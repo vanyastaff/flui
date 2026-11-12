@@ -71,7 +71,7 @@ impl<K: ViewKey + Clone + 'static> RenderView for KeyedLeafBox<K> {
 }
 
 impl<K: ViewKey + Clone + 'static> View for KeyedLeafBox<K> {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 
@@ -125,7 +125,7 @@ impl RenderView for GlobalBox {
 }
 
 impl View for GlobalBox {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 
@@ -180,7 +180,7 @@ impl RenderView for MultiBox {
 }
 
 impl View for MultiBox {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 

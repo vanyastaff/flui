@@ -1172,7 +1172,7 @@ impl<K: Copy + Eq + 'static> AnimatedView for AnchoredDrag<K> {
 }
 
 impl<K: Copy + Eq + 'static> View for AnchoredDrag<K> {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::animated(self)
     }
 }

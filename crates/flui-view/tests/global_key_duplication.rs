@@ -59,7 +59,7 @@ impl StatelessView for Filler {
 }
 
 impl View for Filler {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -125,7 +125,7 @@ impl flui_view::RenderView for Leaf {
 }
 
 impl View for Leaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -166,13 +166,13 @@ impl RenderView for SlotHost {
 }
 
 impl View for SlotHost {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
 
 impl View for Keyed {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         CREATED_BY.set(Some(self.tag));
         flui_view::element::ElementKind::stateful(self)
     }
@@ -331,7 +331,7 @@ impl StatelessView for KeyedParent {
 }
 
 impl View for KeyedParent {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

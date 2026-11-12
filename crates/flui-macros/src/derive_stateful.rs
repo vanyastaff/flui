@@ -61,7 +61,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         impl #impl_generics #runtime::View for #ident #ty_generics
         #augmented_where
         {
-            fn create_element(&self) -> #runtime::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> #runtime::element::ElementKind {
                 #runtime::element::ElementKind::stateful(self)
             }
 

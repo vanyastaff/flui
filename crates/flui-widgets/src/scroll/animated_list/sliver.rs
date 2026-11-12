@@ -573,7 +573,7 @@ impl<K> View for KeyedItem<K>
 where
     K: Clone + Eq + Hash + fmt::Debug + Send + Sync + 'static,
 {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 

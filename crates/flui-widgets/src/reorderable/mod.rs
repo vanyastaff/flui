@@ -1466,7 +1466,7 @@ impl fmt::Debug for ReorderableListState {
 }
 
 impl View for ReorderableList {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -1514,7 +1514,7 @@ impl fmt::Debug for ReorderableGridState {
 }
 
 impl View for ReorderableGrid {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -1650,7 +1650,7 @@ struct DragHandle {
 }
 
 impl View for DragHandle {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -1722,7 +1722,7 @@ struct ReorderRow {
 }
 
 impl View for ReorderRow {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 
@@ -1909,7 +1909,7 @@ struct RowPlate {
 }
 
 impl View for RowPlate {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

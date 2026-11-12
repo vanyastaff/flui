@@ -15,7 +15,7 @@ impl StatelessView for Label {
 }
 
 impl View for Label {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

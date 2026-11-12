@@ -137,12 +137,12 @@ where
             },
         );
 
-        // One clone of the view serves `provide` and `child`, taken before
+        // One handle on the shared view serves `provide` and `child`, taken before
         // the reactive phase is armed: between the two hooks nothing the
         // author wrote runs, so the phase `publish_provided` arms is always
         // handed to `build_or_recover_begun`. The child mounts under what is
         // published here.
-        let view = core.view().clone();
+        let view = std::rc::Rc::clone(core.shared_view());
         publish_provided(&mut self.publication, core, owner, |values| {
             state.provide(&view, ctx, values);
         });

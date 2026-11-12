@@ -135,7 +135,7 @@ impl LinkedParagraph {
 }
 
 impl View for LinkedParagraph {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -475,7 +475,7 @@ struct LinkFocusStop {
 }
 
 impl View for LinkFocusStop {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 

@@ -313,7 +313,7 @@ struct KeyedIndicatorState {
 }
 
 impl flui_view::View for KeyedIndicator {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
@@ -542,7 +542,7 @@ fn indicator_unmount_mid_frame_releases_controller() {
 struct VisibleIndicators(flui_view::Signal<usize>);
 
 impl flui_view::View for VisibleIndicators {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

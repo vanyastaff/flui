@@ -30,6 +30,7 @@
 
 use flui_rendering::parent_data::SliverSlot;
 use std::fmt;
+use std::rc::Rc;
 
 use super::{
     arity::{Single, Variable},
@@ -252,7 +253,7 @@ impl ElementKind {
     }
 
     /// Create a stateless-family element kind.
-    pub fn stateless<V>(view: &V) -> Self
+    pub fn stateless<V>(view: Rc<V>) -> Self
     where
         V: StatelessView + crate::view::View + Clone + 'static,
         StatelessBehavior: ElementBehavior<V, Single>,
@@ -265,7 +266,7 @@ impl ElementKind {
     }
 
     /// Create a stateful-family element kind.
-    pub fn stateful<V>(view: &V) -> Self
+    pub fn stateful<V>(view: Rc<V>) -> Self
     where
         V: StatefulView + crate::view::View + Clone + 'static,
         StatefulBehavior<V>: ElementBehavior<V, Single>,
@@ -278,7 +279,7 @@ impl ElementKind {
     }
 
     /// Create a proxy-family element kind.
-    pub fn proxy<V>(view: &V) -> Self
+    pub fn proxy<V>(view: Rc<V>) -> Self
     where
         V: ProxyView + crate::view::View + Clone + 'static,
         ProxyBehavior: ElementBehavior<V, Single>,
@@ -291,20 +292,20 @@ impl ElementKind {
     }
 
     /// Create an inherited-family element kind.
-    pub fn inherited<V>(view: &V) -> Self
+    pub fn inherited<V>(view: Rc<V>) -> Self
     where
         V: InheritedView + crate::view::View + Clone + 'static,
         InheritedBehavior<V>: ElementBehavior<V, Single>,
         Element<V, Single, InheritedBehavior<V>>: ElementBase,
     {
         Self::Inherited(Box::new(Element::<V, Single, InheritedBehavior<V>>::new(
-            view,
-            InheritedBehavior::new(view),
+            Rc::clone(&view),
+            InheritedBehavior::new(&view),
         )))
     }
 
     /// Create a render-object element kind for the currently wired variable arity.
-    pub fn render_variable<V>(view: &V) -> Self
+    pub fn render_variable<V>(view: Rc<V>) -> Self
     where
         V: RenderView + crate::view::View + Clone + 'static,
         RenderBehavior<V>: ElementBehavior<V, Variable>,
@@ -317,7 +318,7 @@ impl ElementKind {
     }
 
     /// Create the element kind of a render view with state.
-    pub fn stateful_render<V>(view: &V) -> Self
+    pub fn stateful_render<V>(view: Rc<V>) -> Self
     where
         V: StatefulRenderView + crate::view::View + Clone + 'static,
         StatefulRenderBehavior<V>: ElementBehavior<V, Variable>,
@@ -332,7 +333,7 @@ impl ElementKind {
     }
 
     /// Create an animated stateful-family element kind.
-    pub fn animated<V>(view: &V) -> Self
+    pub fn animated<V>(view: Rc<V>) -> Self
     where
         V: AnimatedView + crate::view::View + Clone + 'static,
         AnimatedBehavior<V>: ElementBehavior<V, Single>,
@@ -345,7 +346,7 @@ impl ElementKind {
     }
 
     /// Create a parent-data proxy-family element kind.
-    pub fn parent_data<V>(view: &V) -> Self
+    pub fn parent_data<V>(view: Rc<V>) -> Self
     where
         V: ParentDataView + crate::view::View + Clone + 'static,
         ParentDataBehavior: ElementBehavior<V, Single>,

@@ -505,7 +505,7 @@ impl flui_view::ViewState<ComposingField> for ComposingFieldState {
 }
 
 impl flui_view::View for ComposingField {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -635,7 +635,7 @@ impl flui_view::ViewState<GuardedView> for GuardedViewState {
 }
 
 impl flui_view::View for GuardedView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1139,7 +1139,7 @@ impl flui_view::ViewState<SlowDetached> for SlowDetachedState {
 }
 
 impl flui_view::View for SlowDetached {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1361,7 +1361,7 @@ impl flui_view::ViewState<TornDown> for TornDownState {
 }
 
 impl flui_view::View for TornDown {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1448,7 +1448,7 @@ impl flui_view::ViewState<PanickingSubscriber> for PanickingSubscriberState {
 }
 
 impl flui_view::View for PanickingSubscriber {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1582,7 +1582,7 @@ impl flui_view::ViewState<FailingNote> for FailingNoteState {
 }
 
 impl flui_view::View for FailingNote {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1792,7 +1792,7 @@ impl flui_view::ViewState<PostFramePanics> for PostFramePanicsState {
 }
 
 impl flui_view::View for PostFramePanics {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1879,7 +1879,7 @@ impl flui_view::StatelessView for BuildFails {
 }
 
 impl flui_view::View for BuildFails {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -2154,7 +2154,7 @@ impl flui_view::ViewState<NoteView> for NoteViewState {
 }
 
 impl flui_view::View for NoteView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }

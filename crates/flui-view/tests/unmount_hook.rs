@@ -38,7 +38,7 @@ impl RenderView for Leaf {
 }
 
 impl View for Leaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -133,7 +133,7 @@ impl ViewState<Hooked> for HookedState {
 }
 
 impl View for Hooked {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }

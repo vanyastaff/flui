@@ -19,7 +19,7 @@ impl StatelessView for Fill {
 }
 
 impl View for Fill {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

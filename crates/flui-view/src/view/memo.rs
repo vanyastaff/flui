@@ -93,7 +93,7 @@ impl<V: View + PartialEq + Clone> Memo<V> {
 }
 
 impl<V: View + PartialEq + Clone> View for Memo<V> {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::proxy(self)
     }
 

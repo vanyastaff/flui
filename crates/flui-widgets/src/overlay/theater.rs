@@ -49,7 +49,7 @@ impl Theater {
 }
 
 impl View for Theater {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::render_variable(self)
     }
 }

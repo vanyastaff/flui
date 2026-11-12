@@ -140,7 +140,7 @@ impl<T: 'static> StatefulView for ValueListenableBuilder<T> {
 }
 
 impl<T: 'static> View for ValueListenableBuilder<T> {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

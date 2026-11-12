@@ -133,7 +133,7 @@ use syn::{DeriveInput, parse_macro_input};
 ///
 /// ```rust,ignore
 /// impl View for Greeting {
-///     fn create_element(&self) -> crate::element::ElementKind {
+///     fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
 ///         crate::element::ElementKind::stateless(self)
 ///     }
 ///     fn key(&self) -> Option<&dyn ViewKey> {

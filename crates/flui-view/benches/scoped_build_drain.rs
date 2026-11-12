@@ -40,7 +40,7 @@ impl RenderView for Leaf {
 }
 
 impl View for Leaf {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::render_variable(self)
     }
 }

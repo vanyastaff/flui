@@ -2,9 +2,11 @@
 //!
 //! The dispatch gates on the concrete runtime `TypeId` (via
 //! `Downcast::as_any().type_id()`); only once that guard has matched
-//! `V` does it take a `downcast_ref::<V>()`, compare through it, and
-//! clone `V` from it into the element. No downcast runs on a value
-//! the guard has not matched, and the clone needs no box of its own.
+//! `V` does it take a `downcast_ref::<V>()` and compare through it. The
+//! element then takes the offered view's shared allocation when it came in
+//! a `BoxedView`, and copies `V` into an allocation of its own only when the
+//! view was offered by reference alone. No downcast runs on a value the
+//! guard has not matched.
 //! After unwrapping any `BoxedView` (below), a genuine concrete-type
 //! mismatch is [`ViewUpdate::Mismatch`]: the reconciler replaces the
 //! element, and no silent stale state remains in the tree.
@@ -28,8 +30,9 @@
 //! wrappers to the inner `&dyn View`, then compares its concrete
 //! `Downcast::as_any().type_id()` (non-overridable — the blanket
 //! `impl<T: 'static + ?Sized> Any for T` reads the discriminant
-//! from the vtable) against `TypeId::of::<V>()`. On match the inner
-//! is downcast by reference and cloned as `V` (so the element
+//! from the vtable) against `TypeId::of::<V>()`. On match the element
+//! takes the `BoxedView`'s shared `Rc<V>`, or a copy of a view offered by
+//! reference alone (so the element
 //! updates in place — consistent with `can_update_by_id`); on a real mismatch it returns
 //! [`ViewUpdate::Mismatch`] and the reconciler replaces the element. Without the
 //! unwrap a boxed rebuild was neither updated (TypeId saw
@@ -52,8 +55,9 @@ use crate::view::{BoxedView, View};
 /// `Downcast::as_any().type_id()`, **not** the overridable
 /// `View::view_type_id()`) against `TypeId::of::<V>()` to
 /// discriminate the dispatch. On match, the guarded
-/// `downcast_ref::<V>()` yields the typed view, and the element
-/// takes a `V::clone` of it.
+/// `downcast_ref::<V>()` yields the typed view, and the element takes the
+/// shared allocation of the `BoxedView` that offered it, or a copy when it
+/// was offered by reference alone.
 /// On mismatch — and on the defense-in-depth case
 /// where the downcast still fails despite the TypeId check —
 /// the function returns [`ViewUpdate::Mismatch`]; the reconciler replaces the
@@ -146,15 +150,19 @@ where
         return ViewUpdate::Equal;
     }
 
-    // The element takes its own copy of the offered view: `V::clone` on the
-    // reference the guard above produced, so the copy costs no box of its
-    // own. The downcast is fallible on principle: should an override ever
-    // break `as_any().type_id() == TypeId::of::<V>() ⇒ downcastable to V`,
-    // the element is replaced instead of the dispatch panicking.
-    match nv {
-        Some(new_ref) => {
-            let previous = core.replace_view_for_dispatch(new_ref.clone());
-            core.note_source_view(shared.map(Rc::downgrade));
+    // The element takes the offered view's shared allocation when it came in
+    // a `BoxedView`, so the update copies nothing; a view offered by
+    // reference alone is copied into an allocation of its own. The downcast
+    // is fallible on principle: should an override ever break
+    // `as_any().type_id() == TypeId::of::<V>() ⇒ downcastable to V`, the
+    // element is replaced instead of the dispatch panicking.
+    let next = match shared {
+        Some(shared) => Rc::clone(shared).downcast_rc::<V>().ok(),
+        None => nv.map(|new_ref| Rc::new(new_ref.clone())),
+    };
+    match next {
+        Some(next) => {
+            let previous = core.replace_view_for_dispatch(next);
             core.mark_dirty_for_dispatch();
             tracing::debug!(
                 "dispatch_view_update succeeded for view_type={:?}",
@@ -181,7 +189,7 @@ pub(crate) enum ViewUpdate<V> {
     /// the view it held before.
     Replaced {
         /// The configuration the element held before the update.
-        previous: V,
+        previous: Rc<V>,
     },
 }
 

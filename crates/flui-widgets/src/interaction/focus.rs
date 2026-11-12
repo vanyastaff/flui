@@ -360,7 +360,7 @@ impl std::fmt::Debug for Focus {
 }
 
 impl View for Focus {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -685,7 +685,7 @@ impl std::fmt::Debug for FocusScope {
 }
 
 impl View for FocusScope {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

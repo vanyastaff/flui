@@ -457,7 +457,7 @@ impl Form {
 }
 
 impl View for Form {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

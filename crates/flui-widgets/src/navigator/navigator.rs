@@ -2577,7 +2577,7 @@ impl fmt::Debug for Navigator {
 }
 
 impl View for Navigator {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

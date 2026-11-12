@@ -62,7 +62,7 @@ impl RenderView for Subject {
     }
 }
 impl View for Subject {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         if matches!(self.hook, Hook::Create) && self.armed.get() {
             fail(&self.drops);
         }
