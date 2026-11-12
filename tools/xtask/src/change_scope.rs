@@ -19,6 +19,7 @@ mod classify;
 mod diagnostics;
 mod guards;
 mod lane_args;
+mod miri_scope;
 mod thread_positions;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -139,9 +140,14 @@ fn render(values: &LaneArgs, package_count: usize, format: Format) -> String {
             } else {
                 ""
             };
+            let miri = if values.miri_required {
+                "  [miri required]"
+            } else {
+                ""
+            };
             let _ = writeln!(
                 out,
-                "lane: {}, mode: {}{heavy}{trybuild}{positions}  ({})",
+                "lane: {}, mode: {}{heavy}{trybuild}{positions}{miri}  ({})",
                 values.lane.as_str(),
                 values.mode,
                 values.reason
@@ -249,6 +255,7 @@ mod tests {
             trybuild_required: false,
             size_required: false,
             send_positions_required: false,
+            miri_required: false,
             reason: "changed: flui-material; plus 2 dependents".to_owned(),
             packages: "flui flui-material flui-web-demo".to_owned(),
             pkg_args: "-p flui -p flui-material -p flui-web-demo".to_owned(),
@@ -271,7 +278,7 @@ mod tests {
 
     fn github_format_is_one_line_per_key() {
         let out = render(&sample(), 3, Format::Github);
-        let expected = "lane=wide\nmode=packages\nheavy_required=false\ntrybuild_required=false\nsize_required=false\nsend_positions_required=false\nreason=changed: flui-material; plus 2 dependents\n\
+        let expected = "lane=wide\nmode=packages\nheavy_required=false\ntrybuild_required=false\nsize_required=false\nsend_positions_required=false\nmiri_required=false\nreason=changed: flui-material; plus 2 dependents\n\
              packages=flui flui-material flui-web-demo\npkg_args=-p flui -p flui-material -p flui-web-demo\n\
              test_args=-p flui -p flui-material -p flui-web-demo\nfeatures=--features flui/cupertino\n\
              platform=false\ncross_platform=false\ncross_app=true\ncross_cli=false\ncross_desktop_mcp=false\ncross_ios=true\n\
@@ -287,7 +294,7 @@ mod tests {
     fn shell_format_quotes_like_shlex() {
         let out = render(&sample(), 3, Format::Shell);
         assert!(
-            out.starts_with("LANE=wide\nMODE=packages\nHEAVY_REQUIRED=false\nTRYBUILD_REQUIRED=false\nSIZE_REQUIRED=false\nSEND_POSITIONS_REQUIRED=false\nREASON='changed: flui-material; plus 2 dependents'\n"),
+            out.starts_with("LANE=wide\nMODE=packages\nHEAVY_REQUIRED=false\nTRYBUILD_REQUIRED=false\nSIZE_REQUIRED=false\nSEND_POSITIONS_REQUIRED=false\nMIRI_REQUIRED=false\nREASON='changed: flui-material; plus 2 dependents'\n"),
             "{out}"
         );
         assert!(
