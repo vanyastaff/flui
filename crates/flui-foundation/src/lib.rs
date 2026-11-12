@@ -205,7 +205,6 @@ pub mod testing;
 pub mod slot;
 // Slot-addressed side tables: membership and position without hashing.
 pub mod slot_index;
-pub mod wasm;
 
 // Shared field-name vocabulary for structured tracing events. Foundation owns
 // the names because every framework crate emits them; *installing* a subscriber
@@ -304,7 +303,6 @@ pub use slot_index::{SlotIndex, SlotKey, SlotSet};
 // Generic typed channel
 pub use notifier_generic::{ArgCallback, Notifier};
 // WASM compatibility
-pub use wasm::WasmNotSendSync;
 
 // ============================================================================
 // PRELUDE
