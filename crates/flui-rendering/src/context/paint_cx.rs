@@ -257,6 +257,9 @@ pub struct PaintAnchor {
 #[derive(Debug)]
 pub struct FragmentRecorder {
     ops: Vec<FragmentOp>,
+    /// Where this recorder's operations begin in `ops`: 0 unless it appends
+    /// to a buffer the pass shares between nodes.
+    start: usize,
     open: Option<Canvas>,
     origin: Offset,
     anchor: Option<PaintAnchor>,
@@ -274,12 +277,43 @@ impl FragmentRecorder {
     pub fn new(origin: Offset, dpr: f64) -> Self {
         Self {
             ops: Vec::new(),
+            start: 0,
             open: None,
             origin,
             anchor: None,
             open_scopes: 0,
             dpr,
         }
+    }
+
+    /// A recorder that appends to `ops`, the pass's shared buffer, after
+    /// the operations already in it: a node's fragment then costs no
+    /// buffer of its own, and the pass hands `ops` from node to node.
+    pub(crate) fn appending(ops: Vec<FragmentOp>, origin: Offset, dpr: f64) -> Self {
+        Self {
+            start: ops.len(),
+            ops,
+            ..Self::new(origin, dpr)
+        }
+    }
+
+    /// Finishes an [`Self::appending`] recorder: the buffer back, with this
+    /// node's operations from the returned index on.
+    pub(crate) fn finish_appended(mut self) -> (Vec<FragmentOp>, usize) {
+        self.seal();
+        debug_assert_eq!(
+            self.open_scopes, 0,
+            "FragmentRecorder finished with unbalanced clip scopes — \
+             a with_clip_* closure must have leaked its scope",
+        );
+        (self.ops, self.start)
+    }
+
+    /// Gives up an [`Self::appending`] recorder whose paint panicked: the
+    /// buffer back without anything this node recorded.
+    pub(crate) fn abandon(mut self) -> Vec<FragmentOp> {
+        self.ops.truncate(self.start);
+        self.ops
     }
 
     /// Records under `anchor`: what [`PaintCx::paint_anchor`] reports to
