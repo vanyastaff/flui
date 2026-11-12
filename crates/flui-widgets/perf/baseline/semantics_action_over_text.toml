@@ -3,7 +3,7 @@
 
 [semantics_action_over_text]
 allocations = 10
-bytes = 2516
+bytes = 1932
 elements = 1
 reallocations = 1
 render_nodes = 1
