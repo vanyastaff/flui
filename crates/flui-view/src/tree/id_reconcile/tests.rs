@@ -29,7 +29,7 @@ impl StatelessView for TestView {
 }
 
 impl View for TestView {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::stateless(self)
     }
 }
@@ -57,7 +57,7 @@ impl StatelessView for KeyedView {
 }
 
 impl View for KeyedView {
-    fn create_element(&self) -> crate::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::stateless(self)
     }
 

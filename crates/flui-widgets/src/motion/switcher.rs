@@ -321,7 +321,7 @@ impl std::fmt::Debug for KeyedEntry {
 }
 
 impl View for KeyedEntry {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 
@@ -730,7 +730,7 @@ mod retirement_tests {
     }
 
     impl View for Capture {
-        fn create_element(&self) -> ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
             ElementKind::stateless(self)
         }
     }

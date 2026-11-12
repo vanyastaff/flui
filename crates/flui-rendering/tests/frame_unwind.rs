@@ -22,6 +22,7 @@ use flui_rendering::{
     parent_data::BoxParentData,
     pipeline::{PipelineCell, PipelineOwner},
     protocol::{BoxProtocol, ProtocolGeometry},
+    testing::SceneHost,
     traits::{HitTestOutcome, RenderBox, RenderObject},
 };
 
@@ -152,6 +153,7 @@ impl RenderObject<BoxProtocol> for Rigged {
 /// 100×100, then asked for 150×150: the next frame owes layout and paint.
 struct Fixture {
     cell: PipelineCell,
+    scene: std::cell::RefCell<SceneHost>,
     text: TextContextHandle,
     root: RenderId,
     boundary: RenderId,
@@ -213,6 +215,15 @@ fn tree(text: &TextContextHandle) -> Tree {
     }
 }
 
+impl Fixture {
+    /// One frame of the cell's owner into the fixture's scene.
+    fn run_frame(
+        &self,
+    ) -> Result<Option<flui_layer::LayerTree>, flui_foundation::TreeError<RenderError>> {
+        self.scene.borrow_mut().run_cell_frame(&self.cell)
+    }
+}
+
 fn fixture() -> Fixture {
     let text = TextContextHandle::standalone();
     let Tree {
@@ -226,13 +237,15 @@ fn fixture() -> Fixture {
         late_compositing,
     } = tree(&text);
     let cell = PipelineCell::new(owner);
+    let mut scene = SceneHost::new();
     assert!(
-        matches!(cell.run_frame(), Ok(Some(_))),
+        matches!(scene.run_cell_frame(&cell), Ok(Some(_))),
         "the first frame paints"
     );
     cell.with_mut(|owner| owner.set_root_constraints(Some(tight(150.0))));
     Fixture {
         cell,
+        scene: std::cell::RefCell::new(scene),
         text,
         root,
         boundary,
@@ -316,7 +329,7 @@ fn the_pipeline_kept_its_owner(f: &Fixture) {
     });
 
     assert!(
-        matches!(f.cell.run_frame(), Ok(Some(_))),
+        matches!(f.run_frame(), Ok(Some(_))),
         "the retry at unchanged constraints paints"
     );
     assert_eq!(
@@ -328,7 +341,7 @@ fn the_pipeline_kept_its_owner(f: &Fixture) {
     f.cell
         .with_mut(|owner| owner.set_root_constraints(Some(tight(200.0))));
     assert!(
-        matches!(f.cell.run_frame(), Ok(Some(_))),
+        matches!(f.run_frame(), Ok(Some(_))),
         "the next frame paints"
     );
     assert_eq!(
@@ -341,7 +354,7 @@ fn the_pipeline_kept_its_owner(f: &Fixture) {
 /// The paint span opens before the paint phase does.
 fn paint_span_opens() {
     let f = fixture();
-    unwinds_under(Trigger::SpanOpens("paint"), || f.cell.run_frame());
+    unwinds_under(Trigger::SpanOpens("paint"), || f.run_frame());
     the_pipeline_kept_its_owner(&f);
 }
 
@@ -354,7 +367,7 @@ fn paint_report() {
             target: "flui_rendering::pipeline::owner::paint",
             level: tracing::Level::DEBUG,
         },
-        || f.cell.run_frame(),
+        || f.run_frame(),
     );
     f.cell
         .with(|owner| owner.local_render_invalidation_handle(f.root))
@@ -372,7 +385,7 @@ fn layout_report() {
             target: "flui_rendering::pipeline::owner::layout",
             level: tracing::Level::DEBUG,
         },
-        || f.cell.run_frame(),
+        || f.run_frame(),
     );
     the_pipeline_kept_its_owner(&f);
 }
@@ -403,7 +416,7 @@ fn wake_as_the_frame_drains() {
     // The send wakes too; the panic is armed for the drain's wake only.
     handle.mark_needs_paint().expect("the owner is live");
     armed.store(true, Ordering::SeqCst);
-    let unwound = catch_unwind(AssertUnwindSafe(|| f.cell.run_frame()));
+    let unwound = catch_unwind(AssertUnwindSafe(|| f.run_frame()));
     match unwound {
         Ok(_) => panic!("the wake's panic goes on to the caller"),
         Err(payload) => flui_foundation::panic::discard_payload(payload),
@@ -426,7 +439,7 @@ fn layout_report_after_a_boundary_laid_out() {
             target: "flui_rendering::pipeline::owner::subtree_arena",
             level: tracing::Level::DEBUG,
         },
-        || f.cell.run_frame(),
+        || f.run_frame(),
     );
     f.fails_layout.store(false, Ordering::SeqCst);
     assert!(
@@ -472,7 +485,7 @@ fn compositing_hook() {
     // Newly attached leaves are composited once their bits are first recomputed.
     f.cell.with_mut(mark_both);
     assert!(
-        matches!(f.cell.run_frame(), Ok(Some(_))),
+        matches!(f.run_frame(), Ok(Some(_))),
         "the frame that composites the rigged leaves paints"
     );
     assert!(
@@ -483,7 +496,7 @@ fn compositing_hook() {
     f.late_compositing.store(PANICS, Ordering::SeqCst);
     f.cell.with_mut(mark_both);
     let wakes = f.cell.with_mut(count_wakes);
-    let unwound = catch_unwind(AssertUnwindSafe(|| f.cell.run_frame()));
+    let unwound = catch_unwind(AssertUnwindSafe(|| f.run_frame()));
     match unwound {
         Ok(_) => panic!("the hook's panic goes on to the caller"),
         Err(payload) => flui_foundation::panic::discard_payload(payload),
@@ -574,7 +587,7 @@ impl RenderBox for FailsAfterItsChild {
 /// paint the queue does not hold yet.
 fn painted_then_resized(owner: &mut PipelineOwner) {
     assert!(
-        matches!(owner.run_frame_in_place(), Ok(Some(_))),
+        matches!(SceneHost::new().run_frame_in_place(owner), Ok(Some(_))),
         "the first frame paints"
     );
     owner.set_root_constraints(Some(tight(150.0)));
@@ -692,8 +705,9 @@ fn a_poison_report_that_panics_comes_after_the_dirty_roots_success() {
         .expect("the child attaches");
     owner.set_root_constraints(Some(tight(100.0)));
     let cell = PipelineCell::new(owner);
+    let mut scene = SceneHost::new();
     assert!(
-        matches!(cell.run_frame(), Ok(Some(_))),
+        matches!(scene.run_cell_frame(&cell), Ok(Some(_))),
         "the first frame paints"
     );
 
@@ -701,7 +715,10 @@ fn a_poison_report_that_panics_comes_after_the_dirty_roots_success() {
     root_fails.store(true, Ordering::SeqCst);
     for side in [150.0, 200.0] {
         cell.with_mut(|owner| owner.set_root_constraints(Some(tight(side))));
-        assert!(cell.run_frame().is_err(), "the root's layout fails");
+        assert!(
+            scene.run_cell_frame(&cell).is_err(),
+            "the root's layout fails"
+        );
     }
 
     // New constraints reach the child, whose layout now fails for the first time.
@@ -713,14 +730,17 @@ fn a_poison_report_that_panics_comes_after_the_dirty_roots_success() {
             target: "flui_rendering::pipeline::owner::layout",
             level: tracing::Level::ERROR,
         },
-        || cell.run_frame(),
+        || scene.run_cell_frame(&cell),
     );
 
     // The first failure of the root since its success.
     child_fails.store(false, Ordering::SeqCst);
     root_fails.store(true, Ordering::SeqCst);
     cell.with_mut(|owner| owner.set_root_constraints(Some(tight(250.0))));
-    assert!(cell.run_frame().is_err(), "the root's layout fails");
+    assert!(
+        scene.run_cell_frame(&cell).is_err(),
+        "the root's layout fails"
+    );
     assert!(
         !cell.with(|owner| owner.is_layout_poisoned(root)),
         "the root's success restarted its poison budget"

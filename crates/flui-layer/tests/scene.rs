@@ -340,7 +340,7 @@ pub(crate) fn a_replaced_owner_never_reports_unchanged() {
 
     drop(second.renew(ResyncReason::Rebuilt));
     let renewed = second.writer().next_content_version().expect("fresh");
-    assert_eq!(renewed.seq(), new.seq());
+    assert!(renewed.seq() > new.seq(), "a renewal runs the sequence on");
     assert_ne!(renewed, new);
 }
 
@@ -395,6 +395,29 @@ pub(crate) fn an_exhausted_mint_renews_the_lineage_and_publishes_full() {
     writer.push(publish(new_root, slots(&[child])));
     owner.apply(SURFACE).expect("the renewed lineage applies");
     assert_eq!(owner.current().len(), 2);
+}
+
+/// A renewal runs the version sequence on, so a layer tree flattened after it
+/// is numbered apart from every one before: an inspection handle kept from
+/// the old lineage names no layer of the new one.
+pub(crate) fn a_renewed_owner_numbers_its_scenes_apart() {
+    let mut owner = SceneOwner::new();
+    let root = owner.current().root();
+    let mut writer = owner.writer();
+    let child = writer.mint_node();
+    writer.push(publish(child, empty()));
+    writer.push(publish(root, slots(&[child])));
+    owner.apply(SURFACE).expect("the first patch applies");
+    let before = owner.current().flatten().scene();
+
+    drop(owner.renew(ResyncReason::Rebuilt));
+    let root = owner.current().root();
+    let mut writer = owner.writer();
+    let child = writer.mint_node();
+    writer.push(publish(child, empty()));
+    writer.push(publish(root, slots(&[child])));
+    owner.apply(SURFACE).expect("the renewed lineage applies");
+    assert_ne!(owner.current().flatten().scene(), before);
 }
 
 // scene_indexes
@@ -533,10 +556,11 @@ pub(crate) fn a_version_is_send_and_sync() {
 
 // scene_table_cost
 
-/// The fewest fanout-32 levels that index `slots` slots.
+/// The fewest levels that index `slots` slots: leaves of eight under
+/// branches of 32.
 fn height(slots: usize) -> u64 {
     let mut height = 1;
-    let mut capacity = 32usize;
+    let mut capacity = 8usize;
     while capacity < slots {
         capacity *= 32;
         height += 1;
@@ -570,7 +594,7 @@ fn places(leaves: &[SceneNodeId], k: usize, stride: usize) -> Vec<SceneOp> {
 pub(crate) fn an_apply_copies_the_patch_not_the_scene() {
     const K: usize = 8;
     let mut same_slots = Vec::new();
-    for n in [100usize, 1_100, 30_000, 100_000] {
+    for n in [100usize, 1_100, 8_000, 100_000] {
         let (mut owner, leaves) = owner_with_leaves(n);
         // The root takes slot 0 and the leaves the slots after it.
         let height = height(n + 1);
@@ -579,7 +603,8 @@ pub(crate) fn an_apply_copies_the_patch_not_the_scene() {
             spread <= K as u64 * height,
             "{n} nodes: {spread} copies over height {height}"
         );
-        let dense = copies_of(&mut owner, places(&leaves[32..], K, 1));
+        // The leaves from the 31st take slots 32..40: one leaf of eight.
+        let dense = copies_of(&mut owner, places(&leaves[31..], K, 1));
         assert_eq!(
             dense, height,
             "{n} nodes: {K} places in one leaf copy one path"
@@ -593,17 +618,17 @@ pub(crate) fn an_apply_copies_the_patch_not_the_scene() {
             .expect("measured")
     };
     let (_, height_small, copies_small) = at(1_100);
-    let (_, height_large, copies_large) = at(30_000);
+    let (_, height_large, copies_large) = at(8_000);
     assert_eq!(height_small, height_large);
     assert_eq!(copies_small, copies_large, "{same_slots:?}");
 }
 
 /// A parent republished with the slots it had, plus one, copies the same
-/// table nodes whether it names 40 children or 1 000: both tables are two
+/// table nodes whether it names 40 children or 200: both tables are two
 /// levels high, and a child named before and after is not written.
 pub(crate) fn a_republished_parent_costs_its_change_not_its_slots() {
     let mut copies = Vec::new();
-    for n in [40usize, 1_000] {
+    for n in [40usize, 200] {
         let (mut owner, leaves) = owner_with_leaves(n);
         assert_eq!(height(n + 1), 2);
         let root = owner.current().root();
@@ -672,6 +697,55 @@ pub(crate) fn a_repaint_with_the_same_links_leaves_the_indexes() {
     assert_eq!(owner.current().texture_users(texture).count(), 1);
 }
 
+/// Content whose `n` chunks draw one texture under `n` followers of one link.
+fn shared_users(
+    owner: &mut SceneOwner,
+    n: u32,
+    link: LayerLink,
+    texture: TextureId,
+) -> Arc<BoundaryContent> {
+    let version = owner.writer().next_content_version().expect("fresh");
+    let mut content = BoundaryContent::builder();
+    for ordinal in 0..n {
+        content.push_effect(Layer::from(FollowerLayer::new(link)), owner_id(), ordinal);
+        let mut canvas = Canvas::new();
+        canvas.draw_texture(
+            texture,
+            Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            None,
+            FilterQuality::Low,
+            1.0,
+        );
+        content.chunk(Arc::new(Chunk::new(
+            owner_id(),
+            ordinal,
+            version,
+            canvas.finish(),
+        )));
+        content.pop_effect();
+    }
+    Arc::new(content.finish())
+}
+
+/// A content with many entries on one texture and one link unshares each
+/// bucket once and extends it in place: its apply copies the table nodes an
+/// apply with one entry copies.
+pub(crate) fn entries_sharing_a_bucket_copy_it_once() {
+    let mut copies = Vec::new();
+    for n in [1u32, 64] {
+        let link = LayerLink::new();
+        let texture = TextureId::new(11);
+        let (mut owner, leaves) = owner_with_leaves(2);
+        let content = shared_users(&mut owner, n, link, texture);
+        copies.push(copies_of(&mut owner, vec![publish(leaves[0], content)]));
+        assert_eq!(owner.current().texture_users(texture).count(), n as usize);
+        assert_eq!(owner.current().followers(link).count(), n as usize);
+    }
+    assert_eq!(
+        copies[0], copies[1],
+        "copies at 1 and 64 entries: {copies:?}"
+    );
+}
 /// A new boundary inserted above a subtree of `n` nodes rewrites `n` depths
 /// and its own.
 pub(crate) fn wrapping_a_subtree_rewrites_its_depths() {

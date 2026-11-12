@@ -183,15 +183,19 @@ fn indicator_ticks_preserve_surrounding_paint_content() {
         vsync,
     );
     laid.pump_for(Duration::ZERO);
+    // The red box is the first picture the root boundary paints; a tick that
+    // keeps the boundary's content keeps that recording itself.
     let surrounding_content = |laid: &LaidOut| {
         laid.layer_tree()
             .expect("painted scene")
             .iter()
-            .find_map(|(_, node)| {
-                node.boundary()
-                    .map(|stamp| (stamp.render_id(), stamp.content().clone()))
+            .find_map(|(_, node)| match node.layer() {
+                flui_rendering::layer::Layer::Picture(picture) => {
+                    Some(std::ptr::from_ref(picture.picture()).addr())
+                }
+                _ => None,
             })
-            .expect("the presentation's root certifies its own pixels")
+            .expect("the presentation's root paints the surrounding box")
     };
     let original = surrounding_content(&laid);
     let mut previous_arc = only_arc(&laid);
@@ -202,7 +206,7 @@ fn indicator_ticks_preserve_surrounding_paint_content() {
         assert_eq!(
             surrounding_content(&laid),
             original,
-            "an indicator tick must preserve the surrounding boundary's content certificate"
+            "an indicator tick keeps the surrounding boundary's recorded content"
         );
         previous_arc = current_arc;
     }
@@ -309,7 +313,7 @@ struct KeyedIndicatorState {
 }
 
 impl flui_view::View for KeyedIndicator {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
@@ -538,7 +542,7 @@ fn indicator_unmount_mid_frame_releases_controller() {
 struct VisibleIndicators(flui_view::Signal<usize>);
 
 impl flui_view::View for VisibleIndicators {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

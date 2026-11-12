@@ -3,7 +3,8 @@
 //! [`RawGestureDetector`] mounts.
 
 use std::{
-    cell::{Cell, OnceCell, RefCell},
+    any::TypeId,
+    cell::{Cell, OnceCell, Ref, RefCell},
     rc::{Rc, Weak},
 };
 
@@ -29,11 +30,12 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
 use super::raw_gesture_detector::{
-    ContactAdmission, FactoryEntry, GestureRecognizerFactory, RawGestureDetector, RecognizerContext,
+    ContactAdmission, ErasedFactory, FactoryEntry, GestureRecognizerFactory, LiveRecognizer,
+    RawGestureDetector, RecognizerContext,
 };
 use crate::Semantics;
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
-use crate::widget_state::{WidgetState, WidgetStatesController};
+use crate::widget_state::WidgetStatesController;
 
 /// Whether an unadmitted native update would act: the event, and how far its
 /// focal point moved since the session's start (the pinch's translation).
@@ -423,21 +425,29 @@ impl std::fmt::Debug for ForcePressSlot {
 /// The single-contact press callbacks: tap, secondary tap, long press and
 /// double tap. They share one composition, so they are one recognizer group.
 #[derive(Clone, Default)]
-struct PressCallbacks {
-    tap: Option<EventCallback>,
-    tap_down: Option<ValueCallback<TapDownDetails>>,
-    tap_up: Option<ValueCallback<TapUpDetails>>,
-    tap_cancel: Option<ValueCallback<TapDetails>>,
+pub(super) struct PressCallbacks {
+    pub(super) tap: Option<EventCallback>,
+    pub(super) tap_down: Option<ValueCallback<TapDownDetails>>,
+    pub(super) tap_up: Option<ValueCallback<TapUpDetails>>,
+    pub(super) tap_cancel: Option<ValueCallback<TapDetails>>,
     secondary_tap: Option<EventCallback>,
     long_press: Option<EventCallback>,
     double_tap: Option<EventCallback>,
     double_tap_down: Option<ValueCallback<DoubleTapDetails>>,
-    /// Where the tap writes [`WidgetState::Pressed`]: set at its down,
+    /// Where the tap writes [`WidgetState::Pressed`](crate::WidgetState::Pressed): set at its down,
     /// cleared at its up or cancel, before the callback of that edge runs.
     pressed: Option<WidgetStatesController>,
 }
 
 impl PressCallbacks {
+    /// The lone tap.
+    pub(super) fn tap(tap: Option<EventCallback>) -> Self {
+        Self {
+            tap,
+            ..Self::default()
+        }
+    }
+
     fn shape(&self) -> PressShape {
         PressShape {
             tap: self.tap.is_some()
@@ -461,6 +471,13 @@ struct PressShape {
 }
 
 impl PressShape {
+    /// The lone tap.
+    const TAP: Self = Self {
+        tap: true,
+        long_press: false,
+        double_tap: false,
+    };
+
     fn is_empty(self) -> bool {
         !(self.tap || self.long_press || self.double_tap)
     }
@@ -956,27 +973,39 @@ fn deliver_event(
 /// Where a press group reads its callbacks at event time: a detector's live
 /// slots, or the one cell of a control that only taps.
 trait PressLive {
-    fn press(&self) -> &RefCell<PressCallbacks>;
+    fn press(&self) -> PressRead<'_>;
 }
 
-impl PressLive for LiveCallbacks {
-    fn press(&self) -> &RefCell<PressCallbacks> {
-        &self.press
+/// The callbacks as a holder has them: its own slots borrowed, or the ones
+/// a smaller holder stands for.
+enum PressRead<'a> {
+    Borrowed(Ref<'a, PressCallbacks>),
+    Owned(PressCallbacks),
+}
+
+impl std::ops::Deref for PressRead<'_> {
+    type Target = PressCallbacks;
+
+    fn deref(&self) -> &PressCallbacks {
+        match self {
+            Self::Borrowed(press) => press,
+            Self::Owned(press) => press,
+        }
     }
 }
 
-impl PressLive for RefCell<PressCallbacks> {
-    fn press(&self) -> &RefCell<PressCallbacks> {
-        self
+impl PressLive for LiveCallbacks {
+    fn press(&self) -> PressRead<'_> {
+        PressRead::Borrowed(self.press.borrow())
     }
 }
 
 /// Write the pressed state of the control the live slots belong to, if it
 /// keeps one. The slot borrow ends before the controller notifies.
 fn mark_pressed(live: &dyn PressLive, pressed: bool) {
-    let states = live.press().borrow().pressed.clone();
+    let states = live.press().pressed.clone();
     if let Some(states) = states {
-        states.update(WidgetState::Pressed, pressed);
+        states.set_contact_pressed(pressed);
     }
 }
 
@@ -988,7 +1017,7 @@ fn deliver_press<T>(
     read: impl FnOnce(&PressCallbacks) -> Option<ValueCallback<T>>,
     value: T,
 ) {
-    let callback = read(&live.press().borrow());
+    let callback = read(&live.press());
     if let Some(callback) = callback {
         writer.write(|cx| callback(cx, value));
     }
@@ -1000,7 +1029,7 @@ fn deliver_press_event(
     writer: &WriterSource,
     read: impl FnOnce(&PressCallbacks) -> Option<EventCallback>,
 ) {
-    let callback = read(&live.press().borrow());
+    let callback = read(&live.press());
     if let Some(callback) = callback {
         writer.write(|cx| callback(cx));
     }
@@ -1202,48 +1231,109 @@ impl GestureRecognizerFactory for PressFactory {
 }
 
 /// The tap of a control that mounts its own recognizers instead of building
-/// a [`GestureDetector`]: the press group a detector with only
-/// [`on_tap`](GestureDetector::on_tap) mounts, so the control competes in
-/// the gesture arena exactly as that detector does.
+/// a [`GestureDetector`]: the press group a detector with the same tap-family
+/// slots ([`on_tap`](GestureDetector::on_tap),
+/// [`on_tap_down`](GestureDetector::on_tap_down),
+/// [`on_tap_up`](GestureDetector::on_tap_up),
+/// [`on_tap_cancel`](GestureDetector::on_tap_cancel)) mounts, so the control
+/// competes in the gesture arena exactly as that detector does.
 pub(super) struct TapSlot {
-    live: Rc<RefCell<PressCallbacks>>,
+    live: Rc<TapLive>,
+}
+
+/// Where a control's tap slot reads the callbacks of the tap family. A
+/// control that only taps hands the value it already shares (a button's
+/// press action), so the slot costs it nothing a bare callback would not.
+pub(super) trait PressSource {
+    /// The tap-family callbacks as they are now: cheap clones, read at
+    /// event time. Its implementations run no user code here.
+    fn callbacks(&self) -> PressCallbacks;
+}
+
+/// What a control's tap reads at event time. The one cell is the control's
+/// callbacks, the source its press group reads and the factory of that
+/// group, so a mounted control keeps one allocation for the three.
+struct TapLive(RefCell<TapCallbacks>);
+
+#[derive(Default)]
+struct TapCallbacks {
+    tap: Option<Rc<dyn PressSource>>,
+    /// As [`PressCallbacks::pressed`].
+    pressed: Option<WidgetStatesController>,
+}
+
+impl PressLive for TapLive {
+    fn press(&self) -> PressRead<'_> {
+        let live = self.0.borrow();
+        // Outside this module a source can only set the tap family, which
+        // is the group the slot mounts.
+        let mut press = live
+            .tap
+            .as_deref()
+            .map(PressSource::callbacks)
+            .unwrap_or_default();
+        press.pressed.clone_from(&live.pressed);
+        PressRead::Owned(press)
+    }
+}
+
+impl ErasedFactory for TapLive {
+    // A slot's group is always the lone tap, so the type identifies it.
+    fn factory_type(&self) -> TypeId {
+        TypeId::of::<Self>()
+    }
+
+    fn create_live(self: Rc<Self>, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
+        Rc::new(PressRecognizers {
+            shape: PressShape::TAP,
+            live: self,
+            cx: cx.clone(),
+            members: OnceCell::new(),
+        })
+    }
+
+    // The callbacks are read live.
+    fn update_live(&self, _: &dyn LiveRecognizer) {}
 }
 
 impl TapSlot {
-    /// A slot that calls `tap`, and writes the pressed state of its contact
-    /// to `pressed` while there is a tap to press.
+    /// A slot that calls the tap family `tap` gives, and writes the pressed
+    /// state of its contact to `pressed` while there is a tap to press.
     pub(super) fn new(
-        tap: Option<EventCallback>,
+        tap: Option<Rc<dyn PressSource>>,
         pressed: Option<&WidgetStatesController>,
     ) -> Self {
         Self {
-            live: Rc::new(RefCell::new(Self::callbacks(tap, pressed))),
+            live: Rc::new(TapLive(RefCell::new(Self::callbacks(tap, pressed)))),
         }
     }
 
     fn callbacks(
-        tap: Option<EventCallback>,
+        tap: Option<Rc<dyn PressSource>>,
         pressed: Option<&WidgetStatesController>,
-    ) -> PressCallbacks {
-        PressCallbacks {
+    ) -> TapCallbacks {
+        TapCallbacks {
             pressed: pressed.filter(|_| tap.is_some()).cloned(),
             tap,
-            ..PressCallbacks::default()
         }
     }
 
     /// Replace the callback. A live recognizer reads it at event time, so a
     /// contact in progress ends in the new one.
-    pub(super) fn set(&self, tap: Option<EventCallback>, pressed: Option<&WidgetStatesController>) {
+    pub(super) fn set(
+        &self,
+        tap: Option<Rc<dyn PressSource>>,
+        pressed: Option<&WidgetStatesController>,
+    ) {
         // The outgoing closure drops after the borrow is released: a
         // capture's `Drop` may reenter the control.
-        let outgoing = self.live.replace(Self::callbacks(tap, pressed));
+        let outgoing = self.live.0.replace(Self::callbacks(tap, pressed));
         drop(outgoing);
     }
 
     /// Whether the slot calls anything.
     pub(super) fn is_set(&self) -> bool {
-        self.live.borrow().tap.is_some()
+        self.live.0.borrow().tap.is_some()
     }
 
     /// The activation assistive technology invokes: the callback the slot
@@ -1252,7 +1342,12 @@ impl TapSlot {
     pub(super) fn click(&self) -> impl Fn(&mut EventCx<'_>) + 'static + use<> {
         let live = Rc::clone(&self.live);
         move |cx| {
-            let callback = live.borrow().tap.clone();
+            let callback = live
+                .0
+                .borrow()
+                .tap
+                .as_deref()
+                .and_then(|source| source.callbacks().tap);
             if let Some(callback) = callback {
                 callback(cx);
             }
@@ -1260,15 +1355,10 @@ impl TapSlot {
     }
 
     /// The recognizer to mount: the press group while there is a callback,
-    /// none otherwise. A slot's group is always the lone tap, so its
-    /// factory's type identifies it.
+    /// none otherwise.
     pub(super) fn factory(&self) -> Option<FactoryEntry> {
-        let shape = self.live.borrow().shape();
-        if shape.is_empty() {
-            return None;
-        }
-        let live: Rc<dyn PressLive> = self.live.clone();
-        Some(FactoryEntry::new(PressFactory { shape, live }))
+        self.is_set()
+            .then(|| FactoryEntry::shared(Rc::clone(&self.live) as Rc<dyn ErasedFactory>))
     }
 }
 

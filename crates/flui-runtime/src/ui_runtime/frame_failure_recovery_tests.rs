@@ -100,7 +100,7 @@ impl StatelessView for PanicsOnceOnBuild {
 }
 
 impl View for PanicsOnceOnBuild {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }
@@ -124,7 +124,7 @@ impl StatelessView for TwoPanickingChildren {
 }
 
 impl View for TwoPanickingChildren {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

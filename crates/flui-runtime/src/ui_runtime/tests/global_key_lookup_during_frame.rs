@@ -69,7 +69,7 @@ impl flui_view::ViewState<Toggle> for ToggleState {
 }
 
 impl flui_view::View for Toggle {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 
@@ -96,7 +96,7 @@ impl flui_view::StatelessView for ToggleReader {
 }
 
 impl flui_view::View for ToggleReader {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }

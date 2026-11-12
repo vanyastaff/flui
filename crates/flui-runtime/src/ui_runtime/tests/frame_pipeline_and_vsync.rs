@@ -28,7 +28,7 @@ impl flui_view::RenderView for LeafView {
 }
 
 impl flui_view::View for LeafView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }

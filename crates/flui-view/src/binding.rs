@@ -1305,17 +1305,15 @@ impl WidgetsBinding {
     pub fn run_frame_with_layout_builders(
         &self,
         pipeline: &PipelineCell,
-    ) -> Result<
-        Option<flui_rendering::layer::LayerTree>,
-        flui_foundation::TreeError<flui_rendering::error::RenderError>,
-    > {
+        writer: &mut flui_rendering::layer::SceneWriter<'_>,
+    ) -> Result<bool, flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
             ref mut build_owner,
             ref mut element_tree,
             ..
         } = *inner;
-        build_owner.run_frame_with_layout_builders(element_tree, pipeline)
+        build_owner.run_frame_with_layout_builders(element_tree, pipeline, writer)
     }
 
     /// [`Self::run_frame_with_layout_builders`]'s build-during-layout
@@ -1643,7 +1641,7 @@ mod tests {
     }
 
     impl View for LeafView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
     }
@@ -1675,7 +1673,7 @@ mod tests {
     }
 
     impl View for RegistryStateView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
 
@@ -1729,7 +1727,7 @@ mod tests {
     }
 
     impl View for LookupInBuild {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateless(self)
         }
     }
@@ -1757,7 +1755,7 @@ mod tests {
     }
 
     impl View for KeyedLookupParent {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
 
@@ -1863,7 +1861,7 @@ mod tests {
     }
 
     impl View for DisposeMarkerView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
     }
@@ -1891,7 +1889,7 @@ mod tests {
         }
 
         impl View for ParentOfDisposeMarker {
-            fn create_element(&self) -> crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
                 crate::element::ElementKind::stateless(self)
             }
         }

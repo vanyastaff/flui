@@ -11,8 +11,10 @@ use flui_foundation::{
     memory::MemoryPressureLevel,
 };
 use flui_layer::SceneSnapshot;
+use flui_platform::DisplayColor;
 
 use super::SlotId;
+use crate::{FrameLatency, SurfaceColor, UnconfiguredSurface};
 
 /// How many lifecycle commands wait for the executor before a send answers
 /// [`RasterSendError::Full`].
@@ -20,13 +22,12 @@ pub const LIFECYCLE_CAPACITY: usize = 64;
 
 /// One command for the raster executor.
 ///
-/// `Attach` and `Detach` travel in order on the bounded lifecycle queue;
-/// `Frame` and `Configure` coalesce in the slot's inbox; `Trim` coalesces to
-/// the strongest level. A turn drains the lifecycle queue before any inbox,
-/// so a frame never reaches a slot that is not attached yet.
+/// `Attach`, `Release`, `Restore` and `Detach` travel in order on the bounded
+/// lifecycle queue; `Frame` and `Configure` coalesce in the slot's inbox;
+/// `Trim` coalesces to the strongest level. A turn drains the lifecycle queue
+/// before any inbox, so a frame never reaches a slot that is not attached yet.
 ///
-/// The window commands of ADR-0305 §3 (`Release`, `Restore`) arrive with
-/// window slots, and `RetryDevice` with the device rebuild (§8).
+/// `RetryDevice` arrives with the device rebuild (ADR-0305 §8).
 #[derive(Debug)]
 pub enum RasterCommand {
     /// Give `slot`, a freshly minted id, a target and bind it to `address`.
@@ -39,6 +40,22 @@ pub enum RasterCommand {
         target: SlotTarget,
         /// The slot's starting configuration.
         config: SlotConfig,
+    },
+    /// The window's surface goes away (a suspend, a window whose handle is
+    /// about to die): the slot drops it, keeps everything else, and settles
+    /// its frames [`RasterVerdict::NotShown`] until a `Restore`.
+    Release {
+        /// The window slot whose surface goes.
+        slot: SlotId,
+    },
+    /// Present to `surface` from now on, configured at the slot's size. A
+    /// frame stamped before it is refused on its surface generation.
+    Restore {
+        /// The window slot the surface comes back to.
+        slot: SlotId,
+        /// The new surface, from the owner's
+        /// [`SurfaceFactory`](crate::SurfaceFactory).
+        surface: UnconfiguredSurface,
     },
     /// Take `slot` down; its pending frame leaves with it, unsettled.
     Detach {
@@ -70,6 +87,8 @@ impl RasterCommand {
     pub fn slot(&self) -> Option<SlotId> {
         match self {
             Self::Attach { slot, .. }
+            | Self::Release { slot }
+            | Self::Restore { slot, .. }
             | Self::Detach { slot }
             | Self::Frame { slot, .. }
             | Self::Configure { slot, .. } => Some(*slot),
@@ -79,8 +98,11 @@ impl RasterCommand {
 }
 
 /// What a slot renders into.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum SlotTarget {
+    /// A window's surface. It attaches without a size: the slot's first
+    /// [`SlotChange::Size`] configures it.
+    Window(UnconfiguredSurface),
     /// A texture the executor reads back: headless rendering and tests.
     Offscreen {
         /// The target's size in device pixels.
@@ -91,11 +113,13 @@ pub enum SlotTarget {
 }
 
 impl SlotTarget {
-    /// The size the target is attached at.
+    /// The size the target is attached at; `None` for a window, which gets
+    /// its size from the slot's first [`SlotChange::Size`].
     #[must_use]
-    pub fn size(&self) -> DeviceSize {
+    pub fn size(&self) -> Option<DeviceSize> {
         match *self {
-            Self::Offscreen { size, .. } => size,
+            Self::Window(_) => None,
+            Self::Offscreen { size, .. } => Some(size),
         }
     }
 }
@@ -106,10 +130,18 @@ impl SlotTarget {
 pub struct SlotConfig {
     /// Whether the slot's presentation reaches the screen.
     pub visibility: SlotVisibility,
+    /// The colour capability a window slot's surface asks for (ADR-0256).
+    pub color: SurfaceColor,
+    /// The colour the platform reports for the window's display, `None`
+    /// where it reports none.
+    pub display: Option<DisplayColor>,
+    /// How many frames a window slot's swapchain holds ahead of the display
+    /// (ADR-0257).
+    pub latency: FrameLatency,
 }
 
 impl SlotConfig {
-    /// A slot that starts shown.
+    /// A slot that starts shown, in sRGB, at balanced latency.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -119,6 +151,21 @@ impl SlotConfig {
     #[must_use]
     pub fn with_visibility(mut self, visibility: SlotVisibility) -> Self {
         self.visibility = visibility;
+        self
+    }
+
+    /// The configuration asking for `color`, on a display reporting `display`.
+    #[must_use]
+    pub fn with_color(mut self, color: SurfaceColor, display: Option<DisplayColor>) -> Self {
+        self.color = color;
+        self.display = display;
+        self
+    }
+
+    /// The configuration with `latency`.
+    #[must_use]
+    pub fn with_latency(mut self, latency: FrameLatency) -> Self {
+        self.latency = latency;
         self
     }
 }
@@ -131,6 +178,13 @@ pub enum SlotChange {
     Size(DeviceSize),
     /// Whether the presentation reaches the screen.
     Shown(SlotVisibility),
+    /// The window's display now reports this colour: its profile changed, or
+    /// the window moved to another display (ADR-0256 §6). An offscreen slot
+    /// ignores it.
+    Color(DisplayColor),
+    /// How many frames the window's swapchain holds ahead of the display. An
+    /// offscreen slot ignores it.
+    Latency(FrameLatency),
 }
 
 /// Whether a slot's presentation reaches the screen: the window's visible,

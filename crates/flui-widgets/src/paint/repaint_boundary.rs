@@ -101,7 +101,7 @@ impl RenderView for RepaintBoundary {
 // Hand-written rather than `impl_render_view!`, which emits only
 // `create_element` and leaves `key` at the trait default of `None`.
 impl View for RepaintBoundary {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 

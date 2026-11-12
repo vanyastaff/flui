@@ -9,7 +9,7 @@ use std::num::NonZeroU8;
 use flui_foundation::FrameStamp;
 use flui_foundation::geometry::Rect;
 
-use crate::scene::Scene;
+use crate::scene::{Scene, SceneVersion, SceneVersionId};
 
 /// Which pixels of a [`SceneSnapshot`] changed since the scene submitted
 /// before it (ADR-0304 §5).
@@ -369,9 +369,16 @@ pub struct SceneSnapshot {
     /// This frame's identity: which presentation, which epoch, against which
     /// surface and GPU-resource generation.
     pub stamp: FrameStamp,
-    /// Which regions changed since the previous frame.
+    /// Which regions changed since the image the raster side holds.
     pub damage: DamageRegion,
-    /// The composited layer tree, ready to render.
+    /// The version the damage is relative to, `None` when it is full
+    /// (ADR-0304 §7).
+    pub base: Option<SceneVersionId>,
+    /// The version drawn, which the raster side reports once it is shown;
+    /// `None` for a scene built by hand.
+    pub version: Option<SceneVersion>,
+    /// The composited layer tree, ready to render: the version flattened,
+    /// until the engine walks versions itself.
     pub scene: Scene,
 }
 
@@ -383,6 +390,27 @@ impl SceneSnapshot {
         Self {
             stamp,
             damage,
+            base: None,
+            version: None,
+            scene,
+        }
+    }
+
+    /// Packages a published `version`, drawn with `damage` against `base`:
+    /// the version is flattened into the scene the engine renders.
+    #[must_use]
+    pub fn of_version(
+        stamp: FrameStamp,
+        base: Option<SceneVersionId>,
+        damage: DamageRegion,
+        version: SceneVersion,
+    ) -> Self {
+        let scene = Scene::new(version.flatten());
+        Self {
+            stamp,
+            damage,
+            base,
+            version: Some(version),
             scene,
         }
     }

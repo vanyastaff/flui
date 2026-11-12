@@ -236,7 +236,7 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `damage_disjoint_from_a_backdrop_does_not_expand`, `damage_over_threshold_is_full`,
   `off_retains_nothing_and_is_always_full`, `a_boundary_stamped_twice_is_full`),
   `scene_snapshot.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`;
-  `flui-rendering`'s `tests/boundary_content_tokens.rs` (the token rule, and
+  `flui-rendering`'s `tests/boundary_contents.rs` (a clean boundary keeps its content, and
   `pipeline_frames_diff_to_the_changed_boundary_rect` end to end); `flui-painting`'s
   `a_color_fill_makes_the_extent_unbounded`, `paragraph_extent_covers_every_rasterized_glyph`,
   `stroke_and_shadow_extents_cover_their_outsets`,

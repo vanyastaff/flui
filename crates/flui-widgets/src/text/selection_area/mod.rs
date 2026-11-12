@@ -282,7 +282,7 @@ impl SelectionArea {
 }
 
 impl View for SelectionArea {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 
@@ -1257,7 +1257,7 @@ impl SelectionContainer {
 }
 
 impl View for SelectionContainer {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 
@@ -1317,7 +1317,7 @@ impl std::fmt::Debug for SelectableParagraph {
 }
 
 impl View for SelectableParagraph {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

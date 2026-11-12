@@ -391,7 +391,7 @@ impl ViewState<KeyedRow> for KeyedRowState {
 }
 
 impl flui_view::View for KeyedRow {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {

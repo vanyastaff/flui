@@ -930,7 +930,7 @@ impl std::fmt::Debug for SelectionGestures {
 }
 
 impl View for SelectionGestures {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -991,7 +991,7 @@ impl SelectionGesturesState {
         if self.built_for.as_ref() == Some(&policy) {
             return;
         }
-        let GesturePolicy { arena, settings } = policy.clone();
+        let (arena, settings) = (policy.arena().clone(), policy.settings().clone());
         let weak = Rc::downgrade(&self.model);
         let tap_and_drag = {
             let (up, start, update, end, cancel) = (

@@ -93,7 +93,7 @@ struct Desk {
 }
 
 impl View for Desk {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -136,7 +136,7 @@ struct DeskContent {
 }
 
 impl View for DeskContent {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -1313,7 +1313,7 @@ struct InsetDesk {
 const INSET: (f64, f64) = (30.0, 50.0);
 
 impl View for InsetDesk {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

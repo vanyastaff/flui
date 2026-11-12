@@ -28,6 +28,7 @@
 
 mod focus_tree_root;
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 pub use focus_tree_root::{FocusTreeRoot, FocusTreeRootState};
@@ -496,7 +497,7 @@ impl_inherited_view!(PlatformConvention);
 /// This composition widget resolves inheritance before publishing one inherited
 /// node containing the arena and both policies. Use [`Self::of`] to acquire the
 /// arena; the resolved form is the [`InheritedView`], not this configuration.
-#[derive(Clone, StatelessView)]
+#[derive(Clone, StatefulView)]
 pub struct GestureArenaScope {
     arena: GestureArena,
     settings: Option<GestureSettingsProvider>,
@@ -557,14 +558,14 @@ impl GestureArenaScope {
     /// gesture recognizer and only mounts beneath the presentation's scope.
     #[must_use]
     pub fn settings_of(ctx: &dyn BuildContext) -> GestureSettingsProvider {
-        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone())
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.policy.settings().clone())
             .expect("BUG: gesture consumers must acquire settings beneath GestureArenaScope")
     }
 
     /// The scope's gesture settings, or the framework defaults outside one.
     #[must_use]
     pub fn settings_or_default_of(ctx: &dyn BuildContext) -> GestureSettingsProvider {
-        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone())
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.policy.settings().clone())
             .unwrap_or_default()
     }
 
@@ -589,13 +590,11 @@ impl GestureArenaScope {
     pub fn of(ctx: &dyn BuildContext) -> GestureArena {
         // Compositions built from the handle are checked against the scope's
         // gesture policy (ADR-0208 delay ceiling).
-        ctx.get::<ResolvedGestureArenaScope, _>(|scope| {
-            scope.data.arena.with_settings(scope.data.settings.clone())
-        })
-        .expect(
-            "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
+        ctx.get::<ResolvedGestureArenaScope, _>(|scope| scope.data.policy.arena().clone())
+            .expect(
+                "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
              the presentation binding is the sole GestureArena lifecycle owner",
-        )
+            )
     }
 
     /// [`Self::of`], registering a dependency: the caller's
@@ -605,21 +604,17 @@ impl GestureArenaScope {
     /// # Panics
     /// Panics outside a presentation scope, as [`Self::of`] does.
     pub fn dependent_of(ctx: &dyn BuildContext) -> GestureArena {
-        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| {
-            scope.data.arena.with_settings(scope.data.settings.clone())
-        })
-        .expect(
-            "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.policy.arena().clone())
+            .expect(
+                "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
              the presentation binding is the sole GestureArena lifecycle owner",
-        )
+            )
     }
 
     /// [`Self::of`], or `None` outside a presentation scope.
     #[must_use]
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<GestureArena> {
-        ctx.get::<ResolvedGestureArenaScope, _>(|scope| {
-            scope.data.arena.with_settings(scope.data.settings.clone())
-        })
+        ctx.get::<ResolvedGestureArenaScope, _>(|scope| scope.data.policy.arena().clone())
     }
 
     /// The shared arena configured for this scope.
@@ -632,37 +627,64 @@ impl GestureArenaScope {
 /// The arena handle and the gesture settings a widget builds its recognizers
 /// for. Equal policies admit alike under the same settings, so recognizers
 /// built for one serve the other.
+///
+/// A scope resolves its policy once and every consumer beneath it shares
+/// that value, so holding or cloning a policy costs one reference.
 #[derive(Clone, Debug)]
-pub struct GesturePolicy {
-    /// The subtree's exact arena, configured with the resolved settings.
-    pub arena: GestureArena,
-    /// The resolved gesture settings the recognizers built for it admit with.
-    pub settings: GestureSettingsProvider,
+pub struct GesturePolicy(Rc<PolicyParts>);
+
+#[derive(Debug)]
+struct PolicyParts {
+    arena: GestureArena,
+    settings: GestureSettingsProvider,
 }
 
 impl GesturePolicy {
-    /// The scope's policy. Reading the settings depends on the scope, so the
-    /// caller's `did_change_dependencies` runs when the scope changes.
+    fn new(arena: &GestureArena, settings: GestureSettingsProvider) -> Self {
+        Self(Rc::new(PolicyParts {
+            // Compositions built from the handle are checked against the
+            // scope's gesture policy (ADR-0208 delay ceiling).
+            arena: arena.with_settings(settings.clone()),
+            settings,
+        }))
+    }
+
+    /// The scope's policy. Reading it depends on the scope, so the caller's
+    /// `did_change_dependencies` runs when the scope changes.
+    ///
+    /// # Panics
+    /// Panics outside a [`GestureArenaScope`], as [`GestureArenaScope::of`]
+    /// does.
     pub fn of(ctx: &dyn BuildContext) -> Self {
-        Self {
-            arena: GestureArenaScope::of(ctx),
-            settings: GestureArenaScope::settings_of(ctx),
-        }
+        Self::maybe_of(ctx).expect(
+            "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
+             the presentation binding is the sole GestureArena lifecycle owner",
+        )
     }
 
     /// [`Self::of`], or `None` outside a presentation scope.
     #[must_use]
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Self> {
-        GestureArenaScope::maybe_of(ctx).map(|arena| Self {
-            arena,
-            settings: GestureArenaScope::settings_or_default_of(ctx),
-        })
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.policy.clone())
+    }
+
+    /// The subtree's exact arena, configured with the resolved settings.
+    #[must_use]
+    pub fn arena(&self) -> &GestureArena {
+        &self.0.arena
+    }
+
+    /// The resolved gesture settings the recognizers built for it admit with.
+    #[must_use]
+    pub fn settings(&self) -> &GestureSettingsProvider {
+        &self.0.settings
     }
 }
 
 impl PartialEq for GesturePolicy {
     fn eq(&self, other: &Self) -> bool {
-        self.settings == other.settings && self.arena.admits_like(&other.arena)
+        Rc::ptr_eq(&self.0, &other.0)
+            || (self.0.settings == other.0.settings && self.0.arena.admits_like(&other.0.arena))
     }
 }
 
@@ -674,30 +696,127 @@ impl std::fmt::Debug for GestureArenaScope {
     }
 }
 
-impl StatelessView for GestureArenaScope {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let inherited =
-            ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone());
+/// What a mounted [`GestureArenaScope`] publishes, resolved when the scope
+/// or the policies above it change. The state keeps it across rebuilds, so a
+/// scope whose arena and policies have not changed hands its consumers the
+/// policy they already hold.
+pub struct GestureArenaScopeState {
+    /// What the scope itself authors, kept to resolve again when the
+    /// policies above change.
+    authored: Policies,
+    inherited: Policies,
+    data: GestureScopeData,
+}
+
+impl std::fmt::Debug for GestureArenaScopeState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GestureArenaScopeState")
+            .field("policy", &self.data.policy)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The two policies of a scope, each absent where none is given.
+#[derive(Clone, Default)]
+struct Policies {
+    settings: Option<GestureSettingsProvider>,
+    wheel_preferences: Option<WheelPreferencesProvider>,
+}
+
+impl Policies {
+    /// The policies of the scope above `ctx`, registering a dependency.
+    fn inherited(ctx: &dyn BuildContext) -> Self {
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| Self {
+            settings: Some(scope.data.policy.settings().clone()),
+            wheel_preferences: Some(scope.data.wheel_preferences.clone()),
+        })
+        .unwrap_or_default()
+    }
+}
+
+impl GestureScopeData {
+    /// What a scope of `arena` publishes when it authors `authored` beneath
+    /// `inherited`. `current` is what it publishes now: its policy is kept
+    /// while it still says the same.
+    fn resolve(
+        arena: &GestureArena,
+        authored: &Policies,
+        inherited: &Policies,
+        current: Option<&Self>,
+    ) -> Self {
         // An override beneath another scope still meets the host's
         // accessibility timing floors (ADR-0212 §3).
-        let settings = match (self.settings.clone(), inherited) {
+        let settings = match (authored.settings.clone(), &inherited.settings) {
             (Some(authored), Some(inherited)) => inherited.overridden_by(authored),
             (Some(authored), None) => authored,
-            (None, inherited) => inherited.unwrap_or_default(),
+            (None, inherited) => inherited.clone().unwrap_or_default(),
         };
-        let wheel_preferences = self.wheel_preferences.clone().unwrap_or_else(|| {
-            ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| {
-                scope.data.wheel_preferences.clone()
-            })
-            .unwrap_or_default()
-        });
+        let wheel_preferences = authored
+            .wheel_preferences
+            .clone()
+            .or_else(|| inherited.wheel_preferences.clone())
+            .unwrap_or_default();
+        let policy = current
+            .map(|current| &current.policy)
+            .filter(|current| *current.settings() == settings && current.arena().admits_like(arena))
+            .map_or_else(
+                || GesturePolicy::new(arena, settings.clone()),
+                GesturePolicy::clone,
+            );
+        Self {
+            policy,
+            wheel_preferences,
+        }
+    }
+}
+
+impl StatefulView for GestureArenaScope {
+    type State = GestureArenaScopeState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let (authored, inherited) = (self.authored(), Policies::inherited(ctx));
+        GestureArenaScopeState {
+            data: GestureScopeData::resolve(&self.arena, &authored, &inherited, None),
+            authored,
+            inherited,
+        }
+    }
+}
+
+impl GestureArenaScope {
+    fn authored(&self) -> Policies {
+        Policies {
+            settings: self.settings.clone(),
+            wheel_preferences: self.wheel_preferences.clone(),
+        }
+    }
+}
+
+impl ViewState<GestureArenaScope> for GestureArenaScopeState {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.inherited = Policies::inherited(ctx);
+        self.data = GestureScopeData::resolve(
+            self.data.policy.arena(),
+            &self.authored,
+            &self.inherited,
+            Some(&self.data),
+        );
+    }
+
+    fn did_update_view(&mut self, _old: &GestureArenaScope, new: &GestureArenaScope) {
+        self.authored = new.authored();
+        self.data = GestureScopeData::resolve(
+            &new.arena,
+            &self.authored,
+            &self.inherited,
+            Some(&self.data),
+        );
+    }
+
+    fn build(&self, view: &GestureArenaScope, _ctx: &dyn BuildContext) -> impl IntoView {
         ResolvedGestureArenaScope {
-            data: GestureScopeData {
-                arena: self.arena.clone(),
-                settings,
-                wheel_preferences,
-            },
-            child: self.child.clone(),
+            data: self.data.clone(),
+            child: view.child.clone(),
         }
     }
 }
@@ -705,8 +824,8 @@ impl StatelessView for GestureArenaScope {
 /// The resolved arena and both policies one inherited node carries.
 #[derive(Clone)]
 struct GestureScopeData {
-    arena: GestureArena,
-    settings: GestureSettingsProvider,
+    /// The arena and the settings as one shared value, which consumers hold.
+    policy: GesturePolicy,
     wheel_preferences: WheelPreferencesProvider,
 }
 
@@ -727,8 +846,7 @@ impl InheritedView for ResolvedGestureArenaScope {
     /// A consumer's recognizers join the arena and follow the policy they were
     /// built with, so a change of either reaches every dependent.
     fn update_should_notify(&self, old: &Self) -> bool {
-        !self.data.arena.admits_like(&old.data.arena)
-            || self.data.settings != old.data.settings
+        self.data.policy != old.data.policy
             || self.data.wheel_preferences != old.data.wheel_preferences
     }
 }

@@ -56,7 +56,7 @@ oversized radii against the same public path commands without a shape hint.
 
 | Concern | Files | What lives there |
 |---|---|---|
-| Entry points | `renderer.rs`, `gpu_context.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery); `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; offscreen slots today, the raster executor's backend); `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
+| Entry points | `renderer.rs`, `gpu_context.rs`, `surface_factory.rs`, `window_slot.rs`, `surface_present.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery); `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; `bootstrap` probes the backends over the host's `DisplayConnection` and the first window, and the raster executor's backend); `SurfaceFactory` (the owner thread's `!Send` maker of `UnconfiguredSurface`s on the context's instance, which refuses a target on another display before wgpu sees it, §2); `WindowSlot` (a window's surface, configuration, frame protocol and recovery inside the context; it attaches unconfigured and its first size configures it, and a surface still lost after a reconfigure is dropped for the owner to replace through the factory and `Restore`, never made again by the executor); the acquire and present path a `Renderer` and a window slot share; `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
 | Window ownership | `window_target.rs`, `surface_lease.rs`, `adapter.rs` | The owned `'static` handle source a surface is created over; the lease that pins surface-before-target drop order; adapter/device acquisition policy |
 | Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs`, `layer_offscreen.rs`, `layer_compositor.rs` | Iterative layer traversal; per-variant lowering of `Layer`; `DrawCommand` → painter routing; offscreen layer rendering and compositing; save/restore layer state |
 | Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks |
@@ -66,7 +66,7 @@ oversized radii against the same public path commands without a shape hint.
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
 | Raster protocol | `raster_executor/`, `raster.rs`, `raster_owner.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (the one lock, held only to swap values) and settlement ring, the inline turn, and `SlotBackend`, its GPU-free seam; the deprecated per-window `RasterBackend` and mailbox/ack channel (ADR-0045) the window runners use until they move to slots; frame timers |
 | Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The dirty-rect accumulator behind `render_scene`'s scissor (ADR-0061), `plan_frame` (where a frame renders), `begin_partial` (the scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
-| Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `SlotBackend` without a GPU); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
+| Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `SlotBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
 `wgsl_bindgen` generates the uniform-layout wrappers for the filter shaders
 into `OUT_DIR` from `build.rs`; each `<filter>/generated.rs` is the committed
@@ -1022,8 +1022,9 @@ Locked by `a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside`
 
 ### 18. Partial frames render into a retained target and blit — [ADR-0087 §4](../../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)
 
-Damage arrives as `flui_layer::DamageRegion` on each `SceneSnapshot`, from the
-host's `LayerDiffer`. The enum is exhaustive (ADR-0304 §5): `Unchanged`,
+Damage arrives as `flui_layer::DamageRegion` on each `SceneSnapshot`: the
+footprint of the scene patches since the version on screen, which the host holds
+to that base with `RasterBase` (ADR-0304 §7). The enum is exhaustive (ADR-0304 §5): `Unchanged`,
 `Region` of up to eight disjoint rects, or `Full` with its `FullReason`, and the
 engine matches all three with no wildcard, so a new variant fails to compile
 here. The tracker plans by the region's bounds. `RasterOwner::pump` hands it to the backend before the
@@ -1118,8 +1119,9 @@ Why this and not "replace only under the content":
 - Clips still clip: a layer never changes a pixel its clip excludes, the one
   limit the author cannot reach from inside the layer.
 - It is the extent the damage producer already reports (`DrawOp`'s damage
-  extent for a bounded save layer is its mapped bounds; `LayerDiffer` takes an
-  opacity layer in such a mode as the viewport), so a partial frame repaints
+  extent for a bounded save layer is its mapped bounds; the scene footprint
+  takes an opacity layer in such a mode as reaching everywhere), so a partial
+  frame repaints
   everything the composite changes.
 
 Edge cases:

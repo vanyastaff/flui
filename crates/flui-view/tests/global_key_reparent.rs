@@ -56,7 +56,7 @@ impl ViewState<Spacer> for SpacerState {
 }
 
 impl View for Spacer {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -102,7 +102,7 @@ impl ViewState<KeyedCounter> for CounterState {
 }
 
 impl View for KeyedCounter {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
     fn key(&self) -> Option<&dyn ViewKey> {

@@ -57,7 +57,7 @@ impl ViewState<Probe> for ProbeState {
 }
 
 impl View for Probe {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }

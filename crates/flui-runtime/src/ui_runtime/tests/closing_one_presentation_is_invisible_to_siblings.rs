@@ -111,7 +111,7 @@ impl View for CloseObserver {
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         Some(&self.key)
     }
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -274,7 +274,7 @@ impl View for KeyedCloseView {
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         Some(&self.0)
     }
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
 }
@@ -447,7 +447,7 @@ impl ViewState<SiblingProbe> for SiblingProbe {
 }
 
 impl View for SiblingProbe {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
@@ -1778,8 +1778,11 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
 
 /// A painted scene's layers, without its scene number: that counts paints, so two paints of the
 /// same content differ only in it.
-fn layer_content(scene: &flui_layer::Scene) -> String {
-    format!("{:?}", scene.tree().iter().collect::<Vec<_>>())
+fn layer_content(publication: &flui_layer::ScenePublication) -> String {
+    format!(
+        "{:?}",
+        publication.scene.flatten().iter().collect::<Vec<_>>()
+    )
 }
 
 /// How many [`PanicsOnDropFuture`]s were dropped in this process.

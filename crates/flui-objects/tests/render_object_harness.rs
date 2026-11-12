@@ -2554,9 +2554,9 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
             0,
         )
     });
-    let result = run.owner_mut().run_frame_in_place();
+    let result = run.try_pump();
     assert!(matches!(
-        result.map_err(flui_foundation::TreeError::into_error),
+        result,
         Err(flui_rendering::RenderError::TextPreparationPending(_))
     ));
     flui_rendering::testing::edit_render_object::<RenderIcon, _, _>(
@@ -6678,9 +6678,7 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callback
         invalid.set(true);
         let root = run.root();
         run.owner_mut().mark_needs_semantics(root);
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run.owner_mut().run_frame_in_place()
-        }));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.try_pump()));
         assert!(
             outcome.is_ok(),
             "rejected callbacks replace the primary semantics error: host={host:?}, custom={custom}, blocked={blocked}, fails={fails:?}"
@@ -6986,7 +6984,7 @@ fn harness_custom_paint_region_failure_keeps_all_anchors_and_retries() {
         run.owner_mut().mark_needs_semantics(id);
     }
     // Use the fallible public frame entry instead of the harness's success-only pump.
-    let result = run.owner_mut().run_frame_in_place();
+    let result = run.try_pump();
     let error = result.expect_err("duplicate keys refuse the complete pass");
     assert!(
         error.to_string().contains("duplicate semantics region key"),
@@ -7016,7 +7014,7 @@ fn harness_custom_paint_region_failure_keeps_all_anchors_and_retries() {
         let id = run.id(label);
         run.owner_mut().mark_needs_semantics(id);
     }
-    let result = run.owner_mut().run_frame_in_place();
+    let result = run.try_pump();
     assert!(result.is_err());
     assert_eq!(semantics_content(&run), updated);
     lists[0].borrow_mut().pop();
@@ -12026,7 +12024,7 @@ fn harness_flow_keeps_hitting_its_last_presentation_after_a_failed_repaint() {
     fail.set(true);
     let root = run.root();
     run.mark_needs_paint(root);
-    let frame = run.owner_mut().run_frame_in_place();
+    let frame = run.try_pump();
     assert!(frame.is_err(), "the repaint fails");
     assert!(
         run.hit(25.0, 20.0).contains(&second),

@@ -64,13 +64,13 @@ impl RecognizerContext {
     /// settings.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
-        &self.policy.arena
+        self.policy.arena()
     }
 
     /// The scope's gesture settings; read them per pointer kind at admission.
     #[must_use]
     pub fn settings(&self) -> &GestureSettingsProvider {
-        &self.policy.settings
+        self.policy.settings()
     }
 
     /// The owner's writer: a recognizer callback opens a write through it to
@@ -82,7 +82,7 @@ impl RecognizerContext {
 }
 
 /// A recognizer built by a factory and kept by the detector's state.
-trait LiveRecognizer: 'static {
+pub(super) trait LiveRecognizer: 'static {
     fn as_any(&self) -> &dyn Any;
     fn recognizer(&self) -> &dyn GestureRecognizer;
     fn attach(self: Rc<Self>, set: &mut RecognizerSet, admission: Option<&ContactAdmission>);
@@ -174,9 +174,9 @@ impl std::fmt::Debug for ContactAdmission {
 }
 
 /// A factory with its recognizer type erased, so one detector holds several.
-trait ErasedFactory {
+pub(super) trait ErasedFactory {
     fn factory_type(&self) -> TypeId;
-    fn create_live(&self, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer>;
+    fn create_live(self: Rc<Self>, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer>;
     fn update_live(&self, live: &dyn LiveRecognizer);
 }
 
@@ -186,8 +186,8 @@ impl<F: GestureRecognizerFactory> ErasedFactory for F {
         TypeId::of::<F>()
     }
 
-    fn create_live(&self, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
-        GestureRecognizerFactory::create(self, cx)
+    fn create_live(self: Rc<Self>, cx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
+        GestureRecognizerFactory::create(&*self, cx)
     }
 
     fn update_live(&self, live: &dyn LiveRecognizer) {
@@ -211,6 +211,12 @@ impl FactoryEntry {
             key: None,
             factory: Rc::new(factory),
         }
+    }
+
+    /// A recognizer whose factory is a value its owner already shares: the
+    /// entry names it and allocates nothing.
+    pub(super) fn shared(factory: Rc<dyn ErasedFactory>) -> Self {
+        Self { key: None, factory }
     }
 
     /// A recognizer identified by its factory's type and `key`.
@@ -433,7 +439,7 @@ fn create_slots(factories: &[FactoryEntry], cx: &RecognizerContext) -> SmallVec<
         .map(|entry| Slot {
             factory_type: entry.factory.factory_type(),
             key: entry.key.clone(),
-            live: entry.factory.create_live(cx),
+            live: Rc::clone(&entry.factory).create_live(cx),
         })
         .collect()
 }
@@ -545,7 +551,11 @@ impl RecognizerHost {
         let mut created: Vec<Option<Rc<dyn LiveRecognizer>>> = factories
             .iter()
             .zip(&pairing)
-            .map(|(entry, paired)| paired.is_none().then(|| entry.factory.create_live(cx)))
+            .map(|(entry, paired)| {
+                paired
+                    .is_none()
+                    .then(|| Rc::clone(&entry.factory).create_live(cx))
+            })
             .collect();
 
         let mut outgoing: Vec<Option<Slot>> = std::mem::take(&mut self.slots)

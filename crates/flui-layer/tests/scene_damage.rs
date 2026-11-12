@@ -1481,10 +1481,14 @@ impl Oracle {
         while let Some((id, at)) = pending.pop() {
             let content = Arc::clone(version.node(id).expect("a slot's node").content());
             let mut placed: Vec<LayerId> = Vec::with_capacity(content.entries().len());
+            let mut layers = content.effect_layers();
             for entry in content.entries() {
                 let parent = entry.parent().map_or(at, |index| placed[index.get()]);
                 let layer = match entry {
-                    Entry::Effect { layer, .. } => tree.push_child(parent, layer.clone()),
+                    Entry::Effect { .. } => {
+                        let (_, layer) = layers.next().expect("an effect has a layer");
+                        tree.push_child(parent, layer.clone())
+                    }
                     Entry::Chunk { chunk, .. } => {
                         let token = self
                             .tokens

@@ -59,7 +59,7 @@ impl RenderView for DenseRow {
 }
 
 impl View for DenseRow {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -98,7 +98,7 @@ impl RenderView for DenseHealthyLeaf {
 }
 
 impl View for DenseHealthyLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -142,7 +142,7 @@ impl RenderView for DensePanicsOnCreate {
 }
 
 impl View for DensePanicsOnCreate {
-    fn create_element(&self) -> flui_view::element::ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
@@ -306,7 +306,7 @@ pub(super) fn run_real_pipeline_frame(
         );
         owner.set_root_id(Some(render_root));
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(320.0, 80.0))));
-        let result = owner.run_frame_in_place();
+        let result = flui_rendering::testing::SceneHost::new().run_frame_in_place(owner);
         result.expect("the dense containment topology must complete a real pipeline frame");
     });
 }

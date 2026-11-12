@@ -1190,7 +1190,7 @@ impl fmt::Debug for Hero {
 }
 
 impl View for Hero {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateful(self)
     }
 }
@@ -1416,7 +1416,7 @@ impl fmt::Debug for HeroMode {
 }
 
 impl View for HeroMode {
-    fn create_element(&self) -> ElementKind {
+    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
         ElementKind::stateless(self)
     }
 }

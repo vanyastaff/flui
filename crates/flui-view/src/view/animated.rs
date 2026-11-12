@@ -83,7 +83,7 @@ pub trait AnimatedView: StatefulView {
 macro_rules! impl_animated_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> $crate::element::ElementKind {
+            fn create_element(self: std::rc::Rc<Self>) -> $crate::element::ElementKind {
                 $crate::element::ElementKind::animated(self)
             }
         }

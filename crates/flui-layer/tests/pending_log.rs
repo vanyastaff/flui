@@ -10,8 +10,9 @@ use flui_foundation::geometry::{Offset, Rect};
 use flui_foundation::panic::commit;
 use flui_foundation::{RenderId, SurfaceGeneration};
 use flui_layer::{
-    AnnotatedRegionLayer, BoundaryContent, Chunk, DamageRect, DamageRegion, FullReason, Layer,
-    Placement, ResyncReason, SceneNodeId, SceneOp, SceneOwner, SceneVersionId, SurfaceKey,
+    AnnotatedRegionLayer, BoundaryContent, Chunk, DamageMode, DamageRect, DamageRegion, FullReason,
+    Layer, Placement, RasterBase, ResyncReason, SceneNodeId, SceneOp, SceneOwner, SceneVersionId,
+    SurfaceKey,
 };
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
@@ -348,4 +349,35 @@ pub(crate) fn a_fold_releases_its_contents_after_the_owner_is_released() {
     assert_eq!(owner.borrow().pending_log_folds(), 26);
     OWNER.set(None);
     assert_eq!(DROPPED.get(), Some(true));
+}
+
+/// Damage repairs the image of its base only on the surface that image was drawn on: a surface
+/// recreated at the same size, or an image lost with its resources, draws in full.
+pub(crate) fn a_recreated_surface_of_the_same_size_draws_in_full() {
+    let (mut owner, leaves) = acked_owner(1);
+    let shown = owner.current().id();
+    let mut raster = RasterBase::new(DamageMode::On { full_above: 1.0 });
+    raster.shown(shown, SURFACE);
+    move_to(&mut owner, leaves[0], 100.0, 100.0, SURFACE);
+    let publication = owner.publication();
+    assert!(covers(
+        raster.damage_for(&publication, SURFACE),
+        100.0,
+        100.0
+    ));
+
+    let recreated = SurfaceKey {
+        generation: SURFACE.generation.next(),
+        ..SURFACE
+    };
+    assert_eq!(
+        raster.damage_for(&publication, recreated),
+        DamageRegion::Full(FullReason::SurfaceChanged)
+    );
+
+    raster.forget();
+    assert_eq!(
+        raster.damage_for(&publication, SURFACE),
+        DamageRegion::Full(FullReason::Resync(ResyncReason::RasterReset))
+    );
 }

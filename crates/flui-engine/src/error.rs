@@ -368,6 +368,31 @@ pub enum EngineError {
         source: raw_window_handle::HandleError,
     },
 
+    /// A window target whose display is not the display the GPU context's
+    /// instance was made on (ADR-0305 §2).
+    ///
+    /// wgpu reads the instance's display at every surface it creates, so a
+    /// surface on another display cannot be made on the shared instance. The
+    /// factory compares the two displays itself, before wgpu sees the target,
+    /// and a context made without a display (headless) refuses every window.
+    #[error("the window's display is not the display the GPU context was made on")]
+    SurfaceOnForeignDisplay,
+
+    /// A window surface the context's adapter cannot present to (ADR-0305
+    /// §2): the first surface picked the adapter for the context's life, and
+    /// a WebGL2 context presents to one canvas only.
+    #[error("the GPU context's adapter cannot present to this window's surface")]
+    IncompatibleSurface,
+
+    /// A window slot's surface stayed lost after a reconfigure and the slot
+    /// dropped it (ADR-0305 §2, §8). The executor makes no surface: the owner
+    /// makes a new one with its [`SurfaceFactory`](crate::SurfaceFactory),
+    /// on the thread the window system serves, and sends it in a
+    /// `RasterCommand::Restore`. Until then the slot's record says it wants
+    /// a surface and its frames settle not shown.
+    #[error("the window's surface was lost; its owner must restore a new one")]
+    SurfaceReplacementNeeded,
+
     /// Adapter request failed with a backend-specific diagnostic payload.
     ///
     /// Wraps wgpu's `RequestAdapterError` (or any other backend-specific
@@ -500,6 +525,9 @@ impl EngineError {
             | Self::GpuProgress { .. }
             | Self::GpuUnavailable
             | Self::SurfaceCreation(_)
+            | Self::SurfaceOnForeignDisplay
+            | Self::IncompatibleSurface
+            | Self::SurfaceReplacementNeeded
             | Self::AdapterRequest(_)
             | Self::NoSupportedGpu { .. }
             | Self::DeviceCreation(_)

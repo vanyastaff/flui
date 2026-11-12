@@ -1,7 +1,7 @@
 # render-scaling: задачи
 
-- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS5, RS6, RS7, RS14, RS15a. Следующие: RS8 с RS4, RS15b (не
-  зависят друг от друга); RS4 сливается в одной серии с RS8.
+- **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS4, RS5, RS6, RS7, RS8, RS14, RS15a, RS15c1, RS15c2. В работе: RS8c
+  (update RS8 выше 1,6× принят автором спеки), RS19a в ревью. Следующие: RS19b, затем RS9, затем RS16 и после него RS15b.
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
 
@@ -172,9 +172,26 @@
   аллокаций кадра показывает, что `apply` с N записями на одну текстуру или одну ссылку аллоцирует
   столько же, сколько с одной (корзина индекса расширяется на месте); readback-наборы
   без правки ожиданий.
-- **Зависит:** RS4 (в той же серии), RS7. **Размер:** XL. **Ревью сильной модели.** Если PR выходит за 3 000 строк
-  диффа, первым отдельным PR уходит `FrameSink::submit(ScenePublication)` с публикацией
-  `Full` на каждый кадр, вторым производитель патчей.
+- **Зависит:** RS4 (в той же серии), RS7. **Размер:** XL. **Ревью сильной модели.**
+- **Серия:** три PR, каждый зелёный сам по себе. Первый: RS4 (сливается только после зелёного
+  второго). Второй: производитель патчей с публикацией и удалением старых форм выше; общие ворота
+  RS4 меряются на его голове. Третий: RS8c. Конвертера `LayerTree` → `SceneVersion` нет: он стоил
+  бы O(сцена) дважды на кадр и уходил бы следующим PR. Если второй выходит за 3 000 строк диффа,
+  от него отделяется проводка `BoundaryRecord` и `SceneWriter` за прежней сборкой дерева, без
+  второго производственного пути: публикует по-прежнему старый.
+
+### RS8c. Буферы paint и сборки сцены живут между кадрами
+
+- **Что:** `Vec<FragmentOp>` нарисованного узла, команды display list, буферы патча и детей слоёв
+  сохраняют ёмкость между кадрами (профиль: `paint_cx.rs` `FragmentOp::Child`/`Push`/`Run`,
+  `display_list/mod.rs` `commands.push`, `paint.rs` списки границ). `BoundaryRecord` живёт за
+  индексом слэба, чтобы записи не перемещались; `node_links` и область границы кэшируются на
+  границу в пределах одной версии.
+- **Ворота:** строка baseline `xtask perf --check`, падающая на коде до пулов: 0 аллокаций paint
+  и сборки сцены на `slide_transition_tick` и на кадре без изменений; update
+  `paint/rotated_box_turn_change/inline` 2.13 / 3.08 / 12.7 µs при N = 1 / 1 000 / 10 000, а цель,
+  которую не взять, получает в строке статуса причину и разбивку callgrind.
+- **Зависит:** RS8. **Размер:** M.
 
 ### RS9. Движок обходит версию
 
@@ -293,19 +310,31 @@
 
 ### RS19. Паника на команду, пересборка устройства, остановка, замер доли растра
 
-- **Что:** ADR-0305 §7–§9: паника сдерживается на команду и стоит общих кэшей, но не пайплайнов;
-  потерянное устройство пересобирается с сохранением поверхностей; остановка ограничена по времени;
-  ось `GpuResourceGeneration` удаляется (§6), раз пересборка у контекста.
-  `shut_down` закрывает очередь жизненного цикла (`Receiver` в `Option`), чтобы
-  `Attach`, прошедший проверку health до остановки, получил `Gone`, а не остался `Attaching`.
-  Плюс замер: доля растра в кадре на сцене-сетке, записанная в теле PR, как вход для решения о
-  потоке растра по ADR-0305 §10.
-- **Тесты:** `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines`,
-  `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full`; тесты ADR-0267 и ADR-0244
-  переписаны на слот.
+Три части: (a) и (b) живут в `gpu_context.rs` и `raster_executor/`, ничего в `flui-app`, и
+проверяются inline на потоке владельца так, чтобы тот же код был верен после переезда исполнителя
+на поток растра; (c) ждёт RS16.
+
+- **(a) Что:** ADR-0305 §7 и §9 в движке. Паника кадра сдерживается на команду и стоит общих
+  кэшей (атлас глифов, кэши изображений и путей, пулы), но не пайплайнов: библиотека пайплайнов и
+  пайплайны blit переживают раскрутку. `shut_down` дожидается каждой отправки, увидевшей
+  исполнитель работающим, затем осушает очередь жизненного цикла и роняет её (`Receiver` в
+  `Option`): принятый `Attach` получает ответ, а не остаётся `Attaching`, поздний получает `Gone`.
+- **(a) Тесты:** `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines` (две
+  паники в одном ходу, у каждого слота своя, следующий ход рисует оба слота),
+  `a_send_racing_the_stop_is_drained_or_handed_back`, `a_command_sent_during_the_stop_comes_back_gone`.
+- **(b) Что:** ADR-0305 §8 в движке: `DeviceHealth` контекста с отсрочкой и потолком ADR-0267,
+  пересборка устройства на том же instance с сохранением поверхностей, перенастройка каждого
+  оконного слота; кадр, проштампованный до пересборки, отклоняется по поколению, как после
+  restore; размер в ожидании или отклонённый держит барьер через пересборку; неудачная пересборка
+  оставляет типизированную ошибку, которую видит владелец, а не цикл повторов; `RetryDevice`.
+- **(b) Тесты:** `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full`; тесты
+  ADR-0267 и ADR-0244 переписаны на слот.
+- **(c) Что:** ось `GpuResourceGeneration` удаляется (§6), раз пересборка у контекста; остановка
+  ограничена по времени (`DETACH_DEADLINE`) вместе с потоком растра; замер доли растра в кадре на
+  сцене-сетке, записанный в теле PR, как вход для решения о потоке растра по ADR-0305 §10.
 - **Ворота:** пункт ADR-0305 в `docs/gaps.md` сведён к строкам «поток растра на платформе X ждёт
   прогона».
-- **Зависит:** RS15. **Размер:** L.
+- **Зависит:** (a), (b) от RS15a и RS15c; (c) от RS16. **Размер:** L.
 
 ## Состояние
 
@@ -318,5 +347,10 @@
 | RS6 | #2399 | готова | `layer_it scene_patch_damage` (девятнадцать строк, каждая падает без своей части: следа `Place` с размещением корня, сравнения эффектов, разрешения последователей, выбора присоединённого лидера, глубины цепочки последователей, цепочек до общего предка (12 вложенных последователей: 24 разрешения вместо 531 440), спаривания последователей за один проход (2 000 соседей: 4 001 чтение ссылок вместо 8 006 001), бахромы билинейной выборки лупы, ветви лидера под `LeaderClip::Hide` и последователя, чья цепочка идёт через скрытого, цепочки из 30 000 эффектов на стеке в 256 КиБ, клипа над сжатым фильтром в той же границе и в дочерней, ленивого чтения входов фильтров (50 размытий над 200 кусками: при далёком сдвиге 100 чтений, только записи фильтров, а не 500 с кусками; при правке под ними 600), ядра фильтра под сжимающим предком, суммы ядер вдоль цепочки (три фильтра и лупа между ними; с максимумом вместо суммы строка падает), `damage_extent` картинки, замыкания над подложкой); `patch_damage_covers_diff_damage`: 10 000 случаев по три патча (метки, сдвиги, эффекты, добавление и удаление кусков, перестановки, сдвиг лидера) зелёные за 0,7 с, подсаженный патч без следа одной операции пойман; `the_renderer_kernel_stays_inside_read_closure` (flui-engine); `damage_readback_tests` на lavapipe без правки ожиданий; в тестах differ четыре ожидания следуют правилу §6 (подложка берёт и то, что читает, цветовой фильтр без границы даёт `Full(Unbounded)`); счётчики `followers_resolved`, `follower_pairing_reads`, `filter_input_reads`, `depth_updates`; у differ нет своих `backdrops` и `foreground`, у `frame_protocol.rs` нет своего радиуса: оба зовут `read_closure` и `close_over` |
 | RS7 | #2401 | готова | `layer_it pending_log_contract`: пять строк ADR (`a_full_log_folds_its_two_oldest_entries`, `damage_from_an_older_base_covers_the_newer_one`, `a_base_from_another_lineage_renders_full`, `a_lost_completion_over_reports_and_never_under_reports`, `a_surface_change_in_the_log_publishes_full`) и пробы повторного входа `a_released_content_drops_after_the_owner_is_released`, `a_fold_releases_its_contents_after_the_owner_is_released` (40 кадров без подтверждения: журнал не больше 16 записей, свёрнутая запись сохраняет `Full(SurfaceChanged)`); каждая строка падает без своей проверки (линия, «только вперёд», сворачивание, отпускание после заимствования, сброс записей по подтверждению); счётчик `pending_log_folds`; `apply` (в `Applied::released`), `completed` и `renew` возвращают `ReleasedContents` для `Outbox` (ADR-0287), включая заменённую версию и содержимое, отпущенное сворачиванием; память журнала ограничена 16 записями |
 | RS15a | #2396 | готова (ревью принято) | `engine_it` 17 тестов; без фикса падают `a_superseded_scene_is_dropped_after_the_inbox_lock_is_released` (взаимоблокировка), `a_full_settlement_ring_holds_the_next_frame`, `a_stopped_executor_settles_every_pending_frame_failed`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn`, `a_panicking_subscriber_cannot_strand_a_refused_slot`, `an_untaken_panic_payload_is_dropped_outside_the_slot_table`, `a_refusal_whose_error_panics_when_formatted_still_commits`, `a_surface_loss_keeps_the_barrier_of_a_pending_resize` |
-| RS15c1 | #2407 | в ревью | `a_surface_targets_display_equals_the_platforms_connection`: X11 под `Xvfb` (`x11_window`), Wayland под `weston` (`platform_it`), `the_headless_display_connection_answers_no_display`; проверка типов Windows, macOS, iOS, Android, wasm32 |
-| RS2, RS4, RS8–RS13, RS15b, RS15c2, RS16–RS19 | | не начата | |
+| RS15c1 | #2407 | готова | `a_surface_targets_display_equals_the_platforms_connection`: X11 под `Xvfb` (`x11_window`), Wayland под `weston` (`platform_it`), `the_headless_display_connection_answers_no_display`; проверка типов Windows, macOS, iOS, Android, wasm32 |
+| RS15c2 | #2441 | готова (ревью принято) | `engine_it`: `window_slots::a_window_slot_attaches_unconfigured_and_its_first_size_configures_it`, `…a_frame_stamped_before_a_restore_is_refused_on_its_generation` (падает, если restore не поднимает поколение), `…a_windows_colour_and_latency_reach_the_backend_once_a_turn`, `…a_dropped_surface_is_asked_of_the_owner_and_a_restore_answers_it`, `…a_restore_keeps_the_barrier_of_a_refused_size`, `…a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation`, `raster_executor::a_size_the_backend_always_refuses_is_not_retried_and_warns_once` (падает и при повторе всякого отказа, и при warn на каждый ход), `a_surface_loss_keeps_the_barrier_of_a_refused_size`, `a_failed_resize_is_held_in_the_record_and_retried_next_turn` (строки Timeout и Panic); lib: `surface_factory::tests::a_surface_on_a_foreign_display_is_refused_before_wgpu_sees_it` (три чужих дисплея без сравнения доходят до wgpu), `gpu_context::tests::a_window_its_adapter_cannot_present_to_is_refused_at_attach`, `…a_failed_window_frame_keeps_the_shared_caches` (без фикса второй кадр строит второй атлас), `…a_lost_window_surface_is_left_for_its_owner_to_replace` (исполнитель не создаёт поверхность, владелец получает `SurfaceReplacementNeeded`), `…a_resize_whose_configure_panics_leaves_the_old_size`, `…a_latency_change_repaints_the_next_frame`; compile-fail `surface_factory_is_owner_local`, `surface_factory_rejects_borrowed_window`; поверхности окон без GPU с no-op бэкенда wgpu (`testing::noop_surface_factory`); присутствие на реальном окне проверяет RS16 |
+| RS19a | | в ревью | `gpu_context::tests::a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines` (lavapipe; паника после записи кадра, до отправки; без сохранения библиотеки после паники наборов пайплайнов 3 вместо 1), `…a_torn_painter_whose_drop_panics_keeps_the_frames_panic` (без сдерживания сброса в записи слота паника сброса вместо паники кадра), `headless::…an_unwound_capture_leaves_the_next_capture_drawing` (наборы пайплайнов не растут), `raster_executor::sender::tests::a_send_racing_the_stop_is_drained_or_handed_back` (без ожидания отправок остановка возвращается раньше отправки), `engine_it raster_executor::a_command_sent_during_the_stop_comes_back_gone` |
+| RS4 | #2416 | готова | `rendering_it paint_matrix::a_picture_run_holds_one_render_objects_output` (падает без запечатывания по владельцу); readback `composited_layer_update_readback` и lib flui-engine на lavapipe без правки; снимки paint не перегенерированы; perf: `layers_produced` без изменений во всех сценариях, `slide_transition_tick.layers_reused` 1 → 30 (30 строк панели теперь 30 картинок, а не одна); общие ворота с RS8 на голове производителя: см. строку RS8 |
+| RS8 | #2416 (#2427) | готова; update выше 1,6× принят автором спеки, остаток переходит в RS8c | `rendering_it`: `a_clean_boundary_emits_no_operation`, `a_paint_panic_applies_no_patch_and_keeps_the_presented_version`, `a_boundary_holding_a_leader_is_retained`, `a_boundary_painted_alone_reads_the_anchor_its_parent_gave_it`, `retained_frames_match_a_full_repaint_over_random_trees_and_marks` (сравнивает `flatten()`); `flui-runtime`: `a_refused_submit_keeps_its_damage_owed`, `a_refused_patch_rebuilds_under_a_new_lineage`, `a_hot_reload_renews_every_scene_lineage` (две презентации; падает без `renew_scene`); `flui-app`: `a_base_mismatch_renders_full`; `layer_it scene_table_cost::entries_sharing_a_bucket_copy_it_once` (64 записи на одну текстуру и одну ссылку копируют столько же узлов таблицы, сколько одна); readback на lavapipe без правки ожиданий, снимки не перегенерированы. Ворота `paint/rotated_box_turn_change/inline`, одна машина, одинаковая работа кадра: голова = paint + `apply`, main = paint + graft + `LayerDiffer::diff` того же кадра (локальный bench `rotated_box_turn_change_with_diff` на main, не в репозитории). update при N = 1 / 1 000 / 10 000, один прогон criterion (голова, main с differ, снова голова): голова 3.34–3.67 / 5.65 / 19.8–22.6 µs, main с differ 2.02 / 3.51 / 15.4 µs; callgrind update на голове 17.6k / 17.6k / 17.7k Ir (плоско по N; было 21.1k до ссылок без копий матриц, листьев по 8 и узкого unshare). Эквивалентность путей damage: `layer_it scene_effect_update` прогоняет таблицу с общим и с принудительно раздельным путём и сравнивает damage и `flatten()`. Исправления по ревью Codex: `a_replaced_version_drops_outside_the_pipeline_borrow`, `a_pixel_ratio_change_retires_the_nodes_it_replaces`, `a_renewed_owner_numbers_its_scenes_apart`, `a_boundary_under_a_moved_clean_boundary_reads_the_moved_anchor`. repaint при N = 1 000: голова 628 µs, main 541 µs, main с differ 591 µs (≤ 1.5× main). perf baseline: `label_change` 462 (было 502), `list scroll` 4 296 (4 300), `slide_transition_tick` 65 (78), `full_reassemble` 2 873 (2 880) аллокаций; `caret_blink_in_10k_list`: `nodes_painted` и `scene_ops` равны на 1 000 и 10 000; `slide_transition_tick`: `scene_depth_updates` 0, `damage_full` 0 |
+| RS8c | | в работе: общий буфер `FragmentOp` на проход (#2447: метка 366 → 298 аллокаций, прокрутка 3 551 → 3 413, перестройка 1 837 → 1 699, рабочие счётчики равны); порядок детей ставится в очередь прохода только для непростого порядка (#2448: кнопка 5 055 → 4 966 живых байт, `boundary_contents::a_parent_painting_its_child_again_drops_the_order_that_left_it_out`); дальше буферы границ, display list и патча; следующий PR линии после RS8 и до любой задачи, добавляющей работу в `apply` или `refresh_boundary`; цели repaint ≤ 478 µs при N = 1 000 и update 2.13 / 3.08 / 12.7 µs при N = 1 / 1 000 / 10 000 | update на голове RS8 в одном прогоне с main с differ: 3.34–3.67 против 2.02 µs, 5.65 против 3.51 µs, 19.8–22.6 против 15.4 µs; разбивка callgrind на update при N = 1 000: `apply` 10.6k Ir (`patch_damage` 8.0k: замыкание `effects_damage` 1.9k, `Scope::through` 1.6k, `mapped` 1.5k, `Geometry::fold` 1.2k, `node_links` 0.9k), `run_paint` 5.6k (`refresh_boundary` 2.9k, `scene_applied` 1.2k), `memcpy` 2.3k, в основном переносы `BoundaryRecord`. repaint головы RS8 628 µs против 541 µs main: paint аллоцирует буферы границ и display list каждый кадр, их некуда вернуть (профиль: `paint_cx.rs` `FragmentOp`, `display_list/mod.rs` `commands.push`, сборка содержимого границы). Известная цена с RS8: ошибка семантики после paint отбрасывает патч, и повтор кадра перерисовывает корневую границу целиком, а не только границы, которые кадр был должен |
+| RS2, RS9–RS13, RS15b, RS16–RS18, RS19b, RS19c | | не начата | |

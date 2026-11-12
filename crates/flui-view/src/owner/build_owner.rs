@@ -3249,7 +3249,7 @@ mod tests {
     }
 
     impl View for TestView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
     }
@@ -3315,7 +3315,7 @@ mod tests {
     }
 
     impl View for KeyedView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateless(self)
         }
 
@@ -3361,7 +3361,7 @@ mod tests {
     }
 
     impl View for KeyedDependencyView {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
 
@@ -3406,7 +3406,7 @@ mod tests {
     }
 
     impl View for ReparentingLayoutHost {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
     }
@@ -3636,7 +3636,7 @@ mod tests {
     }
 
     impl View for MidDrainStableLeaf {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
 
@@ -3697,7 +3697,7 @@ mod tests {
     }
 
     impl View for MidDrainSelfRescheduler {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
     }
@@ -3748,7 +3748,7 @@ mod tests {
     }
 
     impl View for MidDrainRootPanic {
-        fn create_element(&self) -> crate::element::ElementKind {
+        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
             crate::element::ElementKind::stateful(self)
         }
     }

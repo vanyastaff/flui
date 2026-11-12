@@ -1,5 +1,5 @@
 use flui_scheduler::AppLifecycleState;
-use flui_view::{StatelessView, View};
+use flui_view::View;
 use flui_widgets::app_root;
 
 use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
@@ -49,7 +49,7 @@ pub fn run_app_android<V>(
     launch: AppLaunch,
 ) -> Result<(), LaunchError>
 where
-    V: View + StatelessView + Clone + 'static,
+    V: View + Clone + 'static,
 {
     let AppLaunch {
         config,
@@ -81,7 +81,7 @@ fn run_android<V>(
     app: android_activity::AndroidApp,
 ) -> Result<(), crate::app::LaunchError>
 where
-    V: View + StatelessView + Clone + 'static,
+    V: View + Clone + 'static,
 {
     use std::sync::Arc;
 
@@ -146,7 +146,7 @@ where
         hot_reload: ScenePlugin,
     ) -> anyhow::Result<()>
     where
-        V: View + StatelessView + Clone + 'static,
+        V: View + Clone + 'static,
     {
         fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             with_owner_platform(f)
