@@ -2,8 +2,8 @@
 //! user can name, against its committed snapshot `api/flui.txt` (ADR-0324).
 //!
 //! **What counts.** rustdoc's JSON output for `flui` with every feature on
-//! the host, as `send-positions` loads it (the same builds, so the two share
-//! their cost), and for every workspace crate a public re-export reaches. The
+//! the host, as `send-positions` loads it (the same builds, so one run of both
+//! builds once), and for every workspace crate a public re-export reaches. The
 //! walk starts at the crate root and visits, in order of path length, every
 //! public item of every public module, through re-exports and glob
 //! re-exports into the crates they name. An item gets the first path the walk

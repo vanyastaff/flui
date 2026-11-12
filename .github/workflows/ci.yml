@@ -711,10 +711,11 @@ jobs:
           BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
-  # The API closure over every host target keeps its rustdoc JSON output in one job, separately
+  # Nightly API contracts keep their rustdoc JSON output in one job, separately
   # from stable documentation and the semver report. Main only: at 17-18
   # minutes it was a pull request's slowest job but one, and a change that
-  # breaks the API closure shows as a red main. Locally: `cargo xtask api-closure`.
+  # breaks the API closure shows as a red main. Locally:
+  # `cargo xtask api-closure` and `cargo xtask send-positions`.
   api-contracts:
     name: api-contracts
     needs: [checks, plan]
@@ -753,13 +754,24 @@ jobs:
           cargo xtask api-closure
           cargo xtask api-closure --self-test
 
+      # Every place the facade's public API names `Send` or `Sync` is listed,
+      # and the list only shrinks (ADR-0136, ADR-0089 §6). Same loader, private
+      # items included; its self-test reads a built-in document and also runs
+      # in `cargo test -p xtask`.
+      - name: cargo xtask send-positions (+ --self-test)
+        env:
+          CARGO_BUILD_WARNINGS: warn
+        run: |
+          set -euo pipefail
+          cargo xtask send-positions
+          cargo xtask send-positions --self-test
+
   # ─────────────────────────────────────────────────────────────────────────
   # public-api — the facade's public API against its committed snapshot
   # `api/flui.txt` (ADR-0324), on every pull request that compiles anything,
-  # so the pull request that changes the surface carries its diff. Then
-  # `send-positions` (ADR-0136 §3) over the same rustdoc builds, which cost it
-  # nothing more. Locally: `cargo xtask public-api` (`--write` restates the
-  # file) and `cargo xtask send-positions`, both with a nightly toolchain.
+  # so the pull request that changes the surface carries its diff. Locally:
+  # `cargo xtask public-api` (`--write` restates the file), with a nightly
+  # toolchain.
   # ─────────────────────────────────────────────────────────────────────────
   public-api:
     name: public-api
@@ -776,28 +788,18 @@ jobs:
         uses: ./.github/actions/rust-toolchain
 
       # No rust-cache: the nightly builds of every crate the facade reaches
-      # take 5 GB, half the repository's cache budget, for a cold run of about
-      # 11 minutes beside jobs that take longer.
-      # rustdoc's JSON output is nightly-only; the gates run it through
+      # take 5 GB, half the repository's cache budget.
+      # rustdoc's JSON output is nightly-only; the gate runs it through
       # `rustup run nightly`, so the pin stays every other step's toolchain.
       - name: Install Rust nightly (rustdoc JSON)
         uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
 
       # Nightly adds lints ahead of stable; lints are the stable jobs'
-      # business, so its warnings do not fail these steps.
+      # business, so its warnings do not fail this step.
       - name: cargo xtask public-api
         env:
           CARGO_BUILD_WARNINGS: warn
         run: cargo xtask public-api
-
-      # Every place the facade's public API names `Send` or `Sync` is listed,
-      # and the list only shrinks (ADR-0136, ADR-0089 §6). Its self-test runs
-      # in `cargo test -p xtask`.
-      - name: cargo xtask send-positions
-        if: ${{ !cancelled() }}
-        env:
-          CARGO_BUILD_WARNINGS: warn
-        run: cargo xtask send-positions
 
   # ─────────────────────────────────────────────────────────────────────────
   # perf-gates — what a frame costs, by counts that do not depend on the

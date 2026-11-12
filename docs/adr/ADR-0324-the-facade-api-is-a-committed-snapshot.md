@@ -43,8 +43,8 @@ change to it is visible in the pull request that makes it?
 ## Decision
 
 Chosen option: 1, because it is the only one that follows the facade's re-exports into the
-workspace crates they name, and it adds no tool and no build to what `send-positions` already
-does.
+workspace crates they name, and it adds no tool: it reads rustdoc's JSON through the loader
+`api-closure` and `send-positions` already share.
 
 ### §1. The snapshot
 
@@ -68,7 +68,7 @@ a blanket implementation's copy on each type are not written.
 `cargo xtask public-api` (`tools/xtask/src/public_api.rs`) renders the surface and fails, listing
 each line that differs, unless the text equals `api/flui.txt`; `--write` restates the file. It
 reads rustdoc's JSON through `api_closure::rustdoc_json` with the builds `send-positions` asks for
-(every feature, private items), so the two share their cost; its `--self-test` renders the
+(every feature, private items), so one job could run both over one build; its `--self-test` renders the
 document `send-positions` plants its positions in and a stale snapshot, and runs in
 `cargo test -p xtask` (ADR-0303 §4).
 
@@ -88,8 +88,8 @@ Admission under ADR-0303 §3, one line per rung:
 ### §3. Where it runs
 
 The `public-api` job of `ci.yml` runs on every pull request that compiles anything (the `wide`
-lane) and on main: `cargo xtask public-api`, then `cargo xtask send-positions` over the same
-builds. A pull request that changes the surface carries the regenerated `api/flui.txt`, and its
+lane) and on main: `cargo xtask public-api`. A pull request that changes the surface carries the
+regenerated `api/flui.txt`, and its
 diff is the review of the change. `api-closure`, which builds the core host for every target,
 stays in the main-only `api-contracts` job.
 
@@ -97,8 +97,6 @@ stays in the main-only `api-contracts` job.
 
 - Good, because every pull request shows what it adds to and removes from the facade, and the
   narrowing of the crate roots is a diff that only shrinks the file.
-- Good, because `send-positions` moves onto pull requests with no build of its own, so its list
-  no longer turns main red after a merge.
 - Bad, because a pull request that compiles anything waits for a nightly rustdoc build of the
   26 crates the facade reaches (about 11 minutes cold on a 4-core runner, uncached: the builds
   take 5 GB), in parallel with the longer `test` job,
