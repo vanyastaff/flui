@@ -255,7 +255,7 @@ pub fn theme_installs_the_focus_ring_style() {
     use flui_sdk::widgets::{RawButton, Text};
 
     let mut laid = lay_out(
-        themed(RawButton::new(Text::new("Go")).on_press(|_ctx| {})),
+        themed(RawButton::new(Text::new("Go")).on_pressed(|_ctx| {})),
         loose(400.0),
     );
     let manager = laid.focus_manager();
