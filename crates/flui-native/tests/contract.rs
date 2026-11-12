@@ -3792,9 +3792,10 @@ mod native_windows {
                         },
                     }
                 };
-                // SAFETY: initialized union arm matches type and device; the
-                // packet slice remains alive for the synchronous native copy.
                 if let Err(error) =
+                    // SAFETY: initialized union arm matches type and device;
+                    // the packet slice remains alive for the synchronous
+                    // native copy.
                     unsafe { InjectSyntheticPointerInput(device.handle(), &[packet]) }
                 {
                     assert!(
