@@ -103,7 +103,7 @@ impl ViewState<Home> for HomeState {
         *self.probe.locale.borrow_mut() = Localizations::maybe_locale_of(ctx);
         *self.probe.focus_scope.borrow_mut() = Some(FocusScope::of(ctx));
         let router = self.probe.handle();
-        RawButton::new(ColoredBox::new(Color::rgb(10, 20, 30))).on_press(move |_ctx| {
+        RawButton::new(ColoredBox::new(Color::rgb(10, 20, 30))).on_pressed(move |_ctx| {
             router
                 .push(AppRoute::Note { id: 1 })
                 .expect("BUG: Home's button fires only while its Router is mounted");

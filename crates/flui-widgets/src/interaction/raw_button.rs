@@ -25,7 +25,7 @@ type PressCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 /// ADR-0086, so it writes a signal directly:
 ///
 /// ```rust,ignore
-/// RawButton::new(Text::new("Increment")).on_press(move |ctx| count.update(ctx, |n| *n += 1))
+/// RawButton::new(Text::new("Increment")).on_pressed(move |ctx| count.update(ctx, |n| *n += 1))
 /// ```
 ///
 /// The callback may return `()` or the `Result` of a write; a refused write
@@ -118,8 +118,8 @@ struct Press(Option<PressCallback>);
 impl Press {
     fn run(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         match &self.0 {
-            Some(on_press) => {
-                on_press(ctx);
+            Some(on_pressed) => {
+                on_pressed(ctx);
                 ActionOutcome::Performed
             }
             None => ActionOutcome::NotPerformed,

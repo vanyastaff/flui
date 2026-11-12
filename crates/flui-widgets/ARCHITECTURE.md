@@ -2985,7 +2985,7 @@ edits but not the caller's own, and `set_value` on a text form field seen by
 ### 33. `RawButton` is a widgets-layer button whose press writes through `EventContext`
 
 **Choice:** `RawButton` is a theme-free press target, so an application that
-uses no design system has a button, and its `on_press` takes
+uses no design system has a button, and its `on_pressed` takes
 `Fn(&mut EventContext<'_>)`, the typed write capability of ADR-0086. It is
 stateless and builds one `InteractiveNode` (`interaction/node.rs`,
 `#[doc(hidden)]` for the official catalogs, outside every prelude; ADR-0322 §1): one element and one `RenderInteractive` that carry what the
