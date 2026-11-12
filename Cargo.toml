@@ -43,11 +43,11 @@ members = [
     "crates/flui-cli",    # `flui` CLI: create, run, build, doctor, devices
 
     # pkg: official packages, built on flui-sdk alone (ADR-0088)
-    "packages/flui-material",  # Material Design theming and the M3 widget catalog
-    "packages/flui-cupertino", # Cupertino theming and widget family
-    "packages/flui-devtools",  # Profiler, timeline and inspector counters
-    "packages/flui-hot-reload",  # Hot reload: the dlopen reload hooks (ADR-0311)
-    "crates/flui-system",      # Capability crate: launcher and file dialogs (ADR-0154)
+    "packages/flui-material",   # Material Design theming and the M3 widget catalog
+    "packages/flui-cupertino",  # Cupertino theming and widget family
+    "packages/flui-devtools",   # Profiler, timeline and inspector counters
+    "packages/flui-hot-reload", # Hot reload: the dlopen reload hooks (ADR-0311)
+    "crates/flui-system",       # Capability crate: launcher and file dialogs (ADR-0154)
 
     # Examples and tools (tier-kind = "tool")
     "examples/desktop_scene",                # Hot-reloadable scene plugin, loaded by HotReloadDriver
