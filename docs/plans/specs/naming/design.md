@@ -120,7 +120,7 @@ flui-interaction 13, flui-painting 11, flui-material 10, flui-platform 8, flui-f
 `FlowPaintingContext`, `TextContext`, `TaskContext` и `ServiceContext`.
 **Привязки.** Привязка любого контекста называется `ctx`, включая `EventContext` и
 `std::task::Context`; `cx` не носит ни одна привязка контекста, и это держит `xtask context-names`
-([ADR-0325](../../../adr/ADR-0325-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)). Время жизни
+([ADR-0325](../../../adr/ADR-0325-a-context-is-bound-as-ctx-and-a-description-builder-has-no-with.md)). Время жизни
 контекста — `'ctx`.
 
 **Затронутые спеки и документы `EventCx` (правятся после утверждения, в PR прохода):**

@@ -322,7 +322,7 @@ host.
   `HostExecutors`, `HostComputePool`, `HostIoPool`, `ComputeJob`, `IoFuture`,
   `SpawnError` and `DeterministicExecutors` are defined in `execution` but
   re-exported as `flui_app::…` and, through the facade's
-  `pub use flui_app as app`, as `flui::app::…`; `AppConfig::with_executors`
+  `pub use flui_app as app`, as `flui::app::…`; `AppConfig::executors`
   takes `HostExecutors`. The promise follows the item, not its crate's
   `tier-kind` (ADR-0089 §1), so a change to any of these signatures is a
   breaking change of `flui` (`SpawnError` is `#[non_exhaustive]`, so a new

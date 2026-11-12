@@ -107,7 +107,7 @@ pub use app::{
     PointerResampling, RootRenderElement, RootRenderView, UnsupportedSystem, run_app,
 };
 pub use flui_engine::{BackendFailure, FrameLatency, GpuBackend};
-// The recording hook (ADR-0215 §1): `AppConfig::with_input_tap` installs a tap
+// The recording hook (ADR-0215 §1): `AppConfig::input_tap` installs a tap
 // per runtime; the serialiser for its records lives in `flui-testing`.
 pub use app::{
     DecisionRow, HostInput, InputOutcome, InputRecord, InputRow, InputTap, InputTapFactory,
@@ -120,7 +120,7 @@ pub use app::{FontRegistrationError, register_font};
 #[cfg(not(target_os = "ios"))]
 pub use app::run_direct;
 // Host-injected execution seam (issue #557): an embedded host provides its
-// own worker pools via `AppConfig::with_executors`, and the runtime's
+// own worker pools via `AppConfig::executors`, and the runtime's
 // default pools are then never constructed. `DeterministicExecutors` is the
 // single-threaded reference implementation for tests and reproducible hosts.
 pub use app::{

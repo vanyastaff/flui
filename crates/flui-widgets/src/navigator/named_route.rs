@@ -144,7 +144,7 @@ impl<'a> RouteRequest<'a> {
     /// The requested route name, if the request carried one.
     #[must_use]
     pub fn name(&self) -> Option<&'a str> {
-        self.settings.name()
+        self.settings.name.as_deref()
     }
 
     /// The request's arguments payload, downcast — shorthand for
@@ -546,7 +546,7 @@ impl<T> RouteKey<T> {
     #[must_use]
     pub fn with_arguments<A: Any + Send + Sync + 'static>(self, arguments: A) -> KeyedSettings<T> {
         KeyedSettings {
-            settings: RouteSettings::named(self.name).with_arguments(arguments),
+            settings: RouteSettings::named(self.name).arguments(arguments),
             output: PhantomData,
         }
     }
@@ -554,7 +554,7 @@ impl<T> RouteKey<T> {
     /// Attach an arguments payload **the caller already holds**, forwarding it
     /// without re-wrapping.
     ///
-    /// The keyed counterpart to [`RouteSettings::with_arguments_shared`], and it
+    /// The keyed counterpart to [`RouteSettings::arguments_shared`], and it
     /// exists for the same reason plus a sharper one: [`with_arguments`](Self::with_arguments)
     /// takes its payload by value, so handing it an existing [`RouteArguments`]
     /// would wrap an `Arc` *in another `Arc`*. The stored concrete type would
@@ -566,7 +566,7 @@ impl<T> RouteKey<T> {
     #[must_use]
     pub fn with_arguments_shared(self, arguments: RouteArguments) -> KeyedSettings<T> {
         KeyedSettings {
-            settings: RouteSettings::named(self.name).with_arguments_shared(arguments),
+            settings: RouteSettings::named(self.name).arguments_shared(arguments),
             output: PhantomData,
         }
     }
@@ -714,7 +714,7 @@ pub enum NamedRouteError {
 /// none (`RouteSettings::default()` plus arguments), which reports as `""`
 /// rather than costing every variant an `Option`.
 pub(super) fn requested_name(request: &RouteSettings) -> String {
-    request.name().unwrap_or_default().to_owned()
+    request.name.as_deref().unwrap_or_default().to_owned()
 }
 
 /// One navigator's name → route table and its two generator hooks.

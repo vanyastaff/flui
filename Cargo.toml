@@ -878,7 +878,7 @@ unstable-windows = ["flui-app/unstable-windows"]
 
 # Development-only reload machinery, off in an ordinary production graph. This
 # re-exports flui-hot-reload as `flui::hot_reload`; the application installs
-# its hook with `AppConfig::with_dev_reload` (ADR-0311 §2), and flui-app names
+# its hook with `AppConfig::dev_reload` (ADR-0311 §2), and flui-app names
 # no reload crate. Without it the normal application graph excludes
 # flui-hot-reload.
 hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-hot-reload/host-hook"]

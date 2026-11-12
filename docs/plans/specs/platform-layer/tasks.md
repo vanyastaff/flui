@@ -2216,7 +2216,7 @@ graph LR
   переименованы `set_snap_layouts`, `snap_layouts`, `set_blur_behind`, `dark_mode`; удалён дубль
   `set_caption_color`. (6) Слот — структура: `WindowOptions::os_options: OsWindowOptions { windows:
   Option<Win32WindowOptions> }` (`with_os_options`, `OsWindowOptions::with_windows`), то же имя в
-  `AppConfig` (`os_options`, `with_os_options`); опции двух ОС больше не вытесняют друг друга.
+  `AppConfig` (`os_options`); опции двух ОС больше не вытесняют друг друга.
   (7) Типы — в публичном модуле контракта `flui_platform::os_options`, не в корне; все
   `#[non_exhaustive]`. ADR-0089 даёт уровень крейту, не модулю (§1: обещание следует за элементом),
   так что они Stable; выбрана наименее обязывающая форма — `#[non_exhaustive]`, построение от
@@ -2840,7 +2840,7 @@ graph LR
   ставится, когда появляется представление; ввод до маршрута отвечает результатом по умолчанию,
   возможности сохраняются и отдаются маршруту ввода; `closed`, услышанное раньше маршрута, запускает
   его сразу; маршрут, который запаниковал, остаётся. `RouteBook` в `AppRuntime` по `WindowId`.
-  Регистраций колбэков нет. `AppConfig::input_latency` (`with_input_latency`) попадает в
+  Регистраций колбэков нет. `AppConfig::input_latency` попадает в
   `WindowOptions`, их читают Web и Android. **Тестовый набор.** `flui_testing::window_handler` —
   `RecordingWindowHandler` (`react_to_*`, `calls`, `inputs`, `count`) и `HandlerCall`; открытия
   окон в тестах всех крейтов перешли на него.

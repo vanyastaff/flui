@@ -13,7 +13,7 @@ use super::{AppConfig, capability::AppCapabilities};
 /// flui::run_app(
 ///     MyRoot,
 ///     AppLaunch::new()
-///         .config(AppConfig::new().with_title("My App"))
+///         .config(AppConfig::new().title("My App"))
 ///         .capabilities(AppCapabilities::new().plugin(MyPlugin)),
 /// )?;
 /// ```

@@ -36,7 +36,14 @@ counterpart has, adapted to Rust:
   `LifecycleContext`, `RenderObjectContext`, the layout, paint and hit-test contexts, a
   capability's `ProviderContext`, an event callback's context and a `poll`'s
   `std::task::Context`. A context type is named `…Context`. `cargo xtask context-names` holds the
-  binding ([ADR-0325](adr/ADR-0325-a-context-is-bound-as-ctx-and-its-type-is-named-context.md)).
+  binding ([ADR-0325](adr/ADR-0325-a-context-is-bound-as-ctx-and-a-description-builder-has-no-with.md)).
+- **Builder methods.** An optional parameter of the Flutter constructor is a builder method with
+  the parameter's bare name: `.alignment(…)`, never `.with_alignment(…)`. The same holds on every
+  description the author assembles and hands over (`Application`, `AppConfig`, a
+  `…Options/Settings/Request/Builder/Params/Spec`). A parameter a host reads back is a `pub` field
+  of a `#[non_exhaustive]` type, never a `get_x`. `with_x` stays where Flutter has `withX` or a
+  setter: a finished value (`Color::with_alpha`), a render object's chaining pair of `set_x`.
+  `cargo xtask builder-names` holds the rule ([ADR-0325](adr/ADR-0325-a-context-is-bound-as-ctx-and-a-description-builder-has-no-with.md)).
 - **Units.** A type generic over `Unit` defaults to logical pixels, `T: Unit = f64`, as `Size`,
   `Rect` and `Offset` do, so a signature writes `BoxDecoration`, not `BoxDecoration<f64>`.
 

@@ -73,7 +73,7 @@ await its returned request or poll `try_result` to obtain the window result."
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `http` | off | the built-in `HttpCapability` provider, each host's own HTTP stack (`ureq` over rustls on Linux); off, an `HttpCapability` request is refused as not registered |
 //! | `system` | off | `flui::services::system`: the launcher and file-dialog providers |
-//! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
+//! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::dev_reload` |
 //! | `devtools` | off | re-exports `flui-devtools` as `devtools`: the frame profiler, timeline and inspector counters |
 //! | `driver` | off | the driver agent in an optimized build; every debug build serves its windows to a driver launched with an endpoint (ADR-0239) |
 //! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving) |
@@ -238,7 +238,7 @@ pub mod services {
 ///
 /// What a window is created with on one system is a value of that system's
 /// type in [`platform::os_options::OsWindowOptions`], given to
-/// [`AppConfig::with_os_options`].
+/// [`AppConfig::os_options`].
 #[cfg(feature = "native")]
 pub mod native {
     #[cfg(target_os = "macos")]

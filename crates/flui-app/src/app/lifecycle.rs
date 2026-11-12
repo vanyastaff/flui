@@ -1051,7 +1051,7 @@ impl ServiceContext {
 /// The declaration of one application service: a name, a lifetime policy,
 /// and a factory for its future.
 ///
-/// Registered through `AppConfig::with_service` and started by the
+/// Registered through `AppConfig::service` and started by the
 /// bootstrap once the loop's execution services exist; owned thereafter by
 /// the runtime's `ServiceRegistry`, which is the *named owner* every
 /// unit of background work must have.
