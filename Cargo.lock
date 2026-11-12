@@ -1750,7 +1750,6 @@ dependencies = [
  "tempfile",
  "toml",
  "tracing",
- "tracing-subscriber",
  "trybuild",
 ]
 

@@ -815,7 +815,6 @@ pollster = { workspace = true }
 
 # === Logging ===
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [features]
 testing = ["dep:flui-testing", "flui-rendering/testing"]
