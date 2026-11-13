@@ -46,11 +46,12 @@
 //! any thread (the owner signal, a window's redraw requester, an exit-policy
 //! request) rings the [`Doorbell`].
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cursor_icon::CursorIcon;
 use flui_platform::CursorError;
@@ -220,7 +221,7 @@ pub(crate) trait X11Host: 'static {
     /// The windows' input on `connection`: the pointers, the keyboard and
     /// the cursor, made on the thread that builds the loop. Every key goes
     /// through `text`.
-    fn input(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Arc<dyn LoopInput>;
+    fn input(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Rc<dyn LoopInput>;
 
     /// The windows' text input: the input method's D-Bus input context,
     /// reached on `executor`, which rings `doorbell` when the input method
@@ -239,7 +240,7 @@ pub(crate) trait X11Host: 'static {
     /// # Errors
     /// [`PlatformError::Init`] when its connection, window or thread cannot
     /// be made.
-    fn clipboard(doorbell: &Doorbell) -> Result<Arc<dyn LoopClipboard>, PlatformError>;
+    fn clipboard(doorbell: &Doorbell) -> Result<Rc<dyn LoopClipboard>, PlatformError>;
 
     /// The windows' drag and drop on `connection`: XDND drops on them, made
     /// on the thread that builds the loop, ringing `doorbell` when work started
@@ -295,7 +296,7 @@ pub(crate) trait LoopDrag: DragTransport {
 /// which the application offers as a closure only the owner thread may
 /// call.
 pub(crate) trait LoopClipboard:
-    host::NativeClipboard + host::NativePrimarySelection + Send + Sync
+    host::NativeClipboard + host::NativePrimarySelection
 {
     /// Answer the requests for the application's primary selection that
     /// rang the doorbell, asking its text with no lock of the loop or of
@@ -305,12 +306,9 @@ pub(crate) trait LoopClipboard:
 
 /// The input of the X11 loop's windows, the input feature's (ADR-0151 §10):
 /// the loop hands it every event first, and a window tells it as it opens
-/// and closes and sets its cursor through it. Every method but
-/// [`capabilities`](Self::capabilities), [`keyboard_layout`](Self::keyboard_layout)
-/// and [`on_keyboard_layout_change`](Self::on_keyboard_layout_change) runs
-/// on the owner thread, and none runs user code with a lock or borrow of
-/// its own held.
-pub(crate) trait LoopInput: Send + Sync {
+/// and closes and sets its cursor through it. Every method runs on the owner
+/// thread, and none runs user code with a borrow of its own held.
+pub(crate) trait LoopInput {
     /// The input capabilities a window opening now has.
     fn capabilities(&self) -> InputCapabilities;
 
@@ -378,7 +376,7 @@ impl std::fmt::Debug for X11Key {
 /// every key, which it delivers now or once the input method has answered
 /// for it, in the order the keys came. Every method runs on the owner
 /// thread, and none runs user code with a borrow of its own held.
-pub(crate) trait LoopText: Send + Sync {
+pub(crate) trait LoopText {
     /// `window` opened at `scale`, its text `text`, the window's text
     /// position's: its field reaches the input method from now on.
     fn window_opened(
@@ -485,7 +483,7 @@ impl WindowScale {
 /// its own connection.
 impl host::Clipboard<X11Loop> for X11Loop {
     fn clipboard(owner: &X11Loop) -> Rc<dyn host::NativeClipboard> {
-        Rc::new(Arc::clone(&owner.clipboard))
+        Rc::clone(&owner.clipboard) as Rc<dyn host::NativeClipboard>
     }
 }
 
@@ -501,7 +499,7 @@ impl host::Drag<X11Loop> for X11Loop {
 /// `PRIMARY`, on the clipboard's connection.
 impl host::PrimarySelection<X11Loop> for X11Loop {
     fn primary_selection(owner: &X11Loop) -> Option<Rc<dyn host::NativePrimarySelection>> {
-        Some(Rc::new(Arc::clone(&owner.clipboard)))
+        Some(Rc::clone(&owner.clipboard) as Rc<dyn host::NativePrimarySelection>)
     }
 }
 
@@ -585,9 +583,9 @@ pub struct X11Loop {
     notices: Arc<dyn NoticeChannel>,
     displays: Arc<dyn HostDisplays>,
     windows: Arc<dyn LoopWindows>,
-    input: Arc<dyn LoopInput>,
+    input: Rc<dyn LoopInput>,
     text: Arc<dyn LoopText>,
-    clipboard: Arc<dyn LoopClipboard>,
+    clipboard: Rc<dyn LoopClipboard>,
     drag: Arc<dyn LoopDrag>,
     start_preferences: fn(&NativeExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
     start_host_notices: fn(&NativeExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
@@ -595,11 +593,14 @@ pub struct X11Loop {
     /// The preference source while the loop runs.
     portal: PortalSlot,
     /// The application asked for its exit policy again.
-    exit_reevaluation: AtomicBool,
+    exit_reevaluation: Cell<bool>,
     /// The thread that built the platform, which its windows belong to and
     /// which alone runs the loop.
     affinity: flui_foundation::OwnerAffinity,
 }
+// Owner-local (ADR-0327 §5): the loop, its input and its clipboard never
+// leave the thread that built them.
+static_assertions::assert_not_impl_any!(X11Loop: Send, Sync);
 
 impl std::fmt::Debug for X11Loop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -651,7 +652,7 @@ impl X11Loop {
             start_host_notices: H::host_notices,
             background_executor,
             portal: PortalSlot::default(),
-            exit_reevaluation: AtomicBool::new(false),
+            exit_reevaluation: Cell::new(false),
             affinity,
         })
     }
@@ -674,7 +675,7 @@ impl X11Loop {
 
     /// The windows' input, which a window opens and closes its input with
     /// and sets its cursor through.
-    pub(crate) fn input(&self) -> &Arc<dyn LoopInput> {
+    pub(crate) fn input(&self) -> &Rc<dyn LoopInput> {
         &self.input
     }
 
@@ -871,7 +872,7 @@ impl X11Loop {
                 return Ok(());
             }
             self.windows.deliver_frames();
-            let reevaluate = self.exit_reevaluation.swap(false, Ordering::AcqRel);
+            let reevaluate = self.exit_reevaluation.replace(false);
             if (self.windows.take_closed() || reevaluate)
                 && self.windows.is_empty()
                 && self.signal.accepting()
@@ -1094,7 +1095,7 @@ impl host::Loop for X11Loop {
     }
 
     fn request_exit_policy_reevaluation(&self) {
-        self.exit_reevaluation.store(true, Ordering::Release);
+        self.exit_reevaluation.set(true);
         if let Err(error) = self.doorbell.ring() {
             tracing::error!(%error, "an exit-policy request could not wake the X11 loop");
         }

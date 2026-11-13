@@ -79,6 +79,9 @@ raw-window-handle = "0.6"
 # assertions never expand outside this crate's own test builds.
 static_assertions = { workspace = true }
 
+# Hash tables keyed by ids the process mints (a host's window table).
+rustc-hash = { workspace = true }
+
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
