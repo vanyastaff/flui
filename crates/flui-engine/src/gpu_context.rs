@@ -960,12 +960,12 @@ impl GpuContext {
             // Released, or not sized yet: nothing to present into.
             return Ok(PresentDisposition::NotShown);
         };
-        // Uploads run before the painter and the blit are taken, so a
-        // panic there (a tracing subscriber is not ours) costs neither.
+        // Uploads run before the painter and the blit are taken, and the
+        // painter is taken only once it is built and retargeted, so a panic
+        // in either step (a tracing subscriber is not ours) costs neither.
         let wrote = self.prepare_textures(slot);
         let (mut painter, mut blit) = self.after_uploads(wrote, |this| {
-            let mut painter = this.take_painter(format, size);
-            painter.resize(size.0, size.1);
+            let painter = this.take_painter(format, size);
             // The blit's pipelines, like the library's, are inserted only
             // once built, so an unwound frame leaves them whole.
             let blit = this
@@ -986,6 +986,7 @@ impl GpuContext {
         };
         let mut caught = FirstPanic::new();
         let rendered = caught.contain(|| {
+            painter.resize(size.0, size.1);
             window.render(
                 &gpu_of(adapter, domain),
                 &mut painter,
@@ -1098,21 +1099,43 @@ impl GpuContext {
         panics
     }
 
-    /// The shared painter, retargeted to `format` and sized for `size`; built
-    /// first when no complete frame left one, over the pipelines an unwound
+    /// The shared painter, retargeted to `format`; built first, sized for
+    /// `size`, when no complete frame left one, over the pipelines an unwound
     /// frame's painter left.
+    ///
+    /// Everything that can fail runs while the painter and the library are
+    /// still fields, and the painter is taken last: a panic here (a tracing
+    /// subscriber, wgpu's error handler) leaves both for the next frame, as
+    /// [`Self::keep_pipelines`] does for a panic of the draw.
     fn take_painter(&mut self, format: wgpu::TextureFormat, size: (u32, u32)) -> WgpuPainter {
+        if self.painter.is_none() {
+            #[cfg(test)]
+            {
+                self.builds.glyph_atlases += 1;
+            }
+            if self.pipelines.is_none() {
+                #[cfg(test)]
+                {
+                    self.builds.pipeline_sets += 1;
+                }
+                self.pipelines = Some(PipelineLibrary::new(self.domain.device(), format));
+            }
+            self.painter = Some(WgpuPainter::with_pipelines(
+                Arc::clone(&self.domain),
+                &mut self.pipelines,
+                size,
+                crate::frame_protocol::FontSource::Ordinary,
+            ));
+        }
+        let painter = self
+            .painter
+            .as_mut()
+            .expect("BUG: the painter was put in place above");
         #[cfg(test)]
         assert!(
             !std::mem::take(&mut self.panic_in_next_setup),
             "injected panic in a frame's painter setup"
         );
-        let taken = self.painter.take();
-        let mut painter = if let Some(painter) = taken {
-            painter
-        } else {
-            self.built_painter(format, size)
-        };
         #[cfg(test)]
         let sets_before = painter.pipeline_sets_built();
         painter.retarget(format);
@@ -1120,29 +1143,9 @@ impl GpuContext {
         {
             self.builds.pipeline_sets += painter.pipeline_sets_built() - sets_before;
         }
-        painter
-    }
-
-    /// A painter with empty caches, over the pipelines an unwound frame's
-    /// painter left, or over a library built for `format`.
-    fn built_painter(&mut self, format: wgpu::TextureFormat, size: (u32, u32)) -> WgpuPainter {
-        #[cfg(test)]
-        {
-            self.builds.glyph_atlases += 1;
-        }
-        let pipelines = self.pipelines.take().unwrap_or_else(|| {
-            #[cfg(test)]
-            {
-                self.builds.pipeline_sets += 1;
-            }
-            PipelineLibrary::new(self.domain.device(), format)
-        });
-        WgpuPainter::with_pipelines(
-            Arc::clone(&self.domain),
-            pipelines,
-            size,
-            crate::frame_protocol::FontSource::Ordinary,
-        )
+        self.painter
+            .take()
+            .expect("BUG: the painter was put in place above")
     }
 
     fn gpu(&self) -> Gpu<'_> {
@@ -2225,8 +2228,9 @@ mod tests {
         assert_eq!(pixels[0], 20, "the next frame draws the newest image");
         assert_eq!(flushes(&executor), 1);
 
-        // A panic after the uploads but before the draw (taking the painter)
-        // flushes too.
+        // A panic after the uploads but before the draw (retargeting the
+        // painter) flushes too, and keeps the painter and its pipelines.
+        let builds = executor.backend().builds();
         executor.backend_mut().panic_in_next_setup();
         let _ = draw(&mut executor, Some(30));
         let _ = sender.take_failure(slot);
@@ -2243,6 +2247,12 @@ mod tests {
         assert_eq!(
             pixels[0], 30,
             "the next frame draws the image the unwound one uploaded"
+        );
+        let after = executor.backend().builds();
+        assert_eq!(
+            (after.glyph_atlases, after.pipeline_sets),
+            (builds.glyph_atlases, builds.pipeline_sets),
+            "the unwound setup left the painter and its pipelines for the next frame"
         );
     }
 
