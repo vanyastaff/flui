@@ -157,8 +157,8 @@ fn perf_radio_alone() {
 
 /// What a pressable `Chip` adds to the `Text` it labels, under a theme: its
 /// composition (the chip, its border painter, `Material`, the well, padding,
-/// constraints, opacity and the label's row), and the `Semantics` that keeps
-/// the chip one node whether it has `on_pressed` or not.
+/// constraints, opacity and the label's row), its description on the well's
+/// node with no `Semantics` element of its own.
 #[test]
 fn perf_chip_over_text() {
     let cost = held_to_baseline(
@@ -172,15 +172,15 @@ fn perf_chip_over_text() {
             },
         ),
     );
-    // The well's three, the chip's own composition and its `Semantics`, which
-    // stays so that gaining or losing the handler keeps the subtree.
+    // 15 elements and 10 render nodes while the chip wrapped itself in a
+    // `Semantics` of its own.
     assert!(
-        cost.elements <= 15,
+        cost.elements <= 14,
         "a chip adds {} elements",
         cost.elements
     );
     assert!(
-        cost.render_nodes <= 10,
+        cost.render_nodes <= 9,
         "a chip adds {} render nodes",
         cost.render_nodes
     );

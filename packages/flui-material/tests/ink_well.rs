@@ -920,15 +920,16 @@ impl ViewState<SwitchedControl> for SwitchedControlState {
 /// A control that resolves its colors from its well's controller above the
 /// well seeds `Disabled` before it builds, from the switch it gives the well:
 /// the frame that turns it off or on builds no element twice, so the control
-/// is drawn in its new state from that frame's one build.
+/// is drawn in its new state from that frame's one build. A `Chip` reads no
+/// controller, so its rows hold the well's own seed of the switch it is given.
 ///
 /// Red-check: drop the `Disabled` seed of a control's `did_update_view`, and
 /// its frame runs one build more than the elements it builds.
 pub fn a_control_turned_off_or_on_builds_each_element_once() {
-    use flui_material::{ElevatedButton, FloatingActionButton, Radio, Switch};
+    use flui_material::{Chip, ElevatedButton, FloatingActionButton, Radio, Switch};
     use flui_sdk::widgets::Text;
 
-    let cases: [(&str, SwitchedBuild); 5] = [
+    let cases: [(&str, SwitchedBuild); 7] = [
         ("Checkbox", |on| {
             let control = Checkbox::new(false);
             if on {
@@ -968,6 +969,15 @@ pub fn a_control_turned_off_or_on_builds_each_element_once() {
             } else {
                 control.boxed()
             }
+        }),
+        ("Chip", |on| {
+            Chip::new(Text::new("Tag"))
+                .on_pressed(|_ctx| {})
+                .enabled(on)
+                .boxed()
+        }),
+        ("Chip without a handler", |on| {
+            Chip::new(Text::new("Tag")).enabled(on).boxed()
         }),
     ];
     for (name, build) in cases {

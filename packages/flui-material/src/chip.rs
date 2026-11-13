@@ -150,8 +150,8 @@ use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
-    IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, SemanticsRole,
-    Toggled, WidgetState, WidgetStates,
+    IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, SemanticsRole, Toggled,
+    WidgetState, WidgetStates,
 };
 use flui_sdk::{
     geometry::{EdgeInsets, Point, Size},
@@ -558,36 +558,30 @@ impl StatelessView for Chip {
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
         );
 
-        let mut ink_well = InkWell::new().child(padded_content).shape(shape);
-        if self.is_pressable() {
-            let on_pressed = self.on_pressed.clone();
-            ink_well = ink_well.on_tap(move |ctx| {
-                if let Some(handler) = &on_pressed {
-                    handler(ctx);
-                }
-            });
+        // Flutter's `RawChip` wraps itself in `Semantics(container: true,
+        // button: tapEnabled, …)`: a chip is a node of its own whether or not
+        // it is a button, so its label, identifier, delete button and state
+        // never fold into the row or toolbar holding it. The well's node is
+        // that node; its switch is the chip's `enabled`, and with no
+        // `on_pressed` it takes no tap, focus or hover. The well stays put
+        // when the handler comes or goes, so the label is never remounted.
+        let role = if self.on_pressed.is_some() {
+            SemanticsRole::Button
+        } else {
+            SemanticsRole::None
+        };
+        let mut ink_well = InkWell::new()
+            .child(padded_content)
+            .shape(shape)
+            .enabled(self.enabled)
+            .description(Description::new(role).identifier(self.identifier.clone()));
+        if let Some(on_pressed) = self.on_pressed.clone() {
+            ink_well = ink_well.on_tap(move |ctx| on_pressed(ctx));
         }
 
-        let container = CustomPaint::new()
+        CustomPaint::new()
             .foreground_painter(ChipBorderPainter { side, shape })
-            .child(Material::new(background_color).shape(shape).child(ink_well));
-
-        // The chip keeps its own node whether it is a button or not: a chip
-        // that gains or loses `on_pressed` keeps the same subtree, its label,
-        // avatar and delete button included. A button description on the
-        // well would leave a chip without `on_pressed` a disabled node, since
-        // the well's switch follows its tap.
-        let mut semantics = Semantics::new()
-            .role(if self.on_pressed.is_some() {
-                SemanticsRole::Button
-            } else {
-                SemanticsRole::None
-            })
-            .enabled(self.enabled);
-        if let Some(identifier) = &self.identifier {
-            semantics = semantics.identifier(std::sync::Arc::clone(identifier));
-        }
-        semantics.child(container)
+            .child(Material::new(background_color).shape(shape).child(ink_well))
     }
 }
 

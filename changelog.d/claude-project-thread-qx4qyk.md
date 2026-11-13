@@ -27,3 +27,7 @@
 - `Checkbox`, `Radio` and `Switch` turned off or on resolve their colors from the new state in the
   frame that turns them, building once instead of twice (one under a pointer still builds twice,
   as the hover it loses is written during that build).
+- A `Chip` without `on_pressed` is a node of its own to assistive technology, as Flutter's
+  `RawChip` is: its label, its `identifier` and its disabled state stay on it instead of folding
+  into the row or toolbar that holds it. The chip describes itself on its well, one element and
+  one render node fewer per chip.
