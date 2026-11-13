@@ -96,7 +96,7 @@ impl fmt::Debug for AnyResult {
 /// **Why this is a value and not a `tracing` call at the site.** An `AnyResult`
 /// wraps a value the *caller* supplied, so dropping it runs user `Drop`; and a
 /// `tracing` subscriber is user code too. Both may reach back into the navigator,
-/// and the history mutex is not reentrant. The same rule the registry follows for
+/// and the history is already borrowed. The same rule the registry follows for
 /// a displaced factory closure, and the same rule `FlushOutcome::deferred`
 /// follows for a lifecycle callback.
 ///
@@ -106,7 +106,7 @@ pub(crate) enum UndeliveredResult {
     /// No present route to deliver to: an empty stack, one whose top is
     /// mid-exit-transition, or a removal target that had already completed.
     NoTarget {
-        /// The value itself, so it drops outside the lock.
+        /// The value itself, so it drops outside the borrow.
         value: AnyResult,
         /// `type_name` of what the caller supplied. In scope at every erasure
         /// site, and the only thing that lets a reader of the log tell *which*
@@ -121,7 +121,7 @@ pub(crate) enum UndeliveredResult {
         route: RouteId,
         /// `type_name` of the `Output` that route delivers.
         expected: &'static str,
-        /// The value itself, so it drops outside the lock.
+        /// The value itself, so it drops outside the borrow.
         value: AnyResult,
     },
 }
@@ -236,7 +236,7 @@ pub enum PushCompletion {
     Immediate,
     /// The route is animating in. The entry parks in `Pushing` until `future`
     /// resolves — awaited from the navigator's own apply step, once the flush
-    /// that installed this entry has released the history lock, never from
+    /// that installed this entry has released the history borrow, never from
     /// inside that flush itself (ADR-0064's constraint for this consumer:
     /// registering mid-flush would let an already-resolved future settle in
     /// the very flush it was returned from). Settles the entry the same way
@@ -334,11 +334,11 @@ pub trait Route: 'static {
 
     /// A pop was attempted; called with `true` after a real pop.
     ///
-    /// # Runs inside the flush, under the navigator's history lock
+    /// # Runs inside the flush, under the navigator's history borrow
     ///
     /// Every `Route` lifecycle hook — this one included — is called while the
-    /// navigator holds its (non-reentrant) history mutex. **Calling back into
-    /// `NavigatorHandle` from here deadlocks the same thread**, including a
+    /// navigator holds its history borrow. **Calling back into
+    /// `NavigatorHandle` from here panics on a second borrow**, including a
     /// pure read such as `can_pop()`. Record what you need and act on it later
     /// (a `PopScope`'s `on_pop_invoked` is delivered *outside* the lock for
     /// exactly this reason, and is the hook user code should prefer).
@@ -358,7 +358,7 @@ impl UndeliveredResult {
     }
 }
 
-/// A result's completion, prepared under the history lock and run after it is
+/// A result's completion, prepared under the history borrow and run after it is
 /// released. Owner-local; it runs no route lifecycle hook.
 pub(crate) type TerminalResultCompletion = Box<dyn FnOnce()>;
 
@@ -377,7 +377,7 @@ pub(crate) trait ErasedRoute {
     fn is_completed(&self) -> bool;
 
     /// The `Ok(None)` completion a still-pending result is owed when its
-    /// navigator unmounts, prepared under the history lock and run after it is
+    /// navigator unmounts, prepared under the history borrow and run after it is
     /// released. `None` once the result has completed.
     fn terminal_result_completion(&mut self) -> Option<TerminalResultCompletion>;
 
@@ -545,7 +545,7 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
                     Ok(value) => Ok(Some(value)),
                     Err(mismatched) => {
                         // Neither reported nor dropped here: this runs inside the
-                        // flush, under the history mutex, and both a `tracing`
+                        // flush, under the history borrow, and both a `tracing`
                         // subscriber and the value's own `Drop` are user code that
                         // may re-enter the navigator.
                         let expected = std::any::type_name::<R::Output>();

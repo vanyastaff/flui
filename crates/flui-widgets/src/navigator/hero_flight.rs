@@ -35,7 +35,7 @@
 //!   while the navigator's user gesture is in progress and replayed once the
 //!   gesture ends, so dragging a pop back to zero mid-gesture does not tear the
 //!   flight down with the finger still down. See `FlightInner::wake`'s doc for the
-//!   Send+Sync boundary this crosses.
+//!   animation-listener boundary this crosses.
 //! * **No navigator size.** `Positioned` takes `left`/`top`/`width`/`height`
 //!   directly, so the rect needs no conversion against the navigator's size.
 
@@ -844,7 +844,7 @@ pub(crate) struct FlightPlan {
     /// Whether this transition was started by `did_start_user_gesture` rather
     /// than a programmatic push/pop.
     pub(crate) is_user_gesture_transition: bool,
-    /// A Send+Sync-safe read of the navigator's user-gesture state, for the
+    /// A read of the navigator's user-gesture state, for the
     /// terminal-status deferral.
     pub(crate) gesture_signal: Terminal<UserGestureSignal>,
 }
@@ -856,7 +856,7 @@ pub(crate) struct FlightPlan {
 ///
 /// A flight ends from inside its own `ProxyAnimation` status listener.
 /// `ProxyAnimation::fan_out_status` snapshots the callbacks and then iterates them
-/// while holding `&self` — so dropping the last `Arc<FlightInner>`, and with it the
+/// while holding `&self` — so dropping the last `Rc<FlightInner>`, and with it the
 /// proxy, *inside* that callback would free the animation the callback is running
 /// under.
 ///

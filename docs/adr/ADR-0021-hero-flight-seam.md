@@ -78,7 +78,7 @@ is claimed; persistent-phase parity is not.
 
 - `NavigatorObserver::did_attach(NavigatorHandle)` / `did_detach()` (Flutter's
   `observer.navigator`).
-- Observer notifications and `Route::dispose` run **after** the history lock is released:
+- Observer notifications and `Route::dispose` run **after** the history borrow is released:
   `RouteHistory` decides and returns owned `notifications` and `dying` routes in
   `FlushOutcome`; `NavigatorShared::apply` performs them. An observer may read or mutate the
   stack from any callback; a re-entrant push runs a fresh flush whose notifications follow the
@@ -113,8 +113,8 @@ the route's `ModalInner`) in `init_state` and deregisters in `dispose`. The cont
 by `RouteId`. This replaces Flutter's element walk plus `widget is Hero` downcast; a hero can
 only register with its own route, which makes Flutter's `Navigator.of(hero) == navigator`
 check structural. Tags use `ViewKey`'s `key_eq`/`key_hash`; nothing downcasts. A duplicate
-tag in one route logs and keeps the **first** (deregistration compares `Arc::ptr_eq`, so the
-loser cannot evict the winner); Flutter asserts in debug and keeps the last in release.
+tag in one route logs and keeps the **first** (deregistration withdraws the seat its own
+registration was given, so the loser cannot evict the winner); Flutter asserts in debug and keeps the last in release.
 
 `HeroMode` provides an inherited `bool` composed as `ancestor && enabled`, so a nested enabled
 scope cannot re-enable a disabled subtree; manifest collection skips a tag whose hero on either
@@ -157,7 +157,7 @@ if the destination is gone, the shuttle fades out while the flight keeps flying.
   survives by construction. Flutter's `placeholderBuilder` replaces the child and loses its
   state; FLUI does not port that shape, and does not reuse its name.
 - **Automatic attach.** `HeroControllerScope::new(controller, child)` / `none(child)` is an
-  inherited `Option<Arc<HeroController>>`. With no scope above it, a navigator creates a default
+  inherited `Option<Rc<HeroController>>`. With no scope above it, a navigator creates a default
   controller (Flutter relies on `MaterialApp` to install one; FLUI has no such host). Each
   navigator wraps its overlay in `HeroControllerScope::none`, so nested navigators are isolated
   unless given their own scope. A manually added hero observer
@@ -171,13 +171,13 @@ A flight can start from a user gesture (the edge swipe-back) rather than from a 
 change. The seam of §3 and §7 is unchanged; these rules add the gesture entry to it, and
 `Hero::transition_on_user_gestures` joins the public surface of §8.
 
-- **The navigator counts gestures.** `NavigatorHandle::did_start_user_gesture` increments an
-  atomic count; only the 0 to 1 edge resolves the top route and its predecessor and calls
+- **The navigator counts gestures.** `NavigatorHandle::did_start_user_gesture` increments a
+  count in a `Cell`; only the 0 to 1 edge resolves the top route and its predecessor and calls
   `NavigatorObserver::did_start_user_gesture(route, previous)`, and only the 1 to 0 edge calls
   `did_stop_user_gesture`. The stop edge saturates at zero, so an unmatched stop is a no-op in
-  release and a debug assertion in debug builds. Observers run after the history lock is
-  released, as in §4 (`crates/flui-widgets/src/navigator/navigator.rs:1243`, `:1255`; the
-  counting itself at `:712`, `:732`).
+  release and a debug assertion in debug builds. Observers run after the history borrow is
+  released, as in §4 (`NavigatorShared::did_start_user_gesture` and `did_stop_user_gesture` in
+  `crates/flui-widgets/src/navigator/navigator.rs`).
 - **The gesture source.** `BackGestureController::new` calls the navigator's
   `did_start_user_gesture` before its first drag update; a route takes part through
   `PageRoute::back_gesture(true)`

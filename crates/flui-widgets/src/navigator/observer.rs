@@ -10,11 +10,11 @@
 //! queues are simply cleared, so registering an observer never
 //! changes route lifecycle — only whether anyone hears about it.
 //!
-//! # Nothing here is notified under a lock
+//! # Nothing here is notified under a borrow
 //!
 //! [`ObservationQueues::drain`] returns the delivery order as **owned data**.
 //! `RouteHistory::flush` puts it into `FlushOutcome`, and `NavigatorShared::apply`
-//! hands it to [`deliver`] *after* releasing the history mutex. That is what makes
+//! hands it to [`deliver`] *after* releasing the history borrow. That is what makes
 //! the [`NavigatorHandle`] an observer holds usable from `did_push`: it can read the
 //! stack, and it can mutate it.
 //!
@@ -29,14 +29,14 @@
 //! [`did_attach`]: NavigatorObserver::did_attach
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
 
 /// Observes route-stack mutations. Every method has a no-op default.
 ///
-/// `&self`, not `&mut self`: an observer is shared (`Arc`) and outlives any one
+/// `&self`, not `&mut self`: an observer is shared (`Rc`) and outlives any one
 /// flush. Implementations that accumulate use interior mutability, exactly as the
 /// rest of the framework does behind private fields.
 ///
@@ -46,9 +46,9 @@ use super::route::RouteId;
 /// `GlobalKey`, no element-tree lookup: the navigator pushes the capability at the
 /// observer, in registration order, from its own `init_state`.
 ///
-/// **Every callback here runs with no navigator lock held.** The flush computes its
+/// **Every callback here runs with no navigator borrow held.** The flush computes its
 /// notifications as owned data and `NavigatorShared::apply` delivers them once the
-/// history mutex is released, so `current()`, `route_ids()`, `can_pop()` — and even
+/// history borrow is released, so `current()`, `route_ids()`, `can_pop()` — and even
 /// `push()` / `pop()` — are all safe from `did_push` and friends. A mutation raised
 /// from a callback runs a *fresh* flush whose notifications are delivered after this
 /// one finishes draining, so treat it as defined but unusual.
@@ -63,7 +63,7 @@ use super::route::RouteId;
 pub trait NavigatorObserver {
     /// This observer was registered on a navigator that is now mounted.
     ///
-    /// Called once per attachment, in registration order, with no lock held.
+    /// Called once per attachment, in registration order, with no borrow held.
     ///
     /// Store the handle if you need it; it is `'static` and cloneable. It is
     /// **not** valid after [`did_detach`](Self::did_detach) — a detached handle
@@ -188,16 +188,16 @@ impl Notification {
 
 /// Fire `notifications` at every observer, in order.
 ///
-/// **The caller must hold no navigator lock.** `NavigatorShared::apply` is the one
-/// production call site, and it runs after `history.lock()` is released — which is
+/// **The caller must hold no navigator borrow.** `NavigatorShared::apply` is the one
+/// production call site, and it runs after `history.borrow_mut()` is released — which is
 /// the whole point: an observer holds a `NavigatorHandle` and would otherwise
-/// deadlock on `parking_lot::Mutex` the moment it read the stack it was told about.
+/// panic on a second `RefCell` borrow the moment it read the stack it was told about.
 ///
 /// An observer that panics does not keep the others from hearing: `recovery`
 /// holds the first failure.
 pub(crate) fn deliver(
     notifications: &[Notification],
-    observers: &[Arc<dyn NavigatorObserver>],
+    observers: &[Rc<dyn NavigatorObserver>],
     recovery: &mut flui_foundation::panic::PanicRecovery,
 ) {
     for notification in notifications {
