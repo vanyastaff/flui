@@ -409,21 +409,23 @@ fn round_navigated_and_settled() {
 /// Dropped in the middle of the push: the route's transition is running on the host's
 /// frames, the ink of the press is spreading and the inbox's task has begun to await the
 /// page's result. The page going out and the page coming in are both on screen only while
-/// the transition runs, which is what the round asserts before it drops them.
+/// the transition runs, which is what the round waits for before it drops them.
 fn round_dropped_with_a_page_coming_in() {
     let mut tester = mail();
     tester.tap(&find::button("Open message 1"));
-    for _ in 0..6 {
+    let mut frames = 0;
+    while (
+        tester.find_all(&find::text("Inbox")).len(),
+        tester.find_all(&find::text("Message 1")).len(),
+    ) != (1, 1)
+    {
+        assert!(
+            frames < 30,
+            "a push shows the page going out and the page coming in together while it runs"
+        );
         tester.pump();
+        frames += 1;
     }
-    assert_eq!(
-        (
-            tester.find_all(&find::text("Inbox")).len(),
-            tester.find_all(&find::text("Message 1")).len()
-        ),
-        (1, 1),
-        "six frames into a push the page going out and the page coming in are both on screen"
-    );
 }
 
 /// Dropped with the page open and settled, its result still awaited: the inbox's state

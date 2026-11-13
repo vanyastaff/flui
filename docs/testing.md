@@ -609,7 +609,7 @@ host's frames run to its end and the same animation dropped in flight;
 both, then drops the application in the middle of the push, and with the
 result still awaited. A round that drops its application in the middle of an
 animation asserts first that it is there: the fade, that the host still has
-its run to drive; the push, that the page going out and the page coming in
+its run to drive; the push waits until the page going out and the page coming in
 are both on screen. A widget
 family that keeps state of a new kind (a controller, an overlay, a route)
 adds its rounds there, one settled and one dropped in flight. A leak a round
