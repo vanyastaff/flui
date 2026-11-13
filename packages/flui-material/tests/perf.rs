@@ -406,19 +406,29 @@ fn round_navigated_and_settled() {
     tester.pump_and_settle();
 }
 
-/// Dropped one frame into the push: the route's transition is running, the ink of the press
-/// is spreading and the inbox's task has just begun to await the page's result.
+/// Dropped in the middle of the push: the route's transition is running on the host's
+/// frames, the ink of the press is spreading and the inbox's task has begun to await the
+/// page's result. The page going out and the page coming in are both on screen only while
+/// the transition runs, which is what the round asserts before it drops them.
 fn round_dropped_with_a_page_coming_in() {
     let mut tester = mail();
     tester.tap(&find::button("Open message 1"));
-    tester.pump();
-    assert!(
-        tester.try_pump_and_settle(0).is_err(),
-        "one frame into a push the application still has its transition to run"
+    for _ in 0..6 {
+        tester.pump();
+    }
+    assert_eq!(
+        (
+            tester.find_all(&find::text("Inbox")).len(),
+            tester.find_all(&find::text("Message 1")).len()
+        ),
+        (1, 1),
+        "six frames into a push the page going out and the page coming in are both on screen"
     );
 }
 
-/// Dropped with the page open: the task awaiting its result is never answered.
+/// Dropped with the page open and settled, its result still awaited: the inbox's state
+/// cancels its task as it goes, and the navigator's teardown completes the result with
+/// nothing.
 fn round_dropped_with_a_result_awaited() {
     let mut tester = mail();
     tester.tap(&find::button("Open message 1"));
@@ -440,7 +450,8 @@ fn round_dropped_with_a_dialog_open() {
 /// overlays, transitions, ink and the async driver each hold `Rc`s to the others; a cycle
 /// among them would leave a page behind every round
 /// (`flui_testing::heap::assert_rounds_plateau`). Two of the rounds drop the application
-/// with work in flight, which is where an owner's retirement has to let go of what it accepted.
+/// with work in flight, which is where an owner's retirement has to let go of what it
+/// accepted; the push's transition is an `AnimationController` on the presentation's vsync.
 #[test]
 fn a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap() {
     let rounds: [(&str, fn()); 3] = [

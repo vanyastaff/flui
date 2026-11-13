@@ -828,7 +828,9 @@ fn round_of_presses() {
 }
 
 /// A transition whose controller the round steps by hand: each value repaints the
-/// transition's layer. No frame drives this controller; the two fade rounds cover that.
+/// transition's layer. No frame drives this controller: the fade rounds below run a motion on
+/// the host's frames, and flui-material's plateau test runs a route transition, which is an
+/// `AnimationController` on the presentation's vsync.
 fn round_of_a_transition_stepped_by_hand() {
     use flui_animation::Animatable;
     use flui_animation::{Animation, AnimationController, Tween};
@@ -859,8 +861,8 @@ fn round_of_a_transition_stepped_by_hand() {
     }
 }
 
-/// A panel that fades out when `shown` turns false. `AnimatedOpacity` owns a controller
-/// registered with the presentation's vsync, so the host's frames run the fade.
+/// A panel that fades out when `shown` turns false. `AnimatedOpacity` owns an implicit motion
+/// bound to the presentation's vsync, so the host's frames run the fade.
 #[derive(Clone, StatefulView)]
 struct Fade {
     shown: SharedSignal<bool>,
@@ -911,7 +913,7 @@ fn host_with_a_fade_started() -> HeadlessHost {
     host
 }
 
-/// An animation the host's frames run to its end: the controller registers with the vsync,
+/// An animation the host's frames run to its end: the motion registers with the vsync,
 /// is ticked frame after frame and settles before the application is dropped.
 fn round_of_an_animation_run_to_its_end() {
     let mut host = host_with_a_fade_started();
@@ -919,8 +921,8 @@ fn round_of_an_animation_run_to_its_end() {
         .expect("a fade ends within a second");
 }
 
-/// The same animation dropped in flight: the vsync registration, the ticker and the frame
-/// the run asked for are all still held when the application goes.
+/// The same animation dropped in flight: the vsync registration and the frame the run asked
+/// for are still held when the application goes.
 fn round_of_an_animation_dropped_in_flight() {
     drop(host_with_a_fade_started());
 }

@@ -551,7 +551,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** all · **Who it hurts:** Applications that close a window, a tab or a nested Router while a dialog or a menu is open · **Parity:** none (ownership)
 
 - A `PageHandle` holds its navigator, the navigator's history holds each route, and a popup route holds the builder the application gave `show_dialog` or `PageHandle::push_popup`. A builder that captures a `PageHandle` closes the cycle, and that is the form ADR-0330 teaches: the handle resolved in `build` and moved into the callback. `NavigatorState::dispose` completes the pending results and leaves the history in place, so a navigator unmounted with such a route open frees neither itself nor the route: 26 KB a time in `an_app_dropped_with_a_dialog_open_keeps_its_navigator` (flui-material's `tests/perf.rs`), which holds the leak with `#[should_panic]`.
-- A `PageHandle` holds its navigator weakly, so the navigator's own routes cannot keep it alive, and an operation on a handle whose navigator is gone returns a typed refusal.
+- The entry closes when a `PageHandle` holds its navigator weakly, so that the navigator's own routes cannot keep it alive, and an operation on a handle whose navigator is gone returns a typed refusal.
 - The check is that test failing: its round joins `a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap` and the `#[should_panic]` goes.
 
 ### Widget states still fill their handles in `init_state`
