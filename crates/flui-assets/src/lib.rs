@@ -156,10 +156,6 @@
 //! - `images` - Enable image loading (PNG, JPEG, GIF, WebP)
 //! - `full` - Enable all stable features
 
-#![expect(
-    clippy::exhaustive_enums,
-    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
-)]
 #![cfg_attr(
     test,
     allow(

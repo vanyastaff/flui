@@ -179,7 +179,7 @@ impl core::fmt::Display for flui::LaunchError
 variant flui::LaunchError::CapabilityConflict(flui_runtime::capability::CapabilityConflict) // at 0
 variant flui::LaunchError::Platform { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 2
 variant flui::LaunchError::UnsupportedSystem(flui::UnsupportedSystem) // at 1
-pub enum flui::StartupWindow
+#[non_exhaustive] pub enum flui::StartupWindow
 impl Clone for flui::StartupWindow
 impl Copy for flui::StartupWindow
 impl Default for flui::StartupWindow
@@ -933,7 +933,7 @@ variant flui::animation::SimulationParameter::SpeedLimit // at 10
 variant flui::animation::SimulationParameter::Stiffness // at 1
 variant flui::animation::SimulationParameter::UnitDistance // at 12
 variant flui::animation::SimulationParameter::Velocity // at 9
-pub enum flui::animation::SpeedLimit
+#[non_exhaustive] pub enum flui::animation::SpeedLimit
 impl Clone for flui::animation::SpeedLimit
 impl Copy for flui::animation::SpeedLimit
 impl PartialEq for flui::animation::SpeedLimit
@@ -1465,7 +1465,7 @@ pub fn flui::app::DeviceRecovery::is_abandoned(self) -> bool
 variant flui::app::DeviceRecovery::Abandoned { attempts: u32 } // at 2
 variant flui::app::DeviceRecovery::Failed { attempts: u32 } // at 1
 variant flui::app::DeviceRecovery::Pending // at 0
-pub enum flui::app::DiagnosticsProfile
+#[non_exhaustive] pub enum flui::app::DiagnosticsProfile
 impl Clone for flui::app::DiagnosticsProfile
 impl Copy for flui::app::DiagnosticsProfile
 impl Default for flui::app::DiagnosticsProfile
@@ -2511,7 +2511,7 @@ pub fn flui::cupertino::CupertinoButton::padding(self, padding: flui::geometry::
 pub fn flui::cupertino::CupertinoButton::pressed_opacity(self, pressed_opacity: Option<f64>) -> Self
 pub fn flui::cupertino::CupertinoButton::size_style(self, size_style: flui::cupertino::CupertinoButtonSize) -> Self
 pub fn flui::cupertino::CupertinoButton::tinted(child: impl flui::prelude::IntoView) -> Self
-pub enum flui::cupertino::CupertinoButtonSize
+#[non_exhaustive] pub enum flui::cupertino::CupertinoButtonSize
 impl Clone for flui::cupertino::CupertinoButtonSize
 impl Copy for flui::cupertino::CupertinoButtonSize
 impl Default for flui::cupertino::CupertinoButtonSize
@@ -9710,7 +9710,7 @@ pub struct flui::material::SnackBarActionState { .. }
 impl Default for flui::material::SnackBarActionState
 impl core::fmt::Debug for flui::material::SnackBarActionState
 impl flui::prelude::ViewState<flui::material::SnackBarAction> for flui::material::SnackBarActionState
-pub enum flui::material::SnackBarClosedReason
+#[non_exhaustive] pub enum flui::material::SnackBarClosedReason
 impl Clone for flui::material::SnackBarClosedReason
 impl Copy for flui::material::SnackBarClosedReason
 impl Eq for flui::material::SnackBarClosedReason
@@ -9833,7 +9833,7 @@ pub fn flui::material::TabController::previous_index(&self) -> usize
 pub fn flui::material::TabController::set_index(&self, index: usize) -> Result<(), flui::foundation::MutatedDuringBuild>
 pub fn flui::material::TabController::step_alternatives(&self) -> flui::widgets::GestureAlternatives
 pub fn flui::material::TabController::with_motion(self, motion: flui::animation::MotionSpec) -> Self
-pub enum flui::material::TabIndicatorAnimation
+#[non_exhaustive] pub enum flui::material::TabIndicatorAnimation
 impl Clone for flui::material::TabIndicatorAnimation
 impl Copy for flui::material::TabIndicatorAnimation
 impl Default for flui::material::TabIndicatorAnimation
@@ -29865,7 +29865,7 @@ pub fn flui_assets::core::metadata::AssetMetadata::new() -> Self
 pub fn flui_assets::core::metadata::AssetMetadata::video(width: u32, height: u32, duration: core::time::Duration, frame_rate: f32, format: impl Into<String>) -> Self
 pub fn flui_assets::core::metadata::AssetMetadata::with_custom(self, key: impl Into<String>, value: impl Into<String>) -> Self
 pub fn flui_assets::core::metadata::AssetMetadata::with_size(size_bytes: usize) -> Self
-pub enum flui_assets::error::AssetError
+#[non_exhaustive] pub enum flui_assets::error::AssetError
 impl Clone for flui_assets::error::AssetError
 impl From<core::io::error::Error> for flui_assets::error::AssetError
 impl core::error::Error for flui_assets::error::AssetError

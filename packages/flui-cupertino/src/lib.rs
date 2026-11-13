@@ -78,10 +78,6 @@
 //! let _themed = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrink());
 //! ```
 
-#![expect(
-    clippy::exhaustive_enums,
-    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
-)]
 #![deny(missing_docs)]
 
 pub mod activity_indicator;

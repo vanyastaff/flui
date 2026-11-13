@@ -100,6 +100,10 @@ const BLACK54: Color = Color::rgba(0, 0, 0, 0x8A);
 /// `Start`/`End` map directly to left/right rather than resolving against
 /// `Directionality`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a drawer opens from one of a bar's two edges"
+)]
 pub enum DrawerAlignment {
     /// The start (left, under the LTR-only mapping this substrate uses) edge.
     Start,
