@@ -296,12 +296,11 @@ pub struct GpuContext {
     /// a slot's textures for the length of its frame. Kept from a slot's
     /// first update until it detaches, across device rebuilds.
     textures: FxHashMap<SlotId, KeptTextures>,
-    /// Whether texture uploads were written to the queue since its last
-    /// submission: until one, a slot uploads no newer image (see
-    /// [`KeptTextures::prepare`]).
-    writes_unsubmitted: bool,
     #[cfg(test)]
     builds: ContextBuilds,
+    /// Flush submissions of texture writes a frame did not submit.
+    #[cfg(test)]
+    texture_flushes: Cell<usize>,
     /// How many of the next offscreen frames panic after their recording.
     #[cfg(test)]
     panics_ahead: u32,
@@ -535,7 +534,8 @@ impl GpuContext {
             blit: None,
             slots: SlotTable::default(),
             textures: FxHashMap::default(),
-            writes_unsubmitted: false,
+            #[cfg(test)]
+            texture_flushes: Cell::new(0),
             #[cfg(test)]
             builds: ContextBuilds {
                 devices: 1,
@@ -583,7 +583,6 @@ impl GpuContext {
         self.painter = None;
         self.pipelines = None;
         self.blit = None;
-        self.writes_unsubmitted = false;
         for kept in self.textures.values_mut() {
             kept.leave_device();
         }
@@ -770,10 +769,29 @@ impl GpuContext {
     /// Put `slot`'s external textures on the current device before its
     /// frame takes the painter, so the lend itself uploads nothing and a
     /// panic here (a tracing subscriber is not ours) costs neither the
-    /// painter nor the blit.
-    fn prepare_textures(&mut self, slot: SlotId) {
-        if let Some(kept) = self.textures.get_mut(&slot) {
-            self.writes_unsubmitted |= kept.prepare(&self.domain, self.writes_unsubmitted);
+    /// painter nor the blit. Answers whether it wrote to the queue: a frame
+    /// that then submits nothing flushes the writes
+    /// ([`Self::flush_texture_writes`]).
+    fn prepare_textures(&mut self, slot: SlotId) -> bool {
+        self.textures
+            .get_mut(&slot)
+            .is_some_and(|kept| kept.prepare(&self.domain))
+    }
+
+    /// Submit the texture writes a frame made and did not submit:
+    /// `write_texture` holds staging memory until a queue submission, and a
+    /// frame can end without one (no damage, a surface not acquired, an
+    /// error, a panic). Bounded by the domain's submission ledger as a frame
+    /// is; a refused flush leaves the writes to the next submission.
+    fn flush_texture_writes(&self) {
+        let flushed = self
+            .domain
+            .prepare(Vec::new(), Vec::new())
+            .and_then(|prepared| self.domain.submit(prepared));
+        #[cfg(test)]
+        self.texture_flushes.set(self.texture_flushes.get() + 1);
+        if let Err(error) = flushed {
+            tracing::debug!(target: "flui.gpu", %error, "texture writes wait for the next submission");
         }
     }
 
@@ -830,8 +848,8 @@ impl GpuContext {
             let entry = self.offscreen_slot(slot)?;
             (entry.target()?.clone(), entry.format, entry.size)
         };
-        let _submission_scope = self.domain.begin_frame_scope()?;
-        self.prepare_textures(slot);
+        let submission_scope = self.domain.begin_frame_scope()?;
+        let wrote = self.prepare_textures(slot);
         let mut painter = self.take_painter(format, size);
         let own_textures = self.lend_textures(slot, &mut painter);
         #[cfg(test)]
@@ -866,15 +884,19 @@ impl GpuContext {
             drawn
         });
         self.take_back_textures(slot, &mut painter, own_textures);
+        drop(submission_scope);
         let Some(drawn) = drawn else {
             self.keep_pipelines(painter, &mut caught);
+            if wrote {
+                let _flushed = caught.contain(|| self.flush_texture_writes());
+            }
             caught.resume();
             unreachable!("BUG: a contained call that did not return holds its panic")
         };
         self.painter = Some(painter);
-        // The frame's submission carried the texture writes before it.
-        if drawn.is_ok() {
-            self.writes_unsubmitted = false;
+        // A submitted frame carried the texture writes made before it.
+        if wrote && drawn.is_err() {
+            self.flush_texture_writes();
         }
         drawn
     }
@@ -908,7 +930,7 @@ impl GpuContext {
         };
         // Uploads run before the painter and the blit are taken, so a
         // panic there (a tracing subscriber is not ours) costs neither.
-        self.prepare_textures(slot);
+        let wrote = self.prepare_textures(slot);
         let mut painter = self.take_painter(format, size);
         painter.resize(size.0, size.1);
         // The blit's pipelines, like the library's, are inserted only once
@@ -941,6 +963,9 @@ impl GpuContext {
         self.take_back_textures(slot, &mut painter, own_textures);
         let Some(rendered) = rendered else {
             self.keep_pipelines(painter, &mut caught);
+            if wrote {
+                let _flushed = caught.contain(|| self.flush_texture_writes());
+            }
             caught.resume();
             unreachable!("BUG: a contained call that did not return holds its panic")
         };
@@ -948,8 +973,9 @@ impl GpuContext {
         // acquire errors come before it records, and a recording error is
         // closed by the frame protocol's cleanup.
         self.painter = Some(painter);
-        if matches!(rendered, Ok(PresentDisposition::Presented)) {
-            self.writes_unsubmitted = false;
+        // A presented frame submitted the texture writes made before it.
+        if wrote && !matches!(rendered, Ok(PresentDisposition::Presented)) {
+            self.flush_texture_writes();
         }
         rendered
     }
@@ -2038,14 +2064,14 @@ mod tests {
         for shade in 20..=23 {
             assert_eq!(draw(&mut executor, shade), RasterVerdict::NotShown);
             assert_eq!(
-                executor.backend().textures[&slot].unuploaded(),
+                executor.backend().textures[&slot].waiting(),
                 1,
                 "the hidden slot keeps one image per texture off the queue"
             );
         }
         show(&mut executor, SlotVisibility::Shown);
         assert_eq!(draw(&mut executor, 30), RasterVerdict::Presented);
-        assert_eq!(executor.backend().textures[&slot].unuploaded(), 0);
+        assert_eq!(executor.backend().textures[&slot].waiting(), 0);
         let pixels = executor
             .backend()
             .read_slot(slot)
@@ -2057,16 +2083,16 @@ mod tests {
         );
     }
 
-    /// A shown frame that ends without a submission (no damage, a surface
-    /// not acquired) leaves its texture writes waiting in the queue's
-    /// staging memory: until a submission carries them, the next frame
-    /// uploads no newer image and draws the one already on the device, and
-    /// the frame after that draws the newest.
+    /// A frame that uploads a texture image and then submits nothing (here it
+    /// panics; no damage and a surface not acquired end the same way)
+    /// flushes the writes, since `write_texture` holds staging memory until
+    /// a submission; a frame that submits flushes nothing more. The newest
+    /// image is drawn by the next frame.
     ///
-    /// Red-check: upload while the queue holds unsubmitted writes and the
-    /// first frame draws the newer image, each such frame adding a batch.
+    /// Red-check: drop the flush from the unwound exit of `render_slot` and
+    /// no flush is counted.
     #[test]
-    fn texture_writes_wait_for_a_submission_before_more_are_written() {
+    fn a_frame_that_submits_nothing_flushes_its_texture_writes() {
         use flui_foundation::ManualClock;
         use flui_layer::{Layer, TextureLayer, TextureRegistry};
         use flui_painting::paint::Image;
@@ -2119,27 +2145,34 @@ mod tests {
             let _ = executor.turn();
             let mut settled = Vec::new();
             sender.drain_settlements(slot, &mut settled);
-            assert_eq!(settled[0].verdict, RasterVerdict::Presented);
-            let pixels = executor
-                .backend()
-                .read_slot(slot)
-                .expect("the slot reads back");
-            pixels[0]
+            settled[0].verdict
         };
+        let flushes =
+            |executor: &RasterExecutor<GpuContext>| executor.backend().texture_flushes.get();
 
-        assert_eq!(draw(&mut executor, Some(10)), 10);
-        // What a shown frame that ended before its submission leaves.
-        executor.backend_mut().writes_unsubmitted = true;
+        assert_eq!(draw(&mut executor, Some(10)), RasterVerdict::Presented);
         assert_eq!(
-            draw(&mut executor, Some(20)),
-            10,
-            "the newer image waits while the queue holds unsubmitted writes"
+            flushes(&executor),
+            0,
+            "a submitted frame carries its writes"
         );
+
+        executor.backend_mut().panic_in_next_frame();
+        let _ = draw(&mut executor, Some(20));
+        let _ = sender.take_failure(slot);
         assert_eq!(
-            draw(&mut executor, None),
-            20,
-            "the frame after a submission draws the newest image"
+            flushes(&executor),
+            1,
+            "the unwound frame flushed its writes"
         );
+
+        assert_eq!(draw(&mut executor, None), RasterVerdict::Presented);
+        let pixels = executor
+            .backend()
+            .read_slot(slot)
+            .expect("the slot reads back");
+        assert_eq!(pixels[0], 20, "the next frame draws the newest image");
+        assert_eq!(flushes(&executor), 1);
     }
 
     /// Dropping the painter a frame unwound with runs destructors that are not

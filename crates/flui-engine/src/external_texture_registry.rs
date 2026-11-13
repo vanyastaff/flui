@@ -12,7 +12,7 @@ use crate::{
     error::{EngineResult, ExternalTextureError},
 };
 use flui_painting::paint::TextureId;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::sync::{Arc, Weak};
 
 /// Default sampling used by the resource-sampling draw entry point.
@@ -454,27 +454,27 @@ fn check_frame_size(max_dimension: u32, frame: &flui_painting::paint::Image) -> 
 }
 
 /// One presentation's external textures in a context that shares its device
-/// and painter between presentations: the newest image of each live texture,
-/// and their allocations on the current device.
+/// and painter between presentations.
 ///
-/// An image reaches the device only when the slot is about to draw
-/// ([`Self::prepare`]): `write_texture` holds staging memory until a submission
-/// completes, and a hidden slot submits nothing, so a producer streaming into
-/// it replaces one image per texture instead of piling up uploads. A new
-/// device gets every image back the same way.
+/// A frame reaches the device only when the slot is about to draw
+/// ([`Self::prepare`]): `write_texture` holds staging memory until a queue
+/// submission, and a hidden slot submits nothing, so a producer streaming into
+/// it replaces one waiting image per texture instead of piling up uploads.
 #[derive(Debug, Default)]
 pub(crate) struct KeptTextures {
     /// The allocations, `None` until the first draw and after the device
     /// they were on is replaced or a frame unwound with them lent.
     registry: Option<ExternalTextureRegistry>,
-    frames: FxHashMap<TextureId, flui_painting::paint::Image>,
-    /// The textures whose newest image `registry` does not hold yet.
-    unuploaded: FxHashSet<TextureId>,
+    /// The image each texture's allocation holds, kept so a new device gets
+    /// it back.
+    drawn: FxHashMap<TextureId, flui_painting::paint::Image>,
+    /// The newest frame of each texture, not on the device yet.
+    waiting: FxHashMap<TextureId, flui_painting::paint::Image>,
 }
 
 impl KeptTextures {
     /// Keep each frame of `updates` that a texture of `domain`'s device can
-    /// hold, for the next draw to upload, and release the retired textures.
+    /// hold as its texture's waiting image, and release the retired textures.
     ///
     /// # Errors
     /// The first frame refused; the texture keeps its previous image, and
@@ -487,12 +487,10 @@ impl KeptTextures {
         let flui_layer::TextureUpdates {
             frames, retired, ..
         } = updates;
-        for id in &retired {
-            self.frames.remove(id);
-            self.unuploaded.remove(id);
-        }
-        if let Some(registry) = &mut self.registry {
-            for id in retired {
+        for id in retired {
+            self.drawn.remove(&id);
+            self.waiting.remove(&id);
+            if let Some(registry) = &mut self.registry {
                 registry.unregister(id);
             }
         }
@@ -501,8 +499,7 @@ impl KeptTextures {
         for (id, frame) in frames {
             match check_frame_size(max_dimension, &frame) {
                 Ok(()) => {
-                    self.frames.insert(id, frame);
-                    self.unuploaded.insert(id);
+                    self.waiting.insert(id, frame);
                 }
                 Err(error) => {
                     first_error.get_or_insert(error);
@@ -513,58 +510,70 @@ impl KeptTextures {
     }
 
     /// Put the textures on `domain`'s device for a draw, and answer whether
-    /// it wrote to the queue.
+    /// it wrote to the queue, which the draw's submission, or a flush when
+    /// the draw submits nothing, then carries.
     ///
-    /// Allocations on no device or another one are made again from every
-    /// kept image. Otherwise the images not uploaded yet are uploaded, unless
-    /// `queue_holds_writes`: `write_texture` holds staging memory until a
-    /// submission, and a shown frame can end without one (no damage, a
-    /// surface that is not acquired), so one batch at most waits for a
-    /// submission and the newer images wait in memory, drawn from the next
-    /// frame after it.
-    ///
-    /// A frame the device refuses (one past a new device's texture limit)
-    /// drops its texture, so the kept images match what is drawn, and is
-    /// reported as a warning.
-    pub(crate) fn prepare(&mut self, domain: &Arc<DeviceDomain>, queue_holds_writes: bool) -> bool {
+    /// Allocations on no device or another one are made again from the drawn
+    /// images; then each waiting image is uploaded. A frame the device
+    /// refuses (one past a new device's texture limit) leaves its texture's
+    /// previous image, reported as a warning.
+    pub(crate) fn prepare(&mut self, domain: &Arc<DeviceDomain>) -> bool {
         let fresh = !self
             .registry
             .as_ref()
             .is_some_and(|registry| registry.is_on(domain));
-        if fresh {
-            self.registry = Some(ExternalTextureRegistry::new(domain));
-            self.unuploaded.extend(self.frames.keys().copied());
-        }
-        if self.unuploaded.is_empty() || (queue_holds_writes && !fresh) {
+        if !fresh && self.waiting.is_empty() {
             return false;
         }
-        let registry = self
-            .registry
+        let Self {
+            registry,
+            drawn,
+            waiting,
+        } = self;
+        let mut refused = Vec::new();
+        if fresh {
+            // Installed only once whole, so a panic part way leaves the next
+            // draw to start again.
+            let mut made = ExternalTextureRegistry::new(domain);
+            drawn.retain(|id, frame| match made.upload(domain, *id, frame) {
+                Ok(()) => true,
+                Err(error) => {
+                    refused.push(error);
+                    false
+                }
+            });
+            *registry = Some(made);
+        }
+        let registry = registry
             .as_mut()
             .expect("BUG: the registry is on this device, made above if it was not");
-        let unuploaded: Vec<TextureId> = self.unuploaded.iter().copied().collect();
-        let mut refused = Vec::new();
-        for id in unuploaded {
-            let Some(frame) = self.frames.get(&id) else {
-                self.unuploaded.remove(&id);
+        let ids: Vec<TextureId> = waiting.keys().copied().collect();
+        for id in ids {
+            let Some(frame) = waiting.get(&id) else {
                 continue;
             };
-            if let Err(error) = registry.upload(domain, id, frame) {
-                self.frames.remove(&id);
-                registry.unregister(id);
-                refused.push(error);
+            // Taken off the waiting list only once uploaded or refused, so a
+            // panic in the upload leaves it for the next draw.
+            let uploaded = registry.upload(domain, id, frame);
+            let frame = waiting
+                .remove(&id)
+                .expect("BUG: the waiting image was read above");
+            match uploaded {
+                Ok(()) => {
+                    drawn.insert(id, frame);
+                }
+                Err(error) => refused.push(error),
             }
-            self.unuploaded.remove(&id);
         }
         for error in refused {
-            tracing::warn!(target: "flui.gpu", %error, "external texture upload refused a frame; its texture is dropped");
+            tracing::warn!(target: "flui.gpu", %error, "external texture upload refused a frame; the texture keeps its previous image");
         }
         true
     }
 
     /// The allocations on `domain`'s device, taken out for one frame after
     /// [`Self::prepare`]: until [`Self::take_back`] returns them, the next
-    /// prepare makes them again from the kept images, so a frame that never
+    /// prepare makes them again from the drawn images, so a frame that never
     /// returns them costs a re-upload, not the textures.
     pub(crate) fn lend(&mut self, domain: &Arc<DeviceDomain>) -> ExternalTextureRegistry {
         let registry = self
@@ -589,10 +598,10 @@ impl KeptTextures {
         self.registry = None;
     }
 
-    /// How many textures hold an image the device has not received yet.
+    /// How many textures have an image waiting for the device.
     #[cfg(test)]
-    pub(crate) fn unuploaded(&self) -> usize {
-        self.unuploaded.len()
+    pub(crate) fn waiting(&self) -> usize {
+        self.waiting.len()
     }
 }
 
@@ -630,6 +639,59 @@ mod tests {
             registry.get(id).map(ExternalTextureEntry::size),
             Some((2, 2)),
             "the previous image stays registered"
+        );
+    }
+
+    /// A waiting frame the device refuses at upload leaves its texture the
+    /// image it drew before, in the allocation and in the image kept for the
+    /// next device.
+    ///
+    /// Red-check: keep the refused frame as the drawn image and the next
+    /// device draws an image this one never showed.
+    #[test]
+    fn a_waiting_frame_refused_at_upload_leaves_the_drawn_image() {
+        let Some((device, queue)) = crate::test_support::try_test_device_and_queue(
+            "a_waiting_frame_refused_at_upload_leaves_the_drawn_image",
+        ) else {
+            return;
+        };
+        let domain = DeviceDomain::new(device, queue);
+        let id = TextureId::new(1);
+        let mut kept = KeptTextures::default();
+        let updates = |side: u32| {
+            flui_layer::TextureUpdates::from_frames(vec![(
+                id,
+                flui_painting::paint::Image::from_rgba8(
+                    side,
+                    side,
+                    [255, 0, 0, 255].repeat((side * side) as usize),
+                ),
+            )])
+        };
+        kept.apply(&domain, updates(2)).expect("the frame fits");
+        assert!(kept.prepare(&domain), "the waiting image is uploaded");
+        kept.registry
+            .as_mut()
+            .expect("prepared on the device")
+            .generation = u64::MAX;
+
+        kept.apply(&domain, updates(4)).expect("the frame fits");
+        assert!(kept.prepare(&domain));
+        assert_eq!(kept.waiting(), 0, "a refused frame does not wait again");
+        assert_eq!(
+            kept.registry
+                .as_ref()
+                .and_then(|registry| registry.get(id))
+                .map(ExternalTextureEntry::size),
+            Some((2, 2)),
+            "the allocation keeps the drawn image"
+        );
+        assert_eq!(
+            kept.drawn
+                .get(&id)
+                .map(|image| (image.width(), image.height())),
+            Some((2, 2)),
+            "the image kept for the next device is the drawn one"
         );
     }
 }
