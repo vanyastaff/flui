@@ -546,7 +546,10 @@ jobs:
     needs: [checks, plan]
     if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.trybuild_required == 'true')
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    # A cold cache (a new key after a lockfile or toolchain change) builds
+    # for about 22 minutes and runs the cases for about 25 more; a job cut
+    # off at the limit saves no cache, so main would stay cold.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
