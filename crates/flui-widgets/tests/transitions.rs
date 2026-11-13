@@ -544,7 +544,7 @@ fn taps_at(
 /// A selected path owns its coordinate mapping through delivery, while a
 /// later selection observes the newly committed animation sample.
 pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     use flui_animation::Vsync;
@@ -559,6 +559,20 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
         let controller = owner.controller();
         let received = Rc::new(RefCell::new(Vec::new()));
         let delivered = Rc::clone(&received);
+        // The innermost listener receives the first Down before the recording
+        // one above it and moves the animation there: the hit test already
+        // selected the path, so the recording listener must still see that
+        // path's mapping, not one recomputed from the newer sample.
+        let armed = Rc::new(Cell::new(false));
+        let mutate = Rc::clone(&armed);
+        let mover = controller.clone();
+        let mutating = Listener::new()
+            .on_pointer_down(move |_, _| {
+                if mutate.replace(false) {
+                    mover.set_value(0.5).expect("no build is running");
+                }
+            })
+            .child(child_box());
         let listener = Listener::new()
             .on_pointer_down(move |_, dispatch| {
                 let (PointerEvent::Down(local), PointerEvent::Down(global)) =
@@ -570,7 +584,7 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
                     .borrow_mut()
                     .push((local.sample.position.get(), global.sample.position.get()));
             })
-            .child(child_box());
+            .child(mutating);
         let slide = SlideTransition::new(fraction(controller, TranslationFraction::new(2.0, 0.0)))
             .child(listener)
             .text_direction(direction);
@@ -592,12 +606,13 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
         assert_no_rebuild(&built(&mut laid), "running slide before selection");
 
         let first = (90.0 + sign * 20.0, 90.0);
+        armed.set(true);
         laid.dispatch_pointer_down(first.0, first.1);
-        // Change the public animation after the down selected its path and
-        // before the frame that commits the new sample: the delivered
-        // coordinates stay those of the selected path.
-        controller.set_value(0.5).expect("no build is running");
         laid.dispatch_pointer_up(first.0, first.1);
+        assert!(
+            !armed.get(),
+            "{direction:?}: the inner listener moved the animation during delivery"
+        );
         laid.pump_for(Duration::ZERO);
         assert_eq!(
             &*received.borrow(),
