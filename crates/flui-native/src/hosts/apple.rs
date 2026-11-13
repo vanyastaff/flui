@@ -175,6 +175,11 @@ static_assertions::assert_not_impl_any!(MacOSPlatform: Send, Sync);
 #[cfg(target_os = "ios")]
 pub type IOSPlatform = HostPlatform<Apple>;
 
+// Owner-local (ADR-0327 §5): the platform belongs to the main thread that
+// built it; another thread reaches it through its proxy.
+#[cfg(target_os = "ios")]
+static_assertions::assert_not_impl_any!(IOSPlatform: Send, Sync);
+
 #[cfg(target_os = "macos")]
 impl MacosHost for Apple {
     fn displays() -> Arc<dyn crate::owner::apple::macos::HostDisplays> {

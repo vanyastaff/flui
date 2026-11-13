@@ -349,8 +349,8 @@ impl host::Loop for MacOSLoop {
         // Idempotent when `MacOSPlatform::try_new` already bound on this thread; trips
         // a debug assertion if `run` somehow migrated threads (ADR-0039).
         self.affinity.bind_current();
-        // The loop is shareable, so only AppKit can say this is the main
-        // thread the application runs on, in a release build too.
+        // The affinity check is debug-only, so AppKit is what proves this is the
+        // main thread the application runs on, in a release build too.
         let main = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
             message: "MacOSPlatform::run must run on the AppKit main thread".to_string(),
         })?;
