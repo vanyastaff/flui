@@ -181,7 +181,7 @@ fn snapshot(laid: &LaidOut) -> DenseSnapshot {
     let row = laid.find_by_render_type("RenderFlex");
     let render_ids = laid.children(row);
     assert_eq!(render_ids.len(), CHILD_COUNT, "render child count");
-    let geometries = render_ids
+    let geometries: Vec<(Size, Offset)> = render_ids
         .iter()
         .map(|id| (laid.size(*id), laid.offset(*id)))
         .collect();
