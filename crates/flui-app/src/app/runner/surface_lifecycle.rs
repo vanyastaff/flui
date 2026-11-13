@@ -100,6 +100,13 @@ impl SurfaceLifecycle for flui_engine::Renderer {
 /// display its window is on (ADR-0256 §6), narrowed from the concrete
 /// renderer as [`SurfaceLifecycle`] is.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "ios")),
+    allow(
+        dead_code,
+        reason = "the Android and iOS runners keep the raster lane until they move to the raster executor (ADR-0305)"
+    )
+)]
 pub(super) trait DisplayColorFollow {
     /// Take `display` as the colour of the window's display: whether the held
     /// surface was configured again for it.
@@ -134,6 +141,13 @@ impl DisplayColorFollow for flui_engine::Renderer {
 #[expect(
     deprecated,
     reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+)]
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "ios")),
+    allow(
+        dead_code,
+        reason = "the Android and iOS runners keep the raster lane until they move to the raster executor (ADR-0305)"
+    )
 )]
 pub(super) fn follow_display_color<B>(
     lane: &parking_lot::Mutex<crate::app::raster_lane::RasterLane<B>>,

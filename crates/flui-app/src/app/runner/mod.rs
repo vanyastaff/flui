@@ -54,6 +54,12 @@ mod owner_dispatch;
 // outcome are portable and its tests are host-run, so a
 // `cfg(target_os = "android")` here would hide the whole file from every gate
 // this host can run.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) mod raster_host;
 mod retry_backoff;
 mod secondary_window;
 #[cfg(any(
@@ -69,12 +75,6 @@ mod session_controller;
 ))]
 mod stand_in_renderer;
 mod terminal;
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub(super) mod window_renderer;
 // Unconditional, like `device_recovery` above: the seam's trait and outcome
 // are portable and its tests are host-run, so a `cfg(target_os = "android")`
 // here would hide the whole file from every gate this host can run.
@@ -493,7 +493,7 @@ pub(crate) use stand_in_renderer::StandInRenderers;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub(crate) use {host::loop_wake_deadline, window_renderer::WindowRenderers};
+pub(crate) use {host::loop_wake_deadline, raster_host::RasterFactory};
 
 /// Install the native journal of `backend` before the loop starts its platform, in a build that
 /// records it (ADR-0288 §11): see `native_journal`.

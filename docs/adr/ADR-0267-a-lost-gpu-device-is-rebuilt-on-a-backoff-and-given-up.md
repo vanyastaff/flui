@@ -90,8 +90,9 @@ and every dropped frame carries the last value.
 
 ### §3 A rebuild failing at the ceiling is given up
 
-`flui-app`'s `DeviceRecoveryBackoff` wraps the shared `RetryBackoff` with a streak. A failed
-rebuild whose next attempt is a full ceiling away counts against
+The raster executor's `DeviceRebuilds` (a desktop window's device, ADR-0305) and `flui-app`'s
+`DeviceRecoveryBackoff` (an Android or iOS window's) each wrap the shared `RetryBackoff` with a
+streak. A failed rebuild whose next attempt is a full ceiling away counts against
 `DEVICE_RECOVERY_ATTEMPTS_AT_CAP = 10`. The backoff reaches its ceiling after seven failures, about
 two seconds after the loss, so the driver has about twelve seconds in all: longer than a Windows
 driver reset (TDR, two seconds by default) or a GPU switch takes. A rebuild still failing then is

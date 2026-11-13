@@ -134,6 +134,13 @@ pub(crate) const SANDBOXED_STORAGE_DIR: &str = "app";
     deprecated,
     reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "ios")),
+    allow(
+        dead_code,
+        reason = "the Android and iOS runners keep the raster lane until they move to the raster executor (ADR-0305)"
+    )
+)]
 pub(super) fn track_raster_lane(lane: flui_engine::RasterHandle) {
     let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
     memory.track_raster_lane(lane);
@@ -952,6 +959,14 @@ pub(crate) fn install_owner_platform(
     let clipboard = owner.clipboard();
     let primary_selection = owner.primary_selection();
     let data_transfer = owner.data_transfer();
+    // The outgoing loop's raster host, whose GPU context retires below,
+    // outside the composition-root borrow.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    let mut previous_raster_host = None;
     let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
         APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();
@@ -981,7 +996,7 @@ pub(crate) fn install_owner_platform(
             {
                 state.quit_notification = crate::app::runtime::QuitNotification::Active;
                 // A loop that wants other renderers says so after this install.
-                state.window_renderers = super::window_renderer::WindowRenderers::default();
+                previous_raster_host = Some(std::mem::take(&mut state.raster_host));
                 state.pending_window_reservations =
                     Arc::new(std::sync::atomic::AtomicUsize::new(0));
             }
@@ -1013,6 +1028,12 @@ pub(crate) fn install_owner_platform(
     });
     first.contain(|| previous_host.shutdown());
     first.contain(|| drop(previous_host));
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    first.contain(|| drop(previous_raster_host));
     first.contain(|| drop(previous_owner_turn_wake));
     first.contain(|| drop(previous_clipboard));
     first.contain(|| drop(previous));
@@ -1574,6 +1595,19 @@ impl Drop for OwnerHostClearGuard {
                 (None, None, None)
             }
         });
+        // The loop's GPU context retires with the loop, before the platform
+        // whose display it was created on, and never in the thread's
+        // teardown, where the GPU driver's own thread-locals are gone.
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        if removed.is_some() {
+            let raster_host =
+                APP_RUNTIME.with(|slot| std::mem::take(&mut slot.borrow_mut().raster_host));
+            drop(raster_host);
+        }
         drop(removed);
         drop(owner_turn_wake);
         drop(storage);

@@ -994,9 +994,6 @@ fn deadlines_survive_a_sibling_install_and_close() {
         assert!(!reveal.after_frame(false, now + web_time::Duration::from_secs(offset)));
         let deadline = reveal.next_deadline().expect("armed reveal");
         let sources = Arc::new(DesktopWakeDeadlines {
-            device_recovery_backoff: Arc::new(
-                super::super::device_recovery::new_device_recovery_backoff(),
-            ),
             fallback: Arc::new(FallbackWake::new()),
             first_reveal: reveal,
         });
