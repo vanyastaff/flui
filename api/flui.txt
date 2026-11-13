@@ -31102,6 +31102,7 @@ impl Default for flui_layer::texture_registry::TextureUpdates
 impl core::fmt::Debug for flui_layer::texture_registry::TextureUpdates
 pub fn flui_layer::texture_registry::TextureUpdates::from_frames(frames: Vec<(flui::painting::paint::TextureId, flui::painting::paint::Image)>) -> Self
 pub fn flui_layer::texture_registry::TextureUpdates::is_empty(&self) -> bool
+pub fn flui_layer::texture_registry::TextureUpdates::merge(&mut self, newer: Self)
 pub struct flui_layer::tree::layer_tree::LayerNode { .. }
 impl From<flui_layer::layer::Layer> for flui_layer::tree::layer_tree::LayerNode
 impl core::fmt::Debug for flui_layer::tree::layer_tree::LayerNode

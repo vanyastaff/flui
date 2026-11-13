@@ -27,12 +27,22 @@ and wakes the runtime. The `Texture` widget listens to its id, rebuilds with the
 revision, and `RenderTexture` repaints on a revision change, so the frame reaches
 the screen without anything else changing.
 
-Before each frame renders, the raster lane (and the web runner's direct sink) takes
-the registry's updates — the newest frame per texture, and the retired ids — and the
-renderer applies them: a frame of the same size replaces the allocation in place, a
-resized one re-registers it, and a retired id is unregistered. The renderer keeps the
-newest frame of each live texture and uploads them again after rebuilding its painter
-(device recovery, surface format change), which drops imported allocations.
+The registry's updates (the newest frame per texture, and the retired ids) travel to
+the raster side. A retired id is unregistered at once.
+
+A slot of the GPU context (ADR-0305) receives them with its frame's snapshot. It keeps
+each frame as its texture's waiting image, and uploads the waiting images only when it
+is about to draw: `write_texture` holds staging memory until a queue submission, and a
+hidden slot submits nothing. A frame that wrote and then submitted nothing flushes the
+writes. A frame of the same size replaces the allocation in place, and a resized one
+re-registers it. A frame the device refuses at upload leaves the image drawn before,
+with a warning. The slot keeps the drawn image of each live texture and uploads them
+again on a rebuilt device.
+
+The per-window renderer, which the desktop and mobile runners still build, takes the
+updates before each frame and uploads them at once. It keeps the newest frame of each
+live texture and uploads them again after rebuilding its painter (device recovery,
+surface format change), which drops imported allocations.
 
 ## Verification
 

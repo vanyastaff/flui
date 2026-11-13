@@ -174,3 +174,36 @@ pub(crate) fn a_panicking_listener_drop_still_wakes_the_retirement() {
     assert_eq!(wakes.load(Ordering::SeqCst), 1, "the retirement wakes");
     assert_eq!(registry.take_updates().retired, [id]);
 }
+
+/// Two updates merged apply as both would in turn: a newer frame replaces
+/// the older one of its texture, a texture retired later loses its older
+/// frame, and every retirement reaches the backend.
+pub(crate) fn merged_updates_keep_the_newest_frame_and_every_retirement() {
+    let (registry, _) = counting_registry();
+    let kept = registry.register().expect("id");
+    let replaced = registry.register().expect("id");
+    let retired_early = registry.register().expect("id");
+    let retired_late = registry.register().expect("id");
+    let (kept_id, replaced_id) = (kept.id(), replaced.id());
+    let (early_id, late_id) = (retired_early.id(), retired_late.id());
+    kept.submit_frame(frame(1));
+    replaced.submit_frame(frame(2));
+    retired_late.submit_frame(frame(3));
+    drop(retired_early);
+    let mut older = registry.take_updates();
+    replaced.submit_frame(frame(4));
+    drop(retired_late);
+    let newer = registry.take_updates();
+    older.merge(newer);
+
+    let mut frames: Vec<_> = older
+        .frames
+        .iter()
+        .map(|(id, image)| (*id, image.data()[0]))
+        .collect();
+    frames.sort_by_key(|(id, _)| id.get());
+    assert_eq!(frames, [(kept_id, 1), (replaced_id, 4)]);
+    let mut retired = older.retired.clone();
+    retired.sort_by_key(|id| id.get());
+    assert_eq!(retired, [early_id, late_id]);
+}

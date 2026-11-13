@@ -400,6 +400,14 @@ impl flui_engine::SlotBackend for RestoresDuringRender {
         self.inner.set_latency(slot, latency);
     }
 
+    fn apply_textures(
+        &mut self,
+        slot: SlotId,
+        updates: flui_layer::TextureUpdates,
+    ) -> flui_engine::EngineResult<()> {
+        self.inner.apply_textures(slot, updates)
+    }
+
     fn render(
         &mut self,
         slot: SlotId,
