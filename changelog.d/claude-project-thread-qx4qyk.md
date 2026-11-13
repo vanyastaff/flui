@@ -20,3 +20,9 @@
   does: it declares no image role of its own, so an `IconButton`, a floating action button or an
   `ElevatedButton` over a labelled icon is one button node with that name instead of a nameless
   button over an image.
+- A `ListTile` without `on_tap` is enabled or disabled as `ListTile::enabled` says, to assistive
+  technology too, and is one node of its own: its state no longer reaches the list it sits in. It
+  still takes no focus and tracks no pointer. The tile describes itself on its well, one element
+  and one render node fewer per row.
+- `Checkbox`, `Radio` and `Switch` turned off or on resolve their colors from the new state in the
+  frame that turns them, building once instead of twice.

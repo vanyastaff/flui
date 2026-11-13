@@ -262,6 +262,14 @@ impl<T: PartialEq + Clone + 'static> StatefulView for Radio<T> {
         } else {
             WidgetStates::NONE
         };
+        // `Disabled` is seeded from the switch the well is given: the well's
+        // node writes the same value, and this build reads it first
+        // (ADR-0322 §3).
+        let initial = if self.is_interactive() {
+            initial
+        } else {
+            initial.with_state(WidgetState::Disabled)
+        };
         RadioState {
             states: WidgetStatesController::new(initial),
             states_listener: None,
@@ -280,6 +288,12 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
     }
 
     fn did_update_view(&mut self, old_view: &Radio<T>, new_view: &Radio<T>) {
+        // Seeded before this build reads it, from the switch the well is
+        // given; the well's node writes the same value (ADR-0322 §3).
+        if old_view.is_interactive() != new_view.is_interactive() {
+            self.states
+                .update(WidgetState::Disabled, !new_view.is_interactive());
+        }
         let was_selected = old_view.is_selected();
         let is_selected = new_view.is_selected();
         if was_selected != is_selected {
@@ -325,6 +339,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
             .shape(MaterialShape::Stadium)
             .overlay_color(overlay_color)
             .states_controller(self.states.clone())
+            .enabled(interactive)
             .focus_indicator(FocusIndicator::Halo)
             // Flutter's `Semantics(checked: …, inMutuallyExclusiveGroup: true,
             // enabled: …)` around the radio: the well's node is that one node,

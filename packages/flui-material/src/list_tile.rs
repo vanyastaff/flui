@@ -139,8 +139,10 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
-    MainAxisSize, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
+    MainAxisSize, Padding, Row, SafeArea, SemanticsRole, SizedBox,
 };
+
+use flui_sdk::widgets::interaction::node::Description;
 
 use crate::ink_well::InkWell;
 use crate::material::Material;
@@ -477,12 +479,6 @@ impl ListTile {
         self.min_tile_height = Some(height);
         self
     }
-
-    /// Whether this tile responds to a whole-tile tap: enabled with an
-    /// `on_tap` set.
-    fn is_interactive(&self) -> bool {
-        self.enabled && self.on_tap.is_some()
-    }
 }
 
 /// [`ListTile`]'s theme-resolved geometry/color/style — see [`resolve_style`]'s
@@ -788,7 +784,9 @@ impl StatelessView for ListTile {
         // keeps it whether or not it is selected; any other tile declares no
         // selection (its `selected` only recolors it), so a tappable one is a
         // button and a tile merged into a radio or check box adds no state
-        // those roles do not carry.
+        // those roles do not carry. The well's node carries the description
+        // and the tile's switch: a tile without a handler is enabled or not as
+        // the tile says, and the node stays put when the handler comes or goes.
         let role = if self.selectable {
             SemanticsRole::ListBoxOption
         } else if self.on_tap.is_some() {
@@ -796,18 +794,17 @@ impl StatelessView for ListTile {
         } else {
             SemanticsRole::None
         };
-        let mut semantics = Semantics::new().role(role).enabled(self.enabled);
+        let mut description = Description::new(role);
         if self.selectable {
-            semantics = semantics.selected(self.selected);
+            description = description.selected(self.selected);
         }
-        let semantics = semantics.child(content);
 
-        let mut ink_well = InkWell::new().child(semantics).shape(resolved.shape);
-        if self.is_interactive() {
-            let on_tap = self
-                .on_tap
-                .clone()
-                .expect("BUG: is_interactive() checked on_tap.is_some()");
+        let mut ink_well = InkWell::new()
+            .child(content)
+            .shape(resolved.shape)
+            .enabled(self.enabled)
+            .description(description);
+        if let Some(on_tap) = self.on_tap.clone() {
             ink_well = ink_well.on_tap(move |ctx| on_tap(ctx));
         }
 

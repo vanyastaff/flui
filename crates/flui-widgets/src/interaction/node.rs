@@ -399,16 +399,28 @@ impl InteractiveNode {
         self
     }
 
-    /// Whether the control is enabled: the only switch of its parts
+    /// Whether the control is enabled: the switch of its parts
     /// (ADR-0322 §2). While `false` no recognizer joins an arena, the focus
     /// node cannot take focus and gives up the focus it holds, every bound
     /// action answers `is_enabled` `false` and stays declared, and the
     /// semantics say disabled and offer no action. The node is still hit
-    /// where it was, so a disabled control covers what is beneath it.
+    /// where it was, so a disabled control covers what is beneath it. The
+    /// switch alone writes `Disabled` and the semantics' `enabled`; a control
+    /// that is enabled but given no press is not disabled, yet takes no
+    /// focus, binds nothing live and tracks no pointer.
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
+    }
+
+    /// Whether the control can be operated: enabled and given a press. A
+    /// control that is enabled but has no handler (a list tile without a
+    /// tap) is not disabled, so it says nothing of `Disabled`, yet nothing
+    /// operates it: it takes no focus, its bindings are switched off, and it
+    /// tracks no pointer, as an `InkWell` without callbacks.
+    fn operable(&self) -> bool {
+        self.enabled && self.press.is_some()
     }
 
     /// The tap the pointer part answers: the control's, while enabled. The
@@ -426,11 +438,13 @@ impl InteractiveNode {
     }
 
     /// The focus part's configuration: the control's own, conjoined with
-    /// the switch.
+    /// whether the control can be operated.
     fn focus_config(&self) -> Option<FocusConfig> {
         self.focus.as_ref().map(|config| {
             let mut config = FocusConfig {
-                can_request_focus: Some(config.can_request_focus.unwrap_or(true) && self.enabled),
+                can_request_focus: Some(
+                    config.can_request_focus.unwrap_or(true) && self.operable(),
+                ),
                 ..config.clone()
             };
             if let Some(states) = &self.states {
@@ -449,12 +463,12 @@ impl InteractiveNode {
         })
     }
 
-    /// The bindings the node declares: its own while enabled, and the same
-    /// types switched off while disabled, so an intent stops at the control
-    /// and does not activate an enclosing one.
+    /// The bindings the node declares: its own while the control can be
+    /// operated, and the same types switched off otherwise, so an intent
+    /// stops at the control and does not activate an enclosing one.
     fn declared_actions(&self) -> Option<Rc<Vec<(TypeId, ErasedAction)>>> {
         let actions = self.actions.as_ref()?;
-        if self.enabled {
+        if self.operable() {
             return Some(Rc::clone(actions));
         }
         Some(Rc::new(
@@ -620,6 +634,9 @@ pub struct InteractiveNodeState {
     /// writes `Disabled` from.
     states: Option<WidgetStatesController>,
     enabled: bool,
+    /// Whether the control can be operated: enabled and given a press. A
+    /// press and a hover need it; `Disabled` reads `enabled` alone.
+    operable: bool,
 }
 
 impl std::fmt::Debug for InteractiveNodeState {
@@ -639,8 +656,11 @@ impl InteractiveNodeState {
     /// controller held before, the same one or the one this replaces: a
     /// press and a hover follow their contact and their pointer. The focus
     /// states come from the focus node, so a controller given to a control
-    /// that already holds focus starts right; a disabled control has no
-    /// contact and tracks no pointer, so nothing of it is pressed or hovers it.
+    /// that already holds focus starts right; a control that cannot be
+    /// operated (disabled, or with no press) has no
+    /// contact and tracks no pointer, so nothing of it is pressed or hovers
+    /// it. `Disabled` is the switch alone: a control with no press is not
+    /// disabled.
     fn write_states(&self, carried: WidgetStates) {
         let Some(states) = &self.states else {
             return;
@@ -660,11 +680,11 @@ impl InteractiveNodeState {
         }
         // `Pressed` follows its sources (the contact and the activation
         // holds, which the controller counts) at their edges; a write here
-        // keeps it, and a disabled control is not pressed.
-        if self.enabled && (carried.contains(WidgetStates::PRESSED) || states.held_pressed()) {
+        // keeps it, and a control that cannot be operated is not pressed.
+        if self.operable && (carried.contains(WidgetStates::PRESSED) || states.held_pressed()) {
             values |= WidgetStates::PRESSED;
         }
-        if carried.contains(WidgetStates::HOVERED) && self.enabled {
+        if carried.contains(WidgetStates::HOVERED) && self.operable {
             values |= WidgetStates::HOVERED;
         }
         states.write(WRITTEN, values);
@@ -772,6 +792,7 @@ impl StatefulRenderView for InteractiveNode {
             anchor: SubtreeAnchor::new(),
             states: self.states.clone(),
             enabled: self.enabled,
+            operable: self.operable(),
         }
     }
 
@@ -873,13 +894,14 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
             failure.contain(|| replaced.write(WRITTEN, WidgetStates::NONE));
         }
         if let Some(states) = &new.states {
-            states.set_pointers_inside(if new.enabled { inside } else { 0 });
-            if contact && new.enabled {
+            states.set_pointers_inside(if new.operable() { inside } else { 0 });
+            if contact && new.operable() {
                 failure.contain(|| states.set_contact_pressed(true));
             }
         }
         self.states.clone_from(&new.states);
         self.enabled = new.enabled;
+        self.operable = new.operable();
         failure.contain(|| self.write_states(carried));
         failure.resume();
     }
@@ -921,11 +943,12 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
             (None, None) => {}
         }
         // The mouse part exists for a reader of `Hovered`, while the control
-        // is enabled: a disabled control tracks no pointer (ADR-0322 §2).
+        // can be operated: a disabled control, or one with no press, tracks
+        // no pointer (ADR-0322 §2).
         let hover = view
             .states
             .as_ref()
-            .filter(|_| view.enabled)
+            .filter(|_| view.operable())
             .map(MouseRegion::hovering);
         match (hover, render_object.mouse_mut()) {
             (Some(hover), Some(part)) => {

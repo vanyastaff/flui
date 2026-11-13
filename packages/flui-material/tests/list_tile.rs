@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_material::{ListTile, Radio, Theme, ThemeData};
-use flui_sdk::view::IntoView;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{MergeSemantics, Text};
 use flui_testing::a11y::Role;
 
@@ -157,5 +157,167 @@ pub fn a_selectable_tile_is_an_option_whether_or_not_selected() {
             announced,
             "selectable: {selectable}, selected: {selected}"
         );
+    }
+}
+
+/// A tile is disabled only when it says so, and operable only with a
+/// handler as well: an enabled tile without one is not disabled, offers no
+/// click and takes no focus. A tile is one node of its own, so its state
+/// stays on it and never reaches the list it sits in.
+///
+/// Red-check: take the well's switch from its handler alone (the
+/// `ListTile`'s `enabled` ignored), and the enabled tile without a handler
+/// is disabled.
+pub fn a_tile_is_disabled_only_when_it_says_so_and_operable_with_a_handler() {
+    use flui_sdk::widgets::{Semantics, SemanticsRole};
+    use flui_testing::a11y::Action;
+
+    for (enabled, handler) in [(true, true), (true, false), (false, true), (false, false)] {
+        let taps = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&taps);
+        let mut tile = ListTile::new().title(Text::new("Inbox")).enabled(enabled);
+        if handler {
+            tile = tile.on_tap(move |_ctx| {
+                counted.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        let mut laid = lay_out(
+            themed(
+                ThemeData::light(),
+                Semantics::new()
+                    .container(true)
+                    .role(SemanticsRole::ListBox)
+                    .child(tile),
+            ),
+            tight(400.0, 56.0),
+        );
+        laid.enable_semantics();
+        laid.pump();
+        let case = format!("enabled: {enabled}, handler: {handler}");
+        {
+            let tree = laid
+                .a11y_tree()
+                .expect("semantics enabled before the frame");
+            let node = tree
+                .find_by_label("Inbox")
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
+            assert_ne!(
+                node.role(),
+                Role::ListBox,
+                "{case}: the tile is its own node"
+            );
+            assert_eq!(node.is_disabled(), !enabled, "{case}: disabled");
+            let operable = enabled && handler;
+            assert_eq!(
+                node.supports_action(Action::Click),
+                operable,
+                "{case}: click"
+            );
+            assert_eq!(
+                node.supports_action(Action::Focus),
+                operable,
+                "{case}: focus"
+            );
+            let list = tree.find(Role::ListBox).expect("the list box");
+            assert!(!list.is_disabled(), "{case}: the list is never disabled");
+        }
+        laid.dispatch_pointer_down(2.0, 2.0);
+        laid.dispatch_pointer_up(2.0, 2.0);
+        assert_eq!(
+            taps.load(Ordering::SeqCst),
+            usize::from(enabled && handler),
+            "{case}: taps"
+        );
+    }
+}
+
+/// A tile turned off and on with its handler in place: off, it is disabled
+/// and does not run the handler; on again, it does. No element builds twice
+/// in the frame that turns it: the well seeds `Disabled` before its build, so
+/// the node's write of the same value during the build notifies nobody, and
+/// the well is not built again for it.
+///
+/// Red-check: drop the seed in `InkWell::did_update_view` (the switch
+/// changed, the controller kept), and the frame runs one build more than the
+/// elements it builds.
+pub fn turning_a_tile_off_and_on_keeps_its_handler_and_builds_the_well_once() {
+    let enabled = flui_testing::widgets::SharedSignal::new(true);
+    let taps = Arc::new(AtomicUsize::new(0));
+    let mut laid = lay_out(
+        themed(
+            ThemeData::light(),
+            SwitchedTile {
+                enabled: enabled.clone(),
+                taps: Arc::clone(&taps),
+            },
+        ),
+        tight(400.0, 56.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tap = |laid: &mut flui_testing::widgets::LaidOut| {
+        laid.dispatch_pointer_down(2.0, 2.0);
+        laid.dispatch_pointer_up(2.0, 2.0);
+        laid.pump();
+    };
+    tap(&mut laid);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "an enabled tile runs its handler"
+    );
+
+    for (on, taps_after) in [(false, 1), (true, 2)] {
+        enabled.set(on);
+        let report = laid.pump_report(std::time::Duration::from_millis(16)).build;
+        assert_eq!(
+            report.builds_run, report.elements_built,
+            "on: {on}: no element builds twice in the frame that turns the tile: {report:?}"
+        );
+        let disabled = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame")
+            .find_by_label("Inbox")
+            .expect("the tile")
+            .is_disabled();
+        assert_eq!(disabled, !on, "on: {on}: disabled");
+        tap(&mut laid);
+        assert_eq!(taps.load(Ordering::SeqCst), taps_after, "on: {on}: taps");
+    }
+}
+
+/// A `ListTile` whose switch a test turns, its handler kept.
+#[derive(Clone, StatefulView)]
+struct SwitchedTile {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    taps: Arc<AtomicUsize>,
+}
+
+struct SwitchedTileState {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for SwitchedTile {
+    type State = SwitchedTileState;
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        SwitchedTileState {
+            enabled: self.enabled.clone(),
+        }
+    }
+}
+
+impl ViewState<SwitchedTile> for SwitchedTileState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.enabled.bind(ctx);
+    }
+
+    fn build(&self, view: &SwitchedTile, ctx: &dyn BuildContext) -> impl IntoView {
+        let taps = Arc::clone(&view.taps);
+        ListTile::new()
+            .title(Text::new("Inbox"))
+            .enabled(self.enabled.get(ctx))
+            .on_tap(move |_ctx| {
+                taps.fetch_add(1, Ordering::SeqCst);
+            })
     }
 }

@@ -18,8 +18,8 @@
 //! allocator.
 
 use flui_material::{
-    Checkbox, Chip, ElevatedButton, FilterChip, InkWell, NavigationBar, NavigationDestination,
-    Radio, Switch, Tab, TabBar, TabController, Theme, ThemeData,
+    Checkbox, Chip, ElevatedButton, FilterChip, InkWell, ListTile, NavigationBar,
+    NavigationDestination, Radio, Switch, Tab, TabBar, TabController, Theme, ThemeData,
 };
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
@@ -270,6 +270,44 @@ fn perf_navigation_bar_alone() {
     assert!(
         cost.render_nodes <= 26,
         "a navigation bar adds {} render nodes",
+        cost.render_nodes
+    );
+}
+
+/// What a `ListTile` adds to the `Text` it titles, under a theme and a media
+/// query: its constraints, surface, safe area, icon theme and row, and its
+/// well, whose node carries the tile's description and switch, with no
+/// `Semantics` element of the tile's own.
+#[test]
+fn perf_list_tile_over_text() {
+    let cost = held_to_baseline(
+        "list_tile_over_text",
+        control_over_text_under(
+            |column| {
+                Theme::new(
+                    ThemeData::light(),
+                    MediaQuery::new(MediaQueryData::default(), column),
+                )
+                .boxed()
+            },
+            |row| {
+                ListTile::new()
+                    .title(Text::new(format!("Row {row}")))
+                    .on_tap(|_ctx| {})
+                    .boxed()
+            },
+        ),
+    );
+    // 18 elements and 9 render nodes while the tile wrapped its content in a
+    // `Semantics` of its own.
+    assert!(
+        cost.elements <= 17,
+        "a list tile adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 8,
+        "a list tile adds {} render nodes",
         cost.render_nodes
     );
 }

@@ -41,14 +41,17 @@
 //!
 //! The oracle's `enabled` is `true` when ANY of six tap-family callbacks is
 //! set (`isWidgetEnabled`, `ink_well.dart` `:1292-1303`). This well takes
-//! [`InkWell::on_tap`] only, so `enabled` is `on_tap.is_some()`, and it is the
-//! node's one switch (ADR-0322 §2): while disabled
-//! [`WidgetState::Disabled`] is set, no recognizer joins an arena, hover
-//! stops updating [`WidgetState::Hovered`] (oracle: `handleMouseEnter` gates
-//! `handleHoverChange` on `enabled`), the well cannot take focus, and the
-//! activation intents stay declared and switched off, so an Enter reaching
-//! it stops there rather than activating an enclosing control. A disabled
-//! well is still hit where it is, as its opaque mouse region made it.
+//! [`InkWell::on_tap`] only, so its switch is `on_tap.is_some()`, unless the
+//! control around it sets one: a `ListTile` is enabled or not whatever its
+//! handler. The switch is the node's (ADR-0322 §2, §3): while it is off
+//! [`WidgetState::Disabled`] is set and the semantics say disabled. The
+//! well responds only while it is on and has a handler; otherwise no
+//! recognizer joins an arena, hover stops updating [`WidgetState::Hovered`]
+//! (oracle: `handleMouseEnter` gates `handleHoverChange` on `enabled`), the
+//! well cannot take focus, and the activation intents stay declared and
+//! switched off, so an Enter reaching it stops there rather than activating
+//! an enclosing control. An enabled well with no handler is not disabled.
+//! A well is still hit where it is, as its opaque mouse region made it.
 //!
 //! # Press-state timing
 //!
@@ -142,6 +145,10 @@ pub struct InkWell {
     /// wrapper (ADR-0322 §1). Shared, so a well that describes nothing pays
     /// one word for it.
     description: Option<Rc<Description>>,
+    /// The well's switch, when the control around it sets one: a `ListTile`
+    /// is enabled or not whatever its handler. `None` takes the switch from
+    /// the handler, as Flutter's `isWidgetEnabled` does.
+    enabled: Option<bool>,
 }
 
 impl Default for InkWell {
@@ -165,6 +172,7 @@ impl InkWell {
             focus_node: None,
             focus_indicator: FocusIndicator::Ring,
             description: None,
+            enabled: None,
         }
     }
 
@@ -240,10 +248,26 @@ impl InkWell {
         self
     }
 
-    /// Whether this `InkWell` responds to interaction — see the module
+    /// Sets the well's switch apart from its handler: an enabled well with
+    /// no handler is not disabled, and still mounts no tap, takes no focus
+    /// and tracks no pointer (ADR-0322 §3). Defaults to whether
+    /// [`InkWell::on_tap`] is set.
+    #[must_use]
+    pub(crate) fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = Some(enabled);
+        self
+    }
+
+    /// The well's switch, the one value both its seed of
+    /// [`WidgetState::Disabled`] and its node's switch read — see the module
     /// doc's `enabled` section.
+    fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(self.on_tap.is_some())
+    }
+
+    /// Whether the well responds to interaction: enabled and given a handler.
     fn is_interactive(&self) -> bool {
-        self.on_tap.is_some()
+        self.is_enabled() && self.on_tap.is_some()
     }
 }
 
@@ -251,6 +275,7 @@ impl std::fmt::Debug for InkWell {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InkWell")
             .field("on_tap", &self.on_tap.is_some())
+            .field("enabled", &self.enabled)
             .field("overlay_color", &self.overlay_color)
             .field("shape", &self.shape)
             .finish_non_exhaustive()
@@ -477,6 +502,11 @@ impl StatefulView for InkWell {
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let states = self.states_controller.clone().unwrap_or_default();
+        // The node writes `Disabled` (ADR-0322 §3) when it mounts, inside this
+        // well's first build. Seeding the same value here, from the same
+        // switch and before the listener exists, keeps that write from
+        // notifying the well while it builds.
+        states.update(WidgetState::Disabled, !self.is_enabled());
         let indication = Indication::new(
             states.clone(),
             IndicationStyle {
@@ -508,15 +538,6 @@ impl StatefulView for InkWell {
 
 impl ViewState<InkWell> for InkWellState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // The node writes `Disabled` (ADR-0322 §2) when it mounts, inside this
-        // well's first build. Seeding the same value here, before the listener
-        // exists, keeps that write from notifying the well while it builds.
-        // `create_state` seeded the handler from the initial view, so
-        // `enabled` is derivable without one.
-        let initially_enabled = self.core.on_tap.borrow().is_some();
-        self.states
-            .update(WidgetState::Disabled, !initially_enabled);
-
         // From here on every real change of the states set (hover/focus/
         // press/disabled) moves the state layer and rebuilds.
         self.listen_to_states();
@@ -574,19 +595,19 @@ impl ViewState<InkWell> for InkWellState {
                 drop(outgoing);
             }
 
-            // Seeded before the listener, as in `init_state` (oracle:
+            // Seeded before the listener, as in `create_state` (oracle:
             // `initStatesController` runs again on a controller swap,
             // `ink_well.dart` `:943`): the node writes the same value to the
             // controller it is handed during this build.
             self.states
-                .update(WidgetState::Disabled, !new_view.is_interactive());
+                .update(WidgetState::Disabled, !new_view.is_enabled());
 
             self.listen_to_states();
-        } else if new_view.is_interactive() != old_view.is_interactive() {
+        } else if new_view.is_enabled() != old_view.is_enabled() {
             // The node writes the new `Disabled` during this build; seeded
             // here, that write notifies nobody mid-build.
             self.states
-                .update(WidgetState::Disabled, !new_view.is_interactive());
+                .update(WidgetState::Disabled, !new_view.is_enabled());
         }
 
         // A new overlay color or controller retargets the state layer.
@@ -599,7 +620,7 @@ impl ViewState<InkWell> for InkWellState {
     }
 
     fn build(&self, view: &InkWell, _ctx: &dyn BuildContext) -> impl IntoView {
-        let enabled = view.is_interactive();
+        let interactive = view.is_interactive();
         // The replaced handler is dropped after the slot's borrow ends: its
         // `Drop` is the author's.
         let replaced = self.core.on_tap.replace(view.on_tap.clone());
@@ -635,7 +656,7 @@ impl ViewState<InkWell> for InkWellState {
         // hit over its whole box, enabled or not.
         let mut node = InteractiveNode::new(content)
             .behavior(HitTestBehavior::Opaque)
-            .enabled(enabled)
+            .enabled(view.is_enabled())
             .states(self.states.clone())
             .bindings([
                 ActionBinding::shared::<ActivateIntent, Core>(&self.core),
@@ -651,7 +672,7 @@ impl ViewState<InkWell> for InkWellState {
         if view.focus_indicator == FocusIndicator::Ring {
             node = node.focus_ring();
         }
-        if enabled {
+        if interactive {
             node = node.tap(Rc::clone(&self.tap));
         }
         node
@@ -725,4 +746,119 @@ fn press_feedback(core: &Rc<Core>) -> ControlTap {
                 on_cancel.indication.cancel(Some(cancel.pointer.id.get()));
             }
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_sdk::widgets::SizedBox;
+    use flui_testing::widgets::{SharedSignal, lay_out, tight};
+
+    use super::*;
+
+    /// A well whose switch a test sets apart from its handler, as a
+    /// `ListTile` does.
+    #[derive(Clone, StatefulView)]
+    struct SwitchedWell {
+        enabled: SharedSignal<bool>,
+        handler: bool,
+        states: WidgetStatesController,
+    }
+
+    struct SwitchedWellState {
+        enabled: SharedSignal<bool>,
+    }
+
+    impl StatefulView for SwitchedWell {
+        type State = SwitchedWellState;
+        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+            SwitchedWellState {
+                enabled: self.enabled.clone(),
+            }
+        }
+    }
+
+    impl ViewState<SwitchedWell> for SwitchedWellState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            self.enabled.bind(ctx);
+        }
+
+        fn build(&self, view: &SwitchedWell, ctx: &dyn BuildContext) -> impl IntoView {
+            let well = InkWell::new()
+                .child(SizedBox::new(80.0, 40.0))
+                .states_controller(view.states.clone())
+                .enabled(self.enabled.get(ctx));
+            if view.handler {
+                well.on_tap(|_ctx| {})
+            } else {
+                well
+            }
+        }
+    }
+
+    /// The well's switch, not its handler, writes `Disabled`: an enabled
+    /// well without a handler is not disabled, and turning the switch with
+    /// the handler kept brings the controller along, from the seed before
+    /// the build as from the node within it.
+    ///
+    /// Red-check: take the switch from the handler alone (`is_enabled`
+    /// ignoring `enabled`), and the well without a handler is disabled.
+    #[test]
+    fn the_switch_writes_disabled_whatever_the_handler() {
+        for handler in [true, false] {
+            let enabled = SharedSignal::new(true);
+            let states = WidgetStatesController::default();
+            let mut laid = lay_out(
+                SwitchedWell {
+                    enabled: enabled.clone(),
+                    handler,
+                    states: states.clone(),
+                },
+                tight(80.0, 40.0),
+            );
+            let disabled = || states.value().contains_state(WidgetState::Disabled);
+            assert!(!disabled(), "handler: {handler}: enabled is not disabled");
+            enabled.set(false);
+            laid.pump();
+            assert!(disabled(), "handler: {handler}: turned off");
+            enabled.set(true);
+            laid.pump();
+            assert!(!disabled(), "handler: {handler}: turned on again");
+        }
+    }
+
+    /// An enabled well without a handler is not operated: it mounts no
+    /// mouse part and no pointer hovers it, as Flutter's `InkWell` without
+    /// callbacks.
+    ///
+    /// Red-check: give the node's mouse part to every enabled control (its
+    /// press not asked for), and the well without a handler mounts one.
+    #[test]
+    fn an_enabled_well_without_a_handler_tracks_no_pointer() {
+        for handler in [true, false] {
+            let states = WidgetStatesController::default();
+            let mut laid = lay_out(
+                SwitchedWell {
+                    enabled: SharedSignal::new(true),
+                    handler,
+                    states: states.clone(),
+                },
+                tight(80.0, 40.0),
+            );
+            let node = laid
+                .try_find_by_render_type("RenderInteractive")
+                .expect("the well's node");
+            assert_eq!(
+                laid.render_node(node).get::<bool>("has_mouse_part").ok() == Some(true),
+                handler,
+                "handler: {handler}: the mouse part"
+            );
+            laid.dispatch_pointer_hover(40.0, 20.0);
+            laid.pump();
+            assert_eq!(
+                states.value().contains_state(WidgetState::Hovered),
+                handler,
+                "handler: {handler}: hovered"
+            );
+        }
+    }
 }

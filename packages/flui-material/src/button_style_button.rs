@@ -386,6 +386,9 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             .shape(shape)
             .overlay_color(overlay_color)
             .states_controller(self.states.clone())
+            // The switch this button seeds `Disabled` from, given to the
+            // well whose node writes it.
+            .enabled(view.is_interactive())
             .description(description);
         if let Some(on_pressed) = view.on_pressed.clone() {
             ink_well = ink_well.on_tap(move |ctx| on_pressed(ctx));

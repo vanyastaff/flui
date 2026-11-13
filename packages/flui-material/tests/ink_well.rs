@@ -671,6 +671,48 @@ impl ViewState<ToggledWell> for ToggledWellState {
     }
 }
 
+/// A controller the well stops writing to keeps none of its states:
+/// handed a second controller while disabled, the well leaves `Disabled` on
+/// the second alone, and enabled again on the first, it leaves nothing on
+/// the second.
+///
+/// Red-check: skip clearing the replaced controller in the node's
+/// `did_update_view`, and the first keeps `Disabled`.
+pub fn a_replaced_controller_keeps_no_disabled() {
+    let enabled = flui_testing::widgets::SharedSignal::new(false);
+    let generation = flui_testing::widgets::SharedSignal::new(0_u32);
+    let first = flui_testing::widgets::SharedSignal::new(true);
+    let [states, second] = [
+        WidgetStatesController::default(),
+        WidgetStatesController::default(),
+    ];
+    let mut laid = lay_out(
+        ToggledWell {
+            enabled: enabled.clone(),
+            generation,
+            first: first.clone(),
+            states: [states.clone(), second.clone()],
+        },
+        tight(80.0, 40.0),
+    );
+    assert_eq!(states.value(), WidgetStates::DISABLED);
+    first.set(false);
+    laid.pump();
+    assert_eq!(
+        (states.value(), second.value()),
+        (WidgetStates::NONE, WidgetStates::DISABLED),
+        "the replaced controller is cleared, the new one disabled"
+    );
+    enabled.set(true);
+    first.set(true);
+    laid.pump();
+    assert_eq!(
+        (states.value(), second.value()),
+        (WidgetStates::NONE, WidgetStates::NONE),
+        "enabled on the first, nothing is left on the second"
+    );
+}
+
 /// The well's activation holds `Pressed` for its delay past the contact
 /// (ADR-0322 §3): through a rebuild of the well with a new view, and to the
 /// controller handed to it under the hold, where it ends with its delay;
@@ -860,5 +902,115 @@ impl ViewState<RebuiltWell> for RebuiltWellState {
             })
             .into_view()
             .boxed()
+    }
+}
+
+/// Builds a control, enabled or not.
+type SwitchedBuild = fn(bool) -> BoxedView;
+
+/// A control a test turns off and on, rebuilt from `build`.
+#[derive(Clone, StatefulView)]
+struct SwitchedControl {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+    build: SwitchedBuild,
+}
+
+struct SwitchedControlState {
+    enabled: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for SwitchedControl {
+    type State = SwitchedControlState;
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        SwitchedControlState {
+            enabled: self.enabled.clone(),
+        }
+    }
+}
+
+impl ViewState<SwitchedControl> for SwitchedControlState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.enabled.bind(ctx);
+    }
+
+    fn build(&self, view: &SwitchedControl, ctx: &dyn BuildContext) -> impl IntoView {
+        (view.build)(self.enabled.get(ctx))
+    }
+}
+
+/// A control that resolves its colors from its well's controller above the
+/// well seeds `Disabled` before it builds, from the switch it gives the well:
+/// the frame that turns it off or on builds no element twice, so the control
+/// is drawn in its new state from that frame's one build.
+///
+/// Red-check: drop the `Disabled` seed of a control's `did_update_view`, and
+/// its frame runs one build more than the elements it builds.
+pub fn a_control_turned_off_or_on_builds_each_element_once() {
+    use flui_material::{ElevatedButton, FloatingActionButton, Radio, Switch};
+    use flui_sdk::widgets::Text;
+
+    let cases: [(&str, SwitchedBuild); 5] = [
+        ("Checkbox", |on| {
+            let control = Checkbox::new(false);
+            if on {
+                control.on_changed(|_ctx, _| {}).boxed()
+            } else {
+                control.boxed()
+            }
+        }),
+        ("Radio", |on| {
+            let control = Radio::new(1, Some(1));
+            if on {
+                control.on_changed(|_ctx, _| {}).boxed()
+            } else {
+                control.boxed()
+            }
+        }),
+        ("Switch", |on| {
+            let control = Switch::new(false);
+            if on {
+                control.on_changed(|_ctx, _| {}).boxed()
+            } else {
+                control.boxed()
+            }
+        }),
+        ("ElevatedButton", |on| {
+            let control = ElevatedButton::new(Text::new("Go"));
+            if on {
+                control.on_pressed(|_ctx| {}).boxed()
+            } else {
+                control.boxed()
+            }
+        }),
+        ("FloatingActionButton", |on| {
+            let control = FloatingActionButton::new();
+            if on {
+                control.on_pressed(|_ctx| {}).boxed()
+            } else {
+                control.boxed()
+            }
+        }),
+    ];
+    for (name, build) in cases {
+        let enabled = flui_testing::widgets::SharedSignal::new(true);
+        let mut laid = lay_out(
+            Theme::new(
+                ThemeData::light(),
+                SwitchedControl {
+                    enabled: enabled.clone(),
+                    build,
+                },
+            ),
+            tight(200.0, 100.0),
+        );
+        laid.pump();
+        for on in [false, true] {
+            enabled.set(on);
+            let report = laid.pump_report(Duration::from_millis(16)).build;
+            assert_eq!(
+                report.builds_run, report.elements_built,
+                "{name}, on: {on}: no element builds twice in the frame that turns it: {report:?}"
+            );
+        }
     }
 }

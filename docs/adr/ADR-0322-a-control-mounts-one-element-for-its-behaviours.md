@@ -137,6 +137,14 @@ The node's `enabled` is the only switch. While it is `false`:
 | actions | every bound mapping answers `is_enabled` `false` and stays declared, so the intent stops at the control and does not activate an enclosing one |
 | states | `WidgetState::Disabled` is set; `Hovered` and `Pressed` are cleared |
 
+The switch is not the press. A control that is enabled and given no press (a `ListTile` without
+`on_tap`, Flutter's `InkWell` without callbacks) is not disabled: its semantics do not say so and
+`Disabled` is not set, yet nothing operates it, so the pointer, hover, focus and actions rows hold
+for it as for a disabled one and `Hovered` and `Pressed` stay clear. A control whose switch is not
+"has a handler" sets it on the node itself; the catalogs' `InkWell` takes it through a
+crate-private `enabled`, from `ListTile::enabled` and from the switch each control around it seeds
+`Disabled` from (§3).
+
 The semantics part has no `enabled` of its own, and the focus part's `can_request_focus` and
 `Action::is_enabled` are conjoined with the node's switch, never a second source: a control is
 enabled for an intent when the node is enabled and the action is. The node's own description
@@ -187,10 +195,15 @@ control that is gone. A controller given later starts at what the node is: the f
 node's, so one that arrives holding any of them keeps only what is true of this control, and a
 press or a hover under way follows its contact or its pointers to it. A control that hands its node
 another controller under a hold takes a hold on the new one before it drops the old, and a control
-that becomes disabled drops its holds. Before it subscribes to a controller, a control may set
-`Disabled` on it to the value the node will write in the next build (Flutter's
-`initStatesController`), so the node's write notifies nobody while the control builds; it writes no
-other state.
+that becomes disabled drops its holds.
+
+The node owns `Disabled` as it owns the other four, and a control whose build reads the controller
+above the node (a button's style, a checkbox's colors) also sets `Disabled` to the value the node
+will write before that build: when it creates the controller, takes another, or its switch changes,
+as Flutter's `initStatesController` and `didUpdateWidget` do. Unseeded, that build resolves from
+the old value and the node's write during the build notifies the control to build again in the
+same frame. The seed and the node's switch are one function of the control (`is_interactive`, or
+`InkWell::is_enabled`), never two expressions; the control writes no other state.
 
 The two focus edges are delivered each on its own: a handler of one that panics does not cost the
 other, and the first failure is the one resumed (ADR-0281).
