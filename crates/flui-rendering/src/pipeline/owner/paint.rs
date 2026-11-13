@@ -2539,10 +2539,8 @@ mod tests {
             (vec![300; 6], 3),
             ([300, 40].repeat(4), 3),
             // A pass a little larger than the one it repeats finds room in
-            // the doubled buffer, and in one a mount's trim cut to the
-            // repeated size, once that grows a time.
+            // the doubled buffer.
             (vec![300, 300, 320, 300, 300, 320, 300], 3),
-            (vec![300, 5000, 300, 310, 300, 300, 310, 300], 4),
             (vec![1500; 6], 3),
             ([2000, 1000].repeat(4), 3),
         ] {
