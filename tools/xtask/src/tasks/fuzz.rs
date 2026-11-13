@@ -2,15 +2,22 @@
 //!
 //! A fuzz target is an example of the crate it tests (`crates/<crate>/fuzz/<name>.rs`)
 //! that links libFuzzer when it is built under `--cfg fuzzing`. An example
-//! shares its crate's lockfile and dev-dependencies, so a run decodes with the
+//! shares its crate's lockfile and dev-dependencies, so a run parses with the
 //! versions an application ships and needs no package of its own. The flags are
 //! the ones `cargo fuzz` passes; this task is their one place, so the nightly
-//! workflow and a developer who replays its crash build the same binary.
+//! workflow and a developer who replays its finding build the same binary.
+//!
+//! `--cfg fuzzing` reaches every crate of the build, and the decoders read it:
+//! `png` and `fdeflate` skip their checksums under it, so that a mutated image
+//! gets past the CRC to the code behind it. A finding is therefore replayed in
+//! the same build (`--replay`), not in a test binary, which would refuse the
+//! input at its checksum; the test case its fix adds restates the checksums.
 //!
 //! libFuzzer keeps the inputs that reached new code in
 //! `<target dir>/fuzz/<name>/corpus/`, which the nightly workflow carries from
-//! one run to the next, and writes the input that ended a run beside it as
-//! `crash-<hash>`, `timeout-<hash>` or `oom-<hash>`.
+//! one run to the next, and writes the input that ended a run to
+//! `<target dir>/fuzz/<name>/findings/`, named by what it did (`crash-<hash>`,
+//! `timeout-<hash>`, `oom-<hash>`, `leak-<hash>`).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -31,6 +38,10 @@ struct Target {
     seeds: &'static [&'static str],
     /// The longest input libFuzzer writes, in bytes.
     max_len: u32,
+    /// The largest single allocation an input may ask for, in MiB: one past
+    /// it ends the run as a finding. It is the bound the parsed entry
+    /// promises its caller, which no assertion on the parsed value can see.
+    malloc_limit_mb: u32,
 }
 
 /// Every fuzz target. Each parses bytes nobody vouches for: an encoded image
@@ -42,24 +53,28 @@ const TARGETS: [Target; 2] = [
         package: "flui-painting",
         seeds: &["crates/flui-painting/tests/fixtures"],
         max_len: 4096,
+        // `flui_painting::paint::MAX_DECODED_IMAGE_BYTES` on this host.
+        malloc_limit_mb: 256,
     },
     Target {
         name: "agent_wire",
         package: "flui-runtime",
         seeds: &["crates/flui-runtime/fuzz/seeds/agent_wire"],
         max_len: 2048,
+        // A conversation of 2 KiB asks a session for nothing near this.
+        malloc_limit_mb: 64,
     },
 ];
 
 /// The one host the sanitizer runtime and this task's flags are written for.
 const FUZZ_TARGET: &str = "x86_64-unknown-linux-gnu";
 
-/// What `rustc` adds to a fuzz build: the `fuzzing` name the targets and
-/// their manifests test, the edge counters and comparison hooks libFuzzer
-/// steers by (`-sanitizer-coverage-*`, as `cargo fuzz` sets them), and
-/// AddressSanitizer, so a read or write out of bounds in `unsafe` code ends
-/// the run where it happens. With `--target` named they reach the target's
-/// crates only, never a build script or a procedural macro.
+/// What `rustc` adds to a fuzz build: the `fuzzing` name the targets, their
+/// manifests and some decoders test, the edge counters and comparison hooks
+/// libFuzzer steers by (`-sanitizer-coverage-*`, as `cargo fuzz` sets them),
+/// and AddressSanitizer, so a read or write out of bounds in `unsafe` code
+/// ends the run where it happens. With `--target` named they reach the
+/// target's crates only, never a build script or a procedural macro.
 const RUSTFLAGS: &str = "--cfg fuzzing -Cpasses=sancov-module \
     -Cllvm-args=-sanitizer-coverage-level=4 \
     -Cllvm-args=-sanitizer-coverage-inline-8bit-counters \
@@ -76,20 +91,22 @@ pub(crate) struct FuzzArgs {
     /// The targets to run (`image_decode`, `agent_wire`); every target when
     /// none is named.
     targets: Vec<String>,
-    /// Seconds each target runs.
-    #[arg(long, default_value_t = 60)]
+    /// Seconds each target runs, at least one: libFuzzer reads zero as no
+    /// limit.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(1..))]
     seconds: u32,
-    /// Run the one named target on this input alone and stop: the replay of
-    /// a `crash-`, `timeout-` or `oom-` file under the sanitizer.
+    /// Run the one named target on this file alone and stop: the replay of
+    /// a finding in the build that found it.
     #[arg(long, value_name = "FILE", conflicts_with = "seconds")]
     replay: Option<PathBuf>,
     #[command(flatten)]
     run: RunOpts,
 }
 
-/// `cargo xtask fuzz`: runs each named target for `--seconds`, and fails on
-/// the first input that panics, aborts, trips the sanitizer, hangs or runs
-/// out of memory. With `--replay` it runs one target on one input.
+/// `cargo xtask fuzz`: runs each named target for `--seconds`, every one of
+/// them even after one fails, and fails when an input panics, aborts, trips
+/// the sanitizer, hangs, leaks or allocates past its target's limit. With
+/// `--replay` it runs one target on one input.
 ///
 /// Needs the nightly toolchain, on x86_64 Linux.
 pub(crate) fn fuzz(args: &FuzzArgs) -> anyhow::Result<ExitCode> {
@@ -102,6 +119,10 @@ pub(crate) fn fuzz(args: &FuzzArgs) -> anyhow::Result<ExitCode> {
         let [target] = targets[..] else {
             bail!("`--replay` takes the one target the input belongs to");
         };
+        // libFuzzer reads a directory as a corpus and fuzzes from it without end.
+        if !input.is_file() {
+            bail!("`--replay` takes a file: {} is not one", input.display());
+        }
         // Every command runs from the repository root, wherever this one was typed.
         let input =
             std::path::absolute(input).with_context(|| format!("resolving {}", input.display()))?;
@@ -109,15 +130,18 @@ pub(crate) fn fuzz(args: &FuzzArgs) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     let work = target_dir()?.join("fuzz");
+    let mut steps = Vec::with_capacity(targets.len());
     for target in targets {
         let dir = work.join(target.name);
         if !runner.dry_run {
-            let corpus = dir.join("corpus");
-            std::fs::create_dir_all(&corpus)
-                .with_context(|| format!("creating {}", corpus.display()))?;
+            for made in [dir.join("corpus"), dir.join("findings")] {
+                std::fs::create_dir_all(&made)
+                    .with_context(|| format!("creating {}", made.display()))?;
+            }
         }
-        runner.steps(&[run_step(target, &dir, args.seconds)])?;
+        steps.push(run_step(target, &dir, args.seconds));
     }
+    runner.every(&steps)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -148,8 +172,16 @@ fn started(target: Target) -> Cmd {
         .args([format!("fuzz_{}", target.name)])
         .args(["--"])
         .env("RUSTFLAGS", RUSTFLAGS)
-        // Nightly adds lints ahead of stable; this run is for crashes.
+        // Nightly adds lints ahead of stable; this run is for findings.
         .env("CARGO_BUILD_WARNINGS", "warn")
+}
+
+/// The limits an input runs under, the same in a run and in its replay.
+fn limits(target: Target) -> [String; 2] {
+    [
+        format!("-timeout={UNIT_TIMEOUT_SECS}"),
+        format!("-malloc_limit_mb={}", target.malloc_limit_mb),
+    ]
 }
 
 /// One target's run: libFuzzer over the corpus in `dir` and the target's
@@ -160,22 +192,20 @@ fn run_step(target: Target, dir: &Path, seconds: u32) -> Step {
         .args([format!("{dir}/corpus")])
         .args(target.seeds.iter().copied())
         .args([
-            format!("-artifact_prefix={dir}/"),
+            format!("-artifact_prefix={dir}/findings/"),
             format!("-max_total_time={seconds}"),
             format!("-max_len={}", target.max_len),
-            format!("-timeout={UNIT_TIMEOUT_SECS}"),
-            "-print_final_stats=1".to_owned(),
         ])
+        .args(limits(target))
+        .args(["-print_final_stats=1"])
         .into()
 }
 
 /// One target on `input` alone: libFuzzer runs a file it is given once.
 fn replay_step(target: Target, input: &Path) -> Step {
     started(target)
-        .args([
-            input.display().to_string(),
-            format!("-timeout={UNIT_TIMEOUT_SECS}"),
-        ])
+        .args([input.display().to_string()])
+        .args(limits(target))
         .into()
 }
 
@@ -195,8 +225,8 @@ mod tests {
                 "cargo +nightly run --locked --target x86_64-unknown-linux-gnu \
                  -p flui-painting --example fuzz_image_decode -- \
                  target/fuzz/image_decode/corpus crates/flui-painting/tests/fixtures \
-                 -artifact_prefix=target/fuzz/image_decode/ -max_total_time=600 \
-                 -max_len=4096 -timeout=20 -print_final_stats=1"
+                 -artifact_prefix=target/fuzz/image_decode/findings/ -max_total_time=600 \
+                 -max_len=4096 -timeout=20 -malloc_limit_mb=256 -print_final_stats=1"
             ),
             "{line}"
         );
@@ -207,10 +237,20 @@ mod tests {
         let line = step.to_string();
         assert!(
             line.ends_with(
-                "-p flui-runtime --example fuzz_agent_wire -- /tmp/crash-0a1b -timeout=20"
+                "-p flui-runtime --example fuzz_agent_wire -- /tmp/crash-0a1b -timeout=20 \
+                 -malloc_limit_mb=64"
             ),
             "{line}"
         );
+    }
+
+    /// `--seconds 0` would be `-max_total_time=0`, which libFuzzer reads as no limit.
+    fn a_run_of_no_seconds_is_refused() {
+        let parsed = |argv: &[&str]| super::super::exec::parsed::<FuzzArgs>(argv.iter().copied());
+        let refused = parsed(&["--seconds", "0"]).expect_err("zero seconds are refused");
+        assert!(refused.to_string().contains("0 is not in 1.."), "{refused}");
+        let taken = parsed(&["agent_wire", "--seconds", "1"]).expect("one second is a run");
+        assert_eq!((taken.seconds, taken.targets.len()), (1, 1));
     }
 
     fn targets_are_selected_by_name_and_an_unknown_one_is_refused() {
@@ -275,6 +315,10 @@ mod tests {
                 (
                     "a_replay_runs_the_target_on_the_one_input",
                     a_replay_runs_the_target_on_the_one_input as fn(),
+                ),
+                (
+                    "a_run_of_no_seconds_is_refused",
+                    a_run_of_no_seconds_is_refused as fn(),
                 ),
                 (
                     "targets_are_selected_by_name_and_an_unknown_one_is_refused",

@@ -1,12 +1,15 @@
 //! The fuzz target of `Image::decode`: `cargo xtask fuzz image_decode` builds
 //! it under `--cfg fuzzing` and libFuzzer mutates encoded images toward code
 //! no input has reached yet, starting from `tests/fixtures/`. A panic, an
-//! abort, a read out of bounds or a decode past the time limit ends the run
-//! and leaves the input that did it.
+//! abort, a read out of bounds, an allocation past the limit or a decode past
+//! the time limit ends the run and leaves the input that did it;
+//! `cargo xtask fuzz image_decode --replay <file>` runs that input again in
+//! the same build.
 //!
-//! Built without that flag it decodes each file named on its command line,
-//! which is how a crash input is replayed on the pinned toolchain:
-//! `cargo run -p flui-painting --example fuzz_image_decode -- <file>`.
+//! Built without that flag it decodes each file named on its command line
+//! with the decoders an application ships. Those check a PNG's checksums,
+//! which a fuzz build skips, so an input the fuzzer found may be refused
+//! here before it reaches what it found.
 
 #![cfg_attr(fuzzing, no_main)]
 

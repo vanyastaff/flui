@@ -3,11 +3,11 @@
 //! toward code no input has reached yet, starting from `fuzz/seeds/agent_wire/`. Each input is
 //! one conversation with a service whose window shows a counter. A panic, an abort, a line
 //! that is not a line of the protocol or an answer nobody asked for ends the run and leaves
-//! the input that did it.
+//! the input that did it; `cargo xtask fuzz agent_wire --replay <file>` runs that input again
+//! in the same build.
 //!
 //! Built without that flag it holds the conversation of each file named on its command line,
-//! which is how a crash input is replayed on the pinned toolchain:
-//! `cargo run -p flui-runtime --example fuzz_agent_wire -- <file>`.
+//! with no sanitizer and no allocation limit.
 
 #![cfg_attr(fuzzing, no_main)]
 

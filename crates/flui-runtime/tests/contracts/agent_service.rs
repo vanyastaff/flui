@@ -1249,3 +1249,30 @@ proptest::proptest! {
         client_bytes_are_answered_or_refused_in_whole_lines(greet, |_| chunks);
     }
 }
+
+/// A request whose unknown field holds a byte that is no UTF-8 is still a request: the
+/// protocol's reader skips a field it does not know without reading it, so the answer names
+/// the request instead of refusing the line. The fuzzer's first run ended on this input, where
+/// the property took the line for no request at all.
+#[test]
+fn a_request_with_bytes_that_are_no_utf8_in_a_field_nobody_reads_is_answered_by_its_id() {
+    let service = service(Limits::default(), None);
+    let (mut host, _agent, _presses) = shown(&service);
+    let waker = Waker::from(CountingWaker::new().shared());
+    let now = Instant::now();
+    let mut session = greeted(&service, now, &waker);
+    let mut request = br#"{"id":3,"method":"no.such","unread":""#.to_vec();
+    request.extend_from_slice(&[0xA7, b'"', b'}', b'\n']);
+    assert!(std::str::from_utf8(&request).is_err());
+
+    session.receive(&request, now);
+    let answered = exchange(&mut session, &mut host, now, &waker);
+
+    assert_eq!(answered.len(), 1, "{answered:?}");
+    assert_eq!(answered[0]["id"], 3, "{answered:?}");
+    assert_eq!(
+        answered[0]["error"]["message"], "no such method",
+        "{answered:?}"
+    );
+    client_bytes_are_answered_or_refused_in_whole_lines(true, |_| vec![request]);
+}

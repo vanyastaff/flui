@@ -484,43 +484,61 @@ These runs are not a CI gate.
 ## Fuzzing
 
 Code that parses bytes nobody vouches for has two tests of the same
-property. A property test draws the bytes at random on every pull request. A
-fuzz target hands the same bytes to libFuzzer, which keeps each input that
-reached new code and mutates it, so it gets past a header check or a method
-name that random bytes almost never satisfy. The property is one function
-under the crate's `tests/support/`, which both call.
+property. A property test draws the bytes at random wherever its crate's
+tests run. A fuzz target hands the same bytes to libFuzzer, which keeps each
+input that reached new code and mutates it, so it gets past a header check
+or a method name that random bytes almost never satisfy. The property is one
+function under the crate's `tests/support/`, which both call.
 
-| Target | Entry | Property |
-|--------|-------|----------|
-| `image_decode` | `Image::decode` (flui-painting) | an image within `MAX_DECODED_IMAGE_BYTES` or a typed error |
-| `agent_wire` | a development agent's `Session::receive` (flui-runtime) | whole JSON lines, at most one answer per line, nothing before a hello |
+| Target | Entry | Property | Largest allocation |
+|--------|-------|----------|--------------------|
+| `image_decode` | `Image::decode` (flui-painting) | an image within `MAX_DECODED_IMAGE_BYTES` or a typed error | 256 MiB |
+| `agent_wire` | a development agent's `Session::receive` (flui-runtime) | whole lines of the protocol; a line that names a request names one sent and not yet answered; never more lines written than received, events aside; nothing to a client whose first line is not a hello with the token | 64 MiB |
+
+The property is checked as the session writes, against what the client had
+sent by then. The last column is a limit of the run, not of the property: an
+input that asks for one allocation past it ends the run as a finding, which
+is how a bound the parsed value cannot show (a decoder's working memory) is
+held.
 
 A target is an example of the crate it tests, `crates/<crate>/fuzz/<name>.rs`,
-so it builds from the workspace's lockfile and decodes with the versions an
-application ships. `cargo xtask fuzz` builds it under `--cfg fuzzing` with
-coverage counters and AddressSanitizer and runs it; the manifest names
-`libfuzzer-sys` under `cfg(fuzzing)`, so no other build compiles it.
+so it builds from the workspace's lockfile, with the versions an application
+ships. `cargo xtask fuzz` builds it under `--cfg fuzzing` with coverage
+counters and AddressSanitizer and runs it; the manifest names `libfuzzer-sys`
+under `cfg(fuzzing)`, so no other build compiles it. That flag reaches every
+crate of the build, and `png` and `fdeflate` skip their checksums under it,
+so that a mutated image gets past its CRC to the decoder behind it.
 
 ```bash
 cargo xtask fuzz                          # every target, 60 seconds each
 cargo xtask fuzz image_decode --seconds 600
-cargo xtask fuzz agent_wire --replay target/fuzz/agent_wire/crash-<hash>
-cargo run -p flui-runtime --example fuzz_agent_wire -- <file>   # the same input, no sanitizer, pinned toolchain
+cargo xtask fuzz agent_wire --replay target/fuzz/agent_wire/findings/crash-<hash>
 ```
 
 It needs the nightly toolchain on x86_64 Linux. The inputs libFuzzer keeps
-are in `target/fuzz/<name>/corpus/`; the input that ended a run is beside it
-as `crash-<hash>`, `timeout-<hash>` or `oom-<hash>`. `fuzz.yml` runs every
-target for ten minutes each night against main, carries the corpus from one
-night to the next, uploads a failing input as the `fuzz-findings` artifact
-and keeps the "Fuzzing found a failing input on main" issue open while a run
-is red. A pull request that edits a target, the task or the workflow runs
-each target for a minute.
+are in `target/fuzz/<name>/corpus/`; the input that ended a run is in
+`target/fuzz/<name>/findings/`, named by what it did (`crash-`, `timeout-`,
+`oom-`, `leak-`). `--replay` runs one input in the build that found it. The
+example built without the flag reads the files named on its command line
+with the shipped decoders and no sanitizer: it shows what an application
+does with an input, and it refuses a PNG whose checksum the fuzzer never
+repaired, so it does not stand in for the replay.
+
+`fuzz.yml` runs each target as a job of its own for ten minutes every night
+against main, carries the corpus from one night to the next, uploads what a
+failing run found as `fuzz-findings-<target>` and keeps the "Fuzzing failed
+on main" issue open while a run is red. A pull request that edits what a
+target is built from (the workflow, the task, a target, its seeds, its
+property, a manifest that names it) runs each target for a minute; a change
+that reaches the build only through `Cargo.lock` is first seen by the
+night's run.
 
 A finding is fixed with a named case in the owning crate's tests that holds
 the input (as `a_header_past_the_limit_is_refused_before_decoding` holds its
-header), not with the raw file. A new parser of foreign bytes adds its target
-as a row of `TARGETS` in `tools/xtask/src/tasks/fuzz.rs`.
+header), not with the raw file; a PNG's case restates the checksums the
+fuzzer left wrong, or the test's decoder refuses it before the defect. A new
+parser of foreign bytes adds its target as a row of `TARGETS` in
+`tools/xtask/src/tasks/fuzz.rs`.
 
 ## Benchmarks
 

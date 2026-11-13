@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_foundation::testing::CountingWaker;
 use flui_protocol::version::PROTOCOL_VERSION;
-use flui_protocol::{AppInfo, ServerLine};
+use flui_protocol::{AppInfo, Greeting, Request, RequestId, ServerLine};
 use flui_runtime::agent::{Limits, Service, ServiceConfig, Session};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::Signal;
@@ -173,11 +173,16 @@ fn listed_window(
 }
 
 /// Whatever a client writes, before its hello (`greet` off) or after it, the session never
-/// panics and keeps three promises, and this panics where one of them fails:
+/// panics and keeps four promises, and this panics where one of them fails:
 /// - every line it writes is one whole line of the protocol;
-/// - besides the events of a subscription, it writes at most one line for each line it
+/// - a line that names a request names one the client sent and that no earlier line
+///   answered;
+/// - besides the events of a subscription, it has never written more lines than it has
 ///   received;
-/// - it writes nothing to a client that has not presented the token.
+/// - it writes nothing to a client whose first line is not a hello that holds the token.
+///
+/// Each promise is checked as the lines are written, against what the client had sent by
+/// then, not once at the end.
 ///
 /// `chunks` is what the client's transport delivers. A greeted client has listed the windows,
 /// as every client does before it names one, and `chunks` receives the window's handle: a
@@ -200,37 +205,74 @@ pub(crate) fn client_bytes_are_answered_or_refused_in_whole_lines(
             .expect("the service takes a conversation");
         (session, None)
     };
-    let chunks = chunks(window.as_deref());
-    let presented = greet
-        || chunks
-            .concat()
-            .windows(TOKEN.len())
-            .any(|bytes| bytes == TOKEN.as_bytes());
+    let mut received = Vec::<u8>::new();
+    // Where the first line not read yet starts in `received`.
+    let mut unread = 0_usize;
+    // Whether the client presented the token where the session reads it: in a hello, as
+    // its first line.
+    let mut presented = greet;
     let mut lines = 0_usize;
+    // The id of each request received and not answered yet.
+    let mut asked = Vec::<RequestId>::new();
     let mut answers = 0_usize;
-    for chunk in &chunks {
-        lines += chunk.split(|byte| *byte == b'\n').count() - 1;
-        session.receive(chunk, now);
+    for chunk in chunks(window.as_deref()) {
+        received.extend_from_slice(&chunk);
+        while let Some(end) = received
+            .get(unread..)
+            .and_then(|rest| rest.iter().position(|byte| *byte == b'\n'))
+        {
+            let line = received.get(unread..unread + end).unwrap_or_default();
+            if lines == 0 {
+                presented = greet
+                    || serde_json::from_slice::<Greeting>(line)
+                        .is_ok_and(|greeting| greeting.hello.token == TOKEN);
+            }
+            asked.extend(asked_id(line));
+            lines += 1;
+            unread += end + 1;
+        }
+        session.receive(&chunk, now);
         session.poll(now, &waker);
         let _ = host.pump(Duration::from_millis(16));
         session.poll(now, &waker);
         while let Some(bytes) = session.transmit() {
-            assert!(presented, "a line was written before any token");
+            let written = String::from_utf8_lossy(&bytes);
+            assert!(presented, "written with no token presented: {written:?}");
             assert_eq!(
                 bytes.iter().position(|byte| *byte == b'\n'),
                 Some(bytes.len() - 1),
-                "{:?}",
-                String::from_utf8_lossy(&bytes)
+                "{written:?}"
             );
-            match serde_json::from_slice::<ServerLine<Value>>(&bytes) {
-                Ok(ServerLine::Event(_)) => {}
-                Ok(_) => answers += 1,
-                Err(error) => panic!("{error}: {:?}", String::from_utf8_lossy(&bytes)),
+            let answered = match serde_json::from_slice::<ServerLine<Value>>(&bytes) {
+                Ok(ServerLine::Event(_)) => continue,
+                Ok(ServerLine::Answered { id, .. }) => Some(id),
+                Ok(ServerLine::Failed { id, .. }) => id,
+                Ok(_) => None,
+                Err(error) => panic!("{error}: {written:?}"),
+            };
+            answers += 1;
+            assert!(
+                answers <= lines,
+                "line {answers} written after {lines} received: {written:?}"
+            );
+            if let Some(id) = answered {
+                let request = asked
+                    .iter()
+                    .position(|sent| *sent == id)
+                    .unwrap_or_else(|| panic!("no unanswered request has this id: {written:?}"));
+                let _ = asked.swap_remove(request);
             }
         }
     }
-    assert!(
-        answers <= lines,
-        "{answers} lines answer the {lines} received"
-    );
+}
+
+/// The id `line` asks under, read as the session reads a line: as a request of the protocol,
+/// whose reader skips a field it does not know without reading it (so bytes there that are no
+/// UTF-8 do not spoil the request), or, where the line is no request, as JSON with an `id`.
+fn asked_id(line: &[u8]) -> Option<RequestId> {
+    if let Ok(request) = serde_json::from_slice::<Request<Value>>(line) {
+        return Some(request.id);
+    }
+    let value = serde_json::from_slice::<Value>(line).ok()?;
+    serde_json::from_value::<RequestId>(value.get("id")?.clone()).ok()
 }
