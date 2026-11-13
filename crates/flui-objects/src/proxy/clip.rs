@@ -443,13 +443,11 @@ impl ClipGeometry for Path {
     const DIAGNOSTIC_NAME: &'static str = "RenderClipPath";
 
     fn approximate_bounds(&self, size: Size) -> Rect<f64> {
-        // The whole box, not the path's own bounds. `Path::bounds` takes
-        // `&mut self` because it memoizes, and this hook has `&self` — so the
-        // honest options were a conservative superset or a lock. A superset is
-        // what the contract asks for, and it is safe in the direction that
-        // matters: a `ClipPath` narrows no accessibility rect it should have
-        // narrowed, rather than dropping one it should have kept. Tightening
-        // it means giving `Path` a `&self` bounds accessor first.
+        // The whole box, not the path's own bounds. A superset is what the
+        // contract asks for, and it is safe in the direction that matters: a
+        // `ClipPath` narrows no accessibility rect it should have narrowed,
+        // rather than dropping one it should have kept. `Path::compute_bounds`
+        // would tighten it at the cost of walking the curves on each query.
         Rect::from_origin_size(Point::ZERO, size)
     }
 
