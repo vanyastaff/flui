@@ -143,6 +143,10 @@ fn action_component_contracts() {
             elevated_button::material_controls_publish_their_identifier,
         ),
         (
+            "elevated_button::style button is one button node enabled or disabled",
+            elevated_button::style_button_is_one_button_node_enabled_or_disabled,
+        ),
+        (
             "elevated_button::widget level style wins over the elevated button theme",
             elevated_button::widget_level_style_wins_over_the_elevated_button_theme,
         ),

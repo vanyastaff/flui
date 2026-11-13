@@ -1314,3 +1314,92 @@ fn a_native_recording_is_refused_without_the_input_or_a_journal() {
         assert!(!host.input_taps().is_recording(), "{}", case.name);
     }
 }
+
+/// What a client could write, a chunk at a time: a request line with any
+/// method, id and params, a line that is not JSON, a line with no newline yet,
+/// or bytes from nowhere.
+#[cfg(not(target_arch = "wasm32"))]
+fn client_chunk() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
+    use proptest::prelude::*;
+    let id = prop_oneof![
+        any::<u64>().prop_map(|id| json!(id)),
+        "[a-z0-9]{0,8}".prop_map(|id| json!(id)),
+        Just(json!(null)),
+        Just(json!([1, 2])),
+        any::<f64>().prop_map(|id| json!(id)),
+    ];
+    let method = prop_oneof![
+        Just("semantics.act".to_owned()),
+        Just("semantics.tree".to_owned()),
+        Just("input.send".to_owned()),
+        Just("record.start".to_owned()),
+        "[a-z.]{0,16}",
+    ];
+    let params = prop_oneof![
+        Just(json!(null)),
+        Just(json!({})),
+        Just(json!({ "target": { "locator": { "named": "Go" } }, "action": "invoke" })),
+        any::<i64>().prop_map(|n| json!({ "window": n, "depth": n })),
+        "[ -~]{0,32}".prop_map(|text| json!({ "text": text })),
+    ];
+    prop_oneof![
+        (id, method, params).prop_map(|(id, method, params)| {
+            line(&json!({ "id": id, "method": method, "params": params }))
+        }),
+        proptest::collection::vec(any::<u8>(), 0..64).prop_map(|mut bytes| {
+            bytes.push(b'\n');
+            bytes
+        }),
+        proptest::collection::vec(any::<u8>(), 0..64),
+    ]
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        // Each case mounts a host: a quarter of the cases the run asks for.
+        cases: (proptest::prelude::ProptestConfig::default().cases / 4).max(1),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// Whatever a client writes, before its hello or after it, the session never
+    /// panics, writes only whole JSON lines, answers each line at most once, and
+    /// holds a bounded queue: bytes before a valid hello close it with nothing
+    /// written.
+    #[test]
+    fn any_client_bytes_are_answered_or_refused_in_whole_lines(
+        greet in proptest::prelude::any::<bool>(),
+        chunks in proptest::collection::vec(client_chunk(), 0..24),
+    ) {
+        let service = service(Limits::default(), None);
+        let (mut host, _agent, _presses) = shown(&service);
+        let waker = Waker::from(CountingWaker::new().shared());
+        let now = Instant::now();
+        let mut session = if greet {
+            greeted(&service, now, &waker)
+        } else {
+            service.accept(now).expect("the service takes a conversation")
+        };
+        let mut lines = 0_usize;
+        let mut written = 0_usize;
+        for chunk in chunks {
+            lines += chunk.split(|byte| *byte == b'\n').count() - 1;
+            session.receive(&chunk, now);
+            session.poll(now, &waker);
+            let _ = host.pump(Duration::from_millis(16));
+            session.poll(now, &waker);
+            while let Some(bytes) = session.transmit() {
+                proptest::prop_assert_eq!(bytes.last(), Some(&b'\n'));
+                proptest::prop_assert_eq!(bytes.iter().position(|byte| *byte == b'\n'), Some(bytes.len() - 1));
+                let parsed = serde_json::from_slice::<Value>(&bytes);
+                proptest::prop_assert!(parsed.is_ok(), "{:?}", String::from_utf8_lossy(&bytes));
+                written += 1;
+            }
+        }
+        if greet {
+            proptest::prop_assert!(written <= lines, "{} lines written for {} received", written, lines);
+        } else {
+            proptest::prop_assert_eq!(written, 0, "nothing is written before a hello");
+        }
+    }
+}

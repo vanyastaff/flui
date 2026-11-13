@@ -259,7 +259,7 @@ mod emission {
     /// Assert the captured events carry exactly the expected
     /// `(kind, slot)` dispositions as a MULTISET. Both sides are
     /// sorted before comparison so a test does not depend on the
-    /// HashMap-iteration order of the keyed-middle phase's multiset
+    /// FxHashMap-iteration order of the keyed-middle phase's multiset
     /// contract — `expected` is written in natural emission order
     /// at the call site.
     fn assert_dispositions(events: &[CollectedEvent], expected: &[(ReconcileEventKind, u64)]) {
@@ -309,7 +309,7 @@ mod emission {
     /// every key's element moves to its permuted slot (never rebuilt).
     /// Ports the retired box-reconciler's exhaustive permutation
     /// corpus onto the production reconciler — multiset equality
-    /// because Phase-4 HashMap iteration order is not stable.
+    /// because Phase-4 FxHashMap iteration order is not stable.
     #[test]
     #[serial]
     fn all_six_permutations_preserve_identity_and_emit_expected() {

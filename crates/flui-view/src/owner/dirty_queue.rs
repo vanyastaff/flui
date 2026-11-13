@@ -1,9 +1,7 @@
 //! The build drain's dirty-element queue.
 
-use std::{
-    cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
-};
+use rustc_hash::FxHashMap;
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 use flui_foundation::ElementId;
 
@@ -108,7 +106,7 @@ impl DirtyQueue {
 /// elements costs O(D + distinct ancestors), not O(D · depth).
 #[derive(Debug, Default)]
 pub(crate) struct ScopeMemo {
-    answers: HashMap<ElementId, Option<ElementId>>,
+    answers: FxHashMap<ElementId, Option<ElementId>>,
     path: Vec<ElementId>,
 }
 

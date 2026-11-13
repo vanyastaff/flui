@@ -123,6 +123,12 @@ flui-view = { workspace = true, features = ["testing"] }
 # collection and when a UI runtime lets go of it.
 flui-painting = { workspace = true, features = ["testing"] }
 
+# Arbitrary bytes on the agent's wire (`agent_service`); the nightly run
+# raises `PROPTEST_CASES`. Not on wasm32: its random source, getrandom, has
+# no backend there without a feature this crate does not ship.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { workspace = true }
+
 # Executing wasm32 unit tests: the execution services' sequential backend is
 # pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to
 # the release that pairs with the locked wasm-bindgen; the unpinned "0.3"

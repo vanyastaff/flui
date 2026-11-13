@@ -24,7 +24,8 @@ name: Nightly platforms
 #
 # The acceptance scenario, `an_agent_drives_the_acceptance_app_on_the_desktop` in the same
 # file, runs on the desktop legs: it builds tests/fixtures/acceptance_app/ as a project of
-# its own and, through `flui mcp` alone, goes from its home page to Settings and back.
+# its own and, through `flui mcp` alone, goes from its home page to Settings and back, waiting
+# for each page with `flui_wait` instead of reading in a loop.
 #
 # Each leg runs the local command, so a run here and one on a developer's
 # machine cannot drift. A row of crates/flui-native/platform-parity.toml that

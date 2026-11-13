@@ -169,10 +169,8 @@ impl StatelessView for RawButton {
         let enabled = self.on_pressed.is_some();
         let press = Rc::new(Press(self.on_pressed.clone()));
         // One node for assistive technology: the button.
-        let description = Description {
-            role: crate::SemanticsRole::Button,
-            identifier: self.identifier.clone(),
-        };
+        let description =
+            Description::new(crate::SemanticsRole::Button).identifier(self.identifier.clone());
         // The bindings are the node's own, so its focus node records them
         // and the root bindings resolve the activation here (ADR-0079).
         let mut node = InteractiveNode::new(self.child.clone())

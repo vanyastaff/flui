@@ -11,6 +11,8 @@ pub mod canvas;
 pub mod clipping;
 pub mod effects;
 pub mod image;
+#[cfg(feature = "decode")]
+mod image_decode;
 pub mod path;
 pub mod shader;
 pub mod shapes;
@@ -30,7 +32,10 @@ pub use effects::{
 };
 pub use image::{
     BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageDataError, ImageRepeat,
+    MAX_ENCODED_IMAGE_BYTES,
 };
+#[cfg(feature = "decode")]
+pub use image_decode::{ImageDecodeError, MAX_DECODED_IMAGE_BYTES};
 pub use path::{Path, PathCommand};
 pub use shader::{ImageShader, MaskFilter, Shader};
 pub use shapes::{CornerRounding, Morph, RoundedPolygon, ShapeError};

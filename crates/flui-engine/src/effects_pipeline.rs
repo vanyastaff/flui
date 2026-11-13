@@ -9,7 +9,7 @@
 //! All of them are specs over [`crate::pipeline_set::create_unit_quad_pipeline`],
 //! the shared unit-quad instanced constructor.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use flui_painting::BlendMode;
 
@@ -133,8 +133,8 @@ pub(crate) struct GradientPipelines {
     second_source_available: bool,
 
     /// One pipeline per (kind, mode) encountered, created on first use.
-    cache: HashMap<(GradientKind, BlendMode), wgpu::RenderPipeline>,
-    isolation_cache: HashMap<GradientKind, wgpu::RenderPipeline>,
+    cache: FxHashMap<(GradientKind, BlendMode), wgpu::RenderPipeline>,
+    isolation_cache: FxHashMap<GradientKind, wgpu::RenderPipeline>,
     isolation_layout: Option<wgpu::PipelineLayout>,
     isolation_bind_group_layout: Option<wgpu::BindGroupLayout>,
     isolation_viewport_layout: wgpu::BindGroupLayout,
@@ -159,8 +159,8 @@ impl GradientPipelines {
             second_source_available: device
                 .features()
                 .contains(wgpu::Features::DUAL_SOURCE_BLENDING),
-            cache: HashMap::new(),
-            isolation_cache: HashMap::new(),
+            cache: FxHashMap::default(),
+            isolation_cache: FxHashMap::default(),
             isolation_layout: None,
             isolation_bind_group_layout: None,
             isolation_viewport_layout: viewport_bind_group_layout.clone(),

@@ -93,7 +93,7 @@ use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::interaction::node::{ControlTap, InteractiveNode};
+use flui_sdk::widgets::interaction::node::{ControlTap, Description, InteractiveNode};
 use flui_sdk::widgets::{
     Action, ActionOutcome, ActivateIntent, ButtonActivateIntent, ButtonChange, CustomPaint,
     HitTestBehavior, PointerDispatch, PointerEvent, PressHold, WidgetState, WidgetStateProperty,
@@ -135,6 +135,11 @@ pub struct InkWell {
     states_controller: Option<WidgetStatesController>,
     focus_node: Option<Rc<FocusNode>>,
     focus_indicator: FocusIndicator,
+    /// The node the control around the well is to assistive technology,
+    /// carried by the well's own interactive node in place of a `Semantics`
+    /// wrapper (ADR-0322 §1). Shared, so a well that describes nothing pays
+    /// one word for it.
+    description: Option<Rc<Description>>,
 }
 
 impl Default for InkWell {
@@ -157,6 +162,7 @@ impl InkWell {
             states_controller: None,
             focus_node: None,
             focus_indicator: FocusIndicator::Ring,
+            description: None,
         }
     }
 
@@ -219,6 +225,16 @@ impl InkWell {
     #[must_use]
     pub(crate) fn focus_indicator(mut self, indicator: FocusIndicator) -> Self {
         self.focus_indicator = indicator;
+        self
+    }
+
+    /// Describes the control the well stands for to assistive technology on
+    /// the well's own node: `ButtonStyleButton`'s button, which Flutter wraps
+    /// around its `InkWell` as a `Semantics`. The node's switch sets
+    /// `enabled`, and its tap and focus add their actions and flags.
+    #[must_use]
+    pub(crate) fn description(mut self, description: Description) -> Self {
+        self.description = Some(Rc::new(description));
         self
     }
 
@@ -524,6 +540,9 @@ impl ViewState<InkWell> for InkWellState {
             Some(focus_node) => node.focus_node(Rc::clone(focus_node)),
             None => node.focusable("InkWell"),
         };
+        if let Some(description) = &view.description {
+            node = node.semantics(Description::clone(description));
+        }
         if view.focus_indicator == FocusIndicator::Ring {
             node = node.focus_ring();
         }

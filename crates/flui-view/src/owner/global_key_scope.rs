@@ -53,7 +53,6 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     fmt,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
@@ -155,6 +154,10 @@ fn retire_snapshot(snapshot: Vec<SnapshotClaim>) {
 }
 
 #[derive(Default)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "indexed by view-key hashes, which an application-defined global key may derive from its own data, so the table keeps SipHash's random seed against chosen collisions"
+)]
 struct ScopeState {
     /// `key hash -> the claims sharing that hash`.
     ///
@@ -163,7 +166,7 @@ struct ScopeState {
     /// in for both. A bucket is dropped as soon as it empties, so
     /// [`GlobalKeyScope::claim_count`] can sum bucket lengths without
     /// counting corpses.
-    claims: HashMap<u64, Vec<Claim>>,
+    claims: std::collections::HashMap<u64, Vec<Claim>>,
 }
 
 impl ScopeState {

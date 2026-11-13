@@ -961,11 +961,13 @@ button in an explicit `flui::prelude::Semantics` — which meant the app `flui
 create` scaffolds was not screen-reader accessible out of the box.
 `RenderParagraph` now publishes its plain text as a semantics label with its
 text direction (an empty paragraph publishes nothing — a recorded mapping
-decision in `crates/flui-objects/ARCHITECTURE.md`), and `ButtonStyleButtonCore`
-wraps every button it composes in `Semantics(container, button, enabled)`.
+decision in `crates/flui-objects/ARCHITECTURE.md`), and every button
+`ButtonStyleButtonCore` composes is one container node of the button role,
+enabled when it has `on_pressed`, which its `InkWell`'s interactive node
+carries (ADR-0322 §1).
 The test mounts that Material tree and queries `"Increment"` from the
 framework's own node; the template itself now uses `RawButton`, which
-publishes the same `Semantics(container, button, enabled)` node.
+describes the same node on its own interactive node.
 
 The acceptance criterion's "actionable command failures" half is the error
 `A11yTree::find_by_label` already produces, needing no new helper: a label that
@@ -1049,7 +1051,7 @@ cargo xtask doc-strict                                        # doc job
 cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-native under Xvfb (FLUI_HEADLESS=1), then its Wayland tests
 cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope reaches
 cargo xtask test --nested --nested-group native               # test-nested: generated projects and facade consumers
-cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites
+cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites (CI runs each shard alone: --trybuild-shard facade, core or view)
 cargo xtask platform-test                                    # native platform suites, default and all features
 cargo xtask cli-test                                         # native CLI suite
 cargo test --workspace --locked --doc
@@ -1181,7 +1183,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `clippy` | `cargo xtask lint` (in `gate`), then, on main only, `cargo xtask native-features` | `native-features` lints flui-native with default features off, once each for none, `x11`, `wayland` and `testing`, with and without `--all-targets`: part of `feature-matrix`; from a Windows or macOS checkout pass `--target x86_64-unknown-linux-gnu` |
 | `test` | `cargo xtask test --fast`, `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl` (main only), then `cargo xtask build-all-targets` | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
 | `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
-| `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
+| `test-trybuild` | `cargo xtask test --nested --nested-group trybuild --trybuild-shard <shard>` (`facade`, `core` or `view`) | compile-fail suites in three shards on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; each shard builds only its own test targets with the whole run's features; without `--trybuild-shard` the command runs every suite, and plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
 | `public-api` | `cargo xtask public-api` | nightly (rustdoc JSON); `cargo xtask public-api --write` restates `api/flui.txt` when a change to the facade's API is meant (ADR-0324) |

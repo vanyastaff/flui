@@ -41,19 +41,21 @@
 //! there is no tooltip layer). What ships, outermost to innermost:
 //!
 //! ```text
-//! Semantics(container: true, button: true, enabled: on_pressed.is_some(),
-//!           toggled: selected, when the button is a toggle)
-//!   ConstrainedBox(min/fixed/max size)
-//!     Material(color, elevation, shape)
-//!       InkWell(overlay_color, shared states controller, enabled = on_pressed.is_some())
-//!         Padding(padding)
-//!           DefaultTextStyle(text_style with foreground_color folded into its `color`)
-//!             child
+//! ConstrainedBox(min/fixed/max size)
+//!   Material(color, elevation, shape)
+//!     InkWell(overlay_color, shared states controller, enabled = on_pressed.is_some(),
+//!             description: button, identifier, toggled: selected when a toggle)
+//!       Padding(padding)
+//!         DefaultTextStyle(text_style with foreground_color folded into its `color`)
+//!           child
 //! ```
 //!
-//! The `Semantics` wrapper is outermost, with the button role always set —
-//! every concrete button this core composes for is semantically a button in
-//! this V1, so there is no per-button override to thread through yet.
+//! Flutter wraps all of this in `Semantics(container: true, button: true,
+//! enabled: …)`. Here the well's own interactive node carries that
+//! description, so the button is one semantics node with the same role,
+//! enabled state, toggle state and actions, and no `Semantics` element of
+//! its own (ADR-0322 §1). The role is always the button's: every concrete
+//! button this core composes for is semantically a button.
 //!
 //! # Own `WidgetStatesController`, shared with the inner `InkWell`
 //!
@@ -93,6 +95,7 @@ use flui_sdk::widgets::{
 use crate::button_style::ButtonStyle;
 use crate::ink_well::InkWell;
 use crate::material::Material;
+use flui_sdk::widgets::interaction::node::Description;
 
 pub(crate) use crate::event_callback::PressCallback;
 
@@ -381,32 +384,33 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             view.default_style.clone(),
         );
 
+        // Flutter's `Semantics(container: true, button: true, enabled: …)`
+        // around the button is the well's own node here: one element and one
+        // semantics node, with the role, the identifier and the toggle state
+        // of this description, `enabled` from the node's switch, and the tap
+        // and focus the node adds (ADR-0322 §1).
+        let mut description =
+            Description::new(SemanticsRole::Button).identifier(view.identifier.clone());
+        if let Some(selected) = view.selected {
+            description = description.toggled(Toggled::from_bool(selected));
+        }
         let mut ink_well = InkWell::new()
             .child(
                 Padding::new(padding).child(DefaultTextStyle::new(text_style, view.child.clone())),
             )
             .shape(shape)
             .overlay_color(overlay_color)
-            .states_controller(self.states.clone());
+            .states_controller(self.states.clone())
+            .description(description);
         if let Some(on_pressed) = view.on_pressed.clone() {
             ink_well = ink_well.on_tap(move |ctx| on_pressed(ctx));
         }
 
-        let semantics = Semantics::new()
-            .container(true)
-            .role(SemanticsRole::Button)
-            .enabled(view.is_interactive());
-        let semantics = match view.selected {
-            Some(selected) => semantics.toggled(Toggled::from_bool(selected)),
-            None => semantics,
-        };
-        identified(semantics, view.identifier.as_ref()).child(
-            ConstrainedBox::new(constraints).child(
-                Material::new(background_color)
-                    .elevation(elevation)
-                    .shape(shape)
-                    .child(ink_well),
-            ),
+        ConstrainedBox::new(constraints).child(
+            Material::new(background_color)
+                .elevation(elevation)
+                .shape(shape)
+                .child(ink_well),
         )
     }
 
