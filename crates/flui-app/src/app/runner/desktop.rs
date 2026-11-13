@@ -188,9 +188,10 @@ where
 
     // 3d. The window's wall-clock wake sources: the owner loop consults them
     // every idle iteration instead of blocking forever, so the pacing
-    // fallback, the first reveal and the executor's next device rebuild
-    // still wake the loop while nothing else is dirty. Read only while this
-    // presentation's frames are enabled.
+    // fallback and the first reveal still wake the loop while nothing else
+    // is dirty (the raster work of the window is the loop's own term, in
+    // `AppRuntime::next_wake`). Read only while this presentation's frames
+    // are enabled.
     let deadlines = Arc::new(DesktopWakeDeadlines {
         fallback: Arc::clone(&fallback),
         first_reveal: Arc::clone(&first_reveal),

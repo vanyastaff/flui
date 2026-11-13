@@ -259,7 +259,10 @@ the dispatch layer moves there too.
   device's next rebuild) is what a window's frame gate counts, and the
   loop's wake (`AppRuntime::next_wake`, on every platform) counts it for each
   window whose frames run (`RasterHost::wake_deadline`), so no window's
-  deadline wakes the loop while only another window's frame would run. A window whose
+  deadline wakes the loop while only another window's frame would run. A
+  UIKit owner wake runs no frame, so on iOS a window whose raster work is
+  due asks its display link for the frame that serves it
+  (`RasterHost::due_frames`). A window whose
   native surface does not exist yet is taken as released until the platform
   reports one. The development scene plugin draws through
   `RasterHost::render_lent`, after which the window's next frame draws in

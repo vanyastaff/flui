@@ -1117,8 +1117,19 @@ fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
     }
     let slots = flui_engine::testing::ScriptedSlots::new();
     let shared = SharedRasterHost::new(RasterFactory::Scripted(slots.clone()));
-    let previous = super::super::host::APP_RUNTIME
-        .with(|slot| std::mem::replace(&mut slot.borrow_mut().raster_host, shared.clone()));
+    /// Puts the loop's raster host back however the row ends.
+    struct LoopRasterHost(Option<SharedRasterHost>);
+    impl Drop for LoopRasterHost {
+        fn drop(&mut self) {
+            if let Some(host) = self.0.take() {
+                super::super::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = host);
+            }
+        }
+    }
+    let _previous =
+        LoopRasterHost(Some(super::super::host::APP_RUNTIME.with(|slot| {
+            std::mem::replace(&mut slot.borrow_mut().raster_host, shared.clone())
+        })));
     let (hidden, shown) = (installed[1].0.address, installed[0].0.address);
     attach_a_window(&shared, shown, 1);
     let owed = owe_a_surface(&shared, &slots, hidden, 2);
@@ -1136,12 +1147,12 @@ fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
     lifecycle(flui_scheduler::AppLifecycleState::Resumed);
     let once_resumed = earliest();
 
-    // Everything the row installed goes before it asserts, so a failure
-    // leaves the table's later rows the loop they expect.
+    // Everything the row installed goes before it asserts, so a failed
+    // assertion leaves the table's later rows the loop they expect; the
+    // loop's own raster host comes back however the row ends.
     close_this_window(installed[1].0);
     close_this_window(installed[0].0);
     teardown_platform_ui_runtime();
-    super::super::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = previous);
 
     assert_ne!(
         while_hidden,

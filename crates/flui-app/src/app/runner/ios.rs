@@ -161,6 +161,14 @@ fn drive_owner() {
             let _ = with_owner_platform(|owner| owner.proxy().wake());
         },
     );
+    // The loop's deadline wakes this owner turn, which runs no frame: a
+    // scene whose raster work is due (a lost device's rebuild, a surface on
+    // its pace) asks its display link for the frame that serves it, or the
+    // same past deadline would be armed again after every turn.
+    let due = APP_RUNTIME.with(|slot| slot.borrow().due_raster_frames(web_time::Instant::now()));
+    for redraw in due {
+        redraw.request_redraw();
+    }
 }
 
 fn stop_process() {
