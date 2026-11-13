@@ -11,6 +11,10 @@ use crate::{protocol::BoxProtocol, traits::RenderObject};
 
 /// The unit of measurement for a viewport's cache extent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a cache extent is in pixels or in viewports, and the viewport computes each"
+)]
 pub enum CacheExtentStyle {
     /// Treat the cache extent as logical pixels.
     #[default]
@@ -27,6 +31,10 @@ pub enum CacheExtentStyle {
 /// This can also be thought of as an ordering in the z-direction:
 /// whichever sliver is painted last (and hit-tested first) is on top.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the first sliver or the last one is on top"
+)]
 pub enum SliverPaintOrder {
     /// The first sliver paints on top, and the last sliver on bottom.
     ///

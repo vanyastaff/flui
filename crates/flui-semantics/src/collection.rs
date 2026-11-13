@@ -288,6 +288,10 @@ impl SemanticsCollection {
 
 /// Which declaration an item's index belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "set membership is decided per origin, and a `_` arm would put a new one in the wrong set"
+)]
 pub enum SemanticsIndexOrigin {
     /// Explicit numbering supplied by an annotation.
     Authored,
@@ -297,6 +301,7 @@ pub enum SemanticsIndexOrigin {
 
 /// Who declared a collection's membership policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SemanticsCollectionOrigin {
     /// Explicit indexes belong to the nearest authored collection.
     Authored,

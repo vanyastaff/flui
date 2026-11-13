@@ -4,6 +4,10 @@ use std::num::NonZeroU32;
 
 /// How a cross-axis sliver group assigns one child's track.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the group assigns a track by each allocation, and a `_` arm would size a new one wrongly"
+)]
 pub enum SliverCrossAxisAllocation {
     /// Claim the child's explicitly reported cross-axis extent first.
     Content,

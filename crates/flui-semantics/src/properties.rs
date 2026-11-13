@@ -24,6 +24,10 @@ pub use flui_foundation::TextDirection;
 /// one level. The six levels are the ones every platform names; a deeper
 /// outline nests its headings at [`Self::H6`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the six heading levels are the ones every platform names, and a deeper outline nests at the sixth"
+)]
 pub enum HeadingLevel {
     /// The top level, a page or screen title.
     H1 = 1,
@@ -246,6 +250,7 @@ pub struct StringAttribute {
 
 /// Types of string attributes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StringAttributeType {
     /// Spell out the text character by character.
     SpellOut,

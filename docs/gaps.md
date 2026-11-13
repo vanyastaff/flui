@@ -588,5 +588,5 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** all · **Who it hurts:** Applications that `match` on a FLUI enum, which a new variant would break after 1.0 · **Parity:** none (API stability)
 
-- `clippy::exhaustive_enums` is a workspace lint (ADR-0329): a public enum is `#[non_exhaustive]`, or carries `#[expect(clippy::exhaustive_enums, reason = "…")]` saying why its set cannot grow. These crates still carry the `expect` at their root, so their public enums are closed by default: `flui-engine`, `flui-interaction`, `flui-native`, `flui-painting`, `flui-protocol`, `flui-rendering`, `flui-runtime`, `flui-semantics`, `flui-widgets`. `rg -l 'ADR-0329: this crate' crates packages` lists them.
+- `clippy::exhaustive_enums` is a workspace lint (ADR-0329): a public enum is `#[non_exhaustive]`, or carries `#[expect(clippy::exhaustive_enums, reason = "…")]` saying why its set cannot grow. These crates still carry the `expect` at their root, so their public enums are closed by default: `flui-interaction`, `flui-native`, `flui-painting`, `flui-protocol`, `flui-widgets`. `rg -l 'ADR-0329: this crate' crates packages` lists them.
 - A crate leaves this entry when its enums are decided and the root attribute goes. The entry closes with the last crate.

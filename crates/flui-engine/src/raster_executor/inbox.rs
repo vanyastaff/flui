@@ -27,6 +27,7 @@ pub(crate) const INLINE_DEPTH: usize = 1;
 
 /// Where a slot is in its life, as its record reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SlotPhase {
     /// Sent to the executor and not attached by it yet.
     Attaching,
@@ -54,6 +55,7 @@ impl SlotPhase {
 }
 
 /// Why a slot failed: the first failure since the owner last took one.
+#[non_exhaustive]
 pub enum SlotFailure {
     /// The backend refused a command on the slot: its attach, a restore, a
     /// colour change, or a resize (which the executor retries on its next turn

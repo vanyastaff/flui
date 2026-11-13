@@ -10,6 +10,7 @@
 
 /// How much of a presentation a development reload replaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ReloadTier {
     /// Rebuild the retained element tree and re-lay-out the render tree,
     /// keeping every `State`.

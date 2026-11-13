@@ -20309,7 +20309,7 @@ impl PartialEq for flui::rendering::ScrollTarget
 impl core::fmt::Debug for flui::rendering::ScrollTarget
 impl core::hash::Hash for flui::rendering::ScrollTarget
 impl core::marker::StructuralPartialEq for flui::rendering::ScrollTarget
-pub enum flui::rendering::SemanticsClip
+#[non_exhaustive] pub enum flui::rendering::SemanticsClip
 impl Clone for flui::rendering::SemanticsClip
 impl Copy for flui::rendering::SemanticsClip
 impl core::fmt::Debug for flui::rendering::SemanticsClip
@@ -20654,7 +20654,7 @@ pub const fn flui::rendering::TreeSliverNodeParentData::is_root(&self) -> bool
 pub const fn flui::rendering::TreeSliverNodeParentData::new(index: usize, depth: usize) -> Self
 pub const fn flui::rendering::TreeSliverNodeParentData::with_depth(self, depth: usize) -> Self
 pub const fn flui::rendering::TreeSliverNodeParentData::zero() -> Self
-pub enum flui::rendering::UsageByParent
+#[non_exhaustive] pub enum flui::rendering::UsageByParent
 impl Clone for flui::rendering::UsageByParent
 impl Copy for flui::rendering::UsageByParent
 impl Default for flui::rendering::UsageByParent
@@ -22409,7 +22409,7 @@ reexport flui::rendering::objects::WrapAlignment => flui::prelude::WrapAlignment
 reexport flui::rendering::objects::WrapCrossAlignment => flui::prelude::WrapCrossAlignment
 pub fn flui::run_app<V>(root: V, launch: flui::AppLaunch) -> Result<(), flui::LaunchError> where V: flui::app::View + Clone + 'static
 pub mod flui::semantics
-pub enum flui::semantics::AccessibilityFocusBlockType
+#[non_exhaustive] pub enum flui::semantics::AccessibilityFocusBlockType
 impl Clone for flui::semantics::AccessibilityFocusBlockType
 impl Copy for flui::semantics::AccessibilityFocusBlockType
 impl Default for flui::semantics::AccessibilityFocusBlockType
@@ -22686,7 +22686,7 @@ impl core::fmt::Debug for flui::semantics::SemanticsCollectionKind
 impl core::marker::StructuralPartialEq for flui::semantics::SemanticsCollectionKind
 variant flui::semantics::SemanticsCollectionKind::Grid // at 1
 variant flui::semantics::SemanticsCollectionKind::List // at 0
-pub enum flui::semantics::SemanticsCollectionOrigin
+#[non_exhaustive] pub enum flui::semantics::SemanticsCollectionOrigin
 impl Clone for flui::semantics::SemanticsCollectionOrigin
 impl Copy for flui::semantics::SemanticsCollectionOrigin
 impl Eq for flui::semantics::SemanticsCollectionOrigin
@@ -22810,7 +22810,7 @@ impl Eq for flui::semantics::StringAttribute
 impl PartialEq for flui::semantics::StringAttribute
 impl core::fmt::Debug for flui::semantics::StringAttribute
 impl core::marker::StructuralPartialEq for flui::semantics::StringAttribute
-pub enum flui::semantics::StringAttributeType
+#[non_exhaustive] pub enum flui::semantics::StringAttributeType
 impl Clone for flui::semantics::StringAttributeType
 impl Eq for flui::semantics::StringAttributeType
 impl PartialEq for flui::semantics::StringAttributeType
@@ -24084,7 +24084,7 @@ impl Clone for flui::testing::rendering::DrawCommandSummary
 impl PartialEq for flui::testing::rendering::DrawCommandSummary
 impl core::fmt::Debug for flui::testing::rendering::DrawCommandSummary
 impl core::marker::StructuralPartialEq for flui::testing::rendering::DrawCommandSummary
-pub enum flui::testing::rendering::DrawKind
+#[non_exhaustive] pub enum flui::testing::rendering::DrawKind
 impl Clone for flui::testing::rendering::DrawKind
 impl Copy for flui::testing::rendering::DrawKind
 impl Eq for flui::testing::rendering::DrawKind
@@ -35517,7 +35517,7 @@ impl flui::testing::rendering::Probe for flui_rendering::testing::harness::Seman
 pub fn flui_rendering::testing::harness::SemanticsRun::edit_and_run_again<T: 'static>(self, id: flui::foundation::RenderId, edit: impl FnOnce(&mut T)) -> Self
 pub fn flui_rendering::testing::harness::SemanticsRun::root(&self) -> flui::foundation::RenderId
 pub fn flui_rendering::testing::harness::SemanticsRun::semantics_owner(&self) -> Option<&flui_semantics::owner::SemanticsOwner>
-pub enum flui_rendering::testing::parent_data::ParentDataSeed
+#[non_exhaustive] pub enum flui_rendering::testing::parent_data::ParentDataSeed
 impl Clone for flui_rendering::testing::parent_data::ParentDataSeed
 impl core::fmt::Debug for flui_rendering::testing::parent_data::ParentDataSeed
 pub fn flui_rendering::testing::parent_data::ParentDataSeed::to_box(&self) -> Box<dyn flui::rendering::ParentData>
@@ -35885,7 +35885,7 @@ impl PartialEq for flui_runtime::pump::FrameOutcome
 impl core::fmt::Debug for flui_runtime::pump::FrameOutcome
 impl core::marker::StructuralPartialEq for flui_runtime::pump::FrameOutcome
 pub const fn flui_runtime::pump::FrameOutcome::presented(self) -> bool
-pub enum flui_runtime::recording_wire::Privacy
+#[non_exhaustive] pub enum flui_runtime::recording_wire::Privacy
 impl Clone for flui_runtime::recording_wire::Privacy
 impl Copy for flui_runtime::recording_wire::Privacy
 impl Default for flui_runtime::recording_wire::Privacy
@@ -35902,7 +35902,7 @@ impl core::fmt::Display for flui_runtime::recording_wire::WireError
 variant flui_runtime::recording_wire::WireError::Invalid(String) // at 1
 variant flui_runtime::recording_wire::WireError::UnknownSpelling(String) // at 0
 variant flui_runtime::recording_wire::WireError::Unmirrored(&'static str) // at 2
-pub enum flui_runtime::reload::ReloadTier
+#[non_exhaustive] pub enum flui_runtime::reload::ReloadTier
 impl Clone for flui_runtime::reload::ReloadTier
 impl Copy for flui_runtime::reload::ReloadTier
 impl Eq for flui_runtime::reload::ReloadTier
@@ -36072,7 +36072,7 @@ impl core::fmt::Debug for flui_runtime::ui_runtime::agent_record::NativeLines
 pub fn flui_runtime::ui_runtime::agent_record::NativeLines::line(&self, stream: u32, setup: bool, kept: Option<&flui_protocol::native_recording::Line>, redacted: Option<&flui_protocol::native_recording::Line>)
 pub fn flui_runtime::ui_runtime::agent_record::NativeLines::lost(&self, stream: u32)
 pub fn flui_runtime::ui_runtime::agent_record::NativeLines::wants(&self) -> flui_runtime::ui_runtime::agent_record::NativeForms
-pub enum flui_runtime::ui_runtime::commands::CommandSendError
+#[non_exhaustive] pub enum flui_runtime::ui_runtime::commands::CommandSendError
 impl core::error::Error for flui_runtime::ui_runtime::commands::CommandSendError
 impl core::fmt::Debug for flui_runtime::ui_runtime::commands::CommandSendError
 impl core::fmt::Display for flui_runtime::ui_runtime::commands::CommandSendError
@@ -36088,7 +36088,7 @@ impl Eq for flui_runtime::ui_runtime::commands::DrainReport
 impl PartialEq for flui_runtime::ui_runtime::commands::DrainReport
 impl core::fmt::Debug for flui_runtime::ui_runtime::commands::DrainReport
 impl core::marker::StructuralPartialEq for flui_runtime::ui_runtime::commands::DrainReport
-pub enum flui_runtime::ui_runtime::commands::UiCommand
+#[non_exhaustive] pub enum flui_runtime::ui_runtime::commands::UiCommand
 impl core::fmt::Debug for flui_runtime::ui_runtime::commands::UiCommand
 variant flui_runtime::ui_runtime::commands::UiCommand::Accessibility { presentation_id: flui::foundation::PresentationId, request: accesskit::ActionRequest } // at 1
 variant flui_runtime::ui_runtime::commands::UiCommand::Agent { presentation_id: flui::foundation::PresentationId, call: flui_view::__runtime::WindowCall } // at 3
