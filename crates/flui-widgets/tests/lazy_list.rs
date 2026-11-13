@@ -1,12 +1,12 @@
 //! Integration tests for the lazy-sliver backend.
 //!
 //! Exercises the correctness paths the single-node `LeafBox` harness misses.
-//! Each test uses the headless frame driver (`pump_frame`) which, since the
+//! Each test drives frames of a UI runtime (`lay_out`), which, since the
 //! child-manager wiring landed, calls `service_child_requests` after `run_frame` — so two `tick` calls
 //! are enough to settle a visible window: the first dispatches the child-build
 //! request; the second lays out the now-built children.
 //!
-//! # Frame sequence (per `pump_frame`)
+//! # Frame sequence (per frame)
 //!
 //! 1. `build_scope` — drains the element-level dirty heap.
 //! 2. `run_frame`  — layout: the sliver emits pending child requests and a

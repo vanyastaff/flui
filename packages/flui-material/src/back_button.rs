@@ -1,13 +1,13 @@
 //! [`BackButton`] — an [`IconButton`] with a back-arrow glyph that pops the
-//! nearest [`Navigator`](flui_sdk::widgets::Navigator).
+//! route it is on.
 //!
 //! # Composition
 //!
 //! This type composes [`IconButton`], wiring
-//! [`NavigatorHandle::maybe_pop`](flui_sdk::widgets::NavigatorHandle::maybe_pop)
+//! [`PageHandle::maybe_pop`](flui_sdk::widgets::PageHandle::maybe_pop)
 //! as the default press handler and [`BackButton::on_pressed`] as the override
 //! that replaces it (for example to pop the platform's navigation stack
-//! instead of the `Navigator`).
+//! instead of the route).
 //!
 //! # Glyph: the `arrow_back` codepoint, not a bundled asset
 //!
@@ -28,7 +28,7 @@
 //! reading start.
 
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{Icon, IconData, NavigatorHandle};
+use flui_sdk::widgets::{Icon, IconData, PageHandle};
 
 use crate::button_style_button::PressCallback;
 use crate::icon_button::IconButton;
@@ -46,9 +46,9 @@ pub fn back_arrow_icon_data() -> IconData {
 
 /// An [`IconButton`] with a back-arrow glyph. With no [`Self::on_pressed`]
 /// override, tapping it calls
-/// [`NavigatorHandle::maybe_pop`](flui_sdk::widgets::NavigatorHandle::maybe_pop)
-/// on the nearest enclosing [`Navigator`](flui_sdk::widgets::Navigator). With
-/// no navigator ancestor at all (and no override), the button mounts disabled
+/// [`PageHandle::maybe_pop`](flui_sdk::widgets::PageHandle::maybe_pop)
+/// on the route it is on, Flutter's `Navigator.maybePop(context)`. Outside
+/// every route (and with no override), the button mounts disabled
 /// rather than panicking.
 ///
 /// ```rust
@@ -72,8 +72,8 @@ impl std::fmt::Debug for BackButton {
 
 impl BackButton {
     /// A `BackButton` with no override: tapping it calls
-    /// [`NavigatorHandle::maybe_pop`](flui_sdk::widgets::NavigatorHandle::maybe_pop)
-    /// on the nearest [`Navigator`](flui_sdk::widgets::Navigator).
+    /// [`PageHandle::maybe_pop`](flui_sdk::widgets::PageHandle::maybe_pop)
+    /// on the route it is on.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -97,9 +97,9 @@ impl StatelessView for BackButton {
 
         if let Some(on_pressed) = self.on_pressed.clone() {
             button = button.on_pressed(move |ctx| on_pressed(ctx));
-        } else if let Some(navigator) = NavigatorHandle::maybe_of(ctx) {
+        } else if let Some(page) = PageHandle::of(ctx) {
             button = button.on_pressed(move |_ctx| {
-                navigator.maybe_pop();
+                page.maybe_pop();
             });
         }
 

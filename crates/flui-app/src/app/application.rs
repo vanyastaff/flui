@@ -9,6 +9,7 @@ use std::marker::PhantomData;
 
 /// Whether startup requests the designated main window.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StartupWindow {
     /// Reserve and open the initial main window after `on_ready`.
     #[default]

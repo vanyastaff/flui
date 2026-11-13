@@ -134,10 +134,11 @@ this one path (ADR-0151 §9).
   asking again (`is_retryable`). No reason names an operating-system version
   (ADR-0244). The table test `every_error_carries_its_reason` holds every
   carrier to it.
-- **A closed enum is a decision.** `#![deny(clippy::exhaustive_enums)]`: a
+- **A closed enum is a decision** (ADR-0329, the workspace's
+  `clippy::exhaustive_enums`): a
   public enum is `#[non_exhaustive]` where a backend may report something new
   to an application (`WindowAppearance`, `WindowCommand`, the errors), and
-  closed with an `allow` that says why where its set is fixed by what it
+  closed with an `expect` that says why where its set is fixed by what it
   names (a key goes down or up, TSF's lock kinds, the W3C `location` values),
   where `Custom` is its open end (`TransferFormat`), or where every consumer
   must handle a new variant (`PlatformInput`; `WindowMaterial`, which every

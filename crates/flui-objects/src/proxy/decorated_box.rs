@@ -20,6 +20,10 @@ use flui_rendering::{
 
 /// Where the decoration paints relative to the child.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a decoration paints behind its child or in front of it"
+)]
 pub enum DecorationPosition {
     /// Behind the child (the common case).
     #[default]

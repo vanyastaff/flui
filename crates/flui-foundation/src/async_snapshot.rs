@@ -31,6 +31,10 @@ use core::fmt;
 /// The usual flow is `None` → `Waiting` → `Active` → `Done`; a `Future` skips
 /// `Active`, going straight from `Waiting` to `Done`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an asynchronous computation is absent, awaited, delivering or done"
+)]
 pub enum ConnectionState {
     /// Not currently connected to any asynchronous computation.
     ///

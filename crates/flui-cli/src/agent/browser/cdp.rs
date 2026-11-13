@@ -97,10 +97,7 @@ impl Cdp {
                 .unwrap_or("an exception");
             return Err(LinkError::Threw(text.to_owned()));
         }
-        Ok(result
-            .get_mut("result")
-            .map(Value::take)
-            .unwrap_or_default())
+        Ok(result.get_mut("result").map_or_default(Value::take))
     }
 }
 
@@ -127,10 +124,7 @@ fn command(
             .unwrap_or("error");
         return Err(LinkError::Refused(format!("{method}: {text}")));
     }
-    Ok(answer
-        .get_mut("result")
-        .map(Value::take)
-        .unwrap_or_default())
+    Ok(answer.get_mut("result").map_or_default(Value::take))
 }
 
 impl BrowserLink for Cdp {

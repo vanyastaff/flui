@@ -28,6 +28,7 @@ pub struct SceneLayer {
 /// (`r12.2`), so a reused slot never reads as the node it replaced; a layer adds its scene the same
 /// way (`l4.37`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Link {
     /// An element (the widget tree).
     Element(ElementId),

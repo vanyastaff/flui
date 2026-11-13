@@ -13,69 +13,16 @@
 //! `NavigatorHandle` sit on top: the `navigator` and `overlay_route` modules are the
 //! only files here that may touch the widget tree or the overlay.
 //!
-//! The signed-off baseline surface is exported from the crate root and prelude.
-//! The pure route-stack internals stay private, and the `Box<dyn Any + Send>`
+//! The pure route-stack internals stay private, and the `Box<dyn Any>`
 //! pop-result boundary remains an implementation detail behind typed public
 //! methods (`pop_with`, `remove_route_with`, `maybe_pop_with`).
 //!
-//! # Not implemented, and not claimed
-//!
-//! The public baseline now includes `Navigator`, `PageRoute` / `PopupRoute`,
-//! `Hero` / `HeroController` / `HeroControllerScope` / `HeroMode`, the Hero
-//! customization hooks, cross-navigator hero flights, gesture-driven
-//! (`transitionOnUserGestures`) flights, and named-route generation
-//! (`GeneratedRoute`, `NavigatorHandle::route` / `on_generate_route` /
-//! `on_unknown_route`, six untyped `*_named` entry points answering
-//! `Result<RouteId, NamedRouteError>`, one typed `push_named_typed::<T>`, and
-//! the typed-key path — `RouteKey<T>` / `route_keyed` / `push_keyed`, where the
-//! route's result type is checked against its name by the compiler at the
-//! registration site. Factories receive a `RouteRequest` carrying only the
-//! request's settings, name and arguments — a factory is a builder, and a
-//! redirect is expressed by returning a different route rather than by
-//! navigating. `RouteRequest::navigator()` existed briefly and was withdrawn
-//! (ADR-0024); navigation from a factory now requires an explicitly
-//! captured handle, is **survivable rather than supported**, and carries the
-//! consequences `ARCHITECTURE.md` §5 records.
-//! Still deferred: Navigator 2.0, restoration, `LocalHistoryRoute` (its module
-//! is `pub(crate)` and not public API until the first consumer; the doc-hidden,
-//! temporary `__test_access` names its handles for tests, ADR-0083 §4), and
-//! per-route focus scope. `PopScope` is **not** deferred: it shipped
-//! 2026-07-10 and is exported below.
-//!
-//! **Typed siblings of the other five entry points are deliberately not
-//! offered.** `push_named_typed` exists because a caller who wants a pushed
-//! screen's result has no other way to name its type; a
-//! `push_replacement_named_typed` or `push_named_and_remove_until_typed` has no
-//! consumer yet, and each is purely additive later. Going the other way — making
-//! all six typed — is what the original design did: under *that* surface every
-//! entry point took a `T`, so reaching a `PageRoute<i32>` screen from a caller
-//! who wrote `::<()>` was a refusal to navigate rather than a push, for a caller
-//! with no reason to know the route's result type at all. (No entry point takes
-//! a turbofish today; the shape is described here only because it is the
-//! rejected one.)
-//!
-//! Deferred **by decision** for named routes: the initial-route back-stack
-//! synthesis. ADR-0024 defers it; the typed `Router` has it instead, as
-//! `Routable::back_stack` (ADR-0093), which is where it will stay once the
-//! named doors are removed.
-//!
-//! The reason first given for the deferral — "no consumer until deep links
-//! exist" — is **false**, and is corrected in ADR-0024. **Any** initial name
-//! other than `/` takes an expansion branch that seeds `/` *first*. So an
-//! initial route of `"/settings"` yields `["/", "/settings"]` — a two-deep stack
-//! whose back button returns home, not a one-deep stack that exits the app.
-//! The consumer is an app shell's initial route, not deep linking.
-//!
-//! What the gap owes when it is built: seed `/` first, build the prefix chain
-//! segment by segment, drop the segments the registry does not resolve, and
-//! treat an unmatched *final* segment as an error that disposes every route
-//! generated so far and seeds `/` alone. The behaviors to pin are that an
-//! initial route can have gaps, and that the full initial route has to be
-//! matched. Until then FLUI bootstraps through
-//! `NavigatorHandle::seed_initial`, one call per route.
-//!
-//! Restorable named pushes (restoration is unbuilt) and `replace_named`
-//! (`replace` itself is private) are absent for their own reasons.
+//! A page an application navigates to is a value of its `Router`'s route type
+//! (ADR-0330): there are no named routes, and the stack a location opens with
+//! is `Routable::back_stack`. Restoration is the Router's (ADR-0262 §6);
+//! `LocalHistoryRoute` stays `pub(crate)` (the doc-hidden, temporary
+//! `__test_access` names its handles for tests, ADR-0083 §4), and there is no
+//! per-route focus scope.
 
 // `pub(crate)` only so `crate::__test_access` can re-export the items the
 // integration tests still reach (ADR-0083 §4); nothing here is public.
@@ -91,11 +38,11 @@ mod history;
 pub(crate) mod lifecycle;
 pub(crate) mod local_history;
 pub(crate) mod modal_route;
-mod named_route;
 #[expect(clippy::module_inception)]
-mod navigator;
-mod observer;
-mod overlay_route;
+pub(crate) mod navigator;
+pub(crate) mod observer;
+pub(crate) mod overlay_route;
+mod page_handle;
 mod page_route;
 mod page_transitions;
 mod parallax_transition;
@@ -116,23 +63,20 @@ pub use flui_animation::{AnimationRunFuture, RunCanceled};
 pub use hero::{Hero, HeroMode};
 pub use hero_controller::{FlightDirection, HeroController};
 pub use hero_controller_scope::HeroControllerScope;
-pub use named_route::{GeneratedRoute, KeyedSettings, NamedRouteError, RouteKey, RouteRequest};
-pub use navigator::{Navigator, NavigatorHandle, NavigatorState};
-pub use observer::NavigatorObserver;
+pub(crate) use navigator::{Navigator, NavigatorHandle};
+pub(crate) use observer::NavigatorObserver;
 pub use overlay_route::{
-    NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
-    SimpleRoute,
+    RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
 };
+pub use page_handle::{PageError, PageHandle};
 pub use page_route::{PageRoute, PopupRoute};
 pub use page_transitions::{PageTransitionBuilder, PageTransitions};
 pub use parallax_transition::ParallaxPageTransition;
 pub use pop_scope::{PopInvokedCallback, PopScope};
 pub use result::{RouteResult, RouteResultError};
-pub use route::{PushCompletion, Route, RouteArguments, RouteId, RouteSettings};
+pub use route::{PushCompletion, Route, RouteId, RouteSettings};
 
 // The harness-driven navigator suites live in `crates/flui-widgets/tests/`
 // (ADR-0083 §4); these are the unit tests that need no mounted tree.
-#[cfg(test)]
-mod navigator_tests;
 #[cfg(test)]
 mod tests;

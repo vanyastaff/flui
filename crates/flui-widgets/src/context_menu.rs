@@ -54,7 +54,7 @@ use crate::popup_menu::{MenuSession, Presenter};
 /// was. Unmounting the area closes its menu.
 ///
 /// The menu is a popup route, so the area needs a
-/// [`Navigator`](crate::Navigator) above it, as `WidgetsApp` provides.
+/// navigator above it, as a `WidgetsApp` page or a `Router` page has.
 #[derive(Clone, StatefulView)]
 pub struct ContextMenuArea {
     /// The checked commands as a menu; the mounted area presents it.

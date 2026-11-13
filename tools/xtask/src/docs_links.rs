@@ -215,7 +215,7 @@ const INPUTS: &str = ".lychee-inputs";
 /// URL is a local path outside the directory named `copy`.
 fn outside<'a>(line: &'a str, copy: &str) -> anyhow::Result<Option<(&'a str, &'a str)>> {
     let parsed = line.split_once(" (").and_then(|(url, rest)| {
-        let rest = rest.strip_suffix(" [excluded]").unwrap_or(rest);
+        let rest = rest.trim_suffix(" [excluded]");
         Some((url, rest.strip_suffix(')')?))
     });
     let Some((url, file)) = parsed else {

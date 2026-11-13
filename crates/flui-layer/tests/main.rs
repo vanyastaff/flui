@@ -22,6 +22,8 @@ mod scene_damage;
 mod scene_effect_update;
 #[path = "scene_links.rs"]
 mod scene_links;
+#[path = "scene_reclaim.rs"]
+mod scene_reclaim;
 #[path = "texture_registry.rs"]
 mod texture_registry;
 

@@ -12,13 +12,6 @@ crate-type = ["cdylib"]
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
-# cargo-shear: wasm-bindgen-futures is a false positive — the dependency is
-# required by the #[wasm_bindgen(start)] procedural macro expansion on the
-# async `main` fn (the macro emits wasm_bindgen_futures::spawn_local internally).
-# shear cannot see through attribute-macro token output.
-[package.metadata.cargo-shear]
-ignored = ["wasm-bindgen-futures"]
-
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 flui-painting = { workspace = true }
 flui-foundation = { workspace = true }

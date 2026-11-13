@@ -81,7 +81,7 @@ impl RoutePath {
         if rest.is_empty() {
             return Ok(path);
         }
-        let rest = rest.strip_suffix('/').unwrap_or(rest);
+        let rest = rest.trim_suffix('/');
         for segment in rest.split('/') {
             if segment.is_empty() {
                 return Err(malformed("it has an empty segment"));

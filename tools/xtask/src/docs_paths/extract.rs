@@ -649,7 +649,7 @@ fn package_flag(word: &str) -> PackageFlag<'_> {
     for (at, flag) in cluster.char_indices() {
         if flag == 'p' {
             let value = &cluster[at + 1..];
-            let value = value.strip_prefix('=').unwrap_or(value);
+            let value = value.trim_prefix('=');
             return if value.is_empty() {
                 PackageFlag::NextWord
             } else {
@@ -667,9 +667,9 @@ fn package_flag(word: &str) -> PackageFlag<'_> {
 /// `$env:NAME=value` too).
 fn assignment(word: &str) -> bool {
     word.split_once('=').is_some_and(|(name, _)| {
-        let name = name.strip_prefix("$env:").unwrap_or(name);
+        let name = name.trim_prefix("$env:");
         // `NAME+=value` appends
-        let name = name.strip_suffix('+').unwrap_or(name);
+        let name = name.trim_suffix('+');
         !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
     })
 }

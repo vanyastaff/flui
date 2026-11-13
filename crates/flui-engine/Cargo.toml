@@ -216,11 +216,6 @@ workspace = true
 features = []
 rustdoc-args = ["--cfg", "docsrs"]
 
-# cargo-shear reports the trybuild compile-fail inputs as unlinked: the
-# `compile_fail` test hands them to rustc by glob, no module declares them.
-[package.metadata.cargo-shear]
-ignored-paths = ["tests/compile_fail/*.rs"]
-
 [package.metadata.flui]
 tier = "R"
 tier-kind = "internal"

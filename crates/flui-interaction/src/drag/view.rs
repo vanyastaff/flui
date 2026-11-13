@@ -137,15 +137,13 @@ impl<'a> DragView<'a> {
         if let Some(data) = self.data {
             return data.formats();
         }
-        self.offer
-            .map(|offer| {
-                offer
-                    .representations()
-                    .iter()
-                    .map(|descriptor| descriptor.format.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.offer.map_or_default(|offer| {
+            offer
+                .representations()
+                .iter()
+                .map(|descriptor| descriptor.format.clone())
+                .collect()
+        })
     }
 
     /// Ask for the first representation in `format`. `None` when the drag offers

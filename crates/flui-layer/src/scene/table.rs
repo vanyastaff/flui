@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+use smallvec::SmallVec;
+
 /// Bits of the key each branch level consumes.
 const BITS: u32 = 5;
 /// Children per branch.
@@ -52,15 +54,6 @@ struct Branch<T>([Option<Node<T>>; FANOUT]);
 struct Leaf<T>([Option<T>; LEAF_FANOUT]);
 
 impl<T> Node<T> {
-    /// An empty node for `level` (0 is the leaf level).
-    fn empty(level: u32) -> Self {
-        if level == 0 {
-            Self::Leaf(Arc::new(Leaf(std::array::from_fn(|_| None))))
-        } else {
-            Self::Branch(Arc::new(Branch(std::array::from_fn(|_| None))))
-        }
-    }
-
     fn is_empty(&self) -> bool {
         match self {
             Self::Branch(branch) => branch.0.iter().all(Option::is_none),
@@ -69,13 +62,87 @@ impl<T> Node<T> {
     }
 }
 
+/// The most emptied nodes of each kind a [`Spares`] keeps.
+const SPARE_CAP: usize = 8;
+
+/// Spare nodes of one kind, held inline so taking them back allocates nothing.
+type Stock<N> = SmallVec<[Arc<N>; SPARE_CAP]>;
+
+/// Emptied nodes a write takes before allocating a copy: what a version
+/// nobody reads any more held alone ([`Table::harvest`]).
+///
+/// Every node it keeps holds no value and no child, so dropping one frees
+/// memory and runs no other code.
+pub(crate) struct Spares<T> {
+    branches: Stock<Branch<T>>,
+    leaves: Stock<Leaf<T>>,
+}
+
+impl<T> Default for Spares<T> {
+    fn default() -> Self {
+        Self {
+            branches: SmallVec::new(),
+            leaves: SmallVec::new(),
+        }
+    }
+}
+
+impl<T> std::fmt::Debug for Spares<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Spares")
+            .field("branches", &self.branches.len())
+            .field("leaves", &self.leaves.len())
+            .finish()
+    }
+}
+
+impl<T> Spares<T> {
+    /// Moves `other`'s nodes in, up to the cap; the rest are freed.
+    pub(crate) fn absorb(&mut self, other: &mut Self) {
+        fill(&mut self.branches, &mut other.branches);
+        fill(&mut self.leaves, &mut other.leaves);
+    }
+
+    /// Nodes held, of both kinds.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn len(&self) -> usize {
+        self.branches.len() + self.leaves.len()
+    }
+}
+
+/// Moves `from`'s nodes into `into` while it has room; the rest are freed.
+fn fill<N>(into: &mut Stock<N>, from: &mut Stock<N>) {
+    while into.len() < SPARE_CAP {
+        let Some(node) = from.pop() else {
+            return;
+        };
+        into.push(node);
+    }
+    from.clear();
+}
+
 /// A persistent map from `u64` to `T`, ordered by key.
-#[derive(Clone)]
+///
+/// A table being written may hold [`Spares`], which its writes use before
+/// allocating; a clone holds none.
 pub(crate) struct Table<T> {
     root: Option<Node<T>>,
     /// Levels under `root`, 1 for a lone leaf; 0 while `root` is `None`.
     height: u32,
     len: usize,
+    spares: Spares<T>,
+}
+
+impl<T: Clone> Clone for Table<T> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            height: self.height,
+            len: self.len,
+            spares: Spares::default(),
+        }
+    }
 }
 
 impl<T> std::fmt::Debug for Table<T> {
@@ -94,6 +161,7 @@ impl<T> Default for Table<T> {
             root: None,
             height: 0,
             len: 0,
+            spares: Spares::default(),
         }
     }
 }
@@ -115,9 +183,21 @@ fn digit(key: u64, level: u32) -> usize {
 }
 
 /// `node` made unshared, counting a clone when another version holds it.
-fn unshare<'a, N: Clone>(node: &'a mut Arc<N>, cost: &mut TableCost) -> &'a mut N {
+/// The clone goes into a spare node when `spares` has one.
+fn unshare<'a, N: Clone>(
+    node: &'a mut Arc<N>,
+    cost: &mut TableCost,
+    spares: &mut Stock<N>,
+) -> &'a mut N {
     if Arc::get_mut(node).is_none() {
         cost.copies += 1;
+        if let Some(mut spare) = spares.pop() {
+            Arc::get_mut(&mut spare)
+                .expect("BUG: a spare node is held by its pool alone")
+                .clone_from(node);
+            // Another version holds `node`, so this drop only counts down.
+            *node = spare;
+        }
     }
     Arc::make_mut(node)
 }
@@ -169,15 +249,24 @@ impl<T: Clone> Table<T> {
     pub(crate) fn get_mut(&mut self, key: u64, cost: &mut TableCost) -> Option<&mut T> {
         // Look first, so a miss copies nothing.
         self.get(key)?;
-        let mut node = self.root.as_mut()?;
-        let mut level = self.height - 1;
+        let Self {
+            root,
+            height,
+            spares,
+            ..
+        } = self;
+        let mut node = root.as_mut()?;
+        let mut level = *height - 1;
         loop {
             match node {
                 Node::Branch(branch) => {
-                    node = unshare(branch, cost).0[digit(key, level)].as_mut()?;
+                    node = unshare(branch, cost, &mut spares.branches).0[digit(key, level)]
+                        .as_mut()?;
                     level = level.checked_sub(1)?;
                 }
-                Node::Leaf(leaf) => return unshare(leaf, cost).0[digit(key, level)].as_mut(),
+                Node::Leaf(leaf) => {
+                    return unshare(leaf, cost, &mut spares.leaves).0[digit(key, level)].as_mut();
+                }
             }
         }
     }
@@ -185,19 +274,28 @@ impl<T: Clone> Table<T> {
     /// Stores `value` at `key` and returns the value it replaced.
     pub(crate) fn insert(&mut self, key: u64, value: T, cost: &mut TableCost) -> Option<T> {
         self.grow_to(height_for(key), cost);
-        let mut slot = &mut self.root;
-        let mut level = self.height - 1;
+        let Self {
+            root,
+            height,
+            spares,
+            ..
+        } = self;
+        let mut slot = root;
+        let mut level = *height - 1;
         let old = loop {
             let node = slot.get_or_insert_with(|| {
                 cost.created += 1;
-                Node::empty(level)
+                spares.empty(level)
             });
             match node {
                 Node::Branch(branch) => {
-                    slot = &mut unshare(branch, cost).0[digit(key, level)];
+                    slot = &mut unshare(branch, cost, &mut spares.branches).0[digit(key, level)];
                     level -= 1;
                 }
-                Node::Leaf(leaf) => break unshare(leaf, cost).0[digit(key, level)].replace(value),
+                Node::Leaf(leaf) => {
+                    break unshare(leaf, cost, &mut spares.leaves).0[digit(key, level)]
+                        .replace(value);
+                }
             }
         };
         if old.is_none() {
@@ -211,7 +309,7 @@ impl<T: Clone> Table<T> {
         // Look first, so a miss copies nothing.
         self.get(key)?;
         let root = self.root.as_mut()?;
-        let removed = remove_in(root, key, self.height - 1, cost);
+        let removed = remove_in(root, key, self.height - 1, cost, &mut self.spares);
         if root.is_empty() {
             self.root = None;
             self.height = 0;
@@ -243,12 +341,91 @@ impl<T: Clone> Table<T> {
             return;
         }
         while self.height < height {
-            let mut children: [Option<Node<T>>; FANOUT] = std::array::from_fn(|_| None);
-            children[0] = self.root.take();
+            let mut branch = self.spares.branch();
+            Arc::get_mut(&mut branch)
+                .expect("BUG: a new branch is held alone")
+                .0[0] = self.root.take();
             cost.created += 1;
-            self.root = Some(Node::Branch(Arc::new(Branch(children))));
+            self.root = Some(Node::Branch(branch));
             self.height += 1;
         }
+    }
+}
+
+impl<T> Table<T> {
+    /// Lends the table the spares its writes take before allocating.
+    pub(crate) fn lend_spares(&mut self, spares: &mut Spares<T>) {
+        std::mem::swap(&mut self.spares, spares);
+    }
+
+    /// Hands back the spares its writes left.
+    pub(crate) fn return_spares(&mut self, spares: &mut Spares<T>) {
+        spares.absorb(&mut self.spares);
+    }
+
+    /// Takes apart a table no other version reads: each node it alone holds
+    /// is emptied into `spares` (up to their cap) and every value it alone
+    /// holds drops here, so a caller runs this with no borrow held (a value
+    /// can hold a content whose annotations are user values). A node another
+    /// version shares is let go.
+    pub(crate) fn harvest(mut self, spares: &mut Spares<T>) {
+        spares.absorb(&mut self.spares);
+        if let Some(root) = self.root.take() {
+            harvest_node(root, spares);
+        }
+    }
+}
+
+/// Empties `node` into `spares` if nothing else holds it, its children
+/// first.
+fn harvest_node<T>(node: Node<T>, spares: &mut Spares<T>) {
+    match node {
+        Node::Branch(mut branch) => {
+            let Some(held) = Arc::get_mut(&mut branch) else {
+                return;
+            };
+            for child in &mut held.0 {
+                if let Some(child) = child.take() {
+                    harvest_node(child, spares);
+                }
+            }
+            if spares.branches.len() < SPARE_CAP {
+                spares.branches.push(branch);
+            }
+        }
+        Node::Leaf(mut leaf) => {
+            let Some(held) = Arc::get_mut(&mut leaf) else {
+                return;
+            };
+            for value in &mut held.0 {
+                *value = None;
+            }
+            if spares.leaves.len() < SPARE_CAP {
+                spares.leaves.push(leaf);
+            }
+        }
+    }
+}
+
+impl<T> Spares<T> {
+    /// An empty node for `level` (0 is the leaf level), spare or new.
+    fn empty(&mut self, level: u32) -> Node<T> {
+        if level == 0 {
+            Node::Leaf(
+                self.leaves
+                    .pop()
+                    .unwrap_or_else(|| Arc::new(Leaf(std::array::from_fn(|_| None)))),
+            )
+        } else {
+            Node::Branch(self.branch())
+        }
+    }
+
+    /// An empty branch, spare or new.
+    fn branch(&mut self) -> Arc<Branch<T>> {
+        self.branches
+            .pop()
+            .unwrap_or_else(|| Arc::new(Branch(std::array::from_fn(|_| None))))
     }
 }
 
@@ -257,18 +434,19 @@ fn remove_in<T: Clone>(
     key: u64,
     level: u32,
     cost: &mut TableCost,
+    spares: &mut Spares<T>,
 ) -> Option<T> {
     match node {
         Node::Branch(branch) => {
-            let slot = &mut unshare(branch, cost).0[digit(key, level)];
+            let slot = &mut unshare(branch, cost, &mut spares.branches).0[digit(key, level)];
             let child = slot.as_mut()?;
-            let removed = remove_in(child, key, level.checked_sub(1)?, cost);
+            let removed = remove_in(child, key, level.checked_sub(1)?, cost, spares);
             if child.is_empty() {
                 *slot = None;
             }
             removed
         }
-        Node::Leaf(leaf) => unshare(leaf, cost).0[digit(key, level)].take(),
+        Node::Leaf(leaf) => unshare(leaf, cost, &mut spares.leaves).0[digit(key, level)].take(),
     }
 }
 

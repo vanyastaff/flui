@@ -158,11 +158,11 @@ pub(crate) fn a_nested_effect_update_damages_its_scope_and_moves_the_bounds(run:
     });
     let inner = inner.expect("the inner effect");
 
-    let updated = content
-        .with_effects([(inner, translate(200.0, 0.0))])
-        .expect("an effect entry");
     let mut writer = owner.writer();
-    writer.push(publish(node, Arc::new(updated)));
+    let updated = writer
+        .with_effects(&content, [(inner, translate(200.0, 0.0))])
+        .expect("an effect entry");
+    writer.push(publish(node, updated));
     owner.apply(SURFACE).expect("the inner transform changes");
     let damage = rects(run.damage(&owner));
     assert!(
@@ -206,11 +206,11 @@ pub(crate) fn an_outer_effect_update_damages_its_unchanged_descendants(run: &mut
     });
     let outer = outer.expect("the outer effect");
 
-    let updated = content
-        .with_effects([(outer, translate(300.0, 0.0))])
-        .expect("an effect entry");
     let mut writer = owner.writer();
-    writer.push(publish(node, Arc::new(updated)));
+    let updated = writer
+        .with_effects(&content, [(outer, translate(300.0, 0.0))])
+        .expect("an effect entry");
+    writer.push(publish(node, updated));
     owner.apply(SURFACE).expect("the outer transform changes");
     let damage = rects(run.damage(&owner));
     assert!(
@@ -359,8 +359,9 @@ pub(crate) fn an_effect_update_equals_a_content_built_afresh(run: &mut Run) {
             fresh_layers[*at] = layer.clone();
         }
         let (fresh, _, _) = build(&fresh_layers, &chunks, &slots);
-        let updated = before
+        let updated = writer
             .with_effects(
+                &before,
                 shape
                     .replaced
                     .iter()
@@ -395,7 +396,7 @@ pub(crate) fn an_effect_update_equals_a_content_built_afresh(run: &mut Run) {
         // Each content over `before`, then moved: the damage of the publish
         // and of the move, which reads the bounds the publish left.
         let mut outcomes = Vec::new();
-        for content in [Arc::new(updated), Arc::new(fresh)] {
+        for content in [updated, Arc::new(fresh)] {
             let mut writer = owner.writer();
             writer.push(publish(node, Arc::clone(&before)));
             writer.push(place(node, 0.0, 0.0));
@@ -437,14 +438,17 @@ pub(crate) fn an_update_of_an_effect_and_its_descendant_folds_each_inside(run: &
     });
     let (outer, inner) = (outer.expect("the outer"), inner.expect("the inner"));
 
-    let updated = content
-        .with_effects([
-            (outer, translate(100.0, 0.0)),
-            (inner, translate(0.0, 50.0)),
-        ])
-        .expect("effect entries");
     let mut writer = owner.writer();
-    writer.push(publish(node, Arc::new(updated)));
+    let updated = writer
+        .with_effects(
+            &content,
+            [
+                (outer, translate(100.0, 0.0)),
+                (inner, translate(0.0, 50.0)),
+            ],
+        )
+        .expect("effect entries");
+    writer.push(publish(node, updated));
     owner.apply(SURFACE).expect("both effects change");
     let damage = rects(run.damage(&owner));
     assert!(
@@ -488,11 +492,11 @@ pub(crate) fn an_effect_update_of_a_reparented_boundary_reads_each_versions_chai
         .apply(SURFACE)
         .expect("two parents, the boundary under the left");
 
-    let updated = moving
-        .with_effects([(effect, translate(20.0, 0.0))])
-        .expect("an effect entry");
     let mut writer = owner.writer();
-    writer.push(publish(node, Arc::new(updated)));
+    let updated = writer
+        .with_effects(&moving, [(effect, translate(20.0, 0.0))])
+        .expect("an effect entry");
+    writer.push(publish(node, updated));
     writer.push(publish(left, Arc::new(BoundaryContent::builder().finish())));
     let mut holder = BoundaryContent::builder();
     holder.slot(node);
@@ -535,11 +539,11 @@ pub(crate) fn an_effect_update_over_a_moved_slot_folds_each_inside(run: &mut Run
     });
     let (effect, child) = (effect.expect("the effect"), child.expect("the slot"));
 
-    let updated = content
-        .with_effects([(effect, translate(40.0, 0.0))])
-        .expect("an effect entry");
     let mut writer = owner.writer();
-    writer.push(publish(node, Arc::new(updated)));
+    let updated = writer
+        .with_effects(&content, [(effect, translate(40.0, 0.0))])
+        .expect("an effect entry");
+    writer.push(publish(node, updated));
     writer.push(place(child, 300.0, 50.0));
     owner
         .apply(SURFACE)

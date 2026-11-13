@@ -21,6 +21,10 @@ pub enum RepeatMode {
 
 /// How many iterations a repeat runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a repeat runs a finite count or forever"
+)]
 pub enum Iterations {
     /// This many, then the run settles on the end of the last one. Zero
     /// settles at the call, where the value already is: no iteration ran,

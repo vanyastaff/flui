@@ -3,6 +3,10 @@
 /// How much space a flex container should occupy in its main axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a flex takes its children's extent or the whole main-axis constraint"
+)]
 pub enum MainAxisSize {
     /// Minimize the amount of space occupied by the children.
     ///

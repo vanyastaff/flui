@@ -1164,15 +1164,15 @@ impl PipelineOwner<PaintPhase> {
                     "paint: composited-layer update, content republished"
                 );
                 let rebuilt = patches.len() as u64;
-                let content = record
-                    .content
-                    .with_effects(patches.drain(..))
+                let content = composer
+                    .writer
+                    .with_effects(&record.content, patches.drain(..))
                     .expect("BUG: a layer patch names effects of the content it patches");
                 composer.counts.layers_produced += rebuilt;
                 composer.counts.layers_reused +=
                     (content.entries().len() as u64).saturating_sub(rebuilt);
                 let fresh = BoundaryRecord {
-                    content: Arc::new(content),
+                    content,
                     ..record.clone()
                 };
                 // The patched content keeps every slot of the one it replaces.
@@ -2131,8 +2131,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
                 None => owner
                     .boundary_records
                     .get(&id)
-                    .map(|record| record.children.clone())
-                    .unwrap_or_default(),
+                    .map_or_default(|record| record.children.clone()),
             };
             self.staged.records.insert(id, None);
             for (child, node) in below {

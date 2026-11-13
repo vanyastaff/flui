@@ -15,10 +15,7 @@ help: use associated function syntax instead
 error[E0599]: no method named `on_vertical_drag_update` found for struct `GestureDetector` in the current scope
   --> tests/ui/one_drag_axis_per_detector.rs:10:10
    |
- 8 |       let _ = GestureDetector::new()
-   |  _____________-
- 9 | |         .drag(DragSlot::pan())
-10 | |         .on_vertical_drag_update(|_| {});
-   | |         -^^^^^^^^^^^^^^^^^^^^^^^ method not found in `GestureDetector`
-   | |_________|
-   |
+ 8 |     let _ = GestureDetector::new()
+ 9 |         .drag(DragSlot::pan())
+10 |         .on_vertical_drag_update(|_| {});
+   |          ^^^^^^^^^^^^^^^^^^^^^^^ method not found in `GestureDetector`

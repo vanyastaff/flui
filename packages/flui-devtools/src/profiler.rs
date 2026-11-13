@@ -90,6 +90,10 @@ impl Default for ProfilerConfig {
 
 /// Frame rendering phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "`Custom` carries every phase the three named ones do not"
+)]
 pub enum FramePhase {
     /// Widget tree build phase
     Build,

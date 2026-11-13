@@ -122,7 +122,7 @@ pub(super) fn response_headers(raw: &[u16]) -> Result<Headers, HttpError> {
     let mut headers = Headers::new();
     // The status line comes first.
     for line in bytes.split(|&byte| byte == b'\n').skip(1) {
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let line = line.trim_suffix(b"\r");
         if line.is_empty() {
             continue;
         }

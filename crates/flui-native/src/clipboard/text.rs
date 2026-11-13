@@ -102,7 +102,7 @@ impl TextForm {
     /// measured without making it: a reader refuses text past its limit
     /// before ISO 8859-1 or ill-formed UTF-8 grows as it decodes.
     pub(crate) fn decoded_len(self, bytes: &[u8]) -> usize {
-        let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+        let bytes = bytes.trim_suffix(&[0]);
         match self {
             Self::PlainUtf8 | Self::Utf8String | Self::Plain => bytes
                 .utf8_chunks()

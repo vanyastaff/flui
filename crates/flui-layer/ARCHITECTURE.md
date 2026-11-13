@@ -204,9 +204,12 @@ layer is held beside the stream, one per effect in paint order (`BoundaryContent
 the stream sits in an `Arc` with everything that depends on the entries alone: each effect's
 entry, the effects and slots in order, each effect's scope end and the union of its direct
 chunks' bounds, the union of the top-level chunks' bounds, the slots by node, and the chunks'
-texture and closure entries. `with_effects`, the composited-layer update, copies the layers,
-rebuilds the indexes they feed (links, texture layers, filter closures) and shares the stream, so
-it costs the content's effects and never its chunks.
+texture and closure entries. `SceneWriter::with_effects`, the composited-layer update, copies the
+layers into a content the owner reclaimed when it holds one, rebuilds the indexes they feed (links,
+texture layers, filter closures) and shares the stream, so it costs the content's effects and never
+its chunks. A refused update (an index that names no effect, or names one twice) hands the
+layers it was given to the owner, which drops them when the next patch opens, as it does a
+discarded content.
 
 `SceneOwner::apply` builds the patch on a copy of the version and keeps it only when every
 operation is valid: an id of another lineage, an unknown or stale id, a retired node a slot still
@@ -258,18 +261,30 @@ log holds sixteen entries; a seventeenth folds the two oldest under the newer id
 older contents, so a raster stall over-reports damage and never holds more than sixteen entries of
 buffers. An acknowledgement moves forward only and ignores another lineage or a version never
 applied. `apply` (in `Applied::released`), `completed` and `renew` return what they release as
-`ReleasedContents`, the version an apply replaced and the contents a fold let go of included, which a caller
-holding the owner in a `RefCell` passes to an `Outbox`: a released annotation value's destructor is
-user code and finds the owner free. A painter that gives up contents it recorded for a patch never
-applied hands them to `SceneWriter::discard`; the owner drops them when `writer` opens the next
-patch or `renew` returns them, both outside the painter's borrows.
+`ReleasedContents`, which a caller holding the owner in a `RefCell` passes to an `Outbox`: a
+released annotation value's destructor is user code and finds the owner free. An apply keeps the
+version it replaced among two retiring ones and releases it once no other holder reads it (an
+`Arc` count of one) or a newer one pushes it out; a fold, a completion or a renewal releases
+contents. `ReleasedContents::reclaim`, run with no borrow held, drops what was released and keeps,
+emptied, the version records, table nodes (`table.rs` `Spares`) and contents the owner held alone;
+`SceneOwner::restock` takes them back under small caps. A write that copies a shared table node
+copies it into an emptied one, an apply's version takes an emptied record, and `with_effects`
+writes into an emptied content, so a steady layer update reuses the same buffers each frame. A
+painter that gives up contents it recorded for a patch never applied hands them to
+`SceneWriter::discard`; the owner drops them when `writer` opens the next patch or `renew` returns
+them, both outside the painter's borrows.
 
 Pinned by `layer_it`: `pending_log_contract`, `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,
 whose damage must cover what `LayerDiffer` finds between the flattened versions),
 `scene_apply_contract`, `content_version_contract` and `scene_table_cost`
 (an apply's copies are at most its operations times the table height, equal at 1 100 and 8 000
 nodes, and a republished parent copies as much at 40 children as at 200); the table's model
-test against `BTreeMap` is `scene::table::tests`.
+test against `BTreeMap` is `scene::table::tests`. `scene_reclaim`: a version someone holds keeps
+what it was applied with while the owner reuses what it held alone
+(`reclaimed_buffers_never_change_a_version_someone_holds`, against an owner that reclaims nothing),
+an update takes what a completion handed back (`an_update_writes_into_what_the_owner_reclaimed`),
+and a refused update drops none of its layers while the writer borrows the owner
+(`a_refused_effect_update_drops_its_layers_outside_the_writer`).
 
 ### Deleted, with the reason
 

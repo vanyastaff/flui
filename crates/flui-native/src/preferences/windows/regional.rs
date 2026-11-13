@@ -60,6 +60,6 @@ fn info(kind: u32) -> Option<String> {
     let written = unsafe { GetLocaleInfoEx(PCWSTR::null(), kind, Some(&mut buffer)) };
     let written = usize::try_from(written).ok().filter(|&units| units > 0)?;
     let value = buffer.get(..written)?;
-    let value = value.strip_suffix(&[0]).unwrap_or(value);
+    let value = value.trim_suffix(&[0]);
     String::from_utf16(value).ok()
 }

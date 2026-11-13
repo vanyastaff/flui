@@ -435,8 +435,7 @@ pub(super) fn issued_of(state: &PresentationState) -> Rc<RefCell<IssuedHandles>>
         .dev_agent
         .borrow()
         .as_ref()
-        .map(|slot| Rc::clone(&slot.issued))
-        .unwrap_or_default()
+        .map_or_default(|slot| Rc::clone(&slot.issued))
 }
 
 /// What an agent's reads have reported, enough to tell a handle that is

@@ -138,15 +138,13 @@ pub(super) fn tick() {
 
 fn recorders() -> Vec<Rc<PlacementRecorder>> {
     APP_RUNTIME.with(|slot| {
-        slot.try_borrow()
-            .map(|state| {
-                state
-                    .placement_recorders
-                    .iter()
-                    .map(|(_, recorder)| Rc::clone(recorder))
-                    .collect()
-            })
-            .unwrap_or_default()
+        slot.try_borrow().map_or_default(|state| {
+            state
+                .placement_recorders
+                .iter()
+                .map(|(_, recorder)| Rc::clone(recorder))
+                .collect()
+        })
     })
 }
 

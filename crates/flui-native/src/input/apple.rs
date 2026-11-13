@@ -1642,8 +1642,7 @@ pub(crate) mod macos {
             let chars = chars.to_string();
             let ignoring = event
                 .charactersIgnoringModifiers()
-                .map(|ignoring| ignoring.to_string())
-                .unwrap_or_default();
+                .map_or_default(|ignoring| ignoring.to_string());
             let control = event
                 .modifierFlags()
                 .contains(NSEventModifierFlags::Control);
@@ -2206,12 +2205,10 @@ pub(crate) mod ios {
             if let (TouchPhase::Move, Some(event)) = (phase, event) {
                 let coalesced = event
                     .coalescedTouchesForTouch(touch)
-                    .map(|samples| samples.to_vec())
-                    .unwrap_or_default();
+                    .map_or_default(|samples| samples.to_vec());
                 let predicted = event
                     .predictedTouchesForTouch(touch)
-                    .map(|samples| samples.to_vec())
-                    .unwrap_or_default();
+                    .map_or_default(|samples| samples.to_vec());
                 return crate::input::apple::samples::assemble_move(
                     &mut self.contacts,
                     &mut self.batch,

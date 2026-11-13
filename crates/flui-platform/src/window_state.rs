@@ -1358,7 +1358,7 @@ impl ApplyError {
 /// Why a command applied at once ([`WindowCommand::admit_and_apply`]) did not
 /// take effect: its admission refused it, or the window did.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a command is refused at admission or at application; there is no third place"
 )]

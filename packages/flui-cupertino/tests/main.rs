@@ -180,8 +180,8 @@ fn theme_and_color_resolution() {
 fn navigation_contracts() {
     common::run_cases(&[
         (
-            "route::cupertino page route slides in from off the right edge over 500ms",
-            route::cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms,
+            "route::cupertino app slides a page in from off the right edge over 500ms",
+            route::cupertino_app_slides_a_page_in_from_off_the_right_edge_over_500ms,
         ),
         (
             "route::cupertino route does not slide under reduced motion",

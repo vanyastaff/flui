@@ -472,7 +472,7 @@ effect layers are addressable by index inside the ENCLOSING boundary's
 content (`effect_slots` of its `BoundaryRecord`). An alpha change rebuilds
 those entries through the same `own_effect_layers` constructor the paint walk
 uses, at the origin the record holds, and republishes the content at the same
-scene node through `BoundaryContent::with_effects`, sharing the entry stream
+scene node through `SceneWriter::with_effects`, sharing the entry stream
 (`refresh_boundary`, `layer_patches_for` in `src/pipeline/owner/paint.rs`) —
 with the node still an ordinary non-boundary and nothing repainted.
 
@@ -661,7 +661,7 @@ question; only the origin is.
 **Cost.** A patch is O(effect-owning nodes in the boundary) + O(effects and
 slots of the boundary's content) — `layer_patches_for` walks every `effect_slots`
 entry of the record regardless of how many nodes actually asked for an update,
-`BoundaryContent::with_effects` copies the effect layers and shares the entry
+`SceneWriter::with_effects` copies the effect layers and shares the entry
 stream, and the scene's damage and subtree bounds of a content that shares its
 stream fold only effects and slots — against a full re-execution of `paint()`
 over the boundary for a repaint. The chunk count of the boundary does not
