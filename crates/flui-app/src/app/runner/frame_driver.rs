@@ -377,10 +377,7 @@ impl FrameDrivers {
                 let period = logical
                     .presentation_refresh_interval(record.binding.0)
                     .unwrap_or(flui_runtime::ui_runtime::DEFAULT_REFRESH_PERIOD);
-                record
-                    .deadlines
-                    .as_ref()?
-                    .next_wake(record.binding.0, enabled, period)
+                record.deadlines.as_ref()?.next_wake(enabled, period)
             })
             .min()
     }

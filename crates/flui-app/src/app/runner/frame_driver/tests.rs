@@ -1076,13 +1076,12 @@ fn deadlines_survive_a_sibling_install_and_close() {
 }
 
 /// A window whose frames are off wakes the loop for none of its raster work:
-/// the surface it is owed is served only by its own frame, so another
-/// window's wake hook reporting it would hand the loop a past instant that
-/// no wake moves. Its frames back on, its own hook reports it again.
+/// the surface it is owed is served only by its own frame, so the loop's
+/// wake reporting it would hand the platform a past instant that no wake
+/// moves. Its frames back on, the loop wakes for it again.
 ///
-/// Red-check: have `DesktopWakeDeadlines::next_wake` report the whole host's
-/// `raster_wake_at` and the hidden window's deadline is reported through
-/// the other window.
+/// Red-check: let `AppRuntime::next_wake` count every window's raster work
+/// (`wake_deadline(|_| true)`) and the hidden window's deadline is reported.
 #[cfg(all(feature = "testing", not(target_os = "ios")))]
 fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
     use super::super::{
@@ -1118,32 +1117,38 @@ fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
     }
     let slots = flui_engine::testing::ScriptedSlots::new();
     let shared = SharedRasterHost::new(RasterFactory::Scripted(slots.clone()));
-    super::super::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = shared.clone());
+    let previous = super::super::host::APP_RUNTIME
+        .with(|slot| std::mem::replace(&mut slot.borrow_mut().raster_host, shared.clone()));
     let (hidden, shown) = (installed[1].0.address, installed[0].0.address);
     attach_a_window(&shared, shown, 1);
     let owed = owe_a_surface(&shared, &slots, hidden, 2);
     let earliest = || super::super::host::APP_RUNTIME.with(|slot| slot.borrow().next_wake());
+    let lifecycle = |state| {
+        installed[1]
+            .0
+            .runtime()
+            .lifecycle(state)
+            .expect("the window's lifecycle changes");
+    };
 
-    installed[1]
-        .0
-        .runtime()
-        .lifecycle(flui_scheduler::AppLifecycleState::Hidden)
-        .expect("hide the window owed a surface");
-    assert_ne!(
-        earliest(),
-        Some(owed),
-        "no other window's wake reports the hidden window's surface"
-    );
-    installed[1]
-        .0
-        .runtime()
-        .lifecycle(flui_scheduler::AppLifecycleState::Resumed)
-        .expect("resume it");
-    assert_eq!(earliest(), Some(owed), "its own wake reports it again");
+    lifecycle(flui_scheduler::AppLifecycleState::Hidden);
+    let while_hidden = earliest();
+    lifecycle(flui_scheduler::AppLifecycleState::Resumed);
+    let once_resumed = earliest();
 
+    // Everything the row installed goes before it asserts, so a failure
+    // leaves the table's later rows the loop they expect.
     close_this_window(installed[1].0);
     close_this_window(installed[0].0);
     teardown_platform_ui_runtime();
+    super::super::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = previous);
+
+    assert_ne!(
+        while_hidden,
+        Some(owed),
+        "no other window's wake reports the hidden window's surface"
+    );
+    assert_eq!(once_resumed, Some(owed), "its own wake reports it again");
 }
 
 fn unpublished_window_retires_native_resources_independently() {

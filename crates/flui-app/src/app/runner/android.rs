@@ -10,7 +10,7 @@ use super::owner_dispatch::{
     ExitWatchdog, RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
     prepare_platform_ui_runtime, teardown_platform_ui_runtime_logged,
 };
-use super::raster_host::{RasterSlot, raster_wake_at};
+use super::raster_host::RasterSlot;
 use crate::app::AppConfig;
 
 // ============================================================================
@@ -102,18 +102,16 @@ where
         // reports, not a sleep on the loop thread.
         let background_pace = Arc::new(BackgroundPace::default());
 
-        // The existing owner wake carries runtime deadlines as well as the
-        // raster host's own (a lost device's next rebuild, a surface's next
-        // attempt) and the background pace. Geometry refresh is owner work
-        // even while a hidden presentation cannot produce frames.
+        // The existing owner wake carries runtime deadlines, which count the
+        // raster work of the window while its frames run (a lost device's next
+        // rebuild, a surface's next attempt), and the background pace.
+        // Geometry refresh is owner work even while a hidden presentation
+        // cannot produce frames.
         {
             let background_pace = Arc::clone(&background_pace);
             super::host::route_wake_deadline(move || {
                 super::host::merge_wake_deadlines(
-                    super::host::merge_wake_deadlines(
-                        APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
-                        raster_wake_at(),
-                    ),
+                    APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
                     background_pace.next_wake(),
                 )
             });

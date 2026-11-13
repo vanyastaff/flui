@@ -41,7 +41,7 @@ use super::owner_dispatch::{
     RuntimeEvent, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
     install_input_wiring, prepare_ui_runtime_alongside, teardown_platform_ui_runtime,
 };
-use super::raster_host::{RasterSlot, raster_wake_at};
+use super::raster_host::RasterSlot;
 use crate::app::hot_reload::WorkerReload;
 use crate::app::{AppConfig, LaunchError};
 
@@ -289,16 +289,12 @@ where
         .with_pointer_resampling(config.pointer_resampling);
     let window = Rc::clone(presentation_window.window());
 
-    // 0. Wire the wall-clock-wake hook to the runtime's deadlines and the
-    // raster host's own (a lost device's next rebuild, a surface's next
-    // attempt). CADisplayLink drives visible frames; owner wakes also keep
-    // native service and the host's work deliverable between those frames.
-    super::host::route_wake_deadline(move || {
-        super::host::merge_wake_deadlines(
-            APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
-            raster_wake_at(),
-        )
-    });
+    // 0. Wire the wall-clock-wake hook to the runtime's deadlines, which
+    // count the raster work of each scene whose frames run (a lost device's
+    // next rebuild, a surface's next attempt). CADisplayLink drives visible
+    // frames; owner wakes also keep native service and the host's work
+    // deliverable between those frames.
+    super::host::route_wake_deadline(move || APP_RUNTIME.with(|slot| slot.borrow().next_wake()));
 
     // 1. The window's measured geometry; its GPU slot is attached once the UI
     // runtime is installed (step 4).

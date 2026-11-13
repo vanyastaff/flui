@@ -1090,9 +1090,25 @@ impl AppRuntime {
         );
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let placement = None;
+        // The raster work a window's own frame serves (its owed surface, the
+        // device's next rebuild), for each window whose frames run: a window
+        // whose frames are off would hand the loop a deadline no wake moves.
+        // `None` while the raster host is turning: that turn answers it.
+        let raster = self
+            .raster_host
+            .try_read(|host| {
+                host.wake_deadline(|address| {
+                    self.installed_host
+                        .logical()
+                        .runtime_status(address.ui_runtime_id)
+                        .is_ok_and(|status| status.frames_enabled)
+                })
+            })
+            .flatten();
         [
             runtime,
             frame,
+            raster,
             self.installed_host.native().text_sizing_deadline(),
             placement,
         ]

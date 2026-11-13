@@ -109,9 +109,8 @@ pub(super) fn wake_action(
 /// UI runtime's own pre-existing dirty state), and `next_attempt_at.is_some()` —
 /// an armed raster deadline of the window's own (`RasterSlot::frame_deadline`:
 /// a device rebuild, or a restore of this window's surface the raster host
-/// paces; the window's wake hook reports the same deadline, which a mobile
-/// loop's one window reads for the whole host). Dropping that
-/// last term loses the
+/// paces; the loop wakes for it while the window's frames run,
+/// `RasterHost::wake_deadline`). Dropping that last term loses the
 /// deadline: wired into the wake-deadline hook but invisible to this gate,
 /// it reaches `WakeAction::Skip` and returns before the raster host's turn
 /// (`RasterSlot::pump`) is ever reached, no matter how faithfully the

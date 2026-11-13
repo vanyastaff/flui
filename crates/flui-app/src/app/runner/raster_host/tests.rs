@@ -390,7 +390,7 @@ fn a_window_with_no_native_surface_waits_for_the_platform() {
     assert_eq!(target.asked(), asked, "frames do not ask the window again");
     assert_eq!(restores(&slots), 0);
     assert_eq!(hold(&host), SurfaceHold::Released);
-    assert_eq!(host.surface_retry_at(), None, "nothing to wake for");
+    assert_eq!(owed_surface(&host), None, "nothing to wake for");
 }
 
 /// A surface the backend refuses is asked for again at the window's pace,
@@ -413,9 +413,7 @@ fn a_refused_surface_is_asked_again_at_its_pace() {
     scene.republish_child(AT, 7);
     assert_ne!(scene.submit(&mut host), SubmitVerdict::Presented);
     assert_eq!(restores(&slots), 1, "the next attempt waits out its pace");
-    let due = host
-        .surface_retry_at()
-        .expect("the pace is a wake deadline");
+    let due = owed_surface(&host).expect("the pace is a wake deadline");
     assert!(
         due > refused_at,
         "the next attempt is paced after the refusal"
@@ -529,13 +527,13 @@ fn a_due_surface_is_made_by_its_wake_without_a_frame() {
     slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
     slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
     assert!(!host.set_surface(address(), true));
-    let first = host.surface_retry_at().expect("a paced deadline");
+    let first = owed_surface(&host).expect("a paced deadline");
 
     // The wake at the deadline: refused again, the deadline moves on.
     let wake = first + std::time::Duration::from_millis(1);
     assert!(!host.before_frame(address(), wake, None, false));
     assert_eq!(restores(&slots), 2);
-    let second = host.surface_retry_at().expect("a later deadline");
+    let second = owed_surface(&host).expect("a later deadline");
     assert!(second > wake, "the deadline is never left in the past");
 
     // The next wake: the backend makes it.
@@ -543,7 +541,7 @@ fn a_due_surface_is_made_by_its_wake_without_a_frame() {
     assert!(host.before_frame(address(), wake, None, false));
     assert_eq!(restores(&slots), 3);
     assert_eq!(hold(&host), SurfaceHold::Held);
-    assert_eq!(host.surface_retry_at(), None);
+    assert_eq!(owed_surface(&host), None);
 }
 
 /// A lent scene draws at the window's size outside its frames, and the
@@ -638,7 +636,7 @@ fn a_surface_is_paced_only_for_a_shown_window_at_a_size_the_device_takes() {
     assert!(!host.set_surface(address(), true));
     assert_eq!(hold(&host), SurfaceHold::Refused);
     assert_eq!(
-        host.surface_retry_at(),
+        owed_surface(&host),
         None,
         "the window's own size is refused: it waits for another"
     );
@@ -647,12 +645,12 @@ fn a_surface_is_paced_only_for_a_shown_window_at_a_size_the_device_takes() {
     scene.republish_child(AT, 12);
     let _ = host.submit(address(), SIZE, scene.publication());
     assert!(
-        host.surface_retry_at().is_some(),
+        owed_surface(&host).is_some(),
         "a surface at the new size is owed on the window's pace"
     );
 
     host.set_visibility(address(), flui_engine::SlotVisibility::Hidden);
-    assert_eq!(host.surface_retry_at(), None, "no frame would serve it");
+    assert_eq!(owed_surface(&host), None, "no frame would serve it");
     host.set_visibility(address(), flui_engine::SlotVisibility::Shown);
     // Shown again, the window tries at once, at an instant its old pace
     // would not admit: its first frame makes it.
@@ -738,7 +736,7 @@ fn what_the_full_queue_refused_is_sent_again() {
 /// other window render for an instant only its own frame moves.
 ///
 /// Red-check: answer `RasterHost::window_deadline` or
-/// `RasterSlot::frame_deadline` from the host-wide `surface_retry_at` and
+/// `RasterSlot::frame_deadline` from every window's surface and
 /// the other window reports the deadline too.
 #[test]
 fn a_surface_deadline_is_only_its_own_windows() {
@@ -784,7 +782,15 @@ fn a_surface_deadline_is_only_its_own_windows() {
     assert!(own.frame_deadline().is_some(), "its own frame serves it");
     assert_eq!(others.frame_deadline(), None, "no frame of this one does");
     shared
-        .try_read(|host| assert_eq!(host.window_deadline(other), None))
+        .try_read(|host| {
+            assert_eq!(host.window_deadline(other), None);
+            assert_eq!(
+                host.wake_deadline(|address| address == other),
+                None,
+                "the loop does not wake for it while only the other window's frames run"
+            );
+            assert!(host.wake_deadline(|address| address != other).is_some());
+        })
         .expect("the host is idle");
 }
 
@@ -792,6 +798,7 @@ fn a_surface_deadline_is_only_its_own_windows() {
 /// backend refuse the surface the platform gives back: the window is owed a
 /// surface on its pace. Answers that pace's deadline. For the frame drivers'
 /// wake tests, which read it through the loop's wake hook.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(in crate::app::runner) fn owe_a_surface(
     shared: &SharedRasterHost,
     slots: &ScriptedSlots,
@@ -820,6 +827,7 @@ pub(in crate::app::runner) fn owe_a_surface(
 }
 
 /// Attach `at`'s window to `shared`, as the loop does when it opens one.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(in crate::app::runner) fn attach_a_window(
     shared: &SharedRasterHost,
     at: PresentationAddress,
@@ -837,4 +845,9 @@ pub(in crate::app::runner) fn attach_a_window(
         })
         .expect("the host is idle")
         .expect("the scripted backend attaches any window");
+}
+
+/// What the loop would wake for if every window's frames ran.
+fn owed_surface(host: &RasterHost) -> Option<web_time::Instant> {
+    host.wake_deadline(|_| true)
 }

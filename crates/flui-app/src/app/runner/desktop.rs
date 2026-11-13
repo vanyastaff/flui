@@ -16,7 +16,7 @@ use super::owner_dispatch::{
     PresentationDispatcher, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
     install_input_wiring, prepare_ui_runtime_alongside,
 };
-use super::raster_host::{RasterSlot, raster_wake_at_for};
+use super::raster_host::RasterSlot;
 use crate::app::AppConfig;
 
 pub(super) struct RenderedMain {
@@ -388,15 +388,13 @@ impl DesktopWakeDeadlines {
             .arm_after_no_present(now, ui_runtime.refresh_interval(presentation))
     }
 
-    /// The earliest armed deadline of `address`'s window: the raster work its
-    /// frame serves (the device's next rebuild, the window's next attempt at
-    /// a surface it is owed), the pacing fallback and the first reveal.
-    /// `period` is the presentation's current refresh interval, which the
-    /// pacing fallback needs to tell a late wake from one that is never
-    /// coming.
+    /// The earliest armed deadline: the pacing fallback and the first
+    /// reveal; the loop counts the raster work of each window whose frames
+    /// run itself (`RasterHost::wake_deadline`). `period` is the
+    /// presentation's current refresh interval, which the pacing fallback
+    /// needs to tell a late wake from one that is never coming.
     pub(super) fn next_wake(
         &self,
-        address: flui_foundation::PresentationAddress,
         frames_enabled: bool,
         period: std::time::Duration,
     ) -> Option<web_time::Instant> {
@@ -404,10 +402,7 @@ impl DesktopWakeDeadlines {
             return None;
         }
         let deadline = merge_wake_deadlines(
-            merge_wake_deadlines(
-                raster_wake_at_for(address),
-                self.fallback.next_wake(web_time::Instant::now(), period),
-            ),
+            self.fallback.next_wake(web_time::Instant::now(), period),
             self.first_reveal.next_deadline(),
         );
         desktop_secondary_wake_deadline(deadline, frames_enabled)
