@@ -25,7 +25,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 use crate::navigator::binding::is_pageless_popup;
 use crate::navigator::history::{ReplaceTarget, RouteHistory};
@@ -43,23 +43,23 @@ pub(super) struct Addressing {
     /// The pages the Router placed. A page that has left the history lingers
     /// until the next pop or removal asks about the last page, which prunes
     /// it; only present pages are ever counted.
-    pages: Mutex<HashSet<RouteId>>,
+    pages: RefCell<HashSet<RouteId>>,
 }
 
 impl Addressing {
     fn new(route_type: &'static str) -> Self {
         Self {
             route_type,
-            pages: Mutex::new(HashSet::new()),
+            pages: RefCell::new(HashSet::new()),
         }
     }
 
     /// Whether removing `id` from `history` would leave no present page.
     ///
-    /// Takes `pages` while the caller holds the history lock; nothing takes
-    /// the history lock while holding `pages`, so the order is fixed.
+    /// Takes `pages` while the caller holds the history borrow; nothing takes
+    /// the history borrow while holding `pages`, so the order is fixed.
     fn is_last_page(&self, history: &RouteHistory, id: RouteId) -> bool {
-        let mut pages = self.pages.lock();
+        let mut pages = self.pages.borrow_mut();
         pages.retain(|page| history.state_of(*page).is_some());
         pages.contains(&id)
             && history.is_present(id)
@@ -171,7 +171,7 @@ impl NavigatorHandle {
         if is_pageless_popup(route.binding_slot()) {
             return;
         }
-        addressing.pages.lock().insert(id);
+        addressing.pages.borrow_mut().insert(id);
     }
 
     /// Refuse `route` at a typed public door: dispose it unpushed, report, and
@@ -315,7 +315,7 @@ impl NavigatorHandle {
     }
 
     /// Commit the Router's typed stack before the flush delivers user effects.
-    /// The framework-only commit runs without the history lock. Its return
+    /// The framework-only commit runs without the history borrow. Its return
     /// value owns outgoing entries until delivery finishes, including unwind;
     /// the mutation's own value comes back beside it.
     fn commit_pages<V, O>(

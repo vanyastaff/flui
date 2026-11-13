@@ -126,7 +126,7 @@ struct Armed {
     ///
     /// Returned rather than dropped. `AnyResult` wraps a value **the caller
     /// supplied**, so dropping it runs user `Drop` — which may reach back into
-    /// this navigator, and the history mutex is not reentrant. Same hazard as
+    /// this navigator, and the history is already borrowed. Same hazard as
     /// dropping a registry closure under its guard, one layer up.
     undelivered: Option<AnyResult>,
 }
@@ -252,7 +252,7 @@ impl RouteEntry {
     /// so the flush can record it as a [`DeferredEffect::AwaitPush`] —
     /// registering a continuation on it is **not** this method's job (or even
     /// the flush's): see that variant's own doc for why it must wait until the
-    /// history lock is released.
+    /// history borrow is released.
     fn handle_push(
         &mut self,
         previous: Option<RouteId>,
@@ -392,14 +392,14 @@ impl RouteEntry {
 const MAX_FLUSH_PASSES: usize = 10;
 
 /// Everything one flush decided but did **not** do, because doing it means leaving
-/// the history's mutex.
+/// the history's cell.
 ///
 /// It cannot run inline at the tail of the flush: a `NavigatorObserver` holds a
-/// `NavigatorHandle` and `parking_lot::Mutex` is not reentrant, so notifying an
-/// observer under `history.lock()` deadlocks the moment it reads the stack it was
+/// `NavigatorHandle` and the history refuses a second borrow, so notifying an
+/// observer under `history.borrow_mut()` panics the moment it reads the stack it was
 /// just told about. `route.dispose()` has the same shape — it runs arbitrary route
 /// teardown. So the flush computes owned data and `NavigatorShared::apply` performs
-/// it once the lock is released.
+/// it once the borrow is released.
 ///
 /// Not `Clone`/`PartialEq`: it owns the dying routes.
 #[derive(Default)]
@@ -415,15 +415,15 @@ pub(crate) struct FlushOutcome {
     /// the caller, **before** [`dispose_routes`](Self::dispose_routes) runs.
     pub(crate) disposed: Vec<RouteId>,
     /// The dying entries themselves, moved out of the history so the caller can
-    /// run `Route::dispose` outside the lock.
+    /// run `Route::dispose` outside the borrow.
     dying: Vec<RouteEntry>,
     /// Everything the flush owes to **user code**, in the order the flush
     /// produced it.
     ///
     /// These callbacks must run under no lock: user code may call straight back
-    /// into the navigator, and the history mutex is not reentrant, so firing
-    /// them inline deadlocks the same thread. The flush therefore *records*
-    /// them; the caller drains them once the lock is released.
+    /// into the navigator, and the history is already borrowed, so firing
+    /// them inline panics on a second borrow. The flush therefore *records*
+    /// them; the caller drains them once the borrow is released.
     ///
     /// **One ordered channel, not one vector per kind.** A flush can run
     /// several passes, so a pop in pass 1 and a refusal in pass 2 must reach
@@ -435,7 +435,7 @@ pub(crate) struct FlushOutcome {
     pub(crate) deferred: Vec<DeferredEffect>,
 }
 
-/// A user-visible effect the flush owes, delivered after the history lock is
+/// A user-visible effect the flush owes, delivered after the history borrow is
 /// released, in the order it was produced.
 ///
 /// Not `Copy`/`PartialEq`/`Eq`: [`AwaitPush`](Self::AwaitPush) carries a
@@ -451,7 +451,7 @@ pub(crate) enum DeferredEffect {
     LocalHistoryPopped(RouteId),
     /// This route's [`PushCompletion::Animating`] future, handed back by
     /// [`RouteEntry::handle_push`] so a continuation can be registered on it
-    /// once the history lock is released — never inside the flush that
+    /// once the history borrow is released — never inside the flush that
     /// produced it. Registering mid-flush would let an already-resolved
     /// future (a zero-duration push) settle within that same flush instead of
     /// on the next one, which is exactly the timing ADR-0064's
@@ -459,7 +459,7 @@ pub(crate) enum DeferredEffect {
     AwaitPush(RouteId, AnimationRunFuture),
     /// This route was told of a new neighbour below or above it, so what its
     /// `PageHandle` answers may have changed: its overlay entry rebuilds,
-    /// outside the lock, as Flutter's `ModalRoute.didChangePrevious` calls
+    /// outside the borrow, as Flutter's `ModalRoute.didChangePrevious` calls
     /// `changedInternalState`.
     NeighboursChanged(RouteId),
 }
@@ -612,7 +612,7 @@ impl RouteHistory {
     }
 
     /// The `Ok(None)` completions every still-pending result is owed when the
-    /// navigator unmounts. The caller runs them after releasing the lock.
+    /// navigator unmounts. The caller runs them after releasing the borrow.
     pub(crate) fn terminal_result_completions(&mut self) -> Vec<TerminalResultCompletion> {
         self.entries
             .iter_mut()
@@ -630,7 +630,7 @@ impl RouteHistory {
     /// The same shape as [`take_outcome`](Self::take_outcome) and
     /// `FlushOutcome::dying`, and for the same reason: an `AnyResult` wraps a
     /// value **the caller supplied**, so dropping one runs user `Drop`, which may
-    /// reach back into this navigator — and the history mutex is not reentrant.
+    /// reach back into this navigator — and the history is already borrowed.
     /// The history records; the caller drains once the guard is released.
     ///
     /// Recorded here rather than returned from each operation because the
@@ -693,7 +693,7 @@ impl RouteHistory {
     ///
     /// The route hook fires here; the user-facing `PopScope` fan-out is owed
     /// through the outcome, so `mutate`'s `apply` delivers it **outside** the
-    /// history lock — a callback may call back into the navigator.
+    /// history borrow — a callback may call back into the navigator.
     pub(crate) fn notify_pop_refused(&mut self) {
         if let Some(entry) = self
             .entries
@@ -941,16 +941,15 @@ impl RouteHistory {
 
     /// The push half of `NavigatorHandle::push_and_remove_until`, split from
     /// the removal-completion half so the caller can evaluate `keep` with
-    /// the history lock **released**: a `RoutePredicate` that queries the
-    /// handle back (a "first route" or "route with name" predicate) must not run inside this module's locked section, or it
-    /// deadlocks the owner thread against its own non-reentrant
-    /// `parking_lot::Mutex`.
+    /// the history borrow **released**: a `RoutePredicate` that queries the
+    /// handle back (a "first route" or "route with name" predicate) must not run inside this module's borrowed section, or it
+    /// panics on a second borrow of the history.
     ///
     /// Appends the new route in `Push`, **without** flushing or evaluating
     /// any predicate, and hands back every existing entry's id, top-to-
     /// bottom, exactly as they stood immediately before the push.
     /// [`complete_removed_and_flush`](Self::complete_removed_and_flush)
-    /// is the second half, run under a second, separate lock acquisition.
+    /// is the second half, run under a second, separate borrow.
     pub(crate) fn push_for_remove_until_with_id<R: Route>(
         &mut self,
         id: RouteId,
@@ -1164,7 +1163,7 @@ impl RouteHistory {
     /// The flag is cleared by a **guard**, not by the statement after the call. A
     /// `Route` lifecycle hook is user code and may panic;
     /// [`PANIC-POLICY`](../../../../../docs/PANIC-POLICY.md) forbids it, but
-    /// forbidding is not preventing. `parking_lot` does not poison, so an unwind
+    /// forbidding is not preventing. Nothing poisons on unwind, so an unwind
     /// past a bare `self.flushing = false` left the flag set and every later flush
     /// tripped `assert!(!self.flushing)` — one panicking `did_pop` bricked the
     /// navigator permanently, with no way back.
@@ -1177,8 +1176,8 @@ impl RouteHistory {
     /// drops a partially built `FlushOutcome`, and any `RouteEntry` already moved
     /// into its `dying` list is dropped without `Route::dispose` having run. That
     /// is deliberately left alone: a `Drop` impl on `FlushOutcome` would run
-    /// `dispose` — user code — during an unwind, *under this lock*, trading a
-    /// missed `dispose` for a possible deadlock while already panicking. So a
+    /// `dispose` — user code — during an unwind, *under this borrow*, trading a
+    /// missed `dispose` for a second-borrow panic while already unwinding, which aborts. So a
     /// panicking hook still leaks those routes' own cleanup. What the guard buys is
     /// that the navigator survives the panic in a usable state, which is the half
     /// that is recoverable.
@@ -1281,7 +1280,7 @@ impl RouteHistory {
                     if popped_ok {
                         // The user-facing `PopScope` fan-out is owed but NOT
                         // fired here — deferred through the outcome so it runs
-                        // outside the history lock (see `FlushOutcome::pop_invoked`).
+                        // outside the history borrow (see `FlushOutcome::pop_invoked`).
                         deferred.push(DeferredEffect::PopInvoked(
                             self.entries[position].id(),
                             true,
@@ -1407,7 +1406,7 @@ impl RouteHistory {
         // Lastly, hand the marked entries to the caller rather than disposing them
         // inline; `Route::dispose` runs arbitrary teardown — an animation controller, a vsync unregistration, a
         // route below releasing its secondary animation — and none of it belongs
-        // under the history's mutex.
+        // under the history's cell.
         let disposed = to_be_disposed.iter().map(RouteEntry::id).collect();
 
         FlushOutcome {
@@ -1421,7 +1420,7 @@ impl RouteHistory {
 
     /// Tell each route about its new neighbours, once per change, and name
     /// the routes told: their `PageHandle` answers (`can_pop`, `is_current`)
-    /// may have changed, so their entries rebuild once the lock is released.
+    /// may have changed, so their entries rebuild once the borrow is released.
     fn flush_route_announcement(&mut self) -> Vec<RouteId> {
         let mut changed = Vec::new();
         let mut index: isize = self.entries.len() as isize - 1;

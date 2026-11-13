@@ -96,15 +96,20 @@ The slide is not this package's copy: Material's Apple-platform default plays
 the same type, and official packages depend only on `flui-sdk`, so the one
 shared implementation lives a layer down (ADR-0221 D4). Its leading-edge
 shadow is a `DecoratedBoxTransition` on the route's own progress, painted only
-while the page moves. The route chrome of `CupertinoPageRoute`, the
-transition-only barrier dim and the edge-swipe back gesture, belongs to a
-route and not to the ambient hook, so a Router's pages have neither yet
-([gaps](../../docs/gaps.md#a-router-page-carries-no-route-chrome)).
+while the page moves.
+
+The builder carries `CupertinoPageRoute`'s chrome with it: a page that adopts
+it pops on a drag from its leading edge, and the app sets its barrier to
+Flutter's page-transition dim (`0x18000000`), which fades in under the page as
+it enters and out as it leaves. Material's Apple-platform default keeps the
+swipe and has no dim, as a `MaterialPageRoute` has none.
 
 `cupertino_app_slides_a_page_in_from_off_the_right_edge_over_500ms`,
-`cupertino_route_casts_its_edge_shadow_only_while_moving` and
-`cupertino_route_does_not_slide_under_reduced_motion` pin the slide through
-`CupertinoApp::router`.
+`cupertino_route_casts_its_edge_shadow_only_while_moving`,
+`cupertino_route_does_not_slide_under_reduced_motion`,
+`cupertino_app_page_pops_on_an_edge_swipe` and
+`cupertino_app_dims_the_page_below_while_the_next_slides_over_it` pin the
+slide and its chrome through `CupertinoApp::router`.
 
 ### The page control is the shared indicator in the iOS look
 

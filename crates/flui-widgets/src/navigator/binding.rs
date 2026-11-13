@@ -12,20 +12,20 @@
 //! *nested* flush is the shape that is needed; a push-completion, by contrast,
 //! must never land inside a flush.
 //!
-//! # Correction 1 to ADR-0020: a direct callback would **deadlock**
+//! # Correction 1 to ADR-0020: a direct callback would re-enter the flush
 //!
 //! ADR-0020 proposed a `RouteBinding` exposing `notify_push_completed()` and
 //! `finalize()` as direct navigator callbacks. That cannot work.
-//! `NavigatorShared::mutate` holds `history.lock()` for the whole flush, and
-//! `parking_lot::Mutex` is not reentrant — a route calling back into
-//! `RouteHistory` from `did_pop` would hang, not panic.
+//! `NavigatorShared::mutate` holds `history.borrow_mut()` for the whole flush, so
+//! a route calling back into `RouteHistory` from `did_pop` would find the
+//! history already borrowed.
 //!
-//! So a binding **enqueues a [`RouteCommand`]** onto a queue guarded by its own
-//! mutex, then calls a `wake` closure. `wake` uses `try_lock` on the history: if
-//! it succeeds we are outside a flush and the commands are applied and flushed
-//! at once; if it fails, a flush is in progress on this thread and *that* flush
-//! drains the queue before it returns. The queue is the "is a flush running"
-//! check, expressed as ownership rather than as a flag.
+//! So a binding **enqueues a [`RouteCommand`]** onto a queue in its own cell,
+//! then calls a `wake` closure. `wake` tries to borrow the history: if it gets
+//! the borrow we are outside a flush and the commands are applied and flushed
+//! at once; if the history is busy, a flush is in progress on this thread and
+//! *that* flush drains the queue before it returns. The queue is the "is a
+//! flush running" check, expressed as ownership rather than as a flag.
 //!
 //! This preserves both invariants: `RouteHistory` never learns about the
 //! navigator (so the route stack stays pure data), and the
@@ -64,13 +64,11 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_animation::{
     Animation, AnimationController, AnimationError, AnimationRunFuture, Curve, Vsync,
 };
-use parking_lot::Mutex;
 
 use super::modal_route::ModalHandle;
 use super::page_transitions::{AdoptedTransition, AdoptedTransitions};
@@ -101,7 +99,7 @@ pub(crate) type ClockRebind = dyn Fn(Option<&Vsync>);
 /// drive its `secondary_animation`.
 ///
 /// FLUI's routes are named by [`RouteId`] and live behind
-/// `Box<dyn ErasedRoute>` inside a `Mutex`, so a route cannot reach another
+/// `Box<dyn ErasedRoute>` inside a `RefCell`, so a route cannot reach another
 /// directly. The registry is the lookup handle.
 ///
 /// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
@@ -254,7 +252,7 @@ pub(crate) type RouteEntries = Rc<super::lifecycle::TerminalMap<RouteId, Overlay
 
 /// `RouteId -> RouteSubtreeCell`, the navigator's way to reach a route's page
 /// subtree. FLUI's routes live behind `Box<dyn ErasedRoute>` inside the
-/// history's mutex, so the route publishes its cell into a registry the navigator
+/// history's cell, so the route publishes its cell into a registry the navigator
 /// owns.
 pub(crate) type RouteSubtrees = Rc<super::lifecycle::TerminalMap<RouteId, RouteSubtreeCell>>;
 
@@ -315,7 +313,7 @@ pub(crate) type PopPacingRegistry = Rc<super::lifecycle::TerminalMap<RouteId, Po
 
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
-/// Its own cell, deliberately: it must be writable while the history's mutex is
+/// Its own cell, deliberately: it must be writable while the history's cell is
 /// held by an in-progress flush.
 pub(crate) type RouteCommandQueue = Rc<RefCell<VecDeque<RouteCommand>>>;
 
@@ -326,8 +324,8 @@ pub(crate) type RouteCommandQueue = Rc<RefCell<VecDeque<RouteCommand>>>;
 /// `RouteId -> _` map standing in for state a route object would otherwise
 /// own directly.
 pub(crate) struct RouteRegistries {
-    closed: AtomicBool,
-    /// `RouteId -> TransitionPeer`. A **different** mutex from the history's, so a
+    closed: Cell<bool>,
+    /// `RouteId -> TransitionPeer`. A **different** cell from the history's, so a
     /// route may consult it from inside a flush.
     pub(crate) peers: super::lifecycle::Terminal<TransitionRegistry>,
     /// `RouteId -> OverlayEntry`.
@@ -346,7 +344,7 @@ pub(crate) struct RouteRegistries {
     /// `None` until the navigator resolves them: before it mounts, and while
     /// it re-resolves after an ambient change. A route installed meanwhile
     /// waits in `awaiting_hooks` and adopts what arrives (ADR-0221 D2).
-    transition_hooks: Mutex<Option<AdoptedTransitions>>,
+    transition_hooks: RefCell<Option<AdoptedTransitions>>,
     /// Routes installed while `transition_hooks` was `None`.
     awaiting_hooks: super::lifecycle::TerminalVec<AwaitingAdoption>,
 }
@@ -382,7 +380,7 @@ impl RouteRegistries {
         recovery: &mut flui_foundation::panic::PanicRecovery,
     ) {
         let removed: Vec<OverlayEntry> = {
-            let mut entries = self.entries.lock();
+            let mut entries = self.entries.borrow_mut();
             routes.iter().filter_map(|id| entries.remove(id)).collect()
         };
         for entry in removed {
@@ -395,7 +393,7 @@ impl RouteRegistries {
 
     pub(crate) fn new() -> Self {
         Self {
-            closed: AtomicBool::new(false),
+            closed: Cell::new(false),
             peers: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
@@ -411,21 +409,21 @@ impl RouteRegistries {
             pop_pacing: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
-            transition_hooks: Mutex::new(None),
+            transition_hooks: RefCell::new(None),
             awaiting_hooks: super::lifecycle::TerminalVec::default(),
         }
     }
 
     pub(crate) fn close(&self) {
-        self.closed.store(true, Ordering::Release);
+        self.closed.set(true);
     }
 
     /// Mark the hooks unresolved, so a route installed while the navigator
     /// re-reads them (a builder's `duration` may push) waits for the new ones
     /// instead of adopting the outgoing ones. The outgoing builders are
-    /// retired with no lock held: a builder's `Drop` is user code.
+    /// retired with no borrow held: a builder's `Drop` is user code.
     pub(crate) fn suspend_transition_hooks(&self) {
-        let outgoing = self.transition_hooks.lock().take();
+        let outgoing = self.transition_hooks.borrow_mut().take();
         drop(outgoing);
     }
 
@@ -434,9 +432,9 @@ impl RouteRegistries {
     /// while the outgoing builders retire or a route adopts.
     pub(crate) fn set_transition_hooks(&self, hooks: AdoptedTransitions) {
         let (outgoing, waiting) = {
-            let mut slot = self.transition_hooks.lock();
+            let mut slot = self.transition_hooks.borrow_mut();
             let outgoing = slot.replace(hooks);
-            let waiting = std::mem::take(&mut *self.awaiting_hooks.lock());
+            let waiting = std::mem::take(&mut *self.awaiting_hooks.borrow_mut());
             (outgoing, waiting)
         };
         drop(outgoing);
@@ -448,7 +446,7 @@ impl RouteRegistries {
     /// The hook of `group`'s kind, `None` when none is in scope or the hooks
     /// are unresolved.
     fn resolved_transition(&self, group: TransitionGroup) -> Option<AdoptedTransition> {
-        let hooks = self.transition_hooks.lock();
+        let hooks = self.transition_hooks.borrow_mut();
         let hooks = hooks.as_ref()?;
         match group {
             TransitionGroup::Page => hooks.page(),
@@ -488,7 +486,7 @@ pub(crate) struct RouteBinding {
     /// The navigator's clock. A cell because `NavigatorState::init_state`
     /// resolves it after the handle (and therefore any seeded binding) exists.
     vsync: Weak<RefCell<Option<Vsync>>>,
-    /// The navigator's `RouteId`-keyed maps, each behind its own mutex — a
+    /// The navigator's `RouteId`-keyed maps, each in its own cell — a
     /// different one from the history's, so a route may consult them from inside a
     /// flush.
     registries: Weak<RouteRegistries>,
@@ -532,7 +530,7 @@ impl RouteBinding {
     fn active_registries(&self) -> Option<Rc<RouteRegistries>> {
         self.registries
             .upgrade()
-            .filter(|owner| !owner.closed.load(Ordering::Acquire))
+            .filter(|owner| !owner.closed.get())
     }
 
     /// This route's overlay entry, or `None` before it is installed.
@@ -541,7 +539,7 @@ impl RouteBinding {
     /// while touching the overlay.
     fn entry(&self) -> Option<OverlayEntry> {
         let registries = self.active_registries()?;
-        registries.entries.lock().get(&self.route).cloned()
+        registries.entries.borrow().get(&self.route).cloned()
     }
 
     /// Set whether this route's overlay entry is opaque.
@@ -577,7 +575,7 @@ impl RouteBinding {
         let Some(registries) = self.active_registries() else {
             return HookLookup::Resolved(None);
         };
-        let hooks = registries.transition_hooks.lock();
+        let hooks = registries.transition_hooks.borrow_mut();
         match hooks.as_ref() {
             None => HookLookup::Unresolved,
             Some(hooks) => HookLookup::Resolved(match group {
@@ -598,12 +596,15 @@ impl RouteBinding {
         let Some(registries) = self.active_registries() else {
             return;
         };
-        let hooks = registries.transition_hooks.lock();
+        let hooks = registries.transition_hooks.borrow_mut();
         if hooks.is_none() {
-            registries.awaiting_hooks.lock().push(AwaitingAdoption {
-                group,
-                adopt: Box::new(adopt),
-            });
+            registries
+                .awaiting_hooks
+                .borrow_mut()
+                .push(AwaitingAdoption {
+                    group,
+                    adopt: Box::new(adopt),
+                });
             return;
         }
         drop(hooks);
@@ -623,7 +624,7 @@ impl RouteBinding {
             drop(super::lifecycle::Terminal::new(peer));
             return;
         };
-        let _prev = registries.peers.lock().insert(self.route, peer);
+        let _prev = registries.peers.borrow_mut().insert(self.route, peer);
     }
 
     /// Withdraw it. Called from `dispose`; a peer that outlives its controller
@@ -632,7 +633,7 @@ impl RouteBinding {
         let Some(registries) = self.active_registries() else {
             return;
         };
-        let _prev = registries.peers.lock().remove(&self.route);
+        let _prev = registries.peers.borrow_mut().remove(&self.route);
     }
 
     /// Publish where this route's page subtree *will* live.
@@ -644,7 +645,7 @@ impl RouteBinding {
             drop(super::lifecycle::Terminal::new(subtree));
             return;
         };
-        let _prev = registries.subtrees.lock().insert(self.route, subtree);
+        let _prev = registries.subtrees.borrow_mut().insert(self.route, subtree);
     }
 
     /// Withdraw it. Called from `dispose`; a registry entry that outlives its route
@@ -653,7 +654,7 @@ impl RouteBinding {
         let Some(registries) = self.active_registries() else {
             return;
         };
-        let _prev = registries.subtrees.lock().remove(&self.route);
+        let _prev = registries.subtrees.borrow_mut().remove(&self.route);
     }
 
     /// Publish this route's `offstage` control, the handle `HeroController`
@@ -663,7 +664,7 @@ impl RouteBinding {
             drop(super::lifecycle::Terminal::new(modal));
             return;
         };
-        let _prev = registries.modals.lock().insert(self.route, modal);
+        let _prev = registries.modals.borrow_mut().insert(self.route, modal);
     }
 
     /// Withdraw it. A disposed route must not be forced offstage.
@@ -671,7 +672,7 @@ impl RouteBinding {
         let Some(registries) = self.active_registries() else {
             return;
         };
-        let _prev = registries.modals.lock().remove(&self.route);
+        let _prev = registries.modals.borrow_mut().remove(&self.route);
     }
 
     /// Consume this route's one-shot [`PopPacing`] override, if the navigator
@@ -679,7 +680,7 @@ impl RouteBinding {
     /// `None` means "pop normally": the route's own default reverse pacing.
     pub(crate) fn take_pop_pacing(&self) -> Option<PopPacing> {
         let registries = self.active_registries()?;
-        registries.pop_pacing.lock().remove(&self.route)
+        registries.pop_pacing.borrow_mut().remove(&self.route)
     }
 
     /// The route this binding drives. Every other capability on this type is
@@ -693,7 +694,7 @@ impl RouteBinding {
     /// The peer for `route`, or `None` when it is not a transition route.
     pub(crate) fn peer(&self, route: RouteId) -> Option<TransitionPeer> {
         let registries = self.active_registries()?;
-        registries.peers.lock().get(&route).cloned()
+        registries.peers.borrow().get(&route).cloned()
     }
 
     /// The route is finished; dispose it.

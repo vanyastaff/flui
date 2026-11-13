@@ -192,6 +192,14 @@ fn navigation_contracts() {
             route::cupertino_route_casts_its_edge_shadow_only_while_moving,
         ),
         (
+            "route::cupertino app dims the page below while the next slides over it",
+            route::cupertino_app_dims_the_page_below_while_the_next_slides_over_it,
+        ),
+        (
+            "route::cupertino app page pops on an edge swipe",
+            route::cupertino_app_page_pops_on_an_edge_swipe,
+        ),
+        (
             "tab_scaffold::an inactive tabs state survives switching away and back",
             tab_scaffold::an_inactive_tabs_state_survives_switching_away_and_back,
         ),
