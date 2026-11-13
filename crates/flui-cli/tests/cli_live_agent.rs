@@ -292,12 +292,14 @@ fn count(tree: &Value) -> Option<u64> {
 /// `flui run --agent --device <device>` in `project`, its JSON events on the
 /// returned channel, and whether the app started: an `Err` carries the
 /// message `flui run` reported instead. `env` is added to the run's
-/// environment.
+/// environment. The channel comes first, so bound in this order it drops
+/// after the run on every exit and still takes the run's last events while
+/// the run stops (locals drop in reverse order).
 fn launch(
     project: &Path,
     device: &str,
     env: &[(&str, &Path)],
-) -> (Session, mpsc::Receiver<Value>, Result<(), String>) {
+) -> (mpsc::Receiver<Value>, Session, Result<(), String>) {
     let mut command = flui();
     command
         .current_dir(project)
@@ -332,7 +334,7 @@ fn launch(
             _ => {}
         }
     };
-    (run, received, started)
+    (received, run, started)
 }
 
 /// `flui mcp` in `project`, once the app it runs answers through its agent.
@@ -384,7 +386,7 @@ fn an_agent_presses_the_counter_on_a_live_device() {
     let project = counter_project(workdir.path(), "flui_live_agent");
 
     // Dropped last, after `mcp`: on every exit, a failed assertion included.
-    let (_run, received, started) = launch(&project, &device, &[]);
+    let (received, _run, started) = launch(&project, &device, &[]);
 
     if let Some(gap) = known_gap {
         match started {
@@ -553,7 +555,7 @@ impl AcceptanceRun {
         let project = acceptance_project(workdir.path(), name, &storage);
         let data = workdir.path().join("data");
         let target_dir = acceptance_target_dir();
-        let (run, received, started) = launch(
+        let (received, run, started) = launch(
             &project,
             "desktop",
             &[("XDG_DATA_HOME", &data), ("CARGO_TARGET_DIR", &target_dir)],
@@ -581,8 +583,8 @@ impl AcceptanceRun {
 /// (`.config/nextest.toml`), and
 /// [`an_agent_drives_the_acceptance_app_on_the_desktop`] after it reuses its
 /// target directory, so the scenario's own budget is spent on driving the
-/// app and not on compiling the framework. A filter that selects the
-/// scenario alone selects this test too, or the scenario builds cold.
+/// app and not on compiling the framework. Select this test with the
+/// scenario (nextest runs it first): the scenario selected alone builds cold.
 #[test]
 fn the_acceptance_app_builds_and_answers_on_the_desktop() {
     if !on_the_desktop("the_acceptance_app_builds_and_answers_on_the_desktop") {
