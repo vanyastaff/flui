@@ -2327,6 +2327,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "smallvec",
  "static_assertions",
  "thiserror 2.0.21",
  "tokio",

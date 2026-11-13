@@ -707,7 +707,19 @@ impl PresentationFrameScope {
         if self.state.phase.get() != SegmentPhase::Idle {
             return Err(PresentationFrameError::SegmentActive);
         }
-        *self.state.current.borrow_mut() = self.state.next.replace(Rc::default());
+        // The registrations of the idle stretch address `next`, so it becomes
+        // the segment's epoch. The epoch it replaces becomes the successor
+        // when no callback still holds it: nothing can observe its completed
+        // flag being reset, and a steady frame allocates no epoch.
+        let mut next = self.state.next.borrow_mut();
+        let retired = self.state.current.replace(Rc::clone(&next));
+        *next = if Rc::strong_count(&retired) == 1 {
+            retired.completed.set(false);
+            retired
+        } else {
+            Rc::default()
+        };
+        drop(next);
         self.state.next_demand.set(false);
         self.state.phase.set(SegmentPhase::Running);
         Ok(())

@@ -49,6 +49,9 @@ flui-semantics = { workspace = true }
 flui-protocol = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The per-frame list of presentations a frame samples: one window stays inline,
+# so a steady frame does not allocate it.
+smallvec = { workspace = true }
 # `PlatformWindow` and its capability traits, the window contract a
 # presentation drives; no backend (ADR-0082).
 flui-platform = { workspace = true }

@@ -4,10 +4,12 @@ use super::UiRuntime;
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
+use flui_foundation::sequence::AtomicIdMint;
 use flui_scheduler::SchedulerPhase;
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Errors returned by [`UiCommandSender`] sends.
 ///
@@ -203,17 +205,26 @@ pub struct DrainReport {
 // Sender
 // ---------------------------------------------------------------------------
 
-/// Identity tokens for coalesced platform wakes.
+/// Tickets for coalesced platform wakes.
 ///
 /// A boolean is insufficient because senders are concurrent: an older wake
 /// may return successfully after a newer wake panics, and must not clear the
-/// newer demand. Each request therefore replaces the current token; a wake
-/// can acknowledge only the exact token it captured. Unlike an integer
-/// generation, token identity cannot saturate on 32-bit targets.
+/// newer demand. Each request therefore mints a newer ticket, and a wake
+/// acknowledges only through the ticket it captured: the debt is paid once
+/// the newest acknowledged ticket reaches the newest requested one. A ticket
+/// is two integers, so requesting a wake allocates nothing.
 #[derive(Default)]
 pub(super) struct WakeDebt {
-    current: parking_lot::Mutex<Option<Arc<AtomicBool>>>,
+    tickets: AtomicIdMint<NonZeroU64>,
+    /// The newest ticket a request minted.
+    requested: AtomicU64,
+    /// The newest ticket a normally returning wake acknowledged.
+    acknowledged: AtomicU64,
 }
+
+/// One requested wake, as [`WakeDebt::request`] minted it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WakeTicket(u64);
 
 impl std::fmt::Debug for WakeDebt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -224,22 +235,23 @@ impl std::fmt::Debug for WakeDebt {
 }
 
 impl WakeDebt {
-    fn request(&self) -> Arc<AtomicBool> {
-        let token = Arc::new(AtomicBool::new(false));
-        *self.current.lock() = Some(Arc::clone(&token));
-        token
+    fn request(&self) -> WakeTicket {
+        let ticket = self
+            .tickets
+            .next()
+            .expect("BUG: a runtime requests fewer than 2^64 wakes")
+            .get();
+        self.requested.fetch_max(ticket, Ordering::AcqRel);
+        WakeTicket(ticket)
     }
 
-    fn pending_token(&self) -> Option<Arc<AtomicBool>> {
-        self.current
-            .lock()
-            .as_ref()
-            .filter(|token| !token.load(Ordering::Acquire))
-            .cloned()
+    fn pending_token(&self) -> Option<WakeTicket> {
+        let requested = self.requested.load(Ordering::Acquire);
+        (self.acknowledged.load(Ordering::Acquire) < requested).then_some(WakeTicket(requested))
     }
 
-    fn acknowledge(token: &AtomicBool) {
-        token.store(true, Ordering::Release);
+    fn acknowledge(&self, ticket: WakeTicket) {
+        self.acknowledged.fetch_max(ticket.0, Ordering::AcqRel);
     }
 }
 
@@ -464,14 +476,14 @@ impl UiCommandSender {
         self.deliver_wake(token);
     }
 
-    fn deliver_wake(&self, token: Arc<AtomicBool>) {
+    fn deliver_wake(&self, token: WakeTicket) {
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: the platform wake is user code; a panic clears the pending token"
         )]
         let outcome = catch_unwind(AssertUnwindSafe(|| (self.wake)()));
         match outcome {
-            Ok(()) => WakeDebt::acknowledge(&token),
+            Ok(()) => self.wake_debt.acknowledge(token),
             Err(payload) => resume_unwind(payload),
         }
     }
