@@ -23,7 +23,7 @@ use std::sync::Arc;
 use flui_engine::{
     DeviceHealth, EngineError, RasterCommand, RasterExecutor, RasterSendError, RasterSender,
     RasterVerdict, SendReceipt, SlotBackend, SlotChange, SlotConfig, SlotFailure, SlotId,
-    SlotSettlement, SlotTarget, SlotVisibility, SurfaceFactory,
+    SlotSettlement, SlotSize, SlotTarget, SlotVisibility, SurfaceFactory, SurfaceHold,
 };
 use flui_foundation::geometry::DeviceSize;
 use flui_foundation::panic::FirstPanic;
@@ -221,9 +221,6 @@ struct HostSlot {
     /// dropped (a device rebuild the window's surface did not survive) is
     /// made again over it.
     surface_target: Arc<dyn SurfaceTarget>,
-    /// The size last sent to the executor; `None` until one is, and after
-    /// the executor refused one.
-    size: Option<DeviceSize>,
     epoch: FrameEpoch,
     /// The version on screen, which a publication's damage starts from
     /// (ADR-0304 §7). Moved only by a frame the slot showed.
@@ -231,19 +228,9 @@ struct HostSlot {
     textures: Option<flui_layer::TextureRegistry>,
     display: Option<DisplayColor>,
     visibility: SlotVisibility,
-    /// A size the device cannot draw at (past its texture limit), and the
-    /// surface generation it was refused at: the window shows nothing at
-    /// it, and is not sent it again, until the platform announces another
-    /// size or the generation moves (a rebuilt device, a new surface, which
-    /// may take it).
-    refused_size: Option<(DeviceSize, SurfaceGeneration)>,
     /// Whether the slot's next frame is the retry of a frame whose resize
     /// or upload panicked: a stale surface it meets again is not retried.
     retrying_panic: bool,
-    /// Whether the host sent the slot a size its next turn answers. The slot
-    /// holds one failure a turn, so a refusal of that size behind another
-    /// failure goes unheard: the host then sends the size again.
-    size_sent: bool,
     /// The first panic of the slot's frames since the window last reported
     /// one to its UI runtime ([`RasterSlot::report_frame_panic`]).
     panic: flui_foundation::panic::FirstPanic,
@@ -268,9 +255,6 @@ pub(crate) fn host_busy() -> EngineError {
 enum SlotTurn {
     Clean,
     Panicked,
-    /// The GPU refused the window's new surface: a frame has nowhere to go,
-    /// and its retry would be refused the same way.
-    SurfaceRefused,
 }
 
 impl RasterHost {
@@ -360,15 +344,12 @@ impl RasterHost {
             HostSlot {
                 slot,
                 surface_target,
-                size: None,
                 epoch: FrameEpoch::ZERO,
                 base,
                 textures,
                 display,
                 visibility: SlotVisibility::Shown,
-                refused_size: None,
                 retrying_panic: false,
-                size_sent: false,
                 panic: caught,
             },
         );
@@ -509,10 +490,11 @@ impl RasterHost {
     }
 
     /// Turn the executor on `address`'s behalf and settle what the turn left
-    /// for its slot: a refusal is logged (a size past the device's limit is
-    /// remembered), and a panic of the slot's commands or of the turn itself
-    /// is held for the window's report after its frame. Answers whether the
-    /// slot's own commands panicked.
+    /// for its slot: a refusal is logged, and a panic of the slot's commands
+    /// or of the turn itself is held for the window's report after its
+    /// frame. Answers whether the slot's own commands panicked. What the
+    /// window does next (a new surface, another size, nothing until it
+    /// changes) is read from the slot's record, not from the failure.
     fn turn_for(placed: &mut Placed, address: PresentationAddress) -> SlotTurn {
         let mut caught = FirstPanic::new();
         let _turned = caught.contain(|| placed.executor.turn());
@@ -520,36 +502,12 @@ impl RasterHost {
             caught.resume();
             return SlotTurn::Clean;
         };
-        let size_sent = std::mem::take(&mut slot.size_sent);
-        let failure = placed.sender.take_failure(slot.slot);
-        // A refusal of the size the window is at, not of an older one (a
-        // restore or a rebuild configured at the size the slot had).
-        let size_refused = match (&failure, slot.size) {
-            (
-                Some(SlotFailure::Refused(EngineError::InvalidTargetSize { width, height })),
-                Some(size),
-            ) => {
-                u32::try_from(size.width) == Ok(*width) && u32::try_from(size.height) == Ok(*height)
-            }
-            _ => false,
-        };
-        if size_sent && failure.is_some() && !size_refused {
-            // The failure held may hide a refusal of the size sent with it:
-            // the next frame sends the size again and hears its own answer.
-            slot.size = None;
-        }
-        let record = placed.sender.record(slot.slot);
-        let settled = match failure {
+        let settled = match placed.sender.take_failure(slot.slot) {
             Some(SlotFailure::Panicked(payload)) => {
                 slot.panic.record(payload);
                 SlotTurn::Panicked
             }
             Some(SlotFailure::Refused(error)) => {
-                if size_refused {
-                    let generation =
-                        record.map_or(SurfaceGeneration::ZERO, |record| record.required_generation);
-                    slot.refused_size = slot.size.take().map(|size| (size, generation));
-                }
                 tracing::warn!(%error, "raster host: the executor refused a window's command");
                 SlotTurn::Clean
             }
@@ -558,17 +516,6 @@ impl RasterHost {
                 SlotTurn::Clean
             }
             None => SlotTurn::Clean,
-        };
-        // The new surface the host sent last was refused, and the slot has
-        // none: not a surface dropped after a restore the backend took (a
-        // rebuilt device, a render that needs another), which the frame's
-        // retry asks for again.
-        let settled = if settled == SlotTurn::Clean
-            && record.is_some_and(|record| record.wants_surface && record.surface_refused)
-        {
-            SlotTurn::SurfaceRefused
-        } else {
-            settled
         };
         // The turn's own panic (a retired scene's `Drop`, a trim, a device
         // rebuild) goes to the window that turned it, for its report.
@@ -685,21 +632,24 @@ impl RasterHost {
         address: PresentationAddress,
         size: (u32, u32),
     ) -> Option<SurfaceGeneration> {
-        let slot = placed.slots.get_mut(&address)?;
+        let slot = placed.slots.get(&address)?;
         let record = placed.sender.record(slot.slot)?;
         // A size past `i32` is one no device configures: unconfigured.
         let (Ok(width), Ok(height)) = (i32::try_from(size.0), i32::try_from(size.1)) else {
             return None;
         };
         let size = DeviceSize::new(width, height);
-        // Checked before a new surface is asked for: nothing is drawn at a
-        // refused size, and the restore would move the generation the
-        // refusal is held for.
-        if slot.refused_size == Some((size, record.required_generation)) {
+        // Nothing is drawn at a size the device refused, and asking again
+        // is refused the same way: the window waits for another size, or
+        // for a rebuilt device, which the record shows pending again.
+        if record.surface.size == SlotSize::Refused(size) {
             return None;
         }
-        slot.refused_size = None;
-        if record.wants_surface {
+        // A surface on its way is not asked for again.
+        if matches!(
+            record.surface.hold,
+            SurfaceHold::Wanted | SurfaceHold::Refused
+        ) {
             let surface = match placed.surfaces.create(Arc::clone(&slot.surface_target)) {
                 Ok(surface) => surface,
                 Err(error) => {
@@ -715,28 +665,36 @@ impl RasterHost {
                 return None;
             }
         }
-        if slot.size != Some(size) {
+        if record.surface.size.newest() != Some(size) {
             match placed.sender.send(RasterCommand::Configure {
                 slot: slot.slot,
                 change: SlotChange::Size(size),
             }) {
-                Ok(SendReceipt::Configured(_)) => {
-                    slot.size = Some(size);
-                    slot.size_sent = true;
-                }
-                Ok(SendReceipt::Unconfigured | SendReceipt::Accepted) => {
-                    slot.size = None;
-                    return None;
-                }
+                Ok(SendReceipt::Configured(_)) => {}
+                Ok(SendReceipt::Unconfigured | SendReceipt::Accepted) => return None,
                 Err(error) => {
                     tracing::warn!(%error, "raster host: a window's size was refused");
-                    slot.size = None;
                     return None;
                 }
             }
         }
         let generation = placed.sender.record(slot.slot)?.required_generation;
         (generation != SurfaceGeneration::ZERO).then_some(generation)
+    }
+
+    /// Whether the device refused `surface`, the size `address`'s window is
+    /// at, and nothing has asked it again since.
+    fn size_refused(placed: &Placed, address: PresentationAddress, surface: (u32, u32)) -> bool {
+        let (Ok(width), Ok(height)) = (i32::try_from(surface.0), i32::try_from(surface.1)) else {
+            return false;
+        };
+        placed
+            .slots
+            .get(&address)
+            .and_then(|slot| placed.sender.record(slot.slot))
+            .is_some_and(|record| {
+                record.surface.size == SlotSize::Refused(DeviceSize::new(width, height))
+            })
     }
 
     /// Send `publication` to `address`'s slot, measured on `surface`, turn
@@ -762,15 +720,10 @@ impl RasterHost {
             .get_mut(&address)
             .is_some_and(|slot| std::mem::take(&mut slot.retrying_panic));
         let Some(generation) = Self::configure(placed, address, surface) else {
-            // `configure` keeps a refused size only while the window is at
-            // it: past the device's limit, a retry is refused the same way.
+            // Past the device's limit, a retry is refused the same way.
             // Otherwise (a zero size, no surface yet) nothing is drawn until
             // the next resize.
-            let refused = placed
-                .slots
-                .get(&address)
-                .is_some_and(|slot| slot.refused_size.is_some());
-            return if refused {
+            return if Self::size_refused(placed, address, surface) {
                 SubmitVerdict::Failed
             } else {
                 SubmitVerdict::NotShown
@@ -809,20 +762,24 @@ impl RasterHost {
         let turned = Self::turn_for(placed, address);
         placed.settlements.clear();
         placed.sender.drain_settlements(id, &mut placed.settlements);
-        let slot = placed
-            .slots
-            .get_mut(&address)
-            .expect("BUG: the slot is still there");
         let settled = placed
             .settlements
             .iter()
             .find(|settlement| settlement.epoch == epoch)
             .map(|settlement| settlement.verdict);
-        if settled == Some(RasterVerdict::Presented) {
-            // Drawn: whatever refusal of the size the turn held is stale (a
-            // device rebuilt again since, which takes it).
-            slot.refused_size = None;
-        }
+        // No surface the GPU takes, or no size it draws at: nothing until the
+        // window's next change (or a rebuilt device) asks again. Retried, the
+        // frame would meet a stale surface every display period.
+        let stuck = settled != Some(RasterVerdict::Presented)
+            && (placed
+                .sender
+                .record(id)
+                .is_some_and(|record| record.surface.hold == SurfaceHold::Refused)
+                || Self::size_refused(placed, address, surface));
+        let slot = placed
+            .slots
+            .get_mut(&address)
+            .expect("BUG: the slot is still there");
         if turned == SlotTurn::Panicked {
             let verdict = match settled {
                 // The render itself panicked, which the executor settles as
@@ -848,16 +805,7 @@ impl RasterHost {
             slot.base.forget();
             return verdict;
         }
-        if turned == SlotTurn::SurfaceRefused && settled != Some(RasterVerdict::Presented) {
-            // No surface to draw on, and none the GPU takes: nothing until
-            // the window's next change asks for one again. Retried, the
-            // frame would meet a stale surface every display period.
-            slot.base.forget();
-            return SubmitVerdict::Failed;
-        }
-        if slot.refused_size.is_some() {
-            // Drawn at no size the device accepts: nothing until the next
-            // resize, and no retry, which would be refused the same way.
+        if stuck {
             slot.base.forget();
             return SubmitVerdict::Failed;
         }

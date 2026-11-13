@@ -16,7 +16,7 @@ use parking_lot::{Mutex, MutexGuard};
 use web_time::Instant;
 
 use super::{
-    DeviceHealth, SlotId,
+    DeviceHealth, SlotId, SurfaceEvent,
     command::{
         ExecutorHealth, RasterCommand, RasterSendError, SendReceipt, SlotChange, SlotConfig,
         SlotSettlement, SlotTarget,
@@ -386,7 +386,8 @@ impl RasterSender {
         target: SlotTarget,
         config: SlotConfig,
     ) -> Result<SendReceipt, RasterSendError> {
-        let (generation, receipt) = if target.size().is_some_and(has_area) {
+        let size = target.size().filter(|size| has_area(*size));
+        let (generation, receipt) = if size.is_some() {
             let generation = SurfaceGeneration::ZERO.next();
             (generation, SendReceipt::Configured(generation))
         } else {
@@ -408,7 +409,7 @@ impl RasterSender {
             if slots.entries.len() <= index {
                 slots.entries.resize_with(index + 1, || None);
             }
-            let inbox = Arc::new(SlotInbox::new(address, generation));
+            let inbox = Arc::new(SlotInbox::new(address, generation, size));
             slots.entries[index] = Some(OwnerSlot {
                 id: slot,
                 inbox: Arc::clone(&inbox),
@@ -463,17 +464,19 @@ impl RasterSender {
         };
         // Minted before the send, so the owner stamps its next frame with it,
         // and taken back if the send fails, unless something minted since.
-        let (previous, generation) = {
+        let (previous, generation, hold) = {
             let mut state = inbox.lock();
             if !state.phase.takes_commands() {
                 drop(state);
                 return Err(self.refusal(RasterCommand::Restore { slot, surface }));
             }
             let previous = state.generation;
+            let hold = state.surface.hold;
+            state.surface = state.surface.on(SurfaceEvent::RestoreSent);
             if previous != SurfaceGeneration::ZERO {
                 state.generation = previous.next();
             }
-            (previous, state.generation)
+            (previous, state.generation, hold)
         };
         let sent = self.shared.send_lifecycle(Lifecycle::Restore {
             slot,
@@ -488,6 +491,7 @@ impl RasterSender {
                 if state.generation == generation {
                     state.generation = previous;
                 }
+                state.surface = state.surface.on(SurfaceEvent::RestoreWithdrawn(hold));
                 Err(error)
             }
         }
@@ -592,7 +596,7 @@ impl RasterSender {
         Ok(match change {
             SlotChange::Size(size) if has_area(size) => {
                 state.generation = state.generation.next();
-                state.size = Some(size);
+                state.surface = state.surface.on(SurfaceEvent::SizeSent(size));
                 SendReceipt::Configured(state.generation)
             }
             SlotChange::Size(_) => SendReceipt::Unconfigured,

@@ -6,7 +6,7 @@
   `UnconfiguredSurface`s attach to the raster executor as window slots, which take
   `Release`, `Restore` and `Configure` with a display colour or a frame latency.
 - `flui-engine`: a window slot whose surface stays lost after a reconfigure drops it and answers
-  `EngineError::SurfaceReplacementNeeded`; `SlotRecord::wants_surface` asks the owner for a new
+  `EngineError::SurfaceReplacementNeeded`; its `SlotRecord::surface` asks the owner for a new
   surface, which it makes with its factory and sends in a `Restore`.
 - `flui-engine` (`testing`): `noop_surface_factory`, `FakeDisplay` and `FakeWindow`, window surfaces from wgpu's no-op backend, so
   a test drives a window slot's commands without a GPU or a window.

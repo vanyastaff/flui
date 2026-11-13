@@ -319,6 +319,10 @@ impl SlotBackend for StandInBackend {
         self.shared.lock().device.lost
     }
 
+    /// A window whose configured size passes the device's limit is refused
+    /// at that size and keeps its surface, as a GPU context's rebuild does;
+    /// with [`StandInRenderer::drop_surfaces_on_rebuild`] every surface is
+    /// dropped instead.
     fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
         let shared = &mut *self.shared.lock();
         let device = &mut shared.device;
@@ -328,14 +332,18 @@ impl SlotBackend for StandInBackend {
             return Err(EngineError::DeviceLost);
         }
         device.lost = false;
-        if !device.drop_surfaces {
-            return Ok(Vec::new());
-        }
+        let device = &shared.device;
         Ok(shared
             .windows
             .iter()
-            .filter_map(|window| window.slot)
-            .map(|slot| (slot, EngineError::SurfaceLost))
+            .filter_map(|window| {
+                let slot = window.slot?;
+                if device.drop_surfaces {
+                    return Some((slot, EngineError::SurfaceLost));
+                }
+                let refusal = window.size.and_then(|size| device.fits(size).err())?;
+                Some((slot, refusal))
+            })
             .collect::<Vec<(SlotId, EngineError)>>())
     }
 
