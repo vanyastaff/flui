@@ -93,7 +93,9 @@ use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::interaction::node::{ControlTap, Description, InteractiveNode};
+use flui_sdk::widgets::interaction::node::{
+    ActionBinding, ControlTap, Description, InteractiveNode,
+};
 use flui_sdk::widgets::{
     Action, ActionOutcome, ActivateIntent, ButtonActivateIntent, ButtonChange, CustomPaint,
     HitTestBehavior, PointerDispatch, PointerEvent, PressHold, WidgetState, WidgetStateProperty,
@@ -534,8 +536,10 @@ impl ViewState<InkWell> for InkWellState {
             .behavior(HitTestBehavior::Opaque)
             .enabled(enabled)
             .states(self.states.clone())
-            .action::<ActivateIntent, KeyActivation>(&keyed)
-            .action::<ButtonActivateIntent, KeyActivation>(&keyed);
+            .bindings([
+                ActionBinding::shared::<ActivateIntent, KeyActivation>(&keyed),
+                ActionBinding::shared::<ButtonActivateIntent, KeyActivation>(&keyed),
+            ]);
         node = match &view.focus_node {
             Some(focus_node) => node.focus_node(Rc::clone(focus_node)),
             None => node.focusable("InkWell"),
