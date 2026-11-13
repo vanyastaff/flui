@@ -18,13 +18,15 @@
 use std::{cell::Cell, marker::PhantomData, sync::Arc};
 
 use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel, panic::FirstPanic};
-use flui_layer::{DamageRegion, Scene};
+use flui_layer::{DamageRegion, Scene, TextureUpdates};
 use flui_platform::{DisplayColor, DisplayConnection, SurfaceTarget};
+use rustc_hash::FxHashMap;
 
 use crate::{
     FrameLatency,
     device_domain::DeviceDomain,
     error::{EngineError, EngineResult},
+    external_texture_registry::KeptTextures,
     gpu_backend::{Attempt, GpuBackend},
     layer_dispatcher::LayerDispatcher,
     offscreen::OffscreenRenderer,
@@ -289,6 +291,11 @@ pub struct GpuContext {
     /// window frame.
     blit: Option<OffscreenRenderer>,
     slots: SlotTable,
+    /// Each slot's external textures: a presentation mints its texture ids
+    /// alone, so two slots' ids collide in the shared painter, which is lent
+    /// a slot's textures for the length of its frame. Kept from a slot's
+    /// first update until it detaches, across device rebuilds.
+    textures: FxHashMap<SlotId, KeptTextures>,
     #[cfg(test)]
     builds: ContextBuilds,
     /// How many of the next offscreen frames panic after their recording.
@@ -523,6 +530,7 @@ impl GpuContext {
             pipelines: None,
             blit: None,
             slots: SlotTable::default(),
+            textures: FxHashMap::default(),
             #[cfg(test)]
             builds: ContextBuilds {
                 devices: 1,
@@ -570,6 +578,9 @@ impl GpuContext {
         self.painter = None;
         self.pipelines = None;
         self.blit = None;
+        for kept in self.textures.values_mut() {
+            kept.leave_device();
+        }
         self.adapter = adapter;
         self.domain = DeviceDomain::new(Arc::new(device), Arc::new(queue));
         install_device_diagnostics(&self.domain);
@@ -722,7 +733,41 @@ impl GpuContext {
 
     /// Detach `slot`; `false` for a stale id or one already detached.
     pub(crate) fn detach(&mut self, slot: SlotId) -> bool {
+        self.textures.remove(&slot);
         self.slots.remove(slot).is_some()
+    }
+
+    /// Apply `updates` to `slot`'s external textures.
+    ///
+    /// # Errors
+    /// [`EngineError::InvalidRenderTarget`] for a slot that is not attached;
+    /// the first frame the device refused, the others still applied.
+    pub(crate) fn apply_slot_textures(
+        &mut self,
+        slot: SlotId,
+        updates: TextureUpdates,
+    ) -> EngineResult<()> {
+        if self.slots.get(slot).is_none() {
+            return Err(not_attached());
+        }
+        // A slot that never drew a texture keeps nothing for a retirement.
+        if updates.frames.is_empty() && !self.textures.contains_key(&slot) {
+            return Ok(());
+        }
+        self.textures
+            .entry(slot)
+            .or_default()
+            .apply(&self.domain, updates)
+    }
+
+    /// Exchange `slot`'s external textures with `painter`'s: once to lend
+    /// them for the slot's frame, once more to take them back, which every
+    /// exit of the frame does, an unwound one included, before the painter
+    /// is kept or dropped.
+    fn exchange_textures(&mut self, slot: SlotId, painter: &mut WgpuPainter) {
+        if let Some(kept) = self.textures.get_mut(&slot) {
+            painter.swap_external_textures(kept.on(&self.domain));
+        }
     }
 
     /// Clear offscreen `slot` to the frame background and draw `tree` over it.
@@ -746,6 +791,7 @@ impl GpuContext {
         };
         let _submission_scope = self.domain.begin_frame_scope()?;
         let mut painter = self.take_painter(format, size);
+        self.exchange_textures(slot, &mut painter);
         #[cfg(test)]
         let panics = self.injected_panic();
         let domain = &self.domain;
@@ -777,6 +823,7 @@ impl GpuContext {
             painter.finish_frame();
             drawn
         });
+        self.exchange_textures(slot, &mut painter);
         let Some(drawn) = drawn else {
             self.keep_pipelines(painter, &mut caught);
             caught.resume();
@@ -815,6 +862,7 @@ impl GpuContext {
         };
         let mut painter = self.take_painter(format, size);
         painter.resize(size.0, size.1);
+        self.exchange_textures(slot, &mut painter);
         // The blit's pipelines, like the library's, are inserted only once
         // built, so an unwound frame leaves them whole.
         let mut blit = self
@@ -841,6 +889,7 @@ impl GpuContext {
             )
         });
         self.blit = Some(blit);
+        self.exchange_textures(slot, &mut painter);
         let Some(rendered) = rendered else {
             self.keep_pipelines(painter, &mut caught);
             caught.resume();
@@ -1122,6 +1171,10 @@ impl SlotBackend for GpuContext {
         if let Some((window, gpu)) = self.window_slot(slot) {
             window.set_latency(&gpu, latency);
         }
+    }
+
+    fn apply_textures(&mut self, slot: SlotId, updates: TextureUpdates) -> EngineResult<()> {
+        self.apply_slot_textures(slot, updates)
     }
 
     fn render(
@@ -1648,6 +1701,124 @@ mod tests {
                 "the slot keeps its size and draws the same frame"
             );
         }
+    }
+
+    /// Two presentations each mint texture id 1 and draw it through slots
+    /// that share the context's painter: each slot draws its own image, after
+    /// a device rebuild too, and a detach drops a slot's textures.
+    ///
+    /// Red-check: skip lending the slot's textures to the shared painter in
+    /// `exchange_textures` and no frame can draw its texture; skip the
+    /// re-upload in `KeptTextures::on` and the frames after the rebuild fail.
+    #[test]
+    fn each_slot_draws_its_own_textures_under_the_same_id_across_a_rebuild() {
+        use flui_foundation::ManualClock;
+        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_painting::paint::Image;
+
+        const SIDE: u32 = 8;
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let clock = ManualClock::new();
+        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let colors = [[255, 0, 0, 255], [0, 0, 255, 255]];
+        let presentations = colors.map(|rgba| {
+            let slot = sender.mint_slot().expect("a slot id is left");
+            let address = PresentationAddress {
+                ui_runtime_id: UiRuntimeId::new(1),
+                presentation_id: PresentationId::new(slot.index() as usize + 1),
+            };
+            let _receipt = sender
+                .send(RasterCommand::Attach {
+                    slot,
+                    address,
+                    target: SlotTarget::Offscreen {
+                        size: DeviceSize::new(8, 8),
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    config: SlotConfig::new(),
+                })
+                .expect("the attach is accepted");
+            let registry = TextureRegistry::new(std::sync::Arc::new(|| {}));
+            let texture = registry.register().expect("an id is left");
+            texture.submit_frame(Image::from_rgba8(2, 2, rgba.repeat(4)));
+            (slot, address, registry, texture)
+        });
+        assert_eq!(
+            presentations[0].3.id(),
+            presentations[1].3.id(),
+            "each presentation mints its own ids"
+        );
+        let draw = |executor: &mut RasterExecutor<GpuContext>| {
+            for (slot, address, registry, texture) in &presentations {
+                let generation = sender
+                    .record(*slot)
+                    .expect("the owner holds the slot")
+                    .required_generation;
+                let tree = LayerTree::new(Layer::from(TextureLayer::new(
+                    texture.id(),
+                    Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+                )));
+                let RasterCommand::Frame { slot, snapshot } =
+                    frame(*slot, *address, generation, tree)
+                else {
+                    unreachable!("BUG: `frame` makes a frame command");
+                };
+                sender
+                    .send(RasterCommand::Frame {
+                        slot,
+                        snapshot: snapshot.textures(registry.take_updates()),
+                    })
+                    .expect("the frame is accepted");
+            }
+            let _ = executor.turn();
+            presentations.each_ref().map(|(slot, ..)| {
+                let mut settled = Vec::new();
+                sender.drain_settlements(*slot, &mut settled);
+                assert_eq!(settled.len(), 1, "each frame settles once");
+                let pixels = executor
+                    .backend()
+                    .read_slot(*slot)
+                    .expect("the slot reads back");
+                (
+                    settled[0].verdict,
+                    [pixels[0], pixels[1], pixels[2], pixels[3]],
+                )
+            })
+        };
+
+        let expected = colors.map(|rgba| (RasterVerdict::Presented, rgba));
+        assert_eq!(
+            draw(&mut executor),
+            expected,
+            "each slot draws its own image"
+        );
+
+        executor.backend().lose_device();
+        let _ = draw(&mut executor);
+        // The rebuild ran in that turn; frames stamped before it are stale.
+        let _ = draw(&mut executor);
+        assert_eq!(
+            executor.backend().builds().devices,
+            2,
+            "the device was rebuilt"
+        );
+        assert_eq!(
+            draw(&mut executor),
+            expected,
+            "the new device has each slot's image back"
+        );
+
+        let detached = presentations[0].0;
+        let _receipt = sender
+            .send(RasterCommand::Detach { slot: detached })
+            .expect("the detach is accepted");
+        let _ = executor.turn();
+        assert!(
+            !executor.backend().textures.contains_key(&detached),
+            "a detach drops the slot's textures"
+        );
     }
 
     /// Dropping the painter a frame unwound with runs destructors that are not

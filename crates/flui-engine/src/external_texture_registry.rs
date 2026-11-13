@@ -159,6 +159,110 @@ impl ExternalTextureRegistry {
         }
     }
 
+    /// Whether this registry's allocations are on `domain`'s device.
+    pub(crate) fn is_on(&self, domain: &Arc<DeviceDomain>) -> bool {
+        std::ptr::eq(self.domain.as_ptr(), Arc::as_ptr(domain))
+    }
+
+    /// Upload each frame of `updates` as its texture's current allocation
+    /// and release the retired textures (see
+    /// [`WgpuPainter::apply_texture_updates`](crate::painter::WgpuPainter::apply_texture_updates)).
+    ///
+    /// # Errors
+    /// The first frame refused; every other frame and every retirement is
+    /// still applied. [`EngineError::DeviceLost`](crate::error::EngineError::DeviceLost)
+    /// for every frame once the registry's device is gone.
+    pub(crate) fn apply(&mut self, updates: flui_layer::TextureUpdates) -> EngineResult<()> {
+        let flui_layer::TextureUpdates {
+            frames, retired, ..
+        } = updates;
+        for id in retired {
+            self.unregister(id);
+        }
+        if frames.is_empty() {
+            return Ok(());
+        }
+        let Some(domain) = self.domain.upgrade() else {
+            return Err(crate::error::EngineError::DeviceLost);
+        };
+        let mut first_error = None;
+        for (id, frame) in frames {
+            if let Err(error) = self.upload(&domain, id, &frame) {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Upload `frame` as `id`'s allocation: in place for one of the same
+    /// size, registered anew for another.
+    fn upload(
+        &mut self,
+        domain: &DeviceDomain,
+        id: TextureId,
+        frame: &flui_painting::paint::Image,
+    ) -> EngineResult<()> {
+        let size = wgpu::Extent3d {
+            width: frame.width(),
+            height: frame.height(),
+            depth_or_array_layers: 1,
+        };
+        // Refuse before allocating: wgpu rejects these extents itself.
+        if size.width == 0
+            || size.height == 0
+            || size.width > self.max_dimension
+            || size.height > self.max_dimension
+        {
+            return Err(ExternalTextureError::InvalidTextureSize {
+                width: size.width,
+                height: size.height,
+            }
+            .into());
+        }
+        let texture = domain.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("external texture frame"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        domain.queue().write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            frame.data(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * size.width),
+                rows_per_image: Some(size.height),
+            },
+            size,
+        );
+        let same_size = self
+            .get(id)
+            .is_some_and(|entry| entry.size() == (size.width, size.height));
+        if same_size {
+            self.update(id, texture)
+        } else {
+            self.unregister(id);
+            self.register(
+                id,
+                texture,
+                ExternalTextureDescriptor {
+                    sampling: ExternalSampling::Linear,
+                    alpha: ExternalAlpha::Straight,
+                    color: ExternalColorEncoding::EncodedSrgb,
+                },
+            )
+        }
+    }
+
     /// Import an allocation under an unused logical ID.
     ///
     /// The caller guarantees device provenance, valid encoded-SDR texels and
@@ -334,5 +438,86 @@ impl ExternalTextureRegistry {
     /// Iterate currently registered logical IDs.
     pub fn texture_ids(&self) -> impl Iterator<Item = TextureId> + '_ {
         self.textures.keys().map(|&id| TextureId::new(id))
+    }
+}
+
+/// One presentation's external textures in a context that shares its device
+/// and painter between presentations: the allocations on the current device,
+/// and the newest image of each texture the device accepted, so a new device
+/// gets every texture back.
+#[derive(Debug, Default)]
+pub(crate) struct KeptTextures {
+    /// The allocations, `None` until the first use and after the device they
+    /// were on is replaced; [`Self::on`] uploads them again from `frames`.
+    registry: Option<ExternalTextureRegistry>,
+    frames: FxHashMap<TextureId, flui_painting::paint::Image>,
+}
+
+impl KeptTextures {
+    /// Apply `updates` on `domain`'s device, keeping each image it accepts.
+    ///
+    /// # Errors
+    /// The first frame refused; the texture keeps its previous image, and
+    /// every other frame and retirement is still applied.
+    pub(crate) fn apply(
+        &mut self,
+        domain: &Arc<DeviceDomain>,
+        updates: flui_layer::TextureUpdates,
+    ) -> EngineResult<()> {
+        let flui_layer::TextureUpdates {
+            frames, retired, ..
+        } = updates;
+        for id in &retired {
+            self.frames.remove(id);
+        }
+        self.on(domain);
+        let Self {
+            registry,
+            frames: kept,
+        } = self;
+        let registry = registry
+            .as_mut()
+            .expect("BUG: `on` left a registry on this device");
+        let mut retirements = flui_layer::TextureUpdates::default();
+        retirements.retired = retired;
+        let mut first_error = registry.apply(retirements).err();
+        for (id, frame) in frames {
+            match registry.upload(domain, id, &frame) {
+                Ok(()) => {
+                    kept.insert(id, frame);
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// The allocations on `domain`'s device, uploaded from the kept images
+    /// first when they are on no device or another one.
+    pub(crate) fn on(&mut self, domain: &Arc<DeviceDomain>) -> &mut ExternalTextureRegistry {
+        if !self
+            .registry
+            .as_ref()
+            .is_some_and(|registry| registry.is_on(domain))
+        {
+            let mut registry = ExternalTextureRegistry::new(domain);
+            for (id, frame) in &self.frames {
+                if let Err(error) = registry.upload(domain, *id, frame) {
+                    tracing::warn!(target: "flui.gpu", %error, "external texture re-upload refused a frame");
+                }
+            }
+            self.registry = Some(registry);
+        }
+        self.registry
+            .as_mut()
+            .expect("BUG: the registry was made on this device above")
+    }
+
+    /// Let go of the allocations, kept on a device being replaced; the
+    /// images stay for the next device.
+    pub(crate) fn leave_device(&mut self) {
+        self.registry = None;
     }
 }

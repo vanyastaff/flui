@@ -688,79 +688,19 @@ impl WgpuPainter {
         &mut self,
         updates: flui_layer::TextureUpdates,
     ) -> crate::error::EngineResult<()> {
-        use crate::external_texture_registry::{
-            ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
-        };
-        let registry = self.resources.external_texture_registry_mut();
-        for id in updates.retired {
-            registry.unregister(id);
-        }
-        let mut first_error = None;
-        for (id, frame) in updates.frames {
-            let size = wgpu::Extent3d {
-                width: frame.width(),
-                height: frame.height(),
-                depth_or_array_layers: 1,
-            };
-            // Refuse before allocating: wgpu rejects these extents itself.
-            let limit = self.device.limits().max_texture_dimension_2d;
-            if size.width == 0 || size.height == 0 || size.width > limit || size.height > limit {
-                first_error.get_or_insert(crate::error::EngineError::from(
-                    crate::error::ExternalTextureError::InvalidTextureSize {
-                        width: size.width,
-                        height: size.height,
-                    },
-                ));
-                continue;
-            }
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("external texture frame"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                frame.data(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * size.width),
-                    rows_per_image: Some(size.height),
-                },
-                size,
-            );
-            let registry = self.resources.external_texture_registry_mut();
-            let same_size = registry
-                .get(id)
-                .is_some_and(|entry| entry.size() == (size.width, size.height));
-            let applied = if same_size {
-                registry.update(id, texture)
-            } else {
-                registry.unregister(id);
-                registry.register(
-                    id,
-                    texture,
-                    ExternalTextureDescriptor {
-                        sampling: ExternalSampling::Linear,
-                        alpha: ExternalAlpha::Straight,
-                        color: ExternalColorEncoding::EncodedSrgb,
-                    },
-                )
-            };
-            if let Err(error) = applied {
-                first_error.get_or_insert(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
+        self.resources
+            .external_texture_registry_mut()
+            .apply(updates)
+    }
+
+    /// Exchange the painter's external textures with `textures`: a context
+    /// that shares one painter between presentations lends each its own for
+    /// the length of its frame, and takes them back after.
+    pub(crate) fn swap_external_textures(
+        &mut self,
+        textures: &mut crate::external_texture_registry::ExternalTextureRegistry,
+    ) {
+        std::mem::swap(self.resources.external_texture_registry_mut(), textures);
     }
 
     // ===== Helper Methods =====

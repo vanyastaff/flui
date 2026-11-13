@@ -563,6 +563,107 @@ fn latest_frame_wins_and_superseded_damage_folds_into_the_survivor() {
     );
 }
 
+/// A frame's texture updates reach the backend before it renders, those of
+/// a frame it superseded with them, and a hidden slot's too; a refused or
+/// panicking update leaves the frame to render, the panic in the record.
+///
+/// Red-check: drop the merged updates in `RasterSender::frame` and the frame
+/// that renders applies none; apply them only to a shown slot and the hidden
+/// frame's retirement is never applied.
+#[test]
+fn a_frames_texture_updates_apply_before_it_whether_shown_or_superseded() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let first = registry.register().expect("an id is left");
+    let second = registry.register().expect("an id is left");
+    let (first_id, second_id) = (first.id(), second.id());
+    let image = || flui_painting::paint::Image::from_rgba8(1, 1, vec![9, 9, 9, 255]);
+    let textured = |epoch: u64| RasterCommand::Frame {
+        slot: at.slot,
+        snapshot: snapshot(at, epoch, DamageRegion::Unchanged, scene())
+            .textures(registry.take_updates()),
+    };
+
+    first.submit_frame(image());
+    let _ = rig.sender.send(textured(1)).expect("accepted");
+    second.submit_frame(image());
+    let _ = rig.sender.send(textured(2)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::Presented)]
+    );
+    let applied = rig.backend.textures();
+    assert_eq!(applied.len(), 1, "one update for the frame that rendered");
+    assert_eq!(applied[0].slot, at.slot);
+    assert_eq!(applied[0].frames, [first_id, second_id]);
+    let calls = rig.backend.calls();
+    let applied_at = calls
+        .iter()
+        .position(|call| *call == SlotCall::Textures(at.slot));
+    let rendered_at = calls
+        .iter()
+        .position(|call| matches!(call, SlotCall::Render(slot, _) if *slot == at.slot));
+    assert!(
+        applied_at < rendered_at,
+        "the textures apply before the render: {calls:?}"
+    );
+
+    let _ = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Shown(SlotVisibility::Hidden),
+        })
+        .expect("accepted");
+    drop(first);
+    let _ = rig.sender.send(textured(3)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(3, RasterVerdict::NotShown)]
+    );
+    assert_eq!(
+        rig.backend
+            .textures()
+            .last()
+            .map(|applied| applied.retired.clone()),
+        Some(vec![first_id]),
+        "a hidden slot's retirement is applied"
+    );
+    let _ = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Shown(SlotVisibility::Shown),
+        })
+        .expect("accepted");
+
+    rig.backend
+        .script_textures(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    second.submit_frame(image());
+    let _ = rig.sender.send(textured(4)).expect("accepted");
+    rig.backend.script_textures(ScriptedAnswer::Panic);
+    second.submit_frame(image());
+    let _ = rig.executor.turn();
+    let mut settled = verdicts(&rig.sender, at.slot);
+    let _ = rig.sender.send(textured(5)).expect("accepted");
+    let _ = rig.executor.turn();
+    settled.extend(verdicts(&rig.sender, at.slot));
+    assert_eq!(
+        settled,
+        [(4, RasterVerdict::Presented), (5, RasterVerdict::Presented)],
+        "a refused or panicking texture update leaves its frame to render"
+    );
+    assert!(
+        matches!(
+            rig.sender.take_failure(at.slot),
+            Some(SlotFailure::Panicked(_))
+        ),
+        "the panic is held in the slot's record"
+    );
+}
 /// A frame renders only against the generation the slot's configuration
 /// has: one stamped zero, or before a resize the executor applied, settles
 /// `SurfaceStale` without reaching the backend.
@@ -1252,6 +1353,14 @@ impl flui_engine::SlotBackend for PanicsAtAttach {
     }
 
     fn set_latency(&mut self, _: SlotId, _: flui_engine::FrameLatency) {}
+
+    fn apply_textures(
+        &mut self,
+        _: SlotId,
+        _: flui_layer::TextureUpdates,
+    ) -> flui_engine::EngineResult<()> {
+        Ok(())
+    }
 
     fn detach(&mut self, _: SlotId) {}
 
