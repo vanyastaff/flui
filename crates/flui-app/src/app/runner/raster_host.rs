@@ -651,6 +651,18 @@ impl RasterHost {
     ) -> Option<SurfaceGeneration> {
         let slot = placed.slots.get_mut(&address)?;
         let record = placed.sender.record(slot.slot)?;
+        // A size past `i32` is one no device configures: unconfigured.
+        let (Ok(width), Ok(height)) = (i32::try_from(size.0), i32::try_from(size.1)) else {
+            return None;
+        };
+        let size = DeviceSize::new(width, height);
+        // Checked before a new surface is asked for: nothing is drawn at a
+        // refused size, and the restore would move the generation the
+        // refusal is held for.
+        if slot.refused_size == Some((size, record.required_generation)) {
+            return None;
+        }
+        slot.refused_size = None;
         if record.wants_surface {
             let surface = match placed.surfaces.create(Arc::clone(&slot.surface_target)) {
                 Ok(surface) => surface,
@@ -667,15 +679,6 @@ impl RasterHost {
                 return None;
             }
         }
-        // A size past `i32` is one no device configures: unconfigured.
-        let (Ok(width), Ok(height)) = (i32::try_from(size.0), i32::try_from(size.1)) else {
-            return None;
-        };
-        let size = DeviceSize::new(width, height);
-        if slot.refused_size == Some((size, record.required_generation)) {
-            return None;
-        }
-        slot.refused_size = None;
         if slot.size != Some(size) {
             match placed.sender.send(RasterCommand::Configure {
                 slot: slot.slot,

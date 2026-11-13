@@ -1056,40 +1056,44 @@ pub(crate) fn a_window_past_the_device_limit_waits_for_a_size_it_takes() {
 }
 
 /// A size a lost device refused is tried again once the device is rebuilt,
-/// since the new device may take it, without waiting for a resize.
+/// since the new device may take it, without waiting for a resize: whether
+/// the window saw the device lost (a rebuild failed first) or the loss and
+/// the rebuild fell in one turn.
 pub(crate) fn a_rebuilt_device_tries_the_refused_size_again() {
-    let observed = Observed::default();
-    let started = start(&observed);
-    started.renderer.limit_size(4096);
-    started.window.simulate_resize(8192.0, 600.0);
-    started.run.run_owner_turn();
-    let presented = started.renderer.frames_presented();
-    // The rebuilt device takes any size; its first rebuild fails, so the
-    // window sees the device lost before it sees it back.
-    started.renderer.limit_size(i32::MAX);
-    started.renderer.lose_device();
-    started.renderer.fail_recoveries(1);
-    observed.schedule_rebuild();
-    started.run.run_owner_turn();
-    for _ in 0..8 {
-        if started.renderer.frames_presented() > presented {
-            break;
+    for failing_rebuilds in [1, 0] {
+        let observed = Observed::default();
+        let started = start(&observed);
+        started.renderer.limit_size(4096);
+        started.window.simulate_resize(8192.0, 600.0);
+        started.run.run_owner_turn();
+        let presented = started.renderer.frames_presented();
+        // The rebuilt device takes any size.
+        started.renderer.limit_size(i32::MAX);
+        started.renderer.lose_device();
+        started.renderer.fail_recoveries(failing_rebuilds);
+        observed.schedule_rebuild();
+        started.run.run_owner_turn();
+        for _ in 0..8 {
+            if started.renderer.frames_presented() > presented {
+                break;
+            }
+            let Some(deadline) = started.run.wake_deadline() else {
+                break;
+            };
+            wake_at(&started, deadline);
         }
-        let Some(deadline) = started.run.wake_deadline() else {
-            break;
-        };
-        wake_at(&started, deadline);
+        assert_eq!(
+            started.renderer.recovery_attempts(),
+            failing_rebuilds + 1,
+            "the device was rebuilt"
+        );
+        assert!(
+            started.renderer.frames_presented() > presented,
+            "the rebuilt device drew at the size the lost one refused \
+             ({failing_rebuilds} failed rebuilds first)"
+        );
+        join_ok_after_close(started);
     }
-    assert_eq!(
-        started.renderer.recovery_attempts(),
-        2,
-        "the device was rebuilt"
-    );
-    assert!(
-        started.renderer.frames_presented() > presented,
-        "the rebuilt device drew at the size the lost one refused"
-    );
-    join_ok_after_close(started);
 }
 
 /// A panic of the renderer while it resizes a window is reported, and the
