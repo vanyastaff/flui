@@ -5,8 +5,8 @@
 # --features flui/material,flui/cupertino,flui/native --test perf`.
 
 [radio_alone]
-allocations = 103
-bytes = 13644
+allocations = 98
+bytes = 13234
 elements = 4
 reallocations = 3
 render_nodes = 2

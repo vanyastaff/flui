@@ -575,6 +575,16 @@ impl Indication {
         *self.states.borrow_mut() = states;
     }
 
+    /// The states controller the indication follows: the well's.
+    pub(crate) fn states(&self) -> WidgetStatesController {
+        self.states.borrow().clone()
+    }
+
+    /// The clock the indication runs on, `None` without a `VsyncScope`.
+    pub(crate) fn vsync(&self) -> Option<Vsync> {
+        self.vsync.borrow().clone()
+    }
+
     /// Move every run to `vsync`.
     pub(crate) fn bind(&self, vsync: Option<Vsync>) {
         if let Some(layer) = self.layer.borrow_mut().as_mut()
