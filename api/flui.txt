@@ -1840,7 +1840,7 @@ pub fn flui::app::PipelineOwner::mark_needs_compositing_bits_update(&mut self, n
 pub fn flui::app::PipelineOwner::mark_needs_layout(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::mark_needs_paint(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::mark_needs_semantics(&mut self, node_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
-pub fn flui::app::PipelineOwner::move_assistive_focus(&mut self, node: Option<flui_semantics::identity::AccessibilityNodeId>) -> flui_semantics::assistive_focus::AssistiveFocusChange // impl flui::app::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::app::PipelineOwner::move_assistive_focus(&mut self, node: Option<flui_semantics::identity::AccessibilityNodeId>) -> flui::semantics::AssistiveFocusChange // impl flui::app::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::app::PipelineOwner::new(text: flui_rendering::pipeline::text_context::TextContextHandle) -> Self // impl flui::app::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::app::PipelineOwner::new_with_capacity(dirty_channel_capacity: usize, text: flui_rendering::pipeline::text_context::TextContextHandle) -> Self // impl flui::app::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::app::PipelineOwner::nodes_needing_compositing_bits_update(&self) -> &[flui_rendering::pipeline::dirty::DirtyNode] // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
@@ -10696,6 +10696,15 @@ field flui::painting::SemanticsRegion::transform: flui::geometry::Matrix4 // at 
 impl Clone for flui::painting::SemanticsRegion
 impl core::fmt::Debug for flui::painting::SemanticsRegion
 pub fn flui::painting::SemanticsRegion::new(key: flui::painting::SemanticsRegionKey, rect: flui::geometry::Rect<f64>, config: flui::prelude::SemanticsConfiguration) -> Self
+pub struct flui::painting::SemanticsRegionId(_)
+impl Clone for flui::painting::SemanticsRegionId
+impl Copy for flui::painting::SemanticsRegionId
+impl Eq for flui::painting::SemanticsRegionId
+impl PartialEq for flui::painting::SemanticsRegionId
+impl core::fmt::Debug for flui::painting::SemanticsRegionId
+impl core::hash::Hash for flui::painting::SemanticsRegionId
+impl core::marker::StructuralPartialEq for flui::painting::SemanticsRegionId
+pub fn flui::painting::SemanticsRegionId::accessibility_id(self) -> flui_semantics::identity::AccessibilityNodeId
 pub struct flui::painting::SemanticsRegionKey(u64)
 impl Clone for flui::painting::SemanticsRegionKey
 impl Copy for flui::painting::SemanticsRegionKey
@@ -17388,8 +17397,8 @@ variant flui::prelude::Lifecycle::Defunct // at 3
 variant flui::prelude::Lifecycle::Inactive // at 2
 variant flui::prelude::Lifecycle::Initial // at 0
 pub trait flui::prelude::LifecycleContext: flui::app::BuildContext
-fn flui::prelude::LifecycleContext::announcer(&self) -> Option<flui::widgets::Announcer>
-fn flui::prelude::LifecycleContext::assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport
+fn flui::prelude::LifecycleContext::announcer(&self) -> Option<flui::semantics::Announcer>
+fn flui::prelude::LifecycleContext::assistive_focus_support(&self) -> flui::semantics::AssistiveFocusSupport
 fn flui::prelude::LifecycleContext::async_driver(&self) -> Option<flui::view::AsyncDriver>
 fn flui::prelude::LifecycleContext::build_phase(&self) -> flui::foundation::BuildPhase
 fn flui::prelude::LifecycleContext::close_guard(&self) -> Option<flui::view::CloseGuard> { .. }
@@ -18369,10 +18378,10 @@ impl core::fmt::Debug for flui::prelude::SelectionController
 pub fn flui::prelude::SelectionController::clear(&self) -> Result<(), flui::widgets::SelectError>
 pub fn flui::prelude::SelectionController::listenable(&self) -> alloc::rcs::rc::Rc<dyn flui::foundation::Listenable>
 pub fn flui::prelude::SelectionController::new() -> Self
-pub fn flui::prelude::SelectionController::select(&self, selection: flui_semantics::document_selection::DocumentSelection) -> Result<(), flui::widgets::SelectError>
+pub fn flui::prelude::SelectionController::select(&self, selection: flui::semantics::DocumentSelection) -> Result<(), flui::widgets::SelectError>
 pub fn flui::prelude::SelectionController::select_all(&self) -> Result<(), flui::widgets::SelectError>
 pub fn flui::prelude::SelectionController::selected_text(&self) -> Option<flui::widgets::SelectedText>
-pub fn flui::prelude::SelectionController::selection(&self) -> Option<flui_semantics::document_selection::DocumentSelection>
+pub fn flui::prelude::SelectionController::selection(&self) -> Option<flui::semantics::DocumentSelection>
 pub fn flui::prelude::SelectionController::texts(&self) -> Vec<flui::prelude::SemanticsAnchor>
 pub trait flui::prelude::SelectionHandles: 'static
 fn flui::prelude::SelectionHandles::build(&self, info: &flui::prelude::HandleInfo, ctx: &dyn flui::app::BuildContext) -> flui::prelude::BoxedView
@@ -18394,21 +18403,21 @@ impl flui::app::View for flui::prelude::Semantics
 impl flui::prelude::RenderView for flui::prelude::Semantics { type Protocol = flui::rendering::BoxProtocol; type RenderObject = flui::rendering::objects::RenderSemanticsAnnotations; }
 pub fn flui::prelude::Semantics::active_descendant(self, anchor: flui::prelude::SemanticsAnchor) -> Self
 pub fn flui::prelude::Semantics::anchor(self, anchor: flui::prelude::SemanticsAnchor) -> Self
-pub fn flui::prelude::Semantics::auto_complete(self, auto_complete: flui::widgets::AutoComplete) -> Self
+pub fn flui::prelude::Semantics::auto_complete(self, auto_complete: flui::semantics::AutoComplete) -> Self
 pub fn flui::prelude::Semantics::block_previous_siblings(self, blocking: bool) -> Self
 pub fn flui::prelude::Semantics::block_user_actions(self, block_user_actions: bool) -> Self
 pub fn flui::prelude::Semantics::busy(self, busy: bool) -> Self
-pub fn flui::prelude::Semantics::cell_position(self, position: flui::widgets::CellPosition) -> Self
+pub fn flui::prelude::Semantics::cell_position(self, position: flui::semantics::CellPosition) -> Self
 pub fn flui::prelude::Semantics::checkbox(self, state: flui::prelude::Toggled) -> Self
 pub fn flui::prelude::Semantics::child(self, child: impl flui::prelude::IntoView) -> Self
 pub fn flui::prelude::Semantics::container(self, container: bool) -> Self
 pub fn flui::prelude::Semantics::controls(self, anchor: flui::prelude::SemanticsAnchor) -> Self
-pub fn flui::prelude::Semantics::current(self, current: flui::widgets::Current) -> Self
+pub fn flui::prelude::Semantics::current(self, current: flui::semantics::Current) -> Self
 pub fn flui::prelude::Semantics::custom_action<F, R>(self, label: impl Into<String>, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::custom_action_when<F, R>(self, label: impl Into<String>, enabled: impl Fn() -> bool + 'static, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::described_by(self, anchor: flui::prelude::SemanticsAnchor) -> Self
 pub fn flui::prelude::Semantics::details(self, anchor: flui::prelude::SemanticsAnchor) -> Self
-pub fn flui::prelude::Semantics::document_selection(self, selection: Option<flui_semantics::document_selection::DocumentSelection>) -> Self
+pub fn flui::prelude::Semantics::document_selection(self, selection: Option<flui::semantics::DocumentSelection>) -> Self
 pub fn flui::prelude::Semantics::enabled(self, enabled: bool) -> Self
 pub fn flui::prelude::Semantics::error_message(self, anchor: flui::prelude::SemanticsAnchor) -> Self
 pub fn flui::prelude::Semantics::exclude_semantics(self, exclude_semantics: bool) -> Self
@@ -18419,14 +18428,14 @@ pub fn flui::prelude::Semantics::flow_to(self, anchor: flui::prelude::SemanticsA
 pub fn flui::prelude::Semantics::focusable(self, focusable: bool) -> Self
 pub fn flui::prelude::Semantics::focused(self, focused: bool) -> Self
 pub fn flui::prelude::Semantics::from_configuration(configuration: flui::prelude::SemanticsConfiguration) -> Self
-pub fn flui::prelude::Semantics::has_popup(self, popup: flui::widgets::HasPopup) -> Self
+pub fn flui::prelude::Semantics::has_popup(self, popup: flui::semantics::HasPopup) -> Self
 pub fn flui::prelude::Semantics::heading_level(self, level: flui::prelude::HeadingLevel) -> Self
 pub fn flui::prelude::Semantics::hidden(self, hidden: bool) -> Self
-pub fn flui::prelude::Semantics::hint(self, hint: impl Into<flui_semantics::properties::AttributedString>) -> Self
+pub fn flui::prelude::Semantics::hint(self, hint: impl Into<flui::semantics::AttributedString>) -> Self
 pub fn flui::prelude::Semantics::identifier(self, identifier: impl Into<alloc::rcs::arc::Arc<str>>) -> Self
-pub fn flui::prelude::Semantics::invalid(self, invalid: flui::widgets::Invalid) -> Self
+pub fn flui::prelude::Semantics::invalid(self, invalid: flui::semantics::Invalid) -> Self
 pub fn flui::prelude::Semantics::keyboard_shortcut(self, shortcut: impl Into<String>) -> Self
-pub fn flui::prelude::Semantics::label(self, label: impl Into<flui_semantics::properties::AttributedString>) -> Self
+pub fn flui::prelude::Semantics::label(self, label: impl Into<flui::semantics::AttributedString>) -> Self
 pub fn flui::prelude::Semantics::labelled_by(self, anchor: flui::prelude::SemanticsAnchor) -> Self
 pub fn flui::prelude::Semantics::language(self, language: impl Into<String>) -> Self
 pub fn flui::prelude::Semantics::level(self, level: core::num::nonzero::NonZeroU32) -> Self
@@ -18438,7 +18447,7 @@ pub fn flui::prelude::Semantics::multiselectable(self, multiselectable: bool) ->
 pub fn flui::prelude::Semantics::names_route(self, names_route: bool) -> Self
 pub fn flui::prelude::Semantics::new() -> Self
 pub fn flui::prelude::Semantics::numeric_range(self, range: flui::prelude::NumericRange) -> Self
-pub fn flui::prelude::Semantics::on_action<F, R>(self, action: flui_protocol::semantics::SemanticsAction, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::widgets::ActionCall) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::Semantics::on_action<F, R>(self, action: flui::semantics::SemanticsAction, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::semantics::ActionCall) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::on_assistive_focus_within<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, bool) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::on_blur<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::on_click<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
@@ -18446,15 +18455,15 @@ pub fn flui::prelude::Semantics::on_decrement<F, R>(self, handler: F) -> Self wh
 pub fn flui::prelude::Semantics::on_focus<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::on_increment<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::on_replace_selected_text<F, R>(self, handler: F) -> Self where F: for<'a> Fn(&mut flui::prelude::EventContext<'_>, &'a str) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::Semantics::on_scroll_down<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::widgets::SemanticsScrollUnit) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::Semantics::on_scroll_into_view<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, Option<flui::widgets::Reveal>) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::Semantics::on_scroll_left<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::widgets::SemanticsScrollUnit) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::Semantics::on_scroll_right<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::widgets::SemanticsScrollUnit) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::Semantics::on_scroll_up<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::widgets::SemanticsScrollUnit) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::Semantics::on_set_document_selection<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui_semantics::document_selection::DocumentSelection) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::Semantics::on_scroll_down<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::semantics::ScrollUnit) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::Semantics::on_scroll_into_view<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, Option<flui::semantics::Reveal>) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::Semantics::on_scroll_left<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::semantics::ScrollUnit) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::Semantics::on_scroll_right<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::semantics::ScrollUnit) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::Semantics::on_scroll_up<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::semantics::ScrollUnit) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::Semantics::on_set_document_selection<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::semantics::DocumentSelection) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::on_set_numeric_value<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, f64) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::on_set_scroll_offset<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::geometry::Offset<f64>) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::Semantics::on_set_text_selection<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::widgets::TextSelection) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::Semantics::on_set_text_selection<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::semantics::TextSelection) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::on_set_value<F, R>(self, handler: F) -> Self where F: for<'a> Fn(&mut flui::prelude::EventContext<'_>, &'a str) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::on_show_context_menu<F, R>(self, handler: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Semantics::orientation(self, orientation: flui::geometry::Axis) -> Self
@@ -18469,14 +18478,14 @@ pub fn flui::prelude::Semantics::role_description(self, description: impl Into<S
 pub fn flui::prelude::Semantics::row_index(self, row: core::num::nonzero::NonZeroUsize) -> Self
 pub fn flui::prelude::Semantics::scopes_route(self, scopes_route: bool) -> Self
 pub fn flui::prelude::Semantics::selected(self, selected: bool) -> Self
-pub fn flui::prelude::Semantics::size_of_set(self, size: flui::widgets::SetSize) -> Self
-pub fn flui::prelude::Semantics::sort_direction(self, direction: flui::widgets::SortDirection) -> Self
+pub fn flui::prelude::Semantics::size_of_set(self, size: flui::semantics::SetSize) -> Self
+pub fn flui::prelude::Semantics::sort_direction(self, direction: flui::semantics::SortDirection) -> Self
 pub fn flui::prelude::Semantics::switch(self, on: bool) -> Self
-pub fn flui::prelude::Semantics::table_shape(self, shape: flui::widgets::TableShape) -> Self
+pub fn flui::prelude::Semantics::table_shape(self, shape: flui::semantics::TableShape) -> Self
 pub fn flui::prelude::Semantics::text_direction(self, text_direction: flui::foundation::TextDirection) -> Self
 pub fn flui::prelude::Semantics::toggled(self, state: flui::prelude::Toggled) -> Self
 pub fn flui::prelude::Semantics::url(self, url: impl Into<String>) -> Self
-pub fn flui::prelude::Semantics::value(self, value: impl Into<flui_semantics::properties::AttributedString>) -> Self
+pub fn flui::prelude::Semantics::value(self, value: impl Into<flui::semantics::AttributedString>) -> Self
 pub struct flui::prelude::SemanticsAnchor(_)
 impl Clone for flui::prelude::SemanticsAnchor
 impl Default for flui::prelude::SemanticsAnchor
@@ -18491,50 +18500,50 @@ impl Default for flui::prelude::SemanticsConfiguration
 impl PartialEq for flui::prelude::SemanticsConfiguration
 impl core::fmt::Debug for flui::prelude::SemanticsConfiguration
 pub fn flui::prelude::SemanticsConfiguration::absorb(&mut self, other: &flui::prelude::SemanticsConfiguration)
-pub fn flui::prelude::SemanticsConfiguration::action_handler(&self, action: flui_protocol::semantics::SemanticsAction) -> Option<&flui_semantics::action::SemanticsActionHandler>
+pub fn flui::prelude::SemanticsConfiguration::action_handler(&self, action: flui::semantics::SemanticsAction) -> Option<&flui::semantics::SemanticsActionHandler>
 pub fn flui::prelude::SemanticsConfiguration::actions_as_bits(&self) -> u64
-pub fn flui::prelude::SemanticsConfiguration::add_action(&mut self, action: flui_protocol::semantics::SemanticsAction, handler: flui_semantics::action::SemanticsActionHandler)
+pub fn flui::prelude::SemanticsConfiguration::add_action(&mut self, action: flui::semantics::SemanticsAction, handler: flui::semantics::SemanticsActionHandler)
 pub fn flui::prelude::SemanticsConfiguration::add_anchor(&mut self, anchor: flui::prelude::SemanticsAnchor)
-pub fn flui::prelude::SemanticsConfiguration::add_assistive_focus_handler(&mut self, handler: flui_semantics::action::AssistiveFocusHandler)
-pub fn flui::prelude::SemanticsConfiguration::add_custom_action(&mut self, label: impl Into<smol_str::SmolStr>, handler: flui_semantics::action::SemanticsActionHandler) -> flui_semantics::action::CustomActionId
-pub fn flui::prelude::SemanticsConfiguration::add_custom_action_as(&mut self, own_id: flui_semantics::action::CustomActionId, label: impl Into<smol_str::SmolStr>, handler: flui_semantics::action::SemanticsActionHandler)
-pub fn flui::prelude::SemanticsConfiguration::add_relation(&mut self, relation: flui_semantics::relation::SemanticsRelation, anchor: flui::prelude::SemanticsAnchor)
-pub fn flui::prelude::SemanticsConfiguration::add_tag(&mut self, tag: flui_semantics::properties::SemanticsTag)
+pub fn flui::prelude::SemanticsConfiguration::add_assistive_focus_handler(&mut self, handler: flui::semantics::AssistiveFocusHandler)
+pub fn flui::prelude::SemanticsConfiguration::add_custom_action(&mut self, label: impl Into<smol_str::SmolStr>, handler: flui::semantics::SemanticsActionHandler) -> flui::semantics::CustomActionId
+pub fn flui::prelude::SemanticsConfiguration::add_custom_action_as(&mut self, own_id: flui::semantics::CustomActionId, label: impl Into<smol_str::SmolStr>, handler: flui::semantics::SemanticsActionHandler)
+pub fn flui::prelude::SemanticsConfiguration::add_relation(&mut self, relation: flui::semantics::SemanticsRelation, anchor: flui::prelude::SemanticsAnchor)
+pub fn flui::prelude::SemanticsConfiguration::add_tag(&mut self, tag: flui::semantics::SemanticsTag)
 pub fn flui::prelude::SemanticsConfiguration::anchors(&self) -> &[flui::prelude::SemanticsAnchor]
-pub fn flui::prelude::SemanticsConfiguration::assistive_focus_handlers(&self) -> &[flui_semantics::action::AssistiveFocusHandler]
-pub fn flui::prelude::SemanticsConfiguration::auto_complete(&self) -> Option<flui::widgets::AutoComplete>
+pub fn flui::prelude::SemanticsConfiguration::assistive_focus_handlers(&self) -> &[flui::semantics::AssistiveFocusHandler]
+pub fn flui::prelude::SemanticsConfiguration::auto_complete(&self) -> Option<flui::semantics::AutoComplete>
 pub fn flui::prelude::SemanticsConfiguration::blocks_previous_siblings(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::blocks_user_actions(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::busy(&self) -> Option<bool>
-pub fn flui::prelude::SemanticsConfiguration::cell_position(&self) -> Option<flui::widgets::CellPosition>
+pub fn flui::prelude::SemanticsConfiguration::cell_position(&self) -> Option<flui::semantics::CellPosition>
 pub fn flui::prelude::SemanticsConfiguration::clear_cell_position(&mut self)
 pub fn flui::prelude::SemanticsConfiguration::clear_position_in_set(&mut self)
 pub fn flui::prelude::SemanticsConfiguration::clear_row_index(&mut self)
 pub fn flui::prelude::SemanticsConfiguration::clear_text_content(&mut self)
-pub fn flui::prelude::SemanticsConfiguration::collection(&self) -> Option<flui_semantics::collection::SemanticsCollection>
-pub fn flui::prelude::SemanticsConfiguration::collection_origin(&self) -> Option<flui_semantics::collection::SemanticsCollectionOrigin>
-pub fn flui::prelude::SemanticsConfiguration::current(&self) -> Option<flui::widgets::Current>
+pub fn flui::prelude::SemanticsConfiguration::collection(&self) -> Option<flui::semantics::SemanticsCollection>
+pub fn flui::prelude::SemanticsConfiguration::collection_origin(&self) -> Option<flui::semantics::SemanticsCollectionOrigin>
+pub fn flui::prelude::SemanticsConfiguration::current(&self) -> Option<flui::semantics::Current>
 pub fn flui::prelude::SemanticsConfiguration::current_value_length(&self) -> Option<i32>
-pub fn flui::prelude::SemanticsConfiguration::custom_action(&self, id: flui_semantics::action::CustomActionId) -> Option<flui_semantics::configuration::DeclaredCustomAction<'_>>
-pub fn flui::prelude::SemanticsConfiguration::custom_actions(&self) -> impl Iterator<Item = (flui_semantics::action::CustomActionId, &str)> + '_
-pub fn flui::prelude::SemanticsConfiguration::decreased_value(&self) -> Option<&flui_semantics::properties::AttributedString>
-pub fn flui::prelude::SemanticsConfiguration::document_selection(&self) -> Option<&flui_semantics::document_selection::DocumentSelection>
+pub fn flui::prelude::SemanticsConfiguration::custom_action(&self, id: flui::semantics::CustomActionId) -> Option<flui::semantics::DeclaredCustomAction<'_>>
+pub fn flui::prelude::SemanticsConfiguration::custom_actions(&self) -> impl Iterator<Item = (flui::semantics::CustomActionId, &str)> + '_
+pub fn flui::prelude::SemanticsConfiguration::decreased_value(&self) -> Option<&flui::semantics::AttributedString>
+pub fn flui::prelude::SemanticsConfiguration::document_selection(&self) -> Option<&flui::semantics::DocumentSelection>
 pub fn flui::prelude::SemanticsConfiguration::effective_actions_as_bits(&self) -> u64
-pub fn flui::prelude::SemanticsConfiguration::effective_custom_actions(&self) -> impl Iterator<Item = (flui_semantics::action::CustomActionId, &str)> + '_
+pub fn flui::prelude::SemanticsConfiguration::effective_custom_actions(&self) -> impl Iterator<Item = (flui::semantics::CustomActionId, &str)> + '_
 pub fn flui::prelude::SemanticsConfiguration::expanded(&self) -> Option<bool>
 pub fn flui::prelude::SemanticsConfiguration::explicit_child_nodes(&self) -> bool
-pub fn flui::prelude::SemanticsConfiguration::has_action(&self, action: flui_protocol::semantics::SemanticsAction) -> bool
+pub fn flui::prelude::SemanticsConfiguration::has_action(&self, action: flui::semantics::SemanticsAction) -> bool
 pub fn flui::prelude::SemanticsConfiguration::has_been_annotated(&self) -> bool
-pub fn flui::prelude::SemanticsConfiguration::has_popup(&self) -> Option<flui::widgets::HasPopup>
-pub fn flui::prelude::SemanticsConfiguration::has_tag(&self, tag: &flui_semantics::properties::SemanticsTag) -> bool
+pub fn flui::prelude::SemanticsConfiguration::has_popup(&self) -> Option<flui::semantics::HasPopup>
+pub fn flui::prelude::SemanticsConfiguration::has_tag(&self, tag: &flui::semantics::SemanticsTag) -> bool
 pub fn flui::prelude::SemanticsConfiguration::heading_level(&self) -> Option<flui::prelude::HeadingLevel>
-pub fn flui::prelude::SemanticsConfiguration::hint(&self) -> Option<&flui_semantics::properties::AttributedString>
-pub fn flui::prelude::SemanticsConfiguration::hint_overrides(&self) -> Option<&flui_semantics::properties::SemanticsHintOverrides>
+pub fn flui::prelude::SemanticsConfiguration::hint(&self) -> Option<&flui::semantics::AttributedString>
+pub fn flui::prelude::SemanticsConfiguration::hint_overrides(&self) -> Option<&flui::semantics::SemanticsHintOverrides>
 pub fn flui::prelude::SemanticsConfiguration::hosted_runs(&self) -> Option<core::ops::range::Range<usize>>
 pub fn flui::prelude::SemanticsConfiguration::identifier(&self) -> Option<&str>
-pub fn flui::prelude::SemanticsConfiguration::increased_value(&self) -> Option<&flui_semantics::properties::AttributedString>
-pub fn flui::prelude::SemanticsConfiguration::index_origin(&self) -> Option<flui_semantics::collection::SemanticsIndexOrigin>
-pub fn flui::prelude::SemanticsConfiguration::invalid(&self) -> Option<flui::widgets::Invalid>
+pub fn flui::prelude::SemanticsConfiguration::increased_value(&self) -> Option<&flui::semantics::AttributedString>
+pub fn flui::prelude::SemanticsConfiguration::index_origin(&self) -> Option<flui::semantics::SemanticsIndexOrigin>
+pub fn flui::prelude::SemanticsConfiguration::invalid(&self) -> Option<flui::semantics::Invalid>
 pub fn flui::prelude::SemanticsConfiguration::is_actions_only(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::is_compatible_with(&self, other: &flui::prelude::SemanticsConfiguration) -> bool
 pub fn flui::prelude::SemanticsConfiguration::is_enabled(&self) -> Option<bool>
@@ -18551,7 +18560,7 @@ pub fn flui::prelude::SemanticsConfiguration::is_required(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::is_selected(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::is_semantics_boundary(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::keyboard_shortcut(&self) -> Option<&str>
-pub fn flui::prelude::SemanticsConfiguration::label(&self) -> Option<&flui_semantics::properties::AttributedString>
+pub fn flui::prelude::SemanticsConfiguration::label(&self) -> Option<&flui::semantics::AttributedString>
 pub fn flui::prelude::SemanticsConfiguration::language(&self) -> Option<&str>
 pub fn flui::prelude::SemanticsConfiguration::level(&self) -> Option<core::num::nonzero::NonZeroU32>
 pub fn flui::prelude::SemanticsConfiguration::live_atomic(&self) -> Option<bool>
@@ -18567,10 +18576,10 @@ pub fn flui::prelude::SemanticsConfiguration::orientation(&self) -> Option<flui:
 pub fn flui::prelude::SemanticsConfiguration::placeholder(&self) -> Option<&str>
 pub fn flui::prelude::SemanticsConfiguration::platform_view_id(&self) -> Option<i32>
 pub fn flui::prelude::SemanticsConfiguration::position_in_set(&self) -> Option<usize>
-pub fn flui::prelude::SemanticsConfiguration::published_table_shape(&self) -> Option<flui::widgets::TableShape>
-pub fn flui::prelude::SemanticsConfiguration::registered_action_handlers(&self) -> impl Iterator<Item = &flui_semantics::action::SemanticsActionHandler>
-pub fn flui::prelude::SemanticsConfiguration::relations(&self) -> &[(flui_semantics::relation::SemanticsRelation, flui::prelude::SemanticsAnchor)]
-pub fn flui::prelude::SemanticsConfiguration::remove_action(&mut self, action: flui_protocol::semantics::SemanticsAction)
+pub fn flui::prelude::SemanticsConfiguration::published_table_shape(&self) -> Option<flui::semantics::TableShape>
+pub fn flui::prelude::SemanticsConfiguration::registered_action_handlers(&self) -> impl Iterator<Item = &flui::semantics::SemanticsActionHandler>
+pub fn flui::prelude::SemanticsConfiguration::relations(&self) -> &[(flui::semantics::SemanticsRelation, flui::prelude::SemanticsAnchor)]
+pub fn flui::prelude::SemanticsConfiguration::remove_action(&mut self, action: flui::semantics::SemanticsAction)
 pub fn flui::prelude::SemanticsConfiguration::retire(self, recovery: &mut flui::foundation::panic::RecoveryScope<'_>)
 pub fn flui::prelude::SemanticsConfiguration::role(&self) -> flui::prelude::SemanticsRole
 pub fn flui::prelude::SemanticsConfiguration::role_description(&self) -> Option<&str>
@@ -18581,36 +18590,36 @@ pub fn flui::prelude::SemanticsConfiguration::scroll_extent_max(&self) -> Option
 pub fn flui::prelude::SemanticsConfiguration::scroll_extent_min(&self) -> Option<f64>
 pub fn flui::prelude::SemanticsConfiguration::scroll_index(&self) -> Option<i32>
 pub fn flui::prelude::SemanticsConfiguration::scroll_position(&self) -> Option<f64>
-pub fn flui::prelude::SemanticsConfiguration::set_auto_complete(&mut self, auto_complete: flui::widgets::AutoComplete)
+pub fn flui::prelude::SemanticsConfiguration::set_auto_complete(&mut self, auto_complete: flui::semantics::AutoComplete)
 pub fn flui::prelude::SemanticsConfiguration::set_blocks_previous_siblings(&mut self, value: bool)
 pub fn flui::prelude::SemanticsConfiguration::set_blocks_user_actions(&mut self, value: bool)
 pub fn flui::prelude::SemanticsConfiguration::set_busy(&mut self, busy: bool)
-pub fn flui::prelude::SemanticsConfiguration::set_cell_position(&mut self, position: flui::widgets::CellPosition)
-pub fn flui::prelude::SemanticsConfiguration::set_collection(&mut self, collection: flui_semantics::collection::SemanticsCollection)
+pub fn flui::prelude::SemanticsConfiguration::set_cell_position(&mut self, position: flui::semantics::CellPosition)
+pub fn flui::prelude::SemanticsConfiguration::set_collection(&mut self, collection: flui::semantics::SemanticsCollection)
 pub fn flui::prelude::SemanticsConfiguration::set_collection_index(&mut self, host: flui::foundation::RenderId, index: usize)
-pub fn flui::prelude::SemanticsConfiguration::set_current(&mut self, current: flui::widgets::Current)
+pub fn flui::prelude::SemanticsConfiguration::set_current(&mut self, current: flui::semantics::Current)
 pub fn flui::prelude::SemanticsConfiguration::set_current_value_length(&mut self, length: i32)
-pub fn flui::prelude::SemanticsConfiguration::set_decreased_value(&mut self, value: impl Into<flui_semantics::properties::AttributedString>)
-pub fn flui::prelude::SemanticsConfiguration::set_document_selection(&mut self, selection: Option<flui_semantics::document_selection::DocumentSelection>)
+pub fn flui::prelude::SemanticsConfiguration::set_decreased_value(&mut self, value: impl Into<flui::semantics::AttributedString>)
+pub fn flui::prelude::SemanticsConfiguration::set_document_selection(&mut self, selection: Option<flui::semantics::DocumentSelection>)
 pub fn flui::prelude::SemanticsConfiguration::set_enabled(&mut self, enabled: Option<bool>)
 pub fn flui::prelude::SemanticsConfiguration::set_expanded(&mut self, value: bool)
 pub fn flui::prelude::SemanticsConfiguration::set_explicit_child_nodes(&mut self, value: bool)
 pub fn flui::prelude::SemanticsConfiguration::set_focusable(&mut self, value: bool)
 pub fn flui::prelude::SemanticsConfiguration::set_focused(&mut self, value: bool)
-pub fn flui::prelude::SemanticsConfiguration::set_has_popup(&mut self, popup: flui::widgets::HasPopup)
+pub fn flui::prelude::SemanticsConfiguration::set_has_popup(&mut self, popup: flui::semantics::HasPopup)
 pub fn flui::prelude::SemanticsConfiguration::set_has_reveal_ancestor(&mut self, value: bool)
 pub fn flui::prelude::SemanticsConfiguration::set_heading_level(&mut self, level: flui::prelude::HeadingLevel)
 pub fn flui::prelude::SemanticsConfiguration::set_hidden(&mut self, value: bool)
-pub fn flui::prelude::SemanticsConfiguration::set_hint(&mut self, hint: impl Into<flui_semantics::properties::AttributedString>)
-pub fn flui::prelude::SemanticsConfiguration::set_hint_overrides(&mut self, overrides: flui_semantics::properties::SemanticsHintOverrides)
+pub fn flui::prelude::SemanticsConfiguration::set_hint(&mut self, hint: impl Into<flui::semantics::AttributedString>)
+pub fn flui::prelude::SemanticsConfiguration::set_hint_overrides(&mut self, overrides: flui::semantics::SemanticsHintOverrides)
 pub fn flui::prelude::SemanticsConfiguration::set_hosted_runs(&mut self, runs: Option<core::ops::range::Range<usize>>)
 pub fn flui::prelude::SemanticsConfiguration::set_identifier(&mut self, identifier: impl Into<alloc::rcs::arc::Arc<str>>)
-pub fn flui::prelude::SemanticsConfiguration::set_increased_value(&mut self, value: impl Into<flui_semantics::properties::AttributedString>)
-pub fn flui::prelude::SemanticsConfiguration::set_invalid(&mut self, invalid: flui::widgets::Invalid)
+pub fn flui::prelude::SemanticsConfiguration::set_increased_value(&mut self, value: impl Into<flui::semantics::AttributedString>)
+pub fn flui::prelude::SemanticsConfiguration::set_invalid(&mut self, invalid: flui::semantics::Invalid)
 pub fn flui::prelude::SemanticsConfiguration::set_keyboard_shortcut(&mut self, shortcut: impl Into<smol_str::SmolStr>)
-pub fn flui::prelude::SemanticsConfiguration::set_label(&mut self, label: impl Into<flui_semantics::properties::AttributedString>)
+pub fn flui::prelude::SemanticsConfiguration::set_label(&mut self, label: impl Into<flui::semantics::AttributedString>)
 pub fn flui::prelude::SemanticsConfiguration::set_language(&mut self, language: impl Into<smol_str::SmolStr>)
-pub fn flui::prelude::SemanticsConfiguration::set_lazy_collection(&mut self, collection: flui_semantics::collection::SemanticsCollection)
+pub fn flui::prelude::SemanticsConfiguration::set_lazy_collection(&mut self, collection: flui::semantics::SemanticsCollection)
 pub fn flui::prelude::SemanticsConfiguration::set_level(&mut self, level: core::num::nonzero::NonZeroU32)
 pub fn flui::prelude::SemanticsConfiguration::set_live_atomic(&mut self, atomic: bool)
 pub fn flui::prelude::SemanticsConfiguration::set_live_region(&mut self, setting: flui::prelude::LiveSetting)
@@ -18638,28 +18647,28 @@ pub fn flui::prelude::SemanticsConfiguration::set_scroll_index(&mut self, index:
 pub fn flui::prelude::SemanticsConfiguration::set_scroll_position(&mut self, position: f64)
 pub fn flui::prelude::SemanticsConfiguration::set_selected(&mut self, value: bool)
 pub fn flui::prelude::SemanticsConfiguration::set_semantics_boundary(&mut self, value: bool)
-pub fn flui::prelude::SemanticsConfiguration::set_size_of_set(&mut self, size: flui::widgets::SetSize)
-pub fn flui::prelude::SemanticsConfiguration::set_sort_direction(&mut self, direction: flui::widgets::SortDirection)
-pub fn flui::prelude::SemanticsConfiguration::set_sort_key(&mut self, key: flui_semantics::properties::SemanticsSortKey)
-pub fn flui::prelude::SemanticsConfiguration::set_table_shape(&mut self, shape: flui::widgets::TableShape)
-pub fn flui::prelude::SemanticsConfiguration::set_text_content(&mut self, content: flui_semantics::text_content::TextContent)
+pub fn flui::prelude::SemanticsConfiguration::set_size_of_set(&mut self, size: flui::semantics::SetSize)
+pub fn flui::prelude::SemanticsConfiguration::set_sort_direction(&mut self, direction: flui::semantics::SortDirection)
+pub fn flui::prelude::SemanticsConfiguration::set_sort_key(&mut self, key: flui::semantics::SemanticsSortKey)
+pub fn flui::prelude::SemanticsConfiguration::set_table_shape(&mut self, shape: flui::semantics::TableShape)
+pub fn flui::prelude::SemanticsConfiguration::set_text_content(&mut self, content: flui::semantics::TextContent)
 pub fn flui::prelude::SemanticsConfiguration::set_text_direction(&mut self, direction: flui::foundation::TextDirection)
 pub fn flui::prelude::SemanticsConfiguration::set_toggled(&mut self, toggled: Option<flui::prelude::Toggled>)
 pub fn flui::prelude::SemanticsConfiguration::set_tooltip(&mut self, tooltip: impl Into<smol_str::SmolStr>)
 pub fn flui::prelude::SemanticsConfiguration::set_url(&mut self, url: impl Into<smol_str::SmolStr>)
-pub fn flui::prelude::SemanticsConfiguration::set_value(&mut self, value: impl Into<flui_semantics::properties::AttributedString>)
-pub fn flui::prelude::SemanticsConfiguration::size_of_set(&self) -> Option<flui::widgets::SetSize>
-pub fn flui::prelude::SemanticsConfiguration::sort_direction(&self) -> Option<flui::widgets::SortDirection>
-pub fn flui::prelude::SemanticsConfiguration::sort_key(&self) -> Option<&flui_semantics::properties::SemanticsSortKey>
-pub fn flui::prelude::SemanticsConfiguration::states(&self) -> &flui_semantics::states::States
-pub fn flui::prelude::SemanticsConfiguration::table_shape(&self) -> Option<flui::widgets::TableShape>
-pub fn flui::prelude::SemanticsConfiguration::tags(&self) -> &[flui_semantics::properties::SemanticsTag]
-pub fn flui::prelude::SemanticsConfiguration::text_content(&self) -> Option<&flui_semantics::text_content::TextContent>
+pub fn flui::prelude::SemanticsConfiguration::set_value(&mut self, value: impl Into<flui::semantics::AttributedString>)
+pub fn flui::prelude::SemanticsConfiguration::size_of_set(&self) -> Option<flui::semantics::SetSize>
+pub fn flui::prelude::SemanticsConfiguration::sort_direction(&self) -> Option<flui::semantics::SortDirection>
+pub fn flui::prelude::SemanticsConfiguration::sort_key(&self) -> Option<&flui::semantics::SemanticsSortKey>
+pub fn flui::prelude::SemanticsConfiguration::states(&self) -> &flui::semantics::States
+pub fn flui::prelude::SemanticsConfiguration::table_shape(&self) -> Option<flui::semantics::TableShape>
+pub fn flui::prelude::SemanticsConfiguration::tags(&self) -> &[flui::semantics::SemanticsTag]
+pub fn flui::prelude::SemanticsConfiguration::text_content(&self) -> Option<&flui::semantics::TextContent>
 pub fn flui::prelude::SemanticsConfiguration::text_direction(&self) -> Option<flui::foundation::TextDirection>
 pub fn flui::prelude::SemanticsConfiguration::toggled(&self) -> Option<flui::prelude::Toggled>
 pub fn flui::prelude::SemanticsConfiguration::tooltip(&self) -> Option<&str>
 pub fn flui::prelude::SemanticsConfiguration::url(&self) -> Option<&str>
-pub fn flui::prelude::SemanticsConfiguration::value(&self) -> Option<&flui_semantics::properties::AttributedString>
+pub fn flui::prelude::SemanticsConfiguration::value(&self) -> Option<&flui::semantics::AttributedString>
 pub fn flui::prelude::SemanticsConfiguration::with_role(self, role: flui::prelude::SemanticsRole) -> Self
 #[non_exhaustive] #[repr(u32)] pub enum flui::prelude::SemanticsRole
 impl Clone for flui::prelude::SemanticsRole
@@ -20880,7 +20889,7 @@ pub fn flui::rendering::objects::FractionFactor::try_new(value: f64) -> Option<S
 pub struct flui::rendering::objects::GatedCustomAction { .. }
 impl Clone for flui::rendering::objects::GatedCustomAction
 impl core::fmt::Debug for flui::rendering::objects::GatedCustomAction
-pub fn flui::rendering::objects::GatedCustomAction::new(label: impl Into<String>, handler: flui_semantics::action::SemanticsActionHandler, enabled: Option<alloc::rcs::rc::Rc<dyn Fn() -> bool>>) -> Self
+pub fn flui::rendering::objects::GatedCustomAction::new(label: impl Into<String>, handler: flui::semantics::SemanticsActionHandler, enabled: Option<alloc::rcs::rc::Rc<dyn Fn() -> bool>>) -> Self
 pub struct flui::rendering::objects::HeaderShrink
 field flui::rendering::objects::HeaderShrink::overlaps_content: bool // at 1
 field flui::rendering::objects::HeaderShrink::shrink_offset: f64 // at 0
@@ -22330,11 +22339,11 @@ impl flui::rendering::objects::RoundedClipGeometry for flui::geometry::RSuperell
 pub struct flui::rendering::objects::SemanticsActionRoute { .. }
 impl Clone for flui::rendering::objects::SemanticsActionRoute
 impl core::fmt::Debug for flui::rendering::objects::SemanticsActionRoute
-pub fn flui::rendering::objects::SemanticsActionRoute::assistive_focus_handler(&self) -> Option<&flui_semantics::action::AssistiveFocusHandler>
-pub fn flui::rendering::objects::SemanticsActionRoute::handler(&self) -> &flui_semantics::action::SemanticsActionHandler
-pub fn flui::rendering::objects::SemanticsActionRoute::new(target: flui_interaction::pointer::interaction_lane::LocalPayloadTarget, handler: flui_semantics::action::SemanticsActionHandler) -> Self
+pub fn flui::rendering::objects::SemanticsActionRoute::assistive_focus_handler(&self) -> Option<&flui::semantics::AssistiveFocusHandler>
+pub fn flui::rendering::objects::SemanticsActionRoute::handler(&self) -> &flui::semantics::SemanticsActionHandler
+pub fn flui::rendering::objects::SemanticsActionRoute::new(target: flui_interaction::pointer::interaction_lane::LocalPayloadTarget, handler: flui::semantics::SemanticsActionHandler) -> Self
 pub fn flui::rendering::objects::SemanticsActionRoute::target(&self) -> flui_interaction::pointer::interaction_lane::LocalPayloadTarget
-pub fn flui::rendering::objects::SemanticsActionRoute::with_assistive_focus(self, handler: flui_semantics::action::AssistiveFocusHandler) -> Self
+pub fn flui::rendering::objects::SemanticsActionRoute::with_assistive_focus(self, handler: flui::semantics::AssistiveFocusHandler) -> Self
 reexport flui::rendering::objects::ShimmerBand => flui::widgets::ShimmerBand
 pub struct flui::rendering::objects::ShimmerSweep
 field flui::rendering::objects::ShimmerSweep::band: flui::widgets::ShimmerBand // at 0
@@ -22448,6 +22457,528 @@ variant flui::rendering::objects::VerticalDirection::Up // at 1
 reexport flui::rendering::objects::WrapAlignment => flui::prelude::WrapAlignment
 reexport flui::rendering::objects::WrapCrossAlignment => flui::prelude::WrapCrossAlignment
 pub fn flui::run_app<V>(root: V, launch: flui::AppLaunch) -> Result<(), flui::LaunchError> where V: flui::app::View + Clone + 'static
+pub mod flui::semantics
+pub enum flui::semantics::AccessibilityFocusBlockType
+impl Clone for flui::semantics::AccessibilityFocusBlockType
+impl Copy for flui::semantics::AccessibilityFocusBlockType
+impl Default for flui::semantics::AccessibilityFocusBlockType
+impl Eq for flui::semantics::AccessibilityFocusBlockType
+impl PartialEq for flui::semantics::AccessibilityFocusBlockType
+impl core::fmt::Debug for flui::semantics::AccessibilityFocusBlockType
+impl core::hash::Hash for flui::semantics::AccessibilityFocusBlockType
+impl core::marker::StructuralPartialEq for flui::semantics::AccessibilityFocusBlockType
+pub fn flui::semantics::AccessibilityFocusBlockType::is_blocked(self) -> bool
+pub fn flui::semantics::AccessibilityFocusBlockType::merge(self, other: Self) -> Self
+variant flui::semantics::AccessibilityFocusBlockType::BlockNode // at 2
+variant flui::semantics::AccessibilityFocusBlockType::BlockSubtree // at 1
+variant flui::semantics::AccessibilityFocusBlockType::None // at 0
+#[non_exhaustive] pub enum flui::semantics::ActionCall
+impl Clone for flui::semantics::ActionCall
+impl PartialEq for flui::semantics::ActionCall
+impl core::fmt::Debug for flui::semantics::ActionCall
+impl core::marker::StructuralPartialEq for flui::semantics::ActionCall
+pub const fn flui::semantics::ActionCall::action(&self) -> flui::semantics::SemanticsAction
+pub const fn flui::semantics::ActionCall::without_payload(action: flui::semantics::SemanticsAction) -> Option<Self>
+variant flui::semantics::ActionCall::Blur // at 2
+variant flui::semantics::ActionCall::Click // at 0
+variant flui::semantics::ActionCall::Collapse // at 4
+variant flui::semantics::ActionCall::CustomAction(flui::semantics::CustomActionId) // at 21
+variant flui::semantics::ActionCall::Decrement // at 6
+variant flui::semantics::ActionCall::Expand // at 3
+variant flui::semantics::ActionCall::Focus // at 1
+variant flui::semantics::ActionCall::HideTooltip // at 20
+variant flui::semantics::ActionCall::Increment // at 5
+variant flui::semantics::ActionCall::ReplaceSelectedText(String) // at 15
+variant flui::semantics::ActionCall::ScrollDown(flui::semantics::ScrollUnit) // at 8
+variant flui::semantics::ActionCall::ScrollIntoView(Option<flui::semantics::Reveal>) // at 11
+variant flui::semantics::ActionCall::ScrollLeft(flui::semantics::ScrollUnit) // at 9
+variant flui::semantics::ActionCall::ScrollRight(flui::semantics::ScrollUnit) // at 10
+variant flui::semantics::ActionCall::ScrollUp(flui::semantics::ScrollUnit) // at 7
+variant flui::semantics::ActionCall::SetDocumentSelection(flui::semantics::DocumentSelection) // at 14
+variant flui::semantics::ActionCall::SetNumericValue(f64) // at 17
+variant flui::semantics::ActionCall::SetScrollOffset(flui::geometry::Offset<f64>) // at 12
+variant flui::semantics::ActionCall::SetTextSelection(flui::semantics::TextSelection) // at 13
+variant flui::semantics::ActionCall::SetValue(String) // at 16
+variant flui::semantics::ActionCall::ShowContextMenu // at 18
+variant flui::semantics::ActionCall::ShowTooltip // at 19
+#[non_exhaustive] pub enum flui::semantics::AnnounceError
+impl Clone for flui::semantics::AnnounceError
+impl Copy for flui::semantics::AnnounceError
+impl Eq for flui::semantics::AnnounceError
+impl PartialEq for flui::semantics::AnnounceError
+impl core::error::Error for flui::semantics::AnnounceError
+impl core::fmt::Debug for flui::semantics::AnnounceError
+impl core::fmt::Display for flui::semantics::AnnounceError
+impl core::marker::StructuralPartialEq for flui::semantics::AnnounceError
+variant flui::semantics::AnnounceError::PresentationClosed // at 0
+pub struct flui::semantics::Announcer { .. }
+impl Clone for flui::semantics::Announcer
+impl core::fmt::Debug for flui::semantics::Announcer
+pub fn flui::semantics::Announcer::announce(&self, message: impl AsRef<str>, urgency: flui::prelude::Urgency) -> Result<(), flui::semantics::AnnounceError>
+pub struct flui::semantics::AssistiveFocus { .. }
+impl Default for flui::semantics::AssistiveFocus
+impl core::fmt::Debug for flui::semantics::AssistiveFocus
+pub fn flui::semantics::AssistiveFocus::move_to(&mut self, node: Option<flui_semantics::identity::AccessibilityNodeId>, owner: Option<&flui_semantics::owner::SemanticsOwner>) -> flui::semantics::AssistiveFocusChange
+pub fn flui::semantics::AssistiveFocus::node(&self) -> Option<flui_semantics::identity::AccessibilityNodeId>
+pub struct flui::semantics::AssistiveFocusChange { .. }
+impl core::fmt::Debug for flui::semantics::AssistiveFocusChange
+pub fn flui::semantics::AssistiveFocusChange::invoke(self)
+pub fn flui::semantics::AssistiveFocusChange::is_empty(&self) -> bool
+pub type flui::semantics::AssistiveFocusHandler = alloc::rcs::rc::Rc<dyn Fn(bool)>
+#[non_exhaustive] pub enum flui::semantics::AssistiveFocusSupport
+impl Clone for flui::semantics::AssistiveFocusSupport
+impl Copy for flui::semantics::AssistiveFocusSupport
+impl Default for flui::semantics::AssistiveFocusSupport
+impl Eq for flui::semantics::AssistiveFocusSupport
+impl PartialEq for flui::semantics::AssistiveFocusSupport
+impl core::fmt::Debug for flui::semantics::AssistiveFocusSupport
+impl core::hash::Hash for flui::semantics::AssistiveFocusSupport
+impl core::marker::StructuralPartialEq for flui::semantics::AssistiveFocusSupport
+variant flui::semantics::AssistiveFocusSupport::Reported // at 0
+variant flui::semantics::AssistiveFocusSupport::Unreported // at 1
+pub struct flui::semantics::AttributedString
+field flui::semantics::AttributedString::attributes: Vec<flui::semantics::StringAttribute> // at 1
+field flui::semantics::AttributedString::string: smol_str::SmolStr // at 0
+impl Clone for flui::semantics::AttributedString
+impl Default for flui::semantics::AttributedString
+impl Eq for flui::semantics::AttributedString
+impl From<&str> for flui::semantics::AttributedString
+impl From<String> for flui::semantics::AttributedString
+impl From<smol_str::SmolStr> for flui::semantics::AttributedString
+impl PartialEq for flui::semantics::AttributedString
+impl core::fmt::Debug for flui::semantics::AttributedString
+impl core::marker::StructuralPartialEq for flui::semantics::AttributedString
+pub fn flui::semantics::AttributedString::add_attribute(&mut self, attr: flui::semantics::StringAttribute)
+pub fn flui::semantics::AttributedString::as_str(&self) -> &str
+pub fn flui::semantics::AttributedString::is_empty(&self) -> bool
+pub fn flui::semantics::AttributedString::new(string: impl Into<smol_str::SmolStr>) -> Self
+#[non_exhaustive] pub enum flui::semantics::AutoComplete
+impl Clone for flui::semantics::AutoComplete
+impl Copy for flui::semantics::AutoComplete
+impl Eq for flui::semantics::AutoComplete
+impl PartialEq for flui::semantics::AutoComplete
+impl core::fmt::Debug for flui::semantics::AutoComplete
+impl core::hash::Hash for flui::semantics::AutoComplete
+impl core::marker::StructuralPartialEq for flui::semantics::AutoComplete
+variant flui::semantics::AutoComplete::Both // at 2
+variant flui::semantics::AutoComplete::Inline // at 0
+variant flui::semantics::AutoComplete::List // at 1
+pub struct flui::semantics::CellPosition { .. }
+impl Clone for flui::semantics::CellPosition
+impl Copy for flui::semantics::CellPosition
+impl Eq for flui::semantics::CellPosition
+impl PartialEq for flui::semantics::CellPosition
+impl core::fmt::Debug for flui::semantics::CellPosition
+impl core::hash::Hash for flui::semantics::CellPosition
+impl core::marker::StructuralPartialEq for flui::semantics::CellPosition
+pub const fn flui::semantics::CellPosition::column(self) -> core::num::nonzero::NonZeroUsize
+pub const fn flui::semantics::CellPosition::column_span(self) -> core::num::nonzero::NonZeroUsize
+pub const fn flui::semantics::CellPosition::new(row: core::num::nonzero::NonZeroUsize, column: core::num::nonzero::NonZeroUsize) -> Self
+pub const fn flui::semantics::CellPosition::row(self) -> core::num::nonzero::NonZeroUsize
+pub const fn flui::semantics::CellPosition::row_span(self) -> core::num::nonzero::NonZeroUsize
+pub const fn flui::semantics::CellPosition::spanning(self, rows: core::num::nonzero::NonZeroUsize, columns: core::num::nonzero::NonZeroUsize) -> Self
+#[non_exhaustive] pub enum flui::semantics::Current
+impl Clone for flui::semantics::Current
+impl Copy for flui::semantics::Current
+impl Eq for flui::semantics::Current
+impl PartialEq for flui::semantics::Current
+impl core::fmt::Debug for flui::semantics::Current
+impl core::hash::Hash for flui::semantics::Current
+impl core::marker::StructuralPartialEq for flui::semantics::Current
+variant flui::semantics::Current::Date // at 3
+variant flui::semantics::Current::Location // at 2
+variant flui::semantics::Current::Page // at 0
+variant flui::semantics::Current::Step // at 1
+variant flui::semantics::Current::Time // at 4
+variant flui::semantics::Current::True // at 5
+pub struct flui::semantics::CustomActionId(_)
+impl Clone for flui::semantics::CustomActionId
+impl Copy for flui::semantics::CustomActionId
+impl Eq for flui::semantics::CustomActionId
+impl PartialEq for flui::semantics::CustomActionId
+impl core::fmt::Debug for flui::semantics::CustomActionId
+impl core::hash::Hash for flui::semantics::CustomActionId
+impl core::marker::StructuralPartialEq for flui::semantics::CustomActionId
+pub fn flui::semantics::CustomActionId::at(index: usize) -> Self
+pub fn flui::semantics::CustomActionId::index(self) -> usize
+pub struct flui::semantics::DeclaredCustomAction<'a>
+field flui::semantics::DeclaredCustomAction::handler: &'a flui::semantics::SemanticsActionHandler // at 1
+field flui::semantics::DeclaredCustomAction::label: &'a str // at 0
+field flui::semantics::DeclaredCustomAction::own_id: flui::semantics::CustomActionId // at 2
+impl core::fmt::Debug for flui::semantics::DeclaredCustomAction<'_>
+impl<'a> Clone for flui::semantics::DeclaredCustomAction<'a>
+impl<'a> Copy for flui::semantics::DeclaredCustomAction<'a>
+pub struct flui::semantics::DocumentPosition { .. }
+impl Clone for flui::semantics::DocumentPosition
+impl Eq for flui::semantics::DocumentPosition
+impl PartialEq for flui::semantics::DocumentPosition
+impl core::fmt::Debug for flui::semantics::DocumentPosition
+impl core::marker::StructuralPartialEq for flui::semantics::DocumentPosition
+pub fn flui::semantics::DocumentPosition::byte(&self) -> usize
+pub fn flui::semantics::DocumentPosition::new(text: flui::prelude::SemanticsAnchor, byte: usize) -> Self
+pub fn flui::semantics::DocumentPosition::text(&self) -> &flui::prelude::SemanticsAnchor
+pub struct flui::semantics::DocumentSelection { .. }
+impl Clone for flui::semantics::DocumentSelection
+impl Eq for flui::semantics::DocumentSelection
+impl PartialEq for flui::semantics::DocumentSelection
+impl core::fmt::Debug for flui::semantics::DocumentSelection
+impl core::marker::StructuralPartialEq for flui::semantics::DocumentSelection
+pub fn flui::semantics::DocumentSelection::anchor(&self) -> &flui::semantics::DocumentPosition
+pub fn flui::semantics::DocumentSelection::collapsed(at: flui::semantics::DocumentPosition) -> Self
+pub fn flui::semantics::DocumentSelection::focus(&self) -> &flui::semantics::DocumentPosition
+pub fn flui::semantics::DocumentSelection::new(anchor: flui::semantics::DocumentPosition, focus: flui::semantics::DocumentPosition) -> Self
+#[non_exhaustive] pub enum flui::semantics::HasPopup
+impl Clone for flui::semantics::HasPopup
+impl Copy for flui::semantics::HasPopup
+impl Eq for flui::semantics::HasPopup
+impl PartialEq for flui::semantics::HasPopup
+impl core::fmt::Debug for flui::semantics::HasPopup
+impl core::hash::Hash for flui::semantics::HasPopup
+impl core::marker::StructuralPartialEq for flui::semantics::HasPopup
+variant flui::semantics::HasPopup::Dialog // at 4
+variant flui::semantics::HasPopup::Grid // at 3
+variant flui::semantics::HasPopup::ListBox // at 1
+variant flui::semantics::HasPopup::Menu // at 0
+variant flui::semantics::HasPopup::Tree // at 2
+reexport flui::semantics::HeadingLevel => flui::prelude::HeadingLevel
+#[non_exhaustive] pub enum flui::semantics::Invalid
+impl Clone for flui::semantics::Invalid
+impl Copy for flui::semantics::Invalid
+impl Eq for flui::semantics::Invalid
+impl PartialEq for flui::semantics::Invalid
+impl core::fmt::Debug for flui::semantics::Invalid
+impl core::hash::Hash for flui::semantics::Invalid
+impl core::marker::StructuralPartialEq for flui::semantics::Invalid
+pub const fn flui::semantics::Invalid::from_bool(invalid: bool) -> Self
+pub const fn flui::semantics::Invalid::is_invalid(self) -> bool
+variant flui::semantics::Invalid::False // at 0
+variant flui::semantics::Invalid::Grammar // at 2
+variant flui::semantics::Invalid::Spelling // at 3
+variant flui::semantics::Invalid::True // at 1
+reexport flui::semantics::LiveSetting => flui::prelude::LiveSetting
+pub const flui::semantics::MAX_RUN_CHARACTERS: usize = 256
+reexport flui::semantics::NumericRange => flui::prelude::NumericRange
+reexport flui::semantics::NumericRangeError => flui::prelude::NumericRangeError
+pub struct flui::semantics::Reveal
+field flui::semantics::Reveal::scroll_position: Option<f64> // at 2
+field flui::semantics::Reveal::target_rect: flui::geometry::Rect<f64> // at 0
+field flui::semantics::Reveal::viewport_rect: flui::geometry::Rect<f64> // at 1
+impl Clone for flui::semantics::Reveal
+impl Copy for flui::semantics::Reveal
+impl PartialEq for flui::semantics::Reveal
+impl core::fmt::Debug for flui::semantics::Reveal
+impl core::marker::StructuralPartialEq for flui::semantics::Reveal
+#[non_exhaustive] pub enum flui::semantics::ScrollUnit
+impl Clone for flui::semantics::ScrollUnit
+impl Copy for flui::semantics::ScrollUnit
+impl Default for flui::semantics::ScrollUnit
+impl Eq for flui::semantics::ScrollUnit
+impl PartialEq for flui::semantics::ScrollUnit
+impl core::fmt::Debug for flui::semantics::ScrollUnit
+impl core::marker::StructuralPartialEq for flui::semantics::ScrollUnit
+variant flui::semantics::ScrollUnit::Item // at 0
+variant flui::semantics::ScrollUnit::Page // at 1
+#[non_exhaustive] #[repr(u8)] pub enum flui::semantics::SemanticsAction
+impl Clone for flui::semantics::SemanticsAction
+impl Copy for flui::semantics::SemanticsAction
+impl Eq for flui::semantics::SemanticsAction
+impl PartialEq for flui::semantics::SemanticsAction
+impl core::fmt::Debug for flui::semantics::SemanticsAction
+impl core::fmt::Display for flui::semantics::SemanticsAction
+impl core::hash::Hash for flui::semantics::SemanticsAction
+impl core::marker::StructuralPartialEq for flui::semantics::SemanticsAction
+pub const flui::semantics::SemanticsAction::ALL: &'static [Self] = _
+pub const fn flui::semantics::SemanticsAction::is_focus_action(self) -> bool
+pub const fn flui::semantics::SemanticsAction::is_scroll_action(self) -> bool
+pub const fn flui::semantics::SemanticsAction::is_text_action(self) -> bool
+pub const fn flui::semantics::SemanticsAction::name(self) -> &'static str
+pub const fn flui::semantics::SemanticsAction::value(self) -> u64
+variant flui::semantics::SemanticsAction::Blur // at 2
+variant flui::semantics::SemanticsAction::Click // at 0
+variant flui::semantics::SemanticsAction::Collapse // at 4
+variant flui::semantics::SemanticsAction::CustomAction // at 20
+variant flui::semantics::SemanticsAction::Decrement // at 6
+variant flui::semantics::SemanticsAction::Expand // at 3
+variant flui::semantics::SemanticsAction::Focus // at 1
+variant flui::semantics::SemanticsAction::HideTooltip // at 19
+variant flui::semantics::SemanticsAction::Increment // at 5
+variant flui::semantics::SemanticsAction::ReplaceSelectedText // at 14
+variant flui::semantics::SemanticsAction::ScrollDown // at 8
+variant flui::semantics::SemanticsAction::ScrollIntoView // at 11
+variant flui::semantics::SemanticsAction::ScrollLeft // at 9
+variant flui::semantics::SemanticsAction::ScrollRight // at 10
+variant flui::semantics::SemanticsAction::ScrollUp // at 7
+variant flui::semantics::SemanticsAction::SetNumericValue // at 16
+variant flui::semantics::SemanticsAction::SetScrollOffset // at 12
+variant flui::semantics::SemanticsAction::SetTextSelection // at 13
+variant flui::semantics::SemanticsAction::SetValue // at 15
+variant flui::semantics::SemanticsAction::ShowContextMenu // at 17
+variant flui::semantics::SemanticsAction::ShowTooltip // at 18
+pub type flui::semantics::SemanticsActionHandler = alloc::rcs::rc::Rc<dyn Fn(flui::semantics::ActionCall)>
+reexport flui::semantics::SemanticsAnchor => flui::prelude::SemanticsAnchor
+pub struct flui::semantics::SemanticsCollection { .. }
+impl Clone for flui::semantics::SemanticsCollection
+impl Copy for flui::semantics::SemanticsCollection
+impl Eq for flui::semantics::SemanticsCollection
+impl PartialEq for flui::semantics::SemanticsCollection
+impl core::fmt::Debug for flui::semantics::SemanticsCollection
+impl core::marker::StructuralPartialEq for flui::semantics::SemanticsCollection
+pub fn flui::semantics::SemanticsCollection::count(self) -> Option<usize>
+pub fn flui::semantics::SemanticsCollection::kind(self) -> flui::semantics::SemanticsCollectionKind
+pub fn flui::semantics::SemanticsCollection::new(kind: flui::semantics::SemanticsCollectionKind, count: Option<usize>) -> Self
+#[non_exhaustive] pub enum flui::semantics::SemanticsCollectionKind
+impl Clone for flui::semantics::SemanticsCollectionKind
+impl Copy for flui::semantics::SemanticsCollectionKind
+impl Eq for flui::semantics::SemanticsCollectionKind
+impl PartialEq for flui::semantics::SemanticsCollectionKind
+impl core::fmt::Debug for flui::semantics::SemanticsCollectionKind
+impl core::marker::StructuralPartialEq for flui::semantics::SemanticsCollectionKind
+variant flui::semantics::SemanticsCollectionKind::Grid // at 1
+variant flui::semantics::SemanticsCollectionKind::List // at 0
+pub enum flui::semantics::SemanticsCollectionOrigin
+impl Clone for flui::semantics::SemanticsCollectionOrigin
+impl Copy for flui::semantics::SemanticsCollectionOrigin
+impl Eq for flui::semantics::SemanticsCollectionOrigin
+impl PartialEq for flui::semantics::SemanticsCollectionOrigin
+impl core::fmt::Debug for flui::semantics::SemanticsCollectionOrigin
+impl core::marker::StructuralPartialEq for flui::semantics::SemanticsCollectionOrigin
+variant flui::semantics::SemanticsCollectionOrigin::Authored // at 0
+variant flui::semantics::SemanticsCollectionOrigin::Lazy // at 1
+reexport flui::semantics::SemanticsConfiguration => flui::prelude::SemanticsConfiguration
+pub struct flui::semantics::SemanticsHintOverrides
+field flui::semantics::SemanticsHintOverrides::on_long_press_hint: Option<smol_str::SmolStr> // at 1
+field flui::semantics::SemanticsHintOverrides::on_tap_hint: Option<smol_str::SmolStr> // at 0
+impl Clone for flui::semantics::SemanticsHintOverrides
+impl Default for flui::semantics::SemanticsHintOverrides
+impl Eq for flui::semantics::SemanticsHintOverrides
+impl PartialEq for flui::semantics::SemanticsHintOverrides
+impl core::fmt::Debug for flui::semantics::SemanticsHintOverrides
+impl core::marker::StructuralPartialEq for flui::semantics::SemanticsHintOverrides
+pub fn flui::semantics::SemanticsHintOverrides::is_empty(&self) -> bool
+pub fn flui::semantics::SemanticsHintOverrides::new() -> Self
+pub fn flui::semantics::SemanticsHintOverrides::with_long_press_hint(self, hint: impl Into<smol_str::SmolStr>) -> Self
+pub fn flui::semantics::SemanticsHintOverrides::with_tap_hint(self, hint: impl Into<smol_str::SmolStr>) -> Self
+pub enum flui::semantics::SemanticsIndexOrigin
+impl Clone for flui::semantics::SemanticsIndexOrigin
+impl Copy for flui::semantics::SemanticsIndexOrigin
+impl Eq for flui::semantics::SemanticsIndexOrigin
+impl PartialEq for flui::semantics::SemanticsIndexOrigin
+impl core::fmt::Debug for flui::semantics::SemanticsIndexOrigin
+impl core::marker::StructuralPartialEq for flui::semantics::SemanticsIndexOrigin
+variant flui::semantics::SemanticsIndexOrigin::Authored // at 0
+variant flui::semantics::SemanticsIndexOrigin::Collection(flui::foundation::RenderId) // at 1
+#[non_exhaustive] pub enum flui::semantics::SemanticsRelation
+impl Clone for flui::semantics::SemanticsRelation
+impl Copy for flui::semantics::SemanticsRelation
+impl Eq for flui::semantics::SemanticsRelation
+impl PartialEq for flui::semantics::SemanticsRelation
+impl core::fmt::Debug for flui::semantics::SemanticsRelation
+impl core::hash::Hash for flui::semantics::SemanticsRelation
+impl core::marker::StructuralPartialEq for flui::semantics::SemanticsRelation
+variant flui::semantics::SemanticsRelation::ActiveDescendant // at 6
+variant flui::semantics::SemanticsRelation::Controls // at 1
+variant flui::semantics::SemanticsRelation::DescribedBy // at 2
+variant flui::semantics::SemanticsRelation::Details // at 3
+variant flui::semantics::SemanticsRelation::ErrorMessage // at 5
+variant flui::semantics::SemanticsRelation::FlowTo // at 4
+variant flui::semantics::SemanticsRelation::LabelledBy // at 0
+reexport flui::semantics::SemanticsRole => flui::prelude::SemanticsRole
+pub struct flui::semantics::SemanticsSortKey
+field flui::semantics::SemanticsSortKey::name: Option<smol_str::SmolStr> // at 1
+field flui::semantics::SemanticsSortKey::order: f64 // at 0
+impl Clone for flui::semantics::SemanticsSortKey
+impl PartialEq for flui::semantics::SemanticsSortKey
+impl PartialOrd for flui::semantics::SemanticsSortKey
+impl core::fmt::Debug for flui::semantics::SemanticsSortKey
+impl core::marker::StructuralPartialEq for flui::semantics::SemanticsSortKey
+pub fn flui::semantics::SemanticsSortKey::named(order: f64, name: impl Into<smol_str::SmolStr>) -> Self
+pub fn flui::semantics::SemanticsSortKey::new(order: f64) -> Self
+pub struct flui::semantics::SemanticsTag
+field flui::semantics::SemanticsTag::name: smol_str::SmolStr // at 0
+impl Clone for flui::semantics::SemanticsTag
+impl Eq for flui::semantics::SemanticsTag
+impl PartialEq for flui::semantics::SemanticsTag
+impl core::fmt::Debug for flui::semantics::SemanticsTag
+impl core::hash::Hash for flui::semantics::SemanticsTag
+impl core::marker::StructuralPartialEq for flui::semantics::SemanticsTag
+pub fn flui::semantics::SemanticsTag::new(name: impl Into<smol_str::SmolStr>) -> Self
+#[non_exhaustive] pub enum flui::semantics::SetSize
+impl Clone for flui::semantics::SetSize
+impl Copy for flui::semantics::SetSize
+impl Eq for flui::semantics::SetSize
+impl PartialEq for flui::semantics::SetSize
+impl core::fmt::Debug for flui::semantics::SetSize
+impl core::hash::Hash for flui::semantics::SetSize
+impl core::marker::StructuralPartialEq for flui::semantics::SetSize
+pub const fn flui::semantics::SetSize::known(self) -> Option<usize>
+variant flui::semantics::SetSize::Known(usize) // at 0
+variant flui::semantics::SetSize::Unknown // at 1
+#[non_exhaustive] pub enum flui::semantics::SortDirection
+impl Clone for flui::semantics::SortDirection
+impl Copy for flui::semantics::SortDirection
+impl Eq for flui::semantics::SortDirection
+impl PartialEq for flui::semantics::SortDirection
+impl core::fmt::Debug for flui::semantics::SortDirection
+impl core::hash::Hash for flui::semantics::SortDirection
+impl core::marker::StructuralPartialEq for flui::semantics::SortDirection
+variant flui::semantics::SortDirection::Ascending // at 0
+variant flui::semantics::SortDirection::Descending // at 1
+variant flui::semantics::SortDirection::Other // at 2
+pub struct flui::semantics::States { .. }
+impl Clone for flui::semantics::States
+impl Copy for flui::semantics::States
+impl Default for flui::semantics::States
+impl Eq for flui::semantics::States
+impl PartialEq for flui::semantics::States
+impl core::fmt::Debug for flui::semantics::States
+impl core::marker::StructuralPartialEq for flui::semantics::States
+pub const fn flui::semantics::States::auto_complete(&self) -> Option<flui::semantics::AutoComplete>
+pub const fn flui::semantics::States::busy(&self) -> Option<bool>
+pub const fn flui::semantics::States::current(&self) -> Option<flui::semantics::Current>
+pub const fn flui::semantics::States::enabled(&self) -> Option<bool>
+pub const fn flui::semantics::States::expanded(&self) -> Option<bool>
+pub const fn flui::semantics::States::focusable(&self) -> Option<bool>
+pub const fn flui::semantics::States::focused(&self) -> Option<bool>
+pub const fn flui::semantics::States::has_popup(&self) -> Option<flui::semantics::HasPopup>
+pub const fn flui::semantics::States::hidden(&self) -> Option<bool>
+pub const fn flui::semantics::States::invalid(&self) -> Option<flui::semantics::Invalid>
+pub const fn flui::semantics::States::modal(&self) -> Option<bool>
+pub const fn flui::semantics::States::names_route(&self) -> Option<bool>
+pub const fn flui::semantics::States::orientation(&self) -> Option<flui::geometry::Axis>
+pub const fn flui::semantics::States::read_only(&self) -> Option<bool>
+pub const fn flui::semantics::States::required(&self) -> Option<bool>
+pub const fn flui::semantics::States::scopes_route(&self) -> Option<bool>
+pub const fn flui::semantics::States::selected(&self) -> Option<bool>
+pub const fn flui::semantics::States::toggled(&self) -> Option<flui::prelude::Toggled>
+pub struct flui::semantics::StringAttribute
+field flui::semantics::StringAttribute::attribute_type: flui::semantics::StringAttributeType // at 2
+field flui::semantics::StringAttribute::end: usize // at 1
+field flui::semantics::StringAttribute::start: usize // at 0
+impl Clone for flui::semantics::StringAttribute
+impl Eq for flui::semantics::StringAttribute
+impl PartialEq for flui::semantics::StringAttribute
+impl core::fmt::Debug for flui::semantics::StringAttribute
+impl core::marker::StructuralPartialEq for flui::semantics::StringAttribute
+pub enum flui::semantics::StringAttributeType
+impl Clone for flui::semantics::StringAttributeType
+impl Eq for flui::semantics::StringAttributeType
+impl PartialEq for flui::semantics::StringAttributeType
+impl core::fmt::Debug for flui::semantics::StringAttributeType
+impl core::marker::StructuralPartialEq for flui::semantics::StringAttributeType
+variant flui::semantics::StringAttributeType::Locale(smol_str::SmolStr) // at 1
+variant flui::semantics::StringAttributeType::SpellOut // at 0
+pub struct flui::semantics::TableShape { .. }
+impl Clone for flui::semantics::TableShape
+impl Copy for flui::semantics::TableShape
+impl Eq for flui::semantics::TableShape
+impl PartialEq for flui::semantics::TableShape
+impl core::fmt::Debug for flui::semantics::TableShape
+impl core::hash::Hash for flui::semantics::TableShape
+impl core::marker::StructuralPartialEq for flui::semantics::TableShape
+pub const fn flui::semantics::TableShape::columns(self) -> flui::semantics::SetSize
+pub const fn flui::semantics::TableShape::new(rows: flui::semantics::SetSize, columns: flui::semantics::SetSize) -> Self
+pub const fn flui::semantics::TableShape::rows(self) -> flui::semantics::SetSize
+pub struct flui::semantics::TextContent { .. }
+impl Clone for flui::semantics::TextContent
+impl PartialEq for flui::semantics::TextContent
+impl core::fmt::Debug for flui::semantics::TextContent
+impl core::marker::StructuralPartialEq for flui::semantics::TextContent
+pub fn flui::semantics::TextContent::byte_offset(&self, position: flui::semantics::TextRunPosition) -> Result<usize, flui::semantics::TextRunError>
+pub fn flui::semantics::TextContent::position_at(&self, byte: usize) -> Option<flui::semantics::TextRunPosition>
+pub fn flui::semantics::TextContent::position_at_or_before(&self, byte: usize) -> Option<flui::semantics::TextRunPosition>
+pub fn flui::semantics::TextContent::run_identities(&self) -> Option<&[flui_semantics::identity::AccessibilityNodeId]>
+pub fn flui::semantics::TextContent::runs(&self) -> &[flui::semantics::TextRun]
+pub fn flui::semantics::TextContent::selection(&self) -> Option<flui::semantics::TextRunSelection>
+pub fn flui::semantics::TextContent::selection_bytes(&self, selection: flui::semantics::TextRunSelection) -> Result<flui::semantics::TextSelection, flui::semantics::TextRunError>
+pub fn flui::semantics::TextContent::transformed(&self, transform: &flui::geometry::Matrix4) -> Option<Self>
+pub fn flui::semantics::TextContent::try_new(runs: Vec<flui::semantics::TextRun>) -> Result<Self, flui::semantics::TextRunError>
+pub fn flui::semantics::TextContent::with_run_identities(self, identities: Vec<flui::painting::SemanticsRegionId>) -> Result<Self, flui::semantics::TextRunError>
+pub fn flui::semantics::TextContent::with_selection(self, selection: flui::semantics::TextRunSelection) -> Result<Self, flui::semantics::TextRunError>
+pub struct flui::semantics::TextRun { .. }
+impl Clone for flui::semantics::TextRun
+impl PartialEq for flui::semantics::TextRun
+impl core::fmt::Debug for flui::semantics::TextRun
+impl core::marker::StructuralPartialEq for flui::semantics::TextRun
+pub fn flui::semantics::TextRun::byte_range(&self) -> core::ops::range::Range<usize>
+pub fn flui::semantics::TextRun::character_count(&self) -> usize
+pub fn flui::semantics::TextRun::character_lengths(&self) -> &[u8]
+pub fn flui::semantics::TextRun::character_positions(&self) -> &[f32]
+pub fn flui::semantics::TextRun::character_widths(&self) -> &[f32]
+pub fn flui::semantics::TextRun::direction(&self) -> flui::foundation::TextDirection
+pub fn flui::semantics::TextRun::line(&self) -> usize
+pub fn flui::semantics::TextRun::rect(&self) -> flui::geometry::Rect<f64>
+pub fn flui::semantics::TextRun::text(&self) -> &str
+pub fn flui::semantics::TextRun::try_new(parts: flui::semantics::TextRunParts) -> Result<Self, flui::semantics::TextRunError>
+pub fn flui::semantics::TextRun::word_starts(&self) -> &[u8]
+#[non_exhaustive] pub enum flui::semantics::TextRunError
+impl Clone for flui::semantics::TextRunError
+impl Copy for flui::semantics::TextRunError
+impl Eq for flui::semantics::TextRunError
+impl PartialEq for flui::semantics::TextRunError
+impl core::error::Error for flui::semantics::TextRunError
+impl core::fmt::Debug for flui::semantics::TextRunError
+impl core::fmt::Display for flui::semantics::TextRunError
+impl core::marker::StructuralPartialEq for flui::semantics::TextRunError
+variant flui::semantics::TextRunError::IdentityCountMismatch { runs: usize, identities: usize } // at 10
+variant flui::semantics::TextRunError::InvalidWordStart { index: usize } // at 5
+variant flui::semantics::TextRunError::LengthsDoNotCoverText { lengths: usize, text: usize } // at 0
+variant flui::semantics::TextRunError::LinesDecrease { run: usize } // at 8
+variant flui::semantics::TextRunError::MetricsMismatch { characters: usize, positions: usize, widths: usize } // at 3
+variant flui::semantics::TextRunError::NoRuns // at 6
+variant flui::semantics::TextRunError::NonFiniteGeometry // at 4
+variant flui::semantics::TextRunError::PositionOutOfRange { run: usize, character: usize } // at 9
+variant flui::semantics::TextRunError::RunsNotContiguous { run: usize } // at 7
+variant flui::semantics::TextRunError::SplitsCharacter { character: usize } // at 1
+variant flui::semantics::TextRunError::TooManyCharacters { count: usize } // at 2
+#[non_exhaustive] pub struct flui::semantics::TextRunParts
+field flui::semantics::TextRunParts::character_lengths: Vec<u8> // at 5
+field flui::semantics::TextRunParts::character_positions: Vec<f32> // at 6
+field flui::semantics::TextRunParts::character_widths: Vec<f32> // at 7
+field flui::semantics::TextRunParts::direction: flui::foundation::TextDirection // at 3
+field flui::semantics::TextRunParts::line: usize // at 2
+field flui::semantics::TextRunParts::rect: flui::geometry::Rect<f64> // at 4
+field flui::semantics::TextRunParts::start: usize // at 1
+field flui::semantics::TextRunParts::text: smol_str::SmolStr // at 0
+field flui::semantics::TextRunParts::word_starts: Vec<u8> // at 8
+impl Clone for flui::semantics::TextRunParts
+impl PartialEq for flui::semantics::TextRunParts
+impl core::fmt::Debug for flui::semantics::TextRunParts
+impl core::marker::StructuralPartialEq for flui::semantics::TextRunParts
+pub fn flui::semantics::TextRunParts::new(text: impl Into<smol_str::SmolStr>, start: usize, line: usize, direction: flui::foundation::TextDirection, rect: flui::geometry::Rect<f64>) -> Self
+pub struct flui::semantics::TextRunPosition
+field flui::semantics::TextRunPosition::character: usize // at 1
+field flui::semantics::TextRunPosition::run: usize // at 0
+impl Clone for flui::semantics::TextRunPosition
+impl Copy for flui::semantics::TextRunPosition
+impl Eq for flui::semantics::TextRunPosition
+impl PartialEq for flui::semantics::TextRunPosition
+impl core::fmt::Debug for flui::semantics::TextRunPosition
+impl core::hash::Hash for flui::semantics::TextRunPosition
+impl core::marker::StructuralPartialEq for flui::semantics::TextRunPosition
+pub const fn flui::semantics::TextRunPosition::new(run: usize, character: usize) -> Self
+pub struct flui::semantics::TextRunSelection
+field flui::semantics::TextRunSelection::anchor: flui::semantics::TextRunPosition // at 0
+field flui::semantics::TextRunSelection::focus: flui::semantics::TextRunPosition // at 1
+impl Clone for flui::semantics::TextRunSelection
+impl Copy for flui::semantics::TextRunSelection
+impl Eq for flui::semantics::TextRunSelection
+impl PartialEq for flui::semantics::TextRunSelection
+impl core::fmt::Debug for flui::semantics::TextRunSelection
+impl core::hash::Hash for flui::semantics::TextRunSelection
+impl core::marker::StructuralPartialEq for flui::semantics::TextRunSelection
+pub const fn flui::semantics::TextRunSelection::collapsed(at: flui::semantics::TextRunPosition) -> Self
+pub const fn flui::semantics::TextRunSelection::new(anchor: flui::semantics::TextRunPosition, focus: flui::semantics::TextRunPosition) -> Self
+pub struct flui::semantics::TextSelection
+field flui::semantics::TextSelection::anchor: usize // at 0
+field flui::semantics::TextSelection::focus: usize // at 1
+impl Clone for flui::semantics::TextSelection
+impl Copy for flui::semantics::TextSelection
+impl Eq for flui::semantics::TextSelection
+impl PartialEq for flui::semantics::TextSelection
+impl core::fmt::Debug for flui::semantics::TextSelection
+impl core::marker::StructuralPartialEq for flui::semantics::TextSelection
+reexport flui::semantics::Toggled => flui::prelude::Toggled
+reexport flui::semantics::Urgency => flui::prelude::Urgency
 pub mod flui::services
 pub mod flui::services::system
 #[non_exhaustive] pub struct flui::services::system::SystemPlugin;
@@ -24172,8 +24703,8 @@ variant flui::view::PostFrameScheduleError::Closed // at 0
 variant flui::view::PostFrameScheduleError::WrongScheduler // at 1
 reexport flui::view::PredictiveBackEvent => flui::prelude::PredictiveBackEvent
 #[non_exhaustive] pub struct flui::view::PresentationCapabilities
-field flui::view::PresentationCapabilities::announcer: Option<flui::widgets::Announcer> // at 2
-field flui::view::PresentationCapabilities::assistive_focus: flui_semantics::platform::AssistiveFocusSupport // at 3
+field flui::view::PresentationCapabilities::announcer: Option<flui::semantics::Announcer> // at 2
+field flui::view::PresentationCapabilities::assistive_focus: flui::semantics::AssistiveFocusSupport // at 3
 field flui::view::PresentationCapabilities::capabilities: Option<alloc::rcs::rc::Rc<dyn flui::view::CapabilitySource>> // at 1
 field flui::view::PresentationCapabilities::close_guard: Option<flui::view::CloseGuard> // at 8
 field flui::view::PresentationCapabilities::drag_and_drop: Option<flui::interaction::drag::DragAndDrop> // at 5
@@ -24812,7 +25343,7 @@ pub type flui::view::element::ScrollingPersistentHeaderView = flui::view::elemen
 pub struct flui::view::element::SemanticSetMapping { .. }
 impl Clone for flui::view::element::SemanticSetMapping
 impl core::fmt::Debug for flui::view::element::SemanticSetMapping
-pub fn flui::view::element::SemanticSetMapping::composed_at(self, offset: usize, set_size: flui::widgets::SetSize) -> Self
+pub fn flui::view::element::SemanticSetMapping::composed_at(self, offset: usize, set_size: flui::semantics::SetSize) -> Self
 pub fn flui::view::element::SemanticSetMapping::declared_count(&self) -> Option<usize>
 pub fn flui::view::element::SemanticSetMapping::differs_from(&self, other: &Self) -> bool
 pub fn flui::view::element::SemanticSetMapping::interleaved(index_of: alloc::rcs::rc::Rc<dyn Fn(usize) -> Option<usize>>, members: usize) -> Self
@@ -25331,35 +25862,7 @@ reexport flui::view::view::memo::Memo => flui::prelude::Memo
 pub mod flui::widgets
 reexport flui::widgets::AbsorbPointer => flui::prelude::AbsorbPointer
 reexport flui::widgets::Action => flui::prelude::Action
-#[non_exhaustive] pub enum flui::widgets::ActionCall
-impl Clone for flui::widgets::ActionCall
-impl PartialEq for flui::widgets::ActionCall
-impl core::fmt::Debug for flui::widgets::ActionCall
-impl core::marker::StructuralPartialEq for flui::widgets::ActionCall
-pub const fn flui::widgets::ActionCall::action(&self) -> flui_protocol::semantics::SemanticsAction
-pub const fn flui::widgets::ActionCall::without_payload(action: flui_protocol::semantics::SemanticsAction) -> Option<Self>
-variant flui::widgets::ActionCall::Blur // at 2
-variant flui::widgets::ActionCall::Click // at 0
-variant flui::widgets::ActionCall::Collapse // at 4
-variant flui::widgets::ActionCall::CustomAction(flui_semantics::action::CustomActionId) // at 21
-variant flui::widgets::ActionCall::Decrement // at 6
-variant flui::widgets::ActionCall::Expand // at 3
-variant flui::widgets::ActionCall::Focus // at 1
-variant flui::widgets::ActionCall::HideTooltip // at 20
-variant flui::widgets::ActionCall::Increment // at 5
-variant flui::widgets::ActionCall::ReplaceSelectedText(String) // at 15
-variant flui::widgets::ActionCall::ScrollDown(flui::widgets::SemanticsScrollUnit) // at 8
-variant flui::widgets::ActionCall::ScrollIntoView(Option<flui::widgets::Reveal>) // at 11
-variant flui::widgets::ActionCall::ScrollLeft(flui::widgets::SemanticsScrollUnit) // at 9
-variant flui::widgets::ActionCall::ScrollRight(flui::widgets::SemanticsScrollUnit) // at 10
-variant flui::widgets::ActionCall::ScrollUp(flui::widgets::SemanticsScrollUnit) // at 7
-variant flui::widgets::ActionCall::SetDocumentSelection(flui_semantics::document_selection::DocumentSelection) // at 14
-variant flui::widgets::ActionCall::SetNumericValue(f64) // at 17
-variant flui::widgets::ActionCall::SetScrollOffset(flui::geometry::Offset<f64>) // at 12
-variant flui::widgets::ActionCall::SetTextSelection(flui::widgets::TextSelection) // at 13
-variant flui::widgets::ActionCall::SetValue(String) // at 16
-variant flui::widgets::ActionCall::ShowContextMenu // at 18
-variant flui::widgets::ActionCall::ShowTooltip // at 19
+reexport flui::widgets::ActionCall => flui::semantics::ActionCall
 reexport flui::widgets::ActionOutcome => flui::prelude::ActionOutcome
 reexport flui::widgets::Actions => flui::prelude::Actions
 reexport flui::widgets::ActivateIntent => flui::prelude::ActivateIntent
@@ -25761,20 +26264,8 @@ impl<T> Clone for flui::widgets::AnnotatedRegion<T>
 impl<T> flui::app::View for flui::widgets::AnnotatedRegion<T> where T: PartialEq + core::fmt::Debug + Send + Sync + 'static
 impl<T> flui::prelude::RenderView for flui::widgets::AnnotatedRegion<T> where T: PartialEq + core::fmt::Debug + Send + Sync + 'static { type Protocol = flui::rendering::BoxProtocol; type RenderObject = flui::rendering::objects::RenderAnnotatedRegion; }
 pub fn flui::widgets::AnnotatedRegion::new(value: T, child: impl flui::prelude::IntoView) -> Self // impl<T> flui::widgets::AnnotatedRegion<T>
-#[non_exhaustive] pub enum flui::widgets::AnnounceError
-impl Clone for flui::widgets::AnnounceError
-impl Copy for flui::widgets::AnnounceError
-impl Eq for flui::widgets::AnnounceError
-impl PartialEq for flui::widgets::AnnounceError
-impl core::error::Error for flui::widgets::AnnounceError
-impl core::fmt::Debug for flui::widgets::AnnounceError
-impl core::fmt::Display for flui::widgets::AnnounceError
-impl core::marker::StructuralPartialEq for flui::widgets::AnnounceError
-variant flui::widgets::AnnounceError::PresentationClosed // at 0
-pub struct flui::widgets::Announcer { .. }
-impl Clone for flui::widgets::Announcer
-impl core::fmt::Debug for flui::widgets::Announcer
-pub fn flui::widgets::Announcer::announce(&self, message: impl AsRef<str>, urgency: flui::prelude::Urgency) -> Result<(), flui::widgets::AnnounceError>
+reexport flui::widgets::AnnounceError => flui::semantics::AnnounceError
+reexport flui::widgets::Announcer => flui::semantics::Announcer
 pub type flui::widgets::AppBuilder = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView>
 pub trait flui::widgets::AppForm: flui_widgets::app::widgets_app::sealed::Sealed + Clone + core::fmt::Debug + 'static
 reexport flui::widgets::AspectRatio => flui::prelude::AspectRatio
@@ -25785,17 +26276,7 @@ impl core::fmt::Debug for flui::widgets::AssetImage
 impl flui::prelude::ImageProvider for flui::widgets::AssetImage
 pub fn flui::widgets::AssetImage::new(registry: alloc::rcs::arc::Arc<flui_assets::registry::AssetRegistry>, path: impl Into<String>) -> Self
 pub fn flui::widgets::AssetImage::path(&self) -> &str
-#[non_exhaustive] pub enum flui::widgets::AutoComplete
-impl Clone for flui::widgets::AutoComplete
-impl Copy for flui::widgets::AutoComplete
-impl Eq for flui::widgets::AutoComplete
-impl PartialEq for flui::widgets::AutoComplete
-impl core::fmt::Debug for flui::widgets::AutoComplete
-impl core::hash::Hash for flui::widgets::AutoComplete
-impl core::marker::StructuralPartialEq for flui::widgets::AutoComplete
-variant flui::widgets::AutoComplete::Both // at 2
-variant flui::widgets::AutoComplete::Inline // at 0
-variant flui::widgets::AutoComplete::List // at 1
+reexport flui::widgets::AutoComplete => flui::semantics::AutoComplete
 reexport flui::widgets::AutovalidateMode => flui::prelude::AutovalidateMode
 pub struct flui::widgets::BackIntent;
 impl Clone for flui::widgets::BackIntent
@@ -25939,20 +26420,7 @@ variant flui::widgets::CarouselLayoutKind::Weighted // at 4
 pub struct flui::widgets::CarouselState { .. }
 impl core::fmt::Debug for flui::widgets::CarouselState
 impl flui::prelude::ViewState<flui::widgets::Carousel> for flui::widgets::CarouselState
-pub struct flui::widgets::CellPosition { .. }
-impl Clone for flui::widgets::CellPosition
-impl Copy for flui::widgets::CellPosition
-impl Eq for flui::widgets::CellPosition
-impl PartialEq for flui::widgets::CellPosition
-impl core::fmt::Debug for flui::widgets::CellPosition
-impl core::hash::Hash for flui::widgets::CellPosition
-impl core::marker::StructuralPartialEq for flui::widgets::CellPosition
-pub const fn flui::widgets::CellPosition::column(self) -> core::num::nonzero::NonZeroUsize
-pub const fn flui::widgets::CellPosition::column_span(self) -> core::num::nonzero::NonZeroUsize
-pub const fn flui::widgets::CellPosition::new(row: core::num::nonzero::NonZeroUsize, column: core::num::nonzero::NonZeroUsize) -> Self
-pub const fn flui::widgets::CellPosition::row(self) -> core::num::nonzero::NonZeroUsize
-pub const fn flui::widgets::CellPosition::row_span(self) -> core::num::nonzero::NonZeroUsize
-pub const fn flui::widgets::CellPosition::spanning(self, rows: core::num::nonzero::NonZeroUsize, columns: core::num::nonzero::NonZeroUsize) -> Self
+reexport flui::widgets::CellPosition => flui::semantics::CellPosition
 reexport flui::widgets::Center => flui::prelude::Center
 reexport flui::widgets::CenterLayoutDelegate => flui::prelude::CenterLayoutDelegate
 pub struct flui::widgets::ClampingScrollPhysics { .. }
@@ -26076,20 +26544,7 @@ impl core::fmt::Debug for flui::widgets::CrossFadeState
 impl core::marker::StructuralPartialEq for flui::widgets::CrossFadeState
 variant flui::widgets::CrossFadeState::ShowFirst // at 0
 variant flui::widgets::CrossFadeState::ShowSecond // at 1
-#[non_exhaustive] pub enum flui::widgets::Current
-impl Clone for flui::widgets::Current
-impl Copy for flui::widgets::Current
-impl Eq for flui::widgets::Current
-impl PartialEq for flui::widgets::Current
-impl core::fmt::Debug for flui::widgets::Current
-impl core::hash::Hash for flui::widgets::Current
-impl core::marker::StructuralPartialEq for flui::widgets::Current
-variant flui::widgets::Current::Date // at 3
-variant flui::widgets::Current::Location // at 2
-variant flui::widgets::Current::Page // at 0
-variant flui::widgets::Current::Step // at 1
-variant flui::widgets::Current::Time // at 4
-variant flui::widgets::Current::True // at 5
+reexport flui::widgets::Current => flui::semantics::Current
 reexport flui::widgets::CursorIcon => cursor_icon::CursorIcon
 reexport flui::widgets::CustomMultiChildLayout => flui::prelude::CustomMultiChildLayout
 reexport flui::widgets::CustomPaint => flui::prelude::CustomPaint
@@ -26557,19 +27012,7 @@ reexport flui::widgets::GridView => flui::prelude::GridView
 reexport flui::widgets::HandleInfo => flui::prelude::HandleInfo
 reexport flui::widgets::HandleSide => flui::prelude::HandleSide
 reexport flui::widgets::HapticsMode => flui::view::HapticsMode
-#[non_exhaustive] pub enum flui::widgets::HasPopup
-impl Clone for flui::widgets::HasPopup
-impl Copy for flui::widgets::HasPopup
-impl Eq for flui::widgets::HasPopup
-impl PartialEq for flui::widgets::HasPopup
-impl core::fmt::Debug for flui::widgets::HasPopup
-impl core::hash::Hash for flui::widgets::HasPopup
-impl core::marker::StructuralPartialEq for flui::widgets::HasPopup
-variant flui::widgets::HasPopup::Dialog // at 4
-variant flui::widgets::HasPopup::Grid // at 3
-variant flui::widgets::HasPopup::ListBox // at 1
-variant flui::widgets::HasPopup::Menu // at 0
-variant flui::widgets::HasPopup::Tree // at 2
+reexport flui::widgets::HasPopup => flui::semantics::HasPopup
 pub struct flui::widgets::HeaderExtents { .. }
 impl Clone for flui::widgets::HeaderExtents
 impl Copy for flui::widgets::HeaderExtents
@@ -26778,20 +27221,7 @@ impl core::fmt::Debug for flui::widgets::InteractiveViewerState
 impl flui::prelude::ViewState<flui::widgets::InteractiveViewer> for flui::widgets::InteractiveViewerState
 reexport flui::widgets::IntrinsicHeight => flui::prelude::IntrinsicHeight
 reexport flui::widgets::IntrinsicWidth => flui::prelude::IntrinsicWidth
-#[non_exhaustive] pub enum flui::widgets::Invalid
-impl Clone for flui::widgets::Invalid
-impl Copy for flui::widgets::Invalid
-impl Eq for flui::widgets::Invalid
-impl PartialEq for flui::widgets::Invalid
-impl core::fmt::Debug for flui::widgets::Invalid
-impl core::hash::Hash for flui::widgets::Invalid
-impl core::marker::StructuralPartialEq for flui::widgets::Invalid
-pub const fn flui::widgets::Invalid::from_bool(invalid: bool) -> Self
-pub const fn flui::widgets::Invalid::is_invalid(self) -> bool
-variant flui::widgets::Invalid::False // at 0
-variant flui::widgets::Invalid::Grammar // at 2
-variant flui::widgets::Invalid::Spelling // at 3
-variant flui::widgets::Invalid::True // at 1
+reexport flui::widgets::Invalid => flui::semantics::Invalid
 #[non_exhaustive] pub struct flui::widgets::InvalidExtents
 field flui::widgets::InvalidExtents::max_scroll_extent: f64 // at 2
 field flui::widgets::InvalidExtents::min_scroll_extent: f64 // at 1
@@ -27463,15 +27893,7 @@ pub struct flui::widgets::ReorderableListState { .. }
 impl core::fmt::Debug for flui::widgets::ReorderableListState
 impl flui::prelude::ViewState<flui::widgets::ReorderableList> for flui::widgets::ReorderableListState
 reexport flui::widgets::RepaintBoundary => flui::prelude::RepaintBoundary
-pub struct flui::widgets::Reveal
-field flui::widgets::Reveal::scroll_position: Option<f64> // at 2
-field flui::widgets::Reveal::target_rect: flui::geometry::Rect<f64> // at 0
-field flui::widgets::Reveal::viewport_rect: flui::geometry::Rect<f64> // at 1
-impl Clone for flui::widgets::Reveal
-impl Copy for flui::widgets::Reveal
-impl PartialEq for flui::widgets::Reveal
-impl core::fmt::Debug for flui::widgets::Reveal
-impl core::marker::StructuralPartialEq for flui::widgets::Reveal
+reexport flui::widgets::Reveal => flui::semantics::Reveal
 reexport flui::widgets::RichText => flui::prelude::RichText
 pub struct flui::widgets::RotateEffect(_)
 impl Clone for flui::widgets::RotateEffect
@@ -27882,27 +28304,8 @@ reexport flui::widgets::Semantics => flui::prelude::Semantics
 reexport flui::widgets::SemanticsAnchor => flui::prelude::SemanticsAnchor
 reexport flui::widgets::SemanticsConfiguration => flui::prelude::SemanticsConfiguration
 reexport flui::widgets::SemanticsRole => flui::prelude::SemanticsRole
-#[non_exhaustive] pub enum flui::widgets::SemanticsScrollUnit
-impl Clone for flui::widgets::SemanticsScrollUnit
-impl Copy for flui::widgets::SemanticsScrollUnit
-impl Default for flui::widgets::SemanticsScrollUnit
-impl Eq for flui::widgets::SemanticsScrollUnit
-impl PartialEq for flui::widgets::SemanticsScrollUnit
-impl core::fmt::Debug for flui::widgets::SemanticsScrollUnit
-impl core::marker::StructuralPartialEq for flui::widgets::SemanticsScrollUnit
-variant flui::widgets::SemanticsScrollUnit::Item // at 0
-variant flui::widgets::SemanticsScrollUnit::Page // at 1
-#[non_exhaustive] pub enum flui::widgets::SetSize
-impl Clone for flui::widgets::SetSize
-impl Copy for flui::widgets::SetSize
-impl Eq for flui::widgets::SetSize
-impl PartialEq for flui::widgets::SetSize
-impl core::fmt::Debug for flui::widgets::SetSize
-impl core::hash::Hash for flui::widgets::SetSize
-impl core::marker::StructuralPartialEq for flui::widgets::SetSize
-pub const fn flui::widgets::SetSize::known(self) -> Option<usize>
-variant flui::widgets::SetSize::Known(usize) // at 0
-variant flui::widgets::SetSize::Unknown // at 1
+reexport flui::widgets::SemanticsScrollUnit => flui::semantics::ScrollUnit
+reexport flui::widgets::SetSize => flui::semantics::SetSize
 pub type flui::widgets::SharedScrollPhysics = alloc::rcs::rc::Rc<dyn flui::widgets::ScrollPhysics>
 pub type flui::widgets::SharedSnapPolicy = alloc::rcs::rc::Rc<dyn flui::widgets::SnapPolicy>
 pub struct flui::widgets::Shimmer { .. }
@@ -28092,24 +28495,14 @@ pub fn flui::widgets::SliverSemantics::container(self, container: bool) -> Self
 pub fn flui::widgets::SliverSemantics::exclude_semantics(self, exclude: bool) -> Self
 pub fn flui::widgets::SliverSemantics::explicit_child_nodes(self, explicit: bool) -> Self
 pub fn flui::widgets::SliverSemantics::from_configuration(configuration: flui::prelude::SemanticsConfiguration) -> Self
-pub fn flui::widgets::SliverSemantics::label(self, label: impl Into<flui_semantics::properties::AttributedString>) -> Self
+pub fn flui::widgets::SliverSemantics::label(self, label: impl Into<flui::semantics::AttributedString>) -> Self
 pub fn flui::widgets::SliverSemantics::new() -> Self
 reexport flui::widgets::SliverToBoxAdapter => flui::prelude::SliverToBoxAdapter
 pub trait flui::widgets::SnapPolicy: core::fmt::Debug
 fn flui::widgets::SnapPolicy::target(&self, metrics: &flui::widgets::ScrollMetrics, velocity: f64) -> f64
 fn flui::widgets::SnapPolicy::target_from(&self, metrics: &flui::widgets::ScrollMetrics, velocity: f64, origin: f64) -> f64 { .. }
 pub type flui::widgets::SnapshotBuilder<T, E> = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::app::BuildContext, &flui::foundation::AsyncSnapshot<T, E>) -> flui::prelude::BoxedView>
-#[non_exhaustive] pub enum flui::widgets::SortDirection
-impl Clone for flui::widgets::SortDirection
-impl Copy for flui::widgets::SortDirection
-impl Eq for flui::widgets::SortDirection
-impl PartialEq for flui::widgets::SortDirection
-impl core::fmt::Debug for flui::widgets::SortDirection
-impl core::hash::Hash for flui::widgets::SortDirection
-impl core::marker::StructuralPartialEq for flui::widgets::SortDirection
-variant flui::widgets::SortDirection::Ascending // at 0
-variant flui::widgets::SortDirection::Descending // at 1
-variant flui::widgets::SortDirection::Other // at 2
+reexport flui::widgets::SortDirection => flui::semantics::SortDirection
 reexport flui::widgets::Spacer => flui::prelude::Spacer
 pub struct flui::widgets::Speed(_)
 impl Clone for flui::widgets::Speed
@@ -28216,29 +28609,11 @@ reexport flui::widgets::TableCell => flui::prelude::TableCell
 reexport flui::widgets::TableCellVerticalAlignment => flui::prelude::TableCellVerticalAlignment
 reexport flui::widgets::TableColumnWidth => flui::prelude::TableColumnWidth
 reexport flui::widgets::TableRow => flui::prelude::TableRow
-pub struct flui::widgets::TableShape { .. }
-impl Clone for flui::widgets::TableShape
-impl Copy for flui::widgets::TableShape
-impl Eq for flui::widgets::TableShape
-impl PartialEq for flui::widgets::TableShape
-impl core::fmt::Debug for flui::widgets::TableShape
-impl core::hash::Hash for flui::widgets::TableShape
-impl core::marker::StructuralPartialEq for flui::widgets::TableShape
-pub const fn flui::widgets::TableShape::columns(self) -> flui::widgets::SetSize
-pub const fn flui::widgets::TableShape::new(rows: flui::widgets::SetSize, columns: flui::widgets::SetSize) -> Self
-pub const fn flui::widgets::TableShape::rows(self) -> flui::widgets::SetSize
+reexport flui::widgets::TableShape => flui::semantics::TableShape
 reexport flui::widgets::TapDetails => flui::interaction::TapDetails
 reexport flui::widgets::Text => flui::prelude::Text
 reexport flui::widgets::TextEditingController => flui::prelude::TextEditingController
-pub struct flui::widgets::TextSelection
-field flui::widgets::TextSelection::anchor: usize // at 0
-field flui::widgets::TextSelection::focus: usize // at 1
-impl Clone for flui::widgets::TextSelection
-impl Copy for flui::widgets::TextSelection
-impl Eq for flui::widgets::TextSelection
-impl PartialEq for flui::widgets::TextSelection
-impl core::fmt::Debug for flui::widgets::TextSelection
-impl core::marker::StructuralPartialEq for flui::widgets::TextSelection
+reexport flui::widgets::TextSelection => flui::semantics::TextSelection
 pub struct flui::widgets::Texture { .. }
 impl Clone for flui::widgets::Texture
 impl core::fmt::Debug for flui::widgets::Texture
@@ -34190,42 +34565,6 @@ impl core::fmt::Debug for flui_protocol::record::RecordRow
 impl core::marker::StructuralPartialEq for flui_protocol::record::RecordRow
 variant flui_protocol::record::RecordRow::Input(flui_protocol::input_recording::Row) // at 0
 variant flui_protocol::record::RecordRow::Native { stream: u32, line: flui_protocol::native_recording::Line } // at 1
-#[non_exhaustive] #[repr(u8)] pub enum flui_protocol::semantics::SemanticsAction
-impl Clone for flui_protocol::semantics::SemanticsAction
-impl Copy for flui_protocol::semantics::SemanticsAction
-impl Eq for flui_protocol::semantics::SemanticsAction
-impl PartialEq for flui_protocol::semantics::SemanticsAction
-impl core::fmt::Debug for flui_protocol::semantics::SemanticsAction
-impl core::fmt::Display for flui_protocol::semantics::SemanticsAction
-impl core::hash::Hash for flui_protocol::semantics::SemanticsAction
-impl core::marker::StructuralPartialEq for flui_protocol::semantics::SemanticsAction
-pub const flui_protocol::semantics::SemanticsAction::ALL: &'static [Self] = _
-pub const fn flui_protocol::semantics::SemanticsAction::is_focus_action(self) -> bool
-pub const fn flui_protocol::semantics::SemanticsAction::is_scroll_action(self) -> bool
-pub const fn flui_protocol::semantics::SemanticsAction::is_text_action(self) -> bool
-pub const fn flui_protocol::semantics::SemanticsAction::name(self) -> &'static str
-pub const fn flui_protocol::semantics::SemanticsAction::value(self) -> u64
-variant flui_protocol::semantics::SemanticsAction::Blur // at 2
-variant flui_protocol::semantics::SemanticsAction::Click // at 0
-variant flui_protocol::semantics::SemanticsAction::Collapse // at 4
-variant flui_protocol::semantics::SemanticsAction::CustomAction // at 20
-variant flui_protocol::semantics::SemanticsAction::Decrement // at 6
-variant flui_protocol::semantics::SemanticsAction::Expand // at 3
-variant flui_protocol::semantics::SemanticsAction::Focus // at 1
-variant flui_protocol::semantics::SemanticsAction::HideTooltip // at 19
-variant flui_protocol::semantics::SemanticsAction::Increment // at 5
-variant flui_protocol::semantics::SemanticsAction::ReplaceSelectedText // at 14
-variant flui_protocol::semantics::SemanticsAction::ScrollDown // at 8
-variant flui_protocol::semantics::SemanticsAction::ScrollIntoView // at 11
-variant flui_protocol::semantics::SemanticsAction::ScrollLeft // at 9
-variant flui_protocol::semantics::SemanticsAction::ScrollRight // at 10
-variant flui_protocol::semantics::SemanticsAction::ScrollUp // at 7
-variant flui_protocol::semantics::SemanticsAction::SetNumericValue // at 16
-variant flui_protocol::semantics::SemanticsAction::SetScrollOffset // at 12
-variant flui_protocol::semantics::SemanticsAction::SetTextSelection // at 13
-variant flui_protocol::semantics::SemanticsAction::SetValue // at 15
-variant flui_protocol::semantics::SemanticsAction::ShowContextMenu // at 17
-variant flui_protocol::semantics::SemanticsAction::ShowTooltip // at 18
 #[non_exhaustive] pub enum flui_protocol::snapshot::ChangedField
 impl Clone for flui_protocol::snapshot::ChangedField
 impl Copy for flui_protocol::snapshot::ChangedField
@@ -36277,32 +36616,20 @@ impl core::fmt::Debug for flui_semantics::action::ActionDecodeError
 impl core::fmt::Display for flui_semantics::action::ActionDecodeError
 impl core::marker::StructuralPartialEq for flui_semantics::action::ActionDecodeError
 variant flui_semantics::action::ActionDecodeError::InvalidTextPosition { node_id: flui_semantics::identity::AccessibilityNodeId } // at 5
-variant flui_semantics::action::ActionDecodeError::MismatchedPayload { action: flui_protocol::semantics::SemanticsAction } // at 4
-variant flui_semantics::action::ActionDecodeError::MissingPayload { action: flui_protocol::semantics::SemanticsAction } // at 3
+variant flui_semantics::action::ActionDecodeError::MismatchedPayload { action: flui::semantics::SemanticsAction } // at 4
+variant flui_semantics::action::ActionDecodeError::MissingPayload { action: flui::semantics::SemanticsAction } // at 3
 variant flui_semantics::action::ActionDecodeError::UnknownTarget(u64) // at 0
 variant flui_semantics::action::ActionDecodeError::UnknownTree(accesskit::TreeId) // at 1
 variant flui_semantics::action::ActionDecodeError::Unrouted(flui_semantics::action::UnroutedAction) // at 2
-pub type flui_semantics::action::AssistiveFocusHandler = alloc::rcs::rc::Rc<dyn Fn(bool)>
-pub struct flui_semantics::action::CustomActionId(_)
-impl Clone for flui_semantics::action::CustomActionId
-impl Copy for flui_semantics::action::CustomActionId
-impl Eq for flui_semantics::action::CustomActionId
-impl PartialEq for flui_semantics::action::CustomActionId
-impl core::fmt::Debug for flui_semantics::action::CustomActionId
-impl core::hash::Hash for flui_semantics::action::CustomActionId
-impl core::marker::StructuralPartialEq for flui_semantics::action::CustomActionId
-pub fn flui_semantics::action::CustomActionId::at(index: usize) -> Self
-pub fn flui_semantics::action::CustomActionId::index(self) -> usize
-pub type flui_semantics::action::SemanticsActionHandler = alloc::rcs::rc::Rc<dyn Fn(flui::widgets::ActionCall)>
 pub struct flui_semantics::action::SemanticsActionRequest
-field flui_semantics::action::SemanticsActionRequest::call: flui::widgets::ActionCall // at 1
+field flui_semantics::action::SemanticsActionRequest::call: flui::semantics::ActionCall // at 1
 field flui_semantics::action::SemanticsActionRequest::node_id: flui_semantics::identity::AccessibilityNodeId // at 0
 impl Clone for flui_semantics::action::SemanticsActionRequest
 impl PartialEq for flui_semantics::action::SemanticsActionRequest
 impl core::fmt::Debug for flui_semantics::action::SemanticsActionRequest
 impl core::marker::StructuralPartialEq for flui_semantics::action::SemanticsActionRequest
-pub const fn flui_semantics::action::SemanticsActionRequest::action(&self) -> flui_protocol::semantics::SemanticsAction
-pub const fn flui_semantics::action::SemanticsActionRequest::new(node_id: flui_semantics::identity::AccessibilityNodeId, call: flui::widgets::ActionCall) -> Self
+pub const fn flui_semantics::action::SemanticsActionRequest::action(&self) -> flui::semantics::SemanticsAction
+pub const fn flui_semantics::action::SemanticsActionRequest::new(node_id: flui_semantics::identity::AccessibilityNodeId, call: flui::semantics::ActionCall) -> Self
 #[non_exhaustive] pub enum flui_semantics::action::UnroutedAction
 impl Clone for flui_semantics::action::UnroutedAction
 impl Copy for flui_semantics::action::UnroutedAction
@@ -36397,9 +36724,9 @@ impl core::marker::StructuralPartialEq for flui_semantics::agent::wait::WaitFact
 pub struct flui_semantics::announce::Announcements { .. }
 impl Clone for flui_semantics::announce::Announcements
 impl core::fmt::Debug for flui_semantics::announce::Announcements
-pub fn flui_semantics::announce::Announcements::announcer(&self, request_frame: alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>) -> flui::widgets::Announcer
+pub fn flui_semantics::announce::Announcements::announcer(&self, request_frame: alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>) -> flui::semantics::Announcer
 pub fn flui_semantics::announce::Announcements::journal(&self, since: Option<u64>, max_entries: Option<u32>) -> flui_protocol::events::AnnouncementJournal
-pub fn flui_semantics::announce::Announcements::new(polite: flui_semantics::regions::SemanticsRegionId, assertive: flui_semantics::regions::SemanticsRegionId) -> Self
+pub fn flui_semantics::announce::Announcements::new(polite: flui::painting::SemanticsRegionId, assertive: flui::painting::SemanticsRegionId) -> Self
 pub fn flui_semantics::announce::Announcements::node_id(&self, urgency: flui::prelude::Urgency) -> flui_semantics::identity::AccessibilityNodeId
 pub fn flui_semantics::announce::Announcements::set_listening(&self, listening: bool)
 #[non_exhaustive] pub enum flui_semantics::applicability::RoleAttribute
@@ -36429,73 +36756,6 @@ variant flui_semantics::applicability::RoleAttribute::Selected // at 1
 variant flui_semantics::applicability::RoleAttribute::Sort // at 13
 variant flui_semantics::applicability::RoleAttribute::TableShape // at 10
 variant flui_semantics::applicability::RoleAttribute::Toggled // at 0
-pub struct flui_semantics::assistive_focus::AssistiveFocusChange { .. }
-impl core::fmt::Debug for flui_semantics::assistive_focus::AssistiveFocusChange
-pub fn flui_semantics::assistive_focus::AssistiveFocusChange::invoke(self)
-pub fn flui_semantics::assistive_focus::AssistiveFocusChange::is_empty(&self) -> bool
-pub struct flui_semantics::collection::SemanticsCollection { .. }
-impl Clone for flui_semantics::collection::SemanticsCollection
-impl Copy for flui_semantics::collection::SemanticsCollection
-impl Eq for flui_semantics::collection::SemanticsCollection
-impl PartialEq for flui_semantics::collection::SemanticsCollection
-impl core::fmt::Debug for flui_semantics::collection::SemanticsCollection
-impl core::marker::StructuralPartialEq for flui_semantics::collection::SemanticsCollection
-pub fn flui_semantics::collection::SemanticsCollection::count(self) -> Option<usize>
-pub fn flui_semantics::collection::SemanticsCollection::kind(self) -> flui_semantics::collection::SemanticsCollectionKind
-pub fn flui_semantics::collection::SemanticsCollection::new(kind: flui_semantics::collection::SemanticsCollectionKind, count: Option<usize>) -> Self
-#[non_exhaustive] pub enum flui_semantics::collection::SemanticsCollectionKind
-impl Clone for flui_semantics::collection::SemanticsCollectionKind
-impl Copy for flui_semantics::collection::SemanticsCollectionKind
-impl Eq for flui_semantics::collection::SemanticsCollectionKind
-impl PartialEq for flui_semantics::collection::SemanticsCollectionKind
-impl core::fmt::Debug for flui_semantics::collection::SemanticsCollectionKind
-impl core::marker::StructuralPartialEq for flui_semantics::collection::SemanticsCollectionKind
-variant flui_semantics::collection::SemanticsCollectionKind::Grid // at 1
-variant flui_semantics::collection::SemanticsCollectionKind::List // at 0
-pub enum flui_semantics::collection::SemanticsCollectionOrigin
-impl Clone for flui_semantics::collection::SemanticsCollectionOrigin
-impl Copy for flui_semantics::collection::SemanticsCollectionOrigin
-impl Eq for flui_semantics::collection::SemanticsCollectionOrigin
-impl PartialEq for flui_semantics::collection::SemanticsCollectionOrigin
-impl core::fmt::Debug for flui_semantics::collection::SemanticsCollectionOrigin
-impl core::marker::StructuralPartialEq for flui_semantics::collection::SemanticsCollectionOrigin
-variant flui_semantics::collection::SemanticsCollectionOrigin::Authored // at 0
-variant flui_semantics::collection::SemanticsCollectionOrigin::Lazy // at 1
-pub enum flui_semantics::collection::SemanticsIndexOrigin
-impl Clone for flui_semantics::collection::SemanticsIndexOrigin
-impl Copy for flui_semantics::collection::SemanticsIndexOrigin
-impl Eq for flui_semantics::collection::SemanticsIndexOrigin
-impl PartialEq for flui_semantics::collection::SemanticsIndexOrigin
-impl core::fmt::Debug for flui_semantics::collection::SemanticsIndexOrigin
-impl core::marker::StructuralPartialEq for flui_semantics::collection::SemanticsIndexOrigin
-variant flui_semantics::collection::SemanticsIndexOrigin::Authored // at 0
-variant flui_semantics::collection::SemanticsIndexOrigin::Collection(flui::foundation::RenderId) // at 1
-pub struct flui_semantics::configuration::DeclaredCustomAction<'a>
-field flui_semantics::configuration::DeclaredCustomAction::handler: &'a flui_semantics::action::SemanticsActionHandler // at 1
-field flui_semantics::configuration::DeclaredCustomAction::label: &'a str // at 0
-field flui_semantics::configuration::DeclaredCustomAction::own_id: flui_semantics::action::CustomActionId // at 2
-impl core::fmt::Debug for flui_semantics::configuration::DeclaredCustomAction<'_>
-impl<'a> Clone for flui_semantics::configuration::DeclaredCustomAction<'a>
-impl<'a> Copy for flui_semantics::configuration::DeclaredCustomAction<'a>
-pub struct flui_semantics::document_selection::DocumentPosition { .. }
-impl Clone for flui_semantics::document_selection::DocumentPosition
-impl Eq for flui_semantics::document_selection::DocumentPosition
-impl PartialEq for flui_semantics::document_selection::DocumentPosition
-impl core::fmt::Debug for flui_semantics::document_selection::DocumentPosition
-impl core::marker::StructuralPartialEq for flui_semantics::document_selection::DocumentPosition
-pub fn flui_semantics::document_selection::DocumentPosition::byte(&self) -> usize
-pub fn flui_semantics::document_selection::DocumentPosition::new(text: flui::prelude::SemanticsAnchor, byte: usize) -> Self
-pub fn flui_semantics::document_selection::DocumentPosition::text(&self) -> &flui::prelude::SemanticsAnchor
-pub struct flui_semantics::document_selection::DocumentSelection { .. }
-impl Clone for flui_semantics::document_selection::DocumentSelection
-impl Eq for flui_semantics::document_selection::DocumentSelection
-impl PartialEq for flui_semantics::document_selection::DocumentSelection
-impl core::fmt::Debug for flui_semantics::document_selection::DocumentSelection
-impl core::marker::StructuralPartialEq for flui_semantics::document_selection::DocumentSelection
-pub fn flui_semantics::document_selection::DocumentSelection::anchor(&self) -> &flui_semantics::document_selection::DocumentPosition
-pub fn flui_semantics::document_selection::DocumentSelection::collapsed(at: flui_semantics::document_selection::DocumentPosition) -> Self
-pub fn flui_semantics::document_selection::DocumentSelection::focus(&self) -> &flui_semantics::document_selection::DocumentPosition
-pub fn flui_semantics::document_selection::DocumentSelection::new(anchor: flui_semantics::document_selection::DocumentPosition, focus: flui_semantics::document_selection::DocumentPosition) -> Self
 #[repr(transparent)] pub struct flui_semantics::identity::AccessibilityNodeId(_)
 impl Clone for flui_semantics::identity::AccessibilityNodeId
 impl Copy for flui_semantics::identity::AccessibilityNodeId
@@ -36543,7 +36803,7 @@ pub fn flui_semantics::node::SemanticsNode::transform(&self) -> Option<&flui::ge
 pub fn flui_semantics::node::SemanticsNode::value(&self) -> Option<&str>
 pub fn flui_semantics::node::SemanticsNode::with_config(self, config: flui::prelude::SemanticsConfiguration) -> Self
 pub fn flui_semantics::node::SemanticsNode::with_element_id(self, element_id: flui::foundation::ElementId) -> Self
-pub fn flui_semantics::node::SemanticsNode::with_region_id(self, id: flui_semantics::regions::SemanticsRegionId) -> Self
+pub fn flui_semantics::node::SemanticsNode::with_region_id(self, id: flui::painting::SemanticsRegionId) -> Self
 pub fn flui_semantics::node::SemanticsNode::with_source_render_id(self, render_id: flui::foundation::RenderId) -> Self
 #[non_exhaustive] pub struct flui_semantics::owner::DuplicateIdentifier
 field flui_semantics::owner::DuplicateIdentifier::identifier: alloc::rcs::arc::Arc<str> // at 0
@@ -36579,11 +36839,11 @@ variant flui_semantics::owner::SemanticsActionError::InvalidNumericValue { node_
 variant flui_semantics::owner::SemanticsActionError::NodeNotFound { node_id: flui_semantics::identity::AccessibilityNodeId } // at 1
 variant flui_semantics::owner::SemanticsActionError::PresentationClosed // at 6
 variant flui_semantics::owner::SemanticsActionError::SemanticsUnavailable // at 0
-variant flui_semantics::owner::SemanticsActionError::UnsupportedAction { node_id: flui_semantics::identity::AccessibilityNodeId, action: flui_protocol::semantics::SemanticsAction } // at 3
+variant flui_semantics::owner::SemanticsActionError::UnsupportedAction { node_id: flui_semantics::identity::AccessibilityNodeId, action: flui::semantics::SemanticsAction } // at 3
 pub struct flui_semantics::owner::SemanticsActionInvocation { .. }
 impl Drop for flui_semantics::owner::SemanticsActionInvocation
 impl core::fmt::Debug for flui_semantics::owner::SemanticsActionInvocation
-pub const fn flui_semantics::owner::SemanticsActionInvocation::action(&self) -> flui_protocol::semantics::SemanticsAction
+pub const fn flui_semantics::owner::SemanticsActionInvocation::action(&self) -> flui::semantics::SemanticsAction
 pub const fn flui_semantics::owner::SemanticsActionInvocation::node_id(&self) -> flui_semantics::identity::AccessibilityNodeId
 pub fn flui_semantics::owner::SemanticsActionInvocation::invoke(self)
 #[non_exhaustive] pub enum flui_semantics::owner::SemanticsDiagnostic
@@ -36601,7 +36861,7 @@ impl core::fmt::Debug for flui_semantics::owner::SemanticsOwner
 pub fn flui_semantics::owner::SemanticsOwner::actionability_point(&self, element: flui_protocol::tree::ElementRef, point: Option<flui_protocol::geometry::LogicalPoint>, placement: flui_semantics::agent::Placement) -> Result<Option<flui_protocol::geometry::LogicalPoint>, flui_semantics::agent::WireReadError>
 pub fn flui_semantics::owner::SemanticsOwner::actionability_wire(&self, element: flui_protocol::tree::ElementRef, point: Option<flui_protocol::geometry::LogicalPoint>, previous: Option<flui::testing::LogicalRect>, hit: &[flui::foundation::RenderId], placement: flui_semantics::agent::Placement) -> Result<flui_protocol::act::Actionability, flui_semantics::agent::WireReadError>
 pub fn flui_semantics::owner::SemanticsOwner::add_child(&mut self, parent_id: flui::foundation::SemanticsId, child_id: flui::foundation::SemanticsId)
-pub fn flui_semantics::owner::SemanticsOwner::announce(&mut self, message: &str, urgency: flui::prelude::Urgency) -> Result<(), flui::widgets::AnnounceError>
+pub fn flui_semantics::owner::SemanticsOwner::announce(&mut self, message: &str, urgency: flui::prelude::Urgency) -> Result<(), flui::semantics::AnnounceError>
 pub fn flui_semantics::owner::SemanticsOwner::announcement_journal(&self, params: &flui_protocol::events::AnnouncementsParams) -> flui_protocol::events::AnnouncementJournal
 pub fn flui_semantics::owner::SemanticsOwner::clear(&mut self)
 pub fn flui_semantics::owner::SemanticsOwner::device_pixel_ratio(&self) -> f64
@@ -36656,19 +36916,8 @@ impl core::marker::StructuralPartialEq for flui_semantics::owner::TextRunsWithhe
 pub type flui_semantics::platform::AccessibilityActionListener = alloc::rcs::arc::Arc<dyn Fn(accesskit::ActionRequest) + Send + Sync>
 pub type flui_semantics::platform::AccessibilityActivationListener = alloc::rcs::arc::Arc<dyn Fn(bool) + Send + Sync>
 pub type flui_semantics::platform::AssistiveFocusListener = alloc::rcs::arc::Arc<dyn Fn(Option<accesskit::NodeId>) + Send + Sync>
-#[non_exhaustive] pub enum flui_semantics::platform::AssistiveFocusSupport
-impl Clone for flui_semantics::platform::AssistiveFocusSupport
-impl Copy for flui_semantics::platform::AssistiveFocusSupport
-impl Default for flui_semantics::platform::AssistiveFocusSupport
-impl Eq for flui_semantics::platform::AssistiveFocusSupport
-impl PartialEq for flui_semantics::platform::AssistiveFocusSupport
-impl core::fmt::Debug for flui_semantics::platform::AssistiveFocusSupport
-impl core::hash::Hash for flui_semantics::platform::AssistiveFocusSupport
-impl core::marker::StructuralPartialEq for flui_semantics::platform::AssistiveFocusSupport
-variant flui_semantics::platform::AssistiveFocusSupport::Reported // at 0
-variant flui_semantics::platform::AssistiveFocusSupport::Unreported // at 1
 pub trait flui_semantics::platform::PlatformAccessibility: Send + Sync
-fn flui_semantics::platform::PlatformAccessibility::assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport
+fn flui_semantics::platform::PlatformAccessibility::assistive_focus_support(&self) -> flui::semantics::AssistiveFocusSupport
 fn flui_semantics::platform::PlatformAccessibility::is_active(&self) -> bool
 fn flui_semantics::platform::PlatformAccessibility::publish(&self, update: accesskit::TreeUpdate)
 fn flui_semantics::platform::PlatformAccessibility::route_change_support(&self) -> flui_semantics::platform::RouteChangeSupport { .. }
@@ -36708,211 +36957,6 @@ impl core::hash::Hash for flui_semantics::platform::RouteChangeSupport
 impl core::marker::StructuralPartialEq for flui_semantics::platform::RouteChangeSupport
 variant flui_semantics::platform::RouteChangeSupport::Announced // at 1
 variant flui_semantics::platform::RouteChangeSupport::Native // at 0
-pub struct flui_semantics::properties::AttributedString
-field flui_semantics::properties::AttributedString::attributes: Vec<flui_semantics::properties::StringAttribute> // at 1
-field flui_semantics::properties::AttributedString::string: smol_str::SmolStr // at 0
-impl Clone for flui_semantics::properties::AttributedString
-impl Default for flui_semantics::properties::AttributedString
-impl Eq for flui_semantics::properties::AttributedString
-impl From<&str> for flui_semantics::properties::AttributedString
-impl From<String> for flui_semantics::properties::AttributedString
-impl From<smol_str::SmolStr> for flui_semantics::properties::AttributedString
-impl PartialEq for flui_semantics::properties::AttributedString
-impl core::fmt::Debug for flui_semantics::properties::AttributedString
-impl core::marker::StructuralPartialEq for flui_semantics::properties::AttributedString
-pub fn flui_semantics::properties::AttributedString::add_attribute(&mut self, attr: flui_semantics::properties::StringAttribute)
-pub fn flui_semantics::properties::AttributedString::as_str(&self) -> &str
-pub fn flui_semantics::properties::AttributedString::is_empty(&self) -> bool
-pub fn flui_semantics::properties::AttributedString::new(string: impl Into<smol_str::SmolStr>) -> Self
-pub struct flui_semantics::properties::SemanticsHintOverrides
-field flui_semantics::properties::SemanticsHintOverrides::on_long_press_hint: Option<smol_str::SmolStr> // at 1
-field flui_semantics::properties::SemanticsHintOverrides::on_tap_hint: Option<smol_str::SmolStr> // at 0
-impl Clone for flui_semantics::properties::SemanticsHintOverrides
-impl Default for flui_semantics::properties::SemanticsHintOverrides
-impl Eq for flui_semantics::properties::SemanticsHintOverrides
-impl PartialEq for flui_semantics::properties::SemanticsHintOverrides
-impl core::fmt::Debug for flui_semantics::properties::SemanticsHintOverrides
-impl core::marker::StructuralPartialEq for flui_semantics::properties::SemanticsHintOverrides
-pub fn flui_semantics::properties::SemanticsHintOverrides::is_empty(&self) -> bool
-pub fn flui_semantics::properties::SemanticsHintOverrides::new() -> Self
-pub fn flui_semantics::properties::SemanticsHintOverrides::with_long_press_hint(self, hint: impl Into<smol_str::SmolStr>) -> Self
-pub fn flui_semantics::properties::SemanticsHintOverrides::with_tap_hint(self, hint: impl Into<smol_str::SmolStr>) -> Self
-pub struct flui_semantics::properties::SemanticsSortKey
-field flui_semantics::properties::SemanticsSortKey::name: Option<smol_str::SmolStr> // at 1
-field flui_semantics::properties::SemanticsSortKey::order: f64 // at 0
-impl Clone for flui_semantics::properties::SemanticsSortKey
-impl PartialEq for flui_semantics::properties::SemanticsSortKey
-impl PartialOrd for flui_semantics::properties::SemanticsSortKey
-impl core::fmt::Debug for flui_semantics::properties::SemanticsSortKey
-impl core::marker::StructuralPartialEq for flui_semantics::properties::SemanticsSortKey
-pub fn flui_semantics::properties::SemanticsSortKey::named(order: f64, name: impl Into<smol_str::SmolStr>) -> Self
-pub fn flui_semantics::properties::SemanticsSortKey::new(order: f64) -> Self
-pub struct flui_semantics::properties::SemanticsTag
-field flui_semantics::properties::SemanticsTag::name: smol_str::SmolStr // at 0
-impl Clone for flui_semantics::properties::SemanticsTag
-impl Eq for flui_semantics::properties::SemanticsTag
-impl PartialEq for flui_semantics::properties::SemanticsTag
-impl core::fmt::Debug for flui_semantics::properties::SemanticsTag
-impl core::hash::Hash for flui_semantics::properties::SemanticsTag
-impl core::marker::StructuralPartialEq for flui_semantics::properties::SemanticsTag
-pub fn flui_semantics::properties::SemanticsTag::new(name: impl Into<smol_str::SmolStr>) -> Self
-pub struct flui_semantics::properties::StringAttribute
-field flui_semantics::properties::StringAttribute::attribute_type: flui_semantics::properties::StringAttributeType // at 2
-field flui_semantics::properties::StringAttribute::end: usize // at 1
-field flui_semantics::properties::StringAttribute::start: usize // at 0
-impl Clone for flui_semantics::properties::StringAttribute
-impl Eq for flui_semantics::properties::StringAttribute
-impl PartialEq for flui_semantics::properties::StringAttribute
-impl core::fmt::Debug for flui_semantics::properties::StringAttribute
-impl core::marker::StructuralPartialEq for flui_semantics::properties::StringAttribute
-pub enum flui_semantics::properties::StringAttributeType
-impl Clone for flui_semantics::properties::StringAttributeType
-impl Eq for flui_semantics::properties::StringAttributeType
-impl PartialEq for flui_semantics::properties::StringAttributeType
-impl core::fmt::Debug for flui_semantics::properties::StringAttributeType
-impl core::marker::StructuralPartialEq for flui_semantics::properties::StringAttributeType
-variant flui_semantics::properties::StringAttributeType::Locale(smol_str::SmolStr) // at 1
-variant flui_semantics::properties::StringAttributeType::SpellOut // at 0
-pub struct flui_semantics::regions::SemanticsRegionId(_)
-impl Clone for flui_semantics::regions::SemanticsRegionId
-impl Copy for flui_semantics::regions::SemanticsRegionId
-impl Eq for flui_semantics::regions::SemanticsRegionId
-impl PartialEq for flui_semantics::regions::SemanticsRegionId
-impl core::fmt::Debug for flui_semantics::regions::SemanticsRegionId
-impl core::hash::Hash for flui_semantics::regions::SemanticsRegionId
-impl core::marker::StructuralPartialEq for flui_semantics::regions::SemanticsRegionId
-pub fn flui_semantics::regions::SemanticsRegionId::accessibility_id(self) -> flui_semantics::identity::AccessibilityNodeId
-#[non_exhaustive] pub enum flui_semantics::relation::SemanticsRelation
-impl Clone for flui_semantics::relation::SemanticsRelation
-impl Copy for flui_semantics::relation::SemanticsRelation
-impl Eq for flui_semantics::relation::SemanticsRelation
-impl PartialEq for flui_semantics::relation::SemanticsRelation
-impl core::fmt::Debug for flui_semantics::relation::SemanticsRelation
-impl core::hash::Hash for flui_semantics::relation::SemanticsRelation
-impl core::marker::StructuralPartialEq for flui_semantics::relation::SemanticsRelation
-variant flui_semantics::relation::SemanticsRelation::ActiveDescendant // at 6
-variant flui_semantics::relation::SemanticsRelation::Controls // at 1
-variant flui_semantics::relation::SemanticsRelation::DescribedBy // at 2
-variant flui_semantics::relation::SemanticsRelation::Details // at 3
-variant flui_semantics::relation::SemanticsRelation::ErrorMessage // at 5
-variant flui_semantics::relation::SemanticsRelation::FlowTo // at 4
-variant flui_semantics::relation::SemanticsRelation::LabelledBy // at 0
-pub struct flui_semantics::states::States { .. }
-impl Clone for flui_semantics::states::States
-impl Copy for flui_semantics::states::States
-impl Default for flui_semantics::states::States
-impl Eq for flui_semantics::states::States
-impl PartialEq for flui_semantics::states::States
-impl core::fmt::Debug for flui_semantics::states::States
-impl core::marker::StructuralPartialEq for flui_semantics::states::States
-pub const fn flui_semantics::states::States::auto_complete(&self) -> Option<flui::widgets::AutoComplete>
-pub const fn flui_semantics::states::States::busy(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::current(&self) -> Option<flui::widgets::Current>
-pub const fn flui_semantics::states::States::enabled(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::expanded(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::focusable(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::focused(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::has_popup(&self) -> Option<flui::widgets::HasPopup>
-pub const fn flui_semantics::states::States::hidden(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::invalid(&self) -> Option<flui::widgets::Invalid>
-pub const fn flui_semantics::states::States::modal(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::names_route(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::orientation(&self) -> Option<flui::geometry::Axis>
-pub const fn flui_semantics::states::States::read_only(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::required(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::scopes_route(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::selected(&self) -> Option<bool>
-pub const fn flui_semantics::states::States::toggled(&self) -> Option<flui::prelude::Toggled>
-pub struct flui_semantics::text_content::TextContent { .. }
-impl Clone for flui_semantics::text_content::TextContent
-impl PartialEq for flui_semantics::text_content::TextContent
-impl core::fmt::Debug for flui_semantics::text_content::TextContent
-impl core::marker::StructuralPartialEq for flui_semantics::text_content::TextContent
-pub fn flui_semantics::text_content::TextContent::byte_offset(&self, position: flui_semantics::text_content::TextRunPosition) -> Result<usize, flui_semantics::text_content::TextRunError>
-pub fn flui_semantics::text_content::TextContent::position_at(&self, byte: usize) -> Option<flui_semantics::text_content::TextRunPosition>
-pub fn flui_semantics::text_content::TextContent::position_at_or_before(&self, byte: usize) -> Option<flui_semantics::text_content::TextRunPosition>
-pub fn flui_semantics::text_content::TextContent::run_identities(&self) -> Option<&[flui_semantics::identity::AccessibilityNodeId]>
-pub fn flui_semantics::text_content::TextContent::runs(&self) -> &[flui_semantics::text_content::TextRun]
-pub fn flui_semantics::text_content::TextContent::selection(&self) -> Option<flui_semantics::text_content::TextRunSelection>
-pub fn flui_semantics::text_content::TextContent::selection_bytes(&self, selection: flui_semantics::text_content::TextRunSelection) -> Result<flui::widgets::TextSelection, flui_semantics::text_content::TextRunError>
-pub fn flui_semantics::text_content::TextContent::transformed(&self, transform: &flui::geometry::Matrix4) -> Option<Self>
-pub fn flui_semantics::text_content::TextContent::try_new(runs: Vec<flui_semantics::text_content::TextRun>) -> Result<Self, flui_semantics::text_content::TextRunError>
-pub fn flui_semantics::text_content::TextContent::with_run_identities(self, identities: Vec<flui_semantics::regions::SemanticsRegionId>) -> Result<Self, flui_semantics::text_content::TextRunError>
-pub fn flui_semantics::text_content::TextContent::with_selection(self, selection: flui_semantics::text_content::TextRunSelection) -> Result<Self, flui_semantics::text_content::TextRunError>
-pub struct flui_semantics::text_content::TextRun { .. }
-impl Clone for flui_semantics::text_content::TextRun
-impl PartialEq for flui_semantics::text_content::TextRun
-impl core::fmt::Debug for flui_semantics::text_content::TextRun
-impl core::marker::StructuralPartialEq for flui_semantics::text_content::TextRun
-pub fn flui_semantics::text_content::TextRun::byte_range(&self) -> core::ops::range::Range<usize>
-pub fn flui_semantics::text_content::TextRun::character_count(&self) -> usize
-pub fn flui_semantics::text_content::TextRun::character_lengths(&self) -> &[u8]
-pub fn flui_semantics::text_content::TextRun::character_positions(&self) -> &[f32]
-pub fn flui_semantics::text_content::TextRun::character_widths(&self) -> &[f32]
-pub fn flui_semantics::text_content::TextRun::direction(&self) -> flui::foundation::TextDirection
-pub fn flui_semantics::text_content::TextRun::line(&self) -> usize
-pub fn flui_semantics::text_content::TextRun::rect(&self) -> flui::geometry::Rect<f64>
-pub fn flui_semantics::text_content::TextRun::text(&self) -> &str
-pub fn flui_semantics::text_content::TextRun::try_new(parts: flui_semantics::text_content::TextRunParts) -> Result<Self, flui_semantics::text_content::TextRunError>
-pub fn flui_semantics::text_content::TextRun::word_starts(&self) -> &[u8]
-#[non_exhaustive] pub enum flui_semantics::text_content::TextRunError
-impl Clone for flui_semantics::text_content::TextRunError
-impl Copy for flui_semantics::text_content::TextRunError
-impl Eq for flui_semantics::text_content::TextRunError
-impl PartialEq for flui_semantics::text_content::TextRunError
-impl core::error::Error for flui_semantics::text_content::TextRunError
-impl core::fmt::Debug for flui_semantics::text_content::TextRunError
-impl core::fmt::Display for flui_semantics::text_content::TextRunError
-impl core::marker::StructuralPartialEq for flui_semantics::text_content::TextRunError
-variant flui_semantics::text_content::TextRunError::IdentityCountMismatch { runs: usize, identities: usize } // at 10
-variant flui_semantics::text_content::TextRunError::InvalidWordStart { index: usize } // at 5
-variant flui_semantics::text_content::TextRunError::LengthsDoNotCoverText { lengths: usize, text: usize } // at 0
-variant flui_semantics::text_content::TextRunError::LinesDecrease { run: usize } // at 8
-variant flui_semantics::text_content::TextRunError::MetricsMismatch { characters: usize, positions: usize, widths: usize } // at 3
-variant flui_semantics::text_content::TextRunError::NoRuns // at 6
-variant flui_semantics::text_content::TextRunError::NonFiniteGeometry // at 4
-variant flui_semantics::text_content::TextRunError::PositionOutOfRange { run: usize, character: usize } // at 9
-variant flui_semantics::text_content::TextRunError::RunsNotContiguous { run: usize } // at 7
-variant flui_semantics::text_content::TextRunError::SplitsCharacter { character: usize } // at 1
-variant flui_semantics::text_content::TextRunError::TooManyCharacters { count: usize } // at 2
-#[non_exhaustive] pub struct flui_semantics::text_content::TextRunParts
-field flui_semantics::text_content::TextRunParts::character_lengths: Vec<u8> // at 5
-field flui_semantics::text_content::TextRunParts::character_positions: Vec<f32> // at 6
-field flui_semantics::text_content::TextRunParts::character_widths: Vec<f32> // at 7
-field flui_semantics::text_content::TextRunParts::direction: flui::foundation::TextDirection // at 3
-field flui_semantics::text_content::TextRunParts::line: usize // at 2
-field flui_semantics::text_content::TextRunParts::rect: flui::geometry::Rect<f64> // at 4
-field flui_semantics::text_content::TextRunParts::start: usize // at 1
-field flui_semantics::text_content::TextRunParts::text: smol_str::SmolStr // at 0
-field flui_semantics::text_content::TextRunParts::word_starts: Vec<u8> // at 8
-impl Clone for flui_semantics::text_content::TextRunParts
-impl PartialEq for flui_semantics::text_content::TextRunParts
-impl core::fmt::Debug for flui_semantics::text_content::TextRunParts
-impl core::marker::StructuralPartialEq for flui_semantics::text_content::TextRunParts
-pub fn flui_semantics::text_content::TextRunParts::new(text: impl Into<smol_str::SmolStr>, start: usize, line: usize, direction: flui::foundation::TextDirection, rect: flui::geometry::Rect<f64>) -> Self
-pub struct flui_semantics::text_content::TextRunPosition
-field flui_semantics::text_content::TextRunPosition::character: usize // at 1
-field flui_semantics::text_content::TextRunPosition::run: usize // at 0
-impl Clone for flui_semantics::text_content::TextRunPosition
-impl Copy for flui_semantics::text_content::TextRunPosition
-impl Eq for flui_semantics::text_content::TextRunPosition
-impl PartialEq for flui_semantics::text_content::TextRunPosition
-impl core::fmt::Debug for flui_semantics::text_content::TextRunPosition
-impl core::hash::Hash for flui_semantics::text_content::TextRunPosition
-impl core::marker::StructuralPartialEq for flui_semantics::text_content::TextRunPosition
-pub const fn flui_semantics::text_content::TextRunPosition::new(run: usize, character: usize) -> Self
-pub struct flui_semantics::text_content::TextRunSelection
-field flui_semantics::text_content::TextRunSelection::anchor: flui_semantics::text_content::TextRunPosition // at 0
-field flui_semantics::text_content::TextRunSelection::focus: flui_semantics::text_content::TextRunPosition // at 1
-impl Clone for flui_semantics::text_content::TextRunSelection
-impl Copy for flui_semantics::text_content::TextRunSelection
-impl Eq for flui_semantics::text_content::TextRunSelection
-impl PartialEq for flui_semantics::text_content::TextRunSelection
-impl core::fmt::Debug for flui_semantics::text_content::TextRunSelection
-impl core::hash::Hash for flui_semantics::text_content::TextRunSelection
-impl core::marker::StructuralPartialEq for flui_semantics::text_content::TextRunSelection
-pub const fn flui_semantics::text_content::TextRunSelection::collapsed(at: flui_semantics::text_content::TextRunPosition) -> Self
-pub const fn flui_semantics::text_content::TextRunSelection::new(anchor: flui_semantics::text_content::TextRunPosition, focus: flui_semantics::text_content::TextRunPosition) -> Self
 pub struct flui_semantics::tree::SemanticsTree { .. }
 impl Default for flui_semantics::tree::SemanticsTree
 impl core::fmt::Debug for flui_semantics::tree::SemanticsTree
