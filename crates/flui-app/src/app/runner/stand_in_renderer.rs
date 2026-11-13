@@ -50,8 +50,8 @@ struct Device {
     refuse_attach: bool,
     /// Whether a rebuilt device drops every window's surface.
     drop_surfaces: bool,
-    /// Whether a new surface for a window is refused.
-    refuse_restores: bool,
+    /// How many of the next new surfaces, of any window, are refused.
+    refused_restores: u32,
     /// The largest side a slot can be sized to.
     max_side: Option<i32>,
 }
@@ -127,10 +127,10 @@ impl StandInRenderer {
         self.shared.lock().device.drop_surfaces = true;
     }
 
-    /// Refuse every new surface a window asks for, as a GPU that cannot
-    /// present to the window any more does.
-    pub fn refuse_restores(&self) {
-        self.shared.lock().device.refuse_restores = true;
+    /// Refuse the next `restores` new surfaces windows ask for, as a GPU that
+    /// cannot present to a window for a while does.
+    pub fn refuse_next_restores(&self, restores: u32) {
+        self.shared.lock().device.refused_restores = restores;
     }
 
     /// Rebuilds of the run's device attempted so far.
@@ -241,7 +241,9 @@ impl SlotBackend for StandInBackend {
     fn release(&mut self, _slot: SlotId) {}
 
     fn restore(&mut self, _slot: SlotId, _surface: UnconfiguredSurface) -> EngineResult<()> {
-        if self.shared.lock().device.refuse_restores {
+        let device = &mut self.shared.lock().device;
+        if device.refused_restores > 0 {
+            device.refused_restores -= 1;
             return Err(EngineError::IncompatibleSurface);
         }
         Ok(())

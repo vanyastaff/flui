@@ -1176,16 +1176,17 @@ pub(crate) fn a_resize_that_keeps_panicking_is_not_retried_forever() {
 /// A window at a refused size whose surface a rebuilt device dropped, and
 /// whose new surface the GPU refuses, arms no retry: the frame's retry would
 /// meet the refused surface the same way, every display period. Its next
-/// change asks for a surface again.
+/// change asks for a surface again, and a size the device takes draws.
 pub(crate) fn a_window_whose_new_surface_is_refused_waits_for_its_next_change() {
     let observed = Observed::default();
     let started = start(&observed);
+    let presented = started.renderer.frames_presented();
     // A window at a size past the device's limit, so its frames stop.
     started.renderer.limit_size(4096);
     started.window.simulate_resize(8192.0, 600.0);
     started.run.run_owner_turn();
     started.renderer.drop_surfaces_on_rebuild();
-    started.renderer.refuse_restores();
+    started.renderer.refuse_next_restores(1);
     started.renderer.lose_device();
     observed.schedule_rebuild();
     started.run.run_owner_turn();
@@ -1197,6 +1198,12 @@ pub(crate) fn a_window_whose_new_surface_is_refused_waits_for_its_next_change() 
         started.run.wake_deadline(),
         None,
         "no retry of a frame with no surface is armed"
+    );
+    started.window.simulate_resize(800.0, 600.0);
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "a size the device takes draws again"
     );
     join_ok_after_close(started);
 }

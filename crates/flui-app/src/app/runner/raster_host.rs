@@ -240,6 +240,9 @@ struct HostSlot {
     /// Whether the slot's next frame is the retry of a frame whose resize
     /// or upload panicked: a stale surface it meets again is not retried.
     retrying_panic: bool,
+    /// Whether the host sent the slot a new surface its next turn answers:
+    /// a slot that still wants one after that turn had it refused.
+    restored: bool,
     /// The first panic of the slot's frames since the window last reported
     /// one to its UI runtime ([`RasterSlot::report_frame_panic`]).
     panic: flui_foundation::panic::FirstPanic,
@@ -364,6 +367,7 @@ impl RasterHost {
                 visibility: SlotVisibility::Shown,
                 refused_size: None,
                 retrying_panic: false,
+                restored: false,
                 panic: caught,
             },
         );
@@ -518,6 +522,9 @@ impl RasterHost {
         let settled = match placed.sender.take_failure(slot.slot) {
             Some(SlotFailure::Panicked(payload)) => {
                 slot.panic.record(payload);
+                // The slot holds one failure a turn: a size refused after
+                // this panic went unheard, so the next frame sends it again.
+                slot.size = None;
                 SlotTurn::Panicked
             }
             Some(SlotFailure::Refused(error)) => {
@@ -527,23 +534,36 @@ impl RasterHost {
                         .record(slot.slot)
                         .map_or(SurfaceGeneration::ZERO, |record| record.required_generation);
                     slot.refused_size = slot.size.take().map(|size| (size, generation));
+                } else {
+                    // The slot holds one failure a turn: a size refused
+                    // after this one went unheard, so the next frame sends
+                    // the size again and hears its own answer.
+                    slot.size = None;
                 }
                 tracing::warn!(%error, "raster host: the executor refused a window's command");
-                if placed
-                    .sender
-                    .record(slot.slot)
-                    .is_some_and(|record| record.wants_surface)
-                {
-                    SlotTurn::SurfaceRefused
-                } else {
-                    SlotTurn::Clean
-                }
+                SlotTurn::Clean
             }
             Some(failure) => {
                 tracing::warn!(?failure, "raster host: a window's slot failed");
                 SlotTurn::Clean
             }
             None => SlotTurn::Clean,
+        };
+        // A new surface the host sent and the slot still wants was refused.
+        // Only that one: a slot that dropped its surface in this turn (a
+        // rebuilt device) has not been sent a new one yet, and gets it on
+        // the frame's retry.
+        let restored = std::mem::take(&mut slot.restored);
+        let settled = if settled == SlotTurn::Clean
+            && restored
+            && placed
+                .sender
+                .record(slot.slot)
+                .is_some_and(|record| record.wants_surface)
+        {
+            SlotTurn::SurfaceRefused
+        } else {
+            settled
         };
         // The turn's own panic (a retired scene's `Drop`, a trim, a device
         // rebuild) goes to the window that turned it, for its report.
@@ -689,6 +709,7 @@ impl RasterHost {
                 tracing::warn!(%error, "raster host: a window's new surface was refused");
                 return None;
             }
+            slot.restored = true;
         }
         if slot.size != Some(size) {
             match placed.sender.send(RasterCommand::Configure {
@@ -815,7 +836,7 @@ impl RasterHost {
             slot.base.forget();
             return verdict;
         }
-        if turned == SlotTurn::SurfaceRefused {
+        if turned == SlotTurn::SurfaceRefused && settled != Some(RasterVerdict::Presented) {
             // No surface to draw on, and none the GPU takes: nothing until
             // the window's next change asks for one again. Retried, the
             // frame would meet a stale surface every display period.
