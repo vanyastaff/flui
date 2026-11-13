@@ -1,7 +1,9 @@
 //! A headless window's frame request runs the frame callback on the owner
 //! thread, whichever thread asks: `PlatformWindow::request_redraw` is called
-//! from async wakers, and the callback is owner code.
+//! from async wakers, and the callback is owner code. So is the application's
+//! owner-turn callback, which a worker's wake runs on the owner.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
@@ -80,6 +82,45 @@ fn a_redraw_requested_on_the_owner_dispatches_at_once() {
     assert_eq!(*frames.lock(), [thread::current().id()]);
 }
 
+/// The application's owner-turn callback is owner code too: it keeps
+/// owner-local state (`Rc`, `Cell`) the turn a worker's wake posts reads,
+/// and the platform's quit drops it on the owner thread.
+fn an_owner_turn_callback_keeps_owner_local_state_until_the_quit() {
+    struct Captured(Rc<Cell<bool>>);
+    impl Drop for Captured {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+
+    let session = session();
+    let runs = Rc::new(Cell::new(0_usize));
+    let dropped = Rc::new(Cell::new(false));
+    let counted = Rc::clone(&runs);
+    let captured = Captured(Rc::clone(&dropped));
+    session
+        .owner
+        .on_wake(Box::new(move || {
+            let _held = &captured;
+            counted.set(counted.get() + 1);
+        }))
+        .expect("register the owner's turn callback");
+
+    let proxy = session.owner.proxy();
+    thread::spawn(move || proxy.wake().expect("a worker wakes the owner"))
+        .join()
+        .expect("waking thread");
+    assert_eq!(runs.get(), 0, "the waking thread runs no owner callback");
+    session.turns.drive();
+    assert_eq!(runs.get(), 1, "the owner's turn runs the callback");
+    assert!(!dropped.get(), "a turn keeps the callback for the next one");
+
+    session.owner.quit();
+    assert!(
+        dropped.get(),
+        "the quit drops the callback and its captures on the owner"
+    );
+}
 #[test]
 fn headless_redraw_contracts() {
     super::run_table(
@@ -92,6 +133,10 @@ fn headless_redraw_contracts() {
             (
                 "a_redraw_requested_on_the_owner_dispatches_at_once",
                 a_redraw_requested_on_the_owner_dispatches_at_once,
+            ),
+            (
+                "an_owner_turn_callback_keeps_owner_local_state_until_the_quit",
+                an_owner_turn_callback_keeps_owner_local_state_until_the_quit,
             ),
         ],
     );

@@ -2955,3 +2955,210 @@ pub(crate) fn semantics_turned_on_later_publish_the_tree_of_semantics_on_from_th
     click(&mut late, "Press");
     assert_eq!((scene.clicks.get(), scene.presses.get()), (2, 2));
 }
+
+/// A labelled piece of content of `role` that forms no node of its own.
+fn content(role: SemanticsRole, label: &'static str) -> Semantics {
+    Semantics::new()
+        .role(role)
+        .label(label)
+        .child(SizedBox::new(10.0, 10.0))
+}
+
+/// The published tree under `root`, as text.
+fn published(root: impl View) -> String {
+    let mut laid = lay_out(root, loose(200.0));
+    laid.enable_semantics();
+    laid.pump();
+    laid.a11y_tree()
+        .expect("semantics enabled before the frame")
+        .describe()
+}
+
+/// A control named by what it holds is one node with its contents' names
+/// (ADR-0332): an image, or an image and a heading, beneath a button are the
+/// button's name, not nodes of their own. A structure keeps its contents as
+/// nodes: a list over the same image is a list with an image in it.
+#[test]
+fn a_control_takes_the_content_roles_beneath_it_as_its_name() {
+    let node = |role: SemanticsRole| Semantics::new().container(true).role(role);
+    let image = || content(SemanticsRole::Image, "Add");
+
+    let button = published(node(SemanticsRole::Button).child(image()));
+    assert_eq!(
+        button, "  Window\n  Button label=\"Add\"",
+        "a button over an image"
+    );
+
+    let both = published(
+        node(SemanticsRole::Button).child(flui_widgets::Column::new((
+            image(),
+            content(SemanticsRole::Heading, "Item"),
+        ))),
+    );
+    assert_eq!(
+        both, "  Window\n  Button label=\"Add Item\"",
+        "a button over an image and a heading"
+    );
+
+    // A configuration between the control and its contents that forms no
+    // node does not undo it: what it absorbs still ends in the button.
+    let wrapped = published(
+        node(SemanticsRole::Button).child(Semantics::new().hint("Opens the list").child(
+            flui_widgets::Column::new((image(), content(SemanticsRole::Heading, "Item"))),
+        )),
+    );
+    assert_eq!(
+        wrapped, "  Window\n  Button label=\"Add Item\"",
+        "a button over a hint over an image and a heading"
+    );
+
+    // Content inside content names the button too.
+    let nested = published(
+        node(SemanticsRole::Button).child(
+            Semantics::new()
+                .role(SemanticsRole::Heading)
+                .label("Item")
+                .child(image()),
+        ),
+    );
+    assert_eq!(
+        nested, "  Window\n  Button label=\"Item Add\"",
+        "a button over a heading over an image"
+    );
+
+    // A control beside the content is a node of its own and does not keep
+    // the content from naming the button around both.
+    let beside = published(
+        node(SemanticsRole::Button).child(flui_widgets::Column::new((
+            image(),
+            content(SemanticsRole::CheckBox, "Pin"),
+        ))),
+    );
+    assert_eq!(
+        beside, "  Window\n  Button label=\"Add\"\n  CheckBox label=\"Pin\"",
+        "a button over an image beside a check box"
+    );
+
+    // The same in the other order.
+    let beside_reversed = published(node(SemanticsRole::Button).child(flui_widgets::Column::new(
+        (content(SemanticsRole::CheckBox, "Pin"), image()),
+    )));
+    assert_eq!(
+        beside_reversed, "  Window\n  Button label=\"Add\"\n  CheckBox label=\"Pin\"",
+        "a button over a check box beside an image"
+    );
+
+    // Beside a control that is a node, a sibling that repeats its action
+    // is a node too: only a naming role stops competing, not a handler.
+    let tap = |child: Semantics| {
+        flui_widgets::GestureDetector::new()
+            .on_tap(|_| {})
+            .child(child)
+    };
+    for (order, column) in [
+        (
+            "after",
+            flui_widgets::Column::new((
+                tap(content(SemanticsRole::CheckBox, "Pin")),
+                tap(Semantics::new()
+                    .label("Go")
+                    .child(SizedBox::new(10.0, 10.0))),
+            )),
+        ),
+        (
+            "before",
+            flui_widgets::Column::new((
+                tap(Semantics::new()
+                    .label("Go")
+                    .child(SizedBox::new(10.0, 10.0))),
+                tap(content(SemanticsRole::CheckBox, "Pin")),
+            )),
+        ),
+    ] {
+        let repeated = published(node(SemanticsRole::Button).child(column));
+        let (check_box, go) = (
+            "  CheckBox label=\"Pin\"",
+            "  Label label=\"Go\" value=\"Go\"",
+        );
+        let nodes = if order == "after" {
+            [check_box, go]
+        } else {
+            [go, check_box]
+        };
+        assert_eq!(
+            repeated,
+            format!("  Window\n  Button\n{}\n{}", nodes[0], nodes[1]),
+            "a tap target {order} a tappable check box"
+        );
+    }
+
+    // A progress bar keeps its node: a button cannot publish its range.
+    let progress = published(
+        node(SemanticsRole::Button).child(content(SemanticsRole::ProgressBar, "Loading")),
+    );
+    assert_eq!(
+        progress, "  Window\n  Button\n  ProgressIndicator label=\"Loading\"",
+        "a button over a progress bar"
+    );
+
+    let list = published(node(SemanticsRole::List).child(image()));
+    assert_eq!(
+        list, "  Window\n  List\n  Image label=\"Add\"",
+        "a list over an image"
+    );
+
+    // A tap target without a role over an inner control gives the control
+    // its tap, inside a button as outside one: the check box is the node
+    // that is pressed, and it keeps its name.
+    let mut laid = lay_out(
+        node(SemanticsRole::Button).child(
+            flui_widgets::GestureDetector::new()
+                .on_tap(|_| {})
+                .child(content(SemanticsRole::CheckBox, "Pin")),
+        ),
+        loose(200.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let pin = tree
+        .find_by_label("Pin")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        pin.role(),
+        flui_testing::a11y::Role::CheckBox,
+        "{}",
+        tree.describe()
+    );
+    assert!(pin.supports_action(Action::Click), "{}", tree.describe());
+}
+
+/// A pressable button over a labelled image is one node that is pressed by
+/// its name: the image's label names the button, and the node that carries
+/// the name is the one that offers the click.
+#[test]
+fn a_button_over_a_labelled_image_is_pressed_by_its_name() {
+    let mut laid = lay_out(
+        flui_widgets::RawButton::new(content(SemanticsRole::Image, "Add")).on_pressed(|_| {}),
+        loose(200.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+
+    let add = tree
+        .find_by_label("Add")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        add.role(),
+        flui_testing::a11y::Role::Button,
+        "{}",
+        tree.describe()
+    );
+    assert!(add.supports_action(Action::Click), "{}", tree.describe());
+    assert!(add.child_ids().is_empty(), "{}", tree.describe());
+}

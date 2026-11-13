@@ -172,7 +172,7 @@ fn the_identifier_is_exported_unannounced_unmerged_and_no_boundary() {
                 let before = parent.clone();
                 let mut child = SemanticsConfiguration::new();
                 child.set_identifier(IDENTIFIER);
-                parent.is_compatible_with(&child) && {
+                parent.can_absorb(&child, false) && {
                     parent.absorb(&child);
                     parent == before
                 }

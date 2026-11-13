@@ -980,6 +980,10 @@ struct SemanticsAssemblyContext {
     parent_requires_explicit_node: bool,
     merge_into_ancestor: bool,
     has_reveal_ancestor: bool,
+    /// Whether what a configuration absorbs here names a control
+    /// (ADR-0332): `SemanticsConfiguration::names_a_control` of the
+    /// configuration above.
+    names_a_control: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1024,6 +1028,7 @@ fn assemble_semantics_root(
             parent_requires_explicit_node: false,
             merge_into_ancestor: false,
             has_reveal_ancestor: false,
+            names_a_control: false,
         },
         false,
         regions,
@@ -1117,6 +1122,7 @@ fn assembly_decisions(
         children_merge_into_ancestor,
         child_context: SemanticsAssemblyContext {
             is_root: false,
+            names_a_control: config.names_a_control(forms_node, context.names_a_control),
             parent_requires_explicit_node: children_require_explicit_node,
             merge_into_ancestor: children_merge_into_ancestor,
             has_reveal_ancestor: context.has_reveal_ancestor
@@ -1308,6 +1314,7 @@ fn build_semantics_fragments_impl(
         &mut config,
         child_fragments,
         decisions.children_merge_into_ancestor,
+        decisions.child_context.names_a_control,
     );
     // AFTER the fold, so this is a genuine fallback. An `IndexedSemantics` on
     // the item is a NON-boundary configuration absorbed by its nearest ancestor
@@ -1437,6 +1444,7 @@ fn merge_child_fragments(
     config: &mut SemanticsConfiguration,
     mut fragments: Vec<SemanticsFragment>,
     suppress_conflicts: bool,
+    names_a_control: bool,
 ) -> Vec<BuiltSemanticsNode> {
     // Stable sorting preserves declarative order for equal keys and unkeyed
     // siblings. Sort before folding, so merged labels follow reading order too.
@@ -1449,7 +1457,8 @@ fn merge_child_fragments(
         }
         by_sort_key(key(a), key(b))
     });
-    let conflicts = (!suppress_conflicts).then(|| mark_configuration_conflicts(config, &fragments));
+    let conflicts = (!suppress_conflicts)
+        .then(|| mark_configuration_conflicts(config, &fragments, names_a_control));
     let mut children = Vec::with_capacity(fragments.len());
 
     for (index, fragment) in fragments.into_iter().enumerate() {
@@ -1519,26 +1528,45 @@ fn in_reading_order(children: &mut Vec<BuiltSemanticsNode>, direction: TextDirec
     );
 }
 
+/// Which pending fragments form nodes of their own instead of being
+/// absorbed by `parent`: one `parent` cannot take, and two that cannot be in
+/// its node together.
+///
+/// A fragment `parent` refuses is a node already, so a sibling is asked
+/// whether it can stay beside that node, not whether the two can share one:
+/// where the fragments name a control (ADR-0332), a check box beside an
+/// icon does not keep the icon from naming the button around both.
 fn mark_configuration_conflicts(
     parent: &SemanticsConfiguration,
     fragments: &[SemanticsFragment],
+    names_a_control: bool,
 ) -> Vec<bool> {
-    let mut conflicts = vec![false; fragments.len()];
+    let pending = |index: usize| match &fragments[index] {
+        SemanticsFragment::Pending(pending) => Some(&pending.config),
+        SemanticsFragment::Formed(_) => None,
+    };
+    let refused: Vec<bool> = (0..fragments.len())
+        .map(|index| {
+            pending(index).is_some_and(|config| !parent.can_absorb(config, names_a_control))
+        })
+        .collect();
+    let mut conflicts = refused.clone();
 
-    for (index, fragment) in fragments.iter().enumerate() {
-        let SemanticsFragment::Pending(pending) = fragment else {
+    for index in 0..fragments.len() {
+        let Some(config) = pending(index) else {
             continue;
         };
-
-        if !parent.is_compatible_with(&pending.config) {
-            conflicts[index] = true;
-        }
-
         for sibling_index in 0..index {
-            let SemanticsFragment::Pending(sibling) = &fragments[sibling_index] else {
+            let Some(sibling) = pending(sibling_index) else {
                 continue;
             };
-            if !pending.config.is_compatible_with(&sibling.config) {
+            let compatible = match (refused[index], refused[sibling_index]) {
+                (true, true) => continue,
+                (true, false) => sibling.can_stay_beside(config, names_a_control),
+                (false, true) => config.can_stay_beside(sibling, names_a_control),
+                (false, false) => config.can_join(sibling, names_a_control),
+            };
+            if !compatible {
                 conflicts[index] = true;
                 conflicts[sibling_index] = true;
             }
@@ -1739,6 +1767,7 @@ fn assembly_inputs_for(
         parent_requires_explicit_node: false,
         merge_into_ancestor: false,
         has_reveal_ancestor: false,
+        names_a_control: false,
     };
     let mut blocks_user_actions = false;
     let mut transform = Matrix4::IDENTITY;
