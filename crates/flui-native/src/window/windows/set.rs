@@ -2,7 +2,11 @@
 //! the deadline redraws and the modal paints, the window position that opens
 //! them into it, and where a window opens and returns to (its placement).
 
-use std::{collections::HashMap, rc::Rc, sync::Arc};
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use windows::Win32::{
@@ -26,7 +30,6 @@ use crate::host::WindowPositions;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
-use crate::owner::slot::OwnerCell;
 use crate::owner::windows::{ClassWindows, WindowsLoop};
 use crate::version::gate::Since;
 use crate::version::gate::windows::WindowsBuild;
@@ -41,14 +44,14 @@ use crate::window::config::WindowConfiguration;
 /// it when the window closes. Public where it is defined, as the host's table
 /// names it, and nameable only inside the crate.
 pub struct WindowSet {
-    /// The windows, on the owner thread: a window is not `Send`. The only
+    /// The windows, which only the owner thread holds (ADR-0327 §5). The only
     /// way from an HWND to a [`WindowId`]: a handle not in it names no window
     /// of this platform.
-    by_handle: OwnerCell<HashMap<isize, Rc<WindowsWindow>>>,
-    /// Issues the id of every window the set opens, on the owner thread,
+    by_handle: RefCell<FxHashMap<isize, Rc<WindowsWindow>>>,
+    /// Issues the id of every window the set opens,
     /// never one twice: Win32 recycles HWND values, so a handle is never an
     /// id.
-    ids: OwnerCell<WindowIdMint>,
+    ids: RefCell<WindowIdMint>,
     pub(super) config: WindowConfiguration,
     /// What every window hands out of the window-level positions.
     pub(super) positions: WindowPositions<WindowRef>,
@@ -103,8 +106,8 @@ impl WindowSet {
         build: WindowsBuild,
     ) -> Self {
         Self {
-            by_handle: OwnerCell::new(),
-            ids: OwnerCell::new(),
+            by_handle: RefCell::default(),
+            ids: RefCell::default(),
             config,
             positions,
             material: material::gate(build),
@@ -126,38 +129,36 @@ impl WindowSet {
         identity: crate::owner::windows::WindowIdentity,
     ) -> Option<(Rc<WindowsWindow>, bool)> {
         let key = hwnd.0 as isize;
-        self.by_handle
-            .with(|windows| {
-                if windows
-                    .get(&key)
-                    .is_some_and(|window| window.identity == identity)
-                {
-                    windows
-                        .remove(&key)
-                        .map(|window| (window, windows.is_empty()))
-                } else {
-                    None
-                }
-            })
-            .flatten()
+        let mut windows = self.by_handle.borrow_mut();
+        if windows
+            .get(&key)
+            .is_none_or(|window| window.identity != identity)
+        {
+            return None;
+        }
+        windows
+            .remove(&key)
+            .map(|window| (window, windows.is_empty()))
     }
 
-    /// A snapshot of the windows, taken on the owner thread: what each of them
-    /// does next may run user code, which may open or close windows.
+    /// A snapshot of the windows: what each of them does next may run user
+    /// code, which may open or close windows.
     fn snapshot(&self) -> Vec<Rc<WindowsWindow>> {
         self.by_handle
-            .with(|windows| windows.values().cloned().collect())
-            .unwrap_or_default()
+            .borrow()
+            .values()
+            .cloned()
+            .collect::<Vec<Rc<WindowsWindow>>>()
     }
 }
 
 impl std::fmt::Debug for WindowSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("WindowSet");
-        // Off the owner thread the count is not there to read.
-        match self.by_handle.with(|windows| windows.len()) {
-            Some(windows) => out.field("windows", &windows),
-            None => out.field("windows", &format_args!("<owner's>")),
+        // A set being changed is not there to count.
+        match self.by_handle.try_borrow() {
+            Ok(windows) => out.field("windows", &windows.len()),
+            Err(_) => out.field("windows", &format_args!("<borrowed>")),
         };
         out.field("ids", &self.ids)
             .field("config", &self.config)
@@ -169,12 +170,9 @@ impl std::fmt::Debug for WindowSet {
 }
 
 impl OpenWindows for WindowSet {
-    /// Asked on the owner thread; a set no window was ever stored into is
-    /// empty.
+    /// A set no window was ever stored into is empty.
     fn is_empty(&self) -> bool {
-        self.by_handle
-            .with(|windows| windows.is_empty())
-            .unwrap_or(true)
+        self.by_handle.borrow().is_empty()
     }
 }
 
@@ -188,8 +186,10 @@ impl ClassWindows for WindowSet {
         // only after the set is let go.
         let Some(limit) = self
             .by_handle
-            .with(|windows| windows.values().map(|window| window.identity).max())
-            .flatten()
+            .borrow()
+            .values()
+            .map(|window| window.identity)
+            .max()
         else {
             return;
         };
@@ -197,17 +197,13 @@ impl ClassWindows for WindowSet {
         loop {
             let next = self
                 .by_handle
-                .with(|windows| {
-                    windows
-                        .values()
-                        .filter(|window| {
-                            after.is_none_or(|after| window.identity > after)
-                                && window.identity <= limit
-                        })
-                        .min_by_key(|window| window.identity)
-                        .cloned()
+                .borrow()
+                .values()
+                .filter(|window| {
+                    after.is_none_or(|after| window.identity > after) && window.identity <= limit
                 })
-                .flatten();
+                .min_by_key(|window| window.identity)
+                .cloned();
             let Some(window) = next else {
                 break;
             };
@@ -273,11 +269,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
             })?;
         tracing::info!("Opening window: {:?}", options.title);
 
-        // On the owner thread (`shares` above), which built the set.
-        let window_id = windows
-            .ids
-            .with(|ids| ids.next())
-            .expect("BUG: a window set is built on the owner thread that opens its windows")?;
+        let window_id = windows.ids.borrow_mut().next()?;
         let window = WindowsWindow::try_new(
             window_id,
             options,
@@ -289,13 +281,13 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         )?;
         let hwnd_value = window.hwnd().0 as isize;
 
-        // Store window
-        // A window opens on the owner thread alone (`shares` above), which
-        // built the set.
-        let _prev = windows
+        // A window the OS gave the same handle before has closed; its
+        // wrapper is dropped with the set's borrow released.
+        let previous = windows
             .by_handle
-            .with(|tracked| tracked.insert(hwnd_value, Rc::clone(&window)))
-            .expect("BUG: a window set is built on the owner thread that opens its windows");
+            .borrow_mut()
+            .insert(hwnd_value, Rc::clone(&window));
+        drop(previous);
 
         Ok(window)
     }
@@ -312,12 +304,9 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         // no entry: the foreground window is then none of this platform's.
         windows
             .by_handle
-            .with(|tracked| {
-                tracked
-                    .get(&(hwnd.0 as isize))
-                    .map(|window| window.window_id)
-            })
-            .flatten()
+            .borrow()
+            .get(&(hwnd.0 as isize))
+            .map(|window| window.window_id)
     }
 
     fn capabilities(_: &WindowsLoop, windows: &WindowSet) -> WindowCapabilities {

@@ -83,7 +83,3 @@ crate = "flui-native"
 type = "WindowsAccessibility"
 traits = ["Send", "Sync"]
 
-[[allow]]
-crate = "flui-native"
-type = "WindowsLoop"
-traits = ["Send", "Sync"]
