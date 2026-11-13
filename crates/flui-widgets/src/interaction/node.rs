@@ -404,10 +404,13 @@ impl InteractiveNode {
 
     /// Answer the tap family `tap` sets, recognized as a
     /// [`GestureDetector`](crate::GestureDetector) with those slots
-    /// recognizes it, and observe the raw contact ends it asks for.
+    /// recognizes it, and observe the raw contact ends it asks for. A control
+    /// that keeps its tap across builds hands the `Rc` it holds, so a rebuild
+    /// allocates nothing for it.
     #[must_use]
-    pub fn tap(self, tap: ControlTap) -> Self {
-        self.press(Rc::new(tap))
+    pub fn tap(self, tap: impl Into<Rc<ControlTap>>) -> Self {
+        let tap: Rc<ControlTap> = tap.into();
+        self.press(tap)
     }
 
     /// [`tap`](Self::tap) from a value the control already shares: a button

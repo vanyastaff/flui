@@ -116,6 +116,8 @@ enum Command {
     ModuleDag(module_dag::ModuleDagArgs),
     /// Print the lane and the packages a change touches (CI's `plan`).
     Affected(change_scope::AffectedArgs),
+    /// List the expectations a change edits; with `--body`, fail on each the body leaves unnamed (ADR-0331).
+    Expectations(change_scope::ExpectationsArgs),
     /// Check that no include_str! target is classified as docs-only.
     PathsFilter(change_scope::PathsFilterArgs),
     /// The `ci` aggregator job: every job is gated and exactly the planned ones skipped.
@@ -221,6 +223,7 @@ fn main() -> ExitCode {
         Command::Reach(args) => workspace::reach(&args),
         Command::ModuleDag(args) => module_dag::module_dag(&args),
         Command::Affected(args) => change_scope::affected(&args),
+        Command::Expectations(args) => change_scope::expectations(&args),
         Command::PathsFilter(args) => change_scope::paths_filter(&args),
         Command::CiVerify(args) => change_scope::ci_verify(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),

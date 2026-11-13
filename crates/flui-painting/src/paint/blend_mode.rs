@@ -9,6 +9,10 @@
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the Porter-Duff and W3C compositing modes are a fixed list, and each is classified exhaustively"
+)]
 pub enum BlendMode {
     /// Drop both the source and the destination, leaving nothing.
     ///
@@ -176,6 +180,10 @@ pub enum BlendMode {
 /// match in [`BlendMode::coverage_class`], so a new mode is classified before
 /// any of these decisions can see it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each decision that folds coverage handles every class, and a `_` arm would fold a new one wrongly"
+)]
 pub enum CoverageClass {
     /// The destination factor is `One` or `1 - srcAlpha`: a transparent
     /// source keeps the destination, and folding coverage is exact.

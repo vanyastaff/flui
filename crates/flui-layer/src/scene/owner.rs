@@ -4,13 +4,14 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use flui_foundation::SurfaceGeneration;
 use flui_foundation::generation::GenSlots;
 use flui_foundation::geometry::Offset;
 use flui_foundation::sequence::IdMint;
+use flui_foundation::{RenderId, SurfaceGeneration};
+use flui_painting::DisplayList;
 use smallvec::SmallVec;
 
-use super::content::{BoundaryContent, EntryIndex};
+use super::content::{BoundaryContent, Chunk, EntryIndex};
 use super::footprint::{self, FootprintCost};
 use super::id::{ContentVersion, Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::pending::{Contents, PendingLog};
@@ -150,6 +151,8 @@ pub struct ReleasedContents {
     versions: SmallVec<[SceneVersion; RETIRING + 1]>,
     /// The owner's empty content, whose stream an emptied content takes.
     empty: Option<Arc<BoundaryContent>>,
+    /// The owner's emptied buffer, which reclaiming fills with emptied chunks.
+    chunks: Vec<Arc<Chunk>>,
 }
 
 impl ReleasedContents {
@@ -163,8 +166,12 @@ impl ReleasedContents {
             contents,
             versions,
             empty,
+            chunks,
         } = self;
-        let mut reclaimed = Reclaimed::default();
+        let mut reclaimed = Reclaimed {
+            chunks,
+            ..Reclaimed::default()
+        };
         // Versions first: a content a released version still names is held
         // alone only once that version is taken apart.
         for version in versions {
@@ -174,6 +181,7 @@ impl ReleasedContents {
             let (Some(empty), Some(held)) = (empty.as_deref(), Arc::get_mut(&mut content)) else {
                 continue;
             };
+            held.harvest_chunks(&mut reclaimed.chunks, SPARE_CHUNKS, KEPT_CHUNK_ROOM);
             held.scrub(empty);
             // One without room for a layer saves a composited-layer update
             // nothing but its `Arc`, and would hold a slot a roomier one needs.
@@ -192,13 +200,22 @@ const RETIRING: usize = 2;
 /// The most emptied contents an owner keeps for composited-layer updates.
 const SPARE_CONTENTS: usize = 4;
 
+/// The most emptied chunks an owner keeps for the next repaint's runs: a
+/// repaint of a few thousand leaves writes into none it allocates.
+const SPARE_CHUNKS: usize = 4096;
+
+/// The most commands a kept chunk holds room for: a chunk that recorded more
+/// lets its buffer go, so one heavy frame does not pin its memory.
+const KEPT_CHUNK_ROOM: usize = 256;
+
 /// What [`ReleasedContents::reclaim`] kept: emptied version records, table
-/// nodes and contents that hold no value of the scene, so dropping them runs
-/// no other code.
+/// nodes, contents and chunks that hold no value of the scene, so dropping
+/// them runs no other code.
 #[derive(Debug, Default)]
 pub struct Reclaimed {
     versions: VersionSpares,
     contents: SmallVec<[Arc<BoundaryContent>; SPARE_CONTENTS]>,
+    chunks: Vec<Arc<Chunk>>,
 }
 
 /// An applied patch: the new version's id and what the owner let go of.
@@ -437,6 +454,10 @@ pub struct SceneOwner {
     retiring: SmallVec<[SceneVersion; RETIRING]>,
     /// Emptied contents the next composited-layer updates write into.
     spare_contents: SmallVec<[Arc<BoundaryContent>; SPARE_CONTENTS]>,
+    /// Emptied chunks the next repaint's runs are written into.
+    spare_chunks: Vec<Arc<Chunk>>,
+    /// The emptied buffer the next released set collects its chunks into.
+    chunk_bag: Vec<Arc<Chunk>>,
     /// The empty content whose stream an emptied content takes.
     empty: Arc<BoundaryContent>,
 }
@@ -492,6 +513,8 @@ impl SceneOwner {
             cost: ApplyCost::default(),
             retiring: SmallVec::new(),
             spare_contents: SmallVec::new(),
+            spare_chunks: Vec::new(),
+            chunk_bag: Vec::new(),
             empty: Arc::new(BoundaryContent::default()),
         }
     }
@@ -611,6 +634,7 @@ impl SceneOwner {
             contents,
             versions,
             empty: Some(Arc::clone(&self.empty)),
+            chunks: std::mem::take(&mut self.chunk_bag),
         }
     }
 
@@ -620,9 +644,22 @@ impl SceneOwner {
         self.scratch.spares.absorb(&mut reclaimed.versions);
         while self.spare_contents.len() < SPARE_CONTENTS {
             let Some(content) = reclaimed.contents.pop() else {
-                return;
+                break;
             };
             self.spare_contents.push(content);
+        }
+        let mut chunks = reclaimed.chunks;
+        if self.spare_chunks.is_empty() {
+            std::mem::swap(&mut self.spare_chunks, &mut chunks);
+        } else {
+            let room = SPARE_CHUNKS.saturating_sub(self.spare_chunks.len());
+            let taken = chunks.len().min(room);
+            self.spare_chunks.extend(chunks.drain(..taken));
+            chunks.clear();
+        }
+        // The emptied buffer collects the next released set's chunks.
+        if self.chunk_bag.capacity() < chunks.capacity() {
+            self.chunk_bag = chunks;
         }
     }
 
@@ -630,7 +667,7 @@ impl SceneOwner {
     #[cfg(feature = "testing")]
     #[must_use]
     pub fn spares_len(&self) -> usize {
-        self.scratch.spares.len() + self.spare_contents.len()
+        self.scratch.spares.len() + self.spare_contents.len() + self.spare_chunks.len()
     }
 
     /// Starts over under a new lineage: the version holds an empty root, the
@@ -673,6 +710,7 @@ impl SceneOwner {
             contents,
             versions,
             empty: Some(Arc::clone(&self.empty)),
+            chunks: std::mem::take(&mut self.chunk_bag),
         }
     }
 
@@ -950,6 +988,34 @@ impl SceneWriter<'_> {
                 Err(index)
             }
         }
+    }
+
+    /// The `ordinal`th run `owner` painted, recorded as `version`, holding
+    /// the commands taken out of `commands`: [`Chunk::new`] written into a
+    /// chunk the owner reclaimed when it holds one ([`SceneOwner::restock`]).
+    /// `commands` is left holding that chunk's emptied buffer, room for the
+    /// next recording ([`Canvas::record_into`](flui_painting::Canvas::record_into)),
+    /// or empty.
+    pub fn chunk(
+        &mut self,
+        owner: RenderId,
+        ordinal: u32,
+        version: ContentVersion,
+        commands: &mut DisplayList,
+    ) -> Arc<Chunk> {
+        if let Some(mut spare) = self.owner.spare_chunks.pop() {
+            let refilled = Arc::get_mut(&mut spare)
+                .and_then(|held| held.refill(owner, ordinal, version, commands));
+            if refilled.is_some() {
+                return spare;
+            }
+        }
+        Arc::new(Chunk::new(
+            owner,
+            ordinal,
+            version,
+            std::mem::take(commands),
+        ))
     }
 
     /// Hands the owner a content the painter recorded for a patch that was

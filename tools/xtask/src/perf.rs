@@ -186,7 +186,7 @@ impl Finding {
 
 /// Whether `counter` measures cost (heap traffic), which only has to stay at
 /// or under its baseline, rather than work, which has to match it.
-fn is_cost(counter: &str) -> bool {
+pub(crate) fn is_cost(counter: &str) -> bool {
     counter.contains("alloc") || counter.contains("bytes")
 }
 

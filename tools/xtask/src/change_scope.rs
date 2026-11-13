@@ -17,6 +17,7 @@
 mod aggregator;
 mod classify;
 mod diagnostics;
+mod expectations;
 mod guards;
 mod lane_args;
 mod miri_scope;
@@ -30,6 +31,7 @@ use anyhow::Context;
 
 use crate::util::repo_root;
 use classify::{Repo, Scope};
+pub(crate) use expectations::{ExpectationsArgs, expectations};
 use lane_args::{Event, LaneArgs};
 
 /// How `affected` prints its answer.

@@ -47,6 +47,10 @@ pub trait InlineSpanTrait: std::fmt::Debug {
 /// in a uniform container.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "text layout handles each span kind, and a `_` arm would drop a span"
+)]
 pub enum InlineSpan {
     /// A run of styled text (with its own child spans).
     ///
@@ -647,6 +651,7 @@ impl PlaceholderDimensions {
 /// Vertical alignment for placeholders in text.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum PlaceholderAlignment {
     /// Align to baseline.
     #[default]

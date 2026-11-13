@@ -305,6 +305,10 @@ impl fmt::Debug for CommandHandle {
 /// The set is closed: a control always shown, a context menu, or controls a
 /// companion widget already draws.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the set of alternatives is closed: a visible control, a context menu or a companion"
+)]
 pub enum Alternative {
     /// Controls always shown beside the content, each performing its
     /// command when pressed. The default choice.
@@ -320,6 +324,10 @@ pub enum Alternative {
 /// Where controls sit beside the content, in reading order: mirrored in a
 /// right-to-left locale.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "controls sit before or after the content"
+)]
 pub enum ControlPlacement {
     /// Before the content: the left in a left-to-right locale.
     Leading,

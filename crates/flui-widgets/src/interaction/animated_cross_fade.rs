@@ -16,6 +16,7 @@ use crate::{
 
 /// Which of an [`AnimatedCrossFade`]'s two children is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(clippy::exhaustive_enums, reason = "a cross-fade has two children")]
 pub enum CrossFadeState {
     /// The first child.
     #[default]

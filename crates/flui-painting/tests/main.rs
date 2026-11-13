@@ -556,6 +556,10 @@ fn recording_contract() {
                 recording::a_taken_recording_lets_go_of_a_heavy_frames_room,
             ),
             (
+                "a_canvas_records_into_a_buffer_it_was_handed",
+                recording::a_canvas_records_into_a_buffer_it_was_handed,
+            ),
+            (
                 "a_finished_display_list_is_sendable_to_another_thread",
                 recording::a_finished_display_list_is_sendable_to_another_thread,
             ),
@@ -566,6 +570,10 @@ fn recording_contract() {
             (
                 "a_destructor_that_panics_during_reset_leaves_the_canvas_empty",
                 recording::a_destructor_that_panics_during_reset_leaves_the_canvas_empty,
+            ),
+            (
+                "a_destructor_that_panics_during_clear_leaves_the_list_empty",
+                recording::a_destructor_that_panics_during_clear_leaves_the_list_empty,
             ),
         ],
     );

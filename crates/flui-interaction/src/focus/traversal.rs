@@ -15,6 +15,10 @@ use std::{
 
 /// A spatial direction, independent of reading-order traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the four spatial directions of a plane"
+)]
 pub enum FocusDirection {
     /// Toward smaller vertical coordinates.
     Up,

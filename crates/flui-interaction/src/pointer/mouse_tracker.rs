@@ -90,6 +90,10 @@ type Retired = SmallVec<[ResolvedMouseTrackerAnnotation; 2]>;
 /// because it derives the hover/contact distinction from the event itself
 /// (an empty-buttons `Move`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "motion is with or without a pressed contact"
+)]
 pub enum PointerMotionKind {
     /// Motion without an active Down sequence.
     Hover,

@@ -211,6 +211,10 @@ fn action_component_contracts() {
             ink_well::the_press_hold_survives_a_rebuild_and_a_disable_ends_it,
         ),
         (
+            "ink_well::a rebuilt well calls its new handler and releases it when unmounted",
+            ink_well::a_rebuilt_well_calls_its_new_handler_and_releases_it_when_unmounted,
+        ),
+        (
             "floating_action_button::fab theme slot reaches the mounted materials color and elevation",
             floating_action_button::fab_theme_slot_reaches_the_mounted_materials_color_and_elevation,
         ),

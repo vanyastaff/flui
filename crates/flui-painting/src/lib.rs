@@ -56,10 +56,6 @@
 //! [`paint`] and re-exported here; the style values live in [`styling`] and
 //! [`typography`].
 
-#![expect(
-    clippy::exhaustive_enums,
-    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
-)]
 #![cfg_attr(
     test,
     allow(

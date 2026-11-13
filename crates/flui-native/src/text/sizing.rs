@@ -31,6 +31,10 @@ pub fn capture_text_sizing(
 
 /// Readiness of one presentation's detached conversion context.
 #[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the composition root acts on each state, and a `_` arm would drop an outstanding receipt"
+)]
 pub enum TextSizingCaptureState {
     /// This backend has no nonlinear native conversion.
     Unsupported,

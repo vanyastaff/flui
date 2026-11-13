@@ -13,6 +13,7 @@
 //! `splash_factory`. The M3 elevated button sets no default `side` or
 //! `fixed_size` either, so neither field is populated here.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::geometry::{EdgeInsets, Size};
@@ -40,7 +41,7 @@ use crate::theme::Theme;
 #[derive(Clone, StatelessView)]
 pub struct ElevatedButton {
     on_pressed: Option<PressCallback>,
-    style: Option<ButtonStyle>,
+    style: Option<Rc<ButtonStyle>>,
     identifier: Option<Arc<str>>,
     child: BoxedView,
 }
@@ -82,7 +83,7 @@ impl ElevatedButton {
     /// `crate::button_style_button`'s resolve-then-coalesce docs.
     #[must_use]
     pub fn style(mut self, style: ButtonStyle) -> Self {
-        self.style = Some(style);
+        self.style = Some(Rc::new(style));
         self
     }
 
@@ -99,7 +100,7 @@ impl StatelessView for ElevatedButton {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let mut core = ButtonStyleButtonCore::new(default_style(&theme), self.child.clone())
-            .style(self.style.clone().unwrap_or_default());
+            .style(self.style.clone());
         // Middle cascade tier: FLUI V1 has no per-button `InheritedTheme`
         // wrapper yet, so this reads the button style off the ambient
         // `ThemeData`'s `elevated_button_theme` slot instead (see
@@ -110,7 +111,7 @@ impl StatelessView for ElevatedButton {
             .as_ref()
             .and_then(|t| t.style.clone())
         {
-            core = core.theme_style(theme_style);
+            core = core.theme_style(Rc::new(theme_style));
         }
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);

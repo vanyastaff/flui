@@ -1421,6 +1421,10 @@ pub struct SizeConstraints {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the host's window vocabulary: a new variant is a format version, and a `_` arm would drop a recorded line"
+)]
 pub enum WindowFrame {
     /// The system's title bar and borders.
     System,
@@ -1438,6 +1442,10 @@ pub enum WindowFrame {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the host's window vocabulary: a new variant is a format version, and a `_` arm would drop a recorded line"
+)]
 pub enum SystemControls {
     /// Where the system puts them.
     Shown,

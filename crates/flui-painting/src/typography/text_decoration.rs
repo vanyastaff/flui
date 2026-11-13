@@ -226,6 +226,7 @@ impl TextDecoration {
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// How visual text overflow is handled.
+#[non_exhaustive]
 pub enum TextOverflow {
     /// Clip the overflowing text at its container boundary.
     #[default]
@@ -241,6 +242,7 @@ pub enum TextOverflow {
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// How the width of a text paragraph is measured.
+#[non_exhaustive]
 pub enum TextWidthBasis {
     /// Width fills the parent's width constraint (multiline text takes the full width).
     #[default]
@@ -303,6 +305,7 @@ impl TextHeightBehavior {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// How the extra vertical space added by the `height` multiplier is
 /// distributed above and below the text.
+#[non_exhaustive]
 pub enum TextLeadingDistribution {
     /// Distribute leading according to the font's ascent/descent ratio.
     #[default]
