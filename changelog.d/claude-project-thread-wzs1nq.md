@@ -53,3 +53,5 @@
   the painting error enums.
 - Also `#[non_exhaustive]` (ADR-0329): the interaction `DragRepresentation`, `DragStage`,
   `MoveOutcome`, `Autoscroll`, `TraversalEdgeBehavior` and `SweepModel`.
+- Also `#[non_exhaustive]` (ADR-0329): the widgets `TransitionGroup`, `RouteLifecycle`, `PanAxis`,
+  `WheelScaleGate` and `DismissDirection`.

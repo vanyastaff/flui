@@ -26579,7 +26579,7 @@ impl PartialEq for flui::widgets::DiscreteEffect
 impl core::fmt::Debug for flui::widgets::DiscreteEffect
 impl core::marker::StructuralPartialEq for flui::widgets::DiscreteEffect
 pub fn flui::widgets::DiscreteEffect::on_change(self, value: u64) -> flui::widgets::SymbolEffect
-pub enum flui::widgets::DismissDirection
+#[non_exhaustive] pub enum flui::widgets::DismissDirection
 impl Clone for flui::widgets::DismissDirection
 impl Copy for flui::widgets::DismissDirection
 impl Eq for flui::widgets::DismissDirection
@@ -27502,7 +27502,7 @@ reexport flui::widgets::PageView => flui::prelude::PageView
 pub struct flui::widgets::PageViewState { .. }
 impl core::fmt::Debug for flui::widgets::PageViewState
 impl flui::prelude::ViewState<flui::prelude::PageView> for flui::widgets::PageViewState
-pub enum flui::widgets::PanAxis
+#[non_exhaustive] pub enum flui::widgets::PanAxis
 impl Clone for flui::widgets::PanAxis
 impl Copy for flui::widgets::PanAxis
 impl Default for flui::widgets::PanAxis
@@ -28605,7 +28605,7 @@ pub fn flui::widgets::ViewportFraction::get(self) -> f64
 pub fn flui::widgets::ViewportFraction::try_new(fraction: f64) -> Result<Self, flui::widgets::InvalidViewportFraction>
 reexport flui::widgets::Visibility => flui::prelude::Visibility
 reexport flui::widgets::VisibilityGate => flui::prelude::VisibilityGate
-pub enum flui::widgets::WheelScaleGate
+#[non_exhaustive] pub enum flui::widgets::WheelScaleGate
 impl Clone for flui::widgets::WheelScaleGate
 impl Copy for flui::widgets::WheelScaleGate
 impl Default for flui::widgets::WheelScaleGate
