@@ -96,15 +96,11 @@
 //! The bar is a `SemanticsRole::TabList` and each destination a
 //! `SemanticsRole::Tab` with its selected state: FLUI's
 //! `flui_semantics::SemanticsRole` carries both, under ARIA's names.
-//! Each destination is one
-//! [`flui_sdk::widgets::Semantics`] node carrying every flag at once
-//! (`role`/`selected`/`enabled`/`button`), rather than an outer
-//! `Semantics(role: tab, selected: ...)` around an inner
-//! `Semantics(enabled: ..., button: true)`.
-//! [`flui_sdk::widgets::MergeSemantics`] still wraps it, which is
-//! load-bearing if a destination's own
-//! icon/label subtree ever contributes its own semantics nodes (folding the
-//! label `Text`'s node into the tab node rather than leaving it a sibling).
+//! Each destination is one node, its `InkWell`'s: the well's description
+//! carries the role and the selected state, the well's own parts the
+//! enabled state and the click, and the description folds the icon and
+//! label beneath it into that node (`Description::merges_descendants`), as
+//! Flutter's `MergeSemantics` around the destination does.
 //!
 //! **Named deferral**: the extra "Tab N of M" accessibility label
 //! needs a `MaterialLocalizations.tabLabel`-equivalent localized string
@@ -141,11 +137,11 @@ use flui_sdk::painting::TextStyle;
 use flui_sdk::painting::{Canvas, Paint};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
     Column, CustomPaint, CustomPainter, Expanded, IconTheme, IconThemeData, IndexedStack,
-    MainAxisAlignment, MergeSemantics, MotionBuilder, Padding, Row, SafeArea, Semantics,
-    SemanticsRole, SizedBox, Stack, SymbolEffect, Text, WidgetState, WidgetStateProperty,
-    WidgetStates,
+    MainAxisAlignment, MotionBuilder, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
+    Stack, SymbolEffect, Text, WidgetState, WidgetStateProperty, WidgetStates,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -501,7 +497,7 @@ fn navigation_destination_states(selected: bool, enabled: bool) -> WidgetStates 
     }
 }
 
-/// Builds one destination's `Expanded(MergeSemantics(Semantics(InkWell(...))))`
+/// Builds one destination's `Expanded(InkWell(...))`
 /// subtree — see the module docs for the layout/overlay/semantics shape.
 #[expect(clippy::too_many_arguments, reason = "internal helper, not public API")]
 fn build_destination(
@@ -581,13 +577,17 @@ fn build_destination(
         });
     }
 
-    let semantics = Semantics::new()
-        .role(SemanticsRole::Tab)
-        .selected(selected)
-        .enabled(enabled)
-        .child(ink_well);
+    // One node per destination: Flutter's `MergeSemantics` and
+    // `Semantics(selected:, enabled:)` around the destination's `InkWell` are
+    // the well's own node here (ADR-0322 §1). Its switch is `enabled`, as the
+    // well is interactive exactly when the destination is.
+    let ink_well = ink_well.description(
+        Description::new(SemanticsRole::Tab)
+            .selected(selected)
+            .merges_descendants(),
+    );
 
-    Expanded::new(MergeSemantics::new().child(semantics))
+    Expanded::new(ink_well)
 }
 
 impl StatelessView for NavigationBar {

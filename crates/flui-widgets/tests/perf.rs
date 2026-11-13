@@ -41,14 +41,12 @@ use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition}
 use flui_testing::control_cost::control_over_text;
 use flui_testing::heap::{CountingAllocator, HeapCounts};
 use flui_testing::widgets::SharedSignal;
-use flui_testing::{
-    FrameReport, HeadlessBinding, HeadlessHost, HeadlessWindow, MountOptions, MountOwners,
-};
-use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+use flui_testing::widgets::{LaidOut, lay_out, tight};
+use flui_testing::{FrameReport, HeadlessHost, HeadlessWindow};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, Column, Expanded, RawButton, RepaintBoundary, SingleChildScrollView, SizedBox,
-    SliverList, Text, Viewport, app_root,
+    SliverList, Text, Viewport,
 };
 
 #[global_allocator]
@@ -129,6 +127,14 @@ struct PerfApp {
     position: ScrollPosition,
 }
 
+thread_local! {
+    /// Rows [`PerfApp`]'s list has built on this thread, so a scenario can see
+    /// that a scroll reached new rows. A thread-local rather than a captured
+    /// handle: the row builder stays a zero-sized closure, so counting adds
+    /// nothing to what a rebuild of the app allocates.
+    static ROWS_BUILT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 impl StatelessView for PerfApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         // Each row paints, so a retained row carries a picture layer that a
@@ -139,6 +145,7 @@ impl StatelessView for PerfApp {
             ROW_HEIGHT,
             std::rc::Rc::new(|index| {
                 (index < ROWS).then(|| {
+                    ROWS_BUILT.with(|built| built.set(built.get() + 1));
                     RepaintBoundary::new()
                         .child(
                             SizedBox::new(WIDTH, ROW_HEIGHT)
@@ -161,7 +168,7 @@ impl StatelessView for PerfApp {
 }
 
 struct Mounted {
-    binding: HeadlessBinding,
+    laid: LaidOut,
     writer: ScrollOffsetWriter,
 }
 impl Mounted {
@@ -169,15 +176,14 @@ impl Mounted {
     fn pump_many(&mut self, frames: usize) -> FrameReport {
         let mut total = FrameReport::default();
         for _ in 0..frames {
-            total += &self.binding.pump_frame_report(FRAME);
+            total += &self.laid.pump_report(FRAME);
         }
         total
     }
 
     fn render_nodes(&self) -> usize {
-        self.binding
+        self.laid
             .pipeline_owner()
-            .expect("tree-bound")
             .with(|owner: &PipelineOwner| owner.render_tree().len())
     }
 }
@@ -187,15 +193,9 @@ fn mount() -> Mounted {
     let label = SharedSignal::new(String::from("label"));
     let (position, writer) = ScrollPosition::with_writer(0.0);
     let app = PerfApp { label, position };
-    let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app_root(app)));
-    let _ = binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(WIDTH, HEIGHT),
-    );
-    binding.enable_semantics().expect("tree-bound");
-    Mounted { binding, writer }
+    let mut laid = lay_out(app, tight(WIDTH, HEIGHT));
+    laid.enable_semantics();
+    Mounted { laid, writer }
 }
 
 /// Writes `report` and what the measured frames asked of the heap for `xtask perf`
@@ -239,9 +239,9 @@ fn counter(report: &FrameReport, name: &str) -> u64 {
 #[test]
 fn perf_counters_are_live_on_a_full_reassemble() {
     let mut app = mount();
-    app.binding.perform_reassemble();
-    app.binding.reassemble_render_tree();
-    let (report, allocations) = perf_measured(|| app.binding.pump_frame_report(FRAME));
+    app.laid.perform_reassemble();
+    app.laid.reassemble_render_tree();
+    let (report, allocations) = perf_measured(|| app.laid.pump_report(FRAME));
     record("full_reassemble", &report, allocations);
 
     for (name, value) in report.counters() {
@@ -264,6 +264,9 @@ fn perf_counters_are_live_on_a_full_reassemble() {
 #[test]
 fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     let mut app = mount();
+    // Semantics reach the tree on the frame after the mount, which the
+    // scenario does not measure.
+    app.laid.pump_for(FRAME);
     let band = app.render_nodes();
 
     app.writer
@@ -290,6 +293,77 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     assert!(report.pipeline.layout_passes >= 1, "{report:#?}");
     assert!(report.pipeline.nodes_painted >= 1, "{report:#?}");
     assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
+}
+
+/// One-screen scrolls a scenario pumps before it measures a steady one. A
+/// margin, not a measured threshold: the scenario asserts that the two scrolls
+/// after it cost the same within [`STEADY_SLACK`], so a warm-up that runs past
+/// it fails there.
+const WARM_SCROLLS: u32 = 8;
+
+/// How many allocations or reallocations two steady scrolls may differ by: the
+/// rows a band rebuilds are not the same rows from one screen to the next.
+const STEADY_SLACK: u64 = 2;
+
+/// A one-screen scroll after [`WARM_SCROLLS`] others, driven through the UI
+/// runtime's frame transaction: what every scroll after the first few asks of
+/// the heap, and the baseline's ratchet fails a change that makes it cost
+/// more. The first-scroll row above runs on another driver, so the two rows'
+/// counts are not comparable.
+#[test]
+fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
+    let (position, writer) = ScrollPosition::with_writer(0.0);
+    let app = PerfApp {
+        label: SharedSignal::new(String::from("label")),
+        position,
+    };
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(&app).expect("a fresh host takes a root");
+    host.enable_semantics();
+    let visible_rows = ((HEIGHT - LABEL_HEIGHT) / ROW_HEIGHT) as u64;
+    // One frame a screen: the runtime's frame transaction lands the lazy band
+    // in the frame that shows it. The frame after must cost what a later, idle
+    // one does and build no row, so no work of the scroll slips past the frame
+    // it measures.
+    let rows_built = || ROWS_BUILT.with(std::cell::Cell::get);
+    let mut scroll_to = |screen: u32| {
+        writer.set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
+        let before = rows_built();
+        let ((), heap) = perf_measured(|| {
+            let _ = host.pump(FRAME);
+        });
+        let built = rows_built() - before;
+        let ((), after) = perf_measured(|| {
+            let _ = host.pump(FRAME);
+        });
+        let ((), idle) = perf_measured(|| {
+            let _ = host.pump(FRAME);
+        });
+        assert!(
+            rows_built() - before == built
+                && after.allocations == idle.allocations
+                && after.allocated_bytes == idle.allocated_bytes,
+            "screen {screen}'s scroll did work after the frame it measures: \
+             the next frame asked {after:?} of the heap against an idle {idle:?}"
+        );
+        (heap, built)
+    };
+    for screen in 0..=WARM_SCROLLS {
+        scroll_to(screen);
+    }
+    let (first, first_built) = scroll_to(WARM_SCROLLS + 1);
+    let (next, next_built) = scroll_to(WARM_SCROLLS + 2);
+    record_counts("list_10k_scroll_warm", &heap_counts(first));
+
+    assert!(
+        first_built >= visible_rows && next_built >= visible_rows,
+        "a warm scroll builds every newly visible row ({visible_rows}): built {first_built}, then {next_built}"
+    );
+    assert!(
+        first.allocations.abs_diff(next.allocations) <= STEADY_SLACK
+            && first.reallocations.abs_diff(next.reallocations) <= STEADY_SLACK,
+        "a warm scroll is still warming up: one asked {first:?} of the heap, the next {next:?}"
+    );
 }
 
 /// Rows under the sliding panel: enough painted content that a subtree
@@ -325,22 +399,15 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
     );
     let app = Align::new(flui_painting::Alignment::TOP_LEFT)
         .child(RepaintBoundary::new().child(SlideTransition::new(position).child(panel)));
-    let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app_root(app)));
-    let _ = binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(WIDTH, HEIGHT),
-    );
-    binding.enable_semantics().expect("tree-bound");
+    let mut laid = lay_out(app, tight(WIDTH, HEIGHT));
+    laid.enable_semantics();
     controller.set_value(0.25).expect("no build is running");
-    binding.pump_frame(FRAME);
+    laid.pump_for(FRAME);
 
-    let ((), allocations) = perf_measured(|| {
+    let (report, allocations) = perf_measured(|| {
         controller.set_value(0.5).expect("no build is running");
-        binding.pump_frame(FRAME);
+        laid.pump_report(FRAME)
     });
-    let report = binding.last_frame_report().clone();
     record("slide_transition_tick", &report, allocations);
 
     assert_eq!(report.build.elements_built, 0, "{report:#?}");
@@ -554,27 +621,21 @@ impl StatelessView for CaretOverRows {
 /// heap counts they made.
 fn caret_blinks(rows: usize) -> (FrameReport, HeapCounts) {
     let shown = SharedSignal::new(true);
-    let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(
-        binding.arena().clone(),
-        FocusTreeRoot::new(app_root(CaretOverRows {
+    let mut laid = lay_out(
+        CaretOverRows {
             shown: shown.clone(),
             rows,
-        })),
-    );
-    let _ = binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(WIDTH, HEIGHT),
+        },
+        tight(WIDTH, HEIGHT),
     );
     for _ in 0..2 {
-        let _ = binding.pump_frame_report(FRAME);
+        laid.pump_for(FRAME);
     }
     perf_measured(|| {
         let mut total = FrameReport::default();
         for blink in 0..SCALING_FRAMES {
             shown.set(blink % 2 == 1);
-            total += &binding.pump_frame_report(FRAME);
+            total += &laid.pump_report(FRAME);
         }
         total
     })

@@ -557,8 +557,9 @@ impl<H: Host> HostPlatform<H> {
     }
 
     /// Run the loop as [`Platform::run`] does, on a platform the caller keeps
-    /// a handle on, to read the system or quit from another thread while the
-    /// loop runs.
+    /// a handle on, to read the system or quit through it while the loop runs:
+    /// from a handler on the owner thread, or from another thread where the
+    /// host is still `Send + Sync` (ADR-0327 §5 takes that away host by host).
     ///
     /// # Errors
     /// Same contract as [`Platform::run`].

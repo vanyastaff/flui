@@ -822,3 +822,147 @@ pub(crate) fn tab_controller_listener_writes_from_an_event_callback() {
         "the reader rebuilt with the listener's write and the new index"
     );
 }
+
+/// A tab is one node: its label and the semantics of what it holds fold
+/// into it, nothing beneath it keeps a node of its own, and assistive
+/// technology's click and focus on that node reach the tab's well.
+///
+/// Red-check: drop `merges_descendants` from the tab's description (the
+/// label and the inner node stay nodes of their own, and the tab node
+/// carries no label).
+pub fn a_tab_is_one_node_that_takes_its_contents_and_their_actions() {
+    use flui_sdk::widgets::Semantics;
+    use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
+
+    let tapped = Rc::new(Cell::new(None));
+    let record = Rc::clone(&tapped);
+    let controller = TabController::new(2, 0);
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            TabBar::secondary(vec![
+                Tab::new().text("One"),
+                Tab::new().child(
+                    Semantics::new()
+                        .container(true)
+                        .label("Starred")
+                        .child(SizedBox::new(24.0, 24.0)),
+                ),
+            ])
+            .controller(controller.clone())
+            .on_tap(move |_ctx, index| record.set(Some(index))),
+        ),
+        tight(400.0, 48.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let tabs = tree.find_all(Role::Tab);
+    let labels: Vec<Option<String>> = tabs
+        .iter()
+        .map(|tab| tab.raw().label().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        labels,
+        [Some("One".to_owned()), Some("Starred".to_owned())],
+        "{}",
+        tree.describe()
+    );
+    assert!(
+        tree.nodes()
+            .filter(|node| node.raw().label() == Some("Starred"))
+            .all(|node| node.raw().role() == Role::Tab),
+        "the inner node folds into its tab\n{}",
+        tree.describe()
+    );
+    let second = tabs[1].id();
+
+    for action in [Action::Focus, Action::Click] {
+        laid.invoke_semantics_action(ActionRequest {
+            action,
+            target_tree: TreeId::ROOT,
+            target_node: second,
+            data: None,
+        })
+        .unwrap_or_else(|error| panic!("the tab takes {action:?}: {error}"));
+        laid.pump();
+    }
+    assert!(
+        laid.focus_manager().primary_focus().is_some(),
+        "focus on the tab's node focuses its well"
+    );
+    assert_eq!(
+        tapped.get(),
+        Some(1),
+        "a click on the tab's node taps its well"
+    );
+    assert_eq!(controller.index(), 1);
+}
+
+/// Selecting another tab updates the tabs' semantics in place: each tab
+/// keeps its node and its label's render object, and the tree reports the
+/// new selection. A selection is part of the description, whose update
+/// reports semantics work alone. While the window collects no semantics a
+/// selection change builds no description at all (ADR-0322 §8).
+///
+/// Red-check: build the selected tab's description into a different view
+/// type than an unselected tab's (the tabs remount), or build the
+/// description while semantics are off (the tabs carry a semantics part).
+pub fn a_selection_change_keeps_every_tab_in_place() {
+    use flui_testing::a11y::Role;
+
+    let controller = TabController::new(2, 0);
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            TabBar::secondary(two_tabs()).controller(controller.clone()),
+        ),
+        tight(400.0, 48.0),
+    );
+    let nodes = |laid: &LaidOut| {
+        (
+            laid.find_all_by_render_type("RenderInteractive"),
+            laid.find_all_by_render_type("RenderParagraph"),
+        )
+    };
+    let select = |laid: &mut LaidOut, index: usize| {
+        controller.set_index(index).expect("not during a build");
+        for _ in 0..30 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+    };
+    let semantics_parts = |laid: &LaidOut| -> Vec<bool> {
+        laid.find_all_by_render_type("RenderInteractive")
+            .into_iter()
+            .map(|id| {
+                laid.render_node(id)
+                    .get::<bool>("has_semantics_part")
+                    .expect("a RenderInteractive reports its semantics part")
+            })
+            .collect()
+    };
+
+    let mounted = nodes(&laid);
+    select(&mut laid, 1);
+    assert_eq!(nodes(&laid), mounted, "every tab keeps its render objects");
+    assert_eq!(
+        semantics_parts(&laid),
+        [false, false],
+        "no window reads the tabs' semantics, so none are built"
+    );
+
+    laid.enable_semantics();
+    laid.pump();
+    assert_eq!(semantics_parts(&laid), [true, true]);
+    select(&mut laid, 0);
+    assert_eq!(nodes(&laid), mounted, "every tab keeps its render objects");
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let selected: Vec<Option<bool>> = tree
+        .find_all(Role::Tab)
+        .iter()
+        .map(|tab| tab.raw().is_selected())
+        .collect();
+    assert_eq!(selected, [Some(true), Some(false)], "{}", tree.describe());
+}
