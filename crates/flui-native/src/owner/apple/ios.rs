@@ -45,14 +45,11 @@ pub(crate) use super::NativeOwner;
 pub use scene::{IOSSceneAttachmentId, IOSSceneSessionId};
 pub(crate) use scene::{SceneConsumer, SceneInstallation};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use crate::owner::signal::OwnerSignal;
 use objc2::rc::{Allocated, Retained};
@@ -442,13 +439,13 @@ pub struct IOSLoop {
     app: Arc<AppDelivery>,
     /// Makes the window a scene session connects.
     windows: Arc<dyn SceneWindows>,
-    running: Arc<AtomicBool>,
+    running: Cell<bool>,
     scenes: NativeOwner<RefCell<SceneState>>,
     /// The system preference source the table made.
     preferences: NativeOwner<Box<dyn UIKitPreferences>>,
     signal: Arc<OwnerSignal>,
     identity: Arc<()>,
-    deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
+    deadline: RefCell<Option<(Arc<()>, web_time::Instant)>>,
     /// The screens, as the table made them; shared with every window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     /// Marks `displays` stale and wakes the owner on screen and scene
@@ -458,7 +455,14 @@ pub struct IOSLoop {
     notices: Arc<dyn NoticeChannel>,
     /// Makes the touches of each window's view, as the table names them.
     view_touches: fn() -> Box<dyn ViewTouches>,
+    /// The loop is the main thread's: it lives in the delegate's
+    /// thread-local state and never moves.
+    _owner_local: std::marker::PhantomData<Rc<()>>,
 }
+
+// Owner-local (ADR-0327 §5): the loop belongs to the main thread, which
+// alone reaches the application, its scenes and its observers.
+static_assertions::assert_not_impl_any!(IOSLoop: Send, Sync);
 
 impl std::fmt::Debug for IOSLoop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -518,7 +522,7 @@ impl IOSLoop {
         Ok(Self {
             app: Arc::clone(&app),
             windows,
-            running: Arc::new(AtomicBool::new(true)),
+            running: Cell::new(true),
             scenes: NativeOwner::new(
                 RefCell::new(SceneState {
                     terminal_sessions: HashSet::new(),
@@ -536,11 +540,12 @@ impl IOSLoop {
             preferences: NativeOwner::new(H::preferences(&signal, marker), marker),
             signal,
             identity,
-            deadline: Mutex::new(None),
+            deadline: RefCell::new(None),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
             notices: H::notices(&app),
             view_touches: H::view_touches,
+            _owner_local: std::marker::PhantomData,
         })
     }
 
@@ -633,11 +638,11 @@ impl IOSLoop {
     }
 
     fn finish_quit(&self) {
-        if !self.running.swap(false, Ordering::SeqCst) {
+        if !self.running.replace(false) {
             return;
         }
         self.signal.close();
-        self.deadline.lock().take();
+        self.deadline.borrow_mut().take();
         self.preferences
             .get(MainThreadMarker::new().expect("BUG: UIKit quit runs on main"))
             .close();
@@ -662,7 +667,7 @@ impl IOSLoop {
         }
         let next = self.app.wake_deadline().or_resume(None);
         let ticket = {
-            let mut current = self.deadline.lock();
+            let mut current = self.deadline.borrow_mut();
             if current.as_ref().map(|(_, deadline)| *deadline) == next {
                 return;
             }
@@ -677,7 +682,7 @@ impl IOSLoop {
         let deadline = next.expect("BUG: an armed ticket retains a deadline");
         let delay = deadline.saturating_duration_since(web_time::Instant::now());
         let Ok(when) = dispatch2::DispatchTime::try_from(delay) else {
-            self.deadline.lock().take();
+            self.deadline.borrow_mut().take();
             tracing::warn!("UIKit owner deadline exceeds dispatch time range");
             return;
         };
@@ -693,7 +698,7 @@ impl IOSLoop {
                             return;
                         }
                         let admitted = {
-                            let mut current = platform.deadline.lock();
+                            let mut current = platform.deadline.borrow_mut();
                             if current
                                 .as_ref()
                                 .is_some_and(|(active, _)| Arc::ptr_eq(active, &ticket))
@@ -761,7 +766,7 @@ impl host::Loop for IOSLoop {
         }
         tracing::info!("Starting iOS platform event loop (UIApplicationMain)");
 
-        self.running.store(true, Ordering::Relaxed);
+        self.running.set(true);
 
         DELEGATE_STATE.with(|state| {
             let mut state = state.borrow_mut();
@@ -1278,7 +1283,7 @@ impl IOSLoop {
         }
         drop(guard);
         self.poll_scene_installation();
-        if !self.running.load(Ordering::SeqCst) {
+        if !self.running.get() {
             self.invoke_quit();
             self.retire_scene_consumer();
         }

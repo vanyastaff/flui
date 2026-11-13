@@ -18,6 +18,9 @@ mod wake_delivery;
 #[path = "frame_completion_recovery.rs"]
 mod frame_completion_recovery;
 
+#[path = "duration.rs"]
+mod duration;
+
 #[path = "end_of_frame_lifecycle.rs"]
 mod end_of_frame_lifecycle;
 
