@@ -2534,17 +2534,21 @@ mod tests {
 
     #[test]
     fn a_repeating_pass_grows_its_buffer_only_while_it_warms() {
-        for peaks in [
-            vec![300; 6],
-            [300, 40].repeat(4),
-            // A pass a little larger than the one it repeats finds room.
-            vec![300, 300, 320, 300, 320, 300],
-            vec![1500; 6],
-            [2000, 1000].repeat(4),
+        // Each row's peaks, and the pass from which none grows the buffer.
+        for (peaks, warm) in [
+            (vec![300; 6], 3),
+            ([300, 40].repeat(4), 3),
+            // A pass a little larger than the one it repeats finds room in
+            // the doubled buffer, and in one a mount's trim cut to the
+            // repeated size, once that grows a time.
+            (vec![300, 300, 320, 300, 300, 320, 300], 3),
+            (vec![300, 5000, 300, 310, 300, 300, 310, 300], 4),
+            (vec![1500; 6], 3),
+            ([2000, 1000].repeat(4), 3),
         ] {
             let grown: Vec<usize> = passes(&peaks).iter().map(|&(grown, _)| grown).collect();
             assert!(
-                grown[3..].iter().all(|&grown| grown == 0),
+                grown[warm..].iter().all(|&grown| grown == 0),
                 "passes {peaks:?} keep growing their buffer: {grown:?}"
             );
         }
@@ -2557,11 +2561,18 @@ mod tests {
             left[1].1 <= KEPT_FRAGMENT_OPS,
             "a mount's room stays: {left:?}"
         );
-        // Grown by doubling past twice the cap, the buffer keeps no more.
-        let left = passes(&[2 * KEPT_CAPACITY + 1, 2 * KEPT_CAPACITY + 1]);
-        assert!(
-            left[1].1 <= 2 * KEPT_CAPACITY,
-            "room past twice the cap: {left:?}"
-        );
+        // Grown by doubling past twice the cap, the buffer keeps no more,
+        // whether it grew from nothing or from a room a trim left between
+        // powers of two (700, regrown to 2800).
+        for peaks in [
+            vec![2 * KEPT_CAPACITY + 1; 2],
+            vec![700, 2500, 2 * KEPT_CAPACITY + 52],
+        ] {
+            let left = passes(&peaks);
+            assert!(
+                left.iter().all(|&(_, room)| room <= 2 * KEPT_CAPACITY),
+                "room past twice the cap: {left:?}"
+            );
+        }
     }
 }
