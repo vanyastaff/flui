@@ -484,6 +484,10 @@ pub enum EngineError {
 ///   operator intervention may be required (e.g. a surface misconfig), but
 ///   blindly retrying the same call loops forever.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a caller retries or rebuilds the renderer, and a `_` arm would retry a fatal error forever"
+)]
 pub enum Recoverability {
     /// Retry the same operation next frame; no rebuild needed.
     Recoverable,

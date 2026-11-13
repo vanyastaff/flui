@@ -103,6 +103,10 @@ pub struct FlexParentData {
 
 /// How flexible child should fit in allocated space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a flex child fits loosely or tightly"
+)]
 pub enum FlexFit {
     /// Child can be smaller than allocated space.
     Loose,
@@ -187,6 +191,10 @@ impl Eq for FlexParentData {}
 ///
 /// A child names one pair, so physical and directional insets cannot be mixed.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "insets are physical or directional, and a child names one pair"
+)]
 pub enum HorizontalInsets {
     /// Distances from the parent's left and right edges.
     Physical {

@@ -7,6 +7,10 @@ use crate::error::{EngineError, EngineResult};
 
 /// The slot domain of [`SlotId`].
 #[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an uninhabited slot domain marker has no variants"
+)]
 pub enum SlotDomain {}
 
 impl Marker for SlotDomain {}

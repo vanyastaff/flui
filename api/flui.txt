@@ -20307,7 +20307,7 @@ impl PartialEq for flui::rendering::ScrollTarget
 impl core::fmt::Debug for flui::rendering::ScrollTarget
 impl core::hash::Hash for flui::rendering::ScrollTarget
 impl core::marker::StructuralPartialEq for flui::rendering::ScrollTarget
-pub enum flui::rendering::SemanticsClip
+#[non_exhaustive] pub enum flui::rendering::SemanticsClip
 impl Clone for flui::rendering::SemanticsClip
 impl Copy for flui::rendering::SemanticsClip
 impl core::fmt::Debug for flui::rendering::SemanticsClip
@@ -20652,7 +20652,7 @@ pub const fn flui::rendering::TreeSliverNodeParentData::is_root(&self) -> bool
 pub const fn flui::rendering::TreeSliverNodeParentData::new(index: usize, depth: usize) -> Self
 pub const fn flui::rendering::TreeSliverNodeParentData::with_depth(self, depth: usize) -> Self
 pub const fn flui::rendering::TreeSliverNodeParentData::zero() -> Self
-pub enum flui::rendering::UsageByParent
+#[non_exhaustive] pub enum flui::rendering::UsageByParent
 impl Clone for flui::rendering::UsageByParent
 impl Copy for flui::rendering::UsageByParent
 impl Default for flui::rendering::UsageByParent
@@ -24082,7 +24082,7 @@ impl Clone for flui::testing::rendering::DrawCommandSummary
 impl PartialEq for flui::testing::rendering::DrawCommandSummary
 impl core::fmt::Debug for flui::testing::rendering::DrawCommandSummary
 impl core::marker::StructuralPartialEq for flui::testing::rendering::DrawCommandSummary
-pub enum flui::testing::rendering::DrawKind
+#[non_exhaustive] pub enum flui::testing::rendering::DrawKind
 impl Clone for flui::testing::rendering::DrawKind
 impl Copy for flui::testing::rendering::DrawKind
 impl Eq for flui::testing::rendering::DrawKind
@@ -35509,7 +35509,7 @@ impl flui::testing::rendering::Probe for flui_rendering::testing::harness::Seman
 pub fn flui_rendering::testing::harness::SemanticsRun::edit_and_run_again<T: 'static>(self, id: flui::foundation::RenderId, edit: impl FnOnce(&mut T)) -> Self
 pub fn flui_rendering::testing::harness::SemanticsRun::root(&self) -> flui::foundation::RenderId
 pub fn flui_rendering::testing::harness::SemanticsRun::semantics_owner(&self) -> Option<&flui_semantics::owner::SemanticsOwner>
-pub enum flui_rendering::testing::parent_data::ParentDataSeed
+#[non_exhaustive] pub enum flui_rendering::testing::parent_data::ParentDataSeed
 impl Clone for flui_rendering::testing::parent_data::ParentDataSeed
 impl core::fmt::Debug for flui_rendering::testing::parent_data::ParentDataSeed
 pub fn flui_rendering::testing::parent_data::ParentDataSeed::to_box(&self) -> Box<dyn flui::rendering::ParentData>

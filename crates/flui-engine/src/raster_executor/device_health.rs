@@ -15,6 +15,7 @@ use web_time::{Duration, Instant};
 /// While the device is lost every frame settles
 /// [`RasterVerdict::DeviceLost`](super::RasterVerdict::DeviceLost).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum DeviceHealth {
     /// The device renders.
     #[default]
