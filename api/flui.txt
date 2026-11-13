@@ -1840,6 +1840,7 @@ pub fn flui::app::PipelineOwner::mark_needs_compositing_bits_update(&mut self, n
 pub fn flui::app::PipelineOwner::mark_needs_layout(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::mark_needs_paint(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::mark_needs_semantics(&mut self, node_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
+pub fn flui::app::PipelineOwner::mark_needs_semantics_geometry(&mut self, node_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::move_assistive_focus(&mut self, node: Option<flui_semantics::identity::AccessibilityNodeId>) -> flui_semantics::assistive_focus::AssistiveFocusChange // impl flui::app::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::app::PipelineOwner::new(text: flui_rendering::pipeline::text_context::TextContextHandle) -> Self // impl flui::app::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::app::PipelineOwner::new_with_capacity(dirty_channel_capacity: usize, text: flui_rendering::pipeline::text_context::TextContextHandle) -> Self // impl flui::app::PipelineOwner<flui_rendering::pipeline::phase::Idle>
@@ -1884,6 +1885,7 @@ pub fn flui::app::PipelineOwner::set_root_id(&mut self, id: Option<flui::foundat
 pub fn flui::app::PipelineOwner::set_root_render_object(&mut self, render_object: Box<dyn flui::rendering::RenderObject<flui::rendering::BoxProtocol>>) -> flui::foundation::RenderId // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::set_semantics_enabled(&mut self, enabled: bool) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::set_semantics_owner(&mut self, owner: Option<flui_semantics::owner::SemanticsOwner>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
+pub fn flui::app::PipelineOwner::set_semantics_placement_check(&mut self, checks: bool) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::set_semantics_route_change_sink(&mut self, sink: Option<flui_semantics::platform::RouteChangeSink>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::set_semantics_update_callback(&mut self, callback: flui_semantics::owner::SemanticsUpdateCallback) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
 pub fn flui::app::PipelineOwner::set_text_sizing(&mut self, sizing: flui::painting::TextSizing) -> Option<flui_rendering::pipeline::notifier::DeferredVisualUpdate> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::app::PipelineOwner<Phase>
@@ -18111,11 +18113,13 @@ pub const flui::prelude::RenderUpdateImpact::LAYOUT: Self = _
 pub const flui::prelude::RenderUpdateImpact::NONE: Self = _
 pub const flui::prelude::RenderUpdateImpact::PAINT: Self = _
 pub const flui::prelude::RenderUpdateImpact::SEMANTICS: Self = _
+pub const flui::prelude::RenderUpdateImpact::SEMANTICS_GEOMETRY: Self = _
 pub const fn flui::prelude::RenderUpdateImpact::is_none(self) -> bool
 pub const fn flui::prelude::RenderUpdateImpact::needs_composited_layer_update(self) -> bool
 pub const fn flui::prelude::RenderUpdateImpact::needs_compositing_bits_update(self) -> bool
 pub const fn flui::prelude::RenderUpdateImpact::needs_layout(self) -> bool
 pub const fn flui::prelude::RenderUpdateImpact::needs_paint(self) -> bool
+pub const fn flui::prelude::RenderUpdateImpact::needs_semantics_geometry_update(self) -> bool
 pub const fn flui::prelude::RenderUpdateImpact::needs_semantics_update(self) -> bool
 pub const fn flui::prelude::RenderUpdateImpact::union(self, other: Self) -> Self
 pub trait flui::prelude::RenderView: Clone + 'static + Sized
