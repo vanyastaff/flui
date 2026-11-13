@@ -20485,7 +20485,7 @@ impl core::marker::StructuralPartialEq for flui::rendering::objects::CarouselIte
 reexport flui::rendering::objects::CarouselLayout => flui::widgets::CarouselLayout
 reexport flui::rendering::objects::CarouselLayoutError => flui::widgets::CarouselLayoutError
 reexport flui::rendering::objects::CarouselLayoutKind => flui::widgets::CarouselLayoutKind
-pub trait flui::rendering::objects::ClipGeometry: flui_objects::proxy::clip::sealed::Sealed + Clone + core::fmt::Debug + PartialEq + Send + Sync + 'static
+pub trait flui::rendering::objects::ClipGeometry: flui_objects::proxy::clip::sealed::Sealed + Clone + core::fmt::Debug + PartialEq + 'static
 const flui::rendering::objects::ClipGeometry::DIAGNOSTIC_NAME: &'static str
 fn flui::rendering::objects::ClipGeometry::approximate_bounds(&self, size: flui::geometry::Size) -> flui::geometry::Rect<f64>
 fn flui::rendering::objects::ClipGeometry::contains(&self, position: flui::geometry::Point<f64>) -> bool
@@ -20494,7 +20494,7 @@ fn flui::rendering::objects::ClipGeometry::path_target_descriptor(_target: flui_
 fn flui::rendering::objects::ClipGeometry::resolve_border_radius(_border_radius: flui::painting::styling::BorderRadius, _size: flui::geometry::Size) -> Option<Self> { .. }
 fn flui::rendering::objects::ClipGeometry::resolve_path_clip_target(_target: flui_interaction::pointer::interaction_lane::PathClipTarget, _size: flui::geometry::Size) -> Option<Self> { .. }
 fn flui::rendering::objects::ClipGeometry::to_paint_clip(stored: <Self as flui::rendering::objects::ClipGeometry>::Stored, behavior: flui::prelude::Clip) -> flui::rendering::PaintClip
-type flui::rendering::objects::ClipGeometry::Stored: core::borrow::Borrow<Self> + Clone + core::fmt::Debug + Send + Sync + 'static + From<Self>
+type flui::rendering::objects::ClipGeometry::Stored: core::borrow::Borrow<Self> + Clone + core::fmt::Debug + 'static + From<Self>
 impl flui::rendering::objects::ClipGeometry for flui::geometry::RRect { type Stored = flui::geometry::RRect; }
 impl flui::rendering::objects::ClipGeometry for flui::geometry::RSuperellipse { type Stored = flui::geometry::RSuperellipse; }
 impl flui::rendering::objects::ClipGeometry for flui::geometry::Rect<f64> { type Stored = flui::geometry::Rect; }
@@ -20531,7 +20531,7 @@ impl flui::Inspect for flui::rendering::objects::FlexDirection
 impl flui::foundation::inspect::ToValue for flui::rendering::objects::FlexDirection
 variant flui::rendering::objects::FlexDirection::Horizontal // at 0
 variant flui::rendering::objects::FlexDirection::Vertical // at 1
-pub trait flui::rendering::objects::FloatingHeaderMode: flui_objects::sliver::sliver_persistent_header::sealed::Sealed + Send + Sync + 'static
+pub trait flui::rendering::objects::FloatingHeaderMode: flui_objects::sliver::sliver_persistent_header::sealed::Sealed + 'static
 const flui::rendering::objects::FloatingHeaderMode::DIAGNOSTIC_NAME: &'static str
 fn flui::rendering::objects::FloatingHeaderMode::update_geometry(core: &flui_objects::sliver::sliver_persistent_header::PersistentHeaderCoreView<'_>, constraints: &flui::rendering::SliverConstraints, effective_scroll_offset: f64, child_extent: f64) -> (flui::rendering::SliverGeometry, f64)
 reexport flui::rendering::objects::FloatingHeaderSnapConfiguration => flui::widgets::FloatingHeaderSnapConfiguration
