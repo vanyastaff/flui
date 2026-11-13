@@ -62,10 +62,6 @@
 //!   observation).
 //! - `full`: all of the above, as one name for feature-matrix runs.
 
-#![expect(
-    clippy::exhaustive_enums,
-    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
-)]
 #![cfg_attr(
     test,
     allow(
