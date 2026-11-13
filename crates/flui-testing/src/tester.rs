@@ -575,22 +575,7 @@ impl Tester {
         duration: Duration,
     ) -> Result<(), TestError> {
         let at = self.action_point(locator)?;
-        let duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-        self.inject(vec![pointer(vec![
-            move_to(at),
-            PointerAction::Down {
-                button: PointerButton::Primary,
-                pressure: None,
-            },
-            PointerAction::Move {
-                to: LogicalPoint::new(at.x + dx, at.y + dy),
-                duration_ms,
-                pressure: None,
-            },
-            PointerAction::Up {
-                button: PointerButton::Primary,
-            },
-        ])])
+        self.try_drag_from(at, dx, dy, duration)
     }
 
     /// Press on the one element `locator` names and move by `dx`, `dy`
@@ -602,6 +587,53 @@ impl Tester {
     #[track_caller]
     pub fn drag(&mut self, locator: &Locator, dx: f64, dy: f64, duration: Duration) {
         self.try_drag(locator, dx, dy, duration)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// Press at `start`, a point in the window's logical pixels, and move by
+    /// `dx`, `dy` over `duration`, then release.
+    ///
+    /// This is for a gesture that starts at a place rather than on an
+    /// element, such as an edge swipe. A drag that starts on an element is
+    /// [`Self::drag`], which checks that the element can take it.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::Agent`] when the window refuses the input, as it refuses
+    /// a non-finite point.
+    pub fn try_drag_from(
+        &mut self,
+        start: LogicalPoint,
+        dx: f64,
+        dy: f64,
+        duration: Duration,
+    ) -> Result<(), TestError> {
+        let duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        self.inject(vec![pointer(vec![
+            move_to(start),
+            PointerAction::Down {
+                button: PointerButton::Primary,
+                pressure: None,
+            },
+            PointerAction::Move {
+                to: LogicalPoint::new(start.x + dx, start.y + dy),
+                duration_ms,
+                pressure: None,
+            },
+            PointerAction::Up {
+                button: PointerButton::Primary,
+            },
+        ])])
+    }
+
+    /// Press at `start` and move by `dx`, `dy` over `duration`, then release.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_drag_from`] fails.
+    #[track_caller]
+    pub fn drag_from(&mut self, start: LogicalPoint, dx: f64, dy: f64, duration: Duration) {
+        self.try_drag_from(start, dx, dy, duration)
             .unwrap_or_else(|error| panic!("{error}"));
     }
 

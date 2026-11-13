@@ -19,8 +19,9 @@
 
 pub use flui_testing::find;
 pub use flui_testing::{
-    Expectation, InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalRect,
-    Match, Node, Pick, Role, StateFilter, TestError, TestWindow, Tester, TextMatch, Tree,
+    Expectation, InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalPoint,
+    LogicalRect, Match, Node, Pick, Role, StateFilter, TestError, TestWindow, Tester, TextMatch,
+    Tree,
 };
 
 /// Render-object tests that drive layout and queries without a widget tree,
