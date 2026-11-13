@@ -102,8 +102,7 @@ pub(super) struct GpuReplay {
     // Every cached mask is produced earlier in the same submit encoder. One
     // clip can hold masks over different crops; a request reuses any whose
     // crop contains its own.
-    clip_bindings:
-        std::collections::HashMap<ClipBindingKey, Vec<(clip::MaskCrop, wgpu::BindGroup)>>,
+    clip_bindings: rustc_hash::FxHashMap<ClipBindingKey, Vec<(clip::MaskCrop, wgpu::BindGroup)>>,
     clip_mask_pipeline: Option<crate::clip_mask::ClipMaskPipeline>,
 
     /// Shared unit-quad vertex buffer (0,0 to 1,1) reused by all instanced
@@ -122,7 +121,7 @@ pub(super) struct GpuReplay {
     nearest_sampler: wgpu::Sampler,
     external_linear_sampler: wgpu::Sampler,
     // Frame-local strong leases prevent pointer reuse while bindings are cached.
-    external_bindings: std::collections::HashMap<
+    external_bindings: rustc_hash::FxHashMap<
         (usize, crate::external_texture_registry::ExternalSampling),
         CapturedExternalBinding,
     >,
@@ -265,7 +264,7 @@ impl GpuReplay {
             viewport_bind_group,
             dummy_mask_view,
             unclipped_binding: None,
-            clip_bindings: std::collections::HashMap::new(),
+            clip_bindings: rustc_hash::FxHashMap::default(),
             clip_mask_pipeline: None,
             uniform_size: (initial_width, initial_height),
             attachment_origin: (0, 0),
@@ -289,16 +288,16 @@ impl GpuReplay {
                 lod_max_clamp: 0.0,
                 ..Default::default()
             }),
-            external_bindings: std::collections::HashMap::new(),
+            external_bindings: rustc_hash::FxHashMap::default(),
             texture_batch: InstanceBatch::new(1024),
             glyph_bind_group: None,
         }
     }
 
     pub(super) fn finish_external_frame(&mut self) {
-        self.external_bindings = std::collections::HashMap::new();
+        self.external_bindings = rustc_hash::FxHashMap::default();
         self.unclipped_binding = None;
-        self.clip_bindings = std::collections::HashMap::new();
+        self.clip_bindings = rustc_hash::FxHashMap::default();
     }
 
     /// Update CPU target state; previously encoded bindings remain immutable.
@@ -379,7 +378,7 @@ impl GpuReplay {
     ) -> EngineResult<()> {
         // A new encoder must enroll its own completion-owned prepared costs.
         self.unclipped_binding = None;
-        self.clip_bindings = std::collections::HashMap::new();
+        self.clip_bindings = rustc_hash::FxHashMap::default();
         self.prepare_viewport_binding(device, pipelines, resources)?;
         // Recording is complete, so the atlas' pages are final for this
         // submit; every segment flushed below binds them.

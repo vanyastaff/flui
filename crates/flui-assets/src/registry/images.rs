@@ -64,6 +64,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use flui_foundation::memory::MemoryPressureLevel;
+use flui_painting::paint::MAX_ENCODED_IMAGE_BYTES;
 use flui_platform::executor::{Executor, Lane, SpawnError};
 use flui_platform::http::{Http, HttpAuthority, HttpError, HttpRequest};
 use parking_lot::Mutex;
@@ -96,11 +97,6 @@ pub(crate) fn default_decode_threads() -> NonZeroUsize {
 /// Bytes one read takes of an image file: a cancelled load stops reading at
 /// the next chunk instead of holding its lane for the whole file.
 const FILE_READ_CHUNK: usize = 256 * 1024;
-
-/// The largest encoded image file a load reads: 256 MiB, the same bound
-/// a network image's request puts on its response body. A larger file fails
-/// before it is buffered.
-const MAX_ENCODED_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// How many times one [`ImageLoad`] takes over a load closed under it before
 /// it answers with an error: lanes that keep dropping what they accept must
@@ -859,7 +855,7 @@ fn fetch(source: &ImageSource, http: Option<Http>) -> Fetch {
     }
 }
 
-/// The body of a `GET` for `url`, within [`MAX_ENCODED_FILE_BYTES`].
+/// The body of a `GET` for `url`, within [`MAX_ENCODED_IMAGE_BYTES`].
 async fn fetch_over_http(url: Arc<str>, http: Option<Http>) -> Result<Vec<u8>> {
     let Some(http) = http else {
         return Err(AssetError::HttpUnavailable {
@@ -871,7 +867,7 @@ async fn fetch_over_http(url: Arc<str>, http: Option<Http>) -> Result<Vec<u8>> {
         source,
     };
     let response = http
-        .send(HttpRequest::get(url.as_ref()).body_limit(MAX_ENCODED_FILE_BYTES))
+        .send(HttpRequest::get(url.as_ref()).body_limit(MAX_ENCODED_IMAGE_BYTES))
         .await
         .map_err(failed)?;
     let status = response.status();
@@ -886,7 +882,7 @@ async fn fetch_over_http(url: Arc<str>, http: Option<Http>) -> Result<Vec<u8>> {
 
 /// Reads the file at `path` one [`FILE_READ_CHUNK`] at a time, yielding
 /// between chunks so a cancelled load stops at the next one, and never more
-/// than [`MAX_ENCODED_FILE_BYTES`].
+/// than [`MAX_ENCODED_IMAGE_BYTES`].
 async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
     use std::io::Read;
 
@@ -896,7 +892,7 @@ async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
     };
     let too_large = || AssetError::LoadFailed {
         path: path.to_string(),
-        reason: format!("the file is larger than {MAX_ENCODED_FILE_BYTES} bytes"),
+        reason: format!("the file is larger than {MAX_ENCODED_IMAGE_BYTES} bytes"),
     };
     let not_a_file = || AssetError::LoadFailed {
         path: path.to_string(),
@@ -914,7 +910,7 @@ async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
         return Err(not_a_file());
     }
     let length = metadata.len();
-    if length > MAX_ENCODED_FILE_BYTES {
+    if length > MAX_ENCODED_IMAGE_BYTES {
         return Err(too_large());
     }
     // The metadata length is a hint, not a bound: the file can grow while it
@@ -929,7 +925,7 @@ async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
             Err(error) => return Err(failed(error)),
         };
         let total = u64::try_from(bytes.len().saturating_add(read)).unwrap_or(u64::MAX);
-        if total > MAX_ENCODED_FILE_BYTES {
+        if total > MAX_ENCODED_IMAGE_BYTES {
             return Err(too_large());
         }
         bytes.extend_from_slice(&chunk[..read]);

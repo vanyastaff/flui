@@ -10,7 +10,7 @@
 //! - Specialized pipelines avoid unnecessary GPU work
 //! - Cache eliminates pipeline recreation overhead
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use flui_painting::paint::CoverageClass;
 use flui_painting::{BlendMode, Paint};
@@ -454,9 +454,9 @@ pub(super) fn select_coverage_blend<S>(
 /// Avoids expensive pipeline recreation by reusing cached variants.
 pub(crate) struct PipelineCache {
     /// Cached pipelines indexed by key
-    cache: HashMap<PipelineKey, RenderPipeline>,
+    cache: FxHashMap<PipelineKey, RenderPipeline>,
     // Isolation has no blend state; only sample count specializes its pipeline.
-    isolation_cache: HashMap<u32, RenderPipeline>,
+    isolation_cache: FxHashMap<u32, RenderPipeline>,
     isolation_shader: Option<wgpu::ShaderModule>,
     isolation_source: &'static str,
     isolation_bind_group_layout: wgpu::BindGroupLayout,
@@ -536,8 +536,8 @@ impl PipelineCache {
             });
 
         Self {
-            cache: HashMap::new(),
-            isolation_cache: HashMap::new(),
+            cache: FxHashMap::default(),
+            isolation_cache: FxHashMap::default(),
             isolation_shader: None,
             isolation_source: shader_sources.isolation,
             isolation_bind_group_layout: create_isolation_bind_group_layout(device),

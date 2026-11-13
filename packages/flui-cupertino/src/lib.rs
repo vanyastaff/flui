@@ -32,9 +32,10 @@
 //! adds no render object of its own either: every component here composes
 //! existing widgets — `FadeTransition`, `GestureDetector`, `DecoratedBox`,
 //! `SlideTransition`, `Stack`/`Positioned`, `Offstage`, `HeroMode`, … The one
-//! render-layer value it names is [`flui_sdk::pipeline::TranslationFraction`]
-//! (an Evolving SDK path), which `SlideTransition` requires as its animation
-//! parameter (see [`route`]'s module docs).
+//! render-layer value it names is
+//! [`flui_sdk::rendering::objects::TranslationFraction`] (the facade's
+//! `flui::rendering::objects` path), which `SlideTransition` requires as its
+//! animation parameter (see [`route`]'s module docs).
 //!
 //! ## Scope (V1 — theming, one page route, and the two-scaffold family)
 //!

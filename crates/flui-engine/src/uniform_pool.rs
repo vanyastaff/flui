@@ -31,7 +31,7 @@
 //! reset — a per-`render` rewind would alias a backdrop-flush buffer with a
 //! final-render buffer in the same frame.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 /// One size class: reusable buffers all exactly `size` bytes, handed out in
@@ -52,7 +52,7 @@ struct Bucket {
 pub(crate) struct UniformPool {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
-    buckets: HashMap<u64, Bucket>,
+    buckets: FxHashMap<u64, Bucket>,
     /// Cumulative count of buffers ever created — plateaus once a repeating
     /// workload's buffers are all reused.  Nothing reads it: no test pins reuse.
     total_created: u64,
@@ -66,7 +66,7 @@ impl UniformPool {
         Self {
             device,
             queue,
-            buckets: HashMap::new(),
+            buckets: FxHashMap::default(),
             total_created: 0,
         }
     }

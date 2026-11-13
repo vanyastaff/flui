@@ -236,6 +236,13 @@ impl DisplayList {
     }
 
     fn push(&mut self, command: DrawCommand) {
+        self.account(&command);
+        self.commands.push(command);
+    }
+
+    /// Folds `command` into the cached bounds and extents, as recording it
+    /// does.
+    fn account(&mut self, command: &DrawCommand) {
         if let Some(cmd_bounds) = command.bounds() {
             accumulate_bounds(&mut self.bounds, cmd_bounds);
         }
@@ -245,7 +252,6 @@ impl DisplayList {
                 accumulate_damage(&mut self.volatile, extent);
             }
         }
-        self.commands.push(command);
     }
 
     /// Moves every command of `other` onto the end of this list, unioning
@@ -280,13 +286,35 @@ impl DisplayList {
     /// Appends a balanced paint run inside its own save/restore scope.
     ///
     /// The run inherits the caller's clip state, but its clips do not affect
-    /// subsequent commands. An empty run records no command but still adds
+    /// subsequent commands. A run that changes no replay state (no clip, save,
+    /// restore or layer scope) is appended as it stands, since a scope around
+    /// it would change nothing. An empty run records no command but still adds
     /// its [`non_finite`](Self::non_finite) counts: a run whose every op was
     /// refused is empty. The caller must provide balanced save/restore
     /// commands within the run.
-    pub fn append_isolated(&mut self, other: DisplayList) {
+    pub fn append_isolated(&mut self, mut other: DisplayList) {
         if other.is_empty() {
             self.non_finite = self.non_finite.saturating_add(other.non_finite);
+            return;
+        }
+        if !other
+            .commands
+            .iter()
+            .any(|command| command.op.scopes_replay())
+        {
+            self.append(other);
+            return;
+        }
+        if self.commands.is_empty() {
+            // The first run is wrapped in its own buffer, which becomes this
+            // list's: splicing it allocates nothing while the run has room
+            // for the two scope commands.
+            let save = DrawCommand::untransformed(DrawOp::Save);
+            other.account(&save);
+            other.commands.insert(0, save);
+            other.push(DrawCommand::untransformed(DrawOp::Restore));
+            other.non_finite = other.non_finite.saturating_add(self.non_finite);
+            *self = other;
             return;
         }
         self.push(DrawCommand::untransformed(DrawOp::Save));

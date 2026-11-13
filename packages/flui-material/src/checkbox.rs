@@ -416,18 +416,19 @@ impl ViewState<Checkbox> for CheckboxState {
         let interactive = view.is_interactive();
         let next_value = view.next_value();
         let on_changed = view.on_changed.clone();
-        let mut ink_well = InkWell::new(
-            CustomPaint::new()
-                .size(Size::new(
-                    CHECKBOX_TAP_TARGET_SIZE,
-                    CHECKBOX_TAP_TARGET_SIZE,
-                ))
-                .painter(painter),
-        )
-        .shape(MaterialShape::Stadium)
-        .overlay_color(overlay_color)
-        .states_controller(self.states.clone())
-        .focus_indicator(FocusIndicator::Halo);
+        let mut ink_well = InkWell::new()
+            .child(
+                CustomPaint::new()
+                    .size(Size::new(
+                        CHECKBOX_TAP_TARGET_SIZE,
+                        CHECKBOX_TAP_TARGET_SIZE,
+                    ))
+                    .painter(painter),
+            )
+            .shape(MaterialShape::Stadium)
+            .overlay_color(overlay_color)
+            .states_controller(self.states.clone())
+            .focus_indicator(FocusIndicator::Halo);
         if interactive {
             ink_well = ink_well.on_tap(move |ctx| {
                 if let Some(handler) = &on_changed {

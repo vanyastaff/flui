@@ -8,7 +8,7 @@
   `WriteTarget`, `EventOutcome` (a callback may return a write's `Result`; a refused write is
   logged on `flui::signals`) and `callback`, which fixes the signature of a `let`-bound event
   closure. `EventCx`, `Signal`, `WriterSource` and `callback` are in the prelude.
-- **`flui-widgets`**: `RawButton`, a theme-free button whose `on_press` receives the
+- **`flui-widgets`**: `RawButton`, a theme-free button whose `on_pressed` receives the
   `&mut EventCx<'_>`. It publishes button semantics, is reachable by a platform click, and is
   disabled without a callback.
 

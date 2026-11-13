@@ -114,7 +114,8 @@ fn a_body_left_unread_holds_the_download_until_it_is_dropped() {
 
 /// A request dropped before its head aborts the connection and ends its
 /// thread; a passed deadline does the same and answers `Timeout`, before the
-/// head and while the reader holds the body unread.
+/// head and while the reader holds the body unread, and the connection is
+/// aborted before its thread releases it.
 #[test]
 fn a_request_left_or_past_its_deadline_aborts_its_connection() {
     let (mut silent, counters) = Scripted::new(Body::Endless);
@@ -137,7 +138,10 @@ fn a_request_left_or_past_its_deadline_aborts_its_connection() {
         counters.closed.load(AtomicOrdering::SeqCst) == 2
     });
 
-    let (stack, counters) = Scripted::new(Body::Endless);
+    // A slow abort: the stop aborts the connection before its thread may
+    // leave and release it.
+    let (mut stack, counters) = Scripted::new(Body::Endless);
+    stack.abort_delay = Duration::from_millis(100);
     let held = block_on(Http::new(Arc::new(BlockingClient::new(stack))).send(
         HttpRequest::get("https://example.test/stream").deadline(Duration::from_millis(100)),
     ))

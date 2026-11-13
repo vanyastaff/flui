@@ -209,9 +209,7 @@ mod sealed {
 /// Downstream crates cannot add new variants — this preserves engine-level
 /// dispatch invariants and lets the compiler monomorphise the clip-emission
 /// path per shape.
-pub trait ClipGeometry:
-    sealed::Sealed + Clone + fmt::Debug + PartialEq + Send + Sync + 'static
-{
+pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + PartialEq + 'static {
     /// Diagnostics label (`RenderClipRect`, `RenderClipRRect`, …).
     ///
     /// Generic `RenderClip<S>` would otherwise surface as
@@ -282,7 +280,7 @@ pub trait ClipGeometry:
     /// shared by refcount on every `resolve_clip`/`to_paint_clip` call and
     /// never deep-cloned. `Self: Into<Self::Stored>` is std's own
     /// `From<T> for T` / `From<T> for Arc<T>` — no per-shape conversion code.
-    type Stored: Borrow<Self> + Clone + fmt::Debug + Send + Sync + 'static + From<Self>;
+    type Stored: Borrow<Self> + Clone + fmt::Debug + 'static + From<Self>;
 
     /// Produces the node-local [`PaintClip`] descriptor for this shape at the
     /// given `behavior`. [`RenderClip::paint_effects`] reports the result,

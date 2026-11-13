@@ -32,6 +32,8 @@ thiserror = { workspace = true }
 # Serialization of the style values (optional). `rc` covers `InlineSpan::Text(Arc<TextSpan>)`;
 # deserialization does not preserve `Arc` sharing, which no snapshot relies on.
 serde = { workspace = true, optional = true, features = ["rc"] }
+# Encoded image bytes decoded into an `Image` (`Image::decode`, feature `decode`).
+image = { workspace = true, optional = true }
 tracing = { workspace = true }
 
 # Host font discovery (`HostFonts::scan`) and the host locale that picks the
@@ -49,6 +51,10 @@ icu_segmenter = { workspace = true }
 swash = { workspace = true }
 parley = { workspace = true }
 lru = { workspace = true }
+# Hash tables keyed by ids the process mints (fonts, glyphs, textures).
+rustc-hash = { workspace = true }
+# The canvas paint pool, inline for the few paints one recording holds.
+smallvec = { workspace = true }
 
 [dev-dependencies]
 # Colour property tests and the compile-fail suite.
@@ -59,7 +65,7 @@ serde_json = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
-flui-painting = { path = ".", features = ["testing"] }
+flui-painting = { path = ".", features = ["testing", "decode"] }
 
 [features]
 default = ["bundled-fonts"]
@@ -74,6 +80,11 @@ serde = ["dep:serde", "flui-foundation/serde", "cursor-icon/serde"]
 # collection holds only the faces registered on it (and a host feed's), so
 # text measures and paints with no face until one is.
 bundled-fonts = []
+
+# decode: `Image::decode`, encoded PNG, JPEG and GIF bytes as RGBA8 pixels, with
+# the decoded size bounded by `MAX_DECODED_IMAGE_BYTES` before any pixel is
+# decoded. The one image decoder: flui-assets and flui-widgets decode through it.
+decode = ["dep:image"]
 
 # testing: opt-in painting test harness (`crate::testing`) — a `record`
 # builder for `DisplayList`s plus diagnostics helpers. Off by default;

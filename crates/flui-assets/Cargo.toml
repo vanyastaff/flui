@@ -42,8 +42,6 @@ parking_lot = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
-# Image loading
-image = { workspace = true, optional = true }
 # The registry's byte-budgeted decoded-image LRU (`registry::images`).
 lru = { workspace = true, optional = true }
 
@@ -58,6 +56,9 @@ tokio = { workspace = true, features = ["macros", "time", "rt-multi-thread"] }
 flui-platform = { path = "../flui-platform", features = ["testing"] }
 # `CountingWaker`, the waker whose wakes a network-image test counts.
 flui-foundation = { path = "../flui-foundation", features = ["testing"] }
+# The decoder hooks `image_hook_reentry` registers: the same `image` crate
+# `flui-painting/decode` decodes with.
+image = { workspace = true }
 
 [features]
 default = []
@@ -67,7 +68,9 @@ default = []
 ## Enable specific asset types and loading capabilities:
 
 # Enable image loading (PNG, JPEG, GIF, WebP, etc.)
-images = ["dep:image", "dep:lru"]
+# Images decode through `flui_painting::paint::Image::decode`, whose limit
+# bounds every decoded image.
+images = ["flui-painting/decode", "dep:lru"]
 
 ## Future Features (Coming Soon)
 ##

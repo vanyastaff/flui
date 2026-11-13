@@ -4,6 +4,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use flui_platform::http::{Headers, HttpError, HttpRequest, StatusCode};
 
@@ -34,6 +35,9 @@ pub(crate) struct Scripted {
     body: Body,
     /// The head waits for an abort.
     pub(crate) silent: bool,
+    /// An abort takes this long to reach the stack, as a real stack's
+    /// shutdown can: what the request's thread does meanwhile shows.
+    pub(crate) abort_delay: Duration,
     pub(crate) headers: Headers,
     counters: Arc<Counters>,
 }
@@ -44,6 +48,7 @@ impl Scripted {
         let stack = Self {
             body,
             silent: false,
+            abort_delay: Duration::ZERO,
             headers: Headers::new(),
             counters: Arc::clone(&counters),
         };
@@ -60,11 +65,13 @@ struct Line {
 
 struct LineAbort {
     line: Arc<Line>,
+    delay: Duration,
     counters: Arc<Counters>,
 }
 
 impl Abort for LineAbort {
     fn abort(&self) {
+        std::thread::sleep(self.delay);
         self.counters.aborted.fetch_add(1, AtomicOrdering::SeqCst);
         *self.line.aborted.lock().expect("BUG: the line's lock") = true;
         self.line.changed.notify_all();
@@ -74,6 +81,7 @@ impl Abort for LineAbort {
 struct ScriptedConnection {
     body: Body,
     silent: bool,
+    abort_delay: Duration,
     headers: Headers,
     served: usize,
     line: Arc<Line>,
@@ -102,6 +110,7 @@ impl Stack for Scripted {
         Ok(Box::new(ScriptedConnection {
             body: self.body,
             silent: self.silent,
+            abort_delay: self.abort_delay,
             headers: self.headers.clone(),
             served: 0,
             line: Arc::default(),
@@ -114,6 +123,7 @@ impl Connection for ScriptedConnection {
     fn aborter(&self) -> Arc<dyn Abort> {
         Arc::new(LineAbort {
             line: Arc::clone(&self.line),
+            delay: self.abort_delay,
             counters: Arc::clone(&self.counters),
         })
     }

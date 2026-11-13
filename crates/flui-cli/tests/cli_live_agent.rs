@@ -9,6 +9,10 @@
 //! nightly platform workflow sets it on each runner. Where FLUI cannot yet
 //! drive the device, the scenario fails as that device's entry of
 //! `docs/gaps.md` ([`KNOWN_GAPS`]), and fails outright once the entry closes.
+//!
+//! On the desktop a second scenario drives the acceptance application
+//! (`tests/fixtures/acceptance_app/`) the same way: from its home page to
+//! Settings and back, through `flui mcp` alone.
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -279,32 +283,26 @@ fn count(tree: &Value) -> Option<u64> {
     })
 }
 
-#[test]
-fn an_agent_presses_the_counter_on_a_live_device() {
-    let Ok(device) = std::env::var("FLUI_CLI_LIVE_DEVICE") else {
-        eprintln!(
-            "skipping an_agent_presses_the_counter_on_a_live_device: set FLUI_CLI_LIVE_DEVICE \
-             to `desktop` or a device id from `flui devices` to run it on that device"
-        );
-        return;
-    };
-    let platform = platform_of(&device);
-    let known_gap = KNOWN_GAPS
-        .iter()
-        .find(|(on, _)| *on == platform)
-        .map(|&(_, gap)| gap);
-    let workdir = TempDir::new().expect("scaffold workdir");
-    let project = counter_project(workdir.path());
-
+/// `flui run --agent --device <device>` in `project`, its JSON events on the
+/// returned channel, and whether the app started: an `Err` carries the
+/// message `flui run` reported instead. `env` is added to the run's
+/// environment.
+fn launch(
+    project: &Path,
+    device: &str,
+    env: &[(&str, &Path)],
+) -> (Session, mpsc::Receiver<Value>, Result<(), String>) {
     let mut command = flui();
     command
-        .current_dir(&project)
+        .current_dir(project)
         .env("CARGO_NET_OFFLINE", "true")
         .args(["--json", "run", "--agent", "--no-hot-reload", "--device"])
-        .arg(&device)
+        .arg(device)
         .stdin(Stdio::null())
         .stdout(Stdio::piped());
-    // Dropped last, after `mcp`: on every exit, a failed assertion included.
+    for (key, value) in env {
+        command.env(key, value);
+    }
     let mut run = Session::spawn(command);
     let (events, received) = mpsc::channel::<Value>();
     let stdout = run.child.stdout.take().expect("BUG: stdout is piped");
@@ -328,6 +326,58 @@ fn an_agent_presses_the_counter_on_a_live_device() {
             _ => {}
         }
     };
+    (run, received, started)
+}
+
+/// `flui mcp` in `project`, once the app it runs answers through its agent.
+fn connect(project: &Path, run: &mpsc::Receiver<Value>) -> Mcp {
+    let mut mcp = Mcp::start(project);
+    // The app builds and starts; it answers once it serves its agent.
+    let deadline = Instant::now() + LAUNCH;
+    while let Err(error) = mcp.call("flui_windows", json!({})) {
+        assert_running(run, "answer from the app's agent");
+        assert!(
+            Instant::now() < deadline,
+            "the app's agent did not answer within {LAUNCH:?}: {error}"
+        );
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    mcp
+}
+
+/// The handle of the button named `name` that accepts `invoke`.
+fn button(tree: &Value, name: &str) -> Option<String> {
+    nodes(tree)
+        .into_iter()
+        .find(|node| {
+            node["role"] == "button"
+                && node["actions"]
+                    .as_array()
+                    .is_some_and(|actions| actions.iter().any(|action| action == "invoke"))
+                && names(node, name)
+        })
+        .and_then(|node| node["id"].as_str().map(str::to_owned))
+}
+
+#[test]
+fn an_agent_presses_the_counter_on_a_live_device() {
+    let Ok(device) = std::env::var("FLUI_CLI_LIVE_DEVICE") else {
+        eprintln!(
+            "skipping an_agent_presses_the_counter_on_a_live_device: set FLUI_CLI_LIVE_DEVICE \
+             to `desktop` or a device id from `flui devices` to run it on that device"
+        );
+        return;
+    };
+    let platform = platform_of(&device);
+    let known_gap = KNOWN_GAPS
+        .iter()
+        .find(|(on, _)| *on == platform)
+        .map(|&(_, gap)| gap);
+    let workdir = TempDir::new().expect("scaffold workdir");
+    let project = counter_project(workdir.path());
+
+    // Dropped last, after `mcp`: on every exit, a failed assertion included.
+    let (_run, received, started) = launch(&project, &device, &[]);
 
     if let Some(gap) = known_gap {
         match started {
@@ -344,30 +394,184 @@ fn an_agent_presses_the_counter_on_a_live_device() {
     }
     started.unwrap_or_else(|message| panic!("{message}"));
 
-    let mut mcp = Mcp::start(&project);
-    // The app builds and starts; it answers once it serves its agent.
-    let deadline = Instant::now() + LAUNCH;
-    while let Err(error) = mcp.call("flui_windows", json!({})) {
-        assert_running(&received, "answer from the app's agent");
-        assert!(
-            Instant::now() < deadline,
-            "the app's agent did not answer within {LAUNCH:?}: {error}"
-        );
-        std::thread::sleep(Duration::from_secs(2));
-    }
-    let button = mcp.read_until(&received, "Increment button with a count of 0", |tree| {
-        let button = nodes(tree).into_iter().find(|node| {
-            node["role"] == "button"
-                && node["actions"]
-                    .as_array()
-                    .is_some_and(|actions| actions.iter().any(|action| action == "invoke"))
-                && names(node, "Increment")
-        })?;
-        (count(tree) == Some(0)).then(|| button["id"].as_str().map(str::to_owned))?
+    let mut mcp = connect(&project, &received);
+    let increment = mcp.read_until(&received, "Increment button with a count of 0", |tree| {
+        (count(tree) == Some(0)).then(|| button(tree, "Increment"))?
     });
-    mcp.call("flui_act", json!({ "element": button, "action": "invoke" }))
-        .unwrap_or_else(|error| panic!("pressing Increment failed: {error}"));
+    mcp.call(
+        "flui_act",
+        json!({ "element": increment, "action": "invoke" }),
+    )
+    .unwrap_or_else(|error| panic!("pressing Increment failed: {error}"));
     mcp.read_until(&received, "count of 1", |tree| {
         (count(tree) == Some(1)).then_some(())
     });
+}
+
+/// The acceptance application (`tests/fixtures/acceptance_app/`) as a
+/// project of its own: the counter's manifest with the facade's `material`
+/// and `serde` features and the application's codec, and the fixture's
+/// `app.rs` as its library, launched with its documents under the storage
+/// directory `storage` instead of the fixture's own.
+fn acceptance_project(workdir: &Path, storage: &str) -> PathBuf {
+    let project = counter_project(workdir);
+    let manifest_path = project.join("Cargo.toml");
+    let text = std::fs::read_to_string(&manifest_path).expect("read the project manifest");
+    let mut manifest = text
+        .parse::<toml::Table>()
+        .expect("the generated manifest is TOML");
+    let dependencies = manifest
+        .get_mut("dependencies")
+        .and_then(toml::Value::as_table_mut)
+        .expect("BUG: the counter template declares dependencies");
+    let facade = dependencies
+        .get_mut("flui")
+        .and_then(toml::Value::as_table_mut)
+        .expect("BUG: a local project names the facade by a table");
+    facade.insert(
+        "features".to_owned(),
+        toml::Value::Array(vec![
+            toml::Value::from("material"),
+            toml::Value::from("serde"),
+        ]),
+    );
+    let mut serde = toml::Table::new();
+    serde.insert("version".to_owned(), toml::Value::from("1"));
+    serde.insert(
+        "features".to_owned(),
+        toml::Value::Array(vec![toml::Value::from("derive")]),
+    );
+    dependencies.insert("serde".to_owned(), toml::Value::Table(serde));
+    dependencies.insert("serde_json".to_owned(), toml::Value::from("1"));
+    std::fs::write(
+        &manifest_path,
+        toml::to_string(&manifest).expect("serialize the project manifest"),
+    )
+    .expect("write the project manifest");
+
+    let source = project.join("src");
+    std::fs::copy(
+        repo_root().join("tests/fixtures/acceptance_app/app.rs"),
+        source.join("app.rs"),
+    )
+    .expect("copy the acceptance application");
+    std::fs::write(
+        source.join("lib.rs"),
+        "//! The acceptance application, run by `src/main.rs`.\n\n\
+         #[allow(dead_code, reason = \"the headless rows use the rest\")]\npub mod app;\n",
+    )
+    .expect("write the library root");
+    std::fs::write(
+        source.join("main.rs"),
+        format!(
+            "use flui_live_agent::app;\n\n\
+             fn main() -> Result<(), flui::LaunchError> {{\n    \
+             let dir = flui::platform::AppDataDir::try_new({storage:?})\n        \
+             .expect(\"BUG: the scenario's storage directory name is valid\");\n    \
+             let config = flui::AppConfig::new().storage_dir(dir);\n    \
+             flui::run_app(\n        \
+             app::AcceptanceApp::new(app::Faults::NONE),\n        \
+             flui::AppLaunch::new().config(config),\n    \
+             )\n}}\n"
+        ),
+    )
+    .expect("write the launcher");
+    project
+}
+
+/// The acceptance application on the desktop, driven through `flui mcp` as
+/// an agent drives it: read the tree, press Settings, see the Settings page
+/// (a Back button, no Settings button), press Back, and read the home page
+/// again; the animation clock answers in between. Only on the desktop: the
+/// counter scenario covers the other devices.
+#[test]
+fn an_agent_drives_the_acceptance_app_on_the_desktop() {
+    if std::env::var("FLUI_CLI_LIVE_DEVICE").as_deref() != Ok("desktop") {
+        eprintln!(
+            "skipping an_agent_drives_the_acceptance_app_on_the_desktop: set \
+             FLUI_CLI_LIVE_DEVICE=desktop to run it on this machine"
+        );
+        return;
+    }
+    let workdir = TempDir::new().expect("scaffold workdir");
+    // A storage directory of the run's own: the user's acceptance
+    // application keeps its session, and a page it left open cannot start
+    // this run on it. Linux takes it under the work directory; the other
+    // desktops resolve it in the user's data roots, which the guard empties.
+    let storage = format!(
+        "dev.flui.acceptance-app.live-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("BUG: the clock is past the epoch")
+            .as_nanos()
+    );
+    let _documents = RunDocuments::of(&storage);
+    let project = acceptance_project(workdir.path(), &storage);
+    let data = workdir.path().join("data");
+    let (_run, received, started) = launch(&project, "desktop", &[("XDG_DATA_HOME", &data)]);
+    started.unwrap_or_else(|message| panic!("{message}"));
+
+    let mut mcp = connect(&project, &received);
+    let settings = mcp.read_until(&received, "home page with a Settings button", |tree| {
+        button(tree, "Settings")
+    });
+    mcp.call("flui_motion", json!({}))
+        .unwrap_or_else(|error| panic!("reading the animation clock failed: {error}"));
+    mcp.call(
+        "flui_act",
+        json!({ "element": settings, "action": "invoke" }),
+    )
+    .unwrap_or_else(|error| panic!("pressing Settings failed: {error}"));
+    let back = mcp.read_until(&received, "Settings page with a Back button", |tree| {
+        button(tree, "Settings")
+            .is_none()
+            .then(|| button(tree, "Back"))?
+    });
+    mcp.call("flui_act", json!({ "element": back, "action": "invoke" }))
+        .unwrap_or_else(|error| panic!("pressing Back failed: {error}"));
+    mcp.read_until(&received, "home page again", |tree| {
+        button(tree, "Back")
+            .is_none()
+            .then(|| button(tree, "Settings"))?
+    });
+}
+
+/// The directories a desktop outside Linux keeps the scenario's documents
+/// in (`flui_native::storage::data_dirs`), removed when the scenario ends.
+struct RunDocuments {
+    dirs: Vec<PathBuf>,
+}
+
+impl RunDocuments {
+    fn of(storage: &str) -> Self {
+        let roots: &[&str] = if cfg!(windows) {
+            &["APPDATA", "LOCALAPPDATA"]
+        } else if cfg!(target_os = "macos") {
+            &["HOME"]
+        } else {
+            &[]
+        };
+        let dirs = roots
+            .iter()
+            .filter_map(std::env::var_os)
+            .map(|root| {
+                let root = PathBuf::from(root);
+                if cfg!(target_os = "macos") {
+                    root.join("Library/Application Support").join(storage)
+                } else {
+                    root.join(storage)
+                }
+            })
+            .collect::<Vec<PathBuf>>();
+        Self { dirs }
+    }
+}
+
+impl Drop for RunDocuments {
+    fn drop(&mut self) {
+        for dir in &self.dirs {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }

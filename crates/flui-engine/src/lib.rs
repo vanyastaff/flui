@@ -150,6 +150,8 @@
 
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
+// Hash tables on the frame path are FxHash (clippy.toml `disallowed-types`).
+#![warn(clippy::disallowed_types)]
 
 // Compile-time guard: the `fragile-send-sync-non-atomic-wasm` wgpu feature
 // marks !Send types as Send+Sync, which is only sound when the wasm target has

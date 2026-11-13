@@ -118,6 +118,10 @@ impl HostFonts {
     /// What a collection is fed from: each font file's path, each in-memory
     /// font's data (shared, not copied), every source's family names, the
     /// generic families' names and the fallback lists.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by names or paths that come from font files and font directories, so the table keeps SipHash's random seed against chosen collisions"
+    )]
     pub(crate) fn faces(&self) -> HostFaces {
         use std::collections::HashMap;
 

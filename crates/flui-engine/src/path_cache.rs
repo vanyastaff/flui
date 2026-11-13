@@ -10,7 +10,6 @@
 //! Entries not accessed for 120 frames are automatically evicted during
 //! [`PathCache::advance_frame`](crate::path_cache::PathCache::advance_frame).
 
-use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use flui_painting::paint::path::{Path, PathCommand};
@@ -25,7 +24,14 @@ const EVICTION_THRESHOLD: u64 = 120;
 /// identical paths do not need to be re-tessellated by lyon every frame.
 #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
 pub struct PathCache {
-    entries: HashMap<u64, CachedPath>,
+    // Keyed by a fingerprint of authored path geometry: an app that draws
+    // untrusted paths could precompute collisions under a fixed hasher, so
+    // the table keeps the seeded std hasher.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by a fingerprint of app-supplied path geometry; SipHash's random seed keeps buckets unpredictable"
+    )]
+    entries: std::collections::HashMap<u64, CachedPath>,
     max_entries: usize,
     hits: u64,
     misses: u64,
@@ -48,9 +54,13 @@ impl PathCache {
     /// A reasonable default for most UIs is 512.
     #[must_use]
     #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the entries table keeps the seeded std hasher, see its field"
+    )]
     pub fn new(max_entries: usize) -> Self {
         Self {
-            entries: HashMap::with_capacity(max_entries.min(512)),
+            entries: std::collections::HashMap::with_capacity(max_entries.min(512)),
             max_entries,
             hits: 0,
             misses: 0,
