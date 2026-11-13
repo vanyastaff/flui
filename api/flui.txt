@@ -17117,8 +17117,8 @@ impl Default for flui::prelude::HeroController
 impl Drop for flui::prelude::HeroController
 impl core::fmt::Debug for flui::prelude::HeroController
 impl flui_widgets::navigator::observer::NavigatorObserver for flui::prelude::HeroController
-pub fn flui::prelude::HeroController::new() -> alloc::rcs::arc::Arc<Self>
-pub fn flui::prelude::HeroController::with_rect_tween<F, A>(factory: F) -> alloc::rcs::arc::Arc<Self> where F: Fn(flui::geometry::Rect, flui::geometry::Rect) -> A + 'static, A: flui::animation::Animatable<Value = flui::geometry::Rect> + 'static
+pub fn flui::prelude::HeroController::new() -> alloc::rcs::rc::Rc<Self>
+pub fn flui::prelude::HeroController::with_rect_tween<F, A>(factory: F) -> alloc::rcs::rc::Rc<Self> where F: Fn(flui::geometry::Rect, flui::geometry::Rect) -> A + 'static, A: flui::animation::Animatable<Value = flui::geometry::Rect> + 'static
 pub struct flui::prelude::HeroMode { .. }
 impl Clone for flui::prelude::HeroMode
 impl core::fmt::Debug for flui::prelude::HeroMode
@@ -26999,8 +26999,8 @@ pub struct flui::widgets::HeroControllerScope { .. }
 impl Clone for flui::widgets::HeroControllerScope
 impl core::fmt::Debug for flui::widgets::HeroControllerScope
 impl flui::app::View for flui::widgets::HeroControllerScope
-impl flui::prelude::InheritedView for flui::widgets::HeroControllerScope { type Data = Option<alloc::rcs::arc::Arc<flui::prelude::HeroController>>; }
-pub fn flui::widgets::HeroControllerScope::new(controller: alloc::rcs::arc::Arc<flui::prelude::HeroController>, child: impl flui::prelude::IntoView) -> Self
+impl flui::prelude::InheritedView for flui::widgets::HeroControllerScope { type Data = Option<alloc::rcs::rc::Rc<flui::prelude::HeroController>>; }
+pub fn flui::widgets::HeroControllerScope::new(controller: alloc::rcs::rc::Rc<flui::prelude::HeroController>, child: impl flui::prelude::IntoView) -> Self
 pub fn flui::widgets::HeroControllerScope::none(child: impl flui::prelude::IntoView) -> Self
 reexport flui::widgets::HeroMode => flui::prelude::HeroMode
 reexport flui::widgets::HitShape => flui::prelude::HitShape
@@ -27487,6 +27487,8 @@ impl core::marker::StructuralPartialEq for flui::widgets::PageSnap
 impl flui::widgets::SnapPolicy for flui::widgets::PageSnap
 pub fn flui::widgets::PageSnap::new(viewport_fraction: flui::widgets::ViewportFraction) -> Self
 pub trait flui::widgets::PageTransitionBuilder
+fn flui::widgets::PageTransitionBuilder::back_gesture(&self) -> bool { .. }
+fn flui::widgets::PageTransitionBuilder::barrier_color(&self) -> Option<flui::prelude::Color> { .. }
 fn flui::widgets::PageTransitionBuilder::build(&self, ctx: &dyn flui::app::BuildContext, primary: &flui::widgets::RouteAnimation, secondary: &flui::widgets::RouteAnimation, child: flui::prelude::BoxedView) -> flui::prelude::BoxedView
 fn flui::widgets::PageTransitionBuilder::duration(&self) -> core::time::Duration
 fn flui::widgets::PageTransitionBuilder::reverse_duration(&self) -> core::time::Duration { .. }
@@ -27530,12 +27532,15 @@ variant flui::widgets::PanIntent::Left // at 0
 variant flui::widgets::PanIntent::Right // at 1
 variant flui::widgets::PanIntent::Up // at 2
 reexport flui::widgets::PanZoomEvent => flui::interaction::PanZoomEvent
-pub struct flui::widgets::ParallaxPageTransition;
+pub struct flui::widgets::ParallaxPageTransition { .. }
 impl Clone for flui::widgets::ParallaxPageTransition
 impl Copy for flui::widgets::ParallaxPageTransition
 impl Default for flui::widgets::ParallaxPageTransition
+impl PartialEq for flui::widgets::ParallaxPageTransition
 impl core::fmt::Debug for flui::widgets::ParallaxPageTransition
+impl core::marker::StructuralPartialEq for flui::widgets::ParallaxPageTransition
 impl flui::widgets::PageTransitionBuilder for flui::widgets::ParallaxPageTransition
+pub const fn flui::widgets::ParallaxPageTransition::barrier(self, color: flui::prelude::Color) -> Self
 pub const fn flui::widgets::ParallaxPageTransition::new() -> Self
 pub struct flui::widgets::ParticleController { .. }
 impl Clone for flui::widgets::ParticleController
@@ -37024,7 +37029,7 @@ impl flui::prelude::ViewState<flui::prelude::Hero> for flui_widgets::navigator::
 pub struct flui_widgets::navigator::navigator::NavigatorHandle { .. }
 impl Clone for flui_widgets::navigator::navigator::NavigatorHandle
 impl core::fmt::Debug for flui_widgets::navigator::navigator::NavigatorHandle
-pub fn flui_widgets::navigator::navigator::NavigatorHandle::add_observer(&self, observer: alloc::rcs::arc::Arc<dyn flui_widgets::navigator::observer::NavigatorObserver>)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::add_observer(&self, observer: alloc::rcs::rc::Rc<dyn flui_widgets::navigator::observer::NavigatorObserver>)
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::admits_pages(&self) -> bool
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::can_pop(&self) -> bool
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::current(&self) -> Option<flui::widgets::RouteId>

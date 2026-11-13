@@ -13,20 +13,14 @@
 //! Unlike `src/navigator/tests.rs` (the route stack's pure-data suite), these drive a
 //! real element tree.
 
-// ADR-0027: these tests capture owner-local handles in shared cells. The
-// library carries the same lint expectation; an integration test is a
-// separate crate, so it is repeated here.
-#![expect(clippy::arc_with_non_send_sync)]
-
+use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::ElementId;
 use flui_view::BuildContext;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorRoute, SimpleRoute};
 use flui_widgets::__test_access::{NavigatorProbe as _, OverlayProbe as _};
@@ -42,14 +36,14 @@ use crate::common::harness::{Harness, mount};
 /// Records every route builder invocation, so "did this route's content build?"
 /// is observable.
 #[derive(Clone, Default)]
-struct Built(Arc<Mutex<Vec<&'static str>>>);
+struct Built(Rc<RefCell<Vec<&'static str>>>);
 
 impl Built {
     fn contains(&self, name: &str) -> bool {
-        self.0.lock().contains(&name)
+        self.0.borrow_mut().contains(&name)
     }
     fn clear(&self) {
-        self.0.lock().clear();
+        self.0.borrow_mut().clear();
     }
 }
 
@@ -57,7 +51,7 @@ impl Built {
 fn page(built: &Built, name: &'static str) -> SimpleRoute<i32> {
     let built = built.clone();
     SimpleRoute::new(move |_ctx| {
-        built.0.lock().push(name);
+        built.0.borrow_mut().push(name);
         SizedBox::new(10.0, 10.0).into_view().boxed()
     })
     .named(name)
@@ -164,17 +158,17 @@ pub(crate) fn navigator_pop_removes_top_route_and_completes_result() {
 /// Red-check: none available as a mutation — a deadlock hangs rather than fails.
 /// Its value is as a regression tripwire (nextest's per-test timeout catches it).
 pub(crate) fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
-    let pushed = Arc::new(AtomicUsize::new(0));
+    let pushed = Rc::new(Cell::new(0));
     let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
 
     {
-        let pushed = Arc::clone(&pushed);
+        let pushed = Rc::clone(&pushed);
         handle.seed_initial(SimpleRoute::<i32>::new(move |ctx| {
             // Clone the handle out under the borrow…
             let found = NavigatorHandle::maybe_of(ctx);
             // …and record that we could, without touching the tree again.
             if found.is_some() {
-                pushed.fetch_add(1, Ordering::Relaxed);
+                pushed.set(pushed.get() + 1);
             }
             SizedBox::new(1.0, 1.0).into_view().boxed()
         }));
@@ -182,7 +176,7 @@ pub(crate) fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 
     let handle_clone = handle.clone();
     let mut harness = mount(Navigator::new(handle.clone()));
-    assert_eq!(pushed.load(Ordering::Relaxed), 1);
+    assert_eq!(pushed.get(), 1);
 
     // Now push from outside the build, as a real callback would.
     handle_clone.push(SimpleRoute::<i32>::new(|_ctx| {
@@ -210,24 +204,24 @@ pub(crate) fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 /// Red-check: drop the `vetoes_pop` arm from `pop_disposition_of_top` — the
 /// first `maybe_pop` pops the route and the stays-put assertion fails.
 pub(crate) fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
-    use std::sync::atomic::AtomicBool;
+    use std::cell::Cell;
 
     use flui_widgets::PopScope;
     use flui_widgets::navigator::PageRoute;
 
-    let outcomes: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
-    let blocking = Arc::new(AtomicBool::new(true));
+    let outcomes: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+    let blocking = Rc::new(Cell::new(true));
 
     let built = Built::default();
     let (handle, mut harness) = navigator_with(&built);
 
-    let outcomes_for_scope = Arc::clone(&outcomes);
-    let blocking_for_page = Arc::clone(&blocking);
+    let outcomes_for_scope = Rc::clone(&outcomes);
+    let blocking_for_page = Rc::clone(&blocking);
     let _guarded = handle.push(PageRoute::<i32>::new(move |_ctx, _p, _s| {
-        let outcomes = Arc::clone(&outcomes_for_scope);
+        let outcomes = Rc::clone(&outcomes_for_scope);
         let scope = PopScope::new(SizedBox::new(10.0, 10.0))
-            .can_pop(!blocking_for_page.load(Ordering::SeqCst))
-            .on_pop_invoked(move |_ctx, did_pop| outcomes.lock().push(did_pop));
+            .can_pop(!blocking_for_page.get())
+            .on_pop_invoked(move |_ctx, did_pop| outcomes.borrow_mut().push(did_pop));
         scope.into_view().boxed()
     }));
     harness.tick();
@@ -241,7 +235,7 @@ pub(crate) fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
         "the vetoed route stays on the stack"
     );
     assert_eq!(
-        outcomes.lock().as_slice(),
+        outcomes.borrow_mut().as_slice(),
         [false],
         "the scope heard the refusal"
     );
@@ -251,7 +245,7 @@ pub(crate) fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
     harness.tick();
     assert_eq!(handle.route_ids().len(), 1, "pop() ignores can_pop");
     assert_eq!(
-        outcomes.lock().as_slice(),
+        outcomes.borrow_mut().as_slice(),
         [false, true],
         "the scope heard the successful pop"
     );
@@ -262,7 +256,7 @@ pub(crate) fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
 // ============================================================================
 
 pub(crate) mod local_history {
-    use std::sync::atomic::AtomicUsize;
+    use std::cell::Cell;
     use std::time::Duration;
 
     use super::*;
@@ -278,7 +272,7 @@ pub(crate) mod local_history {
     /// context cannot see it — only a mounted descendant's can.
     #[derive(Clone)]
     struct HandleProbe {
-        sink: Arc<Mutex<Option<LocalHistoryHandle>>>,
+        sink: Rc<RefCell<Option<LocalHistoryHandle>>>,
     }
 
     impl View for HandleProbe {
@@ -292,13 +286,13 @@ pub(crate) mod local_history {
 
         fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             HandleProbeState {
-                sink: Arc::clone(&self.sink),
+                sink: Rc::clone(&self.sink),
             }
         }
     }
 
     struct HandleProbeState {
-        sink: Arc<Mutex<Option<LocalHistoryHandle>>>,
+        sink: Rc<RefCell<Option<LocalHistoryHandle>>>,
     }
 
     impl std::fmt::Debug for HandleProbeState {
@@ -309,8 +303,10 @@ pub(crate) mod local_history {
 
     impl ViewState<HandleProbe> for HandleProbeState {
         fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-            let _prev =
-                std::mem::replace(&mut *self.sink.lock(), LocalHistoryHandle::maybe_of(ctx));
+            let _prev = std::mem::replace(
+                &mut *self.sink.borrow_mut(),
+                LocalHistoryHandle::maybe_of(ctx),
+            );
         }
 
         fn build(&self, _view: &HandleProbe, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -321,13 +317,13 @@ pub(crate) mod local_history {
     /// A modal page whose content captures the route's [`LocalHistoryHandle`]
     /// on mount.
     pub(super) fn page_with_handle(
-        sink: &Arc<Mutex<Option<LocalHistoryHandle>>>,
+        sink: &Rc<RefCell<Option<LocalHistoryHandle>>>,
         duration: Duration,
     ) -> PageRoute<i32> {
-        let sink = Arc::clone(sink);
+        let sink = Rc::clone(sink);
         PageRoute::<i32>::new(move |_ctx, _p, _s| {
             HandleProbe {
-                sink: Arc::clone(&sink),
+                sink: Rc::clone(&sink),
             }
             .into_view()
             .boxed()
@@ -337,10 +333,10 @@ pub(crate) mod local_history {
 
     /// Counts `did_pop` observations, to prove observer silence on entry pops.
     #[derive(Default)]
-    struct PopCounter(AtomicUsize);
+    struct PopCounter(Cell<usize>);
     impl NavigatorObserver for PopCounter {
         fn did_pop(&self, _route: RouteId, _previous: Option<RouteId>) {
-            self.0.fetch_add(1, Ordering::SeqCst);
+            self.0.set(self.0.get() + 1);
         }
     }
 
@@ -355,44 +351,39 @@ pub(crate) mod local_history {
     pub(crate) fn an_entry_pops_before_the_route_and_observers_stay_silent() {
         let built = Built::default();
         let (handle, mut harness) = navigator_with(&built);
-        let pops = Arc::new(PopCounter::default());
-        handle.add_observer(Arc::clone(&pops) as Arc<dyn NavigatorObserver>);
+        let pops = Rc::new(PopCounter::default());
+        handle.add_observer(Rc::clone(&pops) as Rc<dyn NavigatorObserver>);
 
-        let sink = Arc::new(Mutex::new(None));
+        let sink = Rc::new(RefCell::new(None));
         let route_result = handle.push(page_with_handle(&sink, Duration::ZERO));
         harness.tick();
-        let local = sink.lock().clone().expect("the page captured its handle");
+        let local = sink
+            .borrow_mut()
+            .clone()
+            .expect("the page captured its handle");
 
-        let removed = Arc::new(AtomicUsize::new(0));
-        let removed_for_entry = Arc::clone(&removed);
+        let removed = Rc::new(Cell::new(0));
+        let removed_for_entry = Rc::clone(&removed);
         let _entry = local.add(LocalHistoryEntry::new().on_remove(move || {
-            removed_for_entry.fetch_add(1, Ordering::SeqCst);
+            removed_for_entry.set(removed_for_entry.get() + 1);
         }));
 
         assert!(handle.maybe_pop(), "the entry pop is handled");
         harness.tick();
         assert_eq!(handle.route_ids().len(), 2, "the route stays");
-        assert_eq!(removed.load(Ordering::SeqCst), 1, "on_remove fired once");
+        assert_eq!(removed.get(), 1, "on_remove fired once");
         assert_eq!(
             route_result.try_take(),
             None,
             "the route's future stays pending"
         );
-        assert_eq!(
-            pops.0.load(Ordering::SeqCst),
-            0,
-            "observers hear nothing for an entry pop"
-        );
+        assert_eq!(pops.0.get(), 0, "observers hear nothing for an entry pop");
 
         assert!(handle.maybe_pop(), "the second pop takes the route");
         harness.tick();
         assert_eq!(handle.route_ids().len(), 1);
-        assert_eq!(
-            pops.0.load(Ordering::SeqCst),
-            1,
-            "now the observers hear it"
-        );
-        assert_eq!(removed.load(Ordering::SeqCst), 1, "no second on_remove");
+        assert_eq!(pops.0.get(), 1, "now the observers hear it");
+        assert_eq!(removed.get(), 1, "no second on_remove");
     }
 
     /// What [`PopsInBuild`] acquired in `init_state`.
@@ -835,7 +826,7 @@ pub(crate) fn closing_mid_transition_releases_the_route_overlay_and_hero() {
     let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(hero_page(None));
     let controller = HeroController::new();
-    navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+    navigator.add_observer(Rc::clone(&controller) as Rc<dyn NavigatorObserver>);
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
         tight(400.0, 400.0),

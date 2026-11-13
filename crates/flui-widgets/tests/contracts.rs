@@ -1213,6 +1213,7 @@ fn route_transitions() {
             ("page_transitions::an_adopted_transition_settles_on_the_first_reduced_motion_frame", crate::page_transitions::an_adopted_transition_settles_on_the_first_reduced_motion_frame),
             ("page_transitions::a_route_pushed_before_mount_adopts_the_hook_at_mount", crate::page_transitions::a_route_pushed_before_mount_adopts_the_hook_at_mount),
             ("page_transitions::a_route_pushed_while_durations_are_read_adopts_the_new_hooks", crate::page_transitions::a_route_pushed_while_durations_are_read_adopts_the_new_hooks),
+            ("page_transitions::an_adopted_builder_brings_its_chrome_unless_the_route_sets_it", crate::page_transitions::an_adopted_builder_brings_its_chrome_unless_the_route_sets_it),
             ("transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes", crate::transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes),
             ("transition_route::scope_replacement_moves_an_existing_route_without_restarting_it", crate::transition_route::scope_replacement_moves_an_existing_route_without_restarting_it),
             ("transition_route::hopping_route_dropped_without_dispose_frees_proxy", crate::transition_route::hopping_route_dropped_without_dispose_frees_proxy),

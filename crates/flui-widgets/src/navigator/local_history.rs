@@ -6,13 +6,13 @@
 //! # Delivery discipline (binding, per ADR-0025)
 //!
 //! `on_remove` is user code. An entry popped by `did_pop` is popped **inside
-//! the flush, under the history lock** — firing the callback there deadlocks
+//! the flush, under the history borrow** — firing the callback there panics
 //! the moment it calls back into the navigator (the `PopScope` fan-out bug,
 //! fixed in `7b038dee`, was exactly this shape). So `did_pop` only *records*
 //! the owed removal; the flush notes the route id in
 //! [`FlushOutcome::local_history_popped`](super::history::FlushOutcome), and
 //! `NavigatorShared::apply` drains [`take_owed`](LocalHistoryRegistry::take_owed)
-//! with no lock held and hands each owed callback to the navigator's
+//! with no borrow held and hands each owed callback to the navigator's
 //! post-frame queue ([`deliver_on_remove`]). A flush can run inside `build`
 //! (a route command or a page update applied there), where a signal write the
 //! callback makes through its captured `WriterSource` is refused; after the
@@ -20,11 +20,11 @@
 //! that panics does not lose the next. A navigator that is no longer mounted
 //! has no queue: its owed callbacks are severed like a disposed route's.
 //! `entry_handle.remove()` is called from application code outside a flush and
-//! fires directly, outside the lock.
+//! fires directly, outside the borrow.
 //!
-//! The registry mutex is a **leaf**: mutate under it, release, then fire. The
+//! The registry cell is a **leaf**: mutate under it, release, then fire. The
 //! exactly-once linearization for `remove()` racing `did_pop` is the entry's
-//! atomic `removed` flag.
+//! `removed` cell.
 //!
 //! # Severed at dispose (ADR-0025, corrected)
 //!
@@ -43,13 +43,12 @@
 // seam stops matching the ADR that specified it.
 #![expect(dead_code)]
 
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::cell::Cell;
+use std::rc::{Rc, Weak};
 
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 /// Fired when its entry leaves the local history — by a pop or an explicit
 /// [`remove`](LocalHistoryEntryHandle::remove).
@@ -94,10 +93,10 @@ struct EntryInner {
     /// never merely cloned out — so the callback (and whatever widget state it
     /// captures) cannot cycle back to a handle that keeps this inner alive
     /// (ADR-0025).
-    on_remove: Mutex<Option<OnRemoveCallback>>,
+    on_remove: RefCell<Option<OnRemoveCallback>>,
     /// The exactly-once linearization point: whoever swaps this to `true`
     /// owns the firing of `on_remove`.
-    removed: AtomicBool,
+    removed: Cell<bool>,
 }
 
 /// The winner of a [`EntryInner::claim`] race: this entry is now removed, and
@@ -116,10 +115,10 @@ impl EntryInner {
     /// real bug: a bare entry read as "someone else already took this", so the
     /// pop walked past it and took the route.
     fn claim(&self) -> Option<Claim> {
-        if self.removed.swap(true, Ordering::AcqRel) {
+        if self.removed.replace(true) {
             return None;
         }
-        Some(Claim(self.on_remove.lock().take()))
+        Some(Claim(self.on_remove.borrow_mut().take()))
     }
 }
 
@@ -154,28 +153,28 @@ impl std::fmt::Debug for LocalHistoryEntry {
 }
 
 /// One route's local-history stack. Owned by `ModalInner` beside `heroes` and
-/// `pop_entries`; the lock is a **leaf** (module docs).
+/// `pop_entries`; the borrow is a **leaf** (module docs).
 #[derive(Clone, Default)]
 pub(crate) struct LocalHistoryRegistry {
-    inner: Arc<RegistryInner>,
+    inner: Rc<RegistryInner>,
 }
 
 #[derive(Default)]
 struct RegistryInner {
-    entries: Mutex<Vec<Arc<EntryInner>>>,
-    /// What pops that happened under the history lock owe: the entry's
+    entries: RefCell<Vec<Rc<EntryInner>>>,
+    /// What pops that happened under the history borrow owe: the entry's
     /// `on_remove` when it had one, and whether that pop emptied the stack (the
     /// `changed_internal_state` edge). A callback-less
     /// entry still records its edge — it just has nothing to fire.
-    owed: Mutex<Vec<(Option<OnRemoveCallback>, bool)>>,
+    owed: RefCell<Vec<(Option<OnRemoveCallback>, bool)>>,
     /// Set at route dispose: adds become inert-with-a-warning
     /// (ADR-0025).
-    closed: AtomicBool,
+    closed: Cell<bool>,
 }
 
 impl Drop for RegistryInner {
     fn drop(&mut self) {
-        self.closed.store(true, Ordering::Release);
+        self.closed.set(true);
         let entries = super::lifecycle::RetiredValues(std::mem::take(self.entries.get_mut()));
         let owed = super::lifecycle::RetiredValues(std::mem::take(self.owed.get_mut()));
         drop(entries);
@@ -191,33 +190,33 @@ impl LocalHistoryRegistry {
     /// Whether the stack is empty, i.e. the route does not handle a pop
     /// internally.
     pub(crate) fn is_empty(&self) -> bool {
-        self.inner.entries.lock().is_empty()
+        self.inner.entries.borrow().is_empty()
     }
 
     /// Push an entry. Returns whether the
     /// empty→non-empty edge was crossed (the caller owes
     /// `changed_internal_state`). `None` when the route is already disposed —
     /// inert, logged.
-    fn add(&self, entry: Arc<EntryInner>) -> Option<bool> {
-        if self.inner.closed.load(Ordering::Acquire) {
+    fn add(&self, entry: Rc<EntryInner>) -> Option<bool> {
+        if self.inner.closed.get() {
             tracing::warn!(
                 "LocalHistoryEntry added to a disposed route; the entry is inert \
                  and its on_remove will never fire"
             );
             return None;
         }
-        let mut entries = self.inner.entries.lock();
+        let mut entries = self.inner.entries.borrow_mut();
         let was_empty = entries.is_empty();
         entries.push(entry);
         Some(was_empty)
     }
 
     /// The `did_pop` half: pop the most recent live entry, **recording** its callback as owed rather than firing it — this
-    /// runs under the history lock. Returns whether an entry was consumed
+    /// runs under the history borrow. Returns whether an entry was consumed
     /// (⇒ `did_pop` answers `false` and the route stays).
     pub(crate) fn pop_last_deferred(&self) -> bool {
         let (claimed, emptied) = {
-            let mut entries = self.inner.entries.lock();
+            let mut entries = self.inner.entries.borrow_mut();
             let mut claimed = None;
             while let Some(entry) = entries.pop() {
                 if let Some(claim) = entry.claim() {
@@ -231,7 +230,7 @@ impl LocalHistoryRegistry {
         };
         match claimed {
             Some(Claim(callback)) => {
-                self.inner.owed.lock().push((callback, emptied));
+                self.inner.owed.borrow_mut().push((callback, emptied));
                 true
             }
             None => false,
@@ -239,11 +238,11 @@ impl LocalHistoryRegistry {
     }
 
     /// Drain everything owed by in-flush pops. Called by
-    /// `NavigatorShared::apply` with **no lock held**; returns whether any
+    /// `NavigatorShared::apply` with **no borrow held**; returns whether any
     /// drained pop crossed the emptied edge (the caller then fires
     /// `changed_internal_state`, also unlocked).
     pub(crate) fn take_owed(&self) -> (Vec<OnRemoveCallback>, bool) {
-        let owed = std::mem::take(&mut *self.inner.owed.lock());
+        let owed = std::mem::take(&mut *self.inner.owed.borrow_mut());
         let mut callbacks = Vec::with_capacity(owed.len());
         let mut emptied = false;
         for (callback, edge) in owed {
@@ -254,30 +253,30 @@ impl LocalHistoryRegistry {
     }
 
     /// Route dispose: sever every live entry **without firing** and
-    /// close the registry against late adds. Runs outside the history lock
+    /// close the registry against late adds. Runs outside the history borrow
     /// (`FlushOutcome::dispose_routes`).
     pub(crate) fn sever(&self) {
-        self.inner.closed.store(true, Ordering::Release);
-        let entries = std::mem::take(&mut *self.inner.entries.lock());
+        self.inner.closed.set(true);
+        let entries = std::mem::take(&mut *self.inner.entries.borrow_mut());
         for entry in entries {
-            entry.removed.store(true, Ordering::Release);
-            let _prev = entry.on_remove.lock().take();
+            entry.removed.set(true);
+            let _prev = entry.on_remove.borrow_mut().take();
         }
         // Owed callbacks were claimed by real pops before dispose: still
         // delivered by the pending `apply`.
     }
 
     /// Remove `entry` out-of-band: drop it from the stack, then fire `on_remove`
-    /// synchronously **after** the leaf lock is released. Returns whether the
+    /// synchronously **after** the leaf borrow is released. Returns whether the
     /// empty edge was crossed.
-    fn remove(&self, entry: &Arc<EntryInner>) -> Option<bool> {
+    fn remove(&self, entry: &Rc<EntryInner>) -> Option<bool> {
         let Claim(callback) = entry.claim()?;
         let emptied = {
-            let mut entries = self.inner.entries.lock();
-            entries.retain(|held| !Arc::ptr_eq(held, entry));
+            let mut entries = self.inner.entries.borrow_mut();
+            entries.retain(|held| !Rc::ptr_eq(held, entry));
             entries.is_empty()
         };
-        // Fired outside the registry lock (it is a leaf), and a callback-less
+        // Fired outside the registry borrow (it is a leaf), and a callback-less
         // entry simply has nothing to fire.
         if let Some(callback) = callback {
             callback();
@@ -289,8 +288,8 @@ impl LocalHistoryRegistry {
 impl std::fmt::Debug for LocalHistoryRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalHistoryRegistry")
-            .field("entries", &self.inner.entries.lock().len())
-            .field("closed", &self.inner.closed.load(Ordering::Relaxed))
+            .field("entries", &self.inner.entries.borrow().len())
+            .field("closed", &self.inner.closed.get())
             .finish()
     }
 }
@@ -332,22 +331,22 @@ impl LocalHistoryHandle {
     /// the entry is inert (logged), and the returned handle's `remove` is a
     /// no-op.
     pub fn add(&self, entry: LocalHistoryEntry) -> LocalHistoryEntryHandle {
-        let inner = Arc::new(EntryInner {
-            on_remove: Mutex::new(entry.on_remove),
-            removed: AtomicBool::new(false),
+        let inner = Rc::new(EntryInner {
+            on_remove: RefCell::new(entry.on_remove),
+            removed: Cell::new(false),
         });
-        match self.registry.add(Arc::clone(&inner)) {
+        match self.registry.add(Rc::clone(&inner)) {
             Some(true) => (self.changed_internal_state)(),
             Some(false) => {}
             None => {
                 // Disposed route: mark the orphan removed so `remove` no-ops.
-                inner.removed.store(true, Ordering::Release);
-                let _prev = inner.on_remove.lock().take();
+                inner.removed.set(true);
+                let _prev = inner.on_remove.borrow_mut().take();
             }
         }
         LocalHistoryEntryHandle {
             inner,
-            registry: Arc::downgrade(&self.registry.inner),
+            registry: Rc::downgrade(&self.registry.inner),
             changed_internal_state: Rc::clone(&self.changed_internal_state),
         }
     }
@@ -367,7 +366,7 @@ impl std::fmt::Debug for LocalHistoryHandle {
 /// keeps no route state alive.
 #[derive(Clone)]
 pub struct LocalHistoryEntryHandle {
-    inner: Arc<EntryInner>,
+    inner: Rc<EntryInner>,
     registry: Weak<RegistryInner>,
     changed_internal_state: Rc<dyn Fn()>,
 }
@@ -375,7 +374,7 @@ pub struct LocalHistoryEntryHandle {
 impl LocalHistoryEntryHandle {
     /// Remove the entry; `on_remove` fires synchronously, outside the leaf
     /// lock. Idempotent, and exactly-once against a
-    /// racing pop (the entry's atomic flag is the linearization point). A
+    /// racing pop (the entry's `removed` cell is the linearization point). A
     /// no-op after the route died (see the module docs).
     pub fn remove(&self) {
         let Some(registry) = self.registry.upgrade() else {
@@ -391,7 +390,7 @@ impl LocalHistoryEntryHandle {
 impl std::fmt::Debug for LocalHistoryEntryHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalHistoryEntryHandle")
-            .field("removed", &self.inner.removed.load(Ordering::Relaxed))
+            .field("removed", &self.inner.removed.get())
             .finish_non_exhaustive()
     }
 }

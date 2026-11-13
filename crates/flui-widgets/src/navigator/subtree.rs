@@ -46,14 +46,14 @@
 //! [`RenderSubtreeAnchor`]: flui_objects::RenderSubtreeAnchor
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::SubtreeAnchor;
 use flui_view::Child;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 use crate::__private::AnchoredBox;
 
@@ -82,7 +82,7 @@ pub(crate) type SubtreeParts = (Option<ElementId>, Option<RenderId>);
 #[derive(Clone, Default)]
 pub(crate) struct RouteSubtreeCell {
     anchor: SubtreeAnchor,
-    element: Arc<Mutex<Option<ElementId>>>,
+    element: Rc<RefCell<Option<ElementId>>>,
 }
 
 impl RouteSubtreeCell {
@@ -97,17 +97,17 @@ impl RouteSubtreeCell {
     /// Not a layout-readiness check. See the module docs.
     pub(crate) fn resolve(&self) -> Option<RouteSubtree> {
         Some(RouteSubtree {
-            element_id: (*self.element.lock())?,
+            element_id: (*self.element.borrow_mut())?,
             render_id: self.anchor.get()?,
         })
     }
 
     fn publish_element(&self, element_id: ElementId) {
-        *self.element.lock() = Some(element_id);
+        *self.element.borrow_mut() = Some(element_id);
     }
 
     fn clear_element(&self) {
-        *self.element.lock() = None;
+        *self.element.borrow_mut() = None;
     }
 
     /// The two halves, separately. Test-facing: [`resolve`](Self::resolve) is an
@@ -115,7 +115,7 @@ impl RouteSubtreeCell {
     /// checks `resolve() == None` passes when *either* retraction works, and would
     /// stay green with one of them deleted.
     pub(crate) fn parts(&self) -> SubtreeParts {
-        (*self.element.lock(), self.anchor.get())
+        (*self.element.borrow_mut(), self.anchor.get())
     }
 }
 
