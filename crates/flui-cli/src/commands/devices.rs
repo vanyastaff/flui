@@ -383,10 +383,20 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
             hint: "install Xcode from the App Store, then run `xcode-select --install`".to_string(),
         });
     }
+    probe_simulators(Path::new("xcrun"), &SIMCTL_BUDGETS)
+}
 
-    match retry_on_timeout(&SIMCTL_BUDGETS, |budget| {
+/// The simulators `xcrun simctl list` reports, through `xcrun` and with an
+/// attempt for each of `budgets`. Apart from [`probe_ios`] so a test runs it
+/// on every host against a stand-in `xcrun`.
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(dead_code, reason = "only the macOS simulator probe lists simulators")
+)]
+fn probe_simulators(xcrun: &Path, budgets: &[std::time::Duration]) -> Result<Vec<Device>, Problem> {
+    match retry_on_timeout(budgets, |budget| {
         output_with_timeout(
-            Command::new("xcrun").args(["simctl", "list", "-j", "devices", "available"]),
+            Command::new(xcrun).args(["simctl", "list", "-j", "devices", "available"]),
             budget,
         )
     }) {
@@ -407,8 +417,8 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
             platform: DevicePlatform::Ios,
             message: format!(
                 "xcrun did not answer within {:?} in {} attempts",
-                SIMCTL_BUDGETS.iter().sum::<std::time::Duration>(),
-                SIMCTL_BUDGETS.len()
+                budgets.iter().sum::<std::time::Duration>(),
+                budgets.len()
             ),
             hint: "Xcode's simulator service may be hung; try restarting it".to_string(),
         }),
@@ -420,7 +430,10 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(dead_code, reason = "only the macOS simulator probe lists simulators")
+)]
 fn parse_simctl_json(text: &str) -> Result<Vec<Device>, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
     let Some(devices_by_runtime) = value.get("devices").and_then(|d| d.as_object()) else {
@@ -480,7 +493,10 @@ fn parse_simctl_json(text: &str) -> Result<Vec<Device>, String> {
 }
 
 /// `com.apple.CoreSimulator.SimRuntime.iOS-17-2` → `iOS 17.2`.
-#[cfg(target_os = "macos")]
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(dead_code, reason = "only the macOS simulator probe lists simulators")
+)]
 fn runtime_name(runtime_key: &str) -> String {
     let Some(suffix) = runtime_key.strip_prefix("com.apple.CoreSimulator.SimRuntime.") else {
         return runtime_key.to_string();
@@ -860,6 +876,55 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    /// A stand-in `xcrun` in a directory of its own: it hangs on its first
+    /// `hangs` calls and then lists one booted simulator, as `simctl list -j`
+    /// prints it.
+    #[cfg(unix)]
+    fn stand_in_xcrun(dir: &std::path::Path, hangs: usize) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let script = dir.join("xcrun");
+        let calls = dir.join("calls");
+        let body = format!(
+            "#!/bin/sh\n\
+             echo x >> '{calls}'\n\
+             if [ \"$(wc -l < '{calls}')\" -le {hangs} ]; then exec sleep 30; fi\n\
+             echo '{{\"devices\":{{\"com.apple.CoreSimulator.SimRuntime.iOS-18-0\":\
+             [{{\"name\":\"iPhone Test\",\"udid\":\"UDID-1\",\"state\":\"Booted\",\
+             \"isAvailable\":true}}]}}}}'\n",
+            calls = calls.display(),
+        );
+        std::fs::write(&script, body).expect("write the stand-in xcrun");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("make the stand-in xcrun executable");
+        script
+    }
+
+    /// The probe `flui devices` runs on macOS, against an `xcrun` that hangs:
+    /// once (the simulator is listed on the retry) and every time (a
+    /// `Problem` that names both attempts).
+    #[cfg(unix)]
+    #[test]
+    fn the_simulator_probe_retries_an_xcrun_that_hangs() {
+        let budgets = [Duration::from_millis(300), Duration::from_secs(20)];
+        let once = tempfile::tempdir().expect("a directory for the stand-in xcrun");
+        let devices = super::probe_simulators(&stand_in_xcrun(once.path(), 1), &budgets)
+            .unwrap_or_else(|problem| panic!("the retry lists the simulator: {}", problem.message));
+        let ids = devices
+            .iter()
+            .map(|device| device.id.as_str())
+            .collect::<Vec<&str>>();
+        assert_eq!(ids, ["UDID-1"]);
+
+        let short = [Duration::from_millis(200), Duration::from_millis(300)];
+        let always = tempfile::tempdir().expect("a directory for the stand-in xcrun");
+        let problem = super::probe_simulators(&stand_in_xcrun(always.path(), 99), &short)
+            .expect_err("an xcrun that always hangs is a problem");
+        assert_eq!(
+            problem.message,
+            "xcrun did not answer within 500ms in 2 attempts"
+        );
     }
 
     #[test]
