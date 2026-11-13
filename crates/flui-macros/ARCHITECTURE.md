@@ -89,7 +89,7 @@ in `flui-foundation`.
 **Oracle:** The shape follows Dioxus's `#[derive(Routable)]` with `#[route("…")]`
 per variant.
 
-**Choice:** `#[derive(Routable)]` (ADR-0093 §1) checks every pattern while
+**Choice:** `#[derive(Routable)]` (ADR-0330 §1) checks every pattern while
 expanding: a leading `/`, no empty segment, trailing `/`, `?`, `#` or `%`;
 each `:param` names one field and each field one parameter; no two patterns of
 the same shape. A tuple variant, a generic enum, a struct and a missing, doubled

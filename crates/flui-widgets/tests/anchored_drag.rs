@@ -553,7 +553,7 @@ pub(crate) fn anchored_drag_assistive_and_key_steps_move_between_anchors() {
         };
         let keys = Keys::of(&laid);
         assert!(keys.down(open.0, open.1.clone()), "{direction:?}: handled");
-        keys.up(open.0, open.1.clone());
+        keys.up(open.0, open.1);
         settle(&mut laid);
         assert_eq!(
             anchors.current(),
@@ -584,7 +584,7 @@ pub(crate) fn anchored_drag_assistive_and_key_steps_move_between_anchors() {
         laid.replay(&slow(Device::Mouse, at(150.0, 150.0), at(160.0, 150.0)));
         settle(&mut laid);
         assert!(
-            bubbles(&mut laid, close.0, close.1.clone()),
+            bubbles(&mut laid, close.0, close.1),
             "{direction:?}: at the lowest anchor the key bubbles"
         );
     }

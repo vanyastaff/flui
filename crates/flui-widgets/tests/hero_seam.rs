@@ -22,15 +22,14 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use parking_lot::Mutex;
 
-use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, NavigatorObserver, PageRoute, RouteAnimation, RouteId, SimpleRoute,
-};
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
+use flui_widgets::navigator::{PageRoute, RouteAnimation, RouteId};
 use flui_widgets::{SizedBox, Text};
 
 use crate::common::harness::{Harness, mount};
 
 fn seeded_navigator() -> NavigatorHandle {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));

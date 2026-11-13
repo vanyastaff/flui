@@ -594,7 +594,7 @@ impl X11Window {
         let origin = origin.reply().ok()?;
         let attributes = attributes.reply().ok()?;
         let words = |reply: xproto::GetPropertyReply| -> Vec<u32> {
-            reply.value32().map(Iterator::collect).unwrap_or_default()
+            reply.value32().map_or_default(Iterator::collect)
         };
         let net_state = words(net_state.reply().ok()?);
         let wm_state = words(wm_state.reply().ok()?);

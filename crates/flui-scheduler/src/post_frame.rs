@@ -570,6 +570,10 @@ pub enum OwnerFrameError {
 /// A value [`PostFrameHandle::schedule_or_return`] could not queue: the
 /// owning UI runtime is gone or retired.
 #[must_use = "a returned value is an obligation: meet it or drop it"]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a refused value has one fate, back to its caller, and a `_` arm would drop it"
+)]
 pub enum PostFrameRejection<T> {
     /// The queue closed: the value is the
     /// caller's again, never run.

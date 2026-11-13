@@ -81,6 +81,7 @@ const K_TINTED_OPACITY_DARK: f64 = 0.26;
 
 /// The size of a [`CupertinoButton`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CupertinoButtonSize {
     /// A smaller button with round sides and [`crate::text_theme::CupertinoTextThemeData::action_small_text_style`].
     Small,

@@ -4,6 +4,7 @@
 /// detecting invalid operations, and handling edge cases in geometry
 /// computations.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum GeometryError {
     // ========================================================================
     // Coordinate/Value Errors

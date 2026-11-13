@@ -939,18 +939,15 @@ impl LaidOut {
         anchor: &flui_semantics::SemanticsAnchor,
     ) -> Vec<crate::a11y::NodeId> {
         self.pipeline_owner.with(|owner| {
-            owner
-                .semantics_owner()
-                .map(|semantics| {
-                    semantics
-                        .tree()
-                        .iter()
-                        .filter(|(_, node)| node.config().anchors().contains(anchor))
-                        .filter_map(|(_, node)| node.accessibility_id())
-                        .map(|identity| crate::a11y::NodeId(identity.as_u64()))
-                        .collect()
-                })
-                .unwrap_or_default()
+            owner.semantics_owner().map_or_default(|semantics| {
+                semantics
+                    .tree()
+                    .iter()
+                    .filter(|(_, node)| node.config().anchors().contains(anchor))
+                    .filter_map(|(_, node)| node.accessibility_id())
+                    .map(|identity| crate::a11y::NodeId(identity.as_u64()))
+                    .collect()
+            })
         })
     }
 

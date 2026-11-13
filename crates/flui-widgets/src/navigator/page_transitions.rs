@@ -158,15 +158,11 @@ impl PageTransitionHooks {
 ///
 /// ```
 /// use std::rc::Rc;
-/// use std::time::Duration;
 ///
 /// use flui_widgets::prelude::*;
-/// use flui_widgets::{
-///     Navigator, NavigatorHandle, PageTransitionBuilder, PageTransitions, ParallaxPageTransition,
-/// };
+/// use flui_widgets::{PageTransitions, ParallaxPageTransition, Text, WidgetsApp};
 ///
-/// let navigator = NavigatorHandle::new();
-/// let app = PageTransitions::new(Navigator::new(navigator))
+/// let app = PageTransitions::new(WidgetsApp::new(Text::new("Home")))
 ///     .page(Rc::new(ParallaxPageTransition::new()));
 /// # let _ = app;
 /// ```

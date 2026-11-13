@@ -79,9 +79,10 @@ use flui_sdk::painting::Canvas;
 use flui_sdk::painting::{BorderSide, BorderStyle};
 use flui_sdk::painting::{Paint, Path};
 use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Semantics, Toggled, WidgetState, WidgetStateProperty, WidgetStates,
-    WidgetStatesController,
+    CustomPaint, CustomPainter, Semantics, SemanticsRole, Toggled, WidgetState,
+    WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 use flui_sdk::{
     geometry::{Point, RRect, Rect, Size},
@@ -416,19 +417,32 @@ impl ViewState<Checkbox> for CheckboxState {
         let interactive = view.is_interactive();
         let next_value = view.next_value();
         let on_changed = view.on_changed.clone();
+        let square = CustomPaint::new()
+            .size(Size::new(
+                CHECKBOX_TAP_TARGET_SIZE,
+                CHECKBOX_TAP_TARGET_SIZE,
+            ))
+            .painter(painter);
+        // The label merges into the well's node as a child `Text`'s would,
+        // so only a labelled checkbox pays for the element that carries it.
+        let child = match &view.semantic_label {
+            Some(label) => Semantics::new().label(label.as_str()).child(square).boxed(),
+            None => square.boxed(),
+        };
         let mut ink_well = InkWell::new()
-            .child(
-                CustomPaint::new()
-                    .size(Size::new(
-                        CHECKBOX_TAP_TARGET_SIZE,
-                        CHECKBOX_TAP_TARGET_SIZE,
-                    ))
-                    .painter(painter),
-            )
+            .child(child)
             .shape(MaterialShape::Stadium)
             .overlay_color(overlay_color)
             .states_controller(self.states.clone())
-            .focus_indicator(FocusIndicator::Halo);
+            .focus_indicator(FocusIndicator::Halo)
+            // Flutter's `Semantics(checked: …, mixed: …, enabled: …)` around
+            // the checkbox: the well's node is that one node, enabled while
+            // the well has its tap.
+            .description(
+                Description::new(SemanticsRole::CheckBox)
+                    .identifier(view.identifier.clone())
+                    .toggled(checkbox_state(view.mode)),
+            );
         if interactive {
             ink_well = ink_well.on_tap(move |ctx| {
                 if let Some(handler) = &on_changed {
@@ -436,16 +450,7 @@ impl ViewState<Checkbox> for CheckboxState {
                 }
             });
         }
-
-        let mut semantics =
-            crate::button_style_button::identified(Semantics::new(), view.identifier.as_ref())
-                .enabled(interactive)
-                .checkbox(checkbox_state(view.mode));
-        if let Some(label) = &view.semantic_label {
-            semantics = semantics.label(label.clone());
-        }
-
-        semantics.child(ink_well)
+        ink_well
     }
 
     fn dispose(&mut self) {

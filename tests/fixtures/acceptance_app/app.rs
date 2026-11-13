@@ -1032,7 +1032,7 @@ impl StatefulView for Screen {
 
 impl ViewState<Screen> for ScreenState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let router = Router::<Route>::handle(ctx).expect("BUG: a screen is under the Router");
+        let router = Router::<Route>::of(ctx).expect("BUG: a screen is under the Router");
         if let Some(place) = self.place.as_ref().and_then(Weak::upgrade) {
             place.attach(router.clone());
         }

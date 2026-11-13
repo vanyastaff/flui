@@ -17,8 +17,7 @@ pub(super) fn start(config: &AppConfig) {
     let hooks = config
         .dev_agent
         .as_ref()
-        .map(crate::app::dev_agent::DevAgent::take)
-        .unwrap_or_default();
+        .map_or_default(crate::app::dev_agent::DevAgent::take);
     // Attached with no borrow of the loop's state held: `attach` is the
     // hooks' code.
     let host = (!hooks.is_empty()).then(|| DevAgentHost::attach(hooks));

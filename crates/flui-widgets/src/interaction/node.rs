@@ -68,7 +68,8 @@ pub struct InteractiveNode {
     focus: Option<FocusConfig>,
     focus_ring: bool,
     /// Shared, so a clone of the view copies no list.
-    actions: Rc<Vec<(TypeId, ErasedAction)>>,
+    /// `None` while the node binds nothing, so such a node holds no list.
+    actions: Option<Rc<Vec<(TypeId, ErasedAction)>>>,
     semantics: Option<Description>,
     /// Where the node writes the interaction states it owns (ADR-0322 §3).
     states: Option<WidgetStatesController>,
@@ -131,7 +132,10 @@ impl std::fmt::Debug for InteractiveNode {
             .field("enabled", &self.enabled)
             .field("press", &self.press.is_some())
             .field("focus", &self.focus.is_some())
-            .field("actions", &self.actions.len())
+            .field(
+                "actions",
+                &self.actions.as_ref().map_or(0, |actions| actions.len()),
+            )
             .field("semantics", &self.semantics.is_some())
             .field("states", &self.states.is_some())
             .finish_non_exhaustive()
@@ -146,6 +150,25 @@ pub(super) trait NodePress: PressSource {
     /// recognizers see the same event, as a [`Listener`] delivers them.
     fn contact(&self) -> Option<&ContactCallbacks> {
         None
+    }
+}
+
+/// One intent type bound to an action, for [`InteractiveNode::bindings`].
+pub struct ActionBinding((TypeId, ErasedAction));
+
+impl ActionBinding {
+    /// Intent type `T` bound to `action`. A control binds one action to
+    /// several intent types, so the binding shares it: each names the same
+    /// action, and none holds a copy.
+    #[must_use]
+    pub fn shared<T: Intent, A: Action<T> + 'static>(action: &Rc<A>) -> Self {
+        Self(shared_action::<T, A>(action))
+    }
+}
+
+impl std::fmt::Debug for ActionBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ActionBinding").field(&self.0.0).finish()
     }
 }
 
@@ -299,7 +322,7 @@ impl InteractiveNode {
             press: None,
             focus: None,
             focus_ring: false,
-            actions: Rc::default(),
+            actions: None,
             semantics: None,
             states: None,
             child: child.into_view().boxed(),
@@ -366,16 +389,17 @@ impl InteractiveNode {
     /// The bindings the node declares: its own while enabled, and the same
     /// types switched off while disabled, so an intent stops at the control
     /// and does not activate an enclosing one.
-    fn declared_actions(&self) -> Rc<Vec<(TypeId, ErasedAction)>> {
+    fn declared_actions(&self) -> Option<Rc<Vec<(TypeId, ErasedAction)>>> {
+        let actions = self.actions.as_ref()?;
         if self.enabled {
-            return Rc::clone(&self.actions);
+            return Some(Rc::clone(actions));
         }
-        Rc::new(
-            self.actions
+        Some(Rc::new(
+            actions
                 .iter()
                 .map(|(intent, action)| (*intent, action.switched_off()))
                 .collect::<Vec<(TypeId, ErasedAction)>>(),
-        )
+        ))
     }
 
     /// Answer the tap family `tap` sets, recognized as a
@@ -439,15 +463,22 @@ impl InteractiveNode {
         self
     }
 
-    /// Bind intent type `T` to `action` for the hosted focus node and the
-    /// subtree, as an [`Actions`](crate::Actions) around a `Focus` does.
+    /// Bind each intent type of `bindings` to its action for the hosted
+    /// focus node and the subtree, as an [`Actions`](crate::Actions) around
+    /// a `Focus` does. The bindings replace the ones the node held.
     ///
-    /// A control binds one action to several intent types, so the node
-    /// takes it shared: each binding names the same action, and none holds
-    /// a copy.
+    /// A control names all its bindings at once, so the node keeps a list
+    /// of exactly that length.
     #[must_use]
-    pub fn action<T: Intent, A: Action<T> + 'static>(mut self, action: &Rc<A>) -> Self {
-        Rc::make_mut(&mut self.actions).push(shared_action::<T, A>(action));
+    pub fn bindings<const N: usize>(mut self, bindings: [ActionBinding; N]) -> Self {
+        self.actions = (N > 0).then(|| {
+            Rc::new(
+                bindings
+                    .into_iter()
+                    .map(|binding| binding.0)
+                    .collect::<Vec<(TypeId, ErasedAction)>>(),
+            )
+        });
         self
     }
 
@@ -504,7 +535,7 @@ pub struct InteractiveNodeState {
     recognizers: RecognizerHost,
     focus: Option<FocusHost>,
     /// The node's own bindings, as the latest view gave them.
-    own_actions: Rc<Vec<(TypeId, ErasedAction)>>,
+    own_actions: Option<Rc<Vec<(TypeId, ErasedAction)>>>,
     /// The chain above the node, read in lifecycle hooks.
     ambient_actions: Option<ActionChain>,
     /// The node's bindings layered over the ambient chain. `None` while the
@@ -514,7 +545,9 @@ pub struct InteractiveNodeState {
     /// The platform convention the node is built under, recorded with the
     /// chain on the focus node. `None` before `init_state`.
     platform: Option<TargetPlatform>,
-    ring_style: FocusRingStyle,
+    /// The ring style provided above the node, shared with its provider:
+    /// a control holds no copy, and none at all under no provider.
+    ring_style: Option<Rc<FocusRingStyle>>,
     /// Names the render object, for the focus node to measure.
     anchor: SubtreeAnchor,
     /// The controller the node writes its states to, and the switch it
@@ -572,8 +605,10 @@ impl InteractiveNodeState {
     }
 
     fn layer_actions(&mut self) {
-        self.chain = (!self.own_actions.is_empty())
-            .then(|| layered_chain(self.ambient_actions.clone(), Rc::clone(&self.own_actions)));
+        self.chain = self
+            .own_actions
+            .as_ref()
+            .map(|own| layered_chain(self.ambient_actions.clone(), Rc::clone(own)));
     }
 
     /// What the hosted focus node records: the chain in force at the node
@@ -589,7 +624,7 @@ impl InteractiveNodeState {
     fn read_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.ambient_actions = EnclosingActions::depend_on(ctx);
         self.platform = Some(PlatformConvention::of(ctx));
-        self.ring_style = DefaultFocusRingStyle::of(ctx);
+        self.ring_style = DefaultFocusRingStyle::shared(ctx);
         self.layer_actions();
     }
 
@@ -667,7 +702,7 @@ impl StatefulRenderView for InteractiveNode {
             ambient_actions: None,
             chain: None,
             platform: None,
-            ring_style: FocusRingStyle::BUILT_IN,
+            ring_style: None,
             anchor: SubtreeAnchor::new(),
             states: self.states.clone(),
             enabled: self.enabled,
@@ -847,7 +882,9 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
                 .focus_node()
                 .is_some_and(|node| node.has_visible_focus());
         render_object.set_anchor(self.focus.is_some().then(|| self.anchor.clone()));
-        impact |= render_object.set_focus_ring(ring.then_some(self.ring_style));
+        let style = self.ring_style.as_deref().copied();
+        impact |=
+            render_object.set_focus_ring(ring.then(|| style.unwrap_or(FocusRingStyle::BUILT_IN)));
         impact
     }
 
@@ -913,7 +950,9 @@ mod switch_tests {
     fn node(enabled: bool) -> InteractiveNode {
         InteractiveNode::new(SizedBox::new(10.0, 10.0))
             .tap(super::ControlTap::new().on_tap(|_ctx| {}))
-            .action::<ActivateIntent, Willing>(&Rc::new(Willing))
+            .bindings([super::ActionBinding::shared::<ActivateIntent, Willing>(
+                &Rc::new(Willing),
+            )])
             .enabled(enabled)
     }
 
@@ -926,7 +965,9 @@ mod switch_tests {
     #[test]
     fn a_disabled_node_declares_its_bindings_switched_off() {
         for (enabled, runs) in [(true, true), (false, false)] {
-            let declared = node(enabled).declared_actions();
+            let declared = node(enabled)
+                .declared_actions()
+                .expect("a node with a binding declares it");
             let [(intent, action)] = declared.as_slice() else {
                 panic!("one binding stays declared, enabled or not");
             };

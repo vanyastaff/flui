@@ -65,12 +65,6 @@ image = { workspace = true }
 pollster = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-# `flui-rendering` is a dev-dependency only for its `testing` feature
-# (`TextContextHandle::with`); no test names the crate, so cargo-shear would call
-# it unused.
-[package.metadata.cargo-shear]
-ignored = ["flui-rendering"]
-
 [lints]
 workspace = true
 

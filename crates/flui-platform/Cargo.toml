@@ -59,11 +59,6 @@ name = "compile_fail"
 path = "tests/compile_fail.rs"
 required-features = ["testing"]
 
-# cargo-shear reports the trybuild compile-fail inputs as unlinked: the
-# `compile_fail` test hands them to rustc by glob, no module declares them.
-[package.metadata.cargo-shear]
-ignored-paths = ["tests/compile_fail/*.rs"]
-
 [features]
 default = []
 serde = ["dep:serde"]

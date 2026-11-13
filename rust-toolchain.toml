@@ -34,6 +34,6 @@
 #   4. Run `cargo xtask toolchain` and `cargo xtask ci`.
 
 [toolchain]
-channel = "1.99.0"
+channel = "1.100.0"
 profile = "default"                # includes rustc, cargo, rustfmt, clippy, rust-docs
 components = ["rustfmt", "clippy"]

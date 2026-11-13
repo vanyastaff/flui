@@ -23,7 +23,7 @@ use crate::unsupported::Unsupported;
 /// The launcher capability: `ctx.capability::<LauncherCapability>()` hands out
 /// a [`Launcher`].
 #[derive(Debug)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a capability marker has no values; it is only ever named"
 )]

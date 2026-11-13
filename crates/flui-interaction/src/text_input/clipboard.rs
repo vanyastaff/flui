@@ -20,7 +20,7 @@ use super::shared_read::SharedRead;
 /// The clipboard capability: `ctx.capability::<ClipboardCapability>()` hands
 /// out a [`ClipboardHandle`].
 #[derive(Debug)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a capability marker has no values; it is only ever named"
 )]

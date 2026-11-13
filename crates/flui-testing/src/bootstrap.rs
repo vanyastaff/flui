@@ -130,6 +130,7 @@ impl Default for MountOwners {
 /// asks for these handles. A `FutureBuilder`/`StreamBuilder` that subscribes
 /// there would silently never poll if the async driver arrived late.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum BuildCapabilities {
     /// The full set — async driver, post-frame, owner-local post-frame,
     /// lifecycle observation, and interaction dispatch.

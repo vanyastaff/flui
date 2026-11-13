@@ -27,5 +27,7 @@ help: the trait `ToValue` is not implemented for `Handle`
 note: required by a bound in `Fields::<'s>::field`
  --> $WORKSPACE/crates/flui-foundation/src/inspect/fields.rs
   |
+  | impl<'s> Fields<'s> {
+...
   |     pub fn field<'f, 'v, T: FieldValue + ?Sized>(
   |                             ^^^^^^^^^^ required by this bound in `Fields::<'s>::field`

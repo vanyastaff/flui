@@ -550,6 +550,7 @@ impl<'a> A11yNode<'a> {
 /// Kept as a typed value rather than a pre-rendered string so a test can match
 /// on the query a failure names without parsing a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum A11yQuery {
     /// Match on [`A11yNode::role`].
     Role(Role),
@@ -573,6 +574,7 @@ impl fmt::Display for A11yQuery {
 
 /// Why a unique-node query did not resolve.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum A11yQueryError {
     /// Nothing matched.
     #[error("no semantics node matched {query}; reachable nodes were:\n{tree}")]
@@ -601,6 +603,7 @@ pub enum A11yQueryError {
 /// counterpart is a dropped request, and a dropped request that no test can name
 /// is the failure mode this module exists to catch.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum InvokeActionError {
     /// The platform request did not decode: an id FLUI never exports, an
     /// action with no FLUI counterpart, or a payload that does not fit the

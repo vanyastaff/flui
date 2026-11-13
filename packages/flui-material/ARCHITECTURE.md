@@ -318,10 +318,9 @@ dialog and `page_transitions_theme_defaults_and_equality` the map.
 
 ### `OpenContainer` morphs inside its route, not in a separate overlay flight
 
-The container transform is a route whose `PageTransitionBuilder` draws one
-surface running from the source's rect to the navigator's: a `PageRoute`, or a
-`PopupRoute` on a navigator a `Router` drives (`NavigatorHandle::admits_pages`),
-which owns its pages and admits only popups. It shares only the
+The container transform is a `PopupRoute` over the page the container sits on,
+pushed through that page's `PageHandle`, whose `PageTransitionBuilder` draws
+one surface running from the source's rect to the navigator's. It shares only the
 flight seat with `Hero` (the anchor, the measurement and the frozen placeholder,
 reached through `flui_sdk::widgets::__private`): it has no tag matching and no
 divert, so it needs no flight manager. The morph's frame is new, so its origin
@@ -339,9 +338,10 @@ The source is measured in the morph frame's coordinates (both mapped through the
 render root, so a scale or rotation above the navigator cancels instead of being
 applied twice) on every tick of the
 route animation, so the exit lands where the source is now. That only holds if
-nothing moves the page below during the morph, so the route sets
-`PageRoute::animates_route_below(false)`: a theme's covered transition (Zoom
-scales the page below to 1.05) would otherwise scale the source under the morph.
+nothing moves the page below during the morph. A `PageRoute` coordinates its
+covered transition only with other page routes, so a popup leaves the page
+below still: a theme's covered transition (Zoom scales the page below to 1.05)
+would otherwise scale the source under the morph.
 The result is delivered from a task on the tree's `AsyncDriver` that owns its
 own token, so a page the navigator accepted reports its value even after the
 container unmounts. The route resolves its result when the pop is accepted, but
@@ -369,8 +369,9 @@ only by decision, recorded where a reader will find it.
 the two publish the same toggled state, and only `RadioButton` says the state is
 one-of-a-set rather than independent.
 
-**Choice:** `Radio::build` publishes `.radio(selected).enabled(interactive)`,
-which sets `SemanticsRole::RadioButton` and the toggled state together.
+**Choice:** `Radio::build` describes its well's node as a `SemanticsRole::RadioButton`
+with the toggled state (`Description::new(SemanticsRole::RadioButton).toggled(…)`),
+enabled while the well has its tap.
 
 Inside a real `ListTile` the tile's node and the radio's node conflict (each
 declares a role, and both declare `enabled`), so they stay **separate** nodes:

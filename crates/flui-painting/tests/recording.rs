@@ -145,6 +145,76 @@ pub(crate) fn interning_shares_arc_for_identical_paints() {
     );
 }
 
+/// A taken recording leaves the canvas empty at the identity transform, and
+/// the next recording shares the paint allocations of the last unless the
+/// paint holds a shader.
+pub(crate) fn a_taken_recording_shares_its_plain_paints_with_the_next() {
+    use flui_foundation::geometry::{Matrix4, Offset};
+    use flui_painting::Shader;
+    use flui_painting::paint::TileMode;
+
+    let plain = Paint::fill(Color::RED);
+    let mut shaded = Paint::fill(Color::RED);
+    shaded.shader = Some(Shader::linear_gradient(
+        Offset::ZERO,
+        Offset::new(10.0, 0.0),
+        vec![Color::RED, Color::BLUE],
+        None,
+        TileMode::Clamp,
+    ));
+    let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+    let mut canvas = Canvas::new();
+    canvas.translate(5.0, 5.0);
+    canvas.draw_rect(rect, &plain);
+    canvas.draw_rect(rect, &shaded);
+    let first = canvas.take_recording();
+    assert_eq!(first.len(), 2);
+    assert!(canvas.is_empty());
+    assert_eq!(canvas.transform_matrix(), Matrix4::identity());
+
+    canvas.draw_rect(rect, &plain);
+    canvas.draw_rect(rect, &shaded);
+    let second = canvas.finish();
+    assert_eq!(
+        second.bounds(),
+        Some(rect),
+        "the translation did not carry over"
+    );
+    let (first, second): (Vec<&DrawCommand>, Vec<&DrawCommand>) = (
+        first.commands().iter().collect(),
+        second.commands().iter().collect(),
+    );
+    assert!(
+        Arc::ptr_eq(rect_paint(first[0]), rect_paint(second[0])),
+        "a plain paint is interned across recordings"
+    );
+    assert!(
+        !Arc::ptr_eq(rect_paint(first[1]), rect_paint(second[1])),
+        "a paint with a shader is let go with its recording"
+    );
+}
+
+/// A canvas kept between recordings lets go of the room a recording that
+/// interned many paints or saved deeply grew, so one heavy frame does not pin
+/// its memory for every frame after it.
+pub(crate) fn a_taken_recording_lets_go_of_a_heavy_frames_room() {
+    let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+    let mut canvas = Canvas::new();
+    for shade in 0..=u8::MAX {
+        canvas.save();
+        canvas.draw_rect(rect, &Paint::fill(Color::rgb(shade, 0, 0)));
+    }
+    for _ in 0..256 {
+        canvas.restore();
+    }
+    let (paints, saves) = canvas.kept_room();
+    assert!(paints >= 256 && saves >= 256, "the heavy frame grew both");
+    drop(canvas.take_recording());
+    let (paints, saves) = canvas.kept_room();
+    assert!(paints <= 4, "the paint pool kept room for {paints} paints");
+    assert!(saves <= 32, "the save stack kept room for {saves} states");
+}
+
 /// A finished `DisplayList` moves to another thread (the GPU hand-off) intact.
 pub(crate) fn a_finished_display_list_is_sendable_to_another_thread() {
     let mut canvas = Canvas::new();

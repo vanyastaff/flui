@@ -151,7 +151,7 @@ pub(super) async fn converse(conversation: Rc<Conversation>, peer: impl Peer) {
         };
         // Written with nothing borrowed: the script may send from inside `onLine`.
         let delivered = lines.iter().all(|line| {
-            let line = line.strip_suffix(b"\n").unwrap_or(line);
+            let line = line.trim_suffix(b"\n");
             peer.send(&String::from_utf8_lossy(line))
         });
         match deadline {

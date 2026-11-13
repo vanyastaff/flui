@@ -1239,7 +1239,7 @@ mod tests {
 
     impl WaitSource for Wire {
         type Event = u32;
-        type Error = std::convert::Infallible;
+        type Error = !;
 
         fn send(&self) -> Result<(), Self::Error> {
             self.flushes.set(self.flushes.get() + 1);

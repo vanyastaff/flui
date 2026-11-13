@@ -1,16 +1,15 @@
-//! End-to-end animation through [`HeadlessBinding::pump_frame`]: a
-//! `FadeTransition` over an [`AnimationController`] *registered with the
-//! binding* advances its opacity frame-to-frame as virtual time is pumped — no
-//! `set_value`, no `thread::sleep`.
+//! End-to-end animation through a UI runtime's frames: a `FadeTransition` over
+//! an [`AnimationController`] *registered with the runtime* advances its
+//! opacity frame-to-frame as virtual time is pumped — no `set_value`, no
+//! `thread::sleep`.
 //!
-//! This exercises the full Phase-1b chain inside a single `pump_frame`: the
-//! binding ticks the registered controller (`tick_at`) → the controller
-//! notifies its listeners → the `FadeTransition`'s subscription marks it dirty
-//! into the build inbox → `build_scope` drains it and rebuilds → `run_frame`
-//! re-reads the new value into the `Opacity` render object. It would fail if the
-//! controller were not ticked inside the frame, or if the tick ran *after*
-//! `build_scope` (the dirty entry would miss this frame's drain — a one-frame
-//! lag).
+//! This exercises the whole chain inside a single frame: the runtime ticks the
+//! registered controller (`tick_at`) → the controller notifies its listeners →
+//! the `FadeTransition`'s subscription marks it dirty into the build inbox →
+//! `build_scope` drains it and rebuilds → `run_frame` re-reads the new value
+//! into the `Opacity` render object. It would fail if the controller were not
+//! ticked inside the frame, or if the tick ran *after* `build_scope` (the dirty
+//! entry would miss this frame's drain — a one-frame lag).
 
 use std::time::Duration;
 

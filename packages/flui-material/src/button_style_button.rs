@@ -88,7 +88,7 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    ConstrainedBox, DefaultTextStyle, Padding, Semantics, SemanticsRole, Toggled, WidgetState,
+    ConstrainedBox, DefaultTextStyle, Padding, SemanticsRole, Toggled, WidgetState,
     WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 
@@ -217,18 +217,6 @@ impl ButtonStyleButtonCore {
 
     fn is_selected(&self) -> bool {
         self.selected == Some(true)
-    }
-}
-
-/// `semantics` naming its node by `identifier` when there is one: how a
-/// control forwards the identifier its author gave it (ADR-0240).
-pub(crate) fn identified(
-    semantics: Semantics,
-    identifier: Option<&std::sync::Arc<str>>,
-) -> Semantics {
-    match identifier {
-        Some(identifier) => semantics.identifier(std::sync::Arc::clone(identifier)),
-        None => semantics,
     }
 }
 

@@ -195,8 +195,7 @@ pub(super) fn read(state: &PresentationState, params: &JournalParams) -> Journal
         .dev_agent
         .borrow()
         .as_ref()
-        .map(|slot| slot.journal.read(params.since, params.max_entries))
-        .unwrap_or_default()
+        .map_or_default(|slot| slot.journal.read(params.since, params.max_entries))
 }
 
 /// The sequence number of `state`'s last journal entry; 0 before the first.

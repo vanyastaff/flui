@@ -292,7 +292,7 @@ impl Unsupported {
 /// [`InputCapabilities::present`](crate::input_capabilities::InputCapabilities::present)
 /// says which devices are attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a capability is delivered by the operating system, made up by the host, or not at all; there is no fourth way"
 )]
