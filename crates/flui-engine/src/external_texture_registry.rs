@@ -254,8 +254,10 @@ impl ExternalTextureRegistry {
         if same_size {
             self.update(id, texture)
         } else {
-            self.unregister(id);
-            self.register(
+            // A refused allocation leaves the previous image registered, as
+            // the kept images hold it.
+            let previous = self.textures.remove(&id.get());
+            let registered = self.register(
                 id,
                 texture,
                 ExternalTextureDescriptor {
@@ -263,7 +265,13 @@ impl ExternalTextureRegistry {
                     alpha: ExternalAlpha::Straight,
                     color: ExternalColorEncoding::EncodedSrgb,
                 },
-            )
+            );
+            if registered.is_err()
+                && let Some(previous) = previous
+            {
+                self.textures.insert(id.get(), previous);
+            }
+            registered
         }
     }
 
@@ -517,6 +525,22 @@ impl KeptTextures {
         self.registry
             .as_mut()
             .expect("BUG: the registry was made on this device above")
+    }
+
+    /// The allocations on `domain`'s device, taken out for one frame: until
+    /// [`Self::take_back`] returns them, [`Self::on`] uploads the kept images
+    /// again, so a frame that never returns them costs a re-upload, not the
+    /// textures.
+    pub(crate) fn lend(&mut self, domain: &Arc<DeviceDomain>) -> ExternalTextureRegistry {
+        self.on(domain);
+        self.registry
+            .take()
+            .expect("BUG: `on` left a registry on this device")
+    }
+
+    /// Return the allocations [`Self::lend`] took out.
+    pub(crate) fn take_back(&mut self, registry: ExternalTextureRegistry) {
+        self.registry = Some(registry);
     }
 
     /// Let go of the allocations, kept on a device being replaced; the

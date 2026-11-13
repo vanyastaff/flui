@@ -26,7 +26,7 @@ use crate::{
     FrameLatency,
     device_domain::DeviceDomain,
     error::{EngineError, EngineResult},
-    external_texture_registry::KeptTextures,
+    external_texture_registry::{ExternalTextureRegistry, KeptTextures},
     gpu_backend::{Attempt, GpuBackend},
     layer_dispatcher::LayerDispatcher,
     offscreen::OffscreenRenderer,
@@ -760,13 +760,37 @@ impl GpuContext {
             .apply(&self.domain, updates)
     }
 
-    /// Exchange `slot`'s external textures with `painter`'s: once to lend
-    /// them for the slot's frame, once more to take them back, which every
-    /// exit of the frame does, an unwound one included, before the painter
-    /// is kept or dropped.
-    fn exchange_textures(&mut self, slot: SlotId, painter: &mut WgpuPainter) {
+    /// Lend `slot`'s external textures to `painter` for the slot's frame,
+    /// handing back the painter's own registry, which
+    /// [`Self::take_back_textures`] returns to it.
+    ///
+    /// While lent, the slot keeps no allocations: a frame that unwinds before
+    /// they come back leaves the slot to upload its kept images again on its
+    /// next frame, never to draw from the painter's empty registry.
+    fn lend_textures(
+        &mut self,
+        slot: SlotId,
+        painter: &mut WgpuPainter,
+    ) -> Option<ExternalTextureRegistry> {
+        let mut lent = self.textures.get_mut(&slot)?.lend(&self.domain);
+        painter.swap_external_textures(&mut lent);
+        Some(lent)
+    }
+
+    /// Take `slot`'s external textures back from `painter`, giving the
+    /// painter the registry [`Self::lend_textures`] handed out.
+    fn take_back_textures(
+        &mut self,
+        slot: SlotId,
+        painter: &mut WgpuPainter,
+        own: Option<ExternalTextureRegistry>,
+    ) {
+        let Some(mut registry) = own else {
+            return;
+        };
+        painter.swap_external_textures(&mut registry);
         if let Some(kept) = self.textures.get_mut(&slot) {
-            painter.swap_external_textures(kept.on(&self.domain));
+            kept.take_back(registry);
         }
     }
 
@@ -791,7 +815,7 @@ impl GpuContext {
         };
         let _submission_scope = self.domain.begin_frame_scope()?;
         let mut painter = self.take_painter(format, size);
-        self.exchange_textures(slot, &mut painter);
+        let own_textures = self.lend_textures(slot, &mut painter);
         #[cfg(test)]
         let panics = self.injected_panic();
         let domain = &self.domain;
@@ -823,7 +847,7 @@ impl GpuContext {
             painter.finish_frame();
             drawn
         });
-        self.exchange_textures(slot, &mut painter);
+        self.take_back_textures(slot, &mut painter, own_textures);
         let Some(drawn) = drawn else {
             self.keep_pipelines(painter, &mut caught);
             caught.resume();
@@ -862,13 +886,15 @@ impl GpuContext {
         };
         let mut painter = self.take_painter(format, size);
         painter.resize(size.0, size.1);
-        self.exchange_textures(slot, &mut painter);
         // The blit's pipelines, like the library's, are inserted only once
         // built, so an unwound frame leaves them whole.
         let mut blit = self
             .blit
             .take()
             .unwrap_or_else(|| OffscreenRenderer::with_domain(Arc::clone(&self.domain)));
+        // Lent last, after everything outside the contained frame that can
+        // unwind.
+        let own_textures = self.lend_textures(slot, &mut painter);
         let Self {
             adapter,
             domain,
@@ -889,7 +915,7 @@ impl GpuContext {
             )
         });
         self.blit = Some(blit);
-        self.exchange_textures(slot, &mut painter);
+        self.take_back_textures(slot, &mut painter, own_textures);
         let Some(rendered) = rendered else {
             self.keep_pipelines(painter, &mut caught);
             caught.resume();
@@ -1708,7 +1734,7 @@ mod tests {
     /// a device rebuild too, and a detach drops a slot's textures.
     ///
     /// Red-check: skip lending the slot's textures to the shared painter in
-    /// `exchange_textures` and no frame can draw its texture; skip the
+    /// `lend_textures` and no frame can draw its texture; skip the
     /// re-upload in `KeptTextures::on` and the frames after the rebuild fail.
     #[test]
     fn each_slot_draws_its_own_textures_under_the_same_id_across_a_rebuild() {
@@ -1818,6 +1844,93 @@ mod tests {
         assert!(
             !executor.backend().textures.contains_key(&detached),
             "a detach drops the slot's textures"
+        );
+    }
+
+    /// A frame that unwinds while it holds a slot's lent textures, outside
+    /// the contained draw (building the window blit, say), drops them with
+    /// the painter: the slot's next frame uploads its kept images again
+    /// instead of drawing from the painter's empty registry.
+    ///
+    /// Red-check: lend by swapping the slot's registry with the painter's,
+    /// leaving the painter's empty one in the slot, and the next frame
+    /// cannot find the texture.
+    #[test]
+    fn a_frame_unwound_with_lent_textures_leaves_the_slot_its_images() {
+        use flui_foundation::ManualClock;
+        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_painting::paint::Image;
+
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let clock = ManualClock::new();
+        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let slot = sender.mint_slot().expect("a slot id is left");
+        let address = PresentationAddress {
+            ui_runtime_id: UiRuntimeId::new(1),
+            presentation_id: PresentationId::new(1),
+        };
+        let _receipt = sender
+            .send(RasterCommand::Attach {
+                slot,
+                address,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(8, 8),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let registry = TextureRegistry::new(std::sync::Arc::new(|| {}));
+        let texture = registry.register().expect("an id is left");
+        texture.submit_frame(Image::from_rgba8(2, 2, RED.repeat(4)));
+        let draw = |executor: &mut RasterExecutor<GpuContext>| {
+            let generation = sender
+                .record(slot)
+                .expect("the owner holds the slot")
+                .required_generation;
+            let tree = LayerTree::new(Layer::from(TextureLayer::new(
+                texture.id(),
+                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            )));
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            else {
+                unreachable!("BUG: `frame` makes a frame command");
+            };
+            sender
+                .send(RasterCommand::Frame {
+                    slot,
+                    snapshot: snapshot.textures(registry.take_updates()),
+                })
+                .expect("the frame is accepted");
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            sender.drain_settlements(slot, &mut settled);
+            let pixels = executor
+                .backend()
+                .read_slot(slot)
+                .expect("the slot reads back");
+            (
+                settled[0].verdict,
+                [pixels[0], pixels[1], pixels[2], pixels[3]],
+            )
+        };
+        assert_eq!(draw(&mut executor), (RasterVerdict::Presented, RED));
+
+        // What an unwind between the lend and the take-back leaves.
+        let context = executor.backend_mut();
+        let mut painter = context.take_painter(wgpu::TextureFormat::Rgba8Unorm, (8, 8));
+        let own = context.lend_textures(slot, &mut painter);
+        assert!(own.is_some(), "the slot has textures to lend");
+        drop(painter);
+        drop(own);
+
+        assert_eq!(
+            draw(&mut executor),
+            (RasterVerdict::Presented, RED),
+            "the slot draws its kept image after the unwound frame"
         );
     }
 
