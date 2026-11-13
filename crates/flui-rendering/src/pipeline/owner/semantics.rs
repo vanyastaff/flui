@@ -1468,7 +1468,9 @@ fn merge_child_fragments(
             // so a merge never drops a second text's runs for the first's:
             // that text keeps its node and its runs (ADR-0214 §2).
             SemanticsFragment::Pending(pending)
-                if conflicts.as_ref().is_some_and(|conflicts| conflicts[index])
+                if conflicts
+                    .as_ref()
+                    .is_some_and(|places| places[index].forms_node())
                     || (pending.config.text_content().is_some()
                         && config.text_content().is_some()) =>
             {
@@ -1528,6 +1530,24 @@ fn in_reading_order(children: &mut Vec<BuiltSemanticsNode>, direction: TextDirec
     );
 }
 
+/// What the conflict marking decided for one fragment of a parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FragmentPlace {
+    /// The parent absorbs it (or it is a node already and was never asked).
+    Absorbed,
+    /// The parent cannot take it: it is a node of its own.
+    Refused,
+    /// The parent could take it, but not together with a sibling.
+    Displaced,
+}
+
+impl FragmentPlace {
+    /// Whether a pending fragment in this place forms its own node.
+    fn forms_node(self) -> bool {
+        self != Self::Absorbed
+    }
+}
+
 /// Which pending fragments form nodes of their own instead of being
 /// absorbed by `parent`: one `parent` cannot take, and two that cannot be in
 /// its node together.
@@ -1536,21 +1556,24 @@ fn in_reading_order(children: &mut Vec<BuiltSemanticsNode>, direction: TextDirec
 /// whether it can stay beside that node, not whether the two can share one:
 /// where the fragments name a control (ADR-0332), a check box beside an
 /// icon does not keep the icon from naming the button around both.
+///
+/// One allocation, a byte per fragment: this runs for every node of every
+/// assembly.
 fn mark_configuration_conflicts(
     parent: &SemanticsConfiguration,
     fragments: &[SemanticsFragment],
     names_a_control: bool,
-) -> Vec<bool> {
+) -> Vec<FragmentPlace> {
     let pending = |index: usize| match &fragments[index] {
         SemanticsFragment::Pending(pending) => Some(&pending.config),
         SemanticsFragment::Formed(_) => None,
     };
-    let refused: Vec<bool> = (0..fragments.len())
-        .map(|index| {
-            pending(index).is_some_and(|config| !parent.can_absorb(config, names_a_control))
+    let mut places: Vec<FragmentPlace> = (0..fragments.len())
+        .map(|index| match pending(index) {
+            Some(config) if !parent.can_absorb(config, names_a_control) => FragmentPlace::Refused,
+            _ => FragmentPlace::Absorbed,
         })
         .collect();
-    let mut conflicts = refused.clone();
 
     for index in 0..fragments.len() {
         let Some(config) = pending(index) else {
@@ -1560,20 +1583,24 @@ fn mark_configuration_conflicts(
             let Some(sibling) = pending(sibling_index) else {
                 continue;
             };
-            let compatible = match (refused[index], refused[sibling_index]) {
+            let refused = |index: usize| places[index] == FragmentPlace::Refused;
+            let compatible = match (refused(index), refused(sibling_index)) {
                 (true, true) => continue,
                 (true, false) => sibling.can_stay_beside(config, names_a_control),
                 (false, true) => config.can_stay_beside(sibling, names_a_control),
                 (false, false) => config.can_join(sibling, names_a_control),
             };
             if !compatible {
-                conflicts[index] = true;
-                conflicts[sibling_index] = true;
+                for displaced in [index, sibling_index] {
+                    if places[displaced] == FragmentPlace::Absorbed {
+                        places[displaced] = FragmentPlace::Displaced;
+                    }
+                }
             }
         }
     }
 
-    conflicts
+    places
 }
 
 fn rebuild_semantics_owner(

@@ -143,8 +143,8 @@ loop reaches neither. Production is then paced by:
 
 - `FrameClock`'s in-flight capacity gate (`Skip(Backpressure)`, live in production for the first
   time — closing ADR-0044 §9's boundary) and `min_produce_interval`;
-- the platform's own pacing signal, armed before every present through the pre-present hook
-  (`RasterBackend::set_pre_present_hook`, ADR-0058 decision 1) — the raster backend fires it
+- the platform's own pacing signal, armed before every present (ADR-0058 decision 1): the
+  window's slot calls its `SurfaceTarget::pre_present_notify` (ADR-0305)
   immediately before `queue.present`, for a frame that will present only;
 - for frames that ran the pipeline but did not present, a `FallbackWake` **deadline** delivered
   through the wake-deadline hook (`ControlFlow::WaitUntil`, ADR-0044 §7; ADR-0058 decision 2).

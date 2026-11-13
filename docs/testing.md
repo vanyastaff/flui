@@ -587,7 +587,36 @@ tree costs more than 5% over the small one: a frame that clears a table the
 mount grew or walks the whole tree for what a few nodes report is caught there,
 while every counter of its work stays put. The budget assertions run with
 flui-widgets' suite on every PR; the `perf-gates` job runs `perf --check` and
-`perf --instructions --check` in the `full` lane.
+`perf --instructions --check` in the `full` lane, and `perf --check` alone on a pull request
+whose diff reaches code that runs for every node of a frame (`perf_required`, below).
+
+The perf targets of flui-widgets and flui-material also hold the heap level:
+`flui_testing::heap::assert_rounds_plateau`
+runs a round (mount an application, drive it, drop it) again and again and
+fails when the test thread's live bytes keep growing. An owner thread holds
+its state in `Rc` (ADR-0323 §1), so a cycle through an element, a state, a
+listener or a signal frees nothing and no tool reports it; each round would
+leave one more tree behind. The counters are per thread, so the assertion is
+for a round that works on the test thread: a block freed on another thread
+than the one that allocated it reads as growth on one and as a fall on the
+other. A round that allocates nothing on the test thread is refused.
+`an_app_mounted_driven_and_dropped_again_and_again_holds_no_more_heap`
+(flui-widgets) runs eager rows under signals, a scrolled lazy list, presses
+through the agent, a transition stepped by hand, an implicit animation the
+host's frames run to its end and the same animation dropped in flight;
+`a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap`
+(flui-material) pushes a page for a result, opens a dialog over it and pops
+both, then drops the application in the middle of the push, and with the
+result still awaited. A round that drops its application in the middle of an
+animation asserts first that it is there: the fade, that the host still has
+its run to drive; the push waits until the page going out and the page coming in
+are both on screen. A widget
+family that keeps state of a new kind (a controller, an overlay, a route)
+adds its rounds there, one settled and one dropped in flight. A leak a round
+finds and its change does not fix is held by a `#[should_panic]` test of its
+own, named in [`gaps.md`](gaps.md):
+`an_app_dropped_with_a_dialog_open_keeps_its_navigator` holds
+[a navigator unmounted with a dialog open](gaps.md#a-navigator-unmounted-with-a-dialog-open-is-never-freed).
 
 `perf --size` measures what an application costs before it does anything,
 against `perf/size.toml`: the packages of the facade's default graph on Linux,
@@ -1055,7 +1084,7 @@ runs `checks`, `plan` and the `ci` aggregator:
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
 | `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `public-api`) over the whole workspace, and the on-demand jobs its diff asks for (below) |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test`, `perf-gates` (all Linux), and `test-trybuild`, `api-contracts` and `miri` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test` (both Linux), and `test-trybuild`, `api-contracts`, `miri` and `perf-gates` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
   job, in parallel, over the whole workspace. One serial job over the
@@ -1127,8 +1156,18 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
   or a change to its plan (`tools/xtask/src/tasks.rs`) or this rule
   (`tools/xtask/src/change_scope/miri_scope.rs`). A change that reaches only the job's narrower
   filters is left to main.
+- `perf-gates` runs its baseline comparison (`cargo xtask perf --check`) when `perf_required` is
+  set: a changed file under a source that runs for every node of a frame
+  (`crates/flui-view/src/tree/`, `crates/flui-view/src/owner/`, `crates/flui-rendering/src/storage/`,
+  `crates/flui-rendering/src/pipeline/`, `crates/flui-semantics/src/`), where one more
+  allocation is a rise in every scenario, or a change to the baseline
+  (`crates/flui-widgets/perf/baseline/`), the scenarios (`crates/flui-widgets/tests/perf.rs`),
+  what counts for them (`crates/flui-testing/src/heap.rs`, `crates/flui-testing/src/control_cost.rs`),
+  the task (`tools/xtask/src/perf.rs`) or this rule
+  (`tools/xtask/src/change_scope/perf_scope.rs`). A rise that comes from anywhere else, and the
+  callgrind half of the job, are left to main.
 
-A pull request that reaches none of them skips all four.
+A pull request that reaches none of them skips all of them.
 
 
 **Only `full` checks these**, so a pull request can merge green and still

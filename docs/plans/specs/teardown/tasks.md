@@ -250,11 +250,11 @@ graph LR
     один отчёт `CallbackPanic` с текстом паники, приложение живо, следующий тап доходит до
     обработчика, следующий кадр выполняет свои post-frame callbacks. Характеризация: границы
     сдерживания уже есть. Нативная строка 5 (`save-panic`) — в T19.
-- [x] T10 — характеризация раннера. Главное окно открывается и на headless: окно рисует
-  `WindowRenderer` (crate-private: `RasterBackend` + `DeviceRecovery` + `DisplayColorFollow` +
-  задержка кадра), которого строит `WindowRenderers` цикла; production — wgpu `Renderer` без
-  изменения поведения, набор раннера — `StandInRenderer` (`flui_app::testing`: кадры,
-  `lose_device`, `fail_recoveries`, `is_released`). `HeadlessRunHandle::renderer`,
+- [x] T10 — характеризация раннера. Главное окно открывается и на headless: каждое окно —
+  слот единственного `RasterExecutor` цикла (`runner::raster_host`, ADR-0305); production
+  ставит исполнитель на `GpuContext`, набор раннера — на `StandInRenderer`
+  (`flui_app::testing`: кадры, `lose_device` и `fail_recoveries` общего на все окна устройства,
+  `is_released` — слот окна отсоединён, `panic_in_next_frames`, `refuse_next_window`, `limit_size`). `HeadlessRunHandle::renderer`,
   `HeadlessRunHandle::wake_deadline`; `run_owner_turn` задаёт вопрос выхода, который ход
   попросил задать снова, как цикл рабочего стола. `flui_testing::DropLedger`/`DropSentinel`
   (ADR-0261 §2). Таблица `runner_close` (`crates/flui-app/tests/runner_close.rs`, восемь

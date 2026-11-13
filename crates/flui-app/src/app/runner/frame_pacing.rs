@@ -14,35 +14,6 @@
 // never reached `present()` (`FallbackWake`, ADR-0058: a non-blocking wake
 // one display period after the last present, never a sleep on the loop).
 
-/// Hands the window's frame-pacing signal to the raster backend: the
-/// backend calls the surface target's
-/// [`pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)
-/// immediately before every present, and only then. On Wayland this is what makes a running
-/// animation compositor-paced (the Wayland host withholds the next frame
-/// until the surface's frame callback) and an occluded window silent; on
-/// every other backend the notify is a no-op. A named function rather than
-/// an inline closure at the bootstrap so the wiring — the hook is installed,
-/// it reaches the window, it fires once per presented frame and not for a
-/// frame that did not present — is pinned by a unit test through the same
-/// call the bootstrap makes.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-#[expect(
-    deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
-)]
-pub(super) fn install_pre_present_hook(
-    backend: &mut impl flui_engine::RasterBackend,
-    surface: std::sync::Arc<dyn flui_platform::SurfaceTarget>,
-) {
-    backend.set_pre_present_hook(Some(Box::new(move |statistics| {
-        surface.pre_present_notify(statistics);
-    })));
-}
-
 /// What a platform wake should do: run the full frame pipeline, service
 /// background owner work, or nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
