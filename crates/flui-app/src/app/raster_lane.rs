@@ -278,7 +278,7 @@ impl<B: RasterBackend> RasterLane<B> {
             damage: RasterBase::default(),
             textures: None,
         };
-        lane.set_damage_mode(damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref()));
+        lane.set_damage_mode(damage_mode_from_env());
         lane
     }
 

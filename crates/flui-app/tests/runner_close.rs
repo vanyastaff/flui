@@ -1135,12 +1135,16 @@ pub(crate) fn a_panicking_resize_is_reported_and_the_window_reaches_its_size() {
 /// A resize the renderer panics on every time is retried once, not on every
 /// frame after it.
 pub(crate) fn a_resize_that_keeps_panicking_is_not_retried_forever() {
+    const PANICS: u32 = 8;
     let observed = Observed::default();
     let started = start(&observed);
-    started.renderer.panic_in_next_resizes(8);
+    started.renderer.panic_in_next_resizes(PANICS);
     started.window.simulate_resize(700.0, 500.0);
     started.run.run_owner_turn();
-    for _ in 0..4 {
+    // The loop as a desktop runs it, until it has nothing to wake for. A
+    // wake of the window for its own reasons may try the size again; a
+    // retry on every display period would report a panic on each.
+    for _ in 0..2 * PANICS {
         let Some(deadline) = started.run.wake_deadline() else {
             break;
         };
@@ -1148,14 +1152,15 @@ pub(crate) fn a_resize_that_keeps_panicking_is_not_retried_forever() {
         started.run.run_owner_turn();
     }
     assert_eq!(
-        observed.frame_panics.load(Ordering::SeqCst),
-        2,
-        "the resize's panic and its one retry's were reported, and no more"
-    );
-    assert_eq!(
         started.run.wake_deadline(),
         None,
         "no retry of the panicking resize is armed"
+    );
+    let panics = observed.frame_panics.load(Ordering::SeqCst);
+    assert!(
+        (2..=3).contains(&panics),
+        "the resize's panic and its one retry's were reported, and at most \
+         one more from a wake the window has for its own reasons: {panics} panics"
     );
     let presented = started.renderer.frames_presented();
     started.renderer.panic_in_next_resizes(0);
