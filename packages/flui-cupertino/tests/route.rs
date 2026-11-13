@@ -10,12 +10,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::{lay_out_animated, tight};
-use flui_cupertino::CupertinoApp;
+use flui_cupertino::{CupertinoApp, CupertinoButton};
 use flui_sdk::animation::{Curve, Vsync, curves};
 use flui_sdk::painting::{Color, DrawOp};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{ColoredBox, Routable, Router, RouterHandle};
+use flui_sdk::widgets::{ColoredBox, Routable, Router, RouterHandle, Text};
+use flui_testing::{LogicalPoint, TestWindow, Tester, find};
 
 /// `CupertinoRouteTransitionMixin.kTransitionDuration` (`route.dart`, oracle
 /// tag `3.44.0`).
@@ -354,4 +355,47 @@ pub fn cupertino_app_page_pops_on_an_edge_swipe() {
         barrier_opacities(&laid).is_empty(),
         "the popped page's barrier left with it"
     );
+}
+
+/// The home page of the scenario below: a button that opens `Next`, which
+/// shows its name.
+#[derive(Clone, StatelessView)]
+struct OpensNext;
+
+impl StatelessView for OpensNext {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let router = Router::<Screen>::of(ctx).expect("BUG: the home page is under the Router");
+        CupertinoButton::new(Text::new("Open next")).on_pressed(move |_ctx| {
+            let _ = router.push(Screen::Next);
+        })
+    }
+}
+
+/// The edge swipe as an application's test writes it: mounted through the
+/// `Tester`, the page opened with a tap and dismissed with a drag that starts
+/// at the window's leading edge, where no element's centre is.
+///
+/// Red-check: make `ParallaxPageTransition::back_gesture` return `false` —
+/// the drag reaches the page and "Next page" stays on screen.
+pub fn cupertino_app_page_pops_on_an_edge_swipe_through_the_tester() {
+    let router = Router::new(Screen::Home, |screen: &Screen, _ctx| match screen {
+        Screen::Home => OpensNext.boxed(),
+        Screen::Next => Text::new("Next page").boxed(),
+    });
+    let mut tester = Tester::mount_in(CupertinoApp::router(router), TestWindow::new(400, 800));
+    tester.tap(&find::button("Open next"));
+    tester.pump_and_settle();
+    tester.expect(find::text("Next page")).to_exist();
+    tester.expect(find::button("Open next")).to_have_count(0);
+
+    tester.drag_from(
+        LogicalPoint::new(5.0, 400.0),
+        300.0,
+        0.0,
+        Duration::from_millis(200),
+    );
+    tester.pump_and_settle();
+
+    tester.expect(find::text("Next page")).to_have_count(0);
+    tester.expect(find::button("Open next")).to_exist();
 }

@@ -1248,6 +1248,7 @@ fn router_and_widgets_app() {
             ("router::a_mutation_from_build_is_refused", crate::router::a_mutation_from_build_is_refused),
             ("router::page_handle_pops_only_its_own_route", crate::router::page_handle_pops_only_its_own_route),
             ("router::page_handle_can_pop_follows_the_route_below", crate::router::page_handle_can_pop_follows_the_route_below),
+            ("router::an_app_dropped_with_a_popup_open_frees_its_builder", crate::router::an_app_dropped_with_a_popup_open_frees_its_builder),
             ("router::a_popup_pushed_from_a_page_resolves_to_its_value", crate::router::a_popup_pushed_from_a_page_resolves_to_its_value),
             ("router::a_named_page_is_announced_when_pushed_and_when_uncovered", crate::router::a_named_page_is_announced_when_pushed_and_when_uncovered),
             ("router::router_never_pops_its_last_page", crate::router::router_never_pops_its_last_page),

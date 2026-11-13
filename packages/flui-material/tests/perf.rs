@@ -15,8 +15,7 @@
 //!
 //! The plateau tests at the end hold the heap level: a Material application navigated and
 //! dropped again and again leaves no more bytes live each time
-//! (`flui_testing::heap::assert_rounds_plateau`), and a leak they found that is not fixed yet
-//! is held by a test of its own.
+//! (`flui_testing::heap::assert_rounds_plateau`).
 //!
 //! A target of its own, not a module of `tests/main.rs`: it pins the
 //! process-global font system and installs the kit's counting global
@@ -489,12 +488,12 @@ fn round_dropped_with_a_dialog_open() {
 /// A Material application with a Router, navigated and dropped again and again. Routes,
 /// overlays, transitions, ink and the async driver each hold `Rc`s to the others; a cycle
 /// among them would leave a page behind every round
-/// (`flui_testing::heap::assert_rounds_plateau`). Two of the rounds drop the application
+/// (`flui_testing::heap::assert_rounds_plateau`). Three of the rounds drop the application
 /// with work in flight, which is where an owner's retirement has to let go of what it
 /// accepted; the push's transition is an `AnimationController` on the presentation's vsync.
 #[test]
 fn a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap() {
-    let rounds: [(&str, fn()); 3] = [
+    let rounds: [(&str, fn()); 4] = [
         ("navigated and settled", round_navigated_and_settled),
         (
             "dropped with a page coming in",
@@ -504,20 +503,13 @@ fn a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap() {
             "dropped with a result awaited",
             round_dropped_with_a_result_awaited,
         ),
+        (
+            "dropped with a dialog open",
+            round_dropped_with_a_dialog_open,
+        ),
     ];
     for (name, round) in rounds {
         eprintln!("round: {name}");
         assert_rounds_plateau(round);
     }
-}
-
-/// A leak this target holds until it is fixed (`docs/gaps.md`, "A navigator unmounted with a
-/// dialog open is never freed"). The dialog's builder holds the message's `PageHandle`, the
-/// handle holds the navigator and the navigator's history holds the dialog's route, so an
-/// application dropped with the dialog open frees none of them. Once the navigator lets go,
-/// this test fails: its round then joins the table above.
-#[test]
-#[should_panic(expected = "more bytes live")]
-fn an_app_dropped_with_a_dialog_open_keeps_its_navigator() {
-    assert_rounds_plateau(round_dropped_with_a_dialog_open);
 }

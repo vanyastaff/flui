@@ -190,6 +190,14 @@ fn build(&self, _view: &NoteList, ctx: &dyn BuildContext) -> impl IntoView {
   runs later with an `EventContext` that has no tree position, so it cannot name "the nearest
   ancestor". The callback moves the owned handle `build` resolved; that is the Rust shape of
   Flutter's captured context, and the only difference an author sees.
+- **A handle does not keep its navigator alive.** `PageHandle` and `RouterHandle` hold the
+  navigator weakly; the `Router`'s state holds it strongly, and the navigator's history holds
+  its routes. A popup's builder that captures its page's handle, the form this section teaches,
+  would otherwise close a cycle through the history, and an application unmounted with the
+  popup open would free neither. Once the navigator is gone, a `PageHandle` operation answers
+  `PageError::Gone` (`maybe_pop`, `can_pop` and `is_current` answer `false`) and a
+  `RouterHandle` edit answers `RouterError::Disposed`, as Flutter's `Navigator.of` on a captured
+  context fails once its element is unmounted.
 - **A lifecycle context is a build context**, so a state that keeps a handle resolves it the same
   way in `did_change_dependencies`. There is no second, lifecycle-only door.
 - **`build` drives nothing.** A `RouterHandle` or `PageHandle` mutation made while its UI runtime
@@ -333,8 +341,11 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   (`from_stack_restores_back_order`, `stack_reads_every_committed_edit`, `empty_stack_is_refused`);
   `show_dialog`'s suite in `packages/flui-material/tests/show_dialog.rs`.
 - §3: `router_of_resolves_the_nearest_router_from_build`, `a_mutation_from_build_is_refused`,
-  `page_handle_pops_only_its_own_route`, `page_handle_can_pop_follows_the_route_below` and
-  `a_popup_pushed_from_a_page_resolves_to_its_value` in `crates/flui-widgets/tests/router.rs`;
+  `page_handle_pops_only_its_own_route`, `page_handle_can_pop_follows_the_route_below`,
+  `a_popup_pushed_from_a_page_resolves_to_its_value` and
+  `an_app_dropped_with_a_popup_open_frees_its_builder` (a builder that holds the page's or the
+  router's handle) in `crates/flui-widgets/tests/router.rs`; the dialog-open round of
+  flui-material's `a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap`;
   Material's `tapping_the_implied_back_button_pops_the_route`, whose bottom page implies no back
   button; the commit order under re-entrant observers
   (`router_push_commits_before_a_reentrant_observer_pop` and its `replace` and `go` siblings,

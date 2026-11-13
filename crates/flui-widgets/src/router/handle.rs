@@ -8,7 +8,7 @@ use flui_foundation::{ListenerCallback, MutatedDuringBuild, Subscription};
 
 use super::routable::Routable;
 use super::router::{Editing, RouterEntry, RouterRetiredValues, RouterShared, clone_routes, paths};
-use crate::navigator::{RouteId, RouteResult};
+use crate::navigator::{NavigatorHandle, RouteId, RouteResult};
 use flui_view::navigation::{RouteParseError, RoutePath};
 
 /// An owned, cloneable capability to drive the nearest
@@ -85,10 +85,11 @@ impl<R: Routable> RouterHandle<R> {
             .expect("BUG: a mounted Router's stack always holds a page")
     }
 
-    /// Pop the popups above the top page: they belong to it (ADR-0330 §2).
-    fn dismiss_popups(&self) {
+    /// Pop the popups above the top page of `navigator`: they belong to it
+    /// (ADR-0330 §2).
+    fn dismiss_popups(&self, navigator: &NavigatorHandle) {
         let top = self.top_page();
-        self.shared.navigator.pop_until(|id| id == top);
+        navigator.pop_until(|id| id == top);
     }
 
     /// Push `route` as a new page, with its entrance transition. A value equal
@@ -120,9 +121,10 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn push_for_result<T: 'static>(&self, route: R) -> Result<RouteResult<T>, RouterError> {
         let _editing = self.editable()?;
+        let navigator = self.shared.navigator()?;
         let _told = self.shared.announce_on_exit();
         let page = self.shared.page_route::<T>(&route);
-        let ((), result) = self.shared.navigator.push_page(page, |id| {
+        let ((), result) = navigator.push_page(page, |id| {
             self.shared
                 .stack
                 .borrow_mut()
@@ -140,22 +142,20 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn replace(&self, route: R) -> Result<(), RouterError> {
         let _editing = self.editable()?;
+        let navigator = self.shared.navigator()?;
         let _told = self.shared.announce_on_exit();
-        self.dismiss_popups();
+        self.dismiss_popups(&navigator);
         let target = self.top_page();
         let page = self.shared.page_route::<()>(&route);
-        let retired = self
-            .shared
-            .navigator
-            .push_replacement_page(target, page, |id| {
-                let mut stack = self.shared.stack.borrow_mut();
-                let retired = stack
-                    .iter()
-                    .position(|entry| entry.id == target)
-                    .map(|index| stack.remove(index));
-                stack.push(RouterEntry::new(id, route));
-                RouterRetiredValues(retired.into_iter().collect())
-            });
+        let retired = navigator.push_replacement_page(target, page, |id| {
+            let mut stack = self.shared.stack.borrow_mut();
+            let retired = stack
+                .iter()
+                .position(|entry| entry.id == target)
+                .map(|index| stack.remove(index));
+            stack.push(RouterEntry::new(id, route));
+            RouterRetiredValues(retired.into_iter().collect())
+        });
         drop(retired);
         Ok(())
     }
@@ -172,11 +172,12 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn pop(&self) -> Result<bool, RouterError> {
         let _editing = self.editable()?;
-        let popup_on_top = self.shared.navigator.current() != Some(self.top_page());
+        let navigator = self.shared.navigator()?;
+        let popup_on_top = navigator.current() != Some(self.top_page());
         if !popup_on_top && self.shared.stack.borrow().len() <= 1 {
             return Ok(false);
         }
-        Ok(self.shared.navigator.pop())
+        Ok(navigator.pop())
     }
 
     /// Pop the top navigator route, as [`pop`](Self::pop) does, delivering
@@ -195,11 +196,12 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn pop_with<T: 'static>(&self, value: T) -> Result<bool, RouterError> {
         let _editing = self.editable()?;
-        let popup_on_top = self.shared.navigator.current() != Some(self.top_page());
+        let navigator = self.shared.navigator()?;
+        let popup_on_top = navigator.current() != Some(self.top_page());
         if !popup_on_top && self.shared.stack.borrow().len() <= 1 {
             return Ok(false);
         }
-        Ok(self.shared.navigator.pop_with(value))
+        Ok(navigator.pop_with(value))
     }
 
     /// Navigate to `location`: derive its stack with
@@ -233,6 +235,7 @@ impl<R: Routable> RouterHandle<R> {
 
     fn go_within(&self, _editing: Editing<'_>, path: &RoutePath) -> Result<(), RouterError> {
         let _told = self.shared.announce_on_exit();
+        let navigator = self.shared.navigator()?;
         // Parsed values can own arbitrary destructors, including values in the
         // retained prefix. Protect them before popup dismissal delivers effects.
         let mut target = RouterRetiredValues(R::back_stack(path)?);
@@ -256,7 +259,7 @@ impl<R: Routable> RouterHandle<R> {
         };
         let mut prefix = common_prefix();
         if prefix.0 != target.0.len() {
-            self.dismiss_popups();
+            self.dismiss_popups(&navigator);
             self.mounted()?;
             // Popup observers may have navigated again. No cached index or
             // kept-page identity survives that user-effect boundary.
@@ -266,7 +269,7 @@ impl<R: Routable> RouterHandle<R> {
         if shared_len == target.0.len() {
             if shared_len < current_len {
                 let keep = self.shared.stack.borrow()[shared_len - 1].id;
-                self.shared.navigator.pop_until(|id| id == keep);
+                navigator.pop_until(|id| id == keep);
             }
             return Ok(());
         }
@@ -287,19 +290,16 @@ impl<R: Routable> RouterHandle<R> {
             .collect();
         let top_page = self.shared.page_route::<()>(top);
 
-        let retired = self
-            .shared
-            .navigator
-            .replace_tail(keep, below_pages, top_page, |ids| {
-                let mut stack = self.shared.stack.borrow_mut();
-                let retired = stack.split_off(shared_len);
-                stack.extend(
-                    ids.into_iter()
-                        .zip(std::mem::take(&mut added.0))
-                        .map(|(id, route)| RouterEntry::new(id, route)),
-                );
-                RouterRetiredValues(retired)
-            });
+        let retired = navigator.replace_tail(keep, below_pages, top_page, |ids| {
+            let mut stack = self.shared.stack.borrow_mut();
+            let retired = stack.split_off(shared_len);
+            stack.extend(
+                ids.into_iter()
+                    .zip(std::mem::take(&mut added.0))
+                    .map(|(id, route)| RouterEntry::new(id, route)),
+            );
+            RouterRetiredValues(retired)
+        });
         drop(retired);
         Ok(())
     }
