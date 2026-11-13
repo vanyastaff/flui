@@ -50,7 +50,9 @@ raw-window-handle = { workspace = true }
 # Canonical hit-test positions accepted by the production input pipeline.
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
-flui-view = { workspace = true }
+# `testing` for `clear_frame_build_report_for_test`, which `LaidOut::pump_report`
+# runs before its frame so a frame that builds nothing reports nothing.
+flui-view = { workspace = true, features = ["testing"] }
 # The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
 # `testing` for `inspect`, the committed-geometry and layer accessors the
 # widget harness (`widgets`) reads.

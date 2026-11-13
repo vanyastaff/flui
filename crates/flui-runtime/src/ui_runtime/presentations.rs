@@ -381,16 +381,6 @@ impl UiRuntime {
         })
     }
 
-    /// The primary presentation's own `FrameClock::produced_count` — for
-    /// tests in a sibling module (`runner.rs`) that need to observe the
-    /// clock's produce count without reaching into the private
-    /// `presentations` field directly.
-    #[cfg(any(test, feature = "testing"))]
-    #[must_use]
-    pub fn primary_produced_count_for_test(&self) -> u64 {
-        self.presentations.primary().clock().produced_count()
-    }
-
     /// This UI runtime's own scheduler — the strong root. `runner.rs`'s
     /// UI runtime-scoped lifecycle sites (`UiRuntime::update_host_lifecycle`, the
     /// per-backend frame pumps) read through here instead of a process-global

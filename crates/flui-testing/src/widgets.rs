@@ -1057,33 +1057,20 @@ impl LaidOut {
             .pipeline_owner
             .with(flui_rendering::pipeline::PipelineOwner::counters);
         let scene_before = self.scene_totals();
-        let produced_before = self.produced_count();
+        // Cleared before the frame, the build owner's report holds what this
+        // frame built: nothing when the window's clock granted no produce.
+        self.with_build_owner_mut(flui_view::BuildOwner::clear_frame_build_report_for_test);
         self.pump_for(dt);
         let pipeline_after = self
             .pipeline_owner
             .with(flui_rendering::pipeline::PipelineOwner::counters);
         let scene_after = self.scene_totals();
-        // The build owner keeps the report of the last frame that ran the
-        // window's pipeline; a pump the window's clock did not grant a
-        // produce built nothing.
-        let build = if self.produced_count() == produced_before {
-            flui_view::FrameBuildReport::default()
-        } else {
-            self.with_build_owner_mut(|owner| owner.last_frame_build_report())
-        };
+        let build = self.with_build_owner_mut(|owner| owner.last_frame_build_report());
         crate::FrameReport {
             build,
             pipeline: pipeline_after.since(pipeline_before),
             scene: crate::SceneReport::between(&scene_before, &scene_after),
         }
-    }
-
-    /// How many times the window's clock has granted a produce: a pipeline run.
-    fn produced_count(&self) -> u64 {
-        self.host
-            .ui_runtime()
-            .ui_runtime()
-            .primary_produced_count_for_test()
     }
 
     /// The window's retained-scene totals between frames.
