@@ -16,6 +16,7 @@ use crate::{
 
 /// What a [`ScriptedSlots`] backend does on its next call of one kind.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ScriptedAnswer {
     /// Return this disposition (a render) or succeed (any other call).
     Answer(PresentDisposition),
@@ -27,6 +28,7 @@ pub enum ScriptedAnswer {
 
 /// The target an attach named, as a [`SlotCall`] records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AttachedTarget {
     /// A window's surface.
     Window,
@@ -36,6 +38,7 @@ pub enum AttachedTarget {
 
 /// One call the executor made on a [`ScriptedSlots`] backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SlotCall {
     /// `attach`.
     Attach(SlotId, AttachedTarget),

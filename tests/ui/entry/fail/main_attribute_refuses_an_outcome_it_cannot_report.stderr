@@ -1,0 +1,22 @@
+error[E0277]: a `#[flui::main]` function returns `()` or `Result<(), E>` with a displayable `E`, not `u32`
+ --> tests/ui/entry/fail/main_attribute_refuses_an_outcome_it_cannot_report.rs:4:8
+  |
+3 | #[flui::main]
+  | ------------- required by a bound introduced by this call
+4 | pub fn run() -> u32 {
+  |        ^^^ returns `u32`
+  |
+  = help: the trait `flui_app::app::__entry::EntryOutcome` is not implemented for `u32`
+help: the following other types implement trait `flui_app::app::__entry::EntryOutcome`
+ --> crates/flui-app/src/app/__entry.rs
+  |
+  | impl EntryOutcome for () {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^ `()`
+...
+  | impl<E: std::fmt::Display> EntryOutcome for Result<(), E> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Result<(), E>`
+note: required by a bound in `flui_app::app::__entry::check`
+ --> crates/flui-app/src/app/__entry.rs
+  |
+  | pub fn check<R: EntryOutcome>(_entry: fn() -> R) {}
+  |                 ^^^^^^^^^^^^ required by this bound in `check`

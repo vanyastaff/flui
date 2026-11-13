@@ -49,6 +49,10 @@ macro_rules! with_entry {
 /// }
 /// ```
 #[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each layout protocol has its own node, and every walk dispatches on the protocol"
+)]
 pub enum RenderNode {
     /// Box protocol node (2D cartesian layout).
     Box(RenderEntry<BoxProtocol>),

@@ -22,6 +22,7 @@ use crate::parent_data::{
 /// A harness-side clone of the parent metadata a widget would normally
 /// write onto its child before layout.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ParentDataSeed {
     /// Track allocation for a cross-axis sliver group.
     SliverCrossAxis(SliverCrossAxisParentData),

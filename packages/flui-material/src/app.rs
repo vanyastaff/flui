@@ -184,7 +184,6 @@ fn resolve_theme(
 ///         .theme(ThemeData::light())
 ///         .dark_theme(ThemeData::dark())
 ///         .theme_mode(ThemeMode::System),
-///     flui::AppLaunch::new(),
 /// )?;
 /// ```
 #[derive(Clone, StatelessView)]

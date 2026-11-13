@@ -222,6 +222,7 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
 /// child's size for positioning (scroll offset) but not for its own size
 /// computation. This is the common case for viewport → sliver children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum UsageByParent {
     /// Parent doesn't depend on this child's geometry at all.
     /// Changes to this child's size don't affect the parent's layout.

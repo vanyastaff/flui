@@ -6,10 +6,6 @@
 reason = "a value crosses a thread here, of a kind ADR-0323 §2 names: a panic payload, a waker, a job, a worker's result, a handle meant for another thread, a scene snapshot or an error's source"
 
 positions = [
-    { item = "flui_app::app::application::AppRunError::Platform::source", at = "dyn", marker = "Send", crosses = "error" },
-    { item = "flui_app::app::application::AppRunError::Platform::source", at = "dyn", marker = "Sync", crosses = "error" },
-    { item = "flui_app::app::application::AppRunError::Service::source", at = "dyn", marker = "Send", crosses = "error" },
-    { item = "flui_app::app::application::AppRunError::Service::source", at = "dyn", marker = "Sync", crosses = "error" },
     { item = "flui_app::app::application_control::AppWindowError::Mount::source", at = "dyn", marker = "Send", crosses = "error" },
     { item = "flui_app::app::application_control::AppWindowError::Mount::source", at = "dyn", marker = "Sync", crosses = "error" },
     { item = "flui_app::app::application_control::AppWindowError::Native::source", at = "dyn", marker = "Send", crosses = "error" },
@@ -26,6 +22,8 @@ positions = [
     { item = "flui_app::app::direct::run_direct", at = "impl-trait", marker = "Send" },
     { item = "flui_app::app::launch::LaunchError::Platform::source", at = "dyn", marker = "Send", crosses = "error" },
     { item = "flui_app::app::launch::LaunchError::Platform::source", at = "dyn", marker = "Sync", crosses = "error" },
+    { item = "flui_app::app::launch::LaunchError::Service::source", at = "dyn", marker = "Send", crosses = "error" },
+    { item = "flui_app::app::launch::LaunchError::Service::source", at = "dyn", marker = "Sync", crosses = "error" },
     { item = "flui_app::app::lifecycle::ServiceDefinition::new", at = "bound", marker = "Send", crosses = "job" },
     { item = "flui_app::app::lifecycle::ServiceDefinition::new", at = "bound", marker = "Sync", crosses = "job" },
     { item = "flui_app::app::lifecycle::ServiceDefinition::new", at = "impl-trait", marker = "Send", crosses = "job" },

@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use flui_view::View;
 
-use super::{AppLaunch, LaunchError};
+use super::LaunchError;
 
 #[cfg(target_os = "android")]
 mod android;
@@ -83,13 +83,7 @@ mod surface_lifecycle;
 mod web;
 
 #[cfg(target_os = "android")]
-pub use android::run_app_android;
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-use desktop::run_desktop;
+use android::run_android;
 pub(in crate::app) use display_host::color_on as display_color_on;
 pub use fonts::{FontRegistrationError, register_font};
 pub(crate) use host::{
@@ -327,28 +321,35 @@ pub fn request_presentation_close(
     }
 }
 
-/// Run a FLUI application: `root` in a main window, with `launch`'s
-/// configuration and capability providers.
+/// Run `root` in a main window with the default configuration and the
+/// built-in providers alone: `Application::new().run(root)`, as Flutter's
+/// `runApp` takes the root widget. The root is any view, stateless or
+/// stateful.
 ///
-/// This is the entry point on the desktop, iOS and the Web; Android enters
-/// through `run_app_android`, which takes the `AndroidApp` the system hands
-/// `android_main`.
+/// The same call starts the application on every platform: on the desktop,
+/// iOS and the web from `fn main`, on Android from the function marked
+/// `#[flui::main]`, whose `android_main` hands the run the system's
+/// `AndroidApp`.
 ///
 /// # Errors
 ///
-/// [`LaunchError::CapabilityConflict`] when `launch`'s registrations
-/// conflict, found before the platform starts; [`LaunchError::Platform`] when
-/// the platform cannot start.
+/// As [`Application::run`](crate::Application::run).
 ///
 /// # Panics
 ///
-/// With the application's own panic, when nothing is left to go on after
-/// it (ADR-0258 §2): a destructor or `on_quit` that panics at the exit, or
-/// the close of the last window. The exit first writes what the
-/// application persisted and stops its services and pools; the panic then
-/// resumes, so the process exits with 101 and the panic's text, printed
-/// once. On Android, which this entry point cannot start.
-pub fn run_app_impl<V>(root: V, launch: AppLaunch) -> Result<(), LaunchError>
+/// As [`Application::run`](crate::Application::run).
+pub fn run_app<V>(root: V) -> Result<(), LaunchError>
+where
+    V: View + Clone + 'static,
+{
+    crate::app::Application::new().run(root)
+}
+
+/// [`Application::run`](crate::Application::run) on this platform.
+pub(in crate::app) fn run<V>(
+    application: crate::app::Application,
+    root: V,
+) -> Result<(), LaunchError>
 where
     V: View + Clone + 'static,
 {
@@ -358,46 +359,60 @@ where
         not(target_arch = "wasm32")
     ))]
     {
-        // The desktop runs an `Application`, which checks the registrations
-        // and installs logging itself.
-        run_desktop(root, launch)
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        let _ = (root, launch);
-        panic!(
-            "On Android, use flui_app::run_app_android() from android_main() \
-             instead of run_app(). AndroidApp must be provided by the system."
+        let run = application.into_run(
+            move |_: &crate::app::AppHandle| root.clone(),
+            crate::app::application::StartupWindow::Open,
         );
+        run_application(run).inspect_err(|error| {
+            if let LaunchError::UnsupportedSystem(unsupported) = error {
+                tracing::error!(%unsupported, "FLUI cannot run on this system");
+            }
+        })
     }
 
-    #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
     {
-        let AppLaunch {
+        let crate::app::Application {
             config,
             capabilities,
-        } = launch;
+        } = application;
+        // Logging first: `android_main` has no stderr, so the log is where a
+        // conflict can be read. Managed startup installs FLUI's default
+        // backend only if the slot is empty, so an application that
+        // configured its own subscriber first keeps it.
+        let _installation = super::logging::init_managed_logging(&config);
+        // Android's `AndroidApp` before anything is installed, so a run with
+        // no entry leaves nothing behind.
+        #[cfg(target_os = "android")]
+        let android_app = take_android_entry().ok_or(LaunchError::NoAndroidEntry)?;
         // Before anything starts, so a conflict starts nothing (ADR-0152 §1).
         install_capabilities(capabilities)?;
-        // Managed startup: install FLUI's default backend only if the slot
-        // is empty. An application that configured its own subscriber first
-        // keeps it, and a second run in one process is a no-op.
-        let _installation = super::logging::init_managed_logging(&config);
         tracing::info!(
             title = %config.title,
             size = ?config.size,
             "Starting FLUI application"
         );
+        #[cfg(target_os = "android")]
+        let started = run_android(root, config, android_app);
         #[cfg(target_os = "ios")]
-        {
-            run_ios(root, config).inspect_err(|_| discard_capabilities())
-        }
+        let started = run_ios(root, config);
         #[cfg(target_arch = "wasm32")]
-        {
-            run_web(root, config).inspect_err(|_| discard_capabilities())
-        }
+        let started = run_web(root, config);
+        started.inspect_err(|_| discard_capabilities())
     }
+}
+
+/// Keep `app` for the run the `#[flui::main]` entry starts on this thread.
+#[cfg(target_os = "android")]
+pub(in crate::app) fn hand_android_entry(app: android_activity::AndroidApp) {
+    let displaced = host::APP_RUNTIME.with(|slot| slot.borrow_mut().android_entry.replace(app));
+    drop(displaced);
+}
+
+/// The `AndroidApp` [`hand_android_entry`] kept, once.
+#[cfg(target_os = "android")]
+pub(in crate::app) fn take_android_entry() -> Option<android_activity::AndroidApp> {
+    host::APP_RUNTIME.with(|slot| slot.borrow_mut().android_entry.take())
 }
 
 /// Check `capabilities` against the built-ins and install the registry the
@@ -409,7 +424,7 @@ where
 /// installed then.
 #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
 pub(in crate::app) fn install_capabilities(
-    capabilities: crate::app::AppCapabilities,
+    capabilities: crate::app::capability::AppCapabilities,
 ) -> Result<(), LaunchError> {
     // A plugin's `register` is user code: it runs with no borrow held.
     let slots = host::APP_RUNTIME.with(|slot| slot.borrow().capability_slots());

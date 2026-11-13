@@ -23,6 +23,10 @@ use crate::constraints::AxisDirection;
 /// assert_eq!(reversed.multiplier(), -1.0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "content grows forward or in reverse"
+)]
 pub enum GrowthDirection {
     /// Content grows in the forward direction (normal reading order).
     #[default]

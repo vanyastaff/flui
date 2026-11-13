@@ -22,6 +22,7 @@ pub struct InstallInitialization {
 
 /// Result of executing a published presentation's initialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums, reason = "initialization completes or fails")]
 pub enum InitializationOutcome {
     /// Every initial observation completed.
     Ready,

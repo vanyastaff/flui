@@ -33,35 +33,25 @@ pub(crate) type ClipboardSlot = Rc<RefCell<Option<Rc<dyn NativeClipboard>>>>;
 /// plugins, which provide what neither the application nor the framework
 /// does.
 ///
-/// Built on the owner thread and handed to the run through
-/// [`AppLaunch::capabilities`](crate::AppLaunch::capabilities) or
-/// [`Application`](crate::Application)'s own builder methods. Two overrides or
-/// two plugins for one capability, or two capabilities sharing a name, fail
-/// the run with a [`CapabilityConflict`] before the platform starts.
-///
-/// ```rust,ignore
-/// let capabilities = AppCapabilities::new()
-///     .capability::<ClipboardCapability>(MyClipboard::default())
-///     .plugin(MyPlugin);
-/// ```
+/// Filled by [`Application`](crate::Application)'s `capability` and
+/// `plugin`. Two overrides or two plugins for one capability, or two
+/// capabilities sharing a name, fail the run with a [`CapabilityConflict`]
+/// before the platform starts.
 #[derive(Default)]
-pub struct AppCapabilities {
+pub(crate) struct AppCapabilities {
     overrides: CapabilityRegistrar,
     plugins: Vec<Box<dyn Plugin>>,
 }
 
 impl AppCapabilities {
-    /// No override and no plugin: the run gets the built-in providers alone.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Provide the capability `C` with `provider`, in place of the built-in
     /// provider and of any plugin's. A widget acquires it with
     /// `ctx.capability::<C>()` in a lifecycle hook.
     #[must_use = "the builder returns the updated registrations; assign or chain it"]
-    pub fn capability<C: Capability>(mut self, provider: impl CapabilityProvider<C>) -> Self {
+    pub(crate) fn capability<C: Capability>(
+        mut self,
+        provider: impl CapabilityProvider<C>,
+    ) -> Self {
         self.overrides.provide::<C>(provider);
         self
     }
@@ -69,7 +59,7 @@ impl AppCapabilities {
     /// Register the providers of `plugin`, for the capabilities neither the
     /// application nor the framework provides.
     #[must_use = "the builder returns the updated registrations; assign or chain it"]
-    pub fn plugin(mut self, plugin: impl Plugin) -> Self {
+    pub(crate) fn plugin(mut self, plugin: impl Plugin) -> Self {
         self.plugins.push(Box::new(plugin));
         self
     }

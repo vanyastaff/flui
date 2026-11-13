@@ -197,6 +197,10 @@ impl<'a> IntoIterator for &'a DirtySet {
 /// orderings all reduce to the same entry, instead of each needing its own
 /// guard.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the paint pass handles each kind, and a `_` arm would skip a repaint"
+)]
 pub enum PaintKind {
     /// Repaint the boundary's subtree.
     Repaint,

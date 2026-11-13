@@ -73,7 +73,6 @@ const PAGE_BARRIER: Color = Color::from_argb(0x1800_0000);
 ///     CupertinoApp::new(MyHome::new())
 ///         // Optional: pin brightness instead of following the platform.
 ///         .theme(CupertinoThemeData::default().with_brightness(Brightness::Dark)),
-///     flui::AppLaunch::new(),
 /// )?;
 /// ```
 #[derive(Clone, StatelessView)]
