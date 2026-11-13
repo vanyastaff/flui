@@ -867,3 +867,29 @@ fn secondary_window_entry_point_requires_a_running_application() {
         .is_err()
     );
 }
+
+/// The arguments `SemanticsConfiguration`'s setters take are named through `flui::semantics`, the
+/// way a render object's `describe_semantics_configuration` writes them.
+#[test]
+fn semantics_vocabulary_is_named_through_the_facade() {
+    use flui::semantics::{
+        SemanticsAnchor, SemanticsCollection, SemanticsCollectionKind, SemanticsConfiguration,
+        SemanticsRelation, SemanticsSortKey, SemanticsTag,
+    };
+
+    let mut config = SemanticsConfiguration::new();
+    let tag = SemanticsTag::new("row");
+    config.add_tag(tag.clone());
+    config.set_sort_key(SemanticsSortKey::named(2.0, "toolbar"));
+    config.set_collection(SemanticsCollection::new(SemanticsCollectionKind::List, Some(3)));
+    let anchor = SemanticsAnchor::new();
+    config.add_relation(SemanticsRelation::LabelledBy, anchor.clone());
+
+    assert!(config.has_tag(&tag));
+    assert_eq!(config.sort_key(), Some(&SemanticsSortKey::named(2.0, "toolbar")));
+    assert_eq!(
+        config.collection().map(SemanticsCollection::count),
+        Some(Some(3))
+    );
+    assert_eq!(config.relations(), &[(SemanticsRelation::LabelledBy, anchor)]);
+}
