@@ -52,8 +52,9 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Libr
 flui-painting = { workspace = true, features = ["testing"] }
 # `TextContextHandle::with` is test support behind `flui-rendering`'s `testing`.
 flui-rendering = { workspace = true, features = ["testing"] }
-# `tests/scene_ownership.rs` builds the layers a scene plugin returns.
-flui-layer = { workspace = true }
+# `tests/scene_ownership.rs` builds the layers a scene plugin returns;
+# `tests/plugin_pipeline_layout.rs` flattens the version an app plugin returns.
+flui-layer = { workspace = true, features = ["testing"] }
 # `examples/scene_render.rs`, the desktop host of a scene plugin: it opens a
 # window on the native host, polls `HotReloadDriver` and renders the plugin's
 # scene through the engine, and draws the engine's effects gallery.

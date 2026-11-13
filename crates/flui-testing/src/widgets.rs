@@ -1577,7 +1577,9 @@ impl LaidOut {
         self.pipeline_owner.inspect_render(query)
     }
 
-    /// A typed snapshot of [`layer_tree`](Self::layer_tree), the last submitted scene.
+    /// A typed snapshot of the last submitted scene, read in place from its retained version as
+    /// the agent's `inspect.layers` reads it: a boundary keeps its id across frames that leave it
+    /// alone.
     ///
     /// # Errors
     ///
@@ -1588,10 +1590,13 @@ impl LaidOut {
         query: flui_foundation::inspect::SnapshotQuery,
     ) -> Result<flui_foundation::inspect::SnapshotNode, flui_foundation::inspect::SnapshotError>
     {
-        let tree = self
-            .layer_tree()
+        let version = self
+            .host
+            .ui_runtime()
+            .sink()
+            .version()
             .ok_or(flui_foundation::inspect::SnapshotError::Empty)?;
-        flui_foundation::inspect::snapshot(tree, query)
+        flui_foundation::inspect::snapshot(version, query)
     }
 
     /// Every draw operation in the last submitted scene's picture layers, in

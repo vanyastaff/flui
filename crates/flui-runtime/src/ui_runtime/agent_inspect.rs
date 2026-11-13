@@ -57,7 +57,7 @@ pub(crate) enum InspectTarget {
     Widgets,
     /// The render tree (`inspect.render`, ids `r12`).
     Render,
-    /// The layers of the next scene the window shows (`inspect.layers`, ids `l4.37`).
+    /// The layers of the next scene the window shows (`inspect.layers`, ids `l4.2:3@7`).
     Layers,
 }
 
@@ -144,7 +144,7 @@ pub(crate) fn deliver_each<T>(items: Vec<T>, mut deliver: impl FnMut(T)) -> Firs
 impl PresentationState {
     /// Reads the scene the window is about to submit for every layer read parked on it, and holds
     /// the readings: they are delivered only if the scene is shown ([`Self::settle_agent_layer_reads`]).
-    /// The version is flattened into a layer tree only when a read is parked.
+    /// The version is read in place, and only when a read is parked.
     pub(crate) fn stage_agent_layer_reads(&self, scene: &flui_layer::SceneVersion) {
         // A scene that was staged and never submitted shows nothing: its reads wait again.
         drop(self.settle_agent_layer_reads(false));
@@ -152,9 +152,9 @@ impl PresentationState {
         if parked.is_empty() {
             return;
         }
-        let tree = scene.flatten();
+
         let staged = parked.into_iter().map(|read| {
-            let reading = reading_from(snapshot(&tree, read.query));
+            let reading = reading_from(snapshot(scene, read.query));
             StagedLayerRead { read, reading }
         });
         self.agent_layer_staged.borrow_mut().extend(staged);

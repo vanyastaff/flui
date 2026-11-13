@@ -614,6 +614,46 @@ fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
     );
 }
 
+/// Frames requested with nothing changed in the tree, as a ticker that
+/// changes nothing asks for them: each runs the frame phases, and none
+/// publishes, paints, damages or allocates anything, because the retained
+/// scene already holds what the window shows (ADR-0304 §8).
+#[test]
+fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
+    const IDLE_FRAMES: usize = 4;
+    let mut app = mount();
+    // The lazy band lands a frame after the mount's paint.
+    let _ = app.pump_many(2);
+    let (report, allocations) = perf_measured(|| {
+        let mut total = FrameReport::default();
+        for _ in 0..IDLE_FRAMES {
+            app.binding.scheduler().request_frame();
+            total += &app.binding.pump_frame_report(FRAME);
+        }
+        total
+    });
+    record("idle_frame_retained_scene", &report, allocations);
+
+    assert_eq!(
+        allocations,
+        HeapCounts::default(),
+        "an idle frame asks nothing of the heap: {report:#?}"
+    );
+    for name in [
+        "elements_rebuilt",
+        "nodes_laid_out",
+        "nodes_painted",
+        "layers_produced",
+        "scene_ops",
+        "damage_rects",
+        "damage_full",
+        "scene_nodes_visited",
+        "scene_depth_updates",
+    ] {
+        assert_eq!(counter(&report, name), 0, "{name}: {report:#?}");
+    }
+}
+
 /// What a `Semantics` with one action adds to the `Text` it holds in a
 /// window that collects no semantics: its element and render object, and no
 /// action route (ADR-0322 §8).
