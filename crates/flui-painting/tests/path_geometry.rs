@@ -822,3 +822,76 @@ pub(crate) fn lerp_morphs_compatible_paths_only() {
         "a NaN end at t = 1"
     );
 }
+
+/// A rectangle, oval or rounded rectangle leaves its curves unbuilt until they are read:
+/// its emptiness and a moved copy read the same before the curves exist as after, its
+/// bounds hold the curves built later and stray from theirs by no more than the curve
+/// tolerance, and a copy moved before its curves are built lays down the curves of the
+/// shape moved after they were.
+pub(crate) fn a_shape_reads_alike_before_and_after_its_curves_are_built() {
+    /// How far the curves built for an oval or an arc stray from the true ellipse.
+    const CURVE_TOLERANCE: f64 = 1e-3;
+    let rrect = RRect::from_rect_xy(Rect::from_ltrb(10.5, 20.25, 130.0, 64.0), 12.0, 7.5);
+    let shapes = [
+        (
+            "rectangle",
+            Path::rectangle(Rect::from_ltrb(3.0, 4.0, 50.0, 25.0)),
+        ),
+        (
+            "rectangle given right to left",
+            Path::rectangle(Rect::from_ltrb(50.0, 25.0, 3.0, 4.0)),
+        ),
+        ("oval", Path::oval(Rect::from_ltrb(-20.0, 5.0, 40.0, 35.0))),
+        ("circle", Path::circle(Point::new(7.0, -3.0), 11.0)),
+        ("rounded rectangle", Path::from_rrect(rrect)),
+        ("empty", Path::new()),
+    ];
+    let offset = Offset::new(37.25, -18.5);
+    for (what, unbuilt) in shapes {
+        let (bounds, empty) = (unbuilt.compute_bounds(), unbuilt.is_empty());
+        let moved_unbuilt = unbuilt.translate(offset);
+
+        let built = unbuilt;
+        let elements = commands(&built);
+        let built_bounds = built.compute_bounds();
+        assert_eq!(empty, elements.is_empty(), "{what}: emptiness");
+        // How far each edge of the unbuilt bounds lies outside the built curves' bounds.
+        for (edge, outside) in [
+            ("left", built_bounds.left() - bounds.left()),
+            ("top", built_bounds.top() - bounds.top()),
+            ("right", bounds.right() - built_bounds.right()),
+            ("bottom", bounds.bottom() - built_bounds.bottom()),
+        ] {
+            assert!(
+                (-1e-9..=CURVE_TOLERANCE + 1e-9).contains(&outside),
+                "{what}: the {edge} bound lies {outside} outside the built curves'"
+            );
+        }
+
+        let moved_built = built.translate(offset);
+        assert_eq!(
+            moved_unbuilt.rrect_hint(),
+            moved_built.rrect_hint(),
+            "{what}: a moved copy keeps the analytic shape"
+        );
+        let (late, early) = (commands(&moved_unbuilt), commands(&moved_built));
+        assert_eq!(late.len(), early.len(), "{what}: moved elements");
+        for (late, early) in late.iter().zip(&early) {
+            let points = |command: &PathCommand| match *command {
+                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => vec![p],
+                PathCommand::QuadraticTo(c, p) => vec![c, p],
+                PathCommand::CubicTo(c1, c2, p) => vec![c1, c2, p],
+                PathCommand::Close => vec![],
+            };
+            assert_eq!(
+                std::mem::discriminant(late),
+                std::mem::discriminant(early),
+                "{what}: moved element kinds"
+            );
+            for (a, b) in points(late).into_iter().zip(points(early)) {
+                close(a.x, b.x, 1e-9, &format!("{what}: moved x"));
+                close(a.y, b.y, 1e-9, &format!("{what}: moved y"));
+            }
+        }
+    }
+}

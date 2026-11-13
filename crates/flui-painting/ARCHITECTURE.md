@@ -75,11 +75,17 @@ The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-comma
 `Paint` is interned per canvas: each `draw_*` scans a small pool of `Arc<Paint>`s
 for an equal paint and shares the `Arc` (`Canvas::intern_paint`,
 `src/canvas/mod.rs:101`). `Path` is copy-on-write over `Arc<kurbo::BezPath>`
-(`src/paint/path.rs:75`): a path inside a `DrawOp` (`ClipPath`, `Path`,
+(`src/paint/path.rs:132`): a path inside a `DrawOp` (`ClipPath`, `Path`,
 `Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a
 fill type, a cached bounds and a finiteness flag, and recording a caller's path copies no
-geometry. `PathCommand` (`src/paint/path.rs:24`) is the element
-`Path::commands` yields (`src/paint/path.rs:600`), not the storage.
+geometry. A rectangle, oval or rounded rectangle made by its constructor, and an empty
+path, leave the `Arc` unset until something reads the elements: the hint is the shape, its
+bounds and a moved copy come from the hint, and the GPU's analytic rounded-rectangle routes
+read the hint, so a Material surface's shape is recorded, clipped and shadowed without
+building curves. A rounded rectangle's curves are laid down at the origin and moved, so a
+copy moved before they are built has the elements of one moved after.
+`PathCommand` (`src/paint/path.rs:28`) is the element `Path::commands` yields
+(`src/paint/path.rs:760`), not the storage.
 `DrawCommand.transform` is a full `Matrix4`, sixteen `f64` (128 bytes), so every
 command carries that much beside its `DrawOp`
 (`src/display_list/command.rs:30`;
