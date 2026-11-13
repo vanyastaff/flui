@@ -1,0 +1,5 @@
+error: `#[flui::main]` takes no arguments; configure the run with `Application`
+ --> tests/ui/entry/fail/main_attribute_refuses_arguments_on_itself.rs:2:14
+  |
+2 | #[flui::main(title = "x")]
+  |              ^^^^^

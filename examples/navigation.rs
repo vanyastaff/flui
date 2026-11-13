@@ -28,7 +28,7 @@ fn main() -> Result<(), LaunchError> {
         AppRoute::Inbox => Inbox.boxed(),
         AppRoute::Message { id } => Message { id: *id }.boxed(),
     });
-    run_app(MaterialApp::router(router), AppLaunch::new())
+    run_app(MaterialApp::router(router))
 }
 
 /// The inbox opens a message and shows what the message page answered.

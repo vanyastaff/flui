@@ -38,6 +38,7 @@ use std::any::TypeId;
 
 /// Why a parent limits its children's accessibility geometry.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum SemanticsClip {
     /// Content outside these bounds is semantically excluded.
     Bounds(flui_foundation::geometry::Rect<f64>),

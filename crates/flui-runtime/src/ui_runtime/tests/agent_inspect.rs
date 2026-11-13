@@ -493,7 +493,7 @@ fn a_layer_read_names_a_layer_and_this_window_before_it_waits() {
 
     let own = ui_runtime.presentation_id();
     let elsewhere = PresentationId::new_gen(own.index() + 1, own.generation());
-    let link: Link = "l1".parse().expect("a layer handle");
+    let link: Link = "l1@1".parse().expect("a layer handle");
     let mut params = InspectParams::new(window_id(&ui_runtime));
     params.root = Some(NodeRef::new(elsewhere, link).to_string());
     let error = park_layers(&ui_runtime, &window, params)

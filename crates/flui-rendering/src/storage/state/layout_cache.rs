@@ -24,6 +24,10 @@ use crate::traits::TextBaseline;
 /// `MinWidth`/`MaxWidth` take a height extent; `MinHeight`/`MaxHeight`
 /// take a width extent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an intrinsic is the minimum or maximum of a width or a height"
+)]
 pub enum IntrinsicDimension {
     /// Minimum width for a given height.
     MinWidth,

@@ -16,7 +16,7 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
-use flui_app::{AppConfig, AppLaunch, LaunchError, run_app};
+use flui_app::{AppConfig, Application, LaunchError};
 use flui_hot_reload::{WorkerReloadHook, engine::env};
 use hot_reload_counter_types::{CounterApp, CounterShell};
 
@@ -63,7 +63,7 @@ fn main() -> Result<(), LaunchError> {
         .size(480, 320)
         .dev_reload(WorkerReloadHook::new(worker_path));
 
-    run_app(root, AppLaunch::new().config(config))?;
+    Application::new().config(config).run(root)?;
 
     tracing::info!(
         final_count = count.load(Ordering::Relaxed),

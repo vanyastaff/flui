@@ -1534,6 +1534,10 @@ mod native_windows {
         reason = "actual owned Win32 system-key dispatch and message pumping"
     )]
     fn system_keyboard_close(mode: &'static str) {
+        #[expect(
+            clippy::arc_with_non_send_sync,
+            reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
+        )]
         let platform = Arc::new(WindowsPlatform::try_new().expect("native Windows platform"));
         let window = open_shown(&platform);
         let original_weak = Rc::downgrade(&window);

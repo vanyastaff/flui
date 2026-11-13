@@ -469,10 +469,7 @@ fn acceptance_project(workdir: &Path, storage: &str) -> PathBuf {
              let dir = flui::platform::AppDataDir::try_new({storage:?})\n        \
              .expect(\"BUG: the scenario's storage directory name is valid\");\n    \
              let config = flui::AppConfig::new().storage_dir(dir);\n    \
-             flui::run_app(\n        \
-             app::AcceptanceApp::new(app::Faults::NONE),\n        \
-             flui::AppLaunch::new().config(config),\n    \
-             )\n}}\n"
+             flui::Application::new()\n        .config(config)\n        .run(app::AcceptanceApp::new(app::Faults::NONE))\n}}\n"
         ),
     )
     .expect("write the launcher");

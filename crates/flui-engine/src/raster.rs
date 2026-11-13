@@ -59,6 +59,10 @@ pub type PrePresentHook = Box<dyn FnMut(flui_platform::SwapChainStatistics) + Se
 /// same mistake for the next state. Exhaustive means a fourth answer cannot
 /// be added without the compiler naming every site that must classify it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every site that classifies a frame names each disposition, and a new one must not compile until each does"
+)]
 pub enum PresentDisposition {
     /// The frame reached `present()`.
     Presented,

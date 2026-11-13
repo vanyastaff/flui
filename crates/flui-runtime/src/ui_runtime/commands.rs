@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// backpressure as a typed value, and a dropped owner is a typed value — the
 /// producer decides what to do, nothing blocks, nothing grows unbounded.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CommandSendError {
     /// The inbox is full; the producer must back off (retry next frame,
     /// drop, or escalate — its call).
@@ -59,6 +60,7 @@ pub enum CommandSendError {
 ///   `BuildOwner` minted it (ADR-0085 §1). They need no presentation stamp:
 ///   graph ids are process-unique, so two presentation incarnations never
 ///   share one.
+#[non_exhaustive]
 pub enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
     #[cfg(feature = "hot-reload")]

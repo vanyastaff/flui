@@ -9,7 +9,7 @@ use core::num::{NonZeroU32, NonZeroU64};
 use core::str::FromStr;
 
 use crate::generation::Generation;
-use crate::id::{ElementId, LayerId, PresentationId, RenderId, SemanticsId};
+use crate::id::{ElementId, PresentationId, RenderId, SemanticsId};
 
 use super::tree::{Link, SceneLayer};
 
@@ -86,13 +86,12 @@ impl FromStr for Link {
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         let error = || ParseRefError::of(text);
         let prefix = text.chars().next().ok_or_else(error)?;
-        let (slot, generation) =
-            slot_and_generation(&text[prefix.len_utf8()..]).ok_or_else(error)?;
-        let generation32 = || -> Result<Generation, ParseRefError> {
-            let generation = generation.map_or(1, NonZeroU64::get);
-            let generation = NonZeroU32::new(u32::try_from(generation).map_err(|_| error())?);
-            Generation::try_from(generation.ok_or_else(error)?).map_err(|_| error())
-        };
+        let body = &text[prefix.len_utf8()..];
+        if prefix == 'l' {
+            return layer_of(body).map(Self::Layer).ok_or_else(error);
+        }
+        let (slot, generation) = slot_and_generation(body).ok_or_else(error)?;
+        let generation32 = || generation32(generation).ok_or_else(error);
         Ok(match prefix {
             'v' => Self::Element(ElementId::new_gen(
                 u32::try_from(slot).map_err(|_| error())?,
@@ -102,11 +101,6 @@ impl FromStr for Link {
                 u32::try_from(slot).map_err(|_| error())?,
                 generation32()?,
             )),
-            'l' => Self::Layer(SceneLayer {
-                scene: generation.unwrap_or(NonZeroU64::MIN),
-                id: LayerId::new_checked(usize::try_from(slot).map_err(|_| error())?)
-                    .ok_or_else(error)?,
-            }),
             's' if generation.is_none() => Self::Semantics(
                 SemanticsId::new_checked(usize::try_from(slot).map_err(|_| error())?)
                     .ok_or_else(error)?,
@@ -114,6 +108,36 @@ impl FromStr for Link {
             _ => return Err(error()),
         })
     }
+}
+
+/// The generation a parsed suffix names, the first when there is none.
+fn generation32(generation: Option<NonZeroU64>) -> Option<Generation> {
+    let generation = u32::try_from(generation.map_or(1, NonZeroU64::get)).ok()?;
+    Generation::try_from(NonZeroU32::new(generation)?).ok()
+}
+
+/// A decimal number with no sign, no leading zero and no other spelling.
+fn number(text: &str) -> Option<u64> {
+    let canonical = text == "0"
+        || (!text.starts_with('0') && !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()));
+    canonical.then(|| text.parse::<u64>().ok()).flatten()
+}
+
+/// A layer's text after its prefix: `4.2:3@7`, `4@7`.
+fn layer_of(body: &str) -> Option<SceneLayer> {
+    let (node, scene) = body.split_once('@')?;
+    let scene = NonZeroU64::new(number(scene)?)?;
+    let (node, entry) = match node.split_once(':') {
+        Some((node, entry)) => (node, Some(u32::try_from(number(entry)?).ok()?)),
+        None => (node, None),
+    };
+    let (slot, generation) = slot_and_generation(node)?;
+    Some(SceneLayer {
+        scene,
+        slot: u32::try_from(slot).ok()?,
+        generation: generation32(generation)?,
+        entry,
+    })
 }
 
 impl FromStr for NodeRef {

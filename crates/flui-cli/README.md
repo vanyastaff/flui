@@ -296,7 +296,7 @@ target, `--universal` without `--lib` on iOS) are rejected before any build
 starts. Every build ends with the artifact list and `Built in N.Ns`.
 
 An Android build compiles the project's `cdylib` with `cargo ndk` (the
-`android_main` in `src/lib.rs`) and packages it with the SDK's build-tools:
+`android_main` that `#[flui::main]` writes in `src/lib.rs`) and packages it with the SDK's build-tools:
 `aapt2 link` on the scaffolded manifest, the library stored under
 `lib/<abi>/`, `zipalign`, and `apksigner` with the debug keystore in
 `~/.android` (created on first use). The result is
