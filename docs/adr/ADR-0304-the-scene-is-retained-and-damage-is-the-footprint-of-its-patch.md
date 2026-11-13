@@ -210,7 +210,8 @@ impl SceneWriter<'_> {
     pub fn next_content_version(&mut self) -> Result<ContentVersion, SceneError>;
     pub fn push(&mut self, op: SceneOp);
     pub fn current(&self) -> &SceneVersion;
-    // a composited-layer update: `content`'s stream shared, the named effects replaced
+    // a composited-layer update: `content`'s stream shared, the named effects replaced;
+    // a refused one leaves its layers with the owner until the next patch opens
     pub fn with_effects(&mut self, content: &BoundaryContent,
         replaced: impl IntoIterator<Item = (EntryIndex, Layer)>)
         -> Result<Arc<BoundaryContent>, EntryIndex>;

@@ -916,7 +916,10 @@ impl SceneWriter<'_> {
     ///
     /// # Errors
     ///
-    /// The first index that names no effect; nothing is published.
+    /// The first index that names no effect, or names one a second time;
+    /// nothing is published. The owner keeps the layers it was handed and
+    /// drops them when the next patch opens, as it does what
+    /// [`Self::discard`] hands it: an annotation's `Drop` is user code.
     pub fn with_effects(
         &mut self,
         content: &BoundaryContent,
@@ -934,8 +937,15 @@ impl SceneWriter<'_> {
         };
         let target =
             Arc::get_mut(&mut fresh).expect("BUG: a spare content is held by its pool alone");
-        content.effects_into(target, replaced)?;
-        Ok(fresh)
+        match content.effects_into(target, replaced) {
+            Ok(()) => Ok(fresh),
+            // The layers it was handed are user values: they drop with the
+            // painter's other discarded contents, when the next patch opens.
+            Err(index) => {
+                owner.discarded.push(fresh);
+                Err(index)
+            }
+        }
     }
 
     /// Hands the owner a content the painter recorded for a patch that was

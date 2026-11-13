@@ -207,7 +207,9 @@ chunks' bounds, the union of the top-level chunks' bounds, the slots by node, an
 texture and closure entries. `SceneWriter::with_effects`, the composited-layer update, copies the
 layers into a content the owner reclaimed when it holds one, rebuilds the indexes they feed (links,
 texture layers, filter closures) and shares the stream, so it costs the content's effects and never
-its chunks.
+its chunks. A refused update (an index that names no effect, or names one twice) hands the
+layers it was given to the owner, which drops them when the next patch opens, as it does a
+discarded content.
 
 `SceneOwner::apply` builds the patch on a copy of the version and keeps it only when every
 operation is valid: an id of another lineage, an unknown or stale id, a retired node a slot still
@@ -280,7 +282,9 @@ nodes, and a republished parent copies as much at 40 children as at 200); the ta
 test against `BTreeMap` is `scene::table::tests`. `scene_reclaim`: a version someone holds keeps
 what it was applied with while the owner reuses what it held alone
 (`reclaimed_buffers_never_change_a_version_someone_holds`, against an owner that reclaims nothing),
-and an update takes what a completion handed back (`an_update_writes_into_what_the_owner_reclaimed`).
+an update takes what a completion handed back (`an_update_writes_into_what_the_owner_reclaimed`),
+and a refused update drops none of its layers while the writer borrows the owner
+(`a_refused_effect_update_drops_its_layers_outside_the_writer`).
 
 ### Deleted, with the reason
 

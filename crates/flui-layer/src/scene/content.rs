@@ -502,8 +502,9 @@ impl BoundaryContent {
     ///
     /// # Errors
     ///
-    /// The first index that names no effect; `target` is then left partly
-    /// written.
+    /// The first index that names no effect, or names one a second time;
+    /// `target` then holds every layer it was handed, placed or not,
+    /// for the caller to drop where no borrow is held.
     pub(crate) fn effects_into(
         &self,
         target: &mut Self,
@@ -511,10 +512,33 @@ impl BoundaryContent {
     ) -> Result<(), EntryIndex> {
         target.stream = Arc::clone(&self.stream);
         target.layers.clone_from(&self.layers);
+        // Which positions this update wrote, so a repeated index is refused
+        // instead of dropping the layer it would replace.
+        let mut written: SmallVec<[u64; 4]> = SmallVec::new();
+        written.resize(self.layers.len().div_ceil(64), 0);
+        let mut refused = None;
         for (index, layer) in replaced {
-            let at = self.effect_position(index).ok_or(index)?;
-            // The replaced layer is a clone of one `self` still holds.
-            target.layers[at] = layer;
+            let position = self.effect_position(index).filter(|&at| {
+                let (word, bit) = (at / 64, 1_u64 << (at % 64));
+                let fresh = written[word] & bit == 0;
+                written[word] |= bit;
+                fresh
+            });
+            match (refused, position) {
+                // The layer it replaces is a clone of one `self` still holds,
+                // so its drop runs no annotation's destructor.
+                (None, Some(at)) => target.layers[at] = layer,
+                // A refused update keeps every layer it was handed, so their
+                // destructors run where the caller drops `target`.
+                (None, None) => {
+                    refused = Some(index);
+                    target.layers.push(layer);
+                }
+                (Some(_), _) => target.layers.push(layer),
+            }
+        }
+        if let Some(index) = refused {
+            return Err(index);
         }
         target.indexes.refill(&self.stream.effects, &target.layers);
         Ok(())

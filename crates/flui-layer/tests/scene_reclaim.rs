@@ -4,13 +4,14 @@
 //! it was applied with (ADR-0304 §7).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::RenderId;
 use flui_foundation::SurfaceGeneration;
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_layer::{
-    Applied, BoundaryContent, Chunk, ContentVersion, EntryIndex, Layer, Placement, SceneNodeId,
-    SceneOp, SceneOwner, SceneVersion, SurfaceKey, TransformLayer,
+    AnnotatedRegionLayer, Applied, BoundaryContent, Chunk, ContentVersion, EntryIndex, Layer,
+    Placement, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SurfaceKey, TransformLayer,
 };
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
@@ -48,6 +49,8 @@ struct Scene {
     owner: SceneOwner,
     nodes: Vec<SceneNodeId>,
     effect: EntryIndex,
+    /// An entry that is no effect: the chunk under it.
+    plain: EntryIndex,
 }
 
 impl Scene {
@@ -58,10 +61,11 @@ impl Scene {
         let version = writer.next_content_version().expect("a version");
         let nodes: Vec<SceneNodeId> = (0..NODES).map(|_| writer.mint_node()).collect();
         let mut effect = None;
+        let mut plain = None;
         for (index, &node) in nodes.iter().enumerate() {
             let mut content = BoundaryContent::builder();
             effect = Some(content.push_effect(translate(0.0), RenderId::new(index + 1), 0));
-            content.chunk(chunk(index + 1, version));
+            plain = Some(content.chunk(chunk(index + 1, version)));
             content.pop_effect();
             writer.push(SceneOp::Publish {
                 node,
@@ -86,6 +90,7 @@ impl Scene {
             owner,
             nodes,
             effect: effect.expect("each boundary has its effect"),
+            plain: plain.expect("each boundary has its chunk"),
         }
     }
 
@@ -189,4 +194,69 @@ fn an_update_writes_into_what_the_owner_reclaimed() {
         "the update and its apply take what was reclaimed"
     );
     drop(third);
+}
+
+/// An annotation that records when its value drops.
+#[derive(Debug)]
+struct Dropped(Arc<AtomicBool>);
+
+impl Drop for Dropped {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+fn annotation(flag: &Arc<AtomicBool>) -> Layer {
+    Layer::from(AnnotatedRegionLayer::new(
+        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        Arc::new(Dropped(Arc::clone(flag))),
+    ))
+}
+
+/// A refused composited-layer update, whether an index names no effect or
+/// names one twice, runs none of the destructors of the layers it was handed
+/// while the writer borrows the owner: the owner keeps them and drops them
+/// when the next patch opens, where an annotation's `Drop` may reach the
+/// owner again.
+#[test]
+fn a_refused_effect_update_drops_its_layers_outside_the_writer() {
+    let mut scene = Scene::new();
+    let content = Arc::clone(
+        scene
+            .owner
+            .current()
+            .node(scene.nodes[0])
+            .expect("a live boundary")
+            .content(),
+    );
+    let refusals = [
+        ("an index that names no effect", scene.plain),
+        ("an index named twice", scene.effect),
+    ];
+    for (case, second) in refusals {
+        let (placed, refused) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        {
+            let mut writer = scene.owner.writer();
+            let outcome = writer.with_effects(
+                &content,
+                [
+                    (scene.effect, annotation(&placed)),
+                    (second, annotation(&refused)),
+                ],
+            );
+            assert_eq!(outcome.err(), Some(second), "{case}: the update is refused");
+            assert!(
+                !placed.load(Ordering::SeqCst) && !refused.load(Ordering::SeqCst),
+                "{case}: no layer drops while the writer borrows the owner"
+            );
+        }
+        let _opened = scene.owner.writer();
+        assert!(
+            placed.load(Ordering::SeqCst) && refused.load(Ordering::SeqCst),
+            "{case}: the next patch drops the layers"
+        );
+    }
 }
