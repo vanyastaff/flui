@@ -16,6 +16,9 @@
 //! them that outgrew their capacity) and `allocated_bytes`. Like the frame
 //! counters they are a function of the tree and the change, not of the host;
 //! they only have to stay at or under the baseline, which `--bless` ratchets.
+//! Nothing else may move them, neither a seed drawn per run nor what an
+//! earlier test left in the process: `measured_frames_ask_the_heap_the_same_on_every_run`
+//! holds the measured frames to that.
 //!
 //! A `perf_scaling_` scenario runs the same change on a small and a large tree
 //! and asserts that the two cost the same: equal allocations here, and equal
@@ -364,6 +367,45 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
             && first.reallocations.abs_diff(next.reallocations) <= STEADY_SLACK,
         "a warm scroll is still warming up: one asked {first:?} of the heap, the next {next:?}"
     );
+}
+
+/// What each frame of `ROUNDS` scrolls down a screen and back asks of the
+/// heap, from a fresh mount.
+fn scroll_round_trips() -> Vec<HeapCounts> {
+    const ROUNDS: u32 = 100;
+    let mut app = mount();
+    app.laid.pump_for(FRAME);
+    (0..ROUNDS)
+        .flat_map(|_| [1, 0])
+        .map(|screen: u32| {
+            app.writer
+                .set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
+            perf_measured(|| app.pump_many(2)).1
+        })
+        .collect()
+}
+
+/// The same frames ask the heap the same on every run, whatever ran before
+/// them in the process: the gate compares exact figures from one process per
+/// scenario, `cargo test` runs every scenario in one. The first run here is
+/// the first in its process under nextest, so state a measured frame fills
+/// lazily (a `static`, a cache, a `thread_local!`) shows as a difference from
+/// the later runs; and every map built with a random seed draws a fresh one,
+/// so a figure that depends on where its keys land differs somewhere among
+/// these frames.
+#[test]
+fn measured_frames_ask_the_heap_the_same_on_every_run() {
+    let first = scroll_round_trips();
+    for run in 1..3 {
+        let again = scroll_round_trips();
+        let differs = first.iter().zip(&again).position(|(was, now)| was != now);
+        assert!(
+            differs.is_none(),
+            "run {run} differs from the first at frame {differs:?}: {:?} against {:?}",
+            differs.map(|frame| again[frame]),
+            differs.map(|frame| first[frame]),
+        );
+    }
 }
 
 /// Rows under the sliding panel: enough painted content that a subtree
