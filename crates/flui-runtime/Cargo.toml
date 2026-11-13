@@ -25,7 +25,7 @@ workspace = true
 # `ScriptedSink` doubles, and decoding a recording's rows (`InputRecord::from_wire`,
 # which names a window by value), for this crate's own tests, `flui-testing`'s and `flui-app`'s,
 # which enable it on their dev edge. Never on a normal edge.
-testing = ["flui-platform/testing"]
+testing = ["flui-platform/testing", "flui-layer/testing"]
 # `reload::ReloadTier`, the development reload the UI runtime applies. Names no
 # hot-reload crate; `flui-app` always turns it on and translates an installed
 # `DevReloadHook`'s event into it (ADR-0311 §1).
