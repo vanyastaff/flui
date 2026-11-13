@@ -82,7 +82,7 @@ fn record(
             canvas.restore();
             let list = canvas.finish();
             let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(p);
-            for command in list.commands() {
+            for command in &list {
                 crate::dispatch::dispatch_command(command, &mut dispatcher);
             }
         }

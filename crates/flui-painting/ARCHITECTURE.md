@@ -19,7 +19,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Concern | Files | What lives there |
 |---|---|---|
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
-| Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` and `DrawOp::ParagraphShadow` carry, decision 18), `BlurSigma` (a text shadow's bounded blur) |
+| Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (interned transforms, ops and cached bounds), `DrawCommand` (the transform and op the reader yields), `DrawOp` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` and `DrawOp::ParagraphShadow` carry, decision 18), `BlurSigma` (a text shadow's bounded blur) |
 | Text | `text_layout/{host,fallback_chain,fallback_tables,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; `HostFonts` (the one host font scan a collection is fed from), the per-platform fallback lists and the order a fed collection falls back in, family resolution |
 | Per-UI runtime text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection), `HostFontFeed` (the host's faces, added off the owner thread) and `TextContext` (one UI runtime's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per UI runtime; every `TextPainter` measurement shapes on it |
 | Parley shaping | `parley_text/{shape,caret}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15) |
@@ -36,9 +36,15 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 
 ## The recorder
 
-Every `draw_*` records one `DrawCommand { transform, op }` through
-`Canvas::record`: the absolute transform at recording time and the
-`DrawOp`. Clips are the one thing that scopes — `DrawOp::Save`/`Restore`
+Every `draw_*` records one op through `Canvas::record` under the absolute
+transform at recording time. The list interns that transform (ADR-0306 §1):
+it stores each op with a list-private id of its entry in the list's transform
+table, the identity takes no entry, and an op under the same CTM as the last
+entry reuses it, so the ops of one run share one `Matrix4`. `append` rebases
+the appended ids by the receiver's table length. The reader
+(`DisplayList::iter`, `get`, `&DisplayList: IntoIterator`) yields
+`DrawCommand { transform: &Matrix4, op: &DrawOp }`; commands under one entry
+yield the same reference. Clips are the one thing that scopes — `DrawOp::Save`/`Restore`
 are unit markers the engine uses to unwind its clip stack. A `Clip::None`
 clip records nothing. A `DisplayList` has no `&mut` surface: nothing outside
 the crate can add, remove, or edit a command, so its cached `bounds()` is
@@ -97,12 +103,11 @@ rectangle and an oval
 are built at once: they are drawn from their curves, so their clones share one build.
 `PathCommand` (`src/paint/path.rs:28`) is the element `Path::commands` yields
 (`src/paint/path.rs:781`), not the storage.
-`DrawCommand.transform` is a full `Matrix4`, sixteen `f64` (128 bytes), so every
-command carries that much beside its `DrawOp`
-(`src/display_list/command.rs:30`;
-`crates/flui-foundation/src/geometry/matrix4.rs:124`). No test in the crate
-pins a size for `DrawOp` or `DrawCommand`, and no budget is stated here;
-`display_list_record` (criterion) measures the recording cost.
+A stored command is its `DrawOp` and one word for its transform id. `const`
+assertions in `src/display_list/mod.rs` hold the measured sizes, which only
+go down: `DrawOp` at most 216 bytes and a stored command at most 224, until
+ADR-0306 §3 boxes the fat payloads; `display_list_record` (criterion)
+measures the recording cost.
 
 `Canvas::finish` is infallible: an unbalanced save fires a `debug_assert`
 and a `tracing::warn!`, then the list ships as recorded, which is what
@@ -318,9 +323,9 @@ overflow, real aligned-glyph ink bounds and valid recovery after rejection.
 [ADR-0181](../../docs/adr/ADR-0181-fallible-text-and-layout-measurement.md) records
 the consumer and frame contract.
 
-### 1. Closed `DrawCommand` enum, matched exhaustively
+### 1. Closed `DrawOp` enum, matched exhaustively
 
-`DrawCommand` has one variant per paint operation and no `#[non_exhaustive]`:
+`DrawOp` has one variant per paint operation and no `#[non_exhaustive]`:
 the engine's `dispatch_command` has no wildcard arm, so a new variant is a
 compile error there until its `render_*` arm exists. That is the whole
 contract — a producer-side variant count would only prove the producer
@@ -337,7 +342,7 @@ and had no consumer is gone: the closure helpers beyond `with_transform` /
 `with_clip_*` / `with_blend_mode` / `with_opacity`, multi-canvas composition,
 clip-bounds queries (whose implementation answered for the last clip only
 and ignored `ClipOp::Difference`), and `draw_shader_mask` /
-`draw_backdrop_filter` with their `DrawCommand` variants — masks and backdrop
+`draw_backdrop_filter` with their `DrawOp` variants — masks and backdrop
 filters are layers (`flui_layer::{ShaderMaskLayer, BackdropFilterLayer}`),
 and the command-level copies had no producer and a second engine lowering.
 

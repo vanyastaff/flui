@@ -440,6 +440,9 @@ impl LifecycleContext for LiveBuildContext<'_> {
     fn close_guard(&self) -> Option<crate::CloseGuard> {
         self.capabilities.presentation.close_guard.clone()
     }
+    fn url_owner(&self) -> Option<crate::__runtime::UrlOwnerSlot> {
+        self.capabilities.presentation.url_owner.clone()
+    }
     fn flush_registry_in_crate(
         &self,
         _token: super::build_context::sealed::CrateToken,

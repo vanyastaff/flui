@@ -1,0 +1,4 @@
+1{"id":1,"method":"inspect.widgets","params":{"window":"$window"}}
+{"id":2,"method":"inspect.render","params":{"window":"$window"}}
+{"id":3,"method":"inspect.layers","params":{"window":"$window"}}
+{"id":4,"method":"window.placement","params":{"window":"$window"}}

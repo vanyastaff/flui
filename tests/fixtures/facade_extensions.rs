@@ -57,8 +57,8 @@ fn custom_painter_records_a_rectangle() {
     let mut canvas = Canvas::new();
     RectanglePainter.paint(&mut canvas, Size::new(24.0, 16.0));
     let recording = canvas.finish();
-    assert_eq!(recording.commands().len(), 1);
-    let DrawOp::Rect { rect, paint } = &recording.commands()[0].op else {
+    assert_eq!(recording.iter().len(), 1);
+    let Some(DrawOp::Rect { rect, paint }) = recording.get(0).map(|command| command.op) else {
         panic!("painter must record a rectangle");
     };
     assert_eq!(

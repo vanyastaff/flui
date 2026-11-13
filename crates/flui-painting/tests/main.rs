@@ -171,6 +171,12 @@ mod damage_extent;
 mod decoration_unit;
 #[path = "font_registration.rs"]
 mod font_registration;
+#[path = "support/foreign_image.rs"]
+mod foreign_image;
+
+/// The image decode property bounds the largest block a decode asks for.
+#[global_allocator]
+static ALLOCATOR: foreign_image::LargestAllocation = foreign_image::LargestAllocation;
 #[path = "host_faces_oracle.rs"]
 mod host_faces_oracle;
 #[path = "image_decode.rs"]
@@ -546,6 +552,14 @@ fn recording_contract() {
             (
                 "isolated_append_scopes_only_a_run_that_changes_replay_state",
                 recording::isolated_append_scopes_only_a_run_that_changes_replay_state,
+            ),
+            (
+                "ops_under_one_transform_share_its_entry",
+                recording::ops_under_one_transform_share_its_entry,
+            ),
+            (
+                "appended_commands_keep_their_transforms",
+                recording::appended_commands_keep_their_transforms,
             ),
             (
                 "interning_shares_arc_for_identical_paints",
@@ -951,12 +965,16 @@ fn image_decode_contract() {
         "image_decode",
         &[
             (
-                "a_png_decodes_to_its_pixels",
-                image_decode::a_png_decodes_to_its_pixels,
+                "each_format_decodes_to_its_pixels",
+                image_decode::each_format_decodes_to_its_pixels,
             ),
             (
                 "a_header_past_the_limit_is_refused_before_decoding",
                 image_decode::a_header_past_the_limit_is_refused_before_decoding,
+            ),
+            (
+                "a_header_at_the_limit_asks_for_one_block_of_the_limit",
+                image_decode::a_header_at_the_limit_asks_for_one_block_of_the_limit,
             ),
             (
                 "arbitrary_bytes_decode_or_fail_typed",

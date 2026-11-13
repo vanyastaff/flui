@@ -362,7 +362,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
     use flui_sdk::geometry::Offset;
     use flui_sdk::painting::Color;
 
-    use flui_sdk::widgets::{ColoredBox, app_root};
+    use flui_sdk::widgets::ColoredBox;
     use flui_testing::PointerScript;
 
     for (end, settling_frames, panel_tap, both) in [
@@ -393,7 +393,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
         }
         .drawer_scrim_color(scrim);
         let mut laid = lay_out_animated(
-            app_root(themed_animated(scaffold, &vsync)),
+            themed_animated(scaffold, &vsync),
             tight(400.0, 400.0),
             vsync.clone(),
         );

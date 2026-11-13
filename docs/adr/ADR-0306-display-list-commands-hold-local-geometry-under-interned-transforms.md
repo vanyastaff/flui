@@ -81,7 +81,9 @@ struct TransformId(Option<NonZeroUsize>);   // None: the identity, which takes n
 struct RecordedOp { transform: TransformId, op: DrawOp }
 
 pub struct DisplayList {
-    transforms: Vec<Matrix4>,               // finite, none of them the identity
+    transforms: SmallVec<[Matrix4; 1]>,     // finite, none of them the identity; one
+                                            // entry inline, since most lists of a
+                                            // translated child have just one
     commands: Vec<RecordedOp>,
     bounds: Option<Rect<f64>>,
     damage: Option<DamageExtent>,
@@ -230,7 +232,7 @@ code, after the list is complete.
 ### Consequences
 
 - Good, because a command is at most 120 bytes instead of 344 to 352: 200,000 operations hold
-  24 MB of commands instead of about 70 MB, plus 128 bytes per distinct transform other than the
+  24 MB of commands instead of about 70 MB, plus 128 bytes per stored transform other than the
   identity, which is one per run of a merged picture whose recorder translates its canvas, and none
   for a render object recorded at its origin.
 - Good, because a render object's position lives in its run's one entry: a chunk whose render

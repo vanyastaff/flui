@@ -9817,33 +9817,38 @@ fn flui::painting::CustomPainter::semantics_regions(&self, _size: flui::geometry
 fn flui::painting::CustomPainter::should_rebuild_semantics(&self, _old_delegate: &dyn flui::painting::CustomPainter) -> bool { .. }
 fn flui::painting::CustomPainter::should_repaint(&self, old_delegate: &dyn flui::painting::CustomPainter) -> bool
 pub struct flui::painting::DisplayList { .. }
-impl AsRef<[flui::painting::DrawCommand]> for flui::painting::DisplayList
 impl AsRef<flui::painting::DisplayList> for flui::painting::Canvas
 impl Clone for flui::painting::DisplayList
 impl Default for flui::painting::DisplayList
 impl core::fmt::Debug for flui::painting::DisplayList
-impl core::ops::index::Index<usize> for flui::painting::DisplayList { type Output = flui::painting::DrawCommand; }
 impl flui::Inspect for flui::painting::DisplayList
-impl<'a> IntoIterator for &'a flui::painting::DisplayList { type IntoIter = core::slice::iter::Iter<'a, flui::painting::DrawCommand>; type Item = &'a flui::painting::DrawCommand; }
+impl<'a> IntoIterator for &'a flui::painting::DisplayList { type IntoIter = flui::painting::DrawCommands<'a>; type Item = flui::painting::DrawCommand<'a>; }
 pub fn flui::painting::DisplayList::append(&mut self, other: flui::painting::DisplayList)
 pub fn flui::painting::DisplayList::append_isolated(&mut self, other: flui::painting::DisplayList)
 pub fn flui::painting::DisplayList::bounds(&self) -> Option<flui::geometry::Rect<f64>>
 pub fn flui::painting::DisplayList::clear(&mut self)
-pub fn flui::painting::DisplayList::commands(&self) -> &[flui::painting::DrawCommand]
 pub fn flui::painting::DisplayList::damage_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
+pub fn flui::painting::DisplayList::get(&self, index: usize) -> Option<flui::painting::DrawCommand<'_>>
 pub fn flui::painting::DisplayList::is_empty(&self) -> bool
-pub fn flui::painting::DisplayList::iter(&self) -> core::slice::iter::Iter<'_, flui::painting::DrawCommand>
+pub fn flui::painting::DisplayList::iter(&self) -> flui::painting::DrawCommands<'_>
 pub fn flui::painting::DisplayList::len(&self) -> usize
 pub fn flui::painting::DisplayList::new() -> Self
 pub fn flui::painting::DisplayList::non_finite(&self) -> flui_painting::display_list::finite::NonFiniteOps
 pub fn flui::painting::DisplayList::room(&self) -> usize
 pub fn flui::painting::DisplayList::volatile_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
-pub struct flui::painting::DrawCommand
-field flui::painting::DrawCommand::op: flui::painting::DrawOp // at 1
-field flui::painting::DrawCommand::transform: flui::geometry::Matrix4 // at 0
-impl Clone for flui::painting::DrawCommand
-impl core::fmt::Debug for flui::painting::DrawCommand
-pub const fn flui::painting::DrawCommand::untransformed(op: flui::painting::DrawOp) -> Self
+#[non_exhaustive] pub struct flui::painting::DrawCommand<'a>
+field flui::painting::DrawCommand::op: &'a flui::painting::DrawOp // at 1
+field flui::painting::DrawCommand::transform: &'a flui::geometry::Matrix4 // at 0
+impl<'a> Clone for flui::painting::DrawCommand<'a>
+impl<'a> Copy for flui::painting::DrawCommand<'a>
+impl<'a> core::fmt::Debug for flui::painting::DrawCommand<'a>
+pub struct flui::painting::DrawCommands<'a> { .. }
+impl DoubleEndedIterator for flui::painting::DrawCommands<'_>
+impl ExactSizeIterator for flui::painting::DrawCommands<'_>
+impl core::iter::traits::marker::FusedIterator for flui::painting::DrawCommands<'_>
+impl<'a> Clone for flui::painting::DrawCommands<'a>
+impl<'a> Iterator for flui::painting::DrawCommands<'a> { type Item = flui::painting::DrawCommand<'a>; }
+impl<'a> core::fmt::Debug for flui::painting::DrawCommands<'a>
 pub enum flui::painting::DrawOp
 impl Clone for flui::painting::DrawOp
 impl core::fmt::Debug for flui::painting::DrawOp
@@ -17566,6 +17571,7 @@ pub fn flui::prelude::Router::from_location(location: &str, page: impl Fn(&R, &d
 pub fn flui::prelude::Router::from_stack(stack: Vec<R>, page: impl Fn(&R, &dyn flui::prelude::BuildContext) -> flui::prelude::BoxedView + 'static) -> Result<Self, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::new(initial: R, page: impl Fn(&R, &dyn flui::prelude::BuildContext) -> flui::prelude::BoxedView + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::of(ctx: &dyn flui::prelude::BuildContext) -> Result<flui::prelude::RouterHandle<R>, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
+pub fn flui::prelude::Router::on_unknown(self, hook: impl Fn(&flui::prelude::RoutePath) + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::transition_duration(self, duration: core::time::Duration) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::transitions(self, transitions: impl Fn(&dyn flui::prelude::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation, flui::prelude::BoxedView) -> flui::prelude::BoxedView + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub struct flui::prelude::RouterHandle<R: flui::prelude::Routable> { .. }
@@ -22660,6 +22666,13 @@ impl core::fmt::Debug for flui::services::system::testing::ScriptedSystem
 impl flui::platform::capability::Plugin for flui::services::system::testing::ScriptedSystem
 pub fn flui::services::system::testing::ScriptedSystem::new(launcher: flui::platform::testing::ScriptedLauncher, dialogs: flui::services::system::testing::ScriptedFileDialogs) -> Self
 pub mod flui::testing
+pub struct flui::testing::CommitBarrier { .. }
+impl Drop for flui::testing::CommitBarrier
+impl core::fmt::Debug for flui::testing::CommitBarrier
+pub fn flui::testing::CommitBarrier::commit(self)
+pub struct flui::testing::CopyHold { .. }
+impl Drop for flui::testing::CopyHold
+impl core::fmt::Debug for flui::testing::CopyHold
 pub struct flui::testing::Expectation<'t> { .. }
 impl core::fmt::Debug for flui::testing::Expectation<'_>
 pub fn flui::testing::Expectation::to_be_checked(self) // impl flui::testing::Expectation<'_>
@@ -22817,6 +22830,22 @@ impl schemars::JsonSchema for flui::testing::Match
 impl serde_core::ser::Serialize for flui::testing::Match
 impl<'de> serde_core::de::Deserialize<'de> for flui::testing::Match
 pub fn flui::testing::Match::new(element: flui_protocol::tree::ElementRef, revision: flui_protocol::tree::TreeRevision, node: flui::testing::Node) -> Self
+pub struct flui::testing::MemoryStorage { .. }
+impl Clone for flui::testing::MemoryStorage
+impl Default for flui::testing::MemoryStorage
+impl core::fmt::Debug for flui::testing::MemoryStorage
+impl flui::platform::Storage for flui::testing::MemoryStorage
+pub fn flui::testing::MemoryStorage::contents(&self, name: &flui::platform::StorageName) -> Option<Vec<u8>>
+pub fn flui::testing::MemoryStorage::fail_copies(&self, error: Option<flui::platform::StorageError>)
+pub fn flui::testing::MemoryStorage::fail_next(&self, error: flui::platform::StorageError)
+pub fn flui::testing::MemoryStorage::fail_reads(&self, error: Option<flui::platform::StorageError>)
+pub fn flui::testing::MemoryStorage::hold_commits(&self) -> flui::testing::CommitBarrier
+pub fn flui::testing::MemoryStorage::hold_copies(&self) -> flui::testing::CopyHold
+pub fn flui::testing::MemoryStorage::hold_writes(&self) -> flui::testing::WriteHold
+pub fn flui::testing::MemoryStorage::kept_aside(&self, name: &flui::platform::StorageName) -> Vec<Vec<u8>>
+pub fn flui::testing::MemoryStorage::live_requests(&self) -> usize
+pub fn flui::testing::MemoryStorage::new() -> Self
+pub fn flui::testing::MemoryStorage::put(&self, name: &flui::platform::StorageName, bytes: impl Into<Vec<u8>>)
 #[non_exhaustive] pub struct flui::testing::Node
 field flui::testing::Node::actions: Vec<flui_protocol::wire::ActionName> // at 17
 field flui::testing::Node::automation_id: Option<String> // at 6
@@ -22956,38 +22985,55 @@ variant flui::testing::TestError::Timeout { expected: String, locator: Box<flui:
 variant flui::testing::TestError::Unanswered { frames: u32 } // at 6
 pub struct flui::testing::TestWindow { .. }
 impl Clone for flui::testing::TestWindow
-impl Copy for flui::testing::TestWindow
 impl Default for flui::testing::TestWindow
-impl PartialEq for flui::testing::TestWindow
 impl core::fmt::Debug for flui::testing::TestWindow
-impl core::marker::StructuralPartialEq for flui::testing::TestWindow
 pub const fn flui::testing::TestWindow::new(width: u32, height: u32) -> Self
-pub const fn flui::testing::TestWindow::platform(self, platform: flui::platform::TargetPlatform) -> Self
+pub fn flui::testing::TestWindow::platform(self, platform: flui::platform::TargetPlatform) -> Self
+pub fn flui::testing::TestWindow::storage(self, storage: flui::testing::MemoryStorage) -> Self
+pub fn flui::testing::TestWindow::without_storage(self) -> Self
 pub struct flui::testing::Tester { .. }
 impl core::fmt::Debug for flui::testing::Tester
+pub fn flui::testing::Tester::cancel_composition(&mut self)
 pub fn flui::testing::Tester::clock(&self) -> &flui::foundation::ManualClock
+pub fn flui::testing::Tester::commit_composition(&mut self, text: &str)
+pub fn flui::testing::Tester::compose(&mut self, text: &str, caret: Option<u32>)
 pub fn flui::testing::Tester::drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration)
 pub fn flui::testing::Tester::drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration)
+pub fn flui::testing::Tester::end_session(&mut self)
 pub fn flui::testing::Tester::enter_text(&mut self, locator: &flui::testing::Locator, text: &str)
 pub fn flui::testing::Tester::expect(&mut self, locator: flui::testing::Locator) -> flui::testing::Expectation<'_>
 pub fn flui::testing::Tester::find_all(&mut self, locator: &flui::testing::Locator) -> Vec<flui::testing::Match>
 pub fn flui::testing::Tester::inspect_render(&mut self) -> flui::testing::InspectReading
 pub fn flui::testing::Tester::inspect_widgets(&mut self) -> flui::testing::InspectReading
+pub fn flui::testing::Tester::is_closed(&self) -> bool
+pub fn flui::testing::Tester::key_down(&mut self, key: &str)
+pub fn flui::testing::Tester::key_up(&mut self, key: &str)
 pub fn flui::testing::Tester::long_press(&mut self, locator: &flui::testing::Locator, duration: core::time::Duration)
 pub fn flui::testing::Tester::mount<V>(view: V) -> Self where V: flui::prelude::View + Clone + 'static
 pub fn flui::testing::Tester::mount_in<V>(view: V, window: flui::testing::TestWindow) -> Self where V: flui::prelude::View + Clone + 'static
+pub fn flui::testing::Tester::press_keys(&mut self, chords: &[&str])
 pub fn flui::testing::Tester::pump(&mut self)
 pub fn flui::testing::Tester::pump_and_settle(&mut self) -> usize
 pub fn flui::testing::Tester::pump_for(&mut self, duration: core::time::Duration)
 pub fn flui::testing::Tester::read(&mut self, locator: &flui::testing::Locator) -> flui::testing::Node
 pub fn flui::testing::Tester::rect(&mut self, locator: &flui::testing::Locator) -> flui::testing::LogicalRect
+pub fn flui::testing::Tester::request_close(&mut self) -> bool
+pub fn flui::testing::Tester::restart(self) -> Self
 pub fn flui::testing::Tester::semantics(&mut self) -> flui::testing::Tree
+pub fn flui::testing::Tester::set_window_focused(&mut self, focused: bool)
+pub fn flui::testing::Tester::storage(&self) -> Option<&flui::testing::MemoryStorage>
 pub fn flui::testing::Tester::tap(&mut self, locator: &flui::testing::Locator)
+pub fn flui::testing::Tester::try_cancel_composition(&mut self) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_commit_composition(&mut self, text: &str) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_compose(&mut self, text: &str, caret: Option<u32>) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_enter_text(&mut self, locator: &flui::testing::Locator, text: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_find_all(&mut self, locator: &flui::testing::Locator) -> Result<Vec<flui::testing::Match>, flui::testing::TestError>
+pub fn flui::testing::Tester::try_key_down(&mut self, key: &str) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_key_up(&mut self, key: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_long_press(&mut self, locator: &flui::testing::Locator, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_press_keys(&mut self, chords: &[&str]) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_pump_and_settle(&mut self, max_frames: usize) -> Result<usize, flui::testing::TestError>
 pub fn flui::testing::Tester::try_read(&mut self, locator: &flui::testing::Locator) -> Result<flui::testing::Node, flui::testing::TestError>
 pub fn flui::testing::Tester::try_rect(&mut self, locator: &flui::testing::Locator) -> Result<flui::testing::LogicalRect, flui::testing::TestError>
@@ -23028,6 +23074,9 @@ impl<'de> serde_core::de::Deserialize<'de> for flui::testing::Tree
 pub fn flui::testing::Tree::new(roots: Vec<flui::testing::Node>, truncated: bool) -> Self
 pub fn flui::testing::Tree::with_diagnostics(self, diagnostics: Vec<flui_protocol::tree::TreeDiagnostic>) -> Self
 pub fn flui::testing::Tree::with_revision(self, revision: flui_protocol::tree::TreeRevision) -> Self
+pub struct flui::testing::WriteHold { .. }
+impl Drop for flui::testing::WriteHold
+impl core::fmt::Debug for flui::testing::WriteHold
 pub mod flui::testing::find
 pub fn flui::testing::find::button(name: impl Into<String>) -> flui::testing::Locator
 pub fn flui::testing::find::id(identifier: impl Into<String>) -> flui::testing::Locator
@@ -23477,33 +23526,16 @@ pub fn flui::testing::harness::replay::VirtualScript::press_button(self, at: flu
 pub fn flui::testing::harness::replay::VirtualScript::release(self) -> Self
 pub fn flui::testing::harness::replay::VirtualScript::wait(self, duration: core::time::Duration) -> Self
 pub mod flui::testing::harness::storage
-pub struct flui::testing::harness::storage::CommitBarrier { .. }
-impl Drop for flui::testing::harness::storage::CommitBarrier
-impl core::fmt::Debug for flui::testing::harness::storage::CommitBarrier
-pub fn flui::testing::harness::storage::CommitBarrier::commit(self)
-pub struct flui::testing::harness::storage::CopyHold { .. }
-impl Drop for flui::testing::harness::storage::CopyHold
-impl core::fmt::Debug for flui::testing::harness::storage::CopyHold
-pub struct flui::testing::harness::storage::MemoryStorage { .. }
-impl Clone for flui::testing::harness::storage::MemoryStorage
-impl Default for flui::testing::harness::storage::MemoryStorage
-impl core::fmt::Debug for flui::testing::harness::storage::MemoryStorage
-impl flui::platform::Storage for flui::testing::harness::storage::MemoryStorage
-pub fn flui::testing::harness::storage::MemoryStorage::contents(&self, name: &flui::platform::StorageName) -> Option<Vec<u8>>
-pub fn flui::testing::harness::storage::MemoryStorage::fail_copies(&self, error: Option<flui::platform::StorageError>)
-pub fn flui::testing::harness::storage::MemoryStorage::fail_next(&self, error: flui::platform::StorageError)
-pub fn flui::testing::harness::storage::MemoryStorage::fail_reads(&self, error: Option<flui::platform::StorageError>)
-pub fn flui::testing::harness::storage::MemoryStorage::hold_commits(&self) -> flui::testing::harness::storage::CommitBarrier
-pub fn flui::testing::harness::storage::MemoryStorage::hold_copies(&self) -> flui::testing::harness::storage::CopyHold
-pub fn flui::testing::harness::storage::MemoryStorage::hold_writes(&self) -> flui::testing::harness::storage::WriteHold
-pub fn flui::testing::harness::storage::MemoryStorage::kept_aside(&self, name: &flui::platform::StorageName) -> Vec<Vec<u8>>
-pub fn flui::testing::harness::storage::MemoryStorage::live_requests(&self) -> usize
-pub fn flui::testing::harness::storage::MemoryStorage::new() -> Self
-pub fn flui::testing::harness::storage::MemoryStorage::put(&self, name: &flui::platform::StorageName, bytes: impl Into<Vec<u8>>)
-pub struct flui::testing::harness::storage::WriteHold { .. }
-impl Drop for flui::testing::harness::storage::WriteHold
-impl core::fmt::Debug for flui::testing::harness::storage::WriteHold
+reexport flui::testing::harness::storage::CommitBarrier => flui::testing::CommitBarrier
+reexport flui::testing::harness::storage::CopyHold => flui::testing::CopyHold
+reexport flui::testing::harness::storage::MemoryStorage => flui::testing::MemoryStorage
+reexport flui::testing::harness::storage::WriteHold => flui::testing::WriteHold
 pub mod flui::testing::harness::widgets
+#[non_exhaustive] pub struct flui::testing::harness::widgets::DrawnOp
+field flui::testing::harness::widgets::DrawnOp::op: flui::painting::DrawOp // at 1
+field flui::testing::harness::widgets::DrawnOp::transform: flui::geometry::Matrix4 // at 0
+impl Clone for flui::testing::harness::widgets::DrawnOp
+impl core::fmt::Debug for flui::testing::harness::widgets::DrawnOp
 pub struct flui::testing::harness::widgets::LaidOut { .. }
 impl core::fmt::Debug for flui::testing::harness::widgets::LaidOut
 pub fn flui::testing::harness::widgets::LaidOut::a11y_nodes_named_by(&self, anchor: &flui::prelude::SemanticsAnchor) -> Vec<accesskit::NodeId>
@@ -23540,10 +23572,10 @@ pub fn flui::testing::harness::widgets::LaidOut::dispatch_scroll_with_modifiers(
 pub fn flui::testing::harness::widgets::LaidOut::dispatch_secondary_down(&self, x: f64, y: f64)
 pub fn flui::testing::harness::widgets::LaidOut::dispatch_secondary_up(&self, x: f64, y: f64)
 pub fn flui::testing::harness::widgets::LaidOut::dispatch_window_hover_left(&self)
-pub fn flui::testing::harness::widgets::LaidOut::draw_ops(&self) -> Vec<flui::painting::DrawCommand>
+pub fn flui::testing::harness::widgets::LaidOut::draw_ops(&self) -> Vec<flui::testing::harness::widgets::DrawnOp>
 pub fn flui::testing::harness::widgets::LaidOut::element_node_count(&mut self) -> usize
 pub fn flui::testing::harness::widgets::LaidOut::enable_semantics(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::end_session(&self)
+pub fn flui::testing::harness::widgets::LaidOut::end_session(&mut self)
 pub fn flui::testing::harness::widgets::LaidOut::enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R
 pub fn flui::testing::harness::widgets::LaidOut::find_all_by_render_type(&self, render_type_name: &str) -> Vec<flui::foundation::RenderId>
 pub fn flui::testing::harness::widgets::LaidOut::find_all_text(&self, text: &str) -> Vec<flui::foundation::RenderId>
@@ -24357,7 +24389,7 @@ impl core::marker::StructuralPartialEq for flui::view::PostFrameScheduleError
 variant flui::view::PostFrameScheduleError::Closed // at 0
 variant flui::view::PostFrameScheduleError::WrongScheduler // at 1
 reexport flui::view::PredictiveBackEvent => flui::prelude::PredictiveBackEvent
-#[non_exhaustive] pub struct flui::view::PresentationCapabilities
+#[non_exhaustive] pub struct flui::view::PresentationCapabilities { .. }
 field flui::view::PresentationCapabilities::announcer: Option<flui::semantics::Announcer> // at 2
 field flui::view::PresentationCapabilities::assistive_focus: flui::semantics::AssistiveFocusSupport // at 3
 field flui::view::PresentationCapabilities::capabilities: Option<alloc::rcs::rc::Rc<dyn flui::view::CapabilitySource>> // at 1
@@ -25203,6 +25235,14 @@ reexport flui::view::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::view::key::ValueKey => flui::foundation::ValueKey
 reexport flui::view::key::ViewKey => flui::foundation::ViewKey
 reexport flui::view::key::WithKey => flui::foundation::WithKey
+pub mod flui::view::navigation
+reexport flui::view::navigation::NavigationIntent => flui::widgets::NavigationIntent
+reexport flui::view::navigation::NavigationOp => flui::widgets::NavigationOp
+reexport flui::view::navigation::NavigationRefused => flui::widgets::NavigationRefused
+reexport flui::view::navigation::RouteParseError => flui::widgets::RouteParseError
+reexport flui::view::navigation::RoutePath => flui::prelude::RoutePath
+pub trait flui::view::navigation::UrlOwner: 'static
+fn flui::view::navigation::UrlOwner::navigate(&self, intent: flui::widgets::NavigationIntent) -> Result<(), flui::widgets::NavigationRefused>
 pub mod flui::view::owner
 reexport flui::view::owner::BuildOwner => flui::prelude::BuildOwner
 reexport flui::view::owner::BuildPremise => flui::view::BuildPremise
@@ -27115,6 +27155,39 @@ reexport flui::widgets::MultiChildLayoutContext => flui::prelude::MultiChildLayo
 reexport flui::widgets::MultiChildLayoutDelegate => flui::prelude::MultiChildLayoutDelegate
 reexport flui::widgets::MultiTapCount => flui::interaction::MultiTapCount
 reexport flui::widgets::MultiTapCountError => flui::interaction::MultiTapCountError
+#[non_exhaustive] pub struct flui::widgets::NavigationIntent
+field flui::widgets::NavigationIntent::op: flui::widgets::NavigationOp // at 0
+impl Clone for flui::widgets::NavigationIntent
+impl Eq for flui::widgets::NavigationIntent
+impl From<flui::widgets::NavigationOp> for flui::widgets::NavigationIntent
+impl PartialEq for flui::widgets::NavigationIntent
+impl core::fmt::Debug for flui::widgets::NavigationIntent
+impl core::marker::StructuralPartialEq for flui::widgets::NavigationIntent
+pub fn flui::widgets::NavigationIntent::new(op: flui::widgets::NavigationOp) -> Self
+#[non_exhaustive] pub enum flui::widgets::NavigationOp
+impl Clone for flui::widgets::NavigationOp
+impl Eq for flui::widgets::NavigationOp
+impl From<flui::widgets::NavigationOp> for flui::widgets::NavigationIntent
+impl PartialEq for flui::widgets::NavigationOp
+impl core::fmt::Debug for flui::widgets::NavigationOp
+impl core::marker::StructuralPartialEq for flui::widgets::NavigationOp
+variant flui::widgets::NavigationOp::Go(flui::prelude::RoutePath) // at 3
+variant flui::widgets::NavigationOp::Pop // at 2
+variant flui::widgets::NavigationOp::Push(flui::prelude::RoutePath) // at 0
+variant flui::widgets::NavigationOp::Replace(flui::prelude::RoutePath) // at 1
+#[non_exhaustive] pub enum flui::widgets::NavigationRefused
+impl Clone for flui::widgets::NavigationRefused
+impl Eq for flui::widgets::NavigationRefused
+impl PartialEq for flui::widgets::NavigationRefused
+impl core::error::Error for flui::widgets::NavigationRefused
+impl core::fmt::Debug for flui::widgets::NavigationRefused
+impl core::fmt::Display for flui::widgets::NavigationRefused
+impl core::marker::StructuralPartialEq for flui::widgets::NavigationRefused
+variant flui::widgets::NavigationRefused::Busy // at 4
+variant flui::widgets::NavigationRefused::NoMatch(flui::prelude::RoutePath) // at 2
+variant flui::widgets::NavigationRefused::NoPresentation // at 0
+variant flui::widgets::NavigationRefused::NoUrlOwner // at 1
+variant flui::widgets::NavigationRefused::NothingToPop // at 3
 pub struct flui::widgets::NestedScroll { .. }
 impl Clone for flui::widgets::NestedScroll
 impl core::fmt::Debug for flui::widgets::NestedScroll
@@ -27654,7 +27727,6 @@ pub type flui::widgets::RoutePageBuilder = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::
 #[non_exhaustive] pub enum flui::widgets::RouteParseError
 impl Clone for flui::widgets::RouteParseError
 impl Eq for flui::widgets::RouteParseError
-impl From<flui::widgets::RouteParseError> for flui::widgets::RouterError
 impl PartialEq for flui::widgets::RouteParseError
 impl core::error::Error for flui::widgets::RouteParseError
 impl core::fmt::Debug for flui::widgets::RouteParseError
@@ -29227,6 +29299,9 @@ reexport flui::widgets::prelude::info! => tracing::info
 reexport flui::widgets::prelude::trace! => tracing::trace
 reexport flui::widgets::prelude::warn! => tracing::warn
 pub mod flui::widgets::router
+reexport flui::widgets::router::NavigationIntent => flui::widgets::NavigationIntent
+reexport flui::widgets::router::NavigationOp => flui::widgets::NavigationOp
+reexport flui::widgets::router::NavigationRefused => flui::widgets::NavigationRefused
 reexport flui::widgets::router::Routable => flui_macros::Routable
 reexport flui::widgets::router::Routable => flui::prelude::Routable
 reexport flui::widgets::router::RouteParseError => flui::widgets::RouteParseError
@@ -35362,6 +35437,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::install_window(&self, id: flui::foun
 pub fn flui_runtime::ui_runtime::UiRuntime::is_sole_presentation(&self, id: flui::foundation::PresentationId) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::mark_primary_needs_full_repaint(&self)
 pub fn flui_runtime::ui_runtime::UiRuntime::mark_rendered(&self)
+pub fn flui_runtime::ui_runtime::UiRuntime::navigate(&self, presentation: flui::foundation::PresentationId, intent: flui::widgets::NavigationIntent) -> Result<(), flui::widgets::NavigationRefused>
 pub fn flui_runtime::ui_runtime::UiRuntime::needs_redraw(&self) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::next_wake(&self) -> Option<std::time::Instant>
 pub fn flui_runtime::ui_runtime::UiRuntime::note_frame_request(&self, presentation_id: flui::foundation::PresentationId, request: flui::platform::FrameRequest)

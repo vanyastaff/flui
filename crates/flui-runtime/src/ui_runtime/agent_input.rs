@@ -19,7 +19,7 @@ use flui_foundation::PresentationId;
 use flui_foundation::geometry::Point;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::InputSurface;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{
     ButtonChange, CancelReason, DeviceId, PenTool, PointerButton, PointerButtons, PointerCancel,
     PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
@@ -364,7 +364,20 @@ fn key_named(name: &str) -> Result<Key, AgentError> {
 
 fn ime_event(action: &ImeAction) -> Result<ImeEvent, AgentError> {
     match action {
-        ImeAction::SetComposition { text, cursor } => {
+        ImeAction::SetComposition {
+            text,
+            caret_hidden: true,
+            cursor,
+        } => {
+            if cursor.is_some() {
+                return Err(invalid("a hidden caret has no position"));
+            }
+            Ok(ImeEvent::Preedit {
+                text: text.clone(),
+                cursor: None,
+            })
+        }
+        ImeAction::SetComposition { text, cursor, .. } => {
             let caret = match cursor {
                 None => text.len(),
                 Some(cursor) => {
@@ -631,18 +644,26 @@ impl Held {
             }
             Step::Key { state, key } => {
                 let pressed = self.keys.iter().position(|held| *held == key);
-                match (state, pressed) {
-                    (KeyState::Down, None) => self.keys.push(key.clone()),
+                let repeat = match (state, pressed) {
+                    (KeyState::Down, None) => {
+                        self.keys.push(key.clone());
+                        KeyRepeat::First
+                    }
+                    // Pressing a pressed key repeats it, as WebDriver dispatches a second
+                    // `keyDown` and as a platform repeats a held key.
+                    (KeyState::Down, Some(_)) => KeyRepeat::AutoRepeat,
                     (KeyState::Up, Some(index)) => {
                         self.keys.remove(index);
+                        KeyRepeat::First
                     }
-                    // Pressing a pressed key, or lifting one that is up, sends nothing.
+                    // Lifting a key that is up sends nothing.
                     _ => return Ok(None),
-                }
+                };
                 // A modifier's own event carries the modifiers as they are after it.
                 Made::Input(PlatformInput::Keyboard(
                     KeyEvent::new(state, key, Code::Unidentified, time)
-                        .with_modifiers(modifiers_of(&self.keys)),
+                        .with_modifiers(modifiers_of(&self.keys))
+                        .with_repeat(repeat),
                 ))
             }
             Step::Ime(event) => Made::Input(PlatformInput::Ime(event)),

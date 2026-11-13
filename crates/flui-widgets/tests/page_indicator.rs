@@ -36,7 +36,7 @@ fn dots(laid: &LaidOut) -> Vec<Dot> {
     let mut dots = Vec::new();
     for (_, node) in laid.layer_tree().expect("a painted frame").iter() {
         if let Layer::Picture(picture) = node.layer() {
-            for command in picture.picture().commands() {
+            for command in picture.picture() {
                 if let DrawOp::Circle {
                     center,
                     radius,

@@ -1,6 +1,6 @@
 //! [`Routable`] — a typed set of locations.
 
-use super::path::{RouteParseError, RoutePath};
+use flui_view::navigation::{RouteParseError, RoutePath};
 
 /// A typed set of locations: the route type a [`Router`](super::Router) keeps
 /// a stack of.

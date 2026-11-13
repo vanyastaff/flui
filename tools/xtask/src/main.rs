@@ -106,6 +106,8 @@ enum Command {
     GpuTest(tasks::GpuTestArgs),
     /// The unsafe-code paths under Miri.
     Miri(tasks::MiriArgs),
+    /// Run the fuzz targets under libFuzzer.
+    Fuzz(tasks::FuzzArgs),
     /// Remove the nested-cargo test caches under the target directory.
     CleanNested(tasks::CleanNestedArgs),
     /// Check crate tiers, manifests, test reachability and ADR numbers.
@@ -218,6 +220,7 @@ fn main() -> ExitCode {
         Command::WasmTest(args) => tasks::wasm_test(&args),
         Command::GpuTest(args) => tasks::gpu_test(&args),
         Command::Miri(args) => tasks::miri(&args),
+        Command::Fuzz(args) => tasks::fuzz(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
         Command::Workspace(args) => workspace::workspace(&args),
         Command::Reach(args) => workspace::reach(&args),

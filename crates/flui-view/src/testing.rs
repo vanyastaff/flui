@@ -624,6 +624,9 @@ impl LifecycleContext for ElementBuildContext {
     fn close_guard(&self) -> Option<crate::CloseGuard> {
         self.owner.borrow().capabilities().close_guard.clone()
     }
+    fn url_owner(&self) -> Option<crate::__runtime::UrlOwnerSlot> {
+        self.owner.borrow().capabilities().url_owner.clone()
+    }
     fn flush_registry_in_crate(
         &self,
         _token: crate::context::build_context::sealed::CrateToken,
