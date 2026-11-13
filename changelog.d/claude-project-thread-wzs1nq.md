@@ -55,3 +55,5 @@
   `MoveOutcome`, `Autoscroll`, `TraversalEdgeBehavior` and `SweepModel`.
 - Also `#[non_exhaustive]` (ADR-0329): the widgets `TransitionGroup`, `RouteLifecycle`, `PanAxis`,
   `WheelScaleGate` and `DismissDirection`.
+- `flui-protocol` decides each public enum (ADR-0329): the recording mirrors, `RecordRow`,
+  `Checked`, `Retry` and `RequestId` stay closed with their reason at the site.
