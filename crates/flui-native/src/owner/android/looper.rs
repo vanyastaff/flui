@@ -48,6 +48,7 @@
 //! needs a window has nothing to build a surface from before it.
 
 use std::{
+    cell::{Cell, RefCell},
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -59,8 +60,6 @@ use std::{
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use flui_platform::{MemoryPressureLevel, SessionEndPhase, SystemNotice, WindowExecutionState};
-
-use parking_lot::Mutex;
 
 use crate::host;
 use crate::owner::android::{
@@ -236,14 +235,14 @@ pub struct AndroidLoop {
     /// What the loop delivers to the application's handler, which `run`
     /// binds at the first window.
     app_delivery: Arc<AppDelivery>,
-    running: Arc<AtomicBool>,
+    running: Cell<bool>,
     pub(crate) activity: Arc<ActivityFlags>,
     /// What each of the Activity's lifecycle callbacks means, as the table
     /// made it ([`AndroidHost::activity`]).
     activity_callbacks: Box<dyn ActivityCallbacks>,
     /// Where the system's memory calls hand system notices.
     notices: Arc<dyn NoticeChannel>,
-    pub(crate) window: Arc<Mutex<Option<Arc<dyn ActivityWindow>>>>,
+    pub(crate) window: RefCell<Option<Arc<dyn ActivityWindow>>>,
     pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     /// The input of the Activity's queue, as the table made it
     /// ([`AndroidHost::input`]).
@@ -266,6 +265,11 @@ pub struct AndroidLoop {
     /// The identities of the windows it opens.
     pub(crate) window_ids: ActivityWindowIds,
 }
+
+// Owner-local (ADR-0327 §5): the loop's window slot and stop flag are its
+// thread's cells, so the loop is not `Sync`; it stays `Send` while the
+// Activity's window is (`ActivityWindow: Send + Sync`, for its delivery).
+static_assertions::assert_not_impl_any!(AndroidLoop: Sync);
 
 // Opaque on purpose, matching `HeadlessLoop`. A
 // derived `Debug` here would format the clipboard, whose contents are the
@@ -321,10 +325,10 @@ impl AndroidLoop {
             app,
             notices: H::notices(&app_delivery),
             app_delivery,
-            running: Arc::new(AtomicBool::new(true)),
+            running: Cell::new(true),
             activity: Arc::new(ActivityFlags::default()),
             activity_callbacks,
-            window: Arc::new(Mutex::new(None)),
+            window: RefCell::new(None),
             clipboard,
             input: H::input(),
             owner_signal,
@@ -340,7 +344,7 @@ impl AndroidLoop {
     /// state is published first, so an observer reads the new value.
     fn publish_activity_fact(&self, record: impl FnOnce(&ActivityFlags)) {
         record(&self.activity);
-        let window = self.window.lock().clone();
+        let window = self.window.borrow().clone();
         if let Some(window) = window {
             window.publish_state();
         }
@@ -384,7 +388,7 @@ impl AndroidLoop {
     /// Deliver the cancellations of the contacts the input ended to the
     /// window, if there is one.
     fn end_input_contacts(&self, events: Vec<flui_platform::PlatformInput>) {
-        let window = self.window.lock().clone();
+        let window = self.window.borrow().clone();
         if let Some(window) = window {
             for event in events {
                 window.delivery().dispatch_input(event);
@@ -395,7 +399,7 @@ impl AndroidLoop {
     /// The loop ended: the window's field and drag are detached, and the view
     /// stops calling native code and leaves the Activity.
     fn retire_java_view(&self) {
-        let retiring = self.window.lock().clone();
+        let retiring = self.window.borrow().clone();
         if let Some(retiring) = retiring {
             retiring.retire_java_view();
         }
@@ -410,7 +414,7 @@ impl AndroidLoop {
         if events.is_empty() {
             return;
         }
-        let window = self.window.lock().clone();
+        let window = self.window.borrow().clone();
         for event in events {
             match event {
                 java_view::ViewEvent::Installed => {
@@ -509,7 +513,7 @@ impl AndroidLoop {
     /// input the table made ([`AndroidHost::input`]) read each, and
     /// dispatches what it means through the window's callbacks.
     fn process_input_events(&self) {
-        let window_guard = self.window.lock();
+        let window_guard = self.window.borrow();
         let Some(window) = window_guard.as_ref().cloned() else {
             // No window yet — still drain events to prevent ANR
             drop(window_guard);
@@ -670,14 +674,12 @@ impl host::Loop for AndroidLoop {
         // promptly instead of continuing to pump input/frame dispatch for
         // an app that never finished bootstrapping.
         let mut bootstrap_error: Option<BootstrapError> = None;
-        // Relaxed everywhere on `running`: it is a bare stop-signal with no
-        // data published through it. The loop re-reads it every iteration,
-        // the Destroy store happens on the loop thread itself, and a
-        // cross-thread `quit()` only needs eventual visibility.
-        self.running.store(true, Ordering::Relaxed);
+        // `running` is the loop's stop flag, which the loop re-reads every
+        // iteration; only the owner thread sets it (ADR-0327 §5).
+        self.running.set(true);
 
         loop {
-            if !self.running.load(Ordering::Relaxed) {
+            if !self.running.get() {
                 break;
             }
 
@@ -688,7 +690,7 @@ impl host::Loop for AndroidLoop {
             // there, a 500ms cadence while resumed stands in, so no change is
             // lost; a paused Activity reads them again on `Resume`.
             let now = web_time::Instant::now();
-            let window = self.window.lock().clone();
+            let window = self.window.borrow().clone();
             if let Some(window) = window.as_ref() {
                 window.settle_insets();
             }
@@ -709,7 +711,7 @@ impl host::Loop for AndroidLoop {
                 next_preference_sample = (!observed).then(|| now + Duration::from_millis(500));
             }
             if self.owner_signal.drive() {
-                self.running.store(false, Ordering::Relaxed);
+                self.running.set(false);
                 continue;
             }
 
@@ -728,7 +730,7 @@ impl host::Loop for AndroidLoop {
                 // deadline only a frame clears stays behind until one runs.
                 let _ = self.owner_signal.wake();
                 if self.owner_signal.drive() {
-                    self.running.store(false, Ordering::Relaxed);
+                    self.running.set(false);
                     continue;
                 }
             }
@@ -741,7 +743,7 @@ impl host::Loop for AndroidLoop {
             // execution before the callback can be delivered.
             let redraw_requested = self
                 .window
-                .lock()
+                .borrow()
                 .as_ref()
                 .is_some_and(|w| w.has_redraw_request());
             let resumed = self.activity.resumed.load(Ordering::SeqCst);
@@ -811,7 +813,7 @@ impl host::Loop for AndroidLoop {
                             // The window is cloned out of its lock: the surface
                             // observer runs embedder code that may call back
                             // into the platform.
-                            let window = self.window.lock().clone();
+                            let window = self.window.borrow().clone();
                             if let Some(w) = window {
                                 w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Rebuild);
                                 w.request_redraw();
@@ -832,7 +834,7 @@ impl host::Loop for AndroidLoop {
                             // step here with a validity window behind it, and
                             // the execution observer runs arbitrary embedder
                             // code.
-                            let window = self.window.lock().clone();
+                            let window = self.window.borrow().clone();
                             if let Some(w) = window {
                                 w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Release);
                             }
@@ -857,7 +859,7 @@ impl host::Loop for AndroidLoop {
                                 should_call_ready = true;
                             }
 
-                            let window = self.window.lock().clone();
+                            let window = self.window.borrow().clone();
                             if let Some(w) = window {
                                 w.invalidate_text_sizing();
                                 // The new native window may have a size the
@@ -889,7 +891,7 @@ impl host::Loop for AndroidLoop {
                             // still valid: `AppCmd::TermWindow` is applied
                             // after this callback returns, so a surface that
                             // outlives it does too.
-                            let window = self.window.lock().clone();
+                            let window = self.window.borrow().clone();
                             if let Some(w) = window {
                                 w.invalidate_text_sizing();
                                 w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Release);
@@ -913,19 +915,19 @@ impl host::Loop for AndroidLoop {
                             }
 
                             // Dispatch close before stopping
-                            let window = self.window.lock().clone();
+                            let window = self.window.borrow().clone();
                             if let Some(w) = window {
                                 w.revoke_geometry();
                                 w.delivery().dispatch_close();
                             }
 
-                            self.running.store(false, Ordering::Relaxed);
+                            self.running.set(false);
                         }
                         MainEvent::WindowResized { .. } => {
                             tracing::info!("Android: Window resized");
                             // Cloned out of its lock: the resize observer runs
                             // embedder code that may call back into the platform.
-                            let window = self.window.lock().clone();
+                            let window = self.window.borrow().clone();
                             if let Some(w) = window {
                                 w.publish_state();
                                 // The insets of the old size no longer apply.
@@ -940,7 +942,7 @@ impl host::Loop for AndroidLoop {
                         MainEvent::ConfigChanged { .. } => {
                             tracing::debug!("Android: Config changed");
                             self.displays.invalidate();
-                            let window = self.window.lock().clone();
+                            let window = self.window.borrow().clone();
                             if let Some(window) = window {
                                 window.invalidate_text_sizing();
                                 window.settle_appearance();
@@ -954,7 +956,7 @@ impl host::Loop for AndroidLoop {
                                     web_time::Instant::now() + Duration::from_millis(500),
                                 );
                             }
-                            let window = self.window.lock().clone();
+                            let window = self.window.borrow().clone();
                             if let Some(window) = window {
                                 window.publish_state();
                                 window.request_insets();
@@ -992,7 +994,7 @@ impl host::Loop for AndroidLoop {
                 if let Err(error) = ready {
                     tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
                     bootstrap_error = Some(error);
-                    self.running.store(false, Ordering::Relaxed);
+                    self.running.set(false);
                     // Skip input/frame dispatch below for this iteration --
                     // the top-of-loop check exits on the next pass.
                     continue;
@@ -1003,10 +1005,10 @@ impl host::Loop for AndroidLoop {
             // Install accepted preference/configuration changes before the
             // first input packet translated in the new context.
             if self.owner_signal.drive() {
-                self.running.store(false, Ordering::Relaxed);
+                self.running.set(false);
                 continue;
             }
-            let window = self.window.lock().clone();
+            let window = self.window.borrow().clone();
             if let Some(window) = window {
                 self.java_view.set_scale(window.scale());
             }
@@ -1025,7 +1027,7 @@ impl host::Loop for AndroidLoop {
             // Where the choreographer paces the frames, only the turn whose
             // poll ran its callback delivers one, stamped with its vsync; a
             // tick this turn cannot deliver is dropped (ADR-0269).
-            let window = self.window.lock().clone();
+            let window = self.window.borrow().clone();
             let stamp = match frame_clock.as_ref() {
                 Some(clock) => clock.take(),
                 None => Some(FrameStamp::Now),
@@ -1091,7 +1093,7 @@ impl host::Loop for AndroidLoop {
         // a new platform and a new window (`ANativeActivity_onCreate`
         // spawns one thread per activity).
         self.retire_java_view();
-        let window = self.window.lock().take();
+        let window = self.window.borrow_mut().take();
         if let Some(window) = window {
             window.revoke_geometry();
             window.delivery().clear();
@@ -1111,14 +1113,14 @@ impl host::Loop for AndroidLoop {
 
     fn quit(&self) {
         tracing::info!("Android: quit requested");
-        let window = self.window.lock().clone();
+        let window = self.window.borrow().clone();
         if let Some(window) = window {
-            // A foreign quit fences leases immediately; native retirement stays
+            // A quit fences leases immediately; native retirement stays
             // on the app owner when its loop exits.
             window.fence_text_sizing();
         }
         self.activity.resumed.store(false, Ordering::SeqCst);
-        self.running.store(false, Ordering::Relaxed);
+        self.running.set(false);
         let _ = self.owner_signal.request_quit();
     }
 
@@ -1176,7 +1178,7 @@ impl host::Displays<AndroidLoop> for AndroidLoop {
         if owner.displays.take_max_rate_change() {
             // A `High` hint skipped while the display's highest rate was
             // unknown (or sent with an older one) is asked again.
-            let window = owner.window.lock().clone();
+            let window = owner.window.borrow().clone();
             if let Some(window) = window {
                 window.apply_frame_rate_hint();
             }
