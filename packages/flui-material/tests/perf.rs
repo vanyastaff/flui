@@ -33,11 +33,6 @@ use flui_testing::heap::CountingAllocator;
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-const TAB_BAR_ELEMENTS: u64 = 1000;
-const TAB_BAR_RENDER_NODES: u64 = 1000;
-const NAVIGATION_BAR_ELEMENTS: u64 = 1000;
-const NAVIGATION_BAR_RENDER_NODES: u64 = 1000;
-
 /// `cost` recorded as `scenario` and held to this catalog's baseline file.
 fn held_to_baseline(scenario: &str, cost: ControlCost) -> ControlCost {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("perf/baseline");
@@ -226,13 +221,15 @@ fn perf_tab_bar_alone() {
             },
         ),
     );
+    // 45 elements and 28 render nodes while each tab had a `MergeSemantics`
+    // and a `Semantics` of its own.
     assert!(
-        cost.elements <= TAB_BAR_ELEMENTS,
+        cost.elements <= 41,
         "a tab bar adds {} elements",
         cost.elements
     );
     assert!(
-        cost.render_nodes <= TAB_BAR_RENDER_NODES,
+        cost.render_nodes <= 24,
         "a tab bar adds {} render nodes",
         cost.render_nodes
     );
@@ -263,13 +260,15 @@ fn perf_navigation_bar_alone() {
             },
         ),
     );
+    // 55 elements and 30 render nodes while each destination had a
+    // `MergeSemantics` and a `Semantics` of its own.
     assert!(
-        cost.elements <= NAVIGATION_BAR_ELEMENTS,
+        cost.elements <= 51,
         "a navigation bar adds {} elements",
         cost.elements
     );
     assert!(
-        cost.render_nodes <= NAVIGATION_BAR_RENDER_NODES,
+        cost.render_nodes <= 26,
         "a navigation bar adds {} render nodes",
         cost.render_nodes
     );
