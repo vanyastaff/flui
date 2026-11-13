@@ -571,31 +571,20 @@ impl KeptTextures {
         true
     }
 
-    /// Whether a draw would write to the queue: allocations on no device or
-    /// another one, or an image waiting.
-    pub(crate) fn needs_writes(&self, domain: &Arc<DeviceDomain>) -> bool {
-        !self.waiting.is_empty()
-            || !self
-                .registry
-                .as_ref()
-                .is_some_and(|registry| registry.is_on(domain))
-    }
-
     /// The allocations on `domain`'s device, taken out for one frame after
     /// [`Self::prepare`]: until [`Self::take_back`] returns them, the next
     /// prepare makes them again from the drawn images, so a frame that never
-    /// returns them costs a re-upload, not the textures. `None` when none are
-    /// on this device, a frame whose prepare was put off: it draws none of
-    /// the slot's textures.
-    pub(crate) fn lend(&mut self, domain: &Arc<DeviceDomain>) -> Option<ExternalTextureRegistry> {
-        if !self
+    /// returns them costs a re-upload, not the textures.
+    pub(crate) fn lend(&mut self, domain: &Arc<DeviceDomain>) -> ExternalTextureRegistry {
+        let registry = self
             .registry
-            .as_ref()
-            .is_some_and(|registry| registry.is_on(domain))
-        {
-            return None;
-        }
-        self.registry.take()
+            .take()
+            .expect("BUG: textures are prepared on the device before they are lent");
+        debug_assert!(
+            registry.is_on(domain),
+            "BUG: textures are prepared on this device before they are lent"
+        );
+        registry
     }
 
     /// Return the allocations [`Self::lend`] took out.
