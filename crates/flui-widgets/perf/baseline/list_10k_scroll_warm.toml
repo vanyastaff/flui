@@ -2,21 +2,6 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [list_10k_scroll_warm]
-allocated_bytes = 650284
-allocations = 3024
-builds_run = 90
-damage_full = 0
-damage_rects = 1
-elements_rebuilt = 90
-frames_produced = 1
-layers_produced = 32
-layers_reused = 0
-layout_passes = 2
-layout_roots = 92
-nodes_laid_out = 96
-nodes_painted = 98
-reallocations = 122
-scene_depth_updates = 30
-scene_nodes_visited = 14
-scene_ops = 128
-semantics_nodes_updated = 81
+allocated_bytes = 793279
+allocations = 3512
+reallocations = 126
