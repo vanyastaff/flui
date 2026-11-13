@@ -1799,6 +1799,16 @@ fn placement_anchors(
                 .render_object()
                 .semantics_regions(entry.state().absolute_paint_size()),
         };
+        // The regions' handlers are authored code: like the assembly walk,
+        // keep them until the pass ends so their captures retire after the
+        // phase, not here with the pipeline borrowed.
+        for region in authored
+            .before_children
+            .iter()
+            .chain(&authored.after_children)
+        {
+            regions.callbacks.retain(&region.config);
+        }
         if !authored.before_children.is_empty() || !authored.after_children.is_empty() {
             return false;
         }
