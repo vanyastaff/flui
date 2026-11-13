@@ -312,6 +312,13 @@ impl PipelineOwner<Semantics> {
             // announcement, or a full publish a new adapter asked for.
             let published = owner.flush();
             self.counters.semantics_nodes_updated += published as u64;
+            // A full publish checks the whole tree: report what it found this
+            // frame, before the owner can be replaced or disposed.
+            let diagnostics = owner.take_diagnostics();
+            #[cfg(any(test, feature = "testing"))]
+            self.unchecked_semantics_diagnostics
+                .extend(diagnostics.iter().cloned());
+            self.semantics_diagnostics.extend(diagnostics);
         } else if pending_count > 0 {
             tracing::warn!(
                 count = pending_count,
