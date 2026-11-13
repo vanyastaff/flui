@@ -10,10 +10,12 @@
 //! | Event | [`SurfaceHold`] after | [`SlotSize`] after |
 //! |-------|-----------------------|--------------------|
 //! | the owner sends size `s` | unchanged | `Pending(s)` |
-//! | the backend applies `s` | unchanged | `Applied(s)` if it was `Pending(s)` |
-//! | the backend refuses `s` for good | unchanged | `Refused(s)` if it was `Pending(s)` |
-//! | a refusal for now, a resize that panics | unchanged | unchanged: `Pending(s)` is tried on the next turn |
-//! | the window's surface is dropped (a render that needs a new one, a rebuilt device that cannot present to it) | `Wanted` | unchanged |
+//! | the backend applies `s` | unchanged | `Applied(s)` if it was `Pending(s)` and no size was sent since |
+//! | the backend refuses `s` for good (past the device's limit) | unchanged | `Refused(s)` if it was `Pending(s)` and no size was sent since |
+//! | any other resize error, a resize that panics | unchanged | unchanged: `Pending(s)` is tried on the next turn |
+//! | the owner sends a restore | `Restoring` | unchanged |
+//! | the restore's send fails | what it was before, if still `Restoring` | unchanged |
+//! | the window's surface is dropped (a render that needs a new one, a rebuilt device that cannot present to it) | `Wanted`, or `Restoring` while a restore is on its way | unchanged |
 //! | a restore the backend takes | `Held` | unchanged |
 //! | a restore the backend refuses | `Refused` | unchanged |
 //! | a restore that panics | `Wanted` | unchanged |
@@ -38,6 +40,9 @@ pub enum SurfaceHold {
     /// [`RasterCommand::Restore`](super::RasterCommand::Restore). Until one
     /// is restored the slot's frames settle not shown.
     Wanted,
+    /// The owner sent a surface the executor has not answered yet: the
+    /// owner sends no other until it does.
+    Restoring,
     /// The newest surface the owner sent was refused, and the slot has
     /// none: a frame has nowhere to go until the owner sends another.
     Refused,
@@ -100,6 +105,10 @@ pub(crate) enum SurfaceEvent {
     Resized(DeviceSize),
     /// The backend refused a size for good.
     SizeRefused(DeviceSize),
+    /// The owner sent a restore.
+    RestoreSent,
+    /// The restore's send failed: the hold goes back to what it was.
+    RestoreWithdrawn(SurfaceHold),
     /// The backend no longer presents to the window's surface.
     SurfaceDropped,
     /// The backend took a restored surface.
@@ -148,6 +157,16 @@ impl SlotSurface {
                     size
                 },
             },
+            SurfaceEvent::RestoreSent => Self {
+                hold: SurfaceHold::Restoring,
+                size,
+            },
+            SurfaceEvent::RestoreWithdrawn(before) if hold == SurfaceHold::Restoring => {
+                Self { hold: before, size }
+            }
+            SurfaceEvent::RestoreWithdrawn(_) => self,
+            // The restore on its way replaces the dropped surface.
+            SurfaceEvent::SurfaceDropped if hold == SurfaceHold::Restoring => self,
             SurfaceEvent::SurfaceDropped | SurfaceEvent::RestorePanicked => Self {
                 hold: SurfaceHold::Wanted,
                 size,
@@ -196,8 +215,8 @@ mod tests {
     fn every_transition_of_the_table() {
         use SlotSize::{Applied, Pending, Refused, Unsized};
         use SurfaceEvent as E;
-        use SurfaceHold::{Held, Refused as Gone, Wanted};
-        let rows: [(SlotSurface, SurfaceEvent, SlotSurface); 22] = [
+        use SurfaceHold::{Held, Refused as Gone, Restoring, Wanted};
+        let rows: [(SlotSurface, SurfaceEvent, SlotSurface); 27] = [
             // A size sent replaces whatever the newest was.
             (
                 state(Held, Unsized),
@@ -241,6 +260,31 @@ mod tests {
                 state(Held, Applied(S)),
             ),
             // The surface's own events leave the size alone.
+            (
+                state(Wanted, Applied(S)),
+                E::RestoreSent,
+                state(Restoring, Applied(S)),
+            ),
+            (
+                state(Gone, Applied(S)),
+                E::RestoreSent,
+                state(Restoring, Applied(S)),
+            ),
+            (
+                state(Restoring, Applied(S)),
+                E::SurfaceDropped,
+                state(Restoring, Applied(S)),
+            ),
+            (
+                state(Restoring, Pending(T)),
+                E::Restored,
+                state(Held, Pending(T)),
+            ),
+            (
+                state(Restoring, Applied(S)),
+                E::RestoreWithdrawn(Wanted),
+                state(Wanted, Applied(S)),
+            ),
             (
                 state(Held, Applied(S)),
                 E::SurfaceDropped,

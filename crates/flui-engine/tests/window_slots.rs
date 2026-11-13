@@ -360,13 +360,17 @@ fn a_restore_keeps_the_barrier_of_a_refused_size() {
 }
 
 /// A [`ScriptedSlots`] whose next render sends a restore through the owner's
-/// sender before it answers, as an owner woken inside the frame would.
-struct RestoresDuringRender {
+/// sender before it answers, and whose next resize sends sizes, as an owner
+/// woken inside the frame or the resize would.
+struct ReentersOwner {
     inner: ScriptedSlots,
     restore: std::rc::Rc<std::cell::RefCell<Option<(RasterSender, UnconfiguredSurface)>>>,
+    /// Sizes the next resize sends through the owner's sender before it
+    /// answers.
+    resizes: std::rc::Rc<std::cell::RefCell<Vec<(RasterSender, SlotChange)>>>,
 }
 
-impl flui_engine::SlotBackend for RestoresDuringRender {
+impl flui_engine::SlotBackend for ReentersOwner {
     fn attach(
         &mut self,
         slot: SlotId,
@@ -377,6 +381,12 @@ impl flui_engine::SlotBackend for RestoresDuringRender {
     }
 
     fn resize(&mut self, slot: SlotId, size: DeviceSize) -> flui_engine::EngineResult<()> {
+        let queued = std::mem::take(&mut *self.resizes.borrow_mut());
+        for (sender, change) in queued {
+            let _receipt = sender
+                .send(RasterCommand::Configure { slot, change })
+                .expect("accepted");
+        }
         self.inner.resize(slot, size)
     }
 
@@ -462,9 +472,10 @@ impl flui_engine::SlotBackend for RestoresDuringRender {
 fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
     let inner = ScriptedSlots::new();
     let restore = std::rc::Rc::new(std::cell::RefCell::new(None));
-    let backend = RestoresDuringRender {
+    let backend = ReentersOwner {
         inner: inner.clone(),
         restore: std::rc::Rc::clone(&restore),
+        resizes: std::rc::Rc::default(),
     };
     let (executor, sender) = RasterExecutor::new(
         backend,
@@ -690,6 +701,12 @@ fn a_restore_over_the_size_limit_keeps_its_surface() {
         rig.sender.take_failure(slot),
         Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
     ));
+    // A frame stamped with the newest generation is laid out for the refused
+    // size: it settles stale, not drawn on an unconfigured surface.
+    let required = rig.sender.record(slot).expect("held").required_generation;
+    let _ = rig.frame(slot, required, 9);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(9, RasterVerdict::SurfaceStale)]);
     let SendReceipt::Configured(resized) = rig.send(RasterCommand::Configure {
         slot,
         change: SlotChange::Size(DeviceSize::new(16, 8)),
@@ -726,6 +743,12 @@ fn a_window_over_the_rebuilt_device_limit_waits_for_a_size_that_fits() {
         rig.sender.take_failure(slot),
         Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
     ));
+    // A frame stamped with the newest generation is laid out for the refused
+    // size: it settles stale, not drawn on an unconfigured surface.
+    let required = rig.sender.record(slot).expect("held").required_generation;
+    let _ = rig.frame(slot, required, 9);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(9, RasterVerdict::SurfaceStale)]);
     let SendReceipt::Configured(resized) = rig.send(RasterCommand::Configure {
         slot,
         change: SlotChange::Size(DeviceSize::new(16, 8)),
@@ -872,6 +895,8 @@ enum Step {
     Resize(ScriptedAnswer),
     /// A frame whose render needs a new surface, which the turn drops.
     DropSurface,
+    /// The owner sends a surface, and the executor has not turned since.
+    SendRestore,
     /// The owner restores a surface, which the backend answers this way.
     Restore(ScriptedAnswer),
     /// The device is lost; its rebuild refuses the slot with this error, if
@@ -887,7 +912,7 @@ enum Step {
 #[test]
 fn each_surface_event_reaches_the_record() {
     use SlotSize::{Applied, Pending, Refused};
-    use Step::{DropSurface, LoseDevice, Resize, Restore, Size, Turn};
+    use Step::{DropSurface, LoseDevice, Resize, Restore, SendRestore, Size, Turn};
     let sized = DeviceSize::new(32, 16);
     let wide = DeviceSize::new(64, 32);
     let over = |size: DeviceSize| EngineError::InvalidTargetSize {
@@ -945,6 +970,18 @@ fn each_surface_event_reaches_the_record() {
             "a dropped surface",
             vec![DropSurface],
             SurfaceHold::Wanted,
+            Applied(sized),
+        ),
+        (
+            "a restore on its way",
+            vec![DropSurface, SendRestore],
+            SurfaceHold::Restoring,
+            Applied(sized),
+        ),
+        (
+            "a restore on its way, taken",
+            vec![DropSurface, SendRestore, Turn],
+            SurfaceHold::Held,
             Applied(sized),
         ),
         (
@@ -1081,6 +1118,12 @@ fn each_surface_event_reaches_the_record() {
                         rig.backend.refuse_on_rebuild(slot, error);
                     }
                 }
+                SendRestore => {
+                    let _ = rig.send(RasterCommand::Restore {
+                        slot,
+                        surface: rig.surface(),
+                    });
+                }
                 Turn => turn_contained(&mut rig),
             }
         }
@@ -1100,4 +1143,100 @@ fn turn_contained(rig: &mut Rig) {
     if let Some(payload) = caught.into_payload() {
         flui_foundation::panic::discard_payload(payload);
     }
+}
+
+/// The backend's answer to a resize is matched to the size sent by its
+/// generation, not by its value: when the owner sends another size and then
+/// the same one again while the resize runs, the answer is to the older send,
+/// and the newest generation is applied by the next turn instead of being
+/// left unauthorised behind a size the record calls applied.
+///
+/// Red-check: let any answer for the pending size apply it, and the frame
+/// stamped with the required generation settles `SurfaceStale`.
+#[test]
+fn a_resize_answer_is_matched_to_its_send_by_generation() {
+    let resizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let backend = ReentersOwner {
+        inner: ScriptedSlots::new(),
+        restore: std::rc::Rc::default(),
+        resizes: std::rc::Rc::clone(&resizes),
+    };
+    let (mut executor, sender) = RasterExecutor::new(
+        backend,
+        std::rc::Rc::new(flui_foundation::SystemClock),
+        || {},
+    );
+    let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
+    let factory = noop_surface_factory(display);
+    let slot = sender.mint_slot().expect("a slot id is left");
+    let _ = sender
+        .send(RasterCommand::Attach {
+            slot,
+            address: address(),
+            target: SlotTarget::Window(
+                factory
+                    .create(Arc::new(FakeWindow::new(7)))
+                    .expect("the no-op backend makes a surface for any window"),
+            ),
+            config: SlotConfig::new(),
+        })
+        .expect("accepted");
+    let sized = DeviceSize::new(32, 16);
+    let wide = DeviceSize::new(64, 32);
+    let _ = sender
+        .send(RasterCommand::Configure {
+            slot,
+            change: SlotChange::Size(sized),
+        })
+        .expect("accepted");
+    let _ = executor.turn();
+
+    let _ = sender
+        .send(RasterCommand::Configure {
+            slot,
+            change: SlotChange::Size(wide),
+        })
+        .expect("accepted");
+    resizes.borrow_mut().extend([
+        (sender.clone(), SlotChange::Size(sized)),
+        (sender.clone(), SlotChange::Size(wide)),
+    ]);
+    let _ = executor.turn();
+    let record = sender.record(slot).expect("held");
+    assert_eq!(
+        record.surface.size,
+        SlotSize::Pending(wide),
+        "the answer was to the older send"
+    );
+    let mut epoch = FrameEpoch::ZERO;
+    epoch = epoch.next();
+    let _ = sender
+        .send(RasterCommand::Frame {
+            slot,
+            snapshot: SceneSnapshot::new(
+                FrameStamp::new(
+                    address(),
+                    epoch,
+                    record.required_generation,
+                    GpuResourceGeneration::ZERO,
+                ),
+                DamageRegion::Unchanged,
+                Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
+            ),
+        })
+        .expect("accepted");
+    let _ = executor.turn();
+    let mut settled = Vec::new();
+    sender.drain_settlements(slot, &mut settled);
+    assert_eq!(
+        settled
+            .iter()
+            .map(|settlement| settlement.verdict)
+            .collect::<Vec<RasterVerdict>>(),
+        [RasterVerdict::Presented]
+    );
+    assert_eq!(
+        sender.record(slot).expect("held").surface.size,
+        SlotSize::Applied(wide)
+    );
 }

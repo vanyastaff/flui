@@ -645,7 +645,11 @@ impl RasterHost {
         if record.surface.size == SlotSize::Refused(size) {
             return None;
         }
-        if record.surface.hold != SurfaceHold::Held {
+        // A surface on its way is not asked for again.
+        if matches!(
+            record.surface.hold,
+            SurfaceHold::Wanted | SurfaceHold::Refused
+        ) {
             let surface = match placed.surfaces.create(Arc::clone(&slot.surface_target)) {
                 Ok(surface) => surface,
                 Err(error) => {

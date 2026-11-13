@@ -330,15 +330,18 @@ one state, `SlotSurface { hold: SurfaceHold, size: SlotSize }`, which changes on
 transition function under the inbox lock and which `SlotRecord::surface` publishes; the owner
 decides from it (a new surface, another size, nothing until the window changes), and a failure the
 slot holds is only what it reports. `SurfaceHold` is `Held`, `Wanted` (the slot dropped its
-surface) or `Refused` (the newest `Restore` was refused); `SlotSize` is `Unsized`, `Pending`,
-`Applied` or `Refused`. A minted size is `Pending`; the backend's answer to it makes it `Applied`,
-or `Refused` when the backend always refuses it, and leaves it `Pending` when it refuses it for now
-(an error whose `Recoverability` is `Recoverable`) or the resize panics, so the next turn retries
-it. A `Refused` size is not retried: the slot keeps its previous configuration, frames stamped
-with that generation settle `SurfaceStale`, and the executor warns once for that size until the
-owner sends another one. A size that is not settled (`Pending` or `Refused`) is a barrier for
-every newer generation: neither a lost surface nor a `Restore` authorises frames laid out for a
-size the slot does not have. The transition table is in `raster_executor/surface.rs`, and
+surface), `Restoring` (a `Restore` is sent and not answered, so the owner sends no second one) or
+`Refused` (the newest `Restore` was refused); `SlotSize` is `Unsized`, `Pending`, `Applied` or
+`Refused`. A minted size is `Pending`; the backend's answer to it counts only while no size was
+minted since the one it answers, matched by generation, not by value. It makes the size
+`Applied`, or `Refused` when the size is past the device's limit (`InvalidTargetSize` naming it),
+and leaves it `Pending` on any other error or a panic, so the next turn retries it. A `Refused`
+size is not retried: the slot keeps its previous configuration, frames stamped with that
+generation settle `SurfaceStale`, and the executor warns once for that size until the owner sends
+another one or a rebuilt device answers it. A size that is not settled (`Pending` or `Refused`) is
+a barrier for every newer generation, and a restore or a rebuild authorises its generation only
+after the backend's answer is in the state: neither a lost surface, a `Restore` nor a rebuild that
+cannot configure the size authorises frames laid out for a size the slot does not have. The transition table is in `raster_executor/surface.rs`, and
 `window_slots::each_surface_event_reaches_the_record` drives each row through the executor.
 `GpuResourceGeneration`, `FrameStamp::gpu_resource_generation`,
 `RasterHandle::bind_gpu_resource_generation` (`raster_owner.rs:954`) and

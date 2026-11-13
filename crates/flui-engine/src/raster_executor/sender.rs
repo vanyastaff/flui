@@ -464,17 +464,19 @@ impl RasterSender {
         };
         // Minted before the send, so the owner stamps its next frame with it,
         // and taken back if the send fails, unless something minted since.
-        let (previous, generation) = {
+        let (previous, generation, hold) = {
             let mut state = inbox.lock();
             if !state.phase.takes_commands() {
                 drop(state);
                 return Err(self.refusal(RasterCommand::Restore { slot, surface }));
             }
             let previous = state.generation;
+            let hold = state.surface.hold;
+            state.surface = state.surface.on(SurfaceEvent::RestoreSent);
             if previous != SurfaceGeneration::ZERO {
                 state.generation = previous.next();
             }
-            (previous, state.generation)
+            (previous, state.generation, hold)
         };
         let sent = self.shared.send_lifecycle(Lifecycle::Restore {
             slot,
@@ -489,6 +491,7 @@ impl RasterSender {
                 if state.generation == generation {
                     state.generation = previous;
                 }
+                state.surface = state.surface.on(SurfaceEvent::RestoreWithdrawn(hold));
                 Err(error)
             }
         }

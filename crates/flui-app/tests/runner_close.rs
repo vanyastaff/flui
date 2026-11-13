@@ -1055,6 +1055,49 @@ pub(crate) fn a_window_past_the_device_limit_waits_for_a_size_it_takes() {
     join_ok_after_close(started);
 }
 
+/// A rebuilt device whose limit is under the window's size keeps the
+/// window's surface and draws nothing at that size, with no retry armed,
+/// until the window takes a size that fits.
+pub(crate) fn a_window_over_the_rebuilt_device_limit_waits_for_a_size_it_takes() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.window.simulate_resize(1000.0, 800.0);
+    started.run.run_owner_turn();
+    let presented = started.renderer.frames_presented();
+    started.renderer.limit_size(700);
+    started.renderer.lose_device();
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    for _ in 0..8 {
+        let Some(deadline) = started.run.wake_deadline() else {
+            break;
+        };
+        wake_at(&started, deadline);
+    }
+    assert_eq!(
+        started.renderer.recovery_attempts(),
+        1,
+        "the device was rebuilt"
+    );
+    assert_eq!(
+        started.renderer.frames_presented(),
+        presented,
+        "nothing is drawn at the size the rebuilt device refused"
+    );
+    assert_eq!(
+        started.run.wake_deadline(),
+        None,
+        "no retry of the refused size is armed"
+    );
+    started.window.simulate_resize(640.0, 480.0);
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "a size the rebuilt device takes draws again"
+    );
+    join_ok_after_close(started);
+}
+
 /// A size a lost device refused is tried again once the device is rebuilt,
 /// since the new device may take it, without waiting for a resize: whether
 /// the window saw the device lost (a rebuild failed first) or the loss and
@@ -1344,6 +1387,10 @@ fn runner_close() {
             (
                 "a_new_surface_refused_at_the_old_size_draws_at_the_new_one",
                 a_new_surface_refused_at_the_old_size_draws_at_the_new_one,
+            ),
+            (
+                "a_window_over_the_rebuilt_device_limit_waits_for_a_size_it_takes",
+                a_window_over_the_rebuilt_device_limit_waits_for_a_size_it_takes,
             ),
         ],
     );
