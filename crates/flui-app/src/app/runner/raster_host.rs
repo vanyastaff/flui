@@ -811,6 +811,11 @@ impl RasterHost {
             .iter()
             .find(|settlement| settlement.epoch == epoch)
             .map(|settlement| settlement.verdict);
+        if settled == Some(RasterVerdict::Presented) {
+            // A size refusal of this turn (a restore configured at the old
+            // size) did not stop the frame: the size it was drawn at is taken.
+            slot.refused_size = None;
+        }
         if turned == SlotTurn::Panicked {
             let verdict = match settled {
                 // The render itself panicked, which the executor settles as

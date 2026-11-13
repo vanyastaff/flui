@@ -603,7 +603,12 @@ impl<B: SlotBackend> RasterExecutor<B> {
             Some(Err(error)) => {
                 let extra = {
                     let mut state = held.inbox.lock();
-                    state.surface_refused = true;
+                    // A size over the device's limit keeps the surface, as
+                    // after a rebuild: the slot waits for a size that fits,
+                    // not for another surface.
+                    let kept = matches!(error, EngineError::InvalidTargetSize { .. });
+                    state.wants_surface = !kept;
+                    state.surface_refused = !kept;
                     state.hold_failure(SlotFailure::Refused(error))
                 };
                 retire(None, extra, first);
@@ -615,7 +620,12 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     first,
                 );
             }
-            None => hold_panic(&held.inbox, caught, first),
+            None => {
+                // The newest restore was not refused: the slot still wants
+                // a surface, and the owner's next one is asked for anew.
+                held.inbox.lock().surface_refused = false;
+                hold_panic(&held.inbox, caught, first);
+            }
         }
     }
 

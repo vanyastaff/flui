@@ -203,7 +203,10 @@ pub struct GpuBootstrap {
   the factory and the context share one instance. The executor makes no surface either: a
   window surface still lost after a reconfigure is dropped, the frame answers
   `EngineError::SurfaceReplacementNeeded`, and the slot's record says it wants a surface
-  (`SlotRecord::wants_surface`) until the owner sends one in a `Restore`.
+  (`SlotRecord::wants_surface`) until the owner sends one in a `Restore`. A `Restore` the backend
+  cannot use is named by `SlotRecord::surface_refused`, so the owner tells it from a surface
+  dropped after one it took, and stops retrying that frame; one over the device's size limit
+  keeps its surface, as after a rebuild, and waits for a size that fits.
 - **The bootstrap runs ADR-0244 decision 1's probe once**, over the first window when there is
   one: each backend attempt in its own instance, the winning instance kept by both the factory
   and the context. It is `async`; native runners block on it once at startup, and the web runner

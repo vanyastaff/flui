@@ -46,8 +46,11 @@ pub trait SlotBackend {
     /// Give window slot `slot` a new surface, configured at its size.
     ///
     /// # Errors
-    /// The surface cannot be used (the adapter cannot present to it, it
-    /// cannot be configured); the slot stays released.
+    /// [`EngineError::InvalidTargetSize`](crate::EngineError::InvalidTargetSize)
+    /// when the slot's size is over the device's limit: the surface is kept,
+    /// unconfigured, until a resize fits. Any other error: the surface cannot
+    /// be used (the adapter cannot present to it, it cannot be configured),
+    /// and the slot stays released.
     fn restore(&mut self, slot: SlotId, surface: UnconfiguredSurface) -> EngineResult<()>;
 
     /// Window slot `slot`'s display now reports `color`.
