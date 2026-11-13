@@ -62,12 +62,12 @@ impl MountedProbe {
             builds,
         }
     }
-    fn pump(&mut self) {
+    fn run_builds(&mut self) {
         self.owner.build_scope(&mut self.tree);
     }
-    fn pump_and_check(&mut self) {
+    fn run_builds_and_check(&mut self) {
         let before = self.builds.get();
-        self.pump();
+        self.run_builds();
         assert!(
             self.builds.get() > before,
             "accepted wake must rebuild its actual mounted element"
@@ -157,9 +157,9 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
             .set_value(0.0)
             .expect("no build is running");
     }
-    forward.pump();
+    forward.run_builds();
     for probe in &mut fanout {
-        probe.pump();
+        probe.run_builds();
     }
     let front = handle
         .shared
@@ -195,15 +195,15 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
         "every scaffold delivery attempted after a failure"
     );
     armed.store(false, Ordering::SeqCst);
-    forward.pump_and_check();
+    forward.run_builds_and_check();
     for probe in &mut fanout {
-        probe.pump_and_check();
+        probe.run_builds_and_check();
     }
     handle.remove_current_snack_bar();
     assert_eq!(next.get(), Some(SnackBarClosedReason::Remove));
     assert!(handle.shared.queue.borrow().is_empty());
     for probe in &mut fanout {
-        probe.pump_and_check();
+        probe.run_builds_and_check();
     }
     let fresh = Rc::new(Cell::new(false));
     let seen = Rc::clone(&fresh);
