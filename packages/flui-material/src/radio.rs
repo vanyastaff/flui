@@ -100,9 +100,10 @@ use flui_sdk::painting::Canvas;
 use flui_sdk::painting::Color;
 use flui_sdk::painting::Paint;
 use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
-    WidgetStatesController,
+    CustomPaint, CustomPainter, SemanticsRole, Toggled, WidgetState, WidgetStateProperty,
+    WidgetStates, WidgetStatesController,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -324,7 +325,15 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
             .shape(MaterialShape::Stadium)
             .overlay_color(overlay_color)
             .states_controller(self.states.clone())
-            .focus_indicator(FocusIndicator::Halo);
+            .focus_indicator(FocusIndicator::Halo)
+            // Flutter's `Semantics(checked: …, inMutuallyExclusiveGroup: true,
+            // enabled: …)` around the radio: the well's node is that one node,
+            // enabled while the well has its tap.
+            .description(
+                Description::new(SemanticsRole::RadioButton)
+                    .identifier(view.identifier.clone())
+                    .toggled(Toggled::from_bool(selected)),
+            );
         if interactive {
             ink_well = ink_well.on_tap(move |ctx| {
                 if selected {
@@ -336,10 +345,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
             });
         }
 
-        crate::button_style_button::identified(Semantics::new(), view.identifier.as_ref())
-            .radio(selected)
-            .enabled(interactive)
-            .child(ink_well)
+        ink_well
     }
 
     fn dispose(&mut self) {
