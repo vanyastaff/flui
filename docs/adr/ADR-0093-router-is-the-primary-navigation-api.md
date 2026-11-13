@@ -34,7 +34,7 @@ restoration:
 
 | What | Where | Users |
 |:--|:--|:--|
-| String-named routes (ADR-0024): `route`, `on_generate_route`, `on_unknown_route`, seven `*_named*` doors, `push_keyed`, `RouteKey<T>`, `RouteArguments` | `crates/flui-widgets/src/navigator/named_route.rs`, `navigator.rs` | none outside `flui-widgets`: its tests and `widgets_app.rs`'s docs |
+| String-named routes (ADR-0024): `route`, `on_generate_route`, `on_unknown_route`, seven `*_named*` doors, `push_keyed`, `RouteKey<T>`, `RouteArguments` | the `named_route` and `navigator` modules of `crates/flui-widgets/src/navigator/` | none outside `flui-widgets`: its tests and `widgets_app.rs`'s docs |
 | Imperative pushes on `NavigatorHandle` (ADR-0019): `push`, `pop_with`, `remove_route`, `maybe_pop`, …, found from `build` through `maybe_of`/`maybe_of_root` | `crates/flui-widgets/src/navigator/navigator.rs` (38 `pub fn`) | `show_dialog`, popup menus, `OpenContainer`, Material's back button and app bar |
 | The typed `Router<R>` with `#[derive(Routable)]` | `crates/flui-widgets/src/router/`, `crates/flui-macros/src/derive_routable.rs` | the acceptance app (`tests/fixtures/acceptance_app/app.rs`: `Router::from_stack`, `WidgetsApp::router`) |
 

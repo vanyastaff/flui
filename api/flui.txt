@@ -17653,7 +17653,6 @@ impl core::fmt::Debug for flui::prelude::NavigatorHandle
 pub fn flui::prelude::NavigatorHandle::add_observer(&self, observer: alloc::rcs::arc::Arc<dyn flui::widgets::NavigatorObserver>)
 pub fn flui::prelude::NavigatorHandle::admits_pages(&self) -> bool
 pub fn flui::prelude::NavigatorHandle::can_pop(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::clear_routes(&self)
 pub fn flui::prelude::NavigatorHandle::current(&self) -> Option<flui::widgets::RouteId>
 pub fn flui::prelude::NavigatorHandle::did_start_user_gesture(&self)
 pub fn flui::prelude::NavigatorHandle::did_stop_user_gesture(&self)
@@ -17664,28 +17663,16 @@ pub fn flui::prelude::NavigatorHandle::maybe_of_root(ctx: &dyn flui::app::BuildC
 pub fn flui::prelude::NavigatorHandle::maybe_pop(&self) -> bool
 pub fn flui::prelude::NavigatorHandle::maybe_pop_with<T: 'static>(&self, result: T) -> bool
 pub fn flui::prelude::NavigatorHandle::new() -> Self
-pub fn flui::prelude::NavigatorHandle::on_generate_route(&self, factory: impl Fn(&flui::widgets::RouteRequest<'_>) -> Option<flui::widgets::GeneratedRoute> + 'static)
-pub fn flui::prelude::NavigatorHandle::on_unknown_route(&self, factory: impl Fn(&flui::widgets::RouteRequest<'_>) -> Option<flui::widgets::GeneratedRoute> + 'static)
 pub fn flui::prelude::NavigatorHandle::pop(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::pop_and_push_named(&self, request: impl Into<flui::widgets::RouteSettings>) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::pop_and_push_named_with<TO: 'static>(&self, request: impl Into<flui::widgets::RouteSettings>, result: TO) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
 pub fn flui::prelude::NavigatorHandle::pop_until(&self, keep: impl FnMut(flui::widgets::RouteId) -> bool)
 pub fn flui::prelude::NavigatorHandle::pop_with<T: 'static>(&self, result: T) -> bool
 pub fn flui::prelude::NavigatorHandle::push<R: flui::widgets::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
 pub fn flui::prelude::NavigatorHandle::push_and_remove_until<R: flui::widgets::NavigatorRoute>(&self, route: R, keep: impl FnMut(flui::widgets::RouteId) -> bool) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::push_keyed<T: 'static>(&self, request: impl Into<flui::widgets::KeyedSettings<T>>) -> Result<flui::widgets::RouteResult<T>, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_named(&self, request: impl Into<flui::widgets::RouteSettings>) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_named_and_remove_until(&self, request: impl Into<flui::widgets::RouteSettings>, keep: impl FnMut(flui::widgets::RouteId) -> bool) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_named_typed<T: 'static>(&self, request: impl Into<flui::widgets::RouteSettings>) -> Result<flui::widgets::RouteResult<T>, flui::widgets::NamedRouteError>
 pub fn flui::prelude::NavigatorHandle::push_replacement<R: flui::widgets::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::push_replacement_named(&self, request: impl Into<flui::widgets::RouteSettings>) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_replacement_named_with<TO: 'static>(&self, request: impl Into<flui::widgets::RouteSettings>, result: TO) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
 pub fn flui::prelude::NavigatorHandle::push_replacement_with<R: flui::widgets::NavigatorRoute, T: 'static>(&self, route: R, result: T) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
 pub fn flui::prelude::NavigatorHandle::remove_route(&self, id: flui::widgets::RouteId) -> bool
 pub fn flui::prelude::NavigatorHandle::remove_route_with<T: 'static>(&self, id: flui::widgets::RouteId, result: T) -> bool
-pub fn flui::prelude::NavigatorHandle::route<R, F>(&self, name: impl Into<String>, factory: F) where R: flui::widgets::NavigatorRoute, F: Fn(&flui::widgets::RouteRequest<'_>) -> Option<R> + 'static
 pub fn flui::prelude::NavigatorHandle::route_ids(&self) -> Vec<flui::widgets::RouteId>
-pub fn flui::prelude::NavigatorHandle::route_keyed<T, R, F>(&self, key: flui::widgets::RouteKey<T>, factory: F) where R: flui::widgets::NavigatorRoute + flui::widgets::Route<Output = T>, F: Fn(&flui::widgets::RouteRequest<'_>) -> Option<R> + 'static
 pub fn flui::prelude::NavigatorHandle::seed_initial<R: flui::widgets::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
 pub fn flui::prelude::NavigatorHandle::user_gesture_in_progress(&self) -> bool
 pub struct flui::prelude::NextFocusAction { .. }
@@ -26945,10 +26932,6 @@ reexport flui::widgets::FractionalTranslation => flui::prelude::FractionalTransl
 reexport flui::widgets::FractionallySizedBox => flui::prelude::FractionallySizedBox
 reexport flui::widgets::FutureBuilder => flui::prelude::FutureBuilder
 pub type flui::widgets::FutureFactory<T, E> = alloc::rcs::rc::Rc<dyn Fn() -> flui::widgets::BoxedResultFuture<T, E>>
-pub struct flui::widgets::GeneratedRoute { .. }
-impl Drop for flui::widgets::GeneratedRoute
-impl core::fmt::Debug for flui::widgets::GeneratedRoute
-pub fn flui::widgets::GeneratedRoute::new<R: flui::widgets::NavigatorRoute>(route: R) -> Self
 pub struct flui::widgets::GestureAlternatives { .. }
 impl Clone for flui::widgets::GestureAlternatives
 impl core::fmt::Debug for flui::widgets::GestureAlternatives
@@ -27271,11 +27254,6 @@ impl core::fmt::Display for flui::widgets::InvalidWheelScrollDistance
 impl core::marker::StructuralPartialEq for flui::widgets::InvalidWheelScrollDistance
 variant flui::widgets::InvalidWheelScrollDistance::Character // at 1
 variant flui::widgets::InvalidWheelScrollDistance::Line // at 0
-pub struct flui::widgets::KeyedSettings<T> { .. }
-impl<T> From<flui::widgets::RouteKey<T>> for flui::widgets::KeyedSettings<T>
-impl<T> core::fmt::Debug for flui::widgets::KeyedSettings<T>
-pub fn flui::widgets::KeyedSettings::settings(&self) -> &flui::widgets::RouteSettings // impl<T> flui::widgets::KeyedSettings<T>
-pub fn flui::widgets::KeyedSettings::untyped(self) -> flui::widgets::RouteSettings // impl<T> flui::widgets::KeyedSettings<T>
 #[non_exhaustive] pub enum flui::widgets::KeylineSnap
 impl Clone for flui::widgets::KeylineSnap
 impl Copy for flui::widgets::KeylineSnap
@@ -27407,17 +27385,6 @@ reexport flui::widgets::MultiChildLayoutContext => flui::prelude::MultiChildLayo
 reexport flui::widgets::MultiChildLayoutDelegate => flui::prelude::MultiChildLayoutDelegate
 reexport flui::widgets::MultiTapCount => flui::interaction::MultiTapCount
 reexport flui::widgets::MultiTapCountError => flui::interaction::MultiTapCountError
-#[non_exhaustive] pub enum flui::widgets::NamedRouteError
-impl Clone for flui::widgets::NamedRouteError
-impl Eq for flui::widgets::NamedRouteError
-impl PartialEq for flui::widgets::NamedRouteError
-impl core::error::Error for flui::widgets::NamedRouteError
-impl core::fmt::Debug for flui::widgets::NamedRouteError
-impl core::fmt::Display for flui::widgets::NamedRouteError
-impl core::marker::StructuralPartialEq for flui::widgets::NamedRouteError
-variant flui::widgets::NamedRouteError::NotAddressable { name: String } // at 2
-variant flui::widgets::NamedRouteError::ResultType { name: String, expected: &'static str, actual: &'static str } // at 1
-variant flui::widgets::NamedRouteError::Unresolved { name: String } // at 0
 reexport flui::widgets::Navigator => flui::prelude::Navigator
 pub struct flui::widgets::NavigatorForm;
 impl Clone for flui::widgets::NavigatorForm
@@ -27948,7 +27915,6 @@ fn flui::widgets::Route::vetoes_pop(&self) -> bool { .. }
 fn flui::widgets::Route::will_handle_pop_internally(&self) -> bool { .. }
 type flui::widgets::Route::Output: 'static
 pub type flui::widgets::RouteAnimation = alloc::rcs::rc::Rc<dyn flui::animation::Animation<f64>>
-pub type flui::widgets::RouteArguments = alloc::rcs::arc::Arc<dyn core::any::Any + Send + Sync>
 pub struct flui::widgets::RouteBindingSlot { .. }
 impl Clone for flui::widgets::RouteBindingSlot
 impl Default for flui::widgets::RouteBindingSlot
@@ -27967,18 +27933,6 @@ impl core::fmt::Debug for flui::widgets::RouteId
 impl core::hash::Hash for flui::widgets::RouteId
 impl core::marker::StructuralPartialEq for flui::widgets::RouteId
 pub fn flui::widgets::RouteId::get(self) -> u64
-pub struct flui::widgets::RouteKey<T> { .. }
-impl<T> Clone for flui::widgets::RouteKey<T>
-impl<T> Copy for flui::widgets::RouteKey<T>
-impl<T> Eq for flui::widgets::RouteKey<T>
-impl<T> From<flui::widgets::RouteKey<T>> for flui::widgets::KeyedSettings<T>
-impl<T> PartialEq for flui::widgets::RouteKey<T>
-impl<T> core::fmt::Debug for flui::widgets::RouteKey<T>
-impl<T> core::hash::Hash for flui::widgets::RouteKey<T>
-pub const fn flui::widgets::RouteKey::name(&self) -> &'static str // impl<T> flui::widgets::RouteKey<T>
-pub const fn flui::widgets::RouteKey::new(name: &'static str) -> Self // impl<T> flui::widgets::RouteKey<T>
-pub fn flui::widgets::RouteKey::with_arguments<A: core::any::Any + Send + Sync + 'static>(self, arguments: A) -> flui::widgets::KeyedSettings<T> // impl<T> flui::widgets::RouteKey<T>
-pub fn flui::widgets::RouteKey::with_arguments_shared(self, arguments: flui::widgets::RouteArguments) -> flui::widgets::KeyedSettings<T> // impl<T> flui::widgets::RouteKey<T>
 pub type flui::widgets::RoutePageBuilder = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::app::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation) -> flui::prelude::BoxedView>
 #[non_exhaustive] pub enum flui::widgets::RouteParseError
 impl Clone for flui::widgets::RouteParseError
@@ -27993,13 +27947,6 @@ variant flui::widgets::RouteParseError::Malformed { location: String, reason: &'
 variant flui::widgets::RouteParseError::NoMatch { path: flui::prelude::RoutePath } // at 1
 variant flui::widgets::RouteParseError::Param { path: flui::prelude::RoutePath, field: &'static str, segment: String } // at 2
 reexport flui::widgets::RoutePath => flui::prelude::RoutePath
-pub struct flui::widgets::RouteRequest<'a> { .. }
-impl<'a> Clone for flui::widgets::RouteRequest<'a>
-impl<'a> Copy for flui::widgets::RouteRequest<'a>
-impl<'a> core::fmt::Debug for flui::widgets::RouteRequest<'a>
-pub fn flui::widgets::RouteRequest::argument<T: core::any::Any + Send + Sync + 'static>(&self) -> Option<&'a T> // impl<'a> flui::widgets::RouteRequest<'a>
-pub fn flui::widgets::RouteRequest::name(&self) -> Option<&'a str> // impl<'a> flui::widgets::RouteRequest<'a>
-pub fn flui::widgets::RouteRequest::settings(&self) -> &'a flui::widgets::RouteSettings // impl<'a> flui::widgets::RouteRequest<'a>
 pub struct flui::widgets::RouteResult<T> { .. }
 impl<T: 'static> core::future::future::Future for flui::widgets::RouteResult<T> { type Output = Result<Option<T>, flui::widgets::RouteResultError>; }
 impl<T> core::fmt::Debug for flui::widgets::RouteResult<T>
@@ -28016,18 +27963,13 @@ impl core::fmt::Display for flui::widgets::RouteResultError
 impl core::marker::StructuralPartialEq for flui::widgets::RouteResultError
 variant flui::widgets::RouteResultError::TypeMismatch { expected: &'static str } // at 0
 #[non_exhaustive] pub struct flui::widgets::RouteSettings
-field flui::widgets::RouteSettings::arguments: Option<flui::widgets::RouteArguments> // at 1
 field flui::widgets::RouteSettings::name: Option<String> // at 0
 impl Clone for flui::widgets::RouteSettings
 impl Default for flui::widgets::RouteSettings
 impl Eq for flui::widgets::RouteSettings
-impl From<&str> for flui::widgets::RouteSettings
-impl From<String> for flui::widgets::RouteSettings
 impl PartialEq for flui::widgets::RouteSettings
 impl core::fmt::Debug for flui::widgets::RouteSettings
-pub fn flui::widgets::RouteSettings::argument<T: core::any::Any + Send + Sync + 'static>(&self) -> Option<&T>
-pub fn flui::widgets::RouteSettings::arguments<T: core::any::Any + Send + Sync + 'static>(self, value: T) -> Self
-pub fn flui::widgets::RouteSettings::arguments_shared(self, arguments: flui::widgets::RouteArguments) -> Self
+impl core::marker::StructuralPartialEq for flui::widgets::RouteSettings
 pub fn flui::widgets::RouteSettings::named(name: impl Into<String>) -> Self
 pub type flui::widgets::RouteTransitionsBuilder = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::app::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation, flui::prelude::BoxedView) -> flui::prelude::BoxedView>
 reexport flui::widgets::Router => flui::prelude::Router
@@ -29201,13 +29143,10 @@ variant flui::widgets::motion::particles::Sprite::Star // at 2
 pub mod flui::widgets::navigator
 reexport flui::widgets::navigator::AnimationRunFuture => flui::animation::AnimationRunFuture
 reexport flui::widgets::navigator::FlightDirection => flui::prelude::FlightDirection
-reexport flui::widgets::navigator::GeneratedRoute => flui::widgets::GeneratedRoute
 reexport flui::widgets::navigator::Hero => flui::prelude::Hero
 reexport flui::widgets::navigator::HeroController => flui::prelude::HeroController
 reexport flui::widgets::navigator::HeroControllerScope => flui::widgets::HeroControllerScope
 reexport flui::widgets::navigator::HeroMode => flui::prelude::HeroMode
-reexport flui::widgets::navigator::KeyedSettings => flui::widgets::KeyedSettings
-reexport flui::widgets::navigator::NamedRouteError => flui::widgets::NamedRouteError
 reexport flui::widgets::navigator::Navigator => flui::prelude::Navigator
 reexport flui::widgets::navigator::NavigatorHandle => flui::prelude::NavigatorHandle
 reexport flui::widgets::navigator::NavigatorObserver => flui::widgets::NavigatorObserver
@@ -29223,13 +29162,10 @@ reexport flui::widgets::navigator::PopupRoute => flui::prelude::PopupRoute
 reexport flui::widgets::navigator::PushCompletion => flui::widgets::PushCompletion
 reexport flui::widgets::navigator::Route => flui::widgets::Route
 reexport flui::widgets::navigator::RouteAnimation => flui::widgets::RouteAnimation
-reexport flui::widgets::navigator::RouteArguments => flui::widgets::RouteArguments
 reexport flui::widgets::navigator::RouteBindingSlot => flui::widgets::RouteBindingSlot
 reexport flui::widgets::navigator::RouteContentBuilder => flui::widgets::RouteContentBuilder
 reexport flui::widgets::navigator::RouteId => flui::widgets::RouteId
-reexport flui::widgets::navigator::RouteKey => flui::widgets::RouteKey
 reexport flui::widgets::navigator::RoutePageBuilder => flui::widgets::RoutePageBuilder
-reexport flui::widgets::navigator::RouteRequest => flui::widgets::RouteRequest
 reexport flui::widgets::navigator::RouteResult => flui::widgets::RouteResult
 reexport flui::widgets::navigator::RouteResultError => flui::widgets::RouteResultError
 reexport flui::widgets::navigator::RouteSettings => flui::widgets::RouteSettings

@@ -142,9 +142,8 @@ pub(crate) fn home_is_seeded_once_as_the_root_route() {
 pub(crate) fn builder_only_app_receives_no_routing_and_supplies_the_subtree() {
     // The oracle builds no Navigator when home/routes/onGenerateRoute/
     // onUnknownRoute are all absent; builder receives a null child. Of
-    // those four, only `home` is a knob this shell has — named-route
-    // registration lives on `NavigatorHandle`, and a caller who wants it
-    // supplies the handle through `WidgetsApp::navigator`.
+    // those four, only `home` is a knob this shell has: there are no named
+    // routes (ADR-0093).
     let received_none = Arc::new(Mutex::new(None::<bool>));
     let received = Arc::clone(&received_none);
     let (probe, captured) = capture(|_ctx| true);

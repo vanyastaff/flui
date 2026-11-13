@@ -38,22 +38,10 @@
 //!   preferred languages, unless [`locale`](WidgetsApp::locale) is set.
 //!   An unavailable host observation falls back to the first supported locale.
 //!   Native observation availability depends on the backend.
-//! - **Named-route table, at the *app* level.** The mechanism
-//!   itself exists — [`route`](NavigatorHandle::route),
-//!   [`on_generate_route`](NavigatorHandle::on_generate_route) and
-//!   [`on_unknown_route`](NavigatorHandle::on_unknown_route) carry the
-//!   `routes` map and its two hooks, and
-//!   [`push_named`](NavigatorHandle::push_named) and its five siblings drive
-//!   them (ADR-0024). What this shell does not yet do is *forward* them: there
-//!   is no `WidgetsApp::routes(..)` folding `home` + a table + a user generator
-//!   into one hook, so an app
-//!   registers on the handle it hands to [`WidgetsApp::navigator`]. When that
-//!   forwarding lands, the reconciliation contract is already fixed: the app
-//!   builder replaces the table wholesale at mount, and the handle mutators
-//!   serve imperative or late registration (`ARCHITECTURE.md`,
-//!   `## Mapping decisions`). New code roots the app in a typed
-//!   [`Router`] with [`WidgetsApp::router`] instead (ADR-0093); the
-//!   navigator form stays for code that has not moved.
+//! - **Routes by name.** There is no `routes` table, `onGenerateRoute` or
+//!   `onUnknownRoute`: an application that navigates roots itself in a typed
+//!   [`Router`] with [`WidgetsApp::router`], whose route values carry their
+//!   paths (ADR-0093). The navigator form stays for code that has not moved.
 //! - **Restoration scope, `SharedAppData`, `NavigationNotification`,
 //!   shortcut/action overrides, performance overlay, debug banner.** Each
 //!   depends on infrastructure FLUI has not built (state restoration,
@@ -403,11 +391,8 @@ impl<F: AppForm> WidgetsApp<F> {
 pub struct WidgetsAppState {
     /// `None` in the builder-only form (no navigator at all) until an update introduces routing.
     ///
-    /// Only `home` and a caller-supplied handle give the shell a navigator:
-    /// it has no named-route table or route-generator hooks of its own to
-    /// consult (the module docs say why), so a handle whose *named* routes
-    /// are registered directly must be handed in through
-    /// [`WidgetsApp::navigator`] to make this `Some`.
+    /// Only `home` and a caller-supplied handle given through
+    /// [`WidgetsApp::navigator`] give the shell a navigator.
     navigator: Option<NavigatorHandle>,
     /// The seeded home route and the live cell its content builder reads —
     /// `did_update_view` writes the current view's `home` into the cell and

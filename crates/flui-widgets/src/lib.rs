@@ -263,12 +263,11 @@ pub use form::{
     FormState, RawTextFormField, RawTextFormFieldState,
 };
 pub use navigator::{
-    AnimationRunFuture, FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope,
-    HeroMode, KeyedSettings, NamedRouteError, Navigator, NavigatorHandle, NavigatorObserver,
-    NavigatorRoute, NavigatorState, PageRoute, PageTransitionBuilder, PageTransitions,
-    ParallaxPageTransition, PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route,
-    RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder, RouteId, RouteKey,
-    RoutePageBuilder, RouteRequest, RouteResult, RouteResultError, RouteSettings,
+    AnimationRunFuture, FlightDirection, Hero, HeroController, HeroControllerScope, HeroMode,
+    Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageRoute,
+    PageTransitionBuilder, PageTransitions, ParallaxPageTransition, PopInvokedCallback, PopScope,
+    PopupRoute, PushCompletion, Route, RouteAnimation, RouteBindingSlot, RouteContentBuilder,
+    RouteId, RoutePageBuilder, RouteResult, RouteResultError, RouteSettings,
     RouteTransitionsBuilder, RunCanceled, SimpleRoute,
 };
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it

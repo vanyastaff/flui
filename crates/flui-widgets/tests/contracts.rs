@@ -47,7 +47,7 @@ fn window_chrome() {
     );
 }
 
-/// Navigator failure paths: panicking hooks and factories, mismatched result types,
+/// Navigator failure paths: panicking hooks, mismatched result types,
 /// undeliverable results, and every re-entrant push or observer callback that must not
 /// deadlock the history lock.
 #[test]
@@ -57,14 +57,10 @@ fn navigator_failure_containment_and_reentrancy() {
         &[
             ("navigator::a_panicking_route_hook_leaves_the_navigator_usable", crate::navigator::a_panicking_route_hook_leaves_the_navigator_usable as fn()),
             ("navigator::navigator_of_then_push_from_a_route_build_does_not_deadlock", crate::navigator::navigator_of_then_push_from_a_route_build_does_not_deadlock),
-            ("navigator_public::a_factory_that_panics_after_the_result_is_erased_loses_only_the_report", crate::navigator_public::a_factory_that_panics_after_the_result_is_erased_loses_only_the_report),
-            ("navigator_public::a_factory_that_pushes_re_entrantly_does_not_deadlock", crate::navigator_public::a_factory_that_pushes_re_entrantly_does_not_deadlock),
             ("navigator_public::a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock", crate::navigator_public::a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock),
             ("navigator_public::every_operation_that_cannot_deliver_a_result_reports_it", crate::navigator_public::every_operation_that_cannot_deliver_a_result_reports_it),
             ("navigator_public::delivered_route_results_remain_completed", crate::navigator_public::delivered_route_results_remain_completed),
             ("navigator_public::explicit_finish_commits_an_authored_page_and_retires_the_old_route", crate::navigator_public::explicit_finish_commits_an_authored_page_and_retires_the_old_route),
-            ("navigator_public::push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing", crate::navigator_public::push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing),
-            ("navigator_public::a_route_key_carries_its_result_type_from_registration_to_delivery", crate::navigator_public::a_route_key_carries_its_result_type_from_registration_to_delivery),
             ("hero_controller::a_hero_controller_does_not_deadlock_the_observer_callback", crate::hero_controller::a_hero_controller_does_not_deadlock_the_observer_callback),
             ("hero_controller::replacing_a_hero_navigator_retires_routes_after_attachment", crate::hero_controller::replacing_a_hero_navigator_retires_routes_after_attachment),
             ("hero_seam::an_observer_may_push_from_did_push_without_deadlocking", crate::hero_seam::an_observer_may_push_from_did_push_without_deadlocking),

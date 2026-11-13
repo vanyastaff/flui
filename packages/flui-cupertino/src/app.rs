@@ -32,7 +32,7 @@
 //!   hero controller, so no explicit scope is needed here.
 //! - **`CupertinoLocalizations`** — FLUI ships no Cupertino resource set
 //!   yet; when one lands its delegate is appended here.
-//! - **`Title`/`color`, named routes/`Router`, restoration, debug overlays**
+//! - **`Title`/`color`, `Router`, restoration, debug overlays**
 //!   — deferred at the `WidgetsApp` layer; see its module docs.
 
 use std::fmt;

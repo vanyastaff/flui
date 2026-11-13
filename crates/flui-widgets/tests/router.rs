@@ -722,17 +722,15 @@ fn a_go_observer_failure_destroys_temporary_route_values() {
 }
 /// A regression in terminal retirement can abort or deadlock, so these rows
 /// run in their own bounded processes rather than the ordinary contract table.
-/// runs in its own bounded process rather than the ordinary contract table.
 #[test]
 fn router_observer_failure_and_terminal_retirement() {
     if let Some(case) = child_process::selected_case() {
         match case.as_str() {
             "replace" => an_observer_failure_destroys_the_replaced_router_value(),
             "go" => a_go_observer_failure_destroys_temporary_route_values(),
-            "terminal-factories" => terminal_named_factory_competition(),
             "terminal-observers" => terminal_observer_competition(),
             "terminal-incoming" => terminal_navigator_during_incoming_unwind(),
-            "terminal-aliases" => terminal_aliases_preserve_healthy_factories(),
+            "terminal-aliases" => terminal_aliases_preserve_healthy_observers(),
             "terminal-router" => terminal_router_config_destroys_factories_after_route_failure(),
             "terminal-route" => terminal_route_result_failure_destroys_later_observer(),
             "terminal-record-waker" => terminal_route_record_destroys_pending_waker(),
@@ -758,7 +756,6 @@ fn router_observer_failure_and_terminal_retirement() {
         &[
             "replace",
             "go",
-            "terminal-factories",
             "terminal-observers",
             "terminal-incoming",
             "terminal-aliases",
@@ -822,37 +819,11 @@ fn assert_terminal_failure(failure: Box<dyn std::any::Any + Send>, expected: &st
     );
     // A fresh owner must remain operational after terminal containment.
     let next = NavigatorHandle::new();
-    let calls = Rc::new(Cell::new(0));
-    let during = Rc::clone(&calls);
-    next.on_generate_route(move |_| {
-        during.set(during.get() + 1);
-        None
-    });
-    assert!(next.push_named("/same").is_err());
-    assert!(next.push_named("/same").is_err());
-    assert_eq!(calls.get(), 2);
-    next.clear_routes();
-}
-
-fn terminal_named_factory_competition() {
-    let navigator = NavigatorHandle::new();
-    let first = TerminalBomb::new("first factory");
-    let first_calls = Rc::clone(&first.calls);
-    let second = TerminalBomb::counting("second factory");
-    let second_calls = Rc::clone(&second.calls);
-    navigator.on_generate_route(move |_| {
-        let _ = &first;
-        None
-    });
-    navigator.on_unknown_route(move |_| {
-        let _ = &second;
-        None
-    });
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(navigator)))
-        .expect_err("the first terminal factory must fail");
-    assert_terminal_failure(failure, "first factory");
-    assert_eq!(first_calls.get(), 1);
-    assert_eq!(second_calls.get(), 1, "the later factory is destroyed too");
+    next.push(SimpleRoute::<()>::new(|_| Text::new("first").boxed()));
+    next.push(SimpleRoute::<()>::new(|_| Text::new("second").boxed()));
+    assert_eq!(next.route_ids().len(), 2);
+    assert!(next.pop());
+    assert_eq!(next.route_ids().len(), 1);
 }
 
 struct TerminalObserver(
@@ -863,6 +834,22 @@ struct TerminalObserver(
     TerminalBomb,
 );
 impl NavigatorObserver for TerminalObserver {}
+
+/// An observer that counts the pushes it is told about, so a test can see
+/// that a surviving owner still delivers to it.
+struct CountingObserver {
+    #[expect(
+        dead_code,
+        reason = "the observer owns this destructor probe without reading it"
+    )]
+    probe: TerminalBomb,
+    pushes: Rc<Cell<usize>>,
+}
+impl NavigatorObserver for CountingObserver {
+    fn did_push(&self, _route: RouteId, _previous: Option<RouteId>) {
+        self.pushes.set(self.pushes.get() + 1);
+    }
+}
 
 #[expect(
     clippy::arc_with_non_send_sync,
@@ -889,61 +876,46 @@ fn terminal_observer_competition() {
 )]
 fn terminal_navigator_during_incoming_unwind() {
     let navigator = NavigatorHandle::new();
-    let factory = TerminalBomb::counting("factory");
-    let factory_calls = Rc::clone(&factory.calls);
-    let observer = TerminalBomb::counting("observer");
-    let observer_calls = Rc::clone(&observer.calls);
-    navigator.on_generate_route(move |_| {
-        let _ = &factory;
-        None
-    });
-    navigator.add_observer(Arc::new(TerminalObserver(observer)));
+    let first = TerminalBomb::counting("first observer");
+    let first_calls = Rc::clone(&first.calls);
+    let second = TerminalBomb::counting("second observer");
+    let second_calls = Rc::clone(&second.calls);
+    navigator.add_observer(Arc::new(TerminalObserver(first)));
+    navigator.add_observer(Arc::new(TerminalObserver(second)));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let _owner = navigator;
         panic!("incoming failure");
     }))
     .expect_err("the incoming failure reaches the caller");
     assert_terminal_failure(failure, "incoming failure");
-    assert_eq!(factory_calls.get(), 1);
-    assert_eq!(observer_calls.get(), 1);
+    assert_eq!(first_calls.get(), 1);
+    assert_eq!(second_calls.get(), 1);
 }
 
-fn terminal_aliases_preserve_healthy_factories() {
+#[expect(
+    clippy::arc_with_non_send_sync,
+    reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
+)]
+fn terminal_aliases_preserve_healthy_observers() {
     let navigator = NavigatorHandle::new();
     let alias = navigator.clone();
-    let first = TerminalBomb::new("healthy factory");
-    first.armed.set(false);
-    let first_calls = Rc::clone(&first.calls);
-    let second = TerminalBomb::new("healthy fallback");
-    second.armed.set(false);
-    let second_calls = Rc::clone(&second.calls);
-    let deliveries = Rc::new(Cell::new(0));
-    let delivered = Rc::clone(&deliveries);
-    navigator.on_generate_route(move |_| {
-        let _ = &first;
-        delivered.set(delivered.get() + 1);
-        None
-    });
-    navigator.on_unknown_route(move |_| {
-        let _ = &second;
-        None
-    });
+    let probe = TerminalBomb::counting("healthy observer");
+    let probe_calls = Rc::clone(&probe.calls);
+    let pushes = Rc::new(Cell::new(0));
+    navigator.add_observer(Arc::new(CountingObserver {
+        probe,
+        pushes: Rc::clone(&pushes),
+    }));
     drop(navigator);
-    assert_eq!(first_calls.get(), 0);
-    assert_eq!(second_calls.get(), 0);
-    assert!(alias.push_named("/retained").is_err());
-    assert_eq!(
-        deliveries.get(),
-        1,
-        "a surviving owner can still invoke its factory"
-    );
+    assert_eq!(probe_calls.get(), 0, "an alias keeps the observer alive");
+    alias.push(SimpleRoute::<()>::new(|_| Text::new("retained").boxed()));
+    assert_eq!(pushes.get(), 1, "a surviving owner still delivers to it");
     drop(alias);
     assert_eq!(
-        first_calls.get(),
+        probe_calls.get(),
         1,
         "healthy final retirement runs normally"
     );
-    assert_eq!(second_calls.get(), 1);
 }
 
 fn terminal_router_config_destroys_factories_after_route_failure() {

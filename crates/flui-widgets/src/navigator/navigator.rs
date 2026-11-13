@@ -31,11 +31,9 @@
 //! behind public `PageRoute` / `PopupRoute`, not public API (nameable only
 //! through the doc-hidden, temporary `__test_access`, ADR-0083 §4).
 //!
-//! Named-route generation *is* here — see the `Named routes` impl block below
-//! and `named_route.rs`. What that feature deliberately leaves out is the
-//! initial-route hierarchy synthesis; `navigator/mod.rs` records why.
+//! There are no named routes: a page with a name is a `Router` route value,
+//! and its location is its name (ADR-0093).
 
-use std::any::{TypeId, type_name};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -60,17 +58,11 @@ use super::hero_controller::HeroController;
 use super::hero_controller_scope::HeroControllerScope;
 use super::history::{DeferredEffect, FlushOutcome, ReplaceTarget, RouteHistory};
 use super::modal_route::ModalHandle;
-use super::named_route::{
-    GeneratedRoute, KeyedSettings, NamedRouteError, PushMode, RouteKey, RouteRegistry,
-    RouteRequest, requested_name,
-};
 use super::observer::{NavigatorObserver, Notification, deliver};
 use super::overlay_route::NavigatorRoute;
 use super::page_transitions::{AdoptedTransitions, PageTransitions};
 use super::result::RouteResult;
-use super::route::{
-    AnyResult, Route, RouteId, RoutePopDisposition, RouteSettings, UndeliveredResult,
-};
+use super::route::{AnyResult, RouteId, RoutePopDisposition, UndeliveredResult};
 use super::subtree::RouteSubtree;
 use crate::{Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 use flui_view::environment::VsyncScope;
@@ -107,13 +99,6 @@ impl RouteReservation {
         self.route
     }
 
-    /// [`reserve`](Self::reserve), carrying `held` (caller-owned values an
-    /// operation keeps across its reservation), and hand both back. A refused
-    /// reservation's unwind destroys `held` (ADR-0281).
-    pub(super) fn reserve_holding<T>(held: T) -> (Self, T) {
-        (Self::reserve(), held)
-    }
-
     pub(super) fn reserve_using(
         route: impl FnOnce() -> RouteId,
         entry: impl FnOnce() -> OverlayEntryId,
@@ -145,11 +130,6 @@ struct NavigatorShared {
     /// behind `Box<dyn ErasedRoute>` inside the history's mutex, so they publish
     /// here instead of being read off the route object (ADR-0019).
     registries: super::lifecycle::Terminal<Rc<RouteRegistries>>,
-
-    /// This navigator's name → route table and its two generator hooks, folded
-    /// into a single resolution path. Owned per navigator, so two navigators
-    /// resolve the same name independently.
-    named_routes: super::lifecycle::Terminal<RouteRegistry>,
 
     /// The clock this navigator's route transitions register with.
     /// Resolved from an ambient `VsyncScope` in `init_state`; `None` when there is
@@ -257,7 +237,6 @@ impl Drop for NavigatorShared {
         let history = self.history.withdraw();
         let overlay = self.overlay.withdraw();
         let registries = self.registries.withdraw();
-        let named = self.named_routes.withdraw();
         let vsync = self.vsync.withdraw();
         let post_frame = super::lifecycle::Terminal::new(self.post_frame.get_mut().take());
         let render_tree = super::lifecycle::Terminal::new(self.render_tree.get_mut().take());
@@ -277,7 +256,6 @@ impl Drop for NavigatorShared {
             history,
             overlay,
             registries,
-            named,
             vsync,
             post_frame,
             render_tree,
@@ -294,6 +272,7 @@ impl Drop for NavigatorShared {
 #[cfg(test)]
 pub(super) fn terminal_binding_authority_is_closed_before_route_retirement() {
     use super::binding::RouteBindingSlot;
+    use super::route::{Route, RouteSettings};
     use std::cell::Cell;
 
     struct ClosingRoute {
@@ -573,7 +552,7 @@ impl NavigatorShared {
     /// # A flush driver drains *both* channels
     ///
     /// This is the third place that runs a flush and releases the guard —
-    /// [`mutate_deferring_report`](Self::mutate_deferring_report) and
+    /// [`mutate_committing`](Self::mutate_committing) and
     /// `NavigatorHandle::push_prepared` are the others. Every such driver owes two
     /// drains, not one: `take_outcome` **and** `take_undelivered`. A flush can
     /// complete a route carrying a `pending_result`, and if the value's type does
@@ -600,7 +579,7 @@ impl NavigatorShared {
             (history.take_outcome(), history.take_undelivered())
         };
         // Same order as every other driver: apply first, then report — see
-        // `mutate_deferring_report`.
+        // `mutate_committing`.
         if let Some(outcome) = outcome {
             self.apply(outcome);
         }
@@ -739,37 +718,17 @@ impl NavigatorShared {
     /// of the log — and a test — can tell *which* operation discarded a value.
     /// Nine sites emitted one indistinguishable message before this.
     fn mutate<R>(&self, operation: &'static str, mutate: impl FnOnce(&mut RouteHistory) -> R) -> R {
-        let (value, undelivered) = self.mutate_deferring_report(mutate);
+        let (value, (), undelivered) = self.mutate_committing(mutate, || ());
         report_undelivered(operation, undelivered);
         value
     }
 
-    /// [`mutate`](Self::mutate) without the report: the undelivered values come
-    /// back for the caller to report once it has no observations left to make.
-    ///
-    /// For an operation **composed of two drains**. `pop_and_push_named` dismisses
-    /// and then pushes, so reporting inside the first drain drops the caller's
-    /// value *before* the operation's own `didPush` — an observer saw the drop's
-    /// events land between one operation's `didPop` and its `didPush`.
-    /// `ARCHITECTURE.md` §5 states the ordering per **operation**, and only a
-    /// composed operation can break it: its single-drain siblings physically
-    /// cannot, which is why the ordering test built on `pop_with` was structurally
-    /// blind to this.
-    ///
-    /// `apply` still runs here. Only the report moves.
-    fn mutate_deferring_report<R>(
-        &self,
-        mutate: impl FnOnce(&mut RouteHistory) -> R,
-    ) -> (R, Vec<UndeliveredResult>) {
-        let (value, (), undelivered) = self.mutate_committing(mutate, || ());
-        (value, undelivered)
-    }
-
-    /// [`mutate_deferring_report`](Self::mutate_deferring_report) with a
-    /// framework-only `commit` between releasing the history lock and applying
-    /// the flushed outcome, so state it publishes is visible to every observer
-    /// and lifecycle hook `apply` reaches. The commit's value is returned, and
-    /// dropped by unwind if `apply` panics.
+    /// [`mutate`](Self::mutate) with a framework-only `commit` between
+    /// releasing the history lock and applying the flushed outcome, so state it
+    /// publishes is visible to every observer and lifecycle hook `apply`
+    /// reaches. The commit's value is returned, and dropped by unwind if
+    /// `apply` panics. The undelivered values come back for the caller to
+    /// report once it has no observations left to make.
     fn mutate_committing<R, C>(
         &self,
         mutate: impl FnOnce(&mut RouteHistory) -> R,
@@ -908,7 +867,6 @@ impl NavigatorHandle {
             overlay: super::lifecycle::Terminal::new(OverlayHandle::new()),
             vsync: super::lifecycle::Terminal::new(Rc::new(RefCell::new(None))),
             registries: super::lifecycle::Terminal::new(Rc::new(RouteRegistries::new())),
-            named_routes: super::lifecycle::Terminal::new(RouteRegistry::default()),
             post_frame: Mutex::new(None),
             render_tree: Mutex::new(None),
             observers: Mutex::new(Vec::new()),
@@ -1201,12 +1159,10 @@ impl NavigatorHandle {
 
     /// [`push`](Self::push), also handing back the [`RouteId`] it minted.
     ///
-    /// `pub(super)` because the named-route path returns that id to its caller
-    /// (`push_named` and friends answer `Result<RouteId, _>`), and the id is
-    /// minted inside `push_prepared` — reading it back off
+    /// The id is minted inside `push_prepared`, so reading it back off
     /// [`current`](Self::current) afterwards would be inferring a fact the push
     /// already knows.
-    pub(super) fn push_reporting_id<R: NavigatorRoute>(
+    fn push_reporting_id<R: NavigatorRoute>(
         &self,
         route: R,
         reserve: impl FnOnce() -> RouteReservation,
@@ -1262,34 +1218,18 @@ impl NavigatorHandle {
     ) -> RouteResult<R::Output> {
         // `CurrentTop`: nothing can run between this call and the flush, so "the
         // top now" is still the caller's route.
-        self.push_replacement_erased_reporting_id(
+        let target = Some(ReplaceTarget::CurrentTop);
+        self.push_prepared(
+            "push_replacement",
             route,
-            Some(ReplaceTarget::CurrentTop),
-            result,
             RouteReservation::reserve,
+            |history, id, route| {
+                history
+                    .push_replacement_with_id(id, target, route, result)
+                    .1
+            },
         )
         .1
-    }
-
-    /// [`push_replacement`](Self::push_replacement) with an already-erased
-    /// `result`, also handing back the new route's [`RouteId`].
-    ///
-    /// `pub(super)` for the named-route path, which needs both halves:
-    /// `PushMode::Replace` carries a result that was erased before the route
-    /// type was known, so it cannot go through the typed
-    /// [`push_replacement_with`](Self::push_replacement_with) front door.
-    pub(super) fn push_replacement_erased_reporting_id<R: NavigatorRoute>(
-        &self,
-        route: R,
-        target: Option<ReplaceTarget>,
-        result: Option<AnyResult>,
-        reserve: impl FnOnce() -> RouteReservation,
-    ) -> (RouteId, RouteResult<R::Output>) {
-        self.push_prepared("push_replacement", route, reserve, |history, id, route| {
-            history
-                .push_replacement_with_id(id, target, route, result)
-                .1
-        })
     }
 
     /// Push `route`, then walk downward from the old top completing every present
@@ -1323,24 +1263,12 @@ impl NavigatorHandle {
         if let Some(refusal) = self.placement_refusal(&route) {
             return self.refuse("push_and_remove_until", refusal, route);
         }
-        self.push_and_remove_until_reporting_id(route, keep, RouteReservation::reserve)
-            .1
-    }
-
-    /// [`push_and_remove_until`](Self::push_and_remove_until), also handing back
-    /// the new route's [`RouteId`]. `pub(super)` for the named-route path.
-    pub(super) fn push_and_remove_until_reporting_id<R: NavigatorRoute>(
-        &self,
-        route: R,
-        keep: impl FnMut(RouteId) -> bool,
-        reserve: impl FnOnce() -> RouteReservation,
-    ) -> (RouteId, RouteResult<R::Output>) {
         // The caller's predicate outlives a capacity refusal in the push below.
         let mut keep = super::lifecycle::Terminal::new(keep);
-        let (id, (result, below_top_to_bottom)) = self.push_prepared(
+        let (_, (result, below_top_to_bottom)) = self.push_prepared(
             "push_and_remove_until",
             route,
-            reserve,
+            RouteReservation::reserve,
             RouteHistory::push_for_remove_until_with_id,
         );
 
@@ -1356,7 +1284,7 @@ impl NavigatorHandle {
             history.complete_removed_and_flush(&remove_ids);
         });
 
-        (id, result)
+        result
     }
 
     /// The shared push shape: take the route's reservation, fill its binding
@@ -1705,715 +1633,6 @@ impl NavigatorHandle {
     #[must_use]
     pub fn maybe_of_root(ctx: &dyn BuildContext) -> Option<Self> {
         ctx.find_root_state::<NavigatorState, _>(NavigatorState::handle)
-    }
-}
-
-/// Named routes: registration, and the six entry points that resolve a name
-/// into a push.
-///
-/// # Registration
-///
-/// FLUI's `Navigator` widget is a thin shell over this handle and every push
-/// already goes through it, so the name table, the catch-all generator and the
-/// unknown-route fallback all register here, and resolution order is one
-/// function: [`route`](Self::route) table entry →
-/// [`on_generate_route`](Self::on_generate_route) →
-/// [`on_unknown_route`](Self::on_unknown_route). They are mutators, not
-/// constructor state, because a rebuilt `Navigator` may swap its callbacks.
-///
-/// When an app-level route table lands (a later slice), the contract is
-/// that **the app builder replaces the table wholesale at mount and these
-/// mutators serve imperative or late registration** — recorded in
-/// `ARCHITECTURE.md`'s `## Mapping decisions` so two registration sites never
-/// arrive with no defined winner.
-///
-/// # The entry points
-///
-/// Six untyped — `push_named`, `push_replacement_named`, `pop_and_push_named`
-/// and `push_named_and_remove_until` plus the `_with` result variants of the
-/// middle two — and one typed
-/// [`push_named_typed`](Self::push_named_typed). Each takes an
-/// `impl Into<RouteSettings>`, so a bare name needs no `RouteSettings` at the
-/// call site and an argument-carrying request builds one:
-///
-/// ```
-/// use flui_widgets::prelude::*;
-/// use flui_widgets::{NavigatorHandle, RouteRequest, RouteSettings, Text};
-///
-/// let navigator = NavigatorHandle::new();
-/// navigator.route("/details", |_request: &RouteRequest<'_>| {
-///     Some(SimpleRoute::<i32>::new(|_ctx| Text::new("Details").into_view().boxed()))
-/// });
-/// navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
-///     Text::new("Home").into_view().boxed()
-/// }));
-///
-/// // A bare name. Note there is no `::<T>`: the untyped entry points never
-/// // name the route's result type, which is why a `SimpleRoute<i32>` is
-/// // reachable from a caller that has never heard of `i32`.
-/// let details = navigator.push_named("/details")?;
-///
-/// // An argument-carrying request.
-/// let with_id = navigator
-///     .push_named(RouteSettings::named("/details").arguments(7_u32))?;
-///
-/// // And the one call that does name a type, to keep the pop result.
-/// let result = navigator.push_named_typed::<i32>("/details")?;
-/// # assert_ne!(details, with_id);
-/// # let _ = result;
-/// # Ok::<(), flui_widgets::NamedRouteError>(())
-/// ```
-///
-/// `_with` on this handle means **"a result delivered to the departing route"**
-/// throughout ([`pop_with`](Self::pop_with),
-/// [`push_replacement_with`](Self::push_replacement_with),
-/// [`remove_route_with`](Self::remove_route_with),
-/// [`maybe_pop_with`](Self::maybe_pop_with)) and keeps that meaning here.
-/// Arguments ride in the request, never in a `_with`.
-impl NavigatorHandle {
-    /// Bind `name` to a route, replacing any previous binding — one entry of the
-    /// name → route table.
-    ///
-    /// Typed sugar over [`on_generate_route`](Self::on_generate_route): one
-    /// name maps to one route type, so the factory returns a concrete
-    /// [`NavigatorRoute`] and the erasure is this method's business. `None`
-    /// declines the request and passes it to the generator, then to the
-    /// unknown-route fallback.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use flui_widgets::prelude::*;
-    /// use flui_widgets::{NavigatorHandle, RouteRequest, Text};
-    ///
-    /// let navigator = NavigatorHandle::new();
-    /// navigator.route("/details", |request: &RouteRequest<'_>| {
-    ///     let title = request.argument::<String>().cloned().unwrap_or_default();
-    ///     Some(SimpleRoute::<()>::new(move |_ctx| {
-    ///         Text::new(title.clone()).into_view().boxed()
-    ///     }))
-    /// });
-    /// ```
-    ///
-    /// See [`route_keyed`](Self::route_keyed) for the variant that checks the
-    /// route's result type against the name at compile time.
-    pub fn route<R, F>(&self, name: impl Into<String>, factory: F)
-    where
-        R: NavigatorRoute,
-        F: Fn(&RouteRequest<'_>) -> Option<R> + 'static,
-    {
-        self.shared.named_routes.register_named(
-            name.into(),
-            Rc::new(move |request| Some(GeneratedRoute::new(factory(request)?))),
-            TypeId::of::<R::Output>(),
-            type_name::<R::Output>(),
-        );
-    }
-
-    /// Bind a [`RouteKey`] to a route whose `Output` the compiler checks against
-    /// the key.
-    ///
-    /// The typed counterpart to [`route`](Self::route). `R: Route<Output = T>`
-    /// is the whole point: registering a `SimpleRoute<String>` under a
-    /// `RouteKey<u32>` does not compile.
-    ///
-    /// That is a check on *this* registration, not a guarantee about the name.
-    /// See [`push_keyed`](Self::push_keyed) for the collision it cannot rule
-    /// out.
-    ///
-    /// Registration still lands in the same name-keyed table the untyped path
-    /// uses — see [`push_keyed`](Self::push_keyed) for what that means when the
-    /// two paths collide on one name.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use flui_widgets::prelude::*;
-    /// use flui_widgets::{NavigatorHandle, RouteKey, RouteRequest, Text};
-    ///
-    /// const COUNT: RouteKey<i32> = RouteKey::new("/count");
-    ///
-    /// let navigator = NavigatorHandle::new();
-    /// navigator.route_keyed(COUNT, |_request: &RouteRequest<'_>| {
-    ///     Some(SimpleRoute::<i32>::new(|_ctx| Text::new("Count").into_view().boxed()))
-    /// });
-    /// ```
-    ///
-    /// The same registration with a route that delivers something else does not
-    /// compile — this is the guarantee the whole keyed path exists for, so it is
-    /// pinned here rather than described:
-    ///
-    /// ```compile_fail
-    /// use flui_widgets::prelude::*;
-    /// use flui_widgets::{NavigatorHandle, RouteKey, RouteRequest, Text};
-    ///
-    /// const COUNT: RouteKey<i32> = RouteKey::new("/count");
-    ///
-    /// let navigator = NavigatorHandle::new();
-    /// navigator.route_keyed(COUNT, |_request: &RouteRequest<'_>| {
-    ///     Some(SimpleRoute::<String>::new(|_ctx| Text::new("Count").into_view().boxed()))
-    /// });
-    /// ```
-    ///
-    /// The two examples differ in exactly one token (`i32` → `String`), which is
-    /// what makes the `compile_fail` meaningful: a `compile_fail` block passes
-    /// when it fails for *any* reason, so it is only evidence when a
-    /// near-identical block above it compiles.
-    pub fn route_keyed<T, R, F>(&self, key: RouteKey<T>, factory: F)
-    where
-        R: NavigatorRoute + Route<Output = T>,
-        F: Fn(&RouteRequest<'_>) -> Option<R> + 'static,
-    {
-        self.route(key.name(), factory);
-    }
-
-    /// Install the catch-all route generator.
-    ///
-    /// Consulted for every name the [`route`](Self::route) table did not
-    /// answer. It cannot be generic over one route type the way `route` is —
-    /// one closure must be able to answer different names with differently
-    /// typed routes — so it returns an erased [`GeneratedRoute`] and the caller
-    /// writes `GeneratedRoute::new(..)`.
-    ///
-    /// # Do not capture a handle, and do not navigate from here
-    ///
-    /// A factory builds a route; it is not given a [`NavigatorHandle`] and should
-    /// not capture one. To send the user elsewhere, **return the route for
-    /// elsewhere** — see [`RouteRequest`]. A route's *content* needs no captured
-    /// handle either: a
-    /// [`RouteContentBuilder`](super::overlay_route::RouteContentBuilder) gets a
-    /// `&dyn BuildContext` and [`maybe_of`](Self::maybe_of) resolves from it.
-    ///
-    /// Capturing one anyway is possible — closures capture freely — and costs two
-    /// things. It closes an `Arc` cycle (the navigator owns the registry, the
-    /// registry owns the closure, the closure would own the navigator) which
-    /// nothing reclaims implicitly, because registrations are deliberately **not**
-    /// mount-scoped; [`clear_routes`](Self::clear_routes) is the only thing that
-    /// breaks it. And navigating from a factory puts a mutation inside another
-    /// operation's resolution: survivable, documented, and not supported — see
-    /// `ARCHITECTURE.md` §5 for the two observable consequences.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use flui_widgets::prelude::*;
-    /// use flui_widgets::{GeneratedRoute, NavigatorHandle, RouteRequest, Text};
-    ///
-    /// let navigator = NavigatorHandle::new();
-    /// navigator.on_generate_route(|request: &RouteRequest<'_>| match request.name()? {
-    ///     "/count" => Some(GeneratedRoute::new(SimpleRoute::<i32>::new(|_ctx| {
-    ///         Text::new("Count").into_view().boxed()
-    ///     }))),
-    ///     _ => None,
-    /// });
-    /// ```
-    pub fn on_generate_route(
-        &self,
-        factory: impl Fn(&RouteRequest<'_>) -> Option<GeneratedRoute> + 'static,
-    ) {
-        self.shared
-            .named_routes
-            .register_generator(Rc::new(factory));
-    }
-
-    /// Install the last-resort fallback, consulted only when neither the table nor the generator produced a
-    /// route. It receives the same [`RouteSettings`] they were offered.
-    ///
-    /// Returning `None` here is the end of the line: the entry point answers
-    /// [`NamedRouteError::Unresolved`]. The capture hazard
-    /// [`on_generate_route`](Self::on_generate_route) documents applies here too.
-    pub fn on_unknown_route(
-        &self,
-        factory: impl Fn(&RouteRequest<'_>) -> Option<GeneratedRoute> + 'static,
-    ) {
-        self.shared
-            .named_routes
-            .register_unknown_fallback(Rc::new(factory));
-    }
-
-    /// Drop every route registration — the table, the generator, and the
-    /// unknown-route fallback.
-    ///
-    /// Registrations are **not** mount-scoped: they survive an unmount and
-    /// remount over a retained handle, because an app that registers once
-    /// against a handle it keeps must not silently lose its routes
-    /// (`ARCHITECTURE.md` §6 draws the contrast with observers, which *are*
-    /// mount-scoped because an observer holds a handle only while mounted).
-    /// Dropping them is therefore a caller decision — only the caller knows
-    /// whether it intends to register again — and this is how the caller makes
-    /// it.
-    ///
-    /// It is also the escape for the one cycle this surface can still create:
-    /// a factory that captures a [`NavigatorHandle`] despite
-    /// no accessor offering one. See
-    /// [`on_generate_route`](Self::on_generate_route).
-    pub fn clear_routes(&self) {
-        self.shared.named_routes.clear();
-    }
-
-    /// Dismiss `route` on behalf of an operation that captured it **before**
-    /// resolving a name.
-    ///
-    /// Named operations resolve first, so an unresolvable name adds nothing of
-    /// the operation's own —
-    /// but resolving runs a user factory, and a factory that captured a handle
-    /// can navigate — a shape this crate no longer offers a way to reach, but
-    /// cannot prevent. By the time the departing route is
-    /// dealt with it may no longer be on top, or may be gone. Acting on "the
-    /// current top" would then dismiss the *factory's* route and leave the
-    /// caller's in place, which is the bug this exists to prevent.
-    ///
-    /// Three cases, all deliberate:
-    ///
-    /// - still on top — the ordinary [`pop`](Self::pop) path, so the observer
-    ///   sees `didPop` and the route's own `did_pop` may refuse. This is what
-    ///   every non-re-entrant call takes, unchanged;
-    /// - present but buried under something the factory pushed — removed by id,
-    ///   which is the honest operation for a route that is no longer the top;
-    /// - already gone (the factory popped it) — nothing to do, and **not** an
-    ///   error: a factory's unrelated navigation must not fail an operation that
-    ///   otherwise succeeded.
-    ///
-    /// Returns anything it could not deliver, **unreported**.
-    ///
-    /// Its two callers are composed operations — they dismiss and then push — so
-    /// reporting here would drop the caller's value before the operation's own
-    /// `didPush`. They report after their final `apply` instead. See
-    /// [`NavigatorShared::mutate_deferring_report`].
-    fn dismiss_captured(
-        &self,
-        route: Option<RouteId>,
-        result: Option<AnyResult>,
-    ) -> Vec<UndeliveredResult> {
-        let Some(route) = route else {
-            // Nothing was captured — an empty stack, or a top mid-exit-transition,
-            // which is a reachable and documented state. The result must **not** go
-            // to whatever a factory left on top; that is what the capture is for.
-            return Vec::from_iter(result.map(UndeliveredResult::no_target));
-        };
-        if self.current() == Some(route) {
-            self.shared
-                .mutate_deferring_report(|history| history.pop(result))
-                .1
-        } else {
-            self.shared
-                .mutate_deferring_report(|history| history.remove_route(route, result))
-                .1
-        }
-    }
-
-    /// Resolve `request` into a route, or say why it could not be.
-    ///
-    /// # Errors
-    ///
-    /// [`NamedRouteError::Unresolved`] when neither the table, the generator,
-    /// nor the unknown-route fallback produced a route.
-    fn resolve_named(&self, settings: &RouteSettings) -> Result<GeneratedRoute, NamedRouteError> {
-        let request = RouteRequest::new(settings);
-        let generated = self.shared.named_routes.resolve(&request).ok_or_else(|| {
-            NamedRouteError::Unresolved {
-                name: requested_name(settings),
-            }
-        })?;
-        // Checked before anything is dismissed or pushed; the refused route is
-        // disposed when `generated` drops.
-        if !self.admits_generated(&generated) {
-            return Err(NamedRouteError::NotAddressable {
-                name: requested_name(settings),
-            });
-        }
-        Ok(generated)
-    }
-
-    /// Resolve `request` and [`push`](Self::push) the route it names.
-    ///
-    /// Returns the new route's [`RouteId`], which pairs with
-    /// [`current`](Self::current) and feeds [`remove_route`](Self::remove_route).
-    /// The route's own pop result is **dropped**: a caller navigating to a screen
-    /// has no reason to know what type that screen completes with. Reach for
-    /// [`push_named_typed`](Self::push_named_typed) when you want the result.
-    ///
-    /// Everything below the name layer is the unnamed path: this calls
-    /// [`push`](Self::push), so one history state machine and one observer
-    /// ordering serve both.
-    ///
-    /// # Errors
-    ///
-    /// [`NamedRouteError::Unresolved`] if no registration answered the name.
-    /// This operation pushes nothing, and a stage that declines returns `None`
-    /// before constructing anything, so the error never has a route to dispose.
-    ///
-    /// It does **not** promise the stack is unchanged: a factory that navigates
-    /// (through a captured handle) and then declines has already made its
-    /// own changes, and those are not rolled back — they were deliberate, and
-    /// undoing them is no more this operation's business than undoing a nested
-    /// push is (see [`pop_and_push_named`](Self::pop_and_push_named)).
-    pub fn push_named(
-        &self,
-        request: impl Into<RouteSettings>,
-    ) -> Result<RouteId, NamedRouteError> {
-        let request = request.into();
-        let generated = self.resolve_named(&request)?;
-        let (reservation, _request) = RouteReservation::reserve_holding(request);
-        Ok(generated.push(self, PushMode::Push, reservation).0)
-    }
-
-    /// [`push_named`](Self::push_named), keeping the new route's typed
-    /// [`RouteResult`] instead of dropping it.
-    ///
-    /// # Choosing between this and [`push_keyed`](Self::push_keyed)
-    ///
-    /// They divide by **when the name exists**, not by preference.
-    /// [`RouteKey::new`] takes a `&'static str`, so a name computed at run time —
-    /// a deep link, a config value, a server-supplied path — cannot be a key, and
-    /// this is the only typed push that can reach the
-    /// [`on_generate_route`](Self::on_generate_route) hook such names resolve
-    /// through. For a name known at compile time prefer
-    /// [`push_keyed`](Self::push_keyed): the key checks the route's result type at
-    /// the *registration* site rather than at the push.
-    ///
-    /// This is the one named entry point that can fail on the result type, and
-    /// it fails **before** anything is pushed: the generated route is concrete
-    /// and carries its own `Output`, so `T` is checked against a `TypeId` the
-    /// carrier captured at construction and a mismatch leaves the stack
-    /// untouched, rather than re-typing through an unchecked cast.
-    ///
-    /// # Errors
-    ///
-    /// [`NamedRouteError::Unresolved`] if no registration answered the name, and
-    /// [`NamedRouteError::ResultType`] if the route generated for it delivers
-    /// something other than `T`. Neither pushes anything; on `ResultType` the
-    /// generated route is disposed, while `Unresolved` never constructed one.
-    /// Neither undoes navigation a factory performed before declining — see
-    /// [`push_named`](Self::push_named).
-    pub fn push_named_typed<T: 'static>(
-        &self,
-        request: impl Into<RouteSettings>,
-    ) -> Result<RouteResult<T>, NamedRouteError> {
-        let request = request.into();
-        let checked = self.resolve_named(&request)?.checked::<T>(&request)?;
-        let (reservation, _request) = RouteReservation::reserve_holding(request);
-        Ok(checked.push(self, PushMode::Push, reservation).1)
-    }
-
-    /// Push the route a [`RouteKey`] names, keeping its typed [`RouteResult`].
-    ///
-    /// The typed push for a name known at compile time: `T` comes from the key
-    /// rather than from a turbofish, and [`route_keyed`](Self::route_keyed) already
-    /// refused a mismatched route at compile time. It does **not** make
-    /// [`NamedRouteError::ResultType`] unreachable — see below.
-    ///
-    /// # Choosing between this and [`push_named_typed`](Self::push_named_typed)
-    ///
-    /// They divide by **when the name exists**, and neither substitutes for the
-    /// other. [`RouteKey::new`] takes a `&'static str`, so this cannot express a
-    /// name computed at run time — a deep link, a config value, a server-supplied
-    /// path — and those resolve through
-    /// [`on_generate_route`](Self::on_generate_route), which only
-    /// [`push_named_typed`](Self::push_named_typed) can reach with a type. Prefer
-    /// this one wherever the name *is* a literal: the check moves from the push to
-    /// the registration site, where the mistake is actually made.
-    ///
-    /// A bare key is a request; [`RouteKey::with_arguments`] adds arguments, and
-    /// [`KeyedSettings::untyped`] converts one for an untyped operation:
-    ///
-    /// ```
-    /// use flui_widgets::prelude::*;
-    /// use flui_widgets::{NavigatorHandle, RouteKey, RouteRequest, Text};
-    ///
-    /// const ORDER: RouteKey<u32> = RouteKey::new("/order");
-    ///
-    /// let navigator = NavigatorHandle::new();
-    /// navigator.route_keyed(ORDER, |request: &RouteRequest<'_>| {
-    ///     let id = request.argument::<u32>().copied().unwrap_or(0);
-    ///     Some(SimpleRoute::<u32>::new(move |_ctx| {
-    ///         Text::new(format!("Order {id}")).into_view().boxed()
-    ///     }))
-    /// });
-    /// navigator.seed_initial(SimpleRoute::<u32>::new(|_ctx| {
-    ///     Text::new("Home").into_view().boxed()
-    /// }));
-    ///
-    /// let plain = navigator.push_keyed(ORDER)?;
-    /// let with_id = navigator.push_keyed(ORDER.with_arguments(1776_u32))?;
-    /// # let _ = (plain, with_id);
-    /// # Ok::<(), flui_widgets::NamedRouteError>(())
-    /// ```
-    ///
-    /// # What the key cannot promise: the registry is name-keyed
-    ///
-    /// A [`RouteKey`] type-checks one *registration site*. The table it
-    /// registers into is keyed by **name**, so any two sites that disagree about
-    /// one name still meet at run time, and the key's promise stops describing
-    /// what is registered. Three ways in, none of them a mistake the compiler
-    /// can see:
-    ///
-    /// - two [`RouteKey`]s spelling the same string with different `T`, each
-    ///   self-consistent — `RouteKey::<u32>::new("/order")` and
-    ///   `RouteKey::<String>::new("/order")` both compile, and the second
-    ///   registration replaces the first;
-    /// - the same name bound through the untyped [`route`](Self::route);
-    /// - [`on_generate_route`](Self::on_generate_route) answering the name when
-    ///   the table misses.
-    ///
-    /// The `TypeId` check is kept for all three. It guards against *two
-    /// registration sites disagreeing about one name* — which a keyed-only
-    /// codebase can absolutely do.
-    ///
-    /// # What the guard buys
-    ///
-    /// **A pre-mutation, non-panicking failure.** Not type safety: the
-    /// `RouteResult` downcast underneath is checked, so a silently wrong result
-    /// was never reachable. Without the guard the push lands *first* and the
-    /// downcast then fails a `BUG:` `expect` — a panic, mid-operation, with the
-    /// stack already mutated. With it you get [`NamedRouteError::ResultType`]
-    /// and an untouched stack.
-    ///
-    /// # Errors
-    ///
-    /// [`NamedRouteError::Unresolved`] if nothing answered the key's name;
-    /// [`NamedRouteError::ResultType`] in the collision cases above. Neither
-    /// mutates the stack.
-    pub fn push_keyed<T: 'static>(
-        &self,
-        request: impl Into<KeyedSettings<T>>,
-    ) -> Result<RouteResult<T>, NamedRouteError> {
-        self.push_named_typed::<T>(request.into().into_settings())
-    }
-
-    /// Resolve `request` and [`push_replacement`](Self::push_replacement). The
-    /// replaced route's [`RouteResult`] resolves with `Ok(None)`.
-    ///
-    /// **The route to replace is captured before resolving.** A factory that
-    /// reaches the navigator can move the top between resolution and the
-    /// replacement; replacing whatever is on top *now* would then replace the
-    /// factory's route rather than the caller's. FLUI captures the route to
-    /// replace **before** resolving, so it replaces the one the caller
-    /// meant.
-    ///
-    /// # Errors
-    ///
-    /// As [`push_named`](Self::push_named); nothing is replaced.
-    pub fn push_replacement_named(
-        &self,
-        request: impl Into<RouteSettings>,
-    ) -> Result<RouteId, NamedRouteError> {
-        let request = request.into();
-        self.refuse_named_placement(&request)?;
-        // Captured before resolving. An empty capture is `None` — no target,
-        // completes nothing — which `ReplaceTarget` cannot express and so cannot
-        // be mistaken for "the current top".
-        let target = self.current().map(ReplaceTarget::Route);
-        let generated = self.resolve_named(&request)?;
-        let (reservation, _request) = RouteReservation::reserve_holding(request);
-        Ok(generated
-            .push(
-                self,
-                PushMode::Replace {
-                    target,
-                    result: None,
-                },
-                reservation,
-            )
-            .0)
-    }
-
-    /// [`push_replacement_named`](Self::push_replacement_named), delivering
-    /// `result` to whoever awaits the **replaced** route.
-    ///
-    /// `result` carries the same delivery-time type contract as
-    /// [`pop_with`](Self::pop_with): the navigator cannot know the replaced
-    /// route's `Output`, so a mismatch completes that route with
-    /// [`RouteResultError::TypeMismatch`](crate::RouteResultError::TypeMismatch).
-    ///
-    /// # Errors
-    ///
-    /// As [`push_named`](Self::push_named). On error nothing is replaced, and
-    /// `result` is **reported and dropped outside any guard** rather than
-    /// discarded silently — `ARCHITECTURE.md` §5's contract, which this doc used
-    /// to contradict by promising a silent drop.
-    pub fn push_replacement_named_with<TO: 'static>(
-        &self,
-        request: impl Into<RouteSettings>,
-        result: TO,
-    ) -> Result<RouteId, NamedRouteError> {
-        let request = request.into();
-        let target = self.current().map(ReplaceTarget::Route);
-        // Erased **before** resolving. `resolve_named` can fail, and a `?` here
-        // would drop the caller's `TO` on the spot — while it is still a bare
-        // generic, so no `Option<AnyResult>` audit can see it. Erasing first makes
-        // the failure path able to report it.
-        //
-        // Resolving before the *dismissal* pays a second time, which was not the
-        // reason for the order and is worth knowing before anyone reverses it: a
-        // route factory is user code and may panic, and resolution happening first
-        // means such a panic strands nothing. Dismiss first and a panicking factory
-        // leaves the navigator with an empty stack — pinned by
-        // `a_factory_that_panics_after_the_result_is_erased_loses_only_the_report`,
-        // whose red-check is exactly that swap.
-        let result: Option<AnyResult> = Some(AnyResult::new(result));
-        let resolved = self
-            .refuse_named_placement(&request)
-            .and_then(|()| self.resolve_named(&request));
-        match resolved {
-            Ok(generated) => {
-                let (reservation, (_request, result)) =
-                    RouteReservation::reserve_holding((request, result));
-                Ok(generated
-                    .push(self, PushMode::Replace { target, result }, reservation)
-                    .0)
-            }
-            Err(unresolved) => {
-                report_undelivered(
-                    "push_replacement_named_with",
-                    Vec::from_iter(result.map(UndeliveredResult::no_target)),
-                );
-                Err(unresolved)
-            }
-        }
-    }
-
-    /// [`pop`](Self::pop) the current route and push the one `request` names.
-    /// Unlike [`push_replacement_named`](Self::push_replacement_named) the
-    /// departing route runs its full exit transition.
-    ///
-    /// **This resolves before it pops.** Popping first would leave the stack
-    /// already mutated when the generator declines a name, failing from the
-    /// middle. Ordering the two the
-    /// other way makes the failure total: this operation pops nothing and pushes
-    /// nothing. (A factory
-    /// that navigated before declining keeps its own changes — see
-    /// [`push_named`](Self::push_named).)
-    ///
-    /// **What that divergence costs, stated rather than claimed as pure gain.**
-    /// Resolving first means a factory runs before the departing route is dealt
-    /// with, and a factory that captured a handle can navigate — survivable
-    /// rather than supported, since `RouteRequest::navigator()` was withdrawn
-    /// (ADR-0024) but a capture still reaches one. So when a factory
-    /// navigates, its `didPush` is observed
-    /// **before** this operation's own dismissal — an ordering that pop-first
-    /// cannot produce, because it has already popped. The departing route is then
-    /// buried, and is removed by id rather than popped (`did_remove`, not
-    /// `did_pop`).
-    ///
-    /// When no factory navigates — every ordinary call — the pop and the push
-    /// are the same two calls in the same order and the stream is identical.
-    ///
-    /// The route dismissed is the one that was current **when this was called**,
-    /// captured before resolving — not whatever a factory left on top. A route
-    /// the factory already popped is simply not there to dismiss, and that is a
-    /// success, not an error.
-    ///
-    /// # Errors
-    ///
-    /// As [`push_named`](Self::push_named); on error, nothing is popped.
-    ///
-    /// # Panics
-    ///
-    /// If route or overlay identity capacity is exhausted. The identities are
-    /// reserved before the pop, so a refusal pops nothing and retains the
-    /// request.
-    pub fn pop_and_push_named(
-        &self,
-        request: impl Into<RouteSettings>,
-    ) -> Result<RouteId, NamedRouteError> {
-        let request = request.into();
-        self.refuse_named_placement(&request)?;
-        let departing = self.current();
-        let generated = self.resolve_named(&request)?;
-        // Reserved before the dismissal: exhaustion refuses the whole
-        // operation rather than leaving the departing route gone unreplaced.
-        let (reservation, _request) = RouteReservation::reserve_holding(request);
-        let undelivered = self.dismiss_captured(departing, None);
-        let pushed = generated.push(self, PushMode::Push, reservation).0;
-        // After the push's own `apply`, so this operation's `didPop` **and**
-        // `didPush` both precede anything a re-entrant drop triggers.
-        report_undelivered("pop_and_push_named", undelivered);
-        Ok(pushed)
-    }
-
-    /// [`pop_and_push_named`](Self::pop_and_push_named), delivering `result` to
-    /// whoever awaits the **popped** route. Same delivery-time contract for
-    /// `result` as [`pop_with`](Self::pop_with), and the same resolve-before-pop
-    /// order.
-    ///
-    /// # Errors
-    ///
-    /// As [`push_named`](Self::push_named). On error nothing is popped, and
-    /// `result` is **reported and dropped outside any guard** — see
-    /// [`push_replacement_named_with`](Self::push_replacement_named_with).
-    ///
-    /// # Panics
-    ///
-    /// As [`pop_and_push_named`](Self::pop_and_push_named): a refusal pops
-    /// nothing and retains both the request and `result`.
-    pub fn pop_and_push_named_with<TO: 'static>(
-        &self,
-        request: impl Into<RouteSettings>,
-        result: TO,
-    ) -> Result<RouteId, NamedRouteError> {
-        let request = request.into();
-        let departing = self.current();
-        // Erased before resolving — see `push_replacement_named_with`, including
-        // why resolving must also precede the dismissal below.
-        let result: Option<AnyResult> = Some(AnyResult::new(result));
-        let resolved = self
-            .refuse_named_placement(&request)
-            .and_then(|()| self.resolve_named(&request));
-        let generated = match resolved {
-            Ok(generated) => generated,
-            Err(unresolved) => {
-                report_undelivered(
-                    "pop_and_push_named_with",
-                    Vec::from_iter(result.map(UndeliveredResult::no_target)),
-                );
-                return Err(unresolved);
-            }
-        };
-        // Reserved before the dismissal, as in `pop_and_push_named`; the
-        // erased result is destroyed if the reservation is refused.
-        let (reservation, (_request, result)) =
-            RouteReservation::reserve_holding((request, result));
-        let undelivered = self.dismiss_captured(departing, result);
-        let pushed = generated.push(self, PushMode::Push, reservation).0;
-        // See `pop_and_push_named`: reported after the final `apply`, not between
-        // this operation's two halves.
-        report_undelivered("pop_and_push_named_with", undelivered);
-        Ok(pushed)
-    }
-
-    /// Resolve `request` and
-    /// [`push_and_remove_until`](Self::push_and_remove_until).
-    ///
-    /// `keep` receives each candidate's [`RouteId`] and runs with the history
-    /// lock released, exactly as
-    /// [`push_and_remove_until`](Self::push_and_remove_until)'s does.
-    ///
-    /// **This one needs no captured target, and that is structural — do not
-    /// "harmonise" it with its siblings.** Its removal is defined by the
-    /// *predicate*, not by a route captured before resolving: the sweep runs
-    /// downward from the newly pushed route until `keep` accepts, so anything a
-    /// re-entrant factory pushed is swept along with everything else above the
-    /// kept route. Its siblings capture a target precisely because they name
-    /// "the current top", which a factory can change underneath them.
-    ///
-    /// # Errors
-    ///
-    /// As [`push_named`](Self::push_named); on error nothing is pushed and
-    /// nothing is removed — `keep` is never consulted.
-    pub fn push_named_and_remove_until(
-        &self,
-        request: impl Into<RouteSettings>,
-        keep: impl FnMut(RouteId) -> bool,
-    ) -> Result<RouteId, NamedRouteError> {
-        let request = request.into();
-        self.refuse_named_placement(&request)?;
-        let generated = self.resolve_named(&request)?;
-        let (reservation, (_request, mut keep)) =
-            RouteReservation::reserve_holding((request, keep));
-        Ok(generated
-            .push(self, PushMode::RemoveUntil { keep: &mut keep }, reservation)
-            .0)
     }
 }
 

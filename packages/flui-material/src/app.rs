@@ -44,7 +44,7 @@
 //! - **`MaterialLocalizations`** — FLUI ships no Material resource set yet;
 //!   when one lands its delegate is appended here. Caller delegates pass
 //!   through to `WidgetsApp` unchanged.
-//! - **`Title`/`color`, named routes/`Router`, restoration, debug overlays**
+//! - **`Title`/`color`, `Router`, restoration, debug overlays**
 //!   — deferred at the `WidgetsApp` layer; see its module docs.
 //!
 //! ## Documented behavior
