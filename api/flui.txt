@@ -24575,11 +24575,11 @@ impl Default for flui::view::Milliseconds
 impl From<core::time::Duration> for flui::view::Milliseconds
 impl From<f64> for flui::view::Milliseconds
 impl From<flui::view::Microseconds> for flui::view::Milliseconds
-impl From<flui::view::Milliseconds> for core::time::Duration
 impl From<flui::view::Milliseconds> for flui::view::Seconds
 impl From<flui::view::Seconds> for flui::view::Milliseconds
 impl PartialEq for flui::view::Milliseconds
 impl PartialOrd for flui::view::Milliseconds
+impl TryFrom<flui::view::Milliseconds> for core::time::Duration { type Error = core::time::TryFromFloatSecsError; }
 impl core::fmt::Debug for flui::view::Milliseconds
 impl core::fmt::Display for flui::view::Milliseconds
 impl core::marker::StructuralPartialEq for flui::view::Milliseconds
@@ -24748,10 +24748,10 @@ impl Default for flui::view::Seconds
 impl From<core::time::Duration> for flui::view::Seconds
 impl From<f64> for flui::view::Seconds
 impl From<flui::view::Milliseconds> for flui::view::Seconds
-impl From<flui::view::Seconds> for core::time::Duration
 impl From<flui::view::Seconds> for flui::view::Milliseconds
 impl PartialEq for flui::view::Seconds
 impl PartialOrd for flui::view::Seconds
+impl TryFrom<flui::view::Seconds> for core::time::Duration { type Error = core::time::TryFromFloatSecsError; }
 impl core::fmt::Debug for flui::view::Seconds
 impl core::fmt::Display for flui::view::Seconds
 impl core::marker::StructuralPartialEq for flui::view::Seconds
