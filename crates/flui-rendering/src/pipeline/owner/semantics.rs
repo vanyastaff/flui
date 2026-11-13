@@ -130,6 +130,10 @@ impl PipelineOwner<Semantics> {
     fn run_semantics_in_phase(&mut self) -> crate::error::RenderResult<()> {
         let mut callbacks = AssemblyCallbacks::default();
         // The rebuild check's own retained handlers, retired with the pass's.
+        #[cfg_attr(
+            not(any(test, feature = "testing")),
+            expect(unused_mut, reason = "only the testing build runs the rebuild check")
+        )]
         let mut check_callbacks: Option<AssemblyCallbacks> = None;
 
         // Sort shallow-first. Roots dispatch before their descendants so a parent's config is
@@ -271,6 +275,7 @@ impl PipelineOwner<Semantics> {
                     callbacks = std::mem::take(&mut regions.callbacks);
                     self.semantics_regions.visited = std::mem::take(&mut regions.visited);
                 }
+                #[cfg(any(test, feature = "testing"))]
                 if moved_count > 0 && self.semantics_regions.checks_placement() {
                     check_callbacks = Some(check_placement_against_rebuild(
                         &self.render_tree,
@@ -383,6 +388,7 @@ pub(super) struct RegionIdentities {
     placement_walk: Vec<RenderId>,
     /// Set by a test that measures a pass and so must not pay for
     /// [`check_placement_against_rebuild`].
+    #[cfg(any(test, feature = "testing"))]
     skip_placement_check: bool,
 }
 
@@ -439,7 +445,9 @@ impl Drop for AssemblyCallbacks {
 
 impl RegionIdentities {
     /// Whether a pass that re-placed moved subtrees checks itself against a
-    /// rebuild: in debug builds, unless a test turned it off.
+    /// rebuild: in debug builds with the `testing` feature, unless a test
+    /// turned it off.
+    #[cfg(any(test, feature = "testing"))]
     fn checks_placement(&self) -> bool {
         cfg!(debug_assertions) && !self.skip_placement_check
     }
@@ -2086,7 +2094,8 @@ fn apply_graft(
 
 /// Checks a pass that re-placed moved subtrees in their own slots against
 /// what re-assembling the whole tree publishes: the two must export the same
-/// AccessKit nodes. Run by default in debug builds, so every test that moves
+/// AccessKit nodes. Run by default in debug builds with the `testing` feature,
+/// so every test that moves
 /// semantics checks the placement rules; a panic names the first node that
 /// differs. The handlers the check's assembly retained are returned for the
 /// caller to retire after the phase, as the pass's own are.
@@ -2094,6 +2103,7 @@ fn apply_graft(
 /// Skipped while the owner announces (its announcer nodes are not part of
 /// assembly) or when the full assembly itself refuses the tree, which the
 /// next ordinary mark reports.
+#[cfg(any(test, feature = "testing"))]
 fn check_placement_against_rebuild(
     tree: &RenderTree,
     root: Option<RenderId>,

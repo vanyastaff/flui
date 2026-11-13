@@ -251,9 +251,9 @@ notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_
   the moved subtree to its outermost formed nodes; when a render node on that walk could
   contribute to its parent (a boundary, a merge boundary, an annotation, a sibling barrier,
   authored regions) or a moved node sits in a document that orders by geometry, the mark
-  becomes an ordinary semantics mark. In debug builds every re-placing pass is compared with a
-  full assembly and a difference panics; `a_moved_transform_re_places_the_semantics_inside_it`
-  is the widget table of the cases.
+  becomes an ordinary semantics mark. In debug builds with the `testing` feature every
+  re-placing pass is compared with a full assembly and a difference panics;
+  `a_moved_transform_re_places_the_semantics_inside_it` is the widget table of the cases.
 - `accesskit_translation.rs` maps the owner's tree to AccessKit updates with stable
   `AccessibilityNodeId`s; `flui-native` hosts the AccessKit adapters per backend.
 - `platform.rs` holds `PlatformAccessibility`, the capability those adapters implement and the
