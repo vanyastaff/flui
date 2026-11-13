@@ -395,7 +395,7 @@ fn half_time_rect_is_between_and_the_placeholder_keeps_size() {
     close(marker.left, 0.0, PX, "the marker's left");
 
     let color = Color::lerp(CLOSED_SURFACE, OPEN_SURFACE, t);
-    let mut path = surface_path(&rig.app, color).expect("the surface paints its morphed colour");
+    let path = surface_path(&rig.app, color).expect("the surface paints its morphed colour");
     assert!(
         surface_path(&rig.app, CLOSED_SURFACE).is_none(),
         "the closed surface is not drawn beside the morph"
@@ -413,7 +413,7 @@ fn half_time_rect_is_between_and_the_placeholder_keeps_size() {
         "the corners are still rounded at half time: radius {}",
         CLOSED_RADIUS * (1.0 - t)
     );
-    let bounds = path.bounds();
+    let bounds = path.compute_bounds();
     assert!(
         bounds.width() > CLOSED_WIDTH && bounds.width() < WIDTH,
         "the surface is between the closed and the open width: {}",

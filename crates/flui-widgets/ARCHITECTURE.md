@@ -455,7 +455,9 @@ its inherited sizing and weight preferences. The public producer row
 allocated square across live changes, exact answers, fractional sizes and theme
 policy; tight constraints can allocate a rectangle without changing glyph size.
 The widget's canonical Semantics wrapper publishes an explicitly authored label
-as an image, including a labelled absent glyph. Decorative icons publish no font
+with no role of its own, including a labelled absent glyph, so inside a button
+or another control the label names the control's node, as Flutter's `Icon` does;
+alone it is a text node. Decorative icons publish no font
 codepoint label. `icon_labels_reach_the_assembled_accessibility_tree` checks the
 assembled tree across label replacement and removal.
 

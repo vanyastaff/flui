@@ -111,7 +111,8 @@ and put `serde` on the Stable contract crate.
    holds the mirror types (`Header`, `Row` and what they nest) with pinned `#[serde(rename)]`
    spellings, plain public data a reader such as the driver reads without the runtime; unknown
    fields are skipped within a major format version, an unknown variant is an error.
-   `flui-runtime` holds the conversions, `InputRecord::to_wire` and `from_wire` over every
+   `flui-runtime` holds the conversions behind its hidden `__runtime` seam, `record_to_wire` and
+   `record_from_wire` over every
    `InputRecord` variant (`Input` with its nested `HostInput`, including the accesskit
    `ActionRequest` payload, `Decision`, `Deadline`, `Preferences`, `Gap` and `End`), the header's
    pieces, and `WireError`, the typed refusal; `flui-testing` holds the writer, the reader and

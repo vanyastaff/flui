@@ -82,6 +82,10 @@ fn component_contracts() {
             bottom_tab_bar::every_item_mounts_its_icon_and_label,
         ),
         (
+            "bottom_tab_bar::each item is one node its click reaches on_tap",
+            bottom_tab_bar::each_item_is_one_node_its_click_reaches_on_tap,
+        ),
+        (
             "button::tap callback writes a signal and rebuilds its reader",
             button::tap_callback_writes_a_signal_and_rebuilds_its_reader,
         ),

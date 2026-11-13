@@ -6,7 +6,7 @@
 
 [navigation_bar_alone]
 allocations = 867
-bytes = 107005
+bytes = 106989
 elements = 51
 reallocations = 21
 render_nodes = 26

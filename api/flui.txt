@@ -1463,8 +1463,6 @@ variant flui::app::InputOutcome::Unhandled // at 1
 #[non_exhaustive] pub enum flui::app::InputRecord
 impl Clone for flui::app::InputRecord
 impl core::fmt::Debug for flui::app::InputRecord
-pub fn flui::app::InputRecord::from_wire(row: flui_protocol::input_recording::Row) -> Result<Self, flui_runtime::recording_wire::WireError>
-pub fn flui::app::InputRecord::to_wire(&self, privacy: flui_runtime::recording_wire::Privacy) -> Result<flui_protocol::input_recording::Row, flui_runtime::recording_wire::WireError>
 variant flui::app::InputRecord::Deadline(flui_runtime::input_record::DeadlineRow) // at 2
 variant flui::app::InputRecord::Decision(flui::app::DecisionRow) // at 1
 variant flui::app::InputRecord::End { lost_rows: u64 } // at 5
@@ -1546,9 +1544,7 @@ impl Clone for flui::app::PreferencesRow
 impl PartialEq for flui::app::PreferencesRow
 impl core::fmt::Debug for flui::app::PreferencesRow
 impl core::marker::StructuralPartialEq for flui::app::PreferencesRow
-pub fn flui::app::PreferencesRow::from_wire(preferences: flui_protocol::input_recording::Preferences) -> Result<Self, flui_runtime::recording_wire::WireError>
 pub fn flui::app::PreferencesRow::new(revision: u64, values: alloc::rcs::arc::Arc<flui::platform::SystemPreferences>) -> Self
-pub fn flui::app::PreferencesRow::to_wire(&self) -> Result<flui_protocol::input_recording::Preferences, flui_runtime::recording_wire::WireError>
 #[non_exhaustive] pub enum flui::app::PublishError
 impl Clone for flui::app::PublishError
 impl Copy for flui::app::PublishError
@@ -1564,7 +1560,6 @@ field flui::app::RecordingStart::preferences: Option<flui::app::PreferencesRow> 
 field flui::app::RecordingStart::windows: Vec<flui::app::RecordingWindow> // at 0
 impl Clone for flui::app::RecordingStart
 impl core::fmt::Debug for flui::app::RecordingStart
-pub fn flui::app::RecordingStart::to_wire(&self, clock: flui_protocol::input_recording::Clock, privacy: flui_runtime::recording_wire::Privacy) -> Result<flui_protocol::input_recording::Header, flui_runtime::recording_wire::WireError>
 #[non_exhaustive] pub struct flui::app::RecordingWindow
 field flui::app::RecordingWindow::gesture_profiles: flui::interaction::GestureProfiles // at 2
 field flui::app::RecordingWindow::scale_factor: f64 // at 1
@@ -10465,7 +10460,6 @@ impl From<flui::painting::paint::Path> for flui_painting::paint::path::PathRepr
 impl From<flui_painting::paint::path::PathRepr> for flui::painting::paint::Path
 impl PartialEq for flui::painting::paint::Path
 impl core::fmt::Debug for flui::painting::paint::Path
-impl core::marker::StructuralPartialEq for flui::painting::paint::Path
 impl serde_core::ser::Serialize for flui::painting::paint::Path
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::Path
 pub const fn flui::painting::paint::Path::fill_type(&self) -> flui::painting::paint::PathFillType
@@ -10473,8 +10467,6 @@ pub fn flui::painting::paint::Path::add_arc(&mut self, rect: flui::geometry::Rec
 pub fn flui::painting::paint::Path::add_oval(&mut self, rect: flui::geometry::Rect<f64>)
 pub fn flui::painting::paint::Path::add_rect(&mut self, rect: flui::geometry::Rect<f64>)
 pub fn flui::painting::paint::Path::arc(rect: flui::geometry::Rect<f64>, start_angle: f64, sweep_angle: f64) -> Self
-pub fn flui::painting::paint::Path::bounds(&mut self) -> flui::geometry::Rect<f64>
-pub fn flui::painting::paint::Path::cached_bounds(&self) -> Option<flui::geometry::Rect<f64>>
 pub fn flui::painting::paint::Path::circle(center: flui::geometry::Point<f64>, radius: f64) -> Self
 pub fn flui::painting::paint::Path::close(&mut self)
 pub fn flui::painting::paint::Path::commands(&self) -> impl ExactSizeIterator<Item = flui::painting::paint::PathCommand> + '_
@@ -35267,16 +35259,6 @@ impl PartialEq for flui_runtime::pump::FrameOutcome
 impl core::fmt::Debug for flui_runtime::pump::FrameOutcome
 impl core::marker::StructuralPartialEq for flui_runtime::pump::FrameOutcome
 pub const fn flui_runtime::pump::FrameOutcome::presented(self) -> bool
-#[non_exhaustive] pub enum flui_runtime::recording_wire::Privacy
-impl Clone for flui_runtime::recording_wire::Privacy
-impl Copy for flui_runtime::recording_wire::Privacy
-impl Default for flui_runtime::recording_wire::Privacy
-impl Eq for flui_runtime::recording_wire::Privacy
-impl PartialEq for flui_runtime::recording_wire::Privacy
-impl core::fmt::Debug for flui_runtime::recording_wire::Privacy
-impl core::marker::StructuralPartialEq for flui_runtime::recording_wire::Privacy
-variant flui_runtime::recording_wire::Privacy::KeepText // at 1
-variant flui_runtime::recording_wire::Privacy::Redact // at 0
 #[non_exhaustive] pub enum flui_runtime::recording_wire::WireError
 impl core::error::Error for flui_runtime::recording_wire::WireError
 impl core::fmt::Debug for flui_runtime::recording_wire::WireError

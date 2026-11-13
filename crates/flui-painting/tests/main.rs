@@ -241,6 +241,10 @@ fn path_geometry_contract() {
                 "lerp_morphs_compatible_paths_only",
                 path_geometry::lerp_morphs_compatible_paths_only,
             ),
+            (
+                "a_shape_reads_alike_before_and_after_its_curves_are_built",
+                path_geometry::a_shape_reads_alike_before_and_after_its_curves_are_built,
+            ),
         ],
     );
 }

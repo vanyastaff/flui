@@ -22,7 +22,7 @@ workspace = true
 # Test hooks (`HeldPointerQueue::append`/`len`, the `SemanticsHost` surface
 # that has no production caller yet, and `ExecutionServices::with_limits`/
 # `default_pools_started`), and the `testing` module's `TestWindow` and
-# `ScriptedSink` doubles, and decoding a recording's rows (`InputRecord::from_wire`,
+# `ScriptedSink` doubles, and decoding a recording's rows (`__runtime::record_from_wire`,
 # which names a window by value), for this crate's own tests, `flui-testing`'s and `flui-app`'s,
 # which enable it on their dev edge. Never on a normal edge.
 testing = ["flui-platform/testing", "flui-layer/testing"]
