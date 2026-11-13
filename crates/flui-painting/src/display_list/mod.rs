@@ -83,8 +83,8 @@ const _: () = assert!(size_of::<RecordedOp>() <= 224);
 /// compute the cached [`bounds`](Self::bounds) from command geometry.
 ///
 /// Transforms are interned: an op holds a list-private id of its entry,
-/// consecutive ops under one transform share it, the identity takes none,
-/// and [`Self::iter`] yields the transform and the op of each command
+/// a transform equal to the last entry recorded reuses it, the identity takes
+/// none, and [`Self::iter`] yields the transform and the op of each command
 /// (ADR-0306 §1, §5).
 #[derive(Debug, Clone)]
 pub struct DisplayList {

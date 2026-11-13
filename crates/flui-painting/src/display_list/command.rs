@@ -25,8 +25,9 @@ use crate::display_list::{BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMo
 /// so every command is self-describing: its bounds, a damage query and a
 /// snapshot line all read one command without replaying state. Clips are
 /// the one thing that scope: [`DrawOp::Save`]/[`DrawOp::Restore`] bracket
-/// them. Consecutive commands under one transform share the list's entry
-/// for it and yield the same reference (ADR-0306 §1, §5).
+/// them. Commands that share the list's entry for their transform (one
+/// recorded equal to the last entry reuses it) yield the same reference
+/// (ADR-0306 §1, §5).
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct DrawCommand<'a> {
