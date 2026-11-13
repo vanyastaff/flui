@@ -3062,24 +3062,51 @@ fn a_node_moved_out_of_its_clip_comes_back() {
 /// A layout wrapper the move takes from the visible part of a viewport into
 /// its cache extent is painted nowhere yet still published, so assembly marks
 /// it hidden, and a hidden wrapper forms a node of its own. The label inside
-/// is moved back into view, so only the wrapper changes: the moved tree must
-/// publish what building it afresh does, the hidden wrapper node included.
+/// is moved back into view, so only the wrapper changes.
 fn a_wrapper_moved_into_the_cache_extent_is_hidden_with_it() {
     use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
     let position = ScrollPosition::fixed(0.0);
-    let content = |dy: f64| {
-        SizedBox::new(100.0, 100.0).child(Viewport::new(
-            position.clone(),
-            (SliverToBoxAdapter::new().child(
-                Transform::translate(0.0, dy).child(
-                    SizedBox::new(40.0, 20.0)
-                        .child(Transform::translate(0.0, -dy).child(labelled("cached", 40.0))),
-                ),
-            ),),
-        ))
-    };
-    // Compared by id, as published: the flat description would not show
-    // which node holds which.
+    publishes_as_built_afresh(
+        |dy| {
+            SizedBox::new(100.0, 100.0).child(Viewport::new(
+                position.clone(),
+                (SliverToBoxAdapter::new().child(
+                    Transform::translate(0.0, dy).child(
+                        SizedBox::new(40.0, 20.0)
+                            .child(Transform::translate(0.0, -dy).child(labelled("cached", 40.0))),
+                    ),
+                ),),
+            ))
+        },
+        &[0.0, 150.0, 0.0],
+    );
+}
+
+/// The reverse: a wrapper in the cache extent gives its hidden flag to the
+/// labelled container it merges into, and moving it into view ends that flag.
+fn a_wrapper_moved_out_of_the_cache_extent_unhides_its_container() {
+    use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    let position = ScrollPosition::fixed(0.0);
+    publishes_as_built_afresh(
+        |dy| {
+            SizedBox::new(100.0, 100.0).child(Viewport::new(
+                position.clone(),
+                (SliverToBoxAdapter::new().child(
+                    Semantics::new()
+                        .container(true)
+                        .label("holder")
+                        .child(Transform::translate(0.0, dy).child(SizedBox::new(40.0, 20.0))),
+                ),),
+            ))
+        },
+        &[150.0, 0.0, 150.0],
+    );
+}
+
+/// Pumps `content` through `steps` and checks after each move that the
+/// published tree is what building that step afresh publishes, compared by
+/// id: the flat description would not show which node holds which.
+fn publishes_as_built_afresh<V: flui_view::View>(content: impl Fn(f64) -> V, steps: &[f64]) {
     let published = |laid: &crate::common::LaidOut| {
         let mut nodes = laid
             .a11y_tree()
@@ -3090,16 +3117,16 @@ fn a_wrapper_moved_into_the_cache_extent_is_hidden_with_it() {
         nodes.sort_by_key(|(id, _)| id.0);
         nodes
     };
-    let mut moved = lay_out(content(0.0), loose(400.0));
+    let mut moved = lay_out(content(steps[0]), loose(400.0));
     moved.enable_semantics();
     moved.tick();
-    for dy in [150.0, 0.0] {
-        moved.pump_widget(content(dy));
+    for &step in &steps[1..] {
+        moved.pump_widget(content(step));
         moved.tick();
-        let mut fresh = lay_out(content(dy), loose(400.0));
+        let mut fresh = lay_out(content(step), loose(400.0));
         fresh.enable_semantics();
         fresh.tick();
-        assert_eq!(published(&moved), published(&fresh), "moved to {dy}");
+        assert_eq!(published(&moved), published(&fresh), "moved to {step}");
     }
 }
 
@@ -3168,6 +3195,10 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
             (
                 "a wrapper moved into the cache extent",
                 a_wrapper_moved_into_the_cache_extent_is_hidden_with_it,
+            ),
+            (
+                "a wrapper moved out of the cache extent",
+                a_wrapper_moved_out_of_the_cache_extent_unhides_its_container,
             ),
             (
                 "reading order in a document",

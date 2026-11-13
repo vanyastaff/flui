@@ -942,6 +942,26 @@ impl SemanticsClips {
         }
     }
 
+    /// Whether [`apply`](Self::apply) can mark some rect hidden under these
+    /// clips: part of what the semantics clip keeps lies outside the paint
+    /// clip, and that part is hidden (no reveal ancestor, or authored
+    /// occlusion). Under a plain clip the semantics region is the paint clip,
+    /// so a rect outside it is dropped, never hidden.
+    fn can_hide(self, revealable: bool) -> bool {
+        let Some(paint) = self.paint else {
+            return false;
+        };
+        if revealable && self.occlusion.is_none() {
+            return false;
+        }
+        let kept = if revealable {
+            self.semantics
+        } else {
+            intersect_clips(self.semantics, self.cache)
+        };
+        !kept.is_some_and(|kept| paint.contains_rect(&kept))
+    }
+
     /// The clips a child of this node inherits.
     ///
     /// Paint clips intersect. A scroll cache replaces only the cache; authored
@@ -1824,10 +1844,10 @@ fn placement_anchors(
         }
         // Assembly marks a node that lands outside the paint clip hidden,
         // and a hidden node contributes: a move can turn a transparent
-        // wrapper into a node of its own.
-        let hidden = node_semantics_rect(node, transform)
-            .is_some_and(|rect| clips.apply(rect, context.has_reveal_ancestor).hidden);
-        if hidden {
+        // wrapper into a node of its own, or end the hidden flag it gave the
+        // node above last pass. Neither pass's state is kept for a wrapper,
+        // so wherever the clips can hide one the walk refuses.
+        if clips.can_hide(context.has_reveal_ancestor) {
             return false;
         }
         let authored = match node {
