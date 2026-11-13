@@ -6,7 +6,7 @@
 //!
 //! See `docs/hot-reload.md`.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -20,10 +20,10 @@ pub const DEFAULT_FINGERPRINT: u64 = 0;
 /// reloadable build functions without touching dylib-local statics.
 pub type RegisterWorkerBuildFn = extern "C" fn(fingerprint: u64, build: *const ());
 
-static WORKER_BUILDS: OnceLock<Mutex<HashMap<u64, BuildPtr>>> = OnceLock::new();
+static WORKER_BUILDS: OnceLock<Mutex<BTreeMap<u64, BuildPtr>>> = OnceLock::new();
 
-fn worker_builds() -> &'static Mutex<HashMap<u64, BuildPtr>> {
-    WORKER_BUILDS.get_or_init(|| Mutex::new(HashMap::new()))
+fn worker_builds() -> &'static Mutex<BTreeMap<u64, BuildPtr>> {
+    WORKER_BUILDS.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
 /// While a [`WorkerPlugin`] init call is in flight, collects the

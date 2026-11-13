@@ -131,9 +131,9 @@ mod measured {
         Morph as _, PathCommand as _, RoundedPolygon as _, material_shapes as _,
     };
     use flui_sdk::painting::{SemanticsRegion as _, SemanticsRegionKey as _};
-    use flui_sdk::pipeline::{
-        PathClipConfiguration as _, RenderPhysicalShape as _, ScrollDirection as _,
-        TranslationFraction as _,
+    use flui_sdk::pipeline::ScrollDirection as _;
+    use flui_sdk::rendering::objects::{
+        PathClipConfiguration as _, RenderPhysicalShape as _, TranslationFraction as _,
     };
     // The capability seam a package declares, provides and acquires with
     // (ADR-0152), the clipboard, its first capability, and the primary
@@ -426,6 +426,15 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::rendering::BoxConstraints) -> flui_sdk::rendering::BoxConstraints = |x| x;
     let _: fn(flui::rendering::HitTestBehavior) -> flui_sdk::rendering::HitTestBehavior = |x| x;
     let _: fn(flui::rendering::BoxProtocol) -> flui_sdk::rendering::BoxProtocol = |x| x;
+    let _: fn(
+        flui::rendering::objects::PathClipConfiguration,
+    ) -> flui_sdk::rendering::objects::PathClipConfiguration = |x| x;
+    let _: fn(
+        flui::rendering::objects::RenderPhysicalShape,
+    ) -> flui_sdk::rendering::objects::RenderPhysicalShape = |x| x;
+    let _: fn(
+        flui::rendering::objects::TranslationFraction,
+    ) -> flui_sdk::rendering::objects::TranslationFraction = |x| x;
 }
 
 /// The unstable input surface a package opts into with `unstable-input`:
@@ -499,6 +508,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub mod hooks {",
         "pub mod input_capabilities {",
         "pub mod interaction {",
+        "pub mod objects {",
         "pub mod painting {",
         "pub mod pipeline {",
         "pub mod platform {",
@@ -592,9 +602,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::text_input::committed_text;",
         "pub use flui_layer::LayerTree;",
         "pub use flui_layer::Scene;",
-        "pub use flui_objects::PathClipConfiguration;",
-        "pub use flui_objects::RenderPhysicalShape;",
-        "pub use flui_objects::TranslationFraction;",
+        "pub use flui_objects::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction};",
         "pub use flui_painting::Alignment;",
         "pub use flui_painting::BlurSigma;",
         "pub use flui_painting::Canvas;",

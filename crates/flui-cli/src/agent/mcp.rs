@@ -1,14 +1,16 @@
 //! `flui mcp`: an MCP server over stdio that forwards to a running app's
 //! driver agent (ADR-0239).
 //!
-//! The agent sees one MCP server whichever FLUI app it drives. Four tools map
-//! one to one onto the agent's methods:
+//! The agent sees one MCP server whichever FLUI app it drives. Each tool maps
+//! onto one of the agent's methods:
 //!
 //! | Tool | Method | Does |
 //! |---|---|---|
 //! | `flui_windows` | `windows.list` | lists the windows that have content |
 //! | `flui_read` | `semantics.read` | reads a window's semantics tree |
+//! | `flui_locate` | `semantics.locate` | finds the elements a locator matches |
 //! | `flui_act` | `semantics.act` | performs an advertised action on an element |
+//! | `flui_wait` | `wait.until` | holds out until a condition holds or its timeout passes |
 //! | `flui_motion` | `motion.set` | reads, pauses or steps the animation clock |
 //!
 //! A tool that takes a `window` may leave it out when the app has exactly one.
@@ -29,7 +31,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use flui_protocol::method::{
-    Method, MethodEffect, MotionSet, SemanticsAct, SemanticsRead, WindowsList,
+    Addressed, Method, MethodEffect, MotionSet, SemanticsAct, SemanticsLocate, SemanticsRead,
+    WaitUntil, WindowsList,
 };
 use flui_protocol::session::ClientRole;
 use serde::Serialize;
@@ -51,17 +54,21 @@ const INSTRUCTIONS: &str = "\
 Drives a running FLUI app through its accessibility tree. Start the app with \
 `flui run --agent`, then: flui_windows lists its windows; flui_read returns a \
 window's tree (nodes carry a `role`, an `id` handle such as `e12`, and the \
-`actions` they accept); flui_act performs one of those actions on a handle. \
-A handle is valid for the window and tree that reported it: read again after \
-the app changes. flui_motion pauses or steps the animation clock so a read \
-sees a settled frame. A failure carries a stable `code` and a `retry` hint; \
+`actions` they accept); flui_locate finds the elements a locator (role, name, \
+state) matches; flui_act performs one of those actions on a handle. A handle \
+is valid for the window and tree that reported it: read again after the app \
+changes. After an action, flui_wait holds out until something appears, goes, \
+matches or the window settles, instead of reading in a loop. flui_motion \
+pauses or steps the animation clock so a read sees a settled frame. A \
+failure carries a stable `code` and a `retry` hint; \
 `busy` and `timeout` with retry `soon` are worth repeating.";
 
 /// What a tool call talks to. [`Live`] is the running app; tests supply a
 /// canned one.
 pub(crate) trait Agent {
-    /// Calls the agent's `method` with `params`.
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure>;
+    /// Calls the agent's `method` with `params`; the app may hold the answer `holds` past
+    /// serving it (a wait).
+    fn call(&mut self, method: &str, params: Value, holds: Duration) -> Result<Value, Failure>;
 }
 
 /// Serves MCP on `input` and `output` until `input` ends.
@@ -132,6 +139,10 @@ fn tools() -> Value {
         "type": "string",
         "description": "A window handle from flui_windows (`w3`). May be left out when the app has one window."
     });
+    let locator = json!({
+        "type": "object",
+        "description": "Which elements, by what a user sees: `role` (`button`, `check_box`, `text_input`, …); `name`, `value` and `description` as a text, {\"match\": \"exact\" | \"contains\" | \"prefix\", \"text\": \"…\", \"ignore_case\": true}; `identifier`; `state` ({\"checked\", \"disabled\", \"focused\", \"expanded\", \"selected\"}); `within` and `has`, locators of an ancestor and of a descendant; `pick` (`strict`, `first`, `last`, {\"nth\": n}). Every field given must match."
+    });
     json!([
         {
             "name": "flui_windows",
@@ -155,6 +166,21 @@ fn tools() -> Value {
             "annotations": { "readOnlyHint": true },
         },
         {
+            "name": "flui_locate",
+            "description": "Find the elements a locator matches, without reading the whole tree. Each match carries its element reference (`w3/e12`, which flui_act takes), the tree revision and the node.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "window": window,
+                    "locator": locator,
+                    "max_matches": { "type": "integer", "minimum": 1, "description": "Matches to report at most; the reply says when it truncated." }
+                },
+                "required": ["locator"],
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": true },
+        },
+        {
             "name": "flui_act",
             "description": "Perform one action a node advertised in its `actions` (invoke, toggle, set_value, select, focus, expand, collapse, scroll_into_view). The reply says how the app delivered it; read the tree to see its effect. A `timeout` error with effect `may_have_run` means the action is still queued: read before repeating it.",
             "inputSchema": {
@@ -169,6 +195,24 @@ fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false },
+        },
+        {
+            "name": "flui_wait",
+            "description": "Hold out until a condition holds in a window, or its timeout passes, instead of reading in a loop. The reply says whether it was satisfied, how many frames presented, what the condition last matched and, for an unsettled window, why. An unsatisfied wait is a result, not an error.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "window": window,
+                    "condition": {
+                        "type": ["object", "string"],
+                        "description": "One of: {\"appears\": locator}, {\"gone\": locator}, {\"matches\": {\"locator\": locator, \"expect\": {\"name\": text} | {\"value\": text} | {\"state\": {…}} | {\"count\": n} | \"focused\"}}, \"settled\" (no frame, callback, timer or image load pending), {\"frames\": n}, {\"event\": {\"kind\": …}}, {\"all\": [conditions]}, {\"any\": [conditions]}. A locator is as in flui_locate; a text is {\"match\": \"exact\", \"text\": \"…\"}."
+                    },
+                    "timeout_ms": { "type": "integer", "minimum": 0, "description": "How long to hold out; 5000 when left out, a day at most." }
+                },
+                "required": ["condition"],
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": true },
         },
         {
             "name": "flui_motion",
@@ -205,6 +249,13 @@ fn call_tool(params: &Value, agent: &mut impl Agent) -> Result<Value, (i32, Stri
             let query = picked(args, &["root", "max_depth", "max_nodes"]);
             send::<SemanticsRead>(agent, json!({ "window": window, "query": query }))
         }),
+        "flui_locate" => locator_in_window(args, agent).and_then(|locator| {
+            let mut params = json!({ "locator": locator });
+            if let Some(max) = args.get("max_matches") {
+                params["max_matches"] = max.clone();
+            }
+            send::<SemanticsLocate>(agent, params)
+        }),
         "flui_act" => window_of(args, agent).and_then(|window| {
             let element = required_str(args, "element")?;
             let action = required_str(args, "action")?;
@@ -220,6 +271,11 @@ fn call_tool(params: &Value, agent: &mut impl Agent) -> Result<Value, (i32, Stri
                 params["value"] = value.clone();
             }
             send::<SemanticsAct>(agent, params)
+        }),
+        "flui_wait" => window_of(args, agent).and_then(|window| {
+            let mut params = picked(args, &["condition", "timeout_ms"]);
+            params["window"] = Value::String(window);
+            send_held::<WaitUntil>(agent, params)
         }),
         "flui_motion" => window_of(args, agent).and_then(|window| {
             let request = picked(args, &["rate", "step_ms"]);
@@ -246,11 +302,50 @@ where
     M: Method,
     M::Params: Serialize + DeserializeOwned,
 {
+    checked_send::<M>(agent, params, |_| Duration::ZERO)
+}
+
+/// [`send`] for a method the app may hold before it answers (a wait): the
+/// reply is awaited as much longer as the parameters ask the app to hold it.
+fn send_held<M>(agent: &mut impl Agent, params: Value) -> Result<Value, Failure>
+where
+    M: Method,
+    M::Params: Serialize + DeserializeOwned + Addressed,
+{
+    checked_send::<M>(agent, params, Addressed::holds_for)
+}
+
+fn checked_send<M>(
+    agent: &mut impl Agent,
+    params: Value,
+    holds: impl FnOnce(&M::Params) -> Duration,
+) -> Result<Value, Failure>
+where
+    M: Method,
+    M::Params: Serialize + DeserializeOwned,
+{
     let params = serde_json::from_value::<M::Params>(params)
         .map_err(|e| invalid(&format!("{}: {e}", M::NAME)))?;
+    let holds = holds(&params);
     let params = serde_json::to_value(&params)
         .map_err(|e| Failure::Transport(format!("{} did not serialize: {e}", M::NAME)))?;
-    agent.call(M::NAME, params)
+    agent.call(M::NAME, params, holds)
+}
+
+/// The call's `locator`, in the window it names, the call's `window`, or the
+/// app's only one.
+fn locator_in_window(
+    args: &serde_json::Map<String, Value>,
+    agent: &mut impl Agent,
+) -> Result<Value, Failure> {
+    let Some(Value::Object(locator)) = args.get("locator") else {
+        return Err(invalid("`locator` is required and must be an object"));
+    };
+    let mut locator = locator.clone();
+    if locator.get("window").is_none_or(Value::is_null) {
+        locator.insert("window".to_owned(), Value::String(window_of(args, agent)?));
+    }
+    Ok(Value::Object(locator))
 }
 
 /// The window a call names, or the app's only one.
@@ -340,7 +435,7 @@ impl Live {
 }
 
 impl Agent for Live {
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+    fn call(&mut self, method: &str, params: Value, holds: Duration) -> Result<Value, Failure> {
         // Once more when the connection broke: the app may have restarted
         // since the last call and left a dead socket behind. A request that
         // never reached it goes again; one that did goes again only when the
@@ -355,7 +450,7 @@ impl Agent for Live {
                 .connection
                 .as_mut()
                 .expect("BUG: connected one line above");
-            match connection.request(method, params.clone()) {
+            match connection.request(method, params.clone(), holds) {
                 Err(Failure::Unsent(_)) if attempt == 0 => self.connection = None,
                 Err(Failure::Transport(_)) if attempt == 0 && reads => self.connection = None,
                 Err(failure @ (Failure::Transport(_) | Failure::Unsent(_))) => {
@@ -371,12 +466,16 @@ impl Agent for Live {
 
 #[cfg(test)]
 mod tests {
+    use flui_protocol::wait::WaitParams;
+
     use super::*;
 
-    /// Answers each method from a table and records what it was asked.
+    /// Answers each method from a table and records what it was asked, and
+    /// how long each call let the app hold its answer.
     struct Canned {
         windows: Vec<&'static str>,
         asked: Vec<(String, Value)>,
+        held: Vec<Duration>,
         fail_with: Option<Value>,
     }
 
@@ -385,14 +484,16 @@ mod tests {
             Self {
                 windows: windows.to_vec(),
                 asked: Vec::new(),
+                held: Vec::new(),
                 fail_with: None,
             }
         }
     }
 
     impl Agent for Canned {
-        fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+        fn call(&mut self, method: &str, params: Value, holds: Duration) -> Result<Value, Failure> {
             self.asked.push((method.to_owned(), params));
+            self.held.push(holds);
             if let Some(error) = &self.fail_with {
                 return Err(Failure::Wire(error.clone()));
             }
@@ -461,15 +562,23 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["flui_windows", "flui_read", "flui_act", "flui_motion"]
+            [
+                "flui_windows",
+                "flui_read",
+                "flui_locate",
+                "flui_act",
+                "flui_wait",
+                "flui_motion"
+            ]
         );
 
         let mut agent = Canned::with_windows(&["w1"]);
         for name in names {
-            let arguments = if name == "flui_act" {
-                json!({ "element": "e1", "action": "invoke" })
-            } else {
-                json!({})
+            let arguments = match name {
+                "flui_act" => json!({ "element": "e1", "action": "invoke" }),
+                "flui_locate" => json!({ "locator": { "role": "button" } }),
+                "flui_wait" => json!({ "condition": "settled" }),
+                _ => json!({}),
             };
             let reply = call(&mut agent, name, arguments);
             assert_eq!(reply["result"]["isError"], false, "{name}: {reply}");
@@ -511,6 +620,91 @@ mod tests {
     }
 
     #[test]
+    fn a_locate_searches_the_window_its_call_or_its_locator_names() {
+        let name = json!({ "match": "exact", "text": "Settings" });
+        let mut agent = Canned::with_windows(&["w3"]);
+        call(
+            &mut agent,
+            "flui_locate",
+            json!({ "locator": { "role": "button", "name": name }, "max_matches": 2 }),
+        );
+        call(
+            &mut agent,
+            "flui_locate",
+            json!({ "window": "w1", "locator": { "window": "w5", "role": "button" } }),
+        );
+        call(
+            &mut agent,
+            "flui_locate",
+            json!({ "window": "w2", "locator": { "window": null, "role": "button" } }),
+        );
+        assert_eq!(
+            agent.asked,
+            [
+                ("windows.list".to_owned(), json!({})),
+                (
+                    "semantics.locate".to_owned(),
+                    json!({ "locator": { "window": "w3", "role": "button", "name": name },
+                            "max_matches": 2 })
+                ),
+                (
+                    "semantics.locate".to_owned(),
+                    json!({ "locator": { "window": "w5", "role": "button" } })
+                ),
+                (
+                    "semantics.locate".to_owned(),
+                    json!({ "locator": { "window": "w2", "role": "button" } })
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_wait_lets_the_app_hold_its_answer_for_the_timeout_it_names() {
+        let appears = json!({ "appears": { "role": "button" } });
+        let mut agent = Canned::with_windows(&["w3"]);
+        call(
+            &mut agent,
+            "flui_wait",
+            json!({ "window": "w3", "condition": appears, "timeout_ms": 30_000 }),
+        );
+        call(&mut agent, "flui_wait", json!({ "condition": "settled" }));
+        call(
+            &mut agent,
+            "flui_wait",
+            json!({ "window": "w3", "condition": "settled", "timeout_ms": u64::MAX }),
+        );
+        let waits: Vec<(&Value, Duration)> = agent
+            .asked
+            .iter()
+            .zip(&agent.held)
+            .filter(|((method, _), _)| method == "wait.until")
+            .map(|((_, params), held)| (params, *held))
+            .collect();
+        assert_eq!(
+            waits,
+            [
+                (
+                    &json!({ "window": "w3", "condition": appears, "timeout_ms": 30_000 }),
+                    Duration::from_secs(30)
+                ),
+                (
+                    &json!({ "window": "w3", "condition": "settled" }),
+                    Duration::from_millis(WaitParams::DEFAULT_TIMEOUT_MS)
+                ),
+                (
+                    &json!({ "window": "w3", "condition": "settled", "timeout_ms": u64::MAX }),
+                    Duration::from_millis(WaitParams::MAX_TIMEOUT_MS)
+                ),
+            ]
+        );
+        // Nothing else holds: a read is answered within the reply timeout.
+        let mut agent = Canned::with_windows(&["w3"]);
+        call(&mut agent, "flui_read", json!({}));
+        assert!(agent.held.iter().all(Duration::is_zero), "{:?}", agent.held);
+    }
+
+    #[test]
     fn a_call_the_method_would_refuse_is_refused_before_anything_is_sent() {
         for arguments in [
             json!({ "window": "w1", "action": "invoke" }),
@@ -533,6 +727,31 @@ mod tests {
         );
         assert_eq!(reply["result"]["isError"], true, "{reply}");
         assert_eq!(agent.asked.len(), 0);
+        for (tool, arguments) in [
+            ("flui_locate", json!({ "window": "w1" })),
+            (
+                "flui_locate",
+                json!({ "window": "w1", "locator": "button" }),
+            ),
+            (
+                "flui_locate",
+                json!({ "window": "w1", "locator": { "state": { "disabled": "yes" } } }),
+            ),
+            ("flui_wait", json!({ "window": "w1" })),
+            ("flui_wait", json!({ "window": "w1", "condition": "soon" })),
+            (
+                "flui_wait",
+                json!({ "window": "w1", "condition": { "frames": -1 } }),
+            ),
+        ] {
+            let mut agent = Canned::with_windows(&["w1"]);
+            let reply = call(&mut agent, tool, arguments.clone());
+            assert_eq!(
+                reply["result"]["isError"], true,
+                "{tool} {arguments}: {reply}"
+            );
+            assert_eq!(agent.asked.len(), 0, "{tool} {arguments}");
+        }
     }
 
     #[test]

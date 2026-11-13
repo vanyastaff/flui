@@ -51,6 +51,10 @@ impl<'de> serde::Deserialize<'de> for Image {
     }
 }
 
+/// The largest encoded image (PNG, JPEG, GIF) a reader takes in, file or
+/// response body: 256 MiB. A longer one is refused before it is buffered.
+pub const MAX_ENCODED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Why RGBA8 pixel data was rejected by [`Image::try_from_rgba8`].
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ImageDataError {

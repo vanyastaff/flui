@@ -6,10 +6,11 @@
 //! - Managing GlobalKey registry
 //! - Coordinating InheritedElement lookups
 
+use rustc_hash::FxHashMap;
 use std::{
     cell::{Cell, RefCell},
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::BinaryHeap,
     rc::Rc,
     sync::Arc,
 };
@@ -18,7 +19,6 @@ use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RebuildReasons, RenderId, SlotSet, ViewKey};
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::DetachedRenderSubtrees;
-use rustc_hash::FxHashMap;
 
 use super::dirty_queue::{DirtyElement, DirtyQueue};
 use crate::{
@@ -241,7 +241,7 @@ pub(crate) struct BuildScopeQueues {
     /// Dirty work currently outside every live layout-builder scope.
     root: BinaryHeap<Reverse<DirtyElement>>,
     /// Dirty work keyed by its current nearest live layout-builder scope.
-    isolated: HashMap<ElementId, BinaryHeap<Reverse<DirtyElement>>>,
+    isolated: FxHashMap<ElementId, BinaryHeap<Reverse<DirtyElement>>>,
     /// Reused while rerouting after scope removal or tree reparenting.
     scratch: Vec<DirtyElement>,
     /// Nearest scope per element, reused by each repartition.
@@ -400,7 +400,7 @@ pub struct BuildOwner {
     ///
     /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
     /// split-borrow.
-    pub(crate) pending_dependency_changes: std::collections::HashSet<ElementId>,
+    pub(crate) pending_dependency_changes: SlotSet<ElementId>,
 
     /// Sparse dependent -> providers ownership index.
     ///
@@ -518,7 +518,7 @@ pub struct BuildOwner {
     /// `ElementOwner::register_child_manager` / `unregister_child_manager`
     /// split-borrow methods.
     ///
-    /// A `RefCell` (not a plain `HashMap`) so `ElementOwner` can carry a
+    /// A `RefCell` (not a plain `FxHashMap`) so `ElementOwner` can carry a
     /// shared `&'a` reference and still register and unregister managers.
     /// `service_child_requests` clones the manager `Rc`s out of it before
     /// calling service, releasing the registry borrow before the potentially
@@ -726,7 +726,7 @@ impl BuildOwner {
             global_key_reservations: Box::new(GlobalKeyReservations::new()),
             global_key_diagnostics: Vec::new(),
             inactive_elements: Vec::new(),
-            pending_dependency_changes: std::collections::HashSet::new(),
+            pending_dependency_changes: SlotSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
             reactive: crate::reactive::Reactive::new(),
             keep_alive: super::KeepAliveHolds::default(),
@@ -744,7 +744,7 @@ impl BuildOwner {
             mid_drain_cap_streak: false,
             built_this_frame: SlotSet::new(),
             frame_builds: Box::default(),
-            child_manager_registry: RefCell::new(HashMap::new()),
+            child_manager_registry: RefCell::new(FxHashMap::default()),
             layout_builder_registry: LayoutBuilderRegistry::default(),
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
             build_scope_queues: None,
@@ -1062,20 +1062,23 @@ impl BuildOwner {
     /// Return the nearest mounted layout-builder scope containing `element`.
     /// The search includes `element` itself: a scope root belongs to its own
     /// scope.
-    fn live_layout_scope_ids(&self, tree: &ElementTree) -> HashSet<ElementId> {
+    fn live_layout_scope_ids(&self, tree: &ElementTree) -> SlotSet<ElementId> {
         self.layout_builder_registry.with_entries(|entries| {
-            entries
+            let mut live = SlotSet::new();
+            for entry in entries
                 .values()
                 .filter(|entry| tree.contains(entry.element))
-                .map(|entry| entry.element)
-                .collect()
+            {
+                live.insert(entry.element);
+            }
+            live
         })
     }
 
     fn nearest_layout_builder_scope(
         tree: &ElementTree,
         element: ElementId,
-        live_scopes: &HashSet<ElementId>,
+        live_scopes: &SlotSet<ElementId>,
     ) -> Option<ElementId> {
         #[cfg(test)]
         LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
@@ -1083,7 +1086,7 @@ impl BuildOwner {
         while let Some(candidate) = cursor {
             #[cfg(test)]
             LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
-            if live_scopes.contains(&candidate) && tree.contains(candidate) {
+            if live_scopes.contains(candidate) && tree.contains(candidate) {
                 return Some(candidate);
             }
             cursor = tree
@@ -1132,7 +1135,7 @@ impl BuildOwner {
     pub(crate) fn repartition_dirty(
         &mut self,
         tree: &ElementTree,
-        live_scopes: &HashSet<ElementId>,
+        live_scopes: &SlotSet<ElementId>,
     ) {
         self.collect_partitioned_dirty();
         let mut memo = std::mem::take(
@@ -1158,7 +1161,7 @@ impl BuildOwner {
             LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
             let scope = memo.nearest(
                 dirty.id(),
-                |id| live_scopes.contains(&id) && tree.contains(id),
+                |id| live_scopes.contains(id) && tree.contains(id),
                 |id| {
                     #[cfg(test)]
                     LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
@@ -1540,7 +1543,7 @@ impl BuildOwner {
         };
 
         self.dirty_reasons.remove(&failed);
-        self.pending_dependency_changes.remove(&failed);
+        self.pending_dependency_changes.remove(failed);
         let mut element_owner = self.element_owner_mut();
         let substitute = crate::element::sparse_children::replace_failed_child(
             parent,
@@ -1558,7 +1561,7 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         target: BuildScopeTarget,
-        live_scopes: Option<&HashSet<ElementId>>,
+        live_scopes: Option<&SlotSet<ElementId>>,
     ) -> BuildDrainResult {
         #[cfg(not(debug_assertions))]
         if matches!(target, BuildScopeTarget::All) {
@@ -1613,7 +1616,7 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         target: BuildScopeTarget,
-        live_scopes: Option<&HashSet<ElementId>>,
+        live_scopes: Option<&SlotSet<ElementId>>,
     ) -> BuildDrainResult {
         let mut result = BuildDrainResult::default();
         let mut absorbed_mid_drain = 0usize;
@@ -1722,7 +1725,7 @@ impl BuildOwner {
             // last build, fire `ViewState::did_change_dependencies` BEFORE
             // the build. Consumed here so the typed hook runs exactly once
             // per dependency-change-then-rebuild cycle.
-            let needs_did_change = self.pending_dependency_changes.contains(&id);
+            let needs_did_change = self.pending_dependency_changes.contains(id);
 
             // Guard (still holding only a brief `&mut node`): an
             // inherited-dependency change marks an otherwise-clean dependent
@@ -1735,7 +1738,7 @@ impl BuildOwner {
                 let Some(node) = tree.get_mut(id) else {
                     // Stale / removed id — nothing to build.
                     self.dirty_reasons.remove(&id);
-                    self.pending_dependency_changes.remove(&id);
+                    self.pending_dependency_changes.remove(id);
                     continue;
                 };
                 if needs_did_change {
@@ -1743,7 +1746,7 @@ impl BuildOwner {
                 }
                 if !node.element().lifecycle().can_build() || !node.element().is_dirty() {
                     self.dirty_reasons.remove(&id);
-                    self.pending_dependency_changes.remove(&id);
+                    self.pending_dependency_changes.remove(id);
                     continue;
                 }
             }
@@ -1914,7 +1917,7 @@ impl BuildOwner {
             result.any_rebuilt = true;
             result.target_rebuilt |=
                 matches!(target, BuildScopeTarget::LayoutBuilder(scope) if scope == id);
-            self.pending_dependency_changes.remove(&id);
+            self.pending_dependency_changes.remove(id);
             // A LATER mid-drain absorb of this same id is a re-entry, not a
             // first-time absorb, whether it comes from this element
             // rescheduling itself, a child notifying it back, or one half of
@@ -2396,23 +2399,25 @@ impl BuildOwner {
         );
 
         // 2. Group requests and retain-bands by sliver RenderId.
-        let mut requests_by_sliver: HashMap<RenderId, Vec<usize>> = HashMap::new();
+        let mut requests_by_sliver: FxHashMap<RenderId, Vec<usize>> = FxHashMap::default();
         for (sliver_id, logical_index) in pending_requests {
             requests_by_sliver
                 .entry(sliver_id)
                 .or_default()
                 .push(logical_index);
         }
-        let mut bands_by_sliver: HashMap<RenderId, (usize, usize)> = HashMap::new();
+        let mut bands_by_sliver: FxHashMap<RenderId, (usize, usize)> = FxHashMap::default();
         for (sliver_id, first, last) in retain_bands {
             bands_by_sliver.insert(sliver_id, (first, last));
         }
 
         // Collect all affected sliver ids (may have requests, bands, or both).
         let affected_ids: Vec<RenderId> = {
-            let mut ids: HashSet<RenderId> = requests_by_sliver.keys().copied().collect();
-            ids.extend(bands_by_sliver.keys().copied());
-            ids.into_iter().collect()
+            let mut ids: SlotSet<RenderId> = SlotSet::new();
+            for &id in requests_by_sliver.keys().chain(bands_by_sliver.keys()) {
+                ids.insert(id);
+            }
+            ids.as_slice().to_vec()
         };
 
         // 3. Clone manager Rcs out of the registry before any service call.
@@ -3451,10 +3456,10 @@ mod tests {
             owner.pending_rebuild_reasons(moved).is_some(),
             "the old scope cannot consume work after the live reparent"
         );
-        assert!(owner.pending_dependency_changes.contains(&moved));
+        assert!(owner.pending_dependency_changes.contains(moved));
         owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope_b));
         assert!(owner.pending_rebuild_reasons(moved).is_none());
-        assert!(!owner.pending_dependency_changes.contains(&moved));
+        assert!(!owner.pending_dependency_changes.contains(moved));
         assert_eq!(dependency_calls.load(Ordering::Relaxed), 1);
         assert_eq!(build_calls.load(Ordering::Relaxed), builds_after_mount + 1);
 
@@ -3475,7 +3480,7 @@ mod tests {
         owner.build_scope(&mut tree);
 
         assert!(owner.pending_rebuild_reasons(moved).is_none());
-        assert!(!owner.pending_dependency_changes.contains(&moved));
+        assert!(!owner.pending_dependency_changes.contains(moved));
         assert_eq!(dependency_calls.load(Ordering::Relaxed), 2);
         assert_eq!(build_calls.load(Ordering::Relaxed), builds_after_mount + 2);
     }

@@ -1,4 +1,7 @@
-### Removed
+### Added
 
-- `RawId::zip_unchecked`, `Id::zip_unchecked` and `Id::new_unchecked`, the hidden `unsafe`
-  constructors of `flui::foundation` ids; the safe constructors stay.
+- `flui::rendering` re-exports the render-contract types its own items name: the `Protocol`
+  associated types (`BoxLayout`, `SliverLayout`, `ProtocolConstraints`, `ChildState`, …),
+  `LayoutContext`, `HitTestContext`, `PaintAnchor`, `PaintFragment`, `FragmentRecorder`,
+  `GrowthDirection`, `InputRegionSink`, `SemanticsClip`, `PoisonPhase`, `DirtySendError` and the
+  parent-data types a sliver cross axis takes. Each was reachable only by an internal crate path.

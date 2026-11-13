@@ -328,7 +328,7 @@ pub struct Renderer {
     /// painter is rebuilt (device recovery, surface format change), which
     /// drops its imported allocations.
     external_frames:
-        std::collections::HashMap<flui_painting::paint::TextureId, flui_painting::paint::Image>,
+        rustc_hash::FxHashMap<flui_painting::paint::TextureId, flui_painting::paint::Image>,
     offscreen: crate::offscreen::OffscreenRenderer,
     /// Whether the surface supports COPY_SRC (for mid-frame texture copies)
     supports_copy_src: bool,
@@ -541,7 +541,7 @@ impl Renderer {
             color,
             capabilities: stack.capabilities,
             painter: stack.painter,
-            external_frames: std::collections::HashMap::new(),
+            external_frames: rustc_hash::FxHashMap::default(),
             offscreen: stack.offscreen,
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
@@ -1446,7 +1446,7 @@ impl Renderer {
     /// accepted for [`Self::reupload_external_frames`].
     fn apply_and_retain_texture_updates(
         painter: &mut crate::painter::WgpuPainter,
-        external_frames: &mut std::collections::HashMap<
+        external_frames: &mut rustc_hash::FxHashMap<
             flui_painting::paint::TextureId,
             flui_painting::paint::Image,
         >,
@@ -1479,7 +1479,7 @@ impl Renderer {
 
     fn reupload_external_frames(
         painter: &mut crate::painter::WgpuPainter,
-        external_frames: &std::collections::HashMap<
+        external_frames: &rustc_hash::FxHashMap<
             flui_painting::paint::TextureId,
             flui_painting::paint::Image,
         >,
@@ -2485,7 +2485,7 @@ mod tests {
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: None,
             force_intermediate: false,
-            external_frames: std::collections::HashMap::new(),
+            external_frames: rustc_hash::FxHashMap::default(),
         };
         (renderer, domain, callback_flag)
     }
@@ -2692,7 +2692,7 @@ mod tests {
         let registration = registry.register().expect("a texture id");
         let id = registration.id();
         let mut painter = build();
-        let mut frames = std::collections::HashMap::new();
+        let mut frames = rustc_hash::FxHashMap::default();
         registration.submit_frame(flui_painting::paint::Image::from_rgba8(
             2,
             2,

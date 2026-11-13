@@ -22,7 +22,7 @@
 //! unfinished, keeps them owed without a failure. The registry's lock is
 //! never held while the storage, the IO pool or the owner's signal runs.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -147,8 +147,8 @@ enum Begin {
 /// The registry's state.
 #[derive(Default)]
 struct Slots {
-    entries: HashMap<ValueKey, Entry>,
-    committed: HashMap<ValueKey, CommittedWrite>,
+    entries: FxHashMap<ValueKey, Entry>,
+    committed: FxHashMap<ValueKey, CommittedWrite>,
     /// How many finished writes were recorded.
     changes: u64,
     /// How many of them the owner has settled: waiters taken before this
@@ -679,8 +679,8 @@ impl FlushHost {
     #[must_use]
     pub fn flush_within(&self, deadline: Instant) -> FlushReport {
         let shared = &self.shared;
-        let owed: HashSet<ValueKey> = shared.slots.lock().entries.keys().copied().collect();
-        let mut attempted = HashSet::new();
+        let owed: FxHashSet<ValueKey> = shared.slots.lock().entries.keys().copied().collect();
+        let mut attempted = FxHashSet::default();
         loop {
             let mut slots = shared.slots.lock();
             if slots.entries.values().any(|entry| entry.writing) {

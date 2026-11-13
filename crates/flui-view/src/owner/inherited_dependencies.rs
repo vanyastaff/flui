@@ -6,7 +6,7 @@
 //! on [`BuildOwner`](super::BuildOwner) avoids adding a collection to every
 //! element node while making registration and lifecycle cleanup symmetric.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use flui_foundation::ElementId;
 use smallvec::SmallVec;
@@ -19,18 +19,18 @@ pub(crate) type ProviderIds = SmallVec<[ElementId; 2]>;
 #[derive(Debug, Default)]
 pub(crate) struct InheritedDependencies {
     /// Active dependent -> providers currently retaining it.
-    active: HashMap<ElementId, ProviderIds>,
+    active: FxHashMap<ElementId, ProviderIds>,
     /// A failed lookup still depends on ancestry. Lifecycle reads accumulate;
     /// build reads belong only to the latest successful build (ADR-0074 §5.5).
-    lifecycle_misses: HashSet<ElementId>,
-    build_misses: HashSet<ElementId>,
+    lifecycle_misses: FxHashSet<ElementId>,
+    build_misses: FxHashSet<ElementId>,
     /// Deactivated elements that had dependencies.
     ///
     /// Provider registrations are removed during `deactivate`, and
     /// `did_change_dependencies` fires if that element is reactivated. This
     /// sparse marker preserves the lifecycle fact without retaining stale provider
     /// ids or adding state to every element node.
-    inactive_with_dependencies: HashSet<ElementId>,
+    inactive_with_dependencies: FxHashSet<ElementId>,
 }
 
 impl InheritedDependencies {

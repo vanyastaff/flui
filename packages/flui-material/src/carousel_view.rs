@@ -22,7 +22,7 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{EventContext, EventOutcome};
 use flui_sdk::widgets::{
     AnimatedBuilder, Carousel, CarouselAutoplay, CarouselController, CarouselItemScope,
-    CarouselLayout, KeylineSnap, Positioned, Semantics, SemanticsRole, Stack, WidgetState,
+    CarouselLayout, KeylineSnap, Positioned, SemanticsRole, Stack, WidgetState,
     WidgetStateProperty,
 };
 
@@ -33,6 +33,7 @@ use crate::ripple::StateLayerAlpha;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
+use flui_sdk::widgets::interaction::node::Description;
 
 /// M3's extra-large corner, the cards' radius.
 const DEFAULT_CORNER_RADIUS: f64 = 28.0;
@@ -356,6 +357,9 @@ impl CarouselCard {
                     .shape(shape)
                     .overlay_color(overlay)
                     .on_tap(move |ctx| on_tap(ctx, index))
+                    // A tappable card is a button to assistive technology, as a
+                    // Material button is, described on the well's own node.
+                    .description(Description::new(SemanticsRole::Button))
                     .boxed()
             }
             None => surface.boxed(),
@@ -365,16 +369,6 @@ impl CarouselCard {
             .shape(shape)
             .clip_behavior(Clip::AntiAlias)
             .child(body);
-        // A tappable card is a button to assistive technology, as a Material button is.
-        let card: BoxedView = if self.on_tap.is_some() {
-            Semantics::new()
-                .container(true)
-                .role(SemanticsRole::Button)
-                .child(card)
-                .boxed()
-        } else {
-            card.boxed()
-        };
         let card = Positioned::new(card)
             .left(start)
             .top(padding.top)

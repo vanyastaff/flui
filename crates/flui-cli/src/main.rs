@@ -245,7 +245,8 @@ enum Commands {
     ///
     /// Start the app with `flui run --agent`; the MCP client launches
     /// `flui mcp` in the same project. Tools: flui_windows, flui_read,
-    /// flui_act, flui_motion. stdout carries the protocol only.
+    /// flui_locate, flui_act, flui_wait, flui_motion. stdout carries the
+    /// protocol only.
     Mcp {
         /// Session file written by `flui run --agent` (default: the nearest
         /// `target/flui-agent.json`, or FLUI_AGENT_ENDPOINT and FLUI_AGENT_TOKEN)

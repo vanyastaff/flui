@@ -1,6 +1,6 @@
 //! The faces and variation instances keys name, held by the raster side.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::hash::{BuildHasher, Hasher, RandomState};
 use std::sync::Arc;
 
@@ -25,16 +25,20 @@ pub struct RunKey {
 ///
 /// Append-only: a face registered once stays for the registry's life, so a
 /// key naming it never dangles.
+#[expect(
+    clippy::disallowed_types,
+    reason = "interns variation coordinates an application's text styles author, so the table keeps SipHash's random seed against chosen collisions"
+)]
 pub struct FontRegistry {
     /// This registry's identity, stamped on every [`VariationId`] it mints: a
     /// random 64-bit value, so two registries collide with negligible
     /// probability and no process-wide counter is needed.
     identity: u64,
-    faces: HashMap<FaceKey, Face>,
+    faces: FxHashMap<FaceKey, Face>,
     owned_sources: bool,
     /// Interned coordinate sets; a [`VariationId`] is an index into this.
     variations: Vec<Box<[i16]>>,
-    variation_ids: HashMap<Box<[i16]>, VariationId>,
+    variation_ids: std::collections::HashMap<Box<[i16]>, VariationId>,
 }
 
 enum FaceBytes {
@@ -75,15 +79,19 @@ impl Face {
 }
 
 impl Default for FontRegistry {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "interns variation coordinates an application's text styles author, so the table keeps SipHash's random seed against chosen collisions"
+    )]
     fn default() -> Self {
         Self {
             // std's randomly keyed hasher over no input: a fresh random value
             // per registry, from state std already keeps.
             identity: RandomState::new().build_hasher().finish(),
-            faces: HashMap::new(),
+            faces: FxHashMap::default(),
             owned_sources: false,
             variations: Vec::new(),
-            variation_ids: HashMap::new(),
+            variation_ids: std::collections::HashMap::new(),
         }
     }
 }

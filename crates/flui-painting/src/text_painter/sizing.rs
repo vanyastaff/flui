@@ -1,4 +1,8 @@
 //! Owner-local closed numeric answers. Native evaluation belongs outside measurement.
+#![expect(
+    clippy::disallowed_types,
+    reason = "keyed by the text sizes an application authors, which may come from content it does not control, so the tables keep SipHash's random seed against chosen collisions"
+)]
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
