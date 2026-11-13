@@ -40,7 +40,7 @@ type UnknownHook = Rc<dyn Fn(&RoutePath)>;
 /// value in its stack, so page transitions, heroes, `PopScope` and local
 /// history work as they do on any navigator. Only `R` values enter that
 /// navigator as pages; a dialog or menu is a pageless popup a page pushes
-/// through its [`PageHandle`](crate::PageHandle) (ADR-0330 §2).
+/// through its [`PageHandle`] (ADR-0330 §2).
 ///
 /// Drive it with the [`RouterHandle`] that [`Router::of`] returns from a
 /// descendant's build context.
