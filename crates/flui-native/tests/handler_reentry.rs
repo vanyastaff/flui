@@ -133,32 +133,29 @@ impl Reach for OwnerPlatform {
 /// a replaced callback whose captures call the platform when dropped reaches
 /// the platform from its destructor.
 fn a_replaced_keyboard_layout_callback_reaches_the_platform(platform: &Rc<dyn Platform>) {
-    std::thread_local! {
-        /// The platform the capture's destructor reaches: the callback is
-        /// `Send` and the platform is not, so the destructor finds it on the
-        /// owner thread that drops it.
-        static REACHED: RefCell<Option<std::rc::Weak<dyn Platform>>> = const { RefCell::new(None) };
+    /// Reaches the platform when dropped: the callback is owner-local, so its
+    /// capture holds the platform itself.
+    struct CallsBack {
+        reached: Arc<AtomicBool>,
+        platform: RcWeak<dyn Platform>,
     }
-    /// Reaches the platform when dropped.
-    struct CallsBack(Arc<AtomicBool>);
     impl Drop for CallsBack {
         fn drop(&mut self) {
-            let platform =
-                REACHED.with(|slot| slot.borrow().as_ref().and_then(std::rc::Weak::upgrade));
-            if let Some(platform) = platform {
+            if let Some(platform) = self.platform.upgrade() {
                 let _ = platform.active_window();
-                self.0.store(true, Ordering::SeqCst);
+                self.reached.store(true, Ordering::SeqCst);
             }
         }
     }
-    REACHED.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(platform)));
     let reached = Arc::new(AtomicBool::new(false));
-    let capture = CallsBack(Arc::clone(&reached));
+    let capture = CallsBack {
+        reached: Arc::clone(&reached),
+        platform: Rc::downgrade(platform),
+    };
     platform.on_keyboard_layout_change(Box::new(move || {
         let _ = &capture;
     }));
     platform.on_keyboard_layout_change(Box::new(|| {}));
-    REACHED.with(|slot| slot.borrow_mut().take());
     assert!(
         reached.load(Ordering::SeqCst),
         "the replaced callback's destructor did not reach the platform"
