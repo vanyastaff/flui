@@ -96,6 +96,10 @@ impl WireTime {
 
 /// A scroll axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a wheel scrolls one of the two axes of a plane"
+)]
 pub enum Axis {
     /// `vertical_scroll`.
     Vertical,
@@ -114,6 +118,7 @@ impl Axis {
 
 /// What turned the axes of a pointer frame (`wl_pointer.axis_source`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum AxisSource {
     /// A wheel's notches, or its high-resolution steps.
     Wheel,
@@ -127,6 +132,10 @@ pub enum AxisSource {
 
 /// A `wl_pointer` event. Positions are surface-local logical coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a mirror of the protocol's events, decoded arm by arm, and a `_` arm would drop input"
+)]
 pub enum PointerWire {
     /// The pointer entered `surface`.
     Enter {
@@ -184,6 +193,10 @@ pub enum PointerWire {
 
 /// A `wl_touch` event.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a mirror of the protocol's events, decoded arm by arm, and a `_` arm would drop input"
+)]
 pub enum TouchWire {
     /// Touch `id` went down on `surface`.
     Down {
@@ -227,6 +240,10 @@ pub enum TouchWire {
 
 /// A tablet tool's event (`zwp_tablet_tool_v2`); a frame closes each set.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a mirror of the protocol's events, decoded arm by arm, and a `_` arm would drop input"
+)]
 pub enum ToolWire {
     /// The tool came into range over `surface`.
     ProximityIn {
@@ -273,6 +290,10 @@ pub enum ToolWire {
 
 /// A pinch's event (`zwp_pointer_gesture_pinch_v1`).
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a mirror of the protocol's events, decoded arm by arm, and a `_` arm would drop input"
+)]
 pub enum PinchWire {
     /// A pinch began over `surface`.
     Begin {
@@ -304,6 +325,10 @@ pub struct SeatKey(pub u64);
 
 /// What one seat object reported.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a mirror of the protocol's events, decoded arm by arm, and a `_` arm would drop input"
+)]
 pub enum SeatEvent {
     /// A device of `seat` came: a pointer, a touchscreen or a tablet tool.
     DeviceAdded {
@@ -380,6 +405,10 @@ pub struct SeatWire {
 
 /// Where an assembled input goes.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an input goes to one window or to every window"
+)]
 pub enum Routed {
     /// To the window of a surface.
     To(NativeSurface, PlatformInput),

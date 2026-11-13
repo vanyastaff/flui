@@ -413,6 +413,10 @@ pub const fn android_feedback(
 
 /// What the decor view said to one `performHapticFeedback` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the call played, was declined or failed"
+)]
 pub enum AndroidFeedbackAnswer {
     /// It returned `true`: the feedback played.
     Played,
@@ -426,6 +430,10 @@ pub enum AndroidFeedbackAnswer {
 
 /// What the owner does with one semantic feedback request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the owner posts the call or holds it behind the one in flight"
+)]
 pub enum AndroidFeedbackCall {
     /// Post the call to the view and report this outcome.
     Post(HapticOutcome),

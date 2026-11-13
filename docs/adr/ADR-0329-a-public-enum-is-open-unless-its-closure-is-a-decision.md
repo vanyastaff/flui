@@ -81,12 +81,10 @@ A `match` in another crate of the workspace over a `#[non_exhaustive]` enum name
 variant in arms of its own and puts `_` in a separate last arm, as the workspace's
 `wildcard_enum_match_arm` entry describes. ADR-0089 §3 already does this for `SemanticsRole`.
 
-### 3. Migration
+### 3. No crate-wide exception
 
-A crate whose enums are not yet decided carries `#![expect(clippy::exhaustive_enums, reason =
-"ADR-0329: …")]` at its root. The `docs/gaps.md` entry lists those crates. The attribute goes when
-the crate's enums are decided, and `expect` fails once no enum is left undecided. A new crate
-starts under the rule.
+Every public enum of the workspace carries its decision on its own declaration. A crate does not
+carry `#![expect(clippy::exhaustive_enums)]` at its root, and a new crate starts under the rule.
 
 ### Consequences
 
@@ -96,7 +94,6 @@ starts under the rule.
 - Bad: a `match` from another workspace crate over an open enum needs a `_` arm, and loses the
   compiler's check that every variant is named; `wildcard_enum_match_arm` where it is on brings
   that check back as a lint.
-- Bad: every public enum of the crates `docs/gaps.md` lists is decided, crate by crate.
 - Neutral: a private or `pub(crate)` enum is out of the lint's reach; only the public surface is a
   promise.
 

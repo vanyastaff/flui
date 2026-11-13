@@ -57,3 +57,6 @@
   `WheelScaleGate` and `DismissDirection`.
 - `flui-protocol` decides each public enum (ADR-0329): the recording mirrors, `RecordRow`,
   `Checked`, `Retry` and `RequestId` stay closed with their reason at the site.
+- `flui-native` decides each public enum (ADR-0329), so every crate of the workspace now states
+  each public enum's closure at its declaration; `MacOSWindowLevel`, `AxisSource`, `ClockChoice`,
+  `CodecError`, `ReplayError` and `AppCall` are `#[non_exhaustive]`.
