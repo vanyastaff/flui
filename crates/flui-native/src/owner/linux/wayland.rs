@@ -337,10 +337,12 @@ pub(crate) mod wait {
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 mod event_loop {
     use std::any::Any;
+    use std::cell::{Cell, RefCell};
+    use std::collections::hash_map::Entry;
     use std::os::fd::OwnedFd;
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Weak};
     use std::thread::ThreadId;
     use std::time::Duration;
@@ -352,7 +354,7 @@ mod event_loop {
         CursorError, DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
         WindowId,
     };
-    use parking_lot::Mutex;
+    use rustc_hash::FxHashMap;
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
     use rustix::io::Errno;
     use wayland_client::backend::{ObjectId, WaylandError};
@@ -390,7 +392,7 @@ mod event_loop {
     use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::OwnerSignal;
-    use crate::owner::slot::{OwnerCell, OwnerMap};
+    use crate::owner::slot::OwnerCell;
     use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
     use crate::owner::watch::Watch;
     use crate::owner::window_delivery::WindowDelivery;
@@ -869,30 +871,29 @@ mod event_loop {
     /// current on the owner thread: an output removed while a surface was on
     /// it sends that surface no `leave`.
     #[derive(Clone, Default)]
-    pub(crate) struct LiveOutputs(Arc<OwnerCell<Vec<OutputName>>>);
+    pub(crate) struct LiveOutputs(Rc<RefCell<Vec<OutputName>>>);
 
     impl LiveOutputs {
-        /// Whether `output` is still announced; `false` off the owner thread.
+        /// Whether `output` is still announced.
         pub(crate) fn contains(&self, output: OutputName) -> bool {
-            self.0.with(|live| live.contains(&output)).unwrap_or(false)
+            self.0.borrow().contains(&output)
         }
 
-        /// Every output announced now; empty off the owner thread.
+        /// Every output announced now.
         #[cfg(any(test, feature = "testing"))]
         pub(crate) fn names(&self) -> Vec<OutputName> {
-            self.0.with(|live| live.clone()).unwrap_or_default()
+            self.0.borrow().clone()
         }
 
         fn add(&self, output: OutputName) {
-            self.0.with(|live| {
-                if !live.contains(&output) {
-                    live.push(output);
-                }
-            });
+            let mut live = self.0.borrow_mut();
+            if !live.contains(&output) {
+                live.push(output);
+            }
         }
 
         fn remove(&self, output: OutputName) {
-            self.0.with(|live| live.retain(|held| *held != output));
+            self.0.borrow_mut().retain(|held| *held != output);
         }
     }
 
@@ -1038,75 +1039,67 @@ mod event_loop {
         fn release(&self);
     }
 
-    /// The windows a loop holds, by identity, on the owner thread.
+    /// The windows a loop holds, by identity, on the owner thread, which
+    /// alone holds the table (ADR-0327 §5).
     pub(crate) struct WindowTable {
-        windows: OwnerMap<WindowId, Rc<dyn LoopWindow>>,
+        windows: RefCell<FxHashMap<WindowId, Rc<dyn LoopWindow>>>,
         /// The window the compositor last activated.
-        active: OwnerCell<Option<WindowId>>,
+        active: Cell<Option<WindowId>>,
         /// The last window closed since the loop last looked: it asks the
         /// application's exit policy.
-        emptied: AtomicBool,
-        /// Issues the id of every window, on the owner thread, never one
-        /// twice.
-        ids: OwnerCell<flui_platform::WindowIdMint>,
+        emptied: Cell<bool>,
+        /// Issues the id of every window, never one twice.
+        ids: RefCell<flui_platform::WindowIdMint>,
         /// The activation token the process was launched with, until the
         /// first window is held.
-        launch_token: OwnerCell<Option<ActivationToken>>,
+        launch_token: RefCell<Option<ActivationToken>>,
     }
 
     impl WindowTable {
-        /// A table whose first window takes `launch_token`; made on the
-        /// owner thread.
+        /// A table whose first window takes `launch_token`.
         fn new(launch_token: Option<ActivationToken>) -> Self {
-            let held = OwnerCell::new();
-            held.with(|held| *held = launch_token);
             Self {
-                windows: OwnerMap::new(),
-                active: OwnerCell::new(),
-                emptied: AtomicBool::new(false),
-                ids: OwnerCell::new(),
-                launch_token: held,
+                windows: RefCell::default(),
+                active: Cell::new(None),
+                emptied: Cell::new(false),
+                ids: RefCell::default(),
+                launch_token: RefCell::new(launch_token),
             }
         }
 
-        /// An identity no window of this loop had, on the owner thread.
+        /// An identity no window of this loop had.
         ///
         /// # Errors
         ///
         /// [`OpenWindowError::IdsExhausted`] once the space is used up, never
-        /// wrapped onto a window something still names, and
-        /// [`OpenWindowError::Backend`] off the owner thread.
+        /// wrapped onto a window something still names.
         fn issue(&self) -> Result<WindowId, OpenWindowError> {
-            let issued =
-                self.ids
-                    .with(|ids| ids.next())
-                    .ok_or_else(|| OpenWindowError::Backend {
-                        message: "a Wayland window opens on the loop's owner thread".to_owned(),
-                    })?;
-            Ok(issued?)
+            Ok(self.ids.borrow_mut().next()?)
         }
 
-        /// Hold `window` as `id`, on the owner thread. The first window held
-        /// is given the activation token the process was launched with; a
-        /// window refused leaves it for the next.
+        /// Hold `window` as `id`. The first window held is given the
+        /// activation token the process was launched with; a window refused
+        /// leaves it for the next.
         fn register(
             &self,
             id: WindowId,
             window: Rc<dyn LoopWindow>,
         ) -> Result<Option<ActivationToken>, OpenWindowError> {
-            match self.windows.insert(id, window) {
-                Ok(None) => Ok(self.launch_token.with(Option::take).flatten()),
-                Ok(Some(previous)) => {
-                    contain_owner_callback(|| drop(previous));
+            let refused = match self.windows.borrow_mut().entry(id) {
+                Entry::Vacant(vacant) => {
+                    vacant.insert(window);
+                    None
+                }
+                Entry::Occupied(_) => Some(window),
+            };
+            match refused {
+                None => Ok(self.launch_token.borrow_mut().take()),
+                Some(refused) => {
+                    // Dropped with the table's borrow released: its drop may
+                    // release what its handler held.
+                    contain_owner_callback(|| drop(refused));
                     Err(OpenWindowError::Backend {
                         message: format!("the Wayland loop already held a window as {id:?}"),
-                    })
-                }
-                Err(refused) => {
-                    contain_owner_callback(|| drop(refused));
-                    Err(OpenWindowError::Unavailable {
-                        message: "a Wayland window opens on the thread that owns its platform"
-                            .to_owned(),
                     })
                 }
             }
@@ -1115,14 +1108,16 @@ mod event_loop {
         /// Let go of the window `id`, which closed. When it was the last, the
         /// loop asks the application's exit policy on its next turn.
         pub(crate) fn forget(&self, id: WindowId) {
-            let window = self.windows.remove(&id);
-            self.active.with(|active| {
-                if *active == Some(id) {
-                    *active = None;
-                }
-            });
-            if window.is_some() && self.windows.is_empty() {
-                self.emptied.store(true, Ordering::Release);
+            let (window, empty) = {
+                let mut windows = self.windows.borrow_mut();
+                let window = windows.remove(&id);
+                (window, windows.is_empty())
+            };
+            if self.active.get() == Some(id) {
+                self.active.set(None);
+            }
+            if window.is_some() && empty {
+                self.emptied.set(true);
             }
             // The window's own drop may release what its handler held.
             contain_owner_callback(|| drop(window));
@@ -1130,30 +1125,30 @@ mod event_loop {
 
         /// The compositor activated window `id`, or took the activation away.
         pub(crate) fn activation(&self, id: WindowId, activated: bool) {
-            self.active.with(|active| {
-                if activated {
-                    *active = Some(id);
-                } else if *active == Some(id) {
-                    *active = None;
-                }
-            });
+            if activated {
+                self.active.set(Some(id));
+            } else if self.active.get() == Some(id) {
+                self.active.set(None);
+            }
         }
 
-        /// The active window; `None` off the owner thread.
+        /// The active window.
         fn active(&self) -> Option<WindowId> {
-            self.active.with(|active| *active).flatten()
+            self.active.get()
         }
 
+        /// The windows held now, as a snapshot a window's settle may change
+        /// the table under.
         fn values(&self) -> Vec<Rc<dyn LoopWindow>> {
-            self.windows.values()
+            self.windows.borrow().values().cloned().collect()
         }
 
         fn is_empty(&self) -> bool {
-            self.windows.is_empty()
+            self.windows.borrow().is_empty()
         }
 
         fn take_emptied(&self) -> bool {
-            self.emptied.swap(false, Ordering::AcqRel)
+            self.emptied.replace(false)
         }
     }
 
@@ -1484,7 +1479,7 @@ mod event_loop {
         /// The portal's colour scheme.
         pub(crate) portal: PortalSlot,
         /// The loop's windows, which the window leaves when it closes.
-        pub(crate) table: Weak<WindowTable>,
+        pub(crate) table: std::rc::Weak<WindowTable>,
         /// The owner signal, which delivers what other threads raise.
         pub(crate) signal: Arc<OwnerSignal>,
         /// What a redraw asked for on another thread wakes.
@@ -1526,12 +1521,12 @@ mod event_loop {
         connection: Connection,
         /// The event queue: owner-only, so a dispatch re-entered from a
         /// handler fails loudly instead of waiting on itself.
-        dispatcher: OwnerCell<Option<Dispatcher>>,
+        dispatcher: RefCell<Dispatcher>,
         protocol: WaylandProtocol,
         waker: Arc<LoopWaker>,
         signal: Arc<OwnerSignal>,
         app: Arc<AppDelivery>,
-        windows: Arc<WindowTable>,
+        windows: Rc<WindowTable>,
         /// The thread that made the platform, which owns its windows and
         /// runs its loop.
         owner_thread: ThreadId,
@@ -1545,20 +1540,23 @@ mod event_loop {
         start_preferences: fn(&NativeExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
         start_host_notices: fn(&NativeExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
         /// The sources the loop keeps while it runs.
-        sources: Mutex<Sources>,
+        sources: RefCell<Sources>,
         /// The display watch, which the owner thread starts and stops.
-        display_watch: OwnerCell<Option<Watch>>,
+        display_watch: RefCell<Option<Watch>>,
         executor: NativeExecutor,
         /// The wake deadline armed and the last one delivered.
-        deadline: OwnerCell<WakeDeadline>,
+        deadline: RefCell<WakeDeadline>,
         /// How many frames the windows' handlers produced, which tells the
         /// deadline a delivery a frame served from one that reached nothing.
         frames: FrameCount,
         /// The exit policy is asked again on the next turn.
-        reevaluate: AtomicBool,
+        reevaluate: Cell<bool>,
         /// The loop ran once; a platform runs once.
-        ran: AtomicBool,
+        ran: Cell<bool>,
     }
+    // Owner-local (ADR-0327 §5): the loop and its window table never leave the
+    // thread that made them.
+    static_assertions::assert_not_impl_any!(WaylandLoop: Send, Sync);
 
     impl std::fmt::Debug for WaylandLoop {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1719,11 +1717,7 @@ mod event_loop {
                     live,
                 },
                 connection,
-                dispatcher: {
-                    let dispatcher = OwnerCell::new();
-                    dispatcher.with(|held| *held = Some(Dispatcher { queue, state }));
-                    dispatcher
-                },
+                dispatcher: RefCell::new(Dispatcher { queue, state }),
                 waker,
                 signal,
                 notices: H::notices(&app),
@@ -1731,7 +1725,7 @@ mod event_loop {
                 // The variable stays set: unsetting it races every thread
                 // reading the environment, and the opener started for a link
                 // leaves it out (`xdg_open`).
-                windows: Arc::new(WindowTable::new(launch_token(std::env::var_os(
+                windows: Rc::new(WindowTable::new(launch_token(std::env::var_os(
                     LAUNCH_TOKEN_VARIABLE,
                 )))),
                 owner_thread: std::thread::current().id(),
@@ -1743,13 +1737,13 @@ mod event_loop {
                 portal: PortalSlot::default(),
                 start_preferences: H::preferences,
                 start_host_notices: H::host_notices,
-                sources: Mutex::new(Sources::default()),
-                display_watch: OwnerCell::new(),
+                sources: RefCell::default(),
+                display_watch: RefCell::default(),
                 executor,
-                deadline: OwnerCell::new(),
+                deadline: RefCell::default(),
                 frames: FrameCount::default(),
-                reevaluate: AtomicBool::new(false),
-                ran: AtomicBool::new(false),
+                reevaluate: Cell::new(false),
+                ran: Cell::new(false),
             })
         }
 
@@ -1778,7 +1772,7 @@ mod event_loop {
                 protocol: self.protocol.clone(),
                 displays: Arc::clone(&self.displays),
                 portal: self.portal.clone(),
-                table: Arc::downgrade(&self.windows),
+                table: Rc::downgrade(&self.windows),
                 signal: Arc::clone(&self.signal),
                 waker: Arc::downgrade(&self.waker),
                 notices: Arc::clone(&self.notices),
@@ -1793,7 +1787,7 @@ mod event_loop {
         /// given the activation token the process was launched with.
         ///
         /// # Errors
-        /// [`OpenWindowError::Unavailable`] off the owner thread.
+        /// [`OpenWindowError::Backend`] when the table holds `id` already.
         pub(crate) fn register(
             &self,
             id: WindowId,
@@ -1811,34 +1805,21 @@ mod event_loop {
         pub(crate) fn roundtrip(&self) -> Result<(), OpenWindowError> {
             self.dispatching(|queue, state| queue.roundtrip(state).map(drop))
                 .map_err(|error| OpenWindowError::Backend {
-                    message: error.to_string(),
-                })?
-                .map_err(|error| OpenWindowError::Backend {
                     message: format!("the Wayland connection: {error}"),
                 })
         }
 
-        /// Run `body` on the event queue and what it dispatches into, on the
-        /// owner thread. The queue is borrowed for `body` alone, which runs no
-        /// handler: a dispatch re-entered from inside one panics on the
-        /// borrow rather than waiting on itself.
-        ///
-        /// # Errors
-        /// [`PlatformError::EventLoop`] off the owner thread.
+        /// Run `body` on the event queue and what it dispatches into. The
+        /// queue is borrowed for `body` alone, which runs no handler: a
+        /// dispatch re-entered from inside one panics on the borrow rather
+        /// than waiting on itself.
         fn dispatching<R>(
             &self,
             body: impl FnOnce(&mut EventQueue<WaylandState>, &mut WaylandState) -> R,
-        ) -> Result<R, PlatformError> {
-            self.dispatcher
-                .with(|dispatcher| {
-                    let Dispatcher { queue, state } = dispatcher
-                        .as_mut()
-                        .expect("BUG: the Wayland loop holds its event queue from construction");
-                    body(queue, state)
-                })
-                .ok_or_else(|| PlatformError::EventLoop {
-                    message: "the Wayland event queue is reached on its owner thread only".into(),
-                })
+        ) -> R {
+            let mut dispatcher = self.dispatcher.borrow_mut();
+            let Dispatcher { queue, state } = &mut *dispatcher;
+            body(queue, state)
         }
 
         /// The window the compositor last activated.
@@ -1916,8 +1897,7 @@ mod event_loop {
             self.protocol.live.names()
         }
 
-        /// The loop's binding of `output`, while the compositor announces it;
-        /// `None` off the owner thread.
+        /// The loop's binding of `output`, while the compositor announces it.
         #[cfg(any(test, feature = "testing"))]
         pub(crate) fn output_proxy(&self, output: OutputName) -> Option<WlOutput> {
             self.dispatching(|_, state| {
@@ -1927,14 +1907,11 @@ mod event_loop {
                     .find(|(name, _)| *name == output)
                     .map(|(_, proxy)| proxy.clone())
             })
-            .ok()
-            .flatten()
         }
 
         /// Dispatch what the compositor already sent: the windows record it.
         fn dispatch_pending(&self) -> Result<usize, PlatformError> {
-            self.dispatching(EventQueue::dispatch_pending)?
-                .map_err(lost)
+            self.dispatching(EventQueue::dispatch_pending).map_err(lost)
         }
 
         /// One turn of the loop, blocking at most `limit`. `true` when the
@@ -1967,10 +1944,7 @@ mod event_loop {
             }
             let now = Instant::now();
             let windows = self.windows.values();
-            let due = self
-                .deadline
-                .with(|deadline| deadline.take_due(now, self.frames.get()))
-                .unwrap_or(false);
+            let due = self.deadline.borrow_mut().take_due(now, self.frames.get());
             if due {
                 for window in &windows {
                     window.request_frame();
@@ -1989,10 +1963,7 @@ mod event_loop {
             } else {
                 None
             };
-            let wake_deadline = self
-                .deadline
-                .with(|deadline| deadline.arm(answer, self.frames.get()))
-                .flatten();
+            let wake_deadline = self.deadline.borrow_mut().arm(answer, self.frames.get());
             let timeout = poll_timeout(
                 LoopTurn {
                     frame_due,
@@ -2013,7 +1984,7 @@ mod event_loop {
 
         /// Deliver what the host's notice sources queued.
         fn deliver_host_notices(&self) {
-            let source = self.sources.lock().host_notices.clone();
+            let source = self.sources.borrow_mut().host_notices.clone();
             if let Some(source) = source {
                 source.deliver(self);
             }
@@ -2025,7 +1996,7 @@ mod event_loop {
         /// decision to the host (a desktop loop ends with its last window).
         fn exit_due(&self) -> bool {
             let emptied = self.windows.take_emptied();
-            let reevaluate = self.reevaluate.swap(false, Ordering::AcqRel);
+            let reevaluate = self.reevaluate.replace(false);
             if !(emptied || reevaluate) || !self.windows.is_empty() {
                 return false;
             }
@@ -2055,7 +2026,7 @@ mod event_loop {
                     BeforePoll::Poll { .. } => queue.prepare_read(),
                 };
                 Ok((next, guard))
-            })??;
+            })?;
             let (BeforePoll::Poll { writable }, Some(guard)) = (next, guard) else {
                 return Ok(());
             };
@@ -2108,9 +2079,9 @@ mod event_loop {
         fn start_sources(&self) {
             let preferences = (self.start_preferences)(&self.executor, &self.signal);
             self.portal.set(Some(&preferences));
-            self.sources.lock().preferences = Some(preferences);
+            self.sources.borrow_mut().preferences = Some(preferences);
             let watch = Arc::clone(&self.displays).observe(&self.signal);
-            self.display_watch.with(|held| *held = Some(watch));
+            *self.display_watch.borrow_mut() = Some(watch);
         }
 
         /// Start the sources of the host's notices, once the owner can
@@ -2118,7 +2089,7 @@ mod event_loop {
         /// would hold logind's inhibitor with no turn to deliver it.
         fn start_host_notices(&self) {
             let notices = (self.start_host_notices)(&self.executor, &self.signal);
-            self.sources.lock().host_notices = Some(notices);
+            self.sources.borrow_mut().host_notices = Some(notices);
         }
 
         /// Stop what the loop started: admission first, so a source that
@@ -2126,8 +2097,8 @@ mod event_loop {
         /// code, so an unwinding run calls it too.
         fn stop_sources(&self) {
             self.signal.close();
-            let watch = self.display_watch.with(Option::take).flatten();
-            let sources = std::mem::take(&mut *self.sources.lock());
+            let watch = self.display_watch.borrow_mut().take();
+            let sources = std::mem::take(&mut *self.sources.borrow_mut());
             self.portal.set(None);
             contain_owner_callback(|| drop(watch));
             contain_owner_callback(|| drop(sources));
@@ -2176,7 +2147,7 @@ mod event_loop {
                         .to_owned(),
                 });
             }
-            if self.ran.swap(true, Ordering::AcqRel) {
+            if self.ran.replace(true) {
                 return Err(PlatformError::EventLoop {
                     message: "a Wayland platform runs once".to_owned(),
                 });
@@ -2222,7 +2193,7 @@ mod event_loop {
         }
 
         fn request_exit_policy_reevaluation(&self) {
-            self.reevaluate.store(true, Ordering::Release);
+            self.reevaluate.set(true);
             self.waker.wake();
         }
     }
@@ -2390,7 +2361,11 @@ mod event_loop {
             let issue = || table.issue().expect("the table issues an id");
             let (first, second, third) = (issue(), issue(), issue());
             assert!(
-                matches!(table.windows.insert(first, Rc::new(Idle)), Ok(None)),
+                table
+                    .windows
+                    .borrow_mut()
+                    .insert(first, Rc::new(Idle))
+                    .is_none(),
                 "a window held before"
             );
             assert!(
