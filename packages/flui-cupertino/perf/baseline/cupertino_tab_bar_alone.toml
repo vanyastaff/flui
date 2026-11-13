@@ -1,0 +1,12 @@
+# Held by packages/flui-cupertino/tests/perf.rs, which fails when a run costs
+# more; counts, not timings. Lower it by hand from a FLUI_PERF_OUT record of
+# the features CI tests with, which change the counts:
+# `FLUI_PERF_OUT=<dir> cargo test --locked --workspace --exclude flui-native
+# --features flui/material,flui/cupertino,flui/native --test perf`.
+
+[cupertino_tab_bar_alone]
+allocations = 598
+bytes = 73760
+elements = 33
+reallocations = 8
+render_nodes = 18

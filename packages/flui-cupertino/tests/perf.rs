@@ -16,14 +16,18 @@
 //! process-global font system and installs the kit's counting global
 //! allocator.
 
-use flui_cupertino::CupertinoButton;
+use flui_cupertino::{CupertinoButton, CupertinoTabBar, CupertinoTabBarItem};
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::Text;
-use flui_testing::control_cost::{ControlCost, control_over_text};
+use flui_sdk::widgets::{Icon, IconData, Text};
+use flui_testing::control_cost::{ControlCost, control_alone_under, control_over_text};
 use flui_testing::heap::CountingAllocator;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+const TAB_BAR_ELEMENTS: u64 = 33;
+const TAB_BAR_RENDER_NODES: u64 = 18;
 
 /// `cost` recorded as `scenario` and held to this catalog's baseline file.
 fn held_to_baseline(scenario: &str, cost: ControlCost) -> ControlCost {
@@ -51,5 +55,37 @@ fn perf_cupertino_button_over_text() {
         cost.elements <= 9,
         "a button adds {} elements",
         cost.elements
+    );
+}
+
+/// What a `CupertinoTabBar` of two items costs in place of an empty box,
+/// under a `MediaQuery`: the bar's decoration and row, and per item its
+/// icon and label on one interactive node that carries the item's
+/// selection and tap.
+#[test]
+fn perf_cupertino_tab_bar_alone() {
+    let cost = held_to_baseline(
+        "cupertino_tab_bar_alone",
+        control_alone_under(
+            |column| MediaQuery::new(MediaQueryData::default(), column).boxed(),
+            |_row| {
+                CupertinoTabBar::new(vec![
+                    CupertinoTabBarItem::new(Icon::new(IconData::new(0xF3A1))).label("Home"),
+                    CupertinoTabBarItem::new(Icon::new(IconData::new(0xF3A2))).label("Settings"),
+                ])
+                .on_tap(|_ctx, _index| {})
+                .boxed()
+            },
+        ),
+    );
+    assert!(
+        cost.elements <= TAB_BAR_ELEMENTS,
+        "a tab bar adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= TAB_BAR_RENDER_NODES,
+        "a tab bar adds {} render nodes",
+        cost.render_nodes
     );
 }
