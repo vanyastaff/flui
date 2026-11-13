@@ -167,12 +167,7 @@ impl Mounted {
     fn pump_many(&mut self, frames: usize) -> FrameReport {
         let mut total = FrameReport::default();
         for _ in 0..frames {
-            let one = self.laid.pump_report(FRAME);
-            eprintln!(
-                "DBG frame {:?} {:?}",
-                one.build, one.pipeline.frames_produced
-            );
-            total += &one;
+            total += &self.laid.pump_report(FRAME);
         }
         total
     }
