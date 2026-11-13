@@ -1532,10 +1532,10 @@ fn in_reading_order(children: &mut Vec<BuiltSemanticsNode>, direction: TextDirec
 /// absorbed by `parent`: one `parent` cannot take, and two that cannot be in
 /// its node together.
 ///
-/// Where the fragments name a control (ADR-0332), a fragment `parent`
-/// refuses is a node already and competes with no sibling: a check box
-/// beside an icon does not keep the icon from naming the button around
-/// both. Elsewhere every pair is compared, as before that decision.
+/// A fragment `parent` refuses is a node already, so a sibling is asked
+/// whether it can stay beside that node, not whether the two can share one:
+/// where the fragments name a control (ADR-0332), a check box beside an
+/// icon does not keep the icon from naming the button around both.
 fn mark_configuration_conflicts(
     parent: &SemanticsConfiguration,
     fragments: &[SemanticsFragment],
@@ -1560,10 +1560,13 @@ fn mark_configuration_conflicts(
             let Some(sibling) = pending(sibling_index) else {
                 continue;
             };
-            if names_a_control && (refused[index] || refused[sibling_index]) {
-                continue;
-            }
-            if !config.can_join(sibling, names_a_control) {
+            let compatible = match (refused[index], refused[sibling_index]) {
+                (true, true) => continue,
+                (true, false) => sibling.can_stay_beside(config, names_a_control),
+                (false, true) => config.can_stay_beside(sibling, names_a_control),
+                (false, false) => config.can_join(sibling, names_a_control),
+            };
+            if !compatible {
                 conflicts[index] = true;
                 conflicts[sibling_index] = true;
             }

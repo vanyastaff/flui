@@ -12,5 +12,5 @@
 ### Removed
 
 - `SemanticsConfiguration::is_compatible_with`: node formation asks
-  `SemanticsConfiguration::can_absorb` and `can_join`, with the scope
+  `SemanticsConfiguration::can_absorb`, `can_join` and `can_stay_beside`, with the scope
   `SemanticsConfiguration::names_a_control` carries down.

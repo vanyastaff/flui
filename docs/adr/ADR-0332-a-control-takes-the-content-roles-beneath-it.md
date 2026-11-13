@@ -81,16 +81,19 @@ impl SemanticsConfiguration {
     pub fn can_absorb(&self, descendant: &Self, names_a_control: bool) -> bool;
     /// Whether this configuration and `sibling`, absorbed by one above them, can share its node.
     pub fn can_join(&self, sibling: &Self, names_a_control: bool) -> bool;
+    /// Whether this configuration, absorbed, can stay beside `node`, a sibling that was refused.
+    pub fn can_stay_beside(&self, node: &Self, names_a_control: bool) -> bool;
 }
 ```
 
 - A control named by its contents starts the scope.
 - A configuration that forms no node and has no role, or a naming role, passes on the scope
   it is in (`enclosing`): what it absorbs travels up to the same control.
-- Every other configuration ends it: a node of another kind, a role that is neither.
+- Every other configuration ends it: a node of another kind, a role that is neither, a route
+  scope whatever its role.
 
 `SemanticsAssemblyContext` in `flui-rendering` holds the answer of the configuration above;
-`mark_configuration_conflicts` hands a configuration's own answer to the two predicates.
+`mark_configuration_conflicts` hands a configuration's own answer to the predicates.
 
 ### §3. The role row inside a scope
 
@@ -101,9 +104,9 @@ Inside one, the role row reads:
   taking it has (a button over an image; a heading over an image inside a button).
 - `can_join`: two naming roles do not compete. An icon and a heading in one button are one
   name.
-- A fragment its parent refuses is a node already, so `mark_configuration_conflicts` does not
-  compare it with its siblings: a check box beside an icon does not keep the icon from naming
-  the button around both.
+- `can_stay_beside`: a fragment its parent refuses is a node already, so a naming role does
+  not compete with its role: a check box directly beneath a button, beside an icon, does not
+  keep the icon from naming the button. Its other rows are compared as between any siblings.
 
 Every other row is unchanged: a state both declare, a repeated action, competing values or
 ranges still form separate nodes, and a configuration without a role still takes a control
@@ -135,6 +138,9 @@ its own node with `Semantics::container(true)`.
 - Bad, because a heading inside a tab or a list option loses its place in heading navigation.
   An author who needs both wraps the heading in `Semantics::container(true)`, which forms a
   node no rule absorbs.
+- Bad, because under a configuration without a role nothing is refused, so there an icon
+  beside a check box still competes with it on role and both form nodes: a hint over the two
+  inside a button leaves the button without a name, as before this decision.
 - Bad, because a configuration between a control and its content that repeats the control's
   action (a tap target inside a button) still cannot join the control: it forms a node, takes
   the content with it, and the control stays without a name, as before this decision. The

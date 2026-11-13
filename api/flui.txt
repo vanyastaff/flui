@@ -17872,6 +17872,7 @@ pub fn flui::prelude::SemanticsConfiguration::blocks_user_actions(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::busy(&self) -> Option<bool>
 pub fn flui::prelude::SemanticsConfiguration::can_absorb(&self, descendant: &flui::prelude::SemanticsConfiguration, names_a_control: bool) -> bool
 pub fn flui::prelude::SemanticsConfiguration::can_join(&self, sibling: &flui::prelude::SemanticsConfiguration, names_a_control: bool) -> bool
+pub fn flui::prelude::SemanticsConfiguration::can_stay_beside(&self, node: &flui::prelude::SemanticsConfiguration, names_a_control: bool) -> bool
 pub fn flui::prelude::SemanticsConfiguration::cell_position(&self) -> Option<flui::semantics::CellPosition>
 pub fn flui::prelude::SemanticsConfiguration::clear_cell_position(&mut self)
 pub fn flui::prelude::SemanticsConfiguration::clear_position_in_set(&mut self)

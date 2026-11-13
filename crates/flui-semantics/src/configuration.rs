@@ -1640,13 +1640,14 @@ impl SemanticsConfiguration {
     /// absorbs travels up to the same control. A route scope ends it.
     #[must_use]
     pub fn names_a_control(&self, forms_node: bool, enclosing: bool) -> bool {
+        if self.scopes_route() {
+            return false;
+        }
         let role = self.attributes.role;
         if is_named_by_content(role) {
             return true;
         }
-        let passes_on = !forms_node
-            && !self.scopes_route()
-            && (role == SemanticsRole::None || is_naming_role(role));
+        let passes_on = !forms_node && (role == SemanticsRole::None || is_naming_role(role));
         passes_on && enclosing
     }
 
@@ -1683,6 +1684,21 @@ impl SemanticsConfiguration {
     pub fn can_join(&self, sibling: &SemanticsConfiguration, names_a_control: bool) -> bool {
         let folds = names_a_control && self.has_naming_role() && sibling.has_naming_role();
         self.shares_a_node_with(sibling, folds)
+    }
+
+    /// Returns whether this configuration, absorbed by the configuration
+    /// above it, can stay there beside `node`, a sibling that configuration
+    /// refused and that is therefore a node of its own.
+    ///
+    /// The rules are those of [`can_join`](Self::can_join), with one
+    /// difference where the two name a control (`names_a_control`): a role
+    /// that names content does not compete with the role of a node it will
+    /// not share, so a check box beside an icon does not keep the icon from
+    /// naming the button around both. Every other row is compared: a sibling
+    /// that repeats the node's action or state still forms its own node.
+    #[must_use]
+    pub fn can_stay_beside(&self, node: &SemanticsConfiguration, names_a_control: bool) -> bool {
+        self.shares_a_node_with(node, names_a_control && self.has_naming_role())
     }
 
     /// Whether this configuration's role is content that names a control
@@ -2786,6 +2802,23 @@ mod tests {
         assert!(!with(R::Button, "node").can_absorb(&page, true));
         assert!(!page.can_join(&with(R::Heading, "other"), true));
         assert!(!page.names_a_control(false, true));
+        let mut button_page = with(R::Button, "page");
+        button_page.set_scopes_route(true);
+        assert!(!button_page.names_a_control(true, true));
+
+        // Beside a sibling that is a node already, a naming role does not
+        // compete on role inside a control; an action both handle still does.
+        let (image, check_box) = (with(R::Image, "a"), with(R::CheckBox, "c"));
+        assert!(image.can_stay_beside(&check_box, true));
+        assert!(!image.can_stay_beside(&check_box, false));
+        assert!(!with(R::Slider, "s").can_stay_beside(&check_box, true));
+        let tapped = |role: R| {
+            let mut config = with(role, "t");
+            config.add_action(SemanticsAction::Click, Rc::new(|_| {}));
+            config
+        };
+        assert!(!tapped(R::Image).can_stay_beside(&tapped(R::CheckBox), true));
+        assert!(!tapped(R::None).can_stay_beside(&tapped(R::CheckBox), true));
     }
 
     /// A forced merge keeps the more specific role: an authored structural
