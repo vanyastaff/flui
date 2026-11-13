@@ -32,6 +32,7 @@ use std::fmt;
 /// assert!(state.is_loaded());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum LoadState {
     /// Asset load has been requested but not started yet.
     Pending,

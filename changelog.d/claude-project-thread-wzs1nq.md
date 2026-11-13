@@ -24,3 +24,6 @@
 
 - devtools' `Verdict` and `EventCategory` are `#[non_exhaustive]`, so a `match` on one needs a `_`
   arm (ADR-0329).
+- These public enums are `#[non_exhaustive]` too (ADR-0329): `SpeedLimit`, `StartupWindow`,
+  `DiagnosticsProfile`, `CacheCapacity`, `AssetError`, `LoadState`, `CupertinoButtonSize`,
+  `SnackBarClosedReason` and `TabIndicatorAnimation`.

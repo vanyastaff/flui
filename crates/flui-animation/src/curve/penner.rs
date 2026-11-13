@@ -9,6 +9,10 @@ use super::{Curve, CurveError, CurveParameter, settled, within};
 /// the animation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a Penner curve eases in, out, or both"
+)]
 pub enum Ease {
     /// Eases away from the start.
     In,

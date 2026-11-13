@@ -84,10 +84,6 @@
 //! [`Listenable`]: flui_foundation::Listenable
 //! [`Rc`]: std::rc::Rc
 
-#![expect(
-    clippy::exhaustive_enums,
-    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
-)]
 #![cfg_attr(
     test,
     allow(

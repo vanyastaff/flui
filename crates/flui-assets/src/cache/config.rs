@@ -8,6 +8,7 @@ use std::time::Duration;
 /// This bounds entries, not their decoded byte footprint or data retained by
 /// consumer handles. Moka applies its capacity policy during maintenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CacheCapacity {
     /// Return loaded data without retaining completed entries.
     Disabled,
