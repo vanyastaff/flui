@@ -50,6 +50,10 @@
 //! [`StatelessView`]: flui_view::prelude::StatelessView
 //! [`ParentDataView`]: flui_view::prelude::ParentDataView
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(

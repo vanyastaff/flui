@@ -50,6 +50,10 @@
 //! assert_eq!(scene.tree().map(LayerTree::len), Some(2));
 //! ```
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(

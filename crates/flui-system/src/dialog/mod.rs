@@ -19,7 +19,7 @@ pub use request::{FileFilter, OpenRequest, PickedFile, SaveRequest};
 /// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
 /// hands out [`FileDialogs`].
 #[derive(Debug)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a capability marker has no values; it is only ever named"
 )]

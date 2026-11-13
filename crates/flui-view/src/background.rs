@@ -39,7 +39,7 @@ use parking_lot::Mutex;
 /// application replaces it, with an executor of its own say, through
 /// `Application::capability::<BackgroundCapability>(provider)`.
 #[derive(Debug)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a capability marker has no values; it is only ever named"
 )]

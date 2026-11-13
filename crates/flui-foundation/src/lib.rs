@@ -122,6 +122,10 @@
 //! - Change notifiers use efficient listener storage
 //! - Atomic flags provide lock-free state management
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(

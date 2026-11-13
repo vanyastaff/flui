@@ -130,6 +130,10 @@
 //! native sink, nothing narrows the result afterwards:
 //! `RUST_LOG=flui_view=trace` really does deliver `TRACE`.
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(
