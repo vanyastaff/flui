@@ -66,9 +66,12 @@ use crate::traits::{PaintClip, PaintOpacity};
 /// output in tests. Under default/production features this type is intentionally
 /// absent from the external re-export paths.
 #[derive(Debug)]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "the recorder handles each op, and a `_` arm would drop paint"
+#[cfg_attr(
+    any(test, feature = "testing"),
+    expect(
+        clippy::exhaustive_enums,
+        reason = "the recorder handles each op, and a `_` arm would drop paint"
+    )
 )]
 pub enum FragmentOp {
     /// A sealed run of draw commands in the current layer space
