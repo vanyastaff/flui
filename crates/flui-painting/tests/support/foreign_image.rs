@@ -62,7 +62,8 @@ unsafe impl GlobalAlloc for LargestAllocation {
 /// block the decode asked for was larger than the limit: the decoder is given
 /// [`MAX_DECODED_IMAGE_BYTES`] as its allocation limit, so an image that
 /// compresses small but decodes huge is refused instead of allocating.
-pub(crate) fn decodes_within_the_limit_or_fails_typed(bytes: &[u8]) {
+/// Returns the largest block the decode asked for.
+pub(crate) fn decodes_within_the_limit_or_fails_typed(bytes: &[u8]) -> u64 {
     let probe = std::hint::black_box(Vec::<u8>::with_capacity(16));
     assert!(
         LARGEST.with(Cell::take) >= probe.capacity(),
@@ -92,4 +93,5 @@ pub(crate) fn decodes_within_the_limit_or_fails_typed(bytes: &[u8]) {
         }
         Err(_) => {}
     }
+    largest
 }

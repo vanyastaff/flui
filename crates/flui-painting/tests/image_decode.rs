@@ -86,7 +86,11 @@ pub(crate) fn a_header_at_the_limit_asks_for_one_block_of_the_limit() {
         u64::from(width) * u64::from(height) * 4,
         MAX_DECODED_IMAGE_BYTES
     );
-    decodes_within_the_limit_or_fails_typed(&png_declaring(width, height));
+    let largest = decodes_within_the_limit_or_fails_typed(&png_declaring(width, height));
+    assert_eq!(
+        largest, MAX_DECODED_IMAGE_BYTES,
+        "the header at the limit is decoded up to its pixel buffer"
+    );
 }
 
 /// Arbitrary bytes, and the fixture with arbitrary bytes overwritten, decode
