@@ -8155,7 +8155,7 @@ impl core::fmt::Debug for flui::interaction::SequencedBranch
 pub fn flui::interaction::SequencedBranch::hand_off(&self, pointer: flui::interaction::PointerId) -> bool
 pub fn flui::interaction::SequencedBranch::hold(&self) -> flui::interaction::GestureArena
 pub fn flui::interaction::SequencedBranch::successor(&self) -> flui::interaction::GestureArena
-pub enum flui::interaction::SweepModel
+#[non_exhaustive] pub enum flui::interaction::SweepModel
 impl Clone for flui::interaction::SweepModel
 impl Copy for flui::interaction::SweepModel
 impl Eq for flui::interaction::SweepModel
@@ -8331,7 +8331,7 @@ impl core::fmt::Debug for flui::interaction::TraversalDirection
 impl core::marker::StructuralPartialEq for flui::interaction::TraversalDirection
 variant flui::interaction::TraversalDirection::Backward // at 1
 variant flui::interaction::TraversalDirection::Forward // at 0
-pub enum flui::interaction::TraversalEdgeBehavior
+#[non_exhaustive] pub enum flui::interaction::TraversalEdgeBehavior
 impl Clone for flui::interaction::TraversalEdgeBehavior
 impl Copy for flui::interaction::TraversalEdgeBehavior
 impl Default for flui::interaction::TraversalEdgeBehavior
@@ -8406,7 +8406,7 @@ pub const fn flui::interaction::drag::AllowedActions::is_empty(&self) -> bool
 pub const fn flui::interaction::drag::AllowedActions::new(within_app: flui::interaction::drag::TransferActions, outside_app: flui::interaction::drag::TransferActions) -> Self
 pub const fn flui::interaction::drag::AllowedActions::union(&self) -> flui::interaction::drag::TransferActions
 pub const fn flui::interaction::drag::AllowedActions::within(within_app: flui::interaction::drag::TransferActions) -> Self
-pub enum flui::interaction::drag::Autoscroll
+#[non_exhaustive] pub enum flui::interaction::drag::Autoscroll
 impl Clone for flui::interaction::drag::Autoscroll
 impl Copy for flui::interaction::drag::Autoscroll
 impl Default for flui::interaction::drag::Autoscroll
@@ -8498,7 +8498,7 @@ impl core::marker::StructuralPartialEq for flui::interaction::drag::DragReach
 variant flui::interaction::drag::DragReach::Runtime // at 1
 variant flui::interaction::drag::DragReach::System // at 2
 variant flui::interaction::drag::DragReach::Window // at 0
-pub enum flui::interaction::drag::DragRepresentation
+#[non_exhaustive] pub enum flui::interaction::drag::DragRepresentation
 impl core::fmt::Debug for flui::interaction::drag::DragRepresentation
 variant flui::interaction::drag::DragRepresentation::InProcess(alloc::rcs::rc::Rc<dyn core::any::Any>) // at 0
 variant flui::interaction::drag::DragRepresentation::Serialized(flui::platform::data_transfer::TransferFormat, flui::interaction::drag::LazyPayload) // at 1
@@ -8572,7 +8572,7 @@ pub struct flui::interaction::drag::LazyPayload(_)
 impl core::fmt::Debug for flui::interaction::drag::LazyPayload
 pub fn flui::interaction::drag::LazyPayload::new(provider: impl FnOnce() -> Result<flui::platform::data_transfer::TransferPayload, flui::platform::data_transfer::TransferError> + 'static) -> Self
 pub fn flui::interaction::drag::LazyPayload::ready(payload: flui::platform::data_transfer::TransferPayload) -> Self
-pub enum flui::interaction::drag::MoveOutcome
+#[non_exhaustive] pub enum flui::interaction::drag::MoveOutcome
 impl Clone for flui::interaction::drag::MoveOutcome
 impl Copy for flui::interaction::drag::MoveOutcome
 impl Eq for flui::interaction::drag::MoveOutcome
@@ -29903,7 +29903,7 @@ pub struct flui_interaction::drag::owner::DragHandle { .. }
 impl Clone for flui_interaction::drag::owner::DragHandle
 impl core::fmt::Debug for flui_interaction::drag::owner::DragHandle
 pub fn flui_interaction::drag::owner::DragHandle::start(&self, start: flui::interaction::drag::DragStart) -> Result<flui::interaction::drag::DragSession, flui::interaction::drag::DragError>
-pub enum flui_interaction::drag::owner::DragStage
+#[non_exhaustive] pub enum flui_interaction::drag::owner::DragStage
 impl Clone for flui_interaction::drag::owner::DragStage
 impl Copy for flui_interaction::drag::owner::DragStage
 impl Eq for flui_interaction::drag::owner::DragStage
