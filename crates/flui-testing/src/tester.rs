@@ -27,24 +27,27 @@
 //! for and what the window showed instead; its `try_` twin returns the same
 //! account as a [`TestError`].
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::ManualClock;
 use flui_protocol::method::{
-    ElementActionability, InputInject, InspectRender, InspectWidgets, SemanticsLocate,
-    SemanticsRead,
+    ElementActionability, InputInject, InputRelease, InspectRender, InspectWidgets,
+    SemanticsLocate, SemanticsRead,
 };
 use flui_protocol::{
     ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ErrorObject,
-    InputParams, InputSource, InspectParams, InspectReading, LocateParams, Locator, LogicalPoint,
-    LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice, ReadParams, Tree,
-    outline,
+    ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams,
+    Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
+    ReadParams, Tree, WindowParams, outline,
 };
-use flui_view::View;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
+use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
 
+use crate::host::KitStorage;
+use crate::storage::MemoryStorage;
 use crate::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 
 /// One frame at 60 Hz: what [`Tester::pump`] advances and what an action or
@@ -65,31 +68,63 @@ const SHOWN_LINES: usize = 15;
 /// woken completion, the rebuild it schedules and the semantics it commits.
 const DUE_NOW_FRAMES: u32 = 8;
 
-/// The window a [`Tester`] mounts its view in: its logical size, and the
-/// platform whose conventions the application follows.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// The window a [`Tester`] mounts its view in: its logical size, the
+/// platform whose conventions the application follows, and the storage its
+/// documents are kept in.
+#[derive(Debug, Clone)]
 pub struct TestWindow {
     width: u32,
     height: u32,
     platform: Option<flui_platform::TargetPlatform>,
+    storage: WindowStorage,
+}
+
+/// Where a [`TestWindow`]'s application keeps its documents.
+#[derive(Debug, Clone)]
+enum WindowStorage {
+    /// A fresh, empty [`MemoryStorage`] for each mount.
+    Fresh,
+    /// This storage, as left by an earlier run.
+    Given(MemoryStorage),
+    /// None at all, as on a platform without files.
+    Absent,
 }
 
 impl TestWindow {
-    /// A window of `width` by `height` logical pixels.
+    /// A window of `width` by `height` logical pixels, its application
+    /// keeping its documents in a fresh, empty [`MemoryStorage`].
     #[must_use]
     pub const fn new(width: u32, height: u32) -> Self {
         Self {
             width,
             height,
             platform: None,
+            storage: WindowStorage::Fresh,
         }
     }
 
     /// Follow `platform`'s conventions (chords, handles, menus, transitions)
-    /// instead of the build host's.
+    /// instead of the platform-neutral ones a headless window follows.
     #[must_use]
-    pub const fn platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
+    pub fn platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
         self.platform = Some(platform);
+        self
+    }
+
+    /// Keep the application's documents in `storage`: a launch over what an
+    /// earlier run left there, or over contents the test put there.
+    #[must_use]
+    pub fn storage(mut self, storage: MemoryStorage) -> Self {
+        self.storage = WindowStorage::Given(storage);
+        self
+    }
+
+    /// Give the application no storage at all, as a platform without files
+    /// runs it: a document it opens is read-only and starts from its initial
+    /// value.
+    #[must_use]
+    pub fn without_storage(mut self) -> Self {
+        self.storage = WindowStorage::Absent;
         self
     }
 }
@@ -231,6 +266,13 @@ pub struct Tester {
     lease: InputLease,
     /// Kept alive so the window keeps its agent: dropping it detaches.
     _agent: HeadlessDevAgent,
+    /// The window this run mounted in, its storage the one the run keeps.
+    config: TestWindow,
+    /// The keys [`Tester::key_down`] holds, which a chord neither presses
+    /// nor releases.
+    held_keys: Vec<String>,
+    /// Mounts the same view again in a window: what [`Tester::restart`] runs.
+    relaunch: Rc<dyn Fn(TestWindow) -> Tester>,
 }
 
 impl std::fmt::Debug for Tester {
@@ -269,13 +311,30 @@ impl Tester {
     where
         V: View + Clone + 'static,
     {
-        let mut headless = HeadlessWindow::new(window.width, window.height).with_text_input();
-        if let Some(platform) = window.platform {
+        let mut config = window;
+        let mut headless = HeadlessWindow::new(config.width, config.height).with_text_input();
+        if let Some(platform) = config.platform {
             headless = headless.with_platform(platform);
+        }
+        let storage = match &config.storage {
+            WindowStorage::Fresh => Some(MemoryStorage::new()),
+            WindowStorage::Given(storage) => Some(storage.clone()),
+            WindowStorage::Absent => None,
+        };
+        if let Some(storage) = &storage {
+            // A restart launches over what this run leaves.
+            config.storage = WindowStorage::Given(storage.clone());
         }
         let windows = Arc::new(Mutex::new(Vec::new()));
         let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
-        let mut host = HeadlessHost::new(headless).with_dev_agent(&mut agent);
+        let mut host = HeadlessHost::with_storage(
+            headless,
+            storage.map(|storage| KitStorage {
+                host: Arc::new(storage),
+                provided: None,
+            }),
+        )
+        .with_dev_agent(&mut agent);
         host.attach(&view)
             .expect("BUG: a fresh host has no root attached");
         let _ = host.pump(FRAME);
@@ -291,6 +350,9 @@ impl Tester {
             window,
             lease,
             _agent: agent,
+            config,
+            held_keys: Vec::new(),
+            relaunch: Rc::new(move |window| Self::mount_in(view.clone(), window)),
         };
         // The window collects semantics from the frame after its agent took
         // it; run that frame so the first locate reads a tree.
@@ -661,6 +723,245 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"));
     }
 
+    /// Press `chords` in turn, as `element.press_keys` does, to the window's
+    /// focused element.
+    ///
+    /// A chord is `+`-joined keys, each a W3C key name (`"Enter"`, `"Tab"`,
+    /// `"ArrowDown"`, `"Control"`) or the text the key types (`"a"`, `"+"`):
+    /// `"Control+a"`, `"Shift+Tab"`, `"Shift++"`. A chord presses its keys left
+    /// to right and releases them right to left. A key held with
+    /// [`Self::key_down`] stays held, so it modifies every chord pressed
+    /// meanwhile; a chord that names it neither presses nor releases it.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::Agent`] when a key is neither a key name nor the text of
+    /// one, as in `"Control+"`; nothing is pressed then.
+    pub fn try_press_keys(&mut self, chords: &[&str]) -> Result<(), TestError> {
+        let mut actions = Vec::new();
+        for chord in chords {
+            let mut keys = chord_keys(chord);
+            keys.retain(|key| !self.held_keys.iter().any(|held| held == key));
+            actions.extend(keys.iter().map(|key| KeyAction::Down {
+                key: (*key).to_owned(),
+            }));
+            actions.extend(keys.iter().rev().map(|key| KeyAction::Up {
+                key: (*key).to_owned(),
+            }));
+        }
+        self.inject(vec![keyboard(actions)])
+    }
+
+    /// Press `chords` in turn to the window's focused element: `"Enter"`,
+    /// `"Control+a"`, `"Shift+Tab"`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_press_keys`] fails.
+    #[track_caller]
+    pub fn press_keys(&mut self, chords: &[&str]) {
+        self.try_press_keys(chords)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// Press `key` and hold it until [`Self::key_up`]: a modifier held across
+    /// several chords, or a key held through its auto-repeats. Pressing a key
+    /// already held repeats it, as a platform repeats a held key and as
+    /// WebDriver dispatches a second `keyDown`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_press_keys`].
+    pub fn try_key_down(&mut self, key: &str) -> Result<(), TestError> {
+        self.inject(vec![keyboard(vec![KeyAction::Down {
+            key: key.to_owned(),
+        }])])?;
+        if !self.held_keys.iter().any(|held| held == key) {
+            self.held_keys.push(key.to_owned());
+        }
+        Ok(())
+    }
+
+    /// Press `key` and hold it until [`Self::key_up`]; pressing it again
+    /// while held is an auto-repeat.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_key_down`] fails.
+    #[track_caller]
+    pub fn key_down(&mut self, key: &str) {
+        self.try_key_down(key)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// Release `key`, held since [`Self::key_down`]. Releasing a key that is
+    /// not held sends nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_press_keys`].
+    pub fn try_key_up(&mut self, key: &str) -> Result<(), TestError> {
+        self.inject(vec![keyboard(vec![KeyAction::Up {
+            key: key.to_owned(),
+        }])])?;
+        self.held_keys.retain(|held| held != key);
+        Ok(())
+    }
+
+    /// Release `key`, held since [`Self::key_down`].
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_key_up`] fails.
+    #[track_caller]
+    pub fn key_up(&mut self, key: &str) {
+        self.try_key_up(key)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// Show `text` as the focused field's input-method composition, with the
+    /// caret `caret` characters into it, or with no caret when `caret` is
+    /// `None`, as an input method that converts shows none. The composition
+    /// replaces the one shown before, or the selection when there is none.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::Agent`] when `caret` is past the end of `text`.
+    pub fn try_compose(&mut self, text: &str, caret: Option<u32>) -> Result<(), TestError> {
+        self.inject_ime(ImeAction::SetComposition {
+            text: text.to_owned(),
+            cursor: caret,
+            caret_hidden: caret.is_none(),
+        })
+    }
+
+    /// Show `text` as the focused field's composition, the caret `caret`
+    /// characters into it, or hidden when `None`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_compose`] fails.
+    #[track_caller]
+    pub fn compose(&mut self, text: &str, caret: Option<u32>) {
+        self.try_compose(text, caret)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// End the focused field's composition by committing `text` in its
+    /// place, or insert `text` at the selection when nothing is composed.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::Agent`] when the window refuses the input.
+    pub fn try_commit_composition(&mut self, text: &str) -> Result<(), TestError> {
+        self.inject_ime(ImeAction::Commit {
+            text: text.to_owned(),
+        })
+    }
+
+    /// End the focused field's composition by committing `text`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_commit_composition`] fails.
+    #[track_caller]
+    pub fn commit_composition(&mut self, text: &str) {
+        self.try_commit_composition(text)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// End the focused field's composition without committing: its text goes
+    /// and the caret returns to where it began.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::Agent`] when the window refuses the input.
+    pub fn try_cancel_composition(&mut self) -> Result<(), TestError> {
+        self.inject_ime(ImeAction::Cancel)
+    }
+
+    /// End the focused field's composition without committing.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_cancel_composition`] fails.
+    #[track_caller]
+    pub fn cancel_composition(&mut self) {
+        self.try_cancel_composition()
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    // --- The application's window and storage -----------------------------
+
+    /// The storage the application keeps its documents in, or `None` for a
+    /// window [`without_storage`](TestWindow::without_storage). A
+    /// [`restart`](Self::restart) launches over it.
+    #[must_use]
+    pub fn storage(&self) -> Option<&MemoryStorage> {
+        match &self.config.storage {
+            WindowStorage::Given(storage) => Some(storage),
+            WindowStorage::Fresh | WindowStorage::Absent => None,
+        }
+    }
+
+    /// Stop this run and launch the same view in the same window over the
+    /// same storage, as when the application quits and is opened again: the
+    /// window commits its composition and closes past every hold, what the
+    /// documents published is written (a write the storage holds is not
+    /// waited for: the storage decides it when its hold ends, and what a
+    /// document still owes then is lost with the run), and the old
+    /// tree, its states and its runtime are gone before the new one mounts.
+    ///
+    /// # Panics
+    ///
+    /// When code the quit runs panics (its first panic resumes once the write
+    /// is done), or when the new run's first frame fails.
+    #[must_use]
+    pub fn restart(mut self) -> Self {
+        self.host.quit_now();
+        let relaunch = Rc::clone(&self.relaunch);
+        let config = self.config.clone();
+        drop(self);
+        relaunch(config)
+    }
+
+    /// The user closes the window. The window's close guard is asked first:
+    /// a close it refuses is recorded, nothing is torn down, and the frame
+    /// after its last hold is released carries the close out. `true` when the
+    /// window closed now.
+    pub fn request_close(&mut self) -> bool {
+        let window = self.host.primary_window();
+        let closed = self.host.request_close(window, CloseReason::User);
+        self.run_due_now();
+        closed
+    }
+
+    /// Whether the window has closed: at once, once what held its close was
+    /// released or decided, or because the session ended. A close refused
+    /// and still recorded is not one.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.host.is_closed(self.host.primary_window())
+    }
+
+    /// The operating system ends the user's session: the session-ended notice
+    /// reaches the application, the window commits its composition and closes
+    /// past every hold, as a session that is ending no longer asks, and then
+    /// what the application's documents published is written, as in
+    /// [`Self::restart`]: a write the storage holds is not waited for, and
+    /// what any document still owes then is lost.
+    pub fn end_session(&mut self) {
+        self.host.end_session_now();
+    }
+
+    /// The window loses (`false`) or regains (`true`) the operating system's
+    /// focus, as when the user switches to another application and back;
+    /// then the frame that reports it runs.
+    pub fn set_window_focused(&mut self, focused: bool) {
+        self.host.set_window_focused(focused);
+        self.run_due_now();
+    }
+
     // --- Expecting --------------------------------------------------------
 
     /// What a test expects of the elements `locator` matches. Each assertion
@@ -767,21 +1068,45 @@ impl Tester {
         }
     }
 
+    /// Deliver one input-method step to the focused field.
+    fn inject_ime(&mut self, step: ImeAction) -> Result<(), TestError> {
+        self.inject(vec![InputSource::Ime {
+            actions: vec![step],
+        }])
+    }
+
     /// Deliver `sources` through the window's input lease and run the frame
     /// after the last tick.
     fn inject(&mut self, sources: Vec<InputSource>) -> Result<(), TestError> {
-        // The agent plays a pause or a timed move for its whole duration
-        // before it answers, so the budget is that span in frames on top of
-        // the ticks' own.
-        let span = sources.iter().map(source_span).max().unwrap_or_default();
-        let frame_ms = u64::try_from(FRAME.as_millis()).unwrap_or(u64::MAX);
-        let span_frames = u32::try_from(span.div_ceil(frame_ms)).unwrap_or(u32::MAX);
-        let call = self.lease.call::<InputInject>(InputParams::new(
-            self.lease.window(),
-            ActionSequence::new(sources),
-        ))?;
-        let _outcome = self.answered_within(call, ANSWER_FRAMES.saturating_add(span_frames))?;
-        Ok(())
+        // The agent plays a tick per frame, and a pause or a timed move for
+        // its whole duration, before it answers, so the budget is the ticks
+        // and that span in frames on top of the answer's own.
+        let sequence = ActionSequence::new(sources);
+        let frame_ms = FRAME.as_millis();
+        let span_frames =
+            u32::try_from(sequence.span().as_millis().div_ceil(frame_ms)).unwrap_or(u32::MAX);
+        let ticks = u32::try_from(sequence.ticks()).unwrap_or(u32::MAX);
+        let call = self
+            .lease
+            .call::<InputInject>(InputParams::new(self.lease.window(), sequence))?;
+        let budget = ANSWER_FRAMES
+            .saturating_add(ticks)
+            .saturating_add(span_frames);
+        let outcome = self.answered_within(call, budget);
+        if matches!(outcome, Err(TestError::Unanswered { .. })) {
+            // The keys and contacts the sequence holds are let go once it ends:
+            // the release is queued behind it. A sequence still unfinished
+            // after a second budget keeps them held, and the test has
+            // already failed with this error.
+            if let Ok(release) = self
+                .lease
+                .call::<InputRelease>(WindowParams::new(self.lease.window()))
+            {
+                let _released = self.answered_within(release, budget);
+            }
+            self.held_keys.clear();
+        }
+        outcome.map(|_outcome| ())
     }
 
     /// The window's outline, cut to its first lines, for a failure.
@@ -985,23 +1310,6 @@ fn line_of(node: &Node) -> String {
         .to_owned()
 }
 
-/// How long `source` plays in milliseconds: the sum of its pauses and timed
-/// moves, saturating.
-fn source_span(source: &InputSource) -> u64 {
-    match source {
-        InputSource::Pointer { actions, .. } => actions
-            .iter()
-            .map(|action| match action {
-                PointerAction::Move { duration_ms, .. } | PointerAction::Pause { duration_ms } => {
-                    *duration_ms
-                }
-                _ => 0,
-            })
-            .fold(0, u64::saturating_add),
-        _ => 0,
-    }
-}
-
 fn pointer(actions: Vec<PointerAction>) -> InputSource {
     InputSource::Pointer {
         id: "tester".to_owned(),
@@ -1017,5 +1325,24 @@ fn move_to(at: LogicalPoint) -> PointerAction {
         to: at,
         duration_ms: 0,
         pressure: None,
+    }
+}
+
+fn keyboard(actions: Vec<KeyAction>) -> InputSource {
+    InputSource::Keys {
+        id: "tester".to_owned(),
+        actions,
+    }
+}
+
+/// The keys of `chord`, `+`-joined; a `+` key is the last one, as in
+/// `"Shift++"`, or the whole chord.
+fn chord_keys(chord: &str) -> Vec<&str> {
+    if chord == "+" {
+        return vec!["+"];
+    }
+    match chord.strip_suffix("++") {
+        Some(held) if !held.is_empty() => held.split('+').chain(["+"]).collect(),
+        _ => chord.split('+').collect(),
     }
 }

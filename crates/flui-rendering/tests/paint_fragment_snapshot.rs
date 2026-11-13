@@ -180,7 +180,7 @@ pub(crate) fn a_picture_run_holds_one_render_objects_output() {
         picture
             .iter()
             .filter_map(|command| match command.op {
-                flui_painting::DrawOp::Rect { rect, .. } => Some(rect),
+                flui_painting::DrawOp::Rect { rect, .. } => Some(*rect),
                 _ => None,
             })
             .collect()

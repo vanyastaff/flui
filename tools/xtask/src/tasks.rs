@@ -12,12 +12,14 @@ mod checks;
 mod deps;
 mod exec;
 pub(crate) mod facade;
+mod fuzz;
 mod native;
 mod web;
 
 use std::process::ExitCode;
 
 use exec::{Cmd, Host, NO_ARGS, Runner, Step, installed, parsed, target_dir};
+pub(crate) use fuzz::{FuzzArgs, fuzz};
 
 use crate::doc_strict;
 use crate::util::{human_size, tree_size};

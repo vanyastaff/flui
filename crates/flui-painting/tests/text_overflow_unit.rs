@@ -102,11 +102,16 @@ pub(crate) fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
     painter.paint(&mut again, Offset::ZERO);
     let DrawOp::Paragraph {
         paragraph: second, ..
-    } = &again.finish()[0].op
+    } = again
+        .finish()
+        .get(0)
+        .expect("the paint recorded a command")
+        .op
+        .clone()
     else {
         unreachable!("the first paint recorded a Paragraph");
     };
-    assert!(std::sync::Arc::ptr_eq(layout, second));
+    assert!(std::sync::Arc::ptr_eq(layout, &second));
 }
 
 /// A recolour paints what a fresh layout of the new text paints, and shapes
@@ -157,7 +162,12 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
         painter.paint(&mut canvas, Offset::ZERO);
         let DrawOp::Paragraph {
             paragraph, color, ..
-        } = &canvas.finish()[0].op
+        } = canvas
+            .finish()
+            .get(0)
+            .expect("paint records a command")
+            .op
+            .clone()
         else {
             unreachable!("paint records a Paragraph");
         };
@@ -173,8 +183,8 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
             })
             .collect::<Vec<PlacedGlyph>>();
         Painted {
-            paragraph: Arc::clone(paragraph),
-            color: *color,
+            paragraph,
+            color,
             glyphs,
         }
     }

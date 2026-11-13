@@ -13,7 +13,6 @@ use flui_interaction::events::Code;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::PlatformInput;
 use flui_protocol::native_recording::Line as NativeLine;
-use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
     ActParams, ActionName, ActionSequence, AppInfo, InputParams, InputSource, Locator,
     LogicalPoint, PointerAction, PointerButton, PointerDevice, Target, WindowId,
@@ -21,146 +20,22 @@ use flui_protocol::{
 use flui_runtime::agent::{Limits, Refused, Service, ServiceConfig, Session, Status};
 use flui_runtime::ui_runtime::{NativeForms, NativeLines};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
-use flui_view::dev_agent::{AgentWindow, DevAgentHook};
-use flui_view::prelude::*;
-use flui_view::{CloseReason, Signal};
-use flui_widgets::{Column, RawButton, Text};
+use flui_view::CloseReason;
 use serde_json::{Value, json};
 use web_time::Instant;
 
-const TOKEN: &str = "a-token-long-enough-for-the-launch-0123456789";
-
-/// A button named "Go" that counts its presses, and the count shown, so a press commits a frame.
-#[derive(Clone, StatefulView)]
-struct Counter {
-    presses: Arc<AtomicU32>,
-}
-
-struct CounterState {
-    count: Signal<u32>,
-}
-
-impl StatefulView for Counter {
-    type State = CounterState;
-
-    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
-        CounterState {
-            count: ctx.signal(0),
-        }
-    }
-}
-
-impl ViewState<Counter> for CounterState {
-    fn build(&self, view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
-        let count = self.count;
-        let presses = Arc::clone(&view.presses);
-        Column::new((
-            Text::new(format!("Count: {}", count.get(ctx))),
-            RawButton::new(Text::new("Go")).on_pressed(move |ctx| {
-                presses.fetch_add(1, Ordering::SeqCst);
-                count.update(ctx, |n| *n += 1)
-            }),
-        ))
-    }
-}
-
-/// Hands every window the host opens to the service, as a transport's hook does.
-struct Served(Service);
-
-impl DevAgentHook for Served {
-    fn attach(&mut self) -> bool {
-        true
-    }
-
-    fn detach(&mut self) {
-        self.0.stop();
-    }
-
-    fn window_opened(&mut self, window: AgentWindow) {
-        self.0.window_opened(window);
-    }
-}
-
-fn service(limits: Limits, on_driver_gone: Option<Box<dyn Fn() + Send + Sync>>) -> Service {
-    Service::new(ServiceConfig {
-        records_native: false,
-        token: TOKEN.to_owned(),
-        app: AppInfo::new("counter", "headless"),
-        limits,
-        on_driver_gone,
-    })
-}
-
-/// A host showing [`Counter`] whose window `service` serves.
-fn shown(service: &Service) -> (HeadlessHost, HeadlessDevAgent, Arc<AtomicU32>) {
-    let mut agent = HeadlessDevAgent::attach(Served(service.clone()));
-    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200)).with_dev_agent(&mut agent);
-    let presses = Arc::new(AtomicU32::new(0));
-    host.attach(&Counter {
-        presses: Arc::clone(&presses),
-    })
-    .expect("mount");
-    let _ = host.pump(Duration::from_millis(16));
-    (host, agent, presses)
-}
-
-fn line(value: &Value) -> Vec<u8> {
-    let mut bytes = serde_json::to_vec(value).expect("a JSON value serializes");
-    bytes.push(b'\n');
-    bytes
-}
-
-/// A hello presenting `token`; with `role`, asking for it.
-fn hello_as(token: &str, role: Option<&str>) -> Vec<u8> {
-    let mut hello =
-        json!({ "token": token, "protocol": PROTOCOL_VERSION.to_string(), "client": "test" });
-    if let Some(role) = role {
-        hello["role"] = json!(role);
-    }
-    line(&json!({ "hello": hello }))
-}
+use crate::agent_wire::{
+    Counter, Served, TOKEN, client_bytes_are_answered_or_refused_in_whole_lines, greeted,
+    greeted_as, hello_as, line, service, shown, transmitted,
+};
 
 fn hello(token: &str) -> Vec<u8> {
     hello_as(token, None)
 }
 
-/// Every line the session has to transmit now.
-fn transmitted(session: &mut Session) -> Vec<Value> {
-    std::iter::from_fn(|| session.transmit())
-        .map(|bytes| serde_json::from_slice::<Value>(&bytes).expect("each line is JSON"))
-        .collect()
-}
-
 fn press_go(id: u64) -> Vec<u8> {
     let params = ActParams::new(Target::Locator(Locator::named("Go")), ActionName::Invoke);
     line(&json!({ "id": id, "method": "semantics.act", "params": params }))
-}
-
-/// A conversation past its hello, at `now`, asking to drive.
-fn greeted(service: &Service, now: Instant, waker: &Waker) -> Session {
-    greeted_as(service, now, waker, None).0
-}
-
-/// A conversation past a hello asking for `role`, at `now`, and the hello's answer.
-fn greeted_as(
-    service: &Service,
-    now: Instant,
-    waker: &Waker,
-    role: Option<&str>,
-) -> (Session, Value) {
-    let mut session = service
-        .accept(now)
-        .expect("the service takes a conversation");
-    session.receive(&hello_as(TOKEN, role), now);
-    session.poll(now, waker);
-    let mut welcome = transmitted(&mut session);
-    assert_eq!(welcome.len(), 1, "one line answers the hello: {welcome:?}");
-    assert_eq!(
-        welcome[0]["hello"]["protocol"],
-        PROTOCOL_VERSION.to_string(),
-        "{welcome:?}"
-    );
-    (session, welcome.remove(0))
 }
 
 /// Requests run in order, one at a time, each answered once the window's owner drains it: the
@@ -1371,35 +1246,33 @@ proptest::proptest! {
         greet in proptest::prelude::any::<bool>(),
         chunks in proptest::collection::vec(client_chunk(), 0..24),
     ) {
-        let service = service(Limits::default(), None);
-        let (mut host, _agent, _presses) = shown(&service);
-        let waker = Waker::from(CountingWaker::new().shared());
-        let now = Instant::now();
-        let mut session = if greet {
-            greeted(&service, now, &waker)
-        } else {
-            service.accept(now).expect("the service takes a conversation")
-        };
-        let mut lines = 0_usize;
-        let mut written = 0_usize;
-        for chunk in chunks {
-            lines += chunk.split(|byte| *byte == b'\n').count() - 1;
-            session.receive(&chunk, now);
-            session.poll(now, &waker);
-            let _ = host.pump(Duration::from_millis(16));
-            session.poll(now, &waker);
-            while let Some(bytes) = session.transmit() {
-                proptest::prop_assert_eq!(bytes.last(), Some(&b'\n'));
-                proptest::prop_assert_eq!(bytes.iter().position(|byte| *byte == b'\n'), Some(bytes.len() - 1));
-                let parsed = serde_json::from_slice::<Value>(&bytes);
-                proptest::prop_assert!(parsed.is_ok(), "{:?}", String::from_utf8_lossy(&bytes));
-                written += 1;
-            }
-        }
-        if greet {
-            proptest::prop_assert!(written <= lines, "{} lines written for {} received", written, lines);
-        } else {
-            proptest::prop_assert_eq!(written, 0, "nothing is written before a hello");
-        }
+        client_bytes_are_answered_or_refused_in_whole_lines(greet, |_| chunks);
     }
+}
+
+/// A request whose unknown field holds a byte that is no UTF-8 is still a request: the
+/// protocol's reader skips a field it does not know without reading it, so the answer names
+/// the request instead of refusing the line. The fuzzer's first run ended on this input, where
+/// the property took the line for no request at all.
+#[test]
+fn a_request_with_bytes_that_are_no_utf8_in_a_field_nobody_reads_is_answered_by_its_id() {
+    let service = service(Limits::default(), None);
+    let (mut host, _agent, _presses) = shown(&service);
+    let waker = Waker::from(CountingWaker::new().shared());
+    let now = Instant::now();
+    let mut session = greeted(&service, now, &waker);
+    let mut request = br#"{"id":3,"method":"no.such","unread":""#.to_vec();
+    request.extend_from_slice(&[0xA7, b'"', b'}', b'\n']);
+    assert!(std::str::from_utf8(&request).is_err());
+
+    session.receive(&request, now);
+    let answered = exchange(&mut session, &mut host, now, &waker);
+
+    assert_eq!(answered.len(), 1, "{answered:?}");
+    assert_eq!(answered[0]["id"], 3, "{answered:?}");
+    assert_eq!(
+        answered[0]["error"]["message"], "no such method",
+        "{answered:?}"
+    );
+    client_bytes_are_answered_or_refused_in_whole_lines(true, |_| vec![request]);
 }

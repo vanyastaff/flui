@@ -147,11 +147,11 @@ impl Chunk {
         let mut destination = false;
         for command in commands {
             if let DrawOp::Texture { texture_id, .. } = command.op
-                && !self.textures.contains(&texture_id)
+                && !self.textures.contains(texture_id)
             {
-                self.textures.push(texture_id);
+                self.textures.push(*texture_id);
             }
-            destination |= reads_destination(&command.op);
+            destination |= reads_destination(command.op);
         }
         self.reads_destination = destination;
     }

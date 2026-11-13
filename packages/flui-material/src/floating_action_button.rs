@@ -371,6 +371,9 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
             .shape(shape)
             .overlay_color(overlay_color)
             .states_controller(self.states.clone())
+            // The switch this button seeds `Disabled` from, given to the
+            // well whose node writes it.
+            .enabled(view.is_interactive())
             // Flutter's `RawMaterialButton` is `Semantics(button: true)`; the
             // well's switch says whether it is enabled.
             .description(Description::new(SemanticsRole::Button));

@@ -1,0 +1,2 @@
+1{"id":1,"method":"record.start","params":{"layers":["input"]}}
+{"id":2,"method":"record.stop","params":{"recording":1}}

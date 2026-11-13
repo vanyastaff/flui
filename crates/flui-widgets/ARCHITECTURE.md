@@ -2110,6 +2110,24 @@ animation controller is made with it.
 on the stack, a handle with no `Router` above it answering `NoRouter`, and a
 hand-written `Routable` round trip: **Unasserted:** no test pins this.
 
+The outermost Router of a presentation owns its URL (ADR-0330 §5). In
+`create_state` it registers a `UrlOwner` into the presentation's slot, which
+it reads with `LifecycleContext::url_owner`, unless `PageHandle::of` finds a
+page around it: a Router nested in a page registers nothing, and no scope of
+its own marks the pages. `UiRuntime::navigate` reaches it through
+the slot: `Push` and `Replace` parse with `from_path`, `Go` opens
+`back_stack` as `go` does, and a path that does not parse is reported to the
+`on_unknown` hook, cloned out of its cell and called with nothing borrowed,
+then refused as `NoMatch`; the Router lets go of the hook when it unmounts. A
+`Pop` goes through the navigator's `maybe_pop`, so a `PopScope` veto keeps the
+page. Every handle edit holds an `Editing` count on the
+shared state for its whole commit, observers and route clones included, so an
+intent that arrives inside one is `Busy`, as is one during a build; an intent
+holds its own count from before it parses its path to its commit.
+
+**Pinned by:** the `url_owner::` rows of `router_and_widgets_app`
+(`tests/url_owner.rs`), through `HeadlessHost::navigate`.
+
 ### 22. A page reaches its own route through `PageHandle`, and pushes only pageless popups
 
 **Choice:** every page on a Router's stack has a path (ADR-0330 §2), and only
@@ -2546,8 +2564,8 @@ navigator handle or observers (ADR-0330 §4), so there is no configuration
 that one form would ignore and no form type parameter. The shell is one view
 type: a rebuilt app updates the boxed Router in place, so the stack and page
 state survive, and an update between the home and router forms lets go of
-the home page's navigator or makes a fresh one. Owning the presentation's URL
-waits for the URL owner of ADR-0330 §5 (`RouterScope`). **Tests:**
+the home page's navigator or makes a fresh one. Its Router owns the
+presentation's URL as any outermost Router does (§21). **Tests:**
 `tests/widgets_app_router.rs`
 (`switching_widgets_app_from_home_to_router_releases_the_navigator`,
 `widgets_app_router_navigates_by_handle_and_the_url_follows`) and

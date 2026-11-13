@@ -195,9 +195,9 @@ fn maybe_transform(transform: &Matrix4) -> String {
 /// to `DrawCommand` (a coordinated breaking change) immediately produces a
 /// compile error here rather than silently falling through.
 #[must_use]
-pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
-    let DrawCommandSummary { kind, mut line } = summarize_op(&cmd.op);
-    line.push_str(&maybe_transform(&cmd.transform));
+pub fn summarize_command(cmd: DrawCommand<'_>) -> DrawCommandSummary {
+    let DrawCommandSummary { kind, mut line } = summarize_op(cmd.op);
+    line.push_str(&maybe_transform(cmd.transform));
     DrawCommandSummary { kind, line }
 }
 

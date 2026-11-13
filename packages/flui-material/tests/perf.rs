@@ -13,22 +13,33 @@
 //! `FLUI_PERF_OUT=<dir>` writes each record to `<dir>/<scenario>.toml`
 //! before asserting, and a lower record is copied into the baseline by hand.
 //!
+//! The plateau tests at the end hold the heap level: a Material application navigated and
+//! dropped again and again leaves no more bytes live each time
+//! (`flui_testing::heap::assert_rounds_plateau`), and a leak they found that is not fixed yet
+//! is held by a test of its own.
+//!
 //! A target of its own, not a module of `tests/main.rs`: it pins the
 //! process-global font system and installs the kit's counting global
 //! allocator.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use flui_material::{
-    Checkbox, Chip, ElevatedButton, FilterChip, InkWell, NavigationBar, NavigationDestination,
-    Radio, Switch, Tab, TabBar, TabController, Theme, ThemeData,
+    AlertDialog, AppBar, Checkbox, Chip, ElevatedButton, FilterChip, InkWell, ListTile,
+    MaterialApp, NavigationBar, NavigationDestination, Radio, Scaffold, Switch, Tab, TabBar,
+    TabController, TextButton, Theme, ThemeData, show_dialog,
 };
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
+use flui_sdk::view::{AsyncDriver, Signal, TaskToken, WriterSource};
 use flui_sdk::widgets::icon::IconData;
-use flui_sdk::widgets::{Icon, Text};
+use flui_sdk::widgets::{Column, Icon, PageHandle, Routable, Router, Text};
 use flui_testing::control_cost::{
     ControlCost, control_alone_under, control_over_text, control_over_text_under,
 };
-use flui_testing::heap::CountingAllocator;
+use flui_testing::heap::{CountingAllocator, assert_rounds_plateau};
+use flui_testing::{Tester, find};
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -272,4 +283,241 @@ fn perf_navigation_bar_alone() {
         "a navigation bar adds {} render nodes",
         cost.render_nodes
     );
+}
+
+/// What a `ListTile` adds to the `Text` it titles, under a theme and a media
+/// query: its constraints, surface, safe area, icon theme and row, and its
+/// well, whose node carries the tile's description and switch, with no
+/// `Semantics` element of the tile's own.
+#[test]
+fn perf_list_tile_over_text() {
+    let cost = held_to_baseline(
+        "list_tile_over_text",
+        control_over_text_under(
+            |column| {
+                Theme::new(
+                    ThemeData::light(),
+                    MediaQuery::new(MediaQueryData::default(), column),
+                )
+                .boxed()
+            },
+            |row| {
+                ListTile::new()
+                    .title(Text::new(format!("Row {row}")))
+                    .on_tap(|_ctx| {})
+                    .boxed()
+            },
+        ),
+    );
+    // 18 elements and 9 render nodes while the tile wrapped its content in a
+    // `Semantics` of its own.
+    assert!(
+        cost.elements <= 17,
+        "a list tile adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 8,
+        "a list tile adds {} render nodes",
+        cost.render_nodes
+    );
+}
+
+/// The routes of the application a plateau round drives.
+#[derive(Routable, Clone, Debug, PartialEq)]
+enum Mail {
+    #[route("/")]
+    Inbox,
+    #[route("/message/:id")]
+    Message { id: u32 },
+}
+
+/// The inbox opens a message and shows what the message page answered.
+#[derive(Clone, StatefulView)]
+struct Inbox;
+
+struct InboxState {
+    answer: Signal<String>,
+    writer: WriterSource,
+    driver: Option<AsyncDriver>,
+    /// The task awaiting the open message's result; dropping it cancels it.
+    waiting: Rc<RefCell<Option<TaskToken>>>,
+}
+
+impl StatefulView for Inbox {
+    type State = InboxState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        InboxState {
+            answer: ctx.signal("Open the message".to_owned()),
+            writer: ctx.writer_source(),
+            driver: ctx.async_driver(),
+            waiting: Rc::default(),
+        }
+    }
+}
+
+impl ViewState<Inbox> for InboxState {
+    fn build(&self, _view: &Inbox, ctx: &dyn BuildContext) -> impl IntoView {
+        let router = Router::<Mail>::of(ctx).expect("the inbox is a page of the Router");
+        let (answer, writer, driver) = (self.answer, self.writer.clone(), self.driver.clone());
+        let waiting = Rc::clone(&self.waiting);
+        let open = move |_ctx: &mut EventContext<'_>| {
+            let (Ok(result), Some(driver)) = (
+                router.push_for_result::<bool>(Mail::Message { id: 1 }),
+                &driver,
+            ) else {
+                return;
+            };
+            let writer = writer.clone();
+            let task = driver.spawn_local(Box::pin(async move {
+                let text = match result.await {
+                    Ok(Some(true)) => "Archived",
+                    _ => "Kept",
+                };
+                let _ = writer.write(|ctx| answer.set(ctx, text.to_owned()));
+            }));
+            *waiting.borrow_mut() = Some(task);
+        };
+        Scaffold::new()
+            .app_bar(AppBar::new().title(Text::new("Inbox")))
+            .body(Column::new((
+                Text::new(answer.get(ctx)),
+                TextButton::new(Text::new("Open message 1")).on_pressed(open),
+                Checkbox::new(false),
+                Switch::new(true),
+            )))
+    }
+}
+
+/// A message: archiving it asks first, in a dialog, then pops the page with `true`.
+#[derive(Clone, StatelessView)]
+struct Message {
+    id: u32,
+}
+
+impl StatelessView for Message {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let page = PageHandle::of(ctx).expect("a message is a page of the Router");
+        let ask = move |_ctx: &mut EventContext<'_>| {
+            let message = page.clone();
+            let _dialog = show_dialog::<(), _, _>(&page, move |ctx| {
+                let dialog = PageHandle::of(ctx).expect("the dialog is a route");
+                let archive = message.clone();
+                AlertDialog::new()
+                    .title(Text::new("Archive this message?"))
+                    .actions(vec![
+                        TextButton::new(Text::new("Archive it"))
+                            .on_pressed(move |_ctx| {
+                                let _ = dialog.pop();
+                                let _ = archive.pop_with(true);
+                            })
+                            .boxed(),
+                    ])
+            });
+        };
+        Scaffold::new()
+            .app_bar(AppBar::new().title(Text::new(format!("Message {}", self.id))))
+            .body(ElevatedButton::new(Text::new("Archive")).on_pressed(ask))
+    }
+}
+
+/// The mail application, mounted for one round.
+fn mail() -> Tester {
+    let router = Router::new(Mail::Inbox, |route: &Mail, _ctx| match route {
+        Mail::Inbox => Inbox.boxed(),
+        Mail::Message { id } => Message { id: *id }.boxed(),
+    });
+    Tester::mount(MaterialApp::router(router))
+}
+
+/// A page pushed for a result, a dialog over it, both popped, the awaiting task writing the
+/// answer back: everything the round started has ended when the application is dropped.
+fn round_navigated_and_settled() {
+    let mut tester = mail();
+    tester.tap(&find::button("Open message 1"));
+    tester.expect(find::text("Message 1")).to_exist();
+    tester.tap(&find::button("Archive"));
+    tester.expect(find::button("Archive it")).to_exist();
+    tester.tap(&find::button("Archive it"));
+    tester.expect(find::text("Archived")).to_exist();
+    tester.pump_and_settle();
+}
+
+/// Dropped in the middle of the push: the route's transition is running on the host's
+/// frames, the ink of the press is spreading and the inbox's task has begun to await the
+/// page's result. The page going out and the page coming in are both on screen only while
+/// the transition runs, which is what the round waits for before it drops them.
+fn round_dropped_with_a_page_coming_in() {
+    let mut tester = mail();
+    tester.tap(&find::button("Open message 1"));
+    let mut frames = 0;
+    while (
+        tester.find_all(&find::text("Inbox")).len(),
+        tester.find_all(&find::text("Message 1")).len(),
+    ) != (1, 1)
+    {
+        assert!(
+            frames < 30,
+            "a push shows the page going out and the page coming in together while it runs"
+        );
+        tester.pump();
+        frames += 1;
+    }
+}
+
+/// Dropped with the page open and settled, its result still awaited: the inbox's state
+/// cancels its task as it goes, and the navigator's teardown completes the result with
+/// nothing.
+fn round_dropped_with_a_result_awaited() {
+    let mut tester = mail();
+    tester.tap(&find::button("Open message 1"));
+    tester.expect(find::text("Message 1")).to_exist();
+    tester.pump_and_settle();
+}
+
+/// Dropped with the dialog open over the page: a popup route, its barrier and its own
+/// unanswered result on top of the awaited one.
+fn round_dropped_with_a_dialog_open() {
+    let mut tester = mail();
+    tester.tap(&find::button("Open message 1"));
+    tester.expect(find::text("Message 1")).to_exist();
+    tester.tap(&find::button("Archive"));
+    tester.expect(find::button("Archive it")).to_exist();
+}
+
+/// A Material application with a Router, navigated and dropped again and again. Routes,
+/// overlays, transitions, ink and the async driver each hold `Rc`s to the others; a cycle
+/// among them would leave a page behind every round
+/// (`flui_testing::heap::assert_rounds_plateau`). Two of the rounds drop the application
+/// with work in flight, which is where an owner's retirement has to let go of what it
+/// accepted; the push's transition is an `AnimationController` on the presentation's vsync.
+#[test]
+fn a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap() {
+    let rounds: [(&str, fn()); 3] = [
+        ("navigated and settled", round_navigated_and_settled),
+        (
+            "dropped with a page coming in",
+            round_dropped_with_a_page_coming_in,
+        ),
+        (
+            "dropped with a result awaited",
+            round_dropped_with_a_result_awaited,
+        ),
+    ];
+    for (name, round) in rounds {
+        eprintln!("round: {name}");
+        assert_rounds_plateau(round);
+    }
+}
+
+/// A leak this target holds until it is fixed (`docs/gaps.md`, "A navigator unmounted with a
+/// dialog open is never freed"). The dialog's builder holds the message's `PageHandle`, the
+/// handle holds the navigator and the navigator's history holds the dialog's route, so an
+/// application dropped with the dialog open frees none of them. Once the navigator lets go,
+/// this test fails: its round then joins the table above.
+#[test]
+#[should_panic(expected = "more bytes live")]
+fn an_app_dropped_with_a_dialog_open_keeps_its_navigator() {
+    assert_rounds_plateau(round_dropped_with_a_dialog_open);
 }

@@ -13,7 +13,7 @@ keywords = ["gui", "ui", "runtime", "flui"]
 categories = ["gui"]
 
 # Dev-only files kept out of the published archive:
-exclude = ["/ARCHITECTURE.md"]
+exclude = ["/ARCHITECTURE.md", "/fuzz/"]
 
 [lints]
 workspace = true
@@ -123,8 +123,8 @@ flui-view = { workspace = true, features = ["testing"] }
 # collection and when a UI runtime lets go of it.
 flui-painting = { workspace = true, features = ["testing"] }
 
-# Arbitrary bytes on the agent's wire (`agent_service`); the nightly run
-# raises `PROPTEST_CASES`. Not on wasm32: its random source, getrandom, has
+# Arbitrary bytes on the agent's wire (`agent_service`), drawn at random; the fuzz
+# target below mutates them by coverage. Not on wasm32: its random source, getrandom, has
 # no backend there without a feature this crate does not ship.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 proptest = { workspace = true }
@@ -137,6 +137,18 @@ proptest = { workspace = true }
 # same pin for the same reason.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.77"
+
+# libFuzzer's runtime, for the fuzz target below. Named under `cfg(fuzzing)`,
+# which only `cargo xtask fuzz` sets, so no other build compiles it.
+[target.'cfg(fuzzing)'.dev-dependencies]
+libfuzzer-sys = { workspace = true }
+
+# The fuzz target of the development agent's wire (`cargo xtask fuzz
+# agent_wire`): an example, so it shares this manifest's lock and
+# dev-dependencies and builds on stable as a replayer of crash inputs.
+[[example]]
+name = "fuzz_agent_wire"
+path = "fuzz/agent_wire.rs"
 
 [package.metadata.docs.rs]
 all-features = true
