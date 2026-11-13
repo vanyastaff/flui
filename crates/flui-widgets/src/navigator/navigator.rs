@@ -858,6 +858,30 @@ pub struct NavigatorHandle {
     _owner_affine: PhantomData<Rc<()>>,
 }
 
+/// A [`NavigatorHandle`] that names its navigator without keeping it alive.
+///
+/// The form a value inside the navigator's own routes holds: a page's handle
+/// captured by a popup builder sits in the history it would otherwise own,
+/// and a strong handle there is a cycle that outlives the unmount (Flutter's
+/// `Navigator.of` on a captured context fails once its element is gone).
+#[derive(Clone)]
+pub(crate) struct WeakNavigatorHandle(Weak<NavigatorShared>);
+
+impl WeakNavigatorHandle {
+    /// The navigator, while something else keeps it.
+    pub(crate) fn upgrade(&self) -> Option<NavigatorHandle> {
+        self.0.upgrade().map(|shared| NavigatorHandle {
+            shared,
+            _owner_affine: PhantomData,
+        })
+    }
+
+    /// Whether `self` and `other` name the same navigator.
+    pub(crate) fn same_navigator(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+
 impl NavigatorHandle {
     /// A handle to an empty, unmounted navigator. Seed it, hand it to
     /// [`Navigator::new`], and keep a clone. `build_phase` is the build phase
@@ -1610,9 +1634,9 @@ impl NavigatorHandle {
         self.shared.build_phase.is_building()
     }
 
-    /// Whether `self` and `other` name the same navigator.
-    pub(crate) fn same_navigator(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.shared, &other.shared)
+    /// A handle that names this navigator without keeping it alive.
+    pub(crate) fn downgrade(&self) -> WeakNavigatorHandle {
+        WeakNavigatorHandle(Rc::downgrade(&self.shared))
     }
 
     /// The lifecycle state of `id`'s entry. Test-facing, read through

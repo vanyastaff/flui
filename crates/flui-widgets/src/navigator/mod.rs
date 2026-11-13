@@ -63,7 +63,7 @@ pub use flui_animation::{AnimationRunFuture, RunCanceled};
 pub use hero::{Hero, HeroMode};
 pub use hero_controller::{FlightDirection, HeroController};
 pub use hero_controller_scope::HeroControllerScope;
-pub(crate) use navigator::{Navigator, NavigatorHandle};
+pub(crate) use navigator::{Navigator, NavigatorHandle, WeakNavigatorHandle};
 pub(crate) use observer::NavigatorObserver;
 pub use overlay_route::{
     RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,

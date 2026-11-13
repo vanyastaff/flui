@@ -2143,6 +2143,14 @@ sits below the handle's and popping would not take a Router's last page.
 runtime builds, and once the route has left its navigator, it disposes the
 popup unpushed and answers `PageError`.
 
+A `PageHandle` and a `RouterHandle` hold the navigator weakly; the `Router`'s
+state is the one strong owner beside the `Navigator` view it builds. The
+navigator's history holds each popup route, and a popup's builder that
+captures the handle of the page under it is the form ADR-0330 §3 teaches, so
+a strong handle would make a cycle that outlives the unmount. Once the
+navigator is gone, the page handle answers `PageError::Gone` and the router
+handle `RouterError::Disposed`.
+
 The navigator a Router builds is *addressed*: a plain `push` admits only routes
 whose binding slot a framework `TransitionRoute` marked
 `TransitionGroup::Default` — `PopupRoute` — and refuses `PageRoute`,
@@ -2157,8 +2165,9 @@ reason, and fails a `debug_assert!`. Every pop the navigator makes — a
 through an internal `NavigatorObserver`, so the location follows it.
 
 **Pinned by:** `popup_routes_are_admitted_and_leave_the_location_alone`,
-`page_handle_pops_only_its_own_route`, `page_handle_can_pop_follows_the_route_below`
-and `a_popup_pushed_from_a_page_resolves_to_its_value`. A `PageRoute` pushed
+`page_handle_pops_only_its_own_route`, `page_handle_can_pop_follows_the_route_below`,
+`a_popup_pushed_from_a_page_resolves_to_its_value` and
+`an_app_dropped_with_a_popup_open_frees_its_builder`. A `PageRoute` pushed
 through the facade refused as not addressable, and the doors that remove or
 seed refusing even a popup: **Unasserted:** no test pins this.
 

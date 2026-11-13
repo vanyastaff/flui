@@ -668,17 +668,16 @@ through the agent, a transition stepped by hand, an implicit animation the
 host's frames run to its end and the same animation dropped in flight;
 `a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap`
 (flui-material) pushes a page for a result, opens a dialog over it and pops
-both, then drops the application in the middle of the push, and with the
-result still awaited. A round that drops its application in the middle of an
+both, then drops the application in the middle of the push, with the result
+still awaited, and with the dialog open. A round that drops its application
+in the middle of an
 animation asserts first that it is there: the fade, that the host still has
 its run to drive; the push waits until the page going out and the page coming in
 are both on screen. A widget
 family that keeps state of a new kind (a controller, an overlay, a route)
 adds its rounds there, one settled and one dropped in flight. A leak a round
 finds and its change does not fix is held by a `#[should_panic]` test of its
-own, named in [`gaps.md`](gaps.md):
-`an_app_dropped_with_a_dialog_open_keeps_its_navigator` holds
-[a navigator unmounted with a dialog open](gaps.md#a-navigator-unmounted-with-a-dialog-open-is-never-freed).
+own, named in [`gaps.md`](gaps.md).
 
 `perf --size` measures what an application costs before it does anything,
 against `perf/size.toml`: the packages of the facade's default graph on Linux,

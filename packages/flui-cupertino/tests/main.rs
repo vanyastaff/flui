@@ -204,6 +204,10 @@ fn navigation_contracts() {
             route::cupertino_app_page_pops_on_an_edge_swipe,
         ),
         (
+            "route::cupertino app page pops on an edge swipe through the tester",
+            route::cupertino_app_page_pops_on_an_edge_swipe_through_the_tester,
+        ),
+        (
             "tab_scaffold::an inactive tabs state survives switching away and back",
             tab_scaffold::an_inactive_tabs_state_survives_switching_away_and_back,
         ),

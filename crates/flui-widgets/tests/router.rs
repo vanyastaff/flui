@@ -2531,3 +2531,64 @@ fn a_panicking_waker_leaves_the_other_unmount_results_delivered() {
     assert_eq!(first.try_take(), Some(Ok(None)));
     assert_eq!(second.try_take(), Some(Ok(None)));
 }
+
+/// The handles a page hands out: its own and its router's.
+type PageAndRouter = (PageHandle, RouterHandle<AppRoute>);
+
+/// An app dropped with a popup open frees what the popup's builder holds,
+/// whichever handle it captured: a handle names its navigator or router
+/// without keeping it, so the builder, held by the route the navigator's
+/// history holds, closes no cycle through it.
+pub(crate) fn an_app_dropped_with_a_popup_open_frees_its_builder() {
+    let mut leaked = Vec::new();
+    for captures_router in [false, true] {
+        // The page hands its handles out on its first build only, and the test
+        // keeps none of them.
+        let given = Rc::new(Cell::new(false));
+        let handles: Rc<RefCell<Option<PageAndRouter>>> = Rc::default();
+        let laid = {
+            let (handles, given) = (Rc::clone(&handles), Rc::clone(&given));
+            mount(Router::new(
+                AppRoute::Home,
+                move |_route: &AppRoute, ctx: &dyn BuildContext| {
+                    let page = PageHandle::of(ctx).expect("a page is on a route");
+                    let router = Router::<AppRoute>::of(ctx).expect("the Router is above");
+                    if !given.replace(true) {
+                        *handles.borrow_mut() = Some((page, router));
+                    }
+                    text("Home".to_owned())
+                },
+            ))
+        };
+        let (page, router) = handles.borrow_mut().take().expect("the page built");
+        let token = Rc::new(());
+        let kept = Rc::downgrade(&token);
+        let held: Box<dyn std::any::Any> = if captures_router {
+            Box::new(router)
+        } else {
+            drop(router);
+            Box::new(page.clone())
+        };
+        let popup = PopupRoute::<()>::new(move |_ctx, _a, _s| {
+            let _held = (&token, &held);
+            text("Popup".to_owned())
+        });
+        let result = page.push_popup(popup).expect("mounted");
+        let mut laid = laid;
+        settle(&mut laid);
+        assert!(laid_out_text(&laid, "Popup"));
+
+        drop((laid, page, result));
+        if kept.upgrade().is_some() {
+            leaked.push(if captures_router {
+                "RouterHandle"
+            } else {
+                "PageHandle"
+            });
+        }
+    }
+    assert!(
+        leaked.is_empty(),
+        "a popup builder that holds a {leaked:?} outlives its app"
+    );
+}

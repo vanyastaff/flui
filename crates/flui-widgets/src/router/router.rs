@@ -23,7 +23,7 @@ use super::handle::{RouterError, RouterHandle};
 use super::routable::Routable;
 use crate::navigator::{
     Navigator, NavigatorHandle, NavigatorObserver, PageHandle, PageRoute, RouteAnimation, RouteId,
-    RouteTransitionsBuilder,
+    RouteTransitionsBuilder, WeakNavigatorHandle,
 };
 use crate::semantics::Semantics;
 
@@ -362,11 +362,9 @@ impl<R: Routable> RouterState<R> {
     /// initial routes, registered as the URL owner of `url_slot` when there
     /// is one.
     fn new(router: &Router<R>, build_phase: BuildPhase, url_slot: Option<UrlOwnerSlot>) -> Self {
+        let navigator = NavigatorHandle::addressed(type_name::<R>(), build_phase.clone());
         let shared = Rc::new(RouterShared {
-            navigator: Terminal::new(NavigatorHandle::addressed(
-                type_name::<R>(),
-                build_phase.clone(),
-            )),
+            navigator: navigator.downgrade(),
             stack: RefCell::new(Vec::new()),
             page: Terminal::new(Rc::new(RefCell::new(Rc::clone(&router.page)))),
             transitions: Terminal::new(Rc::new(RefCell::new(router.transitions.clone()))),
@@ -386,6 +384,7 @@ impl<R: Routable> RouterState<R> {
         let url = url_slot.map(|slot| slot.register(&url_owner));
         RouterState {
             shared: Terminal::new(shared),
+            navigator: Terminal::new(navigator),
             observer: Terminal::new(observer),
             url_owner,
             url,
@@ -398,6 +397,10 @@ impl<R: Routable> RouterState<R> {
 /// [`StatefulView::State`] names it.
 pub struct RouterState<R: Routable> {
     shared: Terminal<Rc<RouterShared<R>>>,
+    /// The navigator the pages live on. The state keeps it, and the shared
+    /// state only names it: a handle a page or popup captures reaches the
+    /// shared state, which the navigator's history must not keep alive.
+    navigator: Terminal<NavigatorHandle>,
     observer: Terminal<Rc<dyn NavigatorObserver>>,
     /// What the presentation's URL-owner slot reaches this router through.
     url_owner: Rc<dyn UrlOwner>,
@@ -420,9 +423,10 @@ impl<R: Routable> fmt::Debug for RouterState<R> {
 impl<R: Routable> Drop for RouterState<R> {
     fn drop(&mut self) {
         let shared = self.shared.withdraw();
+        let navigator = self.navigator.withdraw();
         let observer = self.observer.withdraw();
         let initial = RetiredValues(std::mem::take(&mut self.initial));
-        drop((shared, observer, initial));
+        drop((shared, navigator, observer, initial));
     }
 }
 
@@ -435,7 +439,7 @@ impl<R: Routable> RouterState<R> {
     fn seed_initial_pages(&mut self) {
         for route in std::mem::take(&mut self.initial) {
             let page = self.shared.page_route::<()>(&route);
-            let id = self.shared.navigator.seed_page(page);
+            let id = self.navigator.seed_page(page);
             self.shared
                 .stack
                 .borrow_mut()
@@ -451,9 +455,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// once when it mounts.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.mounted.set(true);
-        self.shared
-            .navigator
-            .add_observer(Rc::clone(&self.observer));
+        self.navigator.add_observer(Rc::clone(&self.observer));
         self.seed_initial_pages();
         // The stack it opens on is not a change.
         let announcer = &self.shared.announcer;
@@ -497,7 +499,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     fn build(&self, _view: &Router<R>, _ctx: &dyn BuildContext) -> impl IntoView {
         RouterScope {
             shared: Rc::clone(&self.shared),
-            child: Terminal::new(Navigator::new(self.shared.navigator.clone()).boxed()),
+            child: Terminal::new(Navigator::new(NavigatorHandle::clone(&self.navigator)).boxed()),
         }
     }
 
@@ -519,7 +521,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         drop(old_hook);
         let ids: Vec<RouteId> = self.shared.stack.borrow().iter().map(|e| e.id).collect();
         for id in ids {
-            self.shared.navigator.mark_route_needs_build(id);
+            self.navigator.mark_route_needs_build(id);
         }
     }
 
@@ -528,7 +530,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     fn dispose(&mut self) {
         self.shared.mounted.set(false);
         drop(self.url.take());
-        self.shared.navigator.remove_observer(&self.observer);
+        self.navigator.remove_observer(&self.observer);
         // The hook may hold a handle to this router, which would keep its
         // shared state alive past the unmount; it is retired here, out of
         // its cell, rather than with the shared state.
@@ -569,7 +571,7 @@ impl<T> Drop for RouterRetiredValues<T> {
 pub(super) struct RouterShared<R: Routable> {
     /// The navigator the pages live on, addressed so its facade refuses pages
     /// that are not `R`.
-    pub(super) navigator: Terminal<NavigatorHandle>,
+    pub(super) navigator: WeakNavigatorHandle,
     /// One entry per page on `navigator`, bottom to top; never empty while
     /// mounted. Popups are not here.
     pub(super) stack: RefCell<Vec<RouterEntry<R>>>,
@@ -685,13 +687,11 @@ impl<R: Routable> UrlOwner for RouterUrlOwner<R> {
                 // The Back key's path: a `PopScope` that refuses keeps its
                 // page and the pop counts as handled; the last page is
                 // left to the platform.
-                NavigationOp::Pop => {
-                    if shared.navigator.maybe_pop() {
-                        Ok(())
-                    } else {
-                        Err(Refusal::Refused(NavigationRefused::NothingToPop))
-                    }
-                }
+                NavigationOp::Pop => match shared.navigator() {
+                    Ok(navigator) if navigator.maybe_pop() => Ok(()),
+                    Ok(_) => Err(Refusal::Refused(NavigationRefused::NothingToPop)),
+                    Err(error) => Err(Refusal::Edit(error)),
+                },
                 // An operation added after this router was written has
                 // nothing here that applies it.
                 _ => Err(Refusal::Refused(NavigationRefused::NoUrlOwner)),
@@ -723,17 +723,26 @@ pub(super) struct StackAnnouncer {
 impl<R: Routable> Drop for RouterShared<R> {
     fn drop(&mut self) {
         self.mounted.set(false);
-        let navigator = self.navigator.withdraw();
         let stack = RetiredValues(std::mem::take(self.stack.get_mut()));
         let page = self.page.withdraw();
         let transitions = self.transitions.withdraw();
         let delivery = self.announcer.delivery.get_mut().take();
         let on_unknown = Terminal::new(self.on_unknown.get_mut().take());
-        drop((navigator, stack, page, transitions, delivery, on_unknown));
+        drop((stack, page, transitions, delivery, on_unknown));
     }
 }
 
 impl<R: Routable> RouterShared<R> {
+    /// The navigator the pages live on, while its router state keeps it.
+    ///
+    /// # Errors
+    ///
+    /// [`RouterError::Disposed`] once the router state, and with it the
+    /// navigator, is gone.
+    pub(super) fn navigator(&self) -> Result<NavigatorHandle, RouterError> {
+        self.navigator.upgrade().ok_or(RouterError::Disposed)
+    }
+
     /// The page route for `route`: a [`PageRoute`] named with its path, whose
     /// page scopes a semantics route (and names it, when `route` has a label).
     pub(super) fn page_route<T: 'static>(&self, route: &R) -> PageRoute<T> {
@@ -1010,7 +1019,7 @@ mod seed_tests {
             assert_eq!(drops.load(Ordering::SeqCst), 3, "the refused value and the tail are destroyed");
             armed.store(false, Ordering::SeqCst);
             assert_eq!(state.shared.stack.borrow().len(), 1, "the seeded page stays committed");
-            assert_eq!(state.shared.navigator.route_ids().len(), 1);
+            assert_eq!(state.navigator.route_ids().len(), 1);
             drop(state);
         }
     }

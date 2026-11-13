@@ -15,7 +15,7 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 
 use super::lifecycle::Terminal;
-use super::navigator::NavigatorHandle;
+use super::navigator::{NavigatorHandle, WeakNavigatorHandle};
 use super::page_route::PopupRoute;
 use super::result::RouteResult;
 use super::route::{Route, RouteId};
@@ -50,7 +50,10 @@ use super::route::{Route, RouteId};
 /// ```
 #[derive(Clone)]
 pub struct PageHandle {
-    navigator: NavigatorHandle,
+    /// Weak: a popup's builder that captures the handle of the page under it
+    /// is held by the navigator's history, so a strong navigator here would
+    /// keep the navigator alive past its unmount.
+    navigator: WeakNavigatorHandle,
     route: RouteId,
 }
 
@@ -67,7 +70,8 @@ impl PageHandle {
     /// Whether this route is on top of its navigator.
     #[must_use]
     pub fn is_current(&self) -> bool {
-        self.navigator.is_mounted() && self.navigator.current() == Some(self.route)
+        self.mounted()
+            .is_some_and(|navigator| navigator.current() == Some(self.route))
     }
 
     /// Whether a route sits below this one for a pop to return to: Flutter's
@@ -75,7 +79,8 @@ impl PageHandle {
     /// button. `false` for a Router's last page, and once the route is gone.
     #[must_use]
     pub fn can_pop(&self) -> bool {
-        self.navigator.is_mounted() && self.navigator.route_can_pop(self.route)
+        self.mounted()
+            .is_some_and(|navigator| navigator.route_can_pop(self.route))
     }
 
     /// Ask this route to pop, honouring its `PopScope`s and local history:
@@ -85,10 +90,10 @@ impl PageHandle {
     /// not on top (a popup covers it, or it is gone), when it is a Router's
     /// last page, or while the UI runtime builds (ADR-0330 §3).
     pub fn maybe_pop(&self) -> bool {
-        if self.editable().is_err() || !self.is_current() {
-            return false;
+        match self.current() {
+            Ok(Some(navigator)) => navigator.maybe_pop(),
+            Ok(None) | Err(_) => false,
         }
-        self.navigator.maybe_pop()
     }
 
     /// Pop this route with no value: its [`RouteResult`] resolves to
@@ -102,8 +107,7 @@ impl PageHandle {
     /// `Ok(false)` when the route is present but not on top, or is a Router's
     /// last page; nothing is popped.
     pub fn pop(&self) -> Result<bool, PageError> {
-        self.editable()?;
-        Ok(self.is_current() && self.navigator.pop())
+        Ok(self.current()?.is_some_and(|navigator| navigator.pop()))
     }
 
     /// Pop this route, delivering `value` to whoever awaits its
@@ -117,12 +121,17 @@ impl PageHandle {
     /// As [`pop`](Self::pop). A refused or unpopped `value` is dropped after
     /// every navigator borrow is released.
     pub fn pop_with<T: 'static>(&self, value: T) -> Result<bool, PageError> {
-        self.editable()?;
-        if !self.is_current() {
-            drop(value);
-            return Ok(false);
+        match self.current() {
+            Ok(Some(navigator)) => Ok(navigator.pop_with(value)),
+            Ok(None) => {
+                drop(value);
+                Ok(false)
+            }
+            Err(refusal) => {
+                drop(value);
+                Err(refusal)
+            }
         }
-        Ok(self.navigator.pop_with(value))
     }
 
     /// Push `popup` over this route's navigator: a dialog, a menu or a sheet,
@@ -138,28 +147,43 @@ impl PageHandle {
         &self,
         popup: PopupRoute<T>,
     ) -> Result<RouteResult<T>, PageError> {
-        let refusal = self.editable().err().or_else(|| {
-            (!self.navigator.is_mounted() || !self.navigator.route_is_active(self.route))
-                .then_some(PageError::Gone)
-        });
-        if let Some(refusal) = refusal {
-            let mut popup = popup;
-            Route::dispose(&mut popup);
-            drop(popup);
-            return Err(refusal);
+        match self.editable() {
+            Ok(navigator) => Ok(navigator.push(popup)),
+            Err(refusal) => {
+                let mut popup = popup;
+                Route::dispose(&mut popup);
+                drop(popup);
+                Err(refusal)
+            }
         }
-        Ok(self.navigator.push(popup))
     }
 
-    /// Refuse a mutation while building, then one of a route that has left.
-    fn editable(&self) -> Result<(), PageError> {
-        flui_foundation::MutatedDuringBuild::check(self.navigator.is_building(), "PageHandle")
+    /// The navigator while it is mounted.
+    fn mounted(&self) -> Option<NavigatorHandle> {
+        self.navigator.upgrade().filter(NavigatorHandle::is_mounted)
+    }
+
+    /// The navigator to change this route through: a mutation is refused
+    /// while building, then once the route has left (its navigator dropped,
+    /// unmounted or past it).
+    fn editable(&self) -> Result<NavigatorHandle, PageError> {
+        let Some(navigator) = self.navigator.upgrade() else {
+            return Err(PageError::Gone);
+        };
+        flui_foundation::MutatedDuringBuild::check(navigator.is_building(), "PageHandle")
             .map_err(|_| PageError::DuringBuild)?;
-        if self.navigator.is_mounted() && self.navigator.route_is_active(self.route) {
-            Ok(())
+        if navigator.is_mounted() && navigator.route_is_active(self.route) {
+            Ok(navigator)
         } else {
             Err(PageError::Gone)
         }
+    }
+
+    /// [`editable`](Self::editable), and the navigator only while this route
+    /// is on top of it.
+    fn current(&self) -> Result<Option<NavigatorHandle>, PageError> {
+        let navigator = self.editable()?;
+        Ok((navigator.current() == Some(self.route)).then_some(navigator))
     }
 }
 
@@ -216,7 +240,10 @@ struct PageStatus {
 
 impl PageScope {
     pub(crate) fn new(navigator: NavigatorHandle, route: RouteId, child: BoxedView) -> Self {
-        let page = PageHandle { navigator, route };
+        let page = PageHandle {
+            navigator: navigator.downgrade(),
+            route,
+        };
         let status = PageStatus {
             is_current: page.is_current(),
             can_pop: page.can_pop(),
