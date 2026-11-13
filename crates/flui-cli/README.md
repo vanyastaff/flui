@@ -197,6 +197,9 @@ the app): `flui run --scene --scene-crate <crate> --package <android.package>`.
 
 ## Driving an app from an agent
 
+**Experimental.** The agent protocol is 0.x: its methods, tool arguments and
+replies can change in any minor release.
+
 ```bash
 flui run --agent                         # debug build, on this desktop
 flui run --agent --release               # release build with the `driver` feature
