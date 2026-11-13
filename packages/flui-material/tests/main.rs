@@ -223,6 +223,10 @@ fn action_component_contracts() {
             chip::a_filter_chip_announces_its_selection_as_pressed,
         ),
         (
+            "chip::a chip that gains or loses its handler keeps its subtree",
+            chip::a_chip_that_gains_or_loses_its_handler_keeps_its_subtree,
+        ),
+        (
             "chip::disabled chip and its delete icon are both inert through dispatch",
             chip::disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch,
         ),

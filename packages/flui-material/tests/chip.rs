@@ -200,3 +200,61 @@ pub fn a_filter_chip_announces_its_selection_as_pressed() {
         assert_eq!(chip.toggled(), Some(pressed), "selected: {selected}");
     }
 }
+
+/// A chip that gains or loses its handler is updated in place: its label's
+/// render object survives the rebuild, so a stateful label, an avatar or a
+/// focused delete button would too. Both chips are rows: `Chip` gains
+/// `on_pressed`, `FilterChip` gains `on_selected`.
+pub fn a_chip_that_gains_or_loses_its_handler_keeps_its_subtree() {
+    use std::cell::Cell;
+
+    use flui_material::FilterChip;
+    use flui_sdk::view::SignalWriteExt;
+    use flui_sdk::view::prelude::*;
+
+    type Row = (&'static str, fn(bool) -> BoxedView);
+    let rows: [Row; 2] = [
+        ("chip", |handled| {
+            let chip = Chip::new(Text::new("Tag"));
+            if handled {
+                chip.on_pressed(|_ctx| {}).boxed()
+            } else {
+                chip.boxed()
+            }
+        }),
+        ("filter chip", |handled| {
+            let chip = FilterChip::new(Text::new("Tag"));
+            if handled {
+                chip.on_selected(|_ctx, _selected| {}).boxed()
+            } else {
+                chip.boxed()
+            }
+        }),
+    ];
+    for (name, chip) in rows {
+        let handled = Rc::new(Cell::new(false));
+        let signals = Rc::new(Cell::new(None));
+        let probe = {
+            let (handled, signals) = (Rc::clone(&handled), Rc::clone(&signals));
+            common::SignalProbe::new(move |probe_signals| {
+                signals.set(Some(probe_signals));
+                themed(chip(handled.get()))
+            })
+        };
+        let mut laid = lay_out(probe.view(), loose(300.0));
+        let label = laid.try_find_by_render_type("RenderParagraph");
+        for now in [true, false] {
+            handled.set(now);
+            let count = signals.get().expect("the probe built").count;
+            probe
+                .write(|ctx| count.update(ctx, |n| *n += 1))
+                .expect("the probe's signal takes a write");
+            laid.pump();
+            assert_eq!(
+                laid.try_find_by_render_type("RenderParagraph"),
+                label,
+                "{name}: the label was remounted when the handler became {now}",
+            );
+        }
+    }
+}

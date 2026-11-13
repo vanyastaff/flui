@@ -558,16 +558,7 @@ impl StatelessView for Chip {
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
         );
 
-        // Flutter's `Semantics(button: true, enabled: …)` around a pressable
-        // chip is the well's node, enabled while the well has its tap. A chip
-        // without `on_pressed` is no button: it keeps the plain node that
-        // names it and says whether it is enabled.
         let mut ink_well = InkWell::new().child(padded_content).shape(shape);
-        if self.on_pressed.is_some() {
-            ink_well = ink_well.description(
-                Description::new(SemanticsRole::Button).identifier(self.identifier.clone()),
-            );
-        }
         if self.is_pressable() {
             let on_pressed = self.on_pressed.clone();
             ink_well = ink_well.on_tap(move |ctx| {
@@ -580,16 +571,23 @@ impl StatelessView for Chip {
         let container = CustomPaint::new()
             .foreground_painter(ChipBorderPainter { side, shape })
             .child(Material::new(background_color).shape(shape).child(ink_well));
-        if self.on_pressed.is_some() {
-            return container.boxed();
-        }
+
+        // The chip keeps its own node whether it is a button or not: a chip
+        // that gains or loses `on_pressed` keeps the same subtree, its label,
+        // avatar and delete button included. A button description on the
+        // well would leave a chip without `on_pressed` a disabled node, since
+        // the well's switch follows its tap.
         let mut semantics = Semantics::new()
-            .role(SemanticsRole::None)
+            .role(if self.on_pressed.is_some() {
+                SemanticsRole::Button
+            } else {
+                SemanticsRole::None
+            })
             .enabled(self.enabled);
         if let Some(identifier) = &self.identifier {
             semantics = semantics.identifier(std::sync::Arc::clone(identifier));
         }
-        semantics.child(container).boxed()
+        semantics.child(container)
     }
 }
 
