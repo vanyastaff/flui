@@ -127,9 +127,14 @@ impl ViewState<Label> for LabelState {
 struct PerfApp {
     label: SharedSignal<String>,
     position: ScrollPosition,
-    /// Rows the list's builder has built, so a scenario can see that a
-    /// scroll reached new rows. A `Cell` add, so it costs no allocation.
-    rows_built: std::rc::Rc<std::cell::Cell<u64>>,
+}
+
+thread_local! {
+    /// Rows [`PerfApp`]'s list has built on this thread, so a scenario can see
+    /// that a scroll reached new rows. A thread-local rather than a captured
+    /// handle: the row builder stays a zero-sized closure, so counting adds
+    /// nothing to what a rebuild of the app allocates.
+    static ROWS_BUILT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 impl StatelessView for PerfApp {
@@ -140,19 +145,16 @@ impl StatelessView for PerfApp {
         let rows = SliverList::new(
             ROWS,
             ROW_HEIGHT,
-            std::rc::Rc::new({
-                let rows_built = std::rc::Rc::clone(&self.rows_built);
-                move |index| {
-                    (index < ROWS).then(|| {
-                        rows_built.set(rows_built.get() + 1);
-                        RepaintBoundary::new()
-                            .child(
-                                SizedBox::new(WIDTH, ROW_HEIGHT)
-                                    .child(ColoredBox::new(Color::rgb(40, 80, 120))),
-                            )
-                            .boxed()
-                    })
-                }
+            std::rc::Rc::new(|index| {
+                (index < ROWS).then(|| {
+                    ROWS_BUILT.with(|built| built.set(built.get() + 1));
+                    RepaintBoundary::new()
+                        .child(
+                            SizedBox::new(WIDTH, ROW_HEIGHT)
+                                .child(ColoredBox::new(Color::rgb(40, 80, 120))),
+                        )
+                        .boxed()
+                })
             }),
         );
         let list = Viewport::new(self.position.clone(), (rows,));
@@ -193,11 +195,7 @@ impl Mounted {
 fn mount() -> Mounted {
     let label = SharedSignal::new(String::from("label"));
     let (position, writer) = ScrollPosition::with_writer(0.0);
-    let app = PerfApp {
-        label,
-        position,
-        rows_built: std::rc::Rc::default(),
-    };
+    let app = PerfApp { label, position };
     let mut binding = HeadlessBinding::new();
     let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app_root(app)));
     let _ = binding.mount_root(
@@ -321,33 +319,40 @@ const STEADY_SLACK: u64 = 2;
 #[test]
 fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     let (position, writer) = ScrollPosition::with_writer(0.0);
-    let rows_built = std::rc::Rc::<std::cell::Cell<u64>>::default();
     let app = PerfApp {
         label: SharedSignal::new(String::from("label")),
         position,
-        rows_built: std::rc::Rc::clone(&rows_built),
     };
     let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
     host.attach(&app).expect("a fresh host takes a root");
     host.enable_semantics();
     let visible_rows = ((HEIGHT - LABEL_HEIGHT) / ROW_HEIGHT) as u64;
     // Two frames a screen: a lazy band lands a frame after the paint that
-    // first shows it. A third frame builds nothing, so the measured two hold
-    // the whole scroll.
+    // first shows it. The third frame must cost what the fourth, idle one
+    // does and build no row, so no work of the scroll slips past the two it
+    // measures.
+    let rows_built = || ROWS_BUILT.with(std::cell::Cell::get);
     let mut scroll_to = |screen: u32| {
         writer.set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
-        let before = rows_built.get();
+        let before = rows_built();
         let ((), heap) = perf_measured(|| {
             for _ in 0..2 {
                 let _ = host.pump(FRAME);
             }
         });
-        let built = rows_built.get() - before;
-        let _ = host.pump(FRAME);
-        assert_eq!(
-            rows_built.get() - before,
-            built,
-            "the band of screen {screen} landed after the two frames a scroll measures"
+        let built = rows_built() - before;
+        let ((), third) = perf_measured(|| {
+            let _ = host.pump(FRAME);
+        });
+        let ((), idle) = perf_measured(|| {
+            let _ = host.pump(FRAME);
+        });
+        assert!(
+            rows_built() - before == built
+                && third.allocations == idle.allocations
+                && third.allocated_bytes == idle.allocated_bytes,
+            "screen {screen}'s scroll did work after the two frames it measures: \
+             the third frame asked {third:?} of the heap against an idle {idle:?}"
         );
         (heap, built)
     };
@@ -704,7 +709,6 @@ fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
     let app = PerfApp {
         label: SharedSignal::new(String::from("label")),
         position,
-        rows_built: std::rc::Rc::default(),
     };
     let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
     host.attach(&app).expect("a fresh host takes a root");
