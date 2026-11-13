@@ -406,6 +406,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - Windows scroll by position is missing: the published `accesskit_windows` implements no UI Automation `ScrollPattern`, so Narrator and NVDA read no scroll position and scroll only through a position slider's `RangeValue`, though FLUI publishes the position from the top or left edge and takes `SetScrollOffset` (ADR-0273). An upstream pull request adds the pattern ([AccessKit/accesskit#816](https://github.com/AccessKit/accesskit/pull/816), open); it closes with the `accesskit_windows` release that has it.
 - **Linux, run against a real AT-SPI client:** `flui-native`'s `linux_atspi` starts a session bus and the accessibility bus of its own (at-spi2-core) beside an Xvfb, publishes a window's tree through `accesskit_unix` and reads it back as Orca would: role, name, hint as the description, a field's text through the Text interface (from its runs; a value without runs reaches no AT-SPI interface), a slider's value and range, states and actions; announcements at their urgency, live regions whose own or child's label changes, a status that appears, and focus once the window is active, each matched by a nonce of the run. A route change and a modal dialog appearing are told by name (ADR-0204 §5): heard on X11 as a polite announcement (`a_route_change_is_heard_by_its_name`); on iOS and Android as the platform's notice of a new screen, type-checked, with no VoiceOver or TalkBack run; on Windows, macOS and the Web as an announcement, not run there. No Orca session ran.
 
+### An image inside a control is a node of its own
+
+> **Environments:** all · **Who it hurts:** Screen-reader users: a button over a labelled image is announced as an unnamed button with an image beneath it
+
+- Two explicit roles never share a node (`SemanticsConfiguration::is_compatible_with`, ADR-0206), so a labelled `Image` (or any node with a content role: image, heading, paragraph) inside a control with its own role (button, link, toggle) stays a child node instead of naming the control. Flutter merges the image flag into the button's node. An `Icon` declares no role, so a labelled icon names its button (`a_labelled_icon_names_the_button_it_sits_in`); an `Image` keeps its role.
+- It closes with an ADR that replaces ADR-0206's role compatibility rule: a content role folds into a control's node, which keeps the control's role, with a table test over the content × control pairs.
+
 ### Add-to-app: no FLUI view inside an existing native app
 
 > **Environments:** all · **Who it hurts:** Teams adding FLUI to an app they already ship · **Parity:** [Windows](platform-parity.md#windows)
