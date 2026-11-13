@@ -24,7 +24,7 @@
 //! # Wraps the existing render object — no new paint code
 //!
 //! `Material` is a thin configuration object over
-//! [`flui_sdk::pipeline::RenderPhysicalShape`] (`RenderPhysicalModelBase<PathClip>`,
+//! [`flui_sdk::rendering::objects::RenderPhysicalShape`] (`RenderPhysicalModelBase<PathClip>`,
 //! `crates/flui-objects/src/proxy/physical_model.rs`) — the render object
 //! that already implements clip + `Canvas::draw_shadow` + fill. This mirrors
 //! the oracle directly: `Material.build` constructs a `PhysicalModel` or
@@ -86,8 +86,8 @@
 
 use flui_sdk::painting::Clip;
 use flui_sdk::painting::Color;
-use flui_sdk::pipeline::{PathClipConfiguration, RenderPhysicalShape};
 use flui_sdk::rendering::BoxProtocol;
+use flui_sdk::rendering::objects::{PathClipConfiguration, RenderPhysicalShape};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{Child, RenderView, impl_render_view};
 use flui_sdk::widgets::DefaultTextStyle;

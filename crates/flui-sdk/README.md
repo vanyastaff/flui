@@ -17,7 +17,7 @@ crate.
   `flui::widgets::Text` are one type.
 - `interaction`, `painting`, `rendering`: the items of the facade's modules
   that packages use, at the same paths.
-- `pipeline` (Evolving): render-object internals the facade does not expose.
+- `pipeline` (Evolving): render internals the facade does not expose.
 
 ## Optional diagnostics
 

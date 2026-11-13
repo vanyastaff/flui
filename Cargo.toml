@@ -775,6 +775,7 @@ flui-app = { workspace = true }
 flui-devtools = { workspace = true, optional = true }
 flui-painting = { workspace = true }
 flui-rendering = { workspace = true }
+flui-objects = { workspace = true }
 flui-interaction = { workspace = true }
 flui-testing = { workspace = true, optional = true }
 flui-material = { workspace = true, optional = true }
@@ -793,7 +794,6 @@ cargo_metadata.workspace = true
 flui-layer = { workspace = true }
 # === Rendering ("testing" for the readback test's render-tree inspection) ===
 flui-rendering = { workspace = true, features = ["testing"] }
-flui-objects = { workspace = true }
 flui-interaction = { workspace = true }
 
 # === Platform (for examples) ===

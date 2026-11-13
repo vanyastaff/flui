@@ -310,17 +310,19 @@ pub mod rendering {
     pub use flui_rendering::hit_testing::HitTestBehavior;
     pub use flui_rendering::protocol::BoxProtocol;
     pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
+
+    /// The built-in render objects packages compose, at `flui::rendering::objects`.
+    pub mod objects {
+        pub use flui_objects::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction};
+    }
 }
 
-/// Render objects and their configuration that the facade does not expose.
+/// Render internals that the facade does not expose.
 ///
-/// **Evolving:** these are internals of the render-object catalog. They may
+/// **Evolving:** these are internals of the render pipeline. They may
 /// change or move on any train; an item graduates into a facade module once it
 /// has stayed unchanged across trains and has a second consumer (ADR-0088 §4).
 pub mod pipeline {
-    pub use flui_objects::PathClipConfiguration;
-    pub use flui_objects::RenderPhysicalShape;
-    pub use flui_objects::TranslationFraction;
     pub use flui_rendering::view::ScrollDirection;
 }
 

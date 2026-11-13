@@ -109,6 +109,12 @@ serial_test = "4"
 # `#[diagnostic::on_unimplemented]` messages on the view traits.
 trybuild = { workspace = true }
 
+# Arbitrary stored bytes for the persisted-document load. Not on wasm32: its
+# random source, getrandom, has no backend there without a feature this crate
+# does not ship.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { workspace = true }
+
 [[test]]
 name = "view_it"
 path = "tests/main.rs"

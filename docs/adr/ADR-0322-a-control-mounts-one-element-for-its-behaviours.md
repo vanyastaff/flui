@@ -486,7 +486,8 @@ render object or already owns the element the value comes from.
 
 ## More information
 
-- The measurement is a counted probe over `HeadlessBinding` with a counting global allocator; the
+- The measurement is `flui_testing::control_cost::control_over_text` on a `HeadlessHost`, counted
+  by the kit's global allocator (`flui_testing::heap::CountingAllocator`); the
   numbers and the closing condition live in `docs/gaps.md`.
 - Revisit option 3 if controls written outside the catalogs show the same cost at a scale that
   matters.

@@ -13481,8 +13481,14 @@ fn render_object_types_match_exports() {
     }
     exported.sort_unstable();
     exported.dedup();
-    // Generic clip family root — harness catalog targets the concrete variants.
-    exported.retain(|name| *name != "RenderClip");
+    // Generic family roots: the catalog targets their concrete aliases
+    // (`RenderClipRect`, `RenderPhysicalShape`, `RenderSliverFloatingPersistentHeader`, …).
+    exported.retain(|name| {
+        !matches!(
+            *name,
+            "RenderClip" | "RenderPhysicalModelBase" | "RenderSliverFloatingHeaderBase"
+        )
+    });
 
     let mut catalog: Vec<&str> = RENDER_OBJECT_TYPES.to_vec();
     catalog.sort_unstable();

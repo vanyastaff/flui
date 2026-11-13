@@ -124,8 +124,10 @@ pub mod a11y;
 pub mod backend_conformance;
 pub mod bootstrap;
 pub mod clipboard;
+pub mod control_cost;
 pub mod drop_ledger;
 pub mod gesture_alternatives;
+pub mod heap;
 pub mod host;
 pub mod motion;
 // The log capture lives in its subscriber's crate (`flui_log::testing`); this
