@@ -168,6 +168,7 @@ impl std::fmt::Debug for TransitionPeer {
 /// A `PopupRoute` pushed over a `PageRoute` therefore drives no secondary
 /// animation on the page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum TransitionGroup {
     /// `TransitionRoute`'s defaults: coordinates with anything else that also
     /// leaves both predicates at `true`. `PopupRoute` lives here.

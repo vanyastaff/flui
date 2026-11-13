@@ -165,6 +165,10 @@ pub enum ScrollEndReason {
 /// Exhaustive: the answer is two-way, and growing it would change the
 /// contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the answer is two-way, and growing it would change the contract"
+)]
 pub enum FlingHandoff {
     /// The residual goes on to the next participant up the chain.
     Declined,

@@ -165,6 +165,7 @@ impl fmt::Display for ActionName {
 /// element is the string `"mixed"`. The three states are complete, so this
 /// enum is exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(clippy::exhaustive_enums, reason = "the three states are complete")]
 pub enum Checked {
     /// Checked.
     True,

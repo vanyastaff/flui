@@ -274,7 +274,10 @@ pub(crate) fn widget_scope_edge_configuration_reaches_the_tab_path() {
                 assert_eq!(result, KeyEventResult::SkipRemainingHandlers);
                 assert!(manager.primary_focus().is_none());
             }
-            TraversalEdgeBehavior::ParentScope => unreachable!(),
+            TraversalEdgeBehavior::ParentScope => {
+                unreachable!("the row never builds a parent scope")
+            }
+            _ => unreachable!("this row lists only the behaviors above"),
         }
     }
 }

@@ -40,8 +40,9 @@ These paths get findings only when near-certain and severe:
 - `docs/plans/specs/`, the live specs, whose task IDs and status tables are their purpose: a
   finding there is a spec that contradicts an accepted ADR or a status the diff makes false;
 - files marked `@generated`, and `Cargo.lock`;
-- `*.snap` files, checked only against the PR body: a regenerated snapshot the PR doesn't
-  explain is a finding, the snapshot contents are not.
+- expectation files (`*.snap`, `*.stderr`, `api/flui.txt`, perf baselines, allowlists), checked
+  only against the `## Expectations` section of the PR body (ADR-0331): an edit whose line there
+  does not say why the old expectation was wrong is a finding, the file's contents are not.
 
 ## What a review cannot see
 

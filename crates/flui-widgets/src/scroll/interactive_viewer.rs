@@ -147,6 +147,7 @@ const PAGE_FRACTION: f64 = 0.8;
 
 /// Constrains which axis (or axes) [`InteractiveViewer`] pans along.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum PanAxis {
     /// Panning is allowed only along the horizontal axis.
     Horizontal,
@@ -224,6 +225,7 @@ type EndCallback = Rc<dyn Fn(&mut EventContext<'_>, InteractionEndDetails)>;
 /// [`GestureAlternatives`] name it, and its zoom keys and assistive
 /// increment and decrement perform it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(clippy::exhaustive_enums, reason = "a zoom goes in or out")]
 pub enum ZoomIntent {
     /// Zoom in: the scene grows.
     In,
@@ -241,6 +243,7 @@ impl Intent for ZoomIntent {}
 /// fifths of the viewport, within the boundary; it goes through the nested
 /// scroll channel like the pan it stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(clippy::exhaustive_enums, reason = "the four directions of a plane")]
 pub enum PanIntent {
     /// Show what lies to the left.
     Left,
@@ -269,6 +272,7 @@ impl Intent for PanIntent {}
 /// [`CtrlWheel`]: WheelScaleGate::CtrlWheel
 /// [`AnyWheel`]: WheelScaleGate::AnyWheel
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum WheelScaleGate {
     /// Every vertical wheel tick zooms.
     #[default]

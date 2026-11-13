@@ -32,6 +32,10 @@ impl GestureComponent {
 
 /// The phase of one gesture component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a gesture component begins, changes, ends or is cancelled"
+)]
 pub enum GesturePhase {
     /// The component began; the reading's delta already applies.
     Began,

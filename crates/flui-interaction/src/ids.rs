@@ -123,6 +123,10 @@ pub use flui_platform::pointer::DeviceId;
 /// would change every owner keyed by the surface and the recording format, so
 /// matches over it stay exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0207 §5 closes the set of routing roots"
+)]
 pub enum InputSurface {
     /// The window of the presentation that owns the binding.
     Window,

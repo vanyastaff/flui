@@ -52,6 +52,10 @@ pub(crate) const DEFAULT_FONT_SIZE: f64 = 14.0;
 /// The variants are ordered by severity, so a prop-diff over several
 /// properties can fold with `max`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each level maps to the render update it needs, and a `_` arm would under-invalidate"
+)]
 pub enum Invalidation {
     /// Nothing observable changed.
     None,

@@ -428,42 +428,55 @@ pub trait Storage<O> {
 pub mod position {
     /// The window position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Window {}
     /// The displays position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Displays {}
     /// The input position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Input {}
     /// The text position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Text {}
     /// The accessibility position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Accessibility {}
     /// The clipboard position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Clipboard {}
     /// The primary selection position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum PrimarySelection {}
     /// The drag-and-drop position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Drag {}
     /// The haptics position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Haptics {}
     /// The system preferences position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Preferences {}
     /// The lifecycle position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Lifecycle {}
     /// The system chrome position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Chrome {}
     /// The storage position.
     #[derive(Debug)]
+    #[expect(clippy::exhaustive_enums, reason = "a position marker has no values")]
     pub enum Storage {}
 }
 

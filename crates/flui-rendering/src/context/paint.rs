@@ -327,6 +327,12 @@ impl FragmentRecorder {
         self.start
     }
 
+    /// Gives the canvas `buffer`'s room for the next run it records
+    /// ([`Canvas::record_into`]): a buffer the scene let go of.
+    pub(crate) fn record_into(&mut self, buffer: DisplayList) {
+        self.canvas.record_into(buffer);
+    }
+
     /// Gives up the recording [`Self::begin`] started, after the node's
     /// paint panicked: the buffer without anything the node recorded, and a
     /// fresh canvas for the next node. The recorder's state is reset before

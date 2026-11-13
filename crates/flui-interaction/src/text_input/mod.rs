@@ -138,6 +138,10 @@ impl std::fmt::Debug for TextInputClient {
 /// Result of a token-guarded detach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the token named the active client or it did not"
+)]
 pub enum DetachOutcome {
     /// The token named the active client and the connection was closed.
     Detached,
@@ -164,6 +168,10 @@ pub enum TextInputError {
 }
 
 /// How a presentation's platform takes text input.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the owner drives each input model, and a `_` arm would leave a platform without text input"
+)]
 pub enum TextInputBackend {
     /// A push-model platform: the owner enables its IME and reports the
     /// cursor area; the platform pushes [`ImeEvent`]s, which the owner

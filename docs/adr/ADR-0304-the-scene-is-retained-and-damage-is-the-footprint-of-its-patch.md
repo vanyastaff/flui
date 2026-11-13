@@ -210,6 +210,10 @@ impl SceneWriter<'_> {
     pub fn next_content_version(&mut self) -> Result<ContentVersion, SceneError>;
     pub fn push(&mut self, op: SceneOp);
     pub fn current(&self) -> &SceneVersion;
+    // a run's chunk, written into one the owner reclaimed when it holds one;
+    // `commands` is left holding that chunk's emptied list for the next recording
+    pub fn chunk(&mut self, owner: RenderId, ordinal: u32, version: ContentVersion,
+        commands: &mut DisplayList) -> Arc<Chunk>;
     // a composited-layer update: `content`'s stream shared, the named effects replaced;
     // a refused one leaves its layers with the owner until the next patch opens
     pub fn with_effects(&mut self, content: &BoundaryContent,
@@ -419,11 +423,14 @@ value is user code) run once the owner is free. `apply` keeps the version it rep
 two it retires and hands each back the same way once no other holder (the raster side, a
 pipeline, a probe) reads it, or when a newer one pushes it out; `renew` hands back its version and
 every retiring one. The caller frees what it is handed with `ReleasedContents::reclaim`, which runs
-those destructors and keeps, emptied, the version records, table nodes and contents the owner held
-alone; `SceneOwner::restock` takes them back, the next apply copies a shared table node into an
-emptied one, and a composited-layer update (`SceneWriter::with_effects`) writes into an emptied
-content, so a frame that moves a layer allocates nothing in the scene. A recording buffer the
-owner holds alone goes back to the recorder's pool (`Arc::try_unwrap`), any other is dropped.
+those destructors and keeps, emptied, the version records, table nodes, contents and the chunks of
+those contents (each with its `Arc<DisplayList>`) the owner held alone; `SceneOwner::restock` takes
+them back, the next apply copies a shared table node into an emptied one, and a composited-layer
+update (`SceneWriter::with_effects`) writes into an emptied content, so a frame that moves a layer
+allocates nothing in the scene. A repaint writes each run into an emptied chunk
+(`SceneWriter::chunk`), which hands the run's buffer the chunk's emptied command list for the
+canvas to record the next run into (`Canvas::record_into`); a chunk or list someone else still
+holds is dropped, never emptied.
 Buffers come back with the completion while only the `Copy` id crosses up (ADR-0045 §1). A refused
 submit changes nothing: the next publication's damage still starts at `acked`.
 

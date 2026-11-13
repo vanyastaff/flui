@@ -57,6 +57,7 @@ pub fn run_keeping_owner(platform: Box<dyn Platform>, log: &Rc<AppLog>) -> Owner
 
 /// One call an [`AppLog`] heard.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum AppCall {
     /// [`AppHandler::ready`].
     Ready,

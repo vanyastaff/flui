@@ -15,6 +15,10 @@ use super::command::{DrawCommand, DrawOp};
 /// or a command under a perspective transform whose image this crate does
 /// not bound.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the damage planner handles bounded and unbounded content, and a `_` arm would under-report damage"
+)]
 pub enum DamageExtent {
     /// Every pixel the content changes lies inside `rect` mapped to the
     /// target, grown there by `spread` times the mapping's largest stretch.
