@@ -1274,7 +1274,7 @@ mod live {
         layout_listeners: RefCell<Vec<Box<dyn FnMut() + Send>>>,
         /// The windows' text input, which every key goes through: the
         /// input method of the focused field takes it or lets it through.
-        text: Arc<dyn LoopText>,
+        text: Rc<dyn LoopText>,
     }
 
     impl std::fmt::Debug for X11Input {
@@ -1457,7 +1457,7 @@ mod live {
         /// The input of `connection`'s windows: XInput 2 set up on it, the
         /// devices listed, the keyboard read, and the device hierarchy and
         /// the keyboard's changes heard from here on.
-        pub(crate) fn new(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Rc<Self> {
+        pub(crate) fn new(connection: &Arc<X11Connection>, text: Rc<dyn LoopText>) -> Rc<Self> {
             let xcb = connection.xcb();
             let version = xcb
                 .xinput_xi_query_version(XI_ASKED.0, XI_ASKED.1)

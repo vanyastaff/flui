@@ -374,7 +374,7 @@ pub struct X11Window {
     drag: Arc<dyn LoopDrag>,
     /// The windows' text input, which serves this window's field to the
     /// input method and hands it the window's keys.
-    text: Arc<dyn LoopText>,
+    text: Rc<dyn LoopText>,
     /// The scale the input reads this window's positions at.
     input_scale: WindowScale,
     record: RefCell<Record>,
@@ -1897,7 +1897,7 @@ impl X11Windows {
             displays: Arc::clone(owner.displays()),
             input,
             drag: Arc::clone(owner.drag()),
-            text: Arc::clone(owner.text()),
+            text: Rc::clone(owner.text()),
             input_scale: WindowScale::new(scale),
             record: RefCell::new(Record {
                 title: options.title.clone(),
