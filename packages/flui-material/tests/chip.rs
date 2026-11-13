@@ -314,7 +314,7 @@ pub fn a_chip_is_its_own_node_and_disabled_only_when_it_says_so() {
                 let case =
                     format!("enabled: {enabled}, handler: {handler}, deletable: {deletable}");
                 let operable = enabled && handler;
-                let chip_node = {
+                let (chip_node, delete_node) = {
                     let tree = laid
                         .a11y_tree()
                         .expect("semantics enabled before the frame");
@@ -379,7 +379,7 @@ pub fn a_chip_is_its_own_node_and_disabled_only_when_it_says_so() {
                         None,
                         "{case}: the toolbar takes no label\n{shown}"
                     );
-                    node.id()
+                    (node.id(), delete_buttons.first().map(|delete| delete.id()))
                 };
                 if operable {
                     laid.invoke_semantics_action(ActionRequest {
@@ -403,6 +403,30 @@ pub fn a_chip_is_its_own_node_and_disabled_only_when_it_says_so() {
                     0,
                     "{case}: activating the chip never deletes it"
                 );
+                // The delete button deletes through its own node, and only
+                // while the chip is on.
+                if let (Some(delete), true) = (delete_node, enabled) {
+                    laid.invoke_semantics_action(ActionRequest {
+                        action: Action::Click,
+                        target_tree: TreeId::ROOT,
+                        target_node: delete,
+                        data: None,
+                    })
+                    .unwrap_or_else(|error| {
+                        panic!("{case}: the delete button takes a click: {error}")
+                    });
+                    laid.pump();
+                    assert_eq!(
+                        deletions.load(Ordering::SeqCst),
+                        1,
+                        "{case}: a click on the delete button deletes the chip"
+                    );
+                    assert_eq!(
+                        taps.load(Ordering::SeqCst),
+                        2 * usize::from(operable),
+                        "{case}: a click on the delete button does not press the chip"
+                    );
+                }
             }
         }
     }

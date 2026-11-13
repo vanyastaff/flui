@@ -125,8 +125,10 @@
 //! - **Custom `delete_icon` widget override** — the delete affordance
 //!   always renders the M3 default glyph (`cancel` for [`Chip`], `clear` for
 //!   [`FilterChip`]).
-//! - **Delete-button tooltip** — no localization
-//!   substrate consumes it yet.
+//! - **Delete-button tooltip and accessible name** — Flutter shows
+//!   `deleteButtonTooltipMessage` as the tooltip and names the delete
+//!   button's node with it; no localization substrate supplies it yet, so
+//!   the delete button is an unnamed button node.
 //! - **RTL** — the content `Row` always lays out left-to-right; no
 //!   `Directionality` ambient in this substrate yet (the same gap
 //!   [`flui_sdk::widgets::Icon`]'s own docs already name).
