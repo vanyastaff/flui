@@ -1,27 +1,25 @@
 use crate::app::hot_reload::WorkerReload;
 use flui_native::HostWindow;
 use flui_platform::PlatformWindow;
+use flui_runtime::pump::SampledClock;
 use flui_scheduler::AppLifecycleState;
 use flui_view::View;
 use flui_widgets::app_root;
-use parking_lot::Mutex;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use super::device_recovery::{
-    FrameRecoveryOutcome, new_device_recovery_backoff, pump_with_device_recovery,
-};
 use super::first_reveal::FirstReveal;
 use super::frame_pacing::{
-    FallbackWake, WakeAction, frame_is_dirty, install_pre_present_hook, keeps_frame_gate_open,
-    wake_action,
+    FallbackWake, WakeAction, frame_is_dirty, keeps_frame_gate_open, wake_action,
 };
 use super::host::{APP_RUNTIME, desktop_secondary_wake_deadline, merge_wake_deadlines};
 use super::owner_dispatch::{
     PresentationDispatcher, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
     install_input_wiring, prepare_ui_runtime_alongside,
 };
+use super::raster_host::{RasterSlot, device_retry_at};
 use crate::app::AppConfig;
+use flui_engine::SlotVisibility;
 
 pub(super) struct RenderedMain {
     pub(super) window: Rc<dyn PlatformWindow>,
@@ -65,10 +63,6 @@ pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::Wind
     options
 }
 
-#[expect(
-    deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
-)]
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
@@ -87,9 +81,8 @@ where
         dispatcher: None,
         committed: false,
     };
-    // Recovery and reveal deadlines belong to this presentation. The native
-    // frame registry retains their metadata even while its driver is leased.
-    let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
+    // The reveal deadline belongs to this presentation. The native frame
+    // registry retains its metadata even while its driver is leased.
 
     // 0d. The window's deferred first reveal (see `FirstReveal`): the
     // platform opened it hidden-but-intended-visible, and the frame closure
@@ -98,29 +91,8 @@ where
     // dirty predicate like every other wake-deadline source here.
     let first_reveal = Arc::new(FirstReveal::new());
 
-    // 2. Create the renderer directly (no DesktopEmbedder): the loop's
-    // `WindowRenderers` builds it on the window's surface target, which the
-    // raster side may hold on any thread, never the window itself
-    // (ADR-0254 §5).
     let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
     let phys_size = geometry.physical;
-    let surface = window.surface_target();
-    let renderers = APP_RUNTIME.with(|slot| slot.borrow().window_renderers.clone());
-    let mut renderer = match renderers.create(window.as_ref(), config) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("GPU init failed: {:?}", e);
-            return Err(crate::app::AppWindowError::Renderer {
-                source: Arc::new(e),
-            });
-        }
-    };
-    renderer.resize(phys_size.width as u32, phys_size.height as u32);
-    renderer.set_frame_latency(config.frame_latency);
-    // The platform's frame-pacing signal (Wayland frame callbacks) is
-    // armed by the renderer right before each present — see
-    // `install_pre_present_hook`'s own doc and ADR-0058.
-    install_pre_present_hook(&mut renderer, surface);
 
     // 3. Mount root widget at the LOGICAL size; the framework lays out
     // in logical pixels and the paint root's DPR transform maps to the
@@ -216,48 +188,50 @@ where
     // reports nothing) with or without a resize.
     let fallback = Arc::new(FallbackWake::new());
 
-    // 3d. Wire the wall-clock-wake hook, now that `owner_dispatch`
-    // exists — the owner loop consults this every
-    // idle iteration instead of blocking forever, so a pending gesture-
-    // arena deadline (a long-press hold, a double-tap give-up) or an
-    // armed device-recovery retry still wakes the loop at the right
-    // instant even while nothing else is dirty and no animation is
-    // running. Moved here from directly after step 0c (this window's
-    // `device_recovery_backoff` construction) specifically so this
-    // closure can capture `owner_dispatch.address.ui_runtime_id` and look up
-    // THIS ui_runtime's `frames_enabled` state each time it runs — see the
-    // closure body's own comment for why that lookup, not just
-    // `next_attempt_at()`, is required.
+    // 3d. The window's wall-clock wake sources: the owner loop consults them
+    // every idle iteration instead of blocking forever, so the pacing
+    // fallback, the first reveal and the executor's next device rebuild
+    // still wake the loop while nothing else is dirty. Read only while this
+    // presentation's frames are enabled.
     let deadlines = Arc::new(DesktopWakeDeadlines {
-        device_recovery_backoff: Arc::clone(&device_recovery_backoff),
         fallback: Arc::clone(&fallback),
         first_reveal: Arc::clone(&first_reveal),
     });
 
-    // 4. Adopt the raster mailbox (ADR-0045's inline lane). The lane's
-    // owner SOLELY owns the renderer from here on: the platform resize
-    // path holds only the lane's mailbox handle plus the owner-affine
-    // stamp/size state, and the frame closure below drives every
-    // submit through the mailbox pump — an owned, stamped
-    // `SceneSnapshot` per frame, checked against the lane's single
-    // `SurfaceGeneration` counter. `Arc<Mutex<RasterLane>>` mirrors the
-    // `Arc<Mutex<Renderer>>` it replaces (the platform's callback
-    // registrations require `Send` closures even though they only ever
-    // fire on this owner thread); a reentrant frame dispatch — already
-    // skipped upstream by the empty-slot drain protection — degrades to
-    // a skipped frame at the `try_lock` below instead of a same-thread
-    // lock deadlock.
-    let lane = Arc::new(Mutex::new(
-        crate::app::raster_lane::RasterLane::new(
-            renderer,
-            owner_dispatch.address,
-            phys_size.width as u32,
-            phys_size.height as u32,
-        )
-        .with_textures(textures),
-    ));
-
-    super::host::track_raster_lane(lane.lock().reclaim_handle());
+    // 4. The window's slot on the loop's raster executor (ADR-0305): the
+    // first window to attach places the executor on its surface, which
+    // picks the adapter; every later window is a slot on the same device.
+    // The slot holds the window's surface target, which the raster side may
+    // hold on any thread, never the window itself (ADR-0254 §5). It is
+    // unconfigured until its first frame measures the window.
+    let host = APP_RUNTIME.with(|slot| slot.borrow().raster_host.clone());
+    let display = super::host::display_color_of(window.as_ref());
+    let attached = host
+        .try_with(|host| {
+            host.attach(
+                window.as_ref(),
+                owner_dispatch.address,
+                config,
+                textures,
+                display,
+            )
+        })
+        // A window opened from code the host's turn runs (a scene's `Drop`,
+        // a tracing subscriber) finds it busy: refused, as a GPU that gives
+        // no surface is.
+        .unwrap_or_else(|| Err(super::raster_host::host_busy()));
+    if let Err(error) = attached {
+        tracing::error!(%error, "GPU init failed");
+        return Err(crate::app::AppWindowError::Renderer {
+            source: Arc::new(error),
+        });
+    }
+    let raster = RasterSlot {
+        host,
+        address: owner_dispatch.address,
+        size: (phys_size.width as u32, phys_size.height as u32),
+        device: flui_engine::DeviceHealth::Healthy,
+    };
 
     // 5. Register input callback -> entered ui_runtime input dispatch
     install_input_wiring(owner_dispatch, window.as_ref());
@@ -267,11 +241,12 @@ where
     let frame = installation
         .frame_driver(super::frame_driver::FrameDriver::Desktop(
             DesktopFrameDriver {
-                lane: Arc::clone(&lane),
+                raster,
                 worker_reload,
                 deadlines,
                 reveal_window: Rc::downgrade(&window),
                 device_retry,
+                retry_pending: false,
             },
         ))
         .map_err(|error| crate::app::AppWindowError::Mount {
@@ -388,15 +363,17 @@ where
 
 pub(super) struct DesktopFrameDriver {
     pub(super) deadlines: Arc<DesktopWakeDeadlines>,
-    lane: Arc<Mutex<crate::app::raster_lane::RasterLane<super::window_renderer::LaneRenderer>>>,
+    raster: RasterSlot,
     worker_reload: WorkerReload,
     reveal_window: std::rc::Weak<dyn PlatformWindow>,
     device_retry: Option<crate::app::application_control::DeviceRetryWatch>,
+    /// The application asked for a rebuild of a given-up device while the
+    /// host was turning; sent on the next wake.
+    retry_pending: bool,
 }
 
 /// Presentation-owned pacing sources, retained even while its driver is leased.
 pub(super) struct DesktopWakeDeadlines {
-    pub(super) device_recovery_backoff: Arc<super::device_recovery::DeviceRecoveryBackoff>,
     pub(super) fallback: Arc<FallbackWake>,
     pub(super) first_reveal: Arc<FirstReveal>,
 }
@@ -417,7 +394,8 @@ impl DesktopWakeDeadlines {
             .arm_after_no_present(now, ui_runtime.refresh_interval(presentation))
     }
 
-    /// The earliest armed deadline. `period` is the presentation's current
+    /// The earliest armed deadline: the device's next rebuild, the pacing
+    /// fallback and the first reveal. `period` is the presentation's current
     /// refresh interval, which the pacing fallback needs to tell a late wake
     /// from one that is never coming.
     pub(super) fn next_wake(
@@ -430,7 +408,7 @@ impl DesktopWakeDeadlines {
         }
         let deadline = merge_wake_deadlines(
             merge_wake_deadlines(
-                self.device_recovery_backoff.next_attempt_at(),
+                device_retry_at(),
                 self.fallback.next_wake(web_time::Instant::now(), period),
             ),
             self.first_reveal.next_deadline(),
@@ -444,26 +422,28 @@ impl DesktopFrameDriver {
         super::host::with_owner_platform(|owner| owner.activate(false));
         tracing::info!("Desktop platform initialized with callbacks");
     }
+
+    /// The platform's new size, which layout reads and the next frame
+    /// configures the slot for.
     pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
-        let resize = self.lane.lock().resize_hook();
         let physical = metrics.physical();
-        resize.apply(
+        self.raster.size = (
             physical.width.unsigned_abs(),
             physical.height.unsigned_abs(),
         );
     }
+
     pub(super) fn wake(
         &mut self,
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         presentation: flui_foundation::PresentationId,
     ) {
-        let retry_requested = self
+        self.retry_pending |= self
             .device_retry
             .as_mut()
             .is_some_and(crate::app::application_control::DeviceRetryWatch::take_request);
-        let lane_frame = &self.lane;
+        let retry_requested = self.retry_pending;
         let worker_reload_frame = &self.worker_reload;
-        let device_recovery_backoff = &self.deadlines.device_recovery_backoff;
         let fallback = &self.deadlines.fallback;
         let first_reveal = &self.deadlines.first_reveal;
         let reveal_window = &self.reveal_window;
@@ -474,74 +454,36 @@ impl DesktopFrameDriver {
 
             let scheduler = ui_runtime.scheduler();
 
-            // Every fire of this callback is a genuine platform-delivered
-            // frame-request signal on this backend (the host's redraw request
-            // -> `dispatch_request_frame` -> here; see
-            // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
-            // pace this via the compositor vs. deliver it immediately).
-            // Recorded unconditionally, before the dirty/wake_action gate below
-            // decides whether anything actually runs this pump: pacing
-            // feedback is about observing the PLATFORM's own delivery timing,
-            // independent of whether this particular delivery ends up idle.
-            // `now` is read ONCE here and is also the pump's frame
-            // timestamp below (`pump_with_device_recovery` hands it to
-            // `UiRuntime::pump` as a `SampledClock`) — this wake's
-            // pacing-feedback sample and its frame's timestamp must agree.
+            // Every fire of this callback is a platform-delivered frame
+            // request (`docs/adr/ADR-0044-driver-loop-hybrid.md`). Recorded
+            // before the gate below decides whether anything runs: pacing
+            // feedback observes the platform's delivery timing. `now` is read
+            // once and is also the pump's frame timestamp, so the sample and
+            // the frame agree.
             let now = web_time::Instant::now();
             ui_runtime.record_compositor_tick(now);
 
-            // Owner-inbox drain: commands and worker results
-            // commit HERE, at the frame boundary while the scheduler phase is
-            // Idle — never inside the frame transaction below. Runs before the
-            // dirty gate so a command-driven redraw request is observed by the
-            // very frame its wake produced.
-            //
-            // The runtime is TAKEN out of the slot for the drain (and restored
-            // after) so drained user closures never run under the RefCell
-            // borrow: a command that re-enters this frame callback through a
-            // nested platform pump then finds an empty slot and skips the
-            // drain, instead of panicking the borrow.
+            // Owner-inbox drain at the frame boundary, before the dirty gate,
+            // so a command-driven redraw is observed by the frame its wake
+            // produced. Drained closures never run under the slot's borrow.
             let inbox_redraw = ui_runtime.drain_owner_inbox();
             // A requested rebuild takes a given-up device out of its held
-            // state, which asks for the frame `pump_with_device_recovery`
-            // rebuilds it in.
+            // state, which asks for the frame the executor rebuilds it in.
             if retry_requested {
                 ui_runtime.retry_render_device();
             }
 
-            // `device_recovery_backoff.next_attempt_at().is_some()` is a
-            // REQUIRED fourth dirty source, not an optional extra: a
-            // deadline wired into the wake-deadline hook (installed
-            // below, after this ui_runtime exists) but absent from THIS
-            // predicate reaches `WakeAction::Skip` and returns before
-            // `pump_with_device_recovery` is ever called, no
-            // matter how faithfully the platform actuates the wake —
-            // see `DeviceRecoveryBackoff`'s own doc for the two paired
-            // obligations a wake-deadline source carries and the
-            // dropped-attempt trace that motivated this line. Calls
-            // the shared `frame_is_dirty` (not a local reimplementation)
-            // for the same reason `wake_action` itself is a named
-            // function here and not inlined: this closure's own
-            // `dirty` computation and the tests that pin it must run
-            // the identical code, or a regression in one is invisible
-            // to the other.
-            // The frame-pacing deferral (ADR-0058), read ONCE per wake:
-            // `gate` consumes a due deadline, so this is both the
-            // "is a deferral pending" question the gate below asks and
-            // the "this wake IS the deferred one" answer that makes it
-            // dirty. Reading it twice would consume it in the first read
-            // and skip the very wake it asked for.
+            // The device's next rebuild is a dirty source as well as a wake
+            // deadline: a deadline the hook wakes the loop for but this
+            // predicate ignores would reach `WakeAction::Skip` and never run
+            // the turn that rebuilds. The pacing deferral is read once: `gate`
+            // consumes a due deadline.
             let fallback_gate = fallback.gate(now);
             let dirty = frame_is_dirty(
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
                 ui_runtime.has_pending_work(),
-                // The reveal fallback joins the device-recovery deadline
-                // here for the same reason that one must be present.
-                merge_wake_deadlines(
-                    device_recovery_backoff.next_attempt_at(),
-                    first_reveal.next_deadline(),
-                ),
+                merge_wake_deadlines(device_retry_at(), first_reveal.next_deadline()),
                 fallback_gate,
             );
             let action = wake_action(
@@ -559,6 +501,21 @@ impl DesktopFrameDriver {
             )
         });
 
+        // A window whose frames are off cannot be seen: its slot is not
+        // drawn, and draws in full when frames come back (ADR-0305).
+        if action != WakeAction::Skip {
+            let visibility = if action == WakeAction::Render {
+                SlotVisibility::Shown
+            } else {
+                SlotVisibility::Hidden
+            };
+            let address = self.raster.address;
+            // A host already turning is told on the next wake.
+            let _told = self
+                .raster
+                .host
+                .try_with(|host| host.set_visibility(address, visibility));
+        }
         match action {
             WakeAction::Skip => return,
             WakeAction::PumpBackground => {
@@ -567,69 +524,74 @@ impl DesktopFrameDriver {
                 // frame. `pump_background` clears the frame latch before
                 // polling so accepted work can request another owner wake.
                 ui_runtime.pump_background();
+                // A hidden window reports what its earlier frames left.
+                self.raster.report_frame_panic(ui_runtime);
                 return;
             }
             WakeAction::Render => {}
         }
 
-        // The frame: `UiRuntime::pump` at `now` (apply commands ->
-        // begin -> persistent callbacks -> the pipeline and submit ->
-        // post-frame callbacks -> Idle, as the text-store transaction
-        // with its commit anchor after it), with a lost GPU device
-        // rebuilt around it: BEFORE the pump when the loss predates
-        // the frame (the frame runs anyway, see
-        // `pump_with_device_recovery`'s doc for why), and AFTER when
-        // the wgpu device-lost callback fired mid-frame.
-        // The display the window is on, as the host last delivered it: a
-        // changed colour profile (HDR switched, a move to another monitor)
-        // sets the surface up again before this frame paints (ADR-0256 §6).
-        if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
+        // Before the frame: the application's rebuild request, a changed
+        // display colour profile (HDR switched, a move to another monitor,
+        // ADR-0256 §6), and a turn of the executor, which rebuilds a device
+        // that is lost and due even when this frame has nothing new to draw.
+        // A device that came back repaints the window in full, so this frame
+        // submits a fresh scene.
+        let address = self.raster.address;
+        let retry_pending = self.retry_pending;
+        let turned = self.raster.host.try_with(|host| {
+            if retry_pending {
+                host.retry_device();
+            }
+            let changed = host.follow_display(address, display_color);
+            host.service(address);
+            changed
+        });
+        // A host already turning is asked again on the next wake.
+        if turned.is_some() {
+            self.retry_pending = false;
+        }
+        let display_changed = turned.unwrap_or(false);
+        if display_changed | self.raster.settle_device(ui_runtime) {
             ui_runtime.mark_primary_needs_full_repaint();
         }
-        let outcome = if let Some(outcome) =
-            pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now)
-        {
-            outcome
-        } else {
-            // The busy lane refused admission without consuming frame work.
-            // The recovery helper retains demand; this tail paces its retry.
-            tracing::error!("frame skipped: raster lane busy at frame admission");
-            FrameRecoveryOutcome {
-                presented: false,
-                just_failed: false,
-                next_attempt_at: None,
-            }
-        };
 
-        // Frame-pacing fallback (ADR-0058), replacing the fixed
-        // 16 ms sleep this thread used to take here. A frame that
-        // reached `present()` needs no bound: the present either
-        // blocked at vsync or the compositor is pacing our redraws
-        // (Wayland, after `pre_present_notify`). A frame that did
-        // NOT present — no damage, occluded surface, surface lost —
-        // got neither, so with a ticker still re-requesting a frame
-        // every wake, nothing would pace the loop; the deferral
-        // below bounds it to one pipeline pass per display period,
-        // as a wake deadline rather than a sleep, so input stays
-        // responsive throughout. A still-lost device armed for a
-        // LATER retry does not feed this: `DeviceRecoveryBackoff`
-        // paces the ATTEMPT itself and reaches the loop through the
-        // same wake-deadline hook.
+        // The frame: `UiRuntime::pump` at `now` (apply commands -> begin ->
+        // persistent callbacks -> the pipeline and its submit through the
+        // window's slot -> post-frame callbacks -> Idle).
+        let mut sink = self.raster.frame();
+        let presented = ui_runtime
+            .pump(&mut SampledClock(now), &mut sink)
+            .presented();
+        // A panic of the frame's GPU work, held by the host, reaches the
+        // application's frame-failure handler.
+        self.raster.report_frame_panic(ui_runtime);
+        // A device the frame itself lost is reported with the frames it
+        // drops; its rebuild is due at the executor's deadline, which the
+        // wake hook and the dirty predicate above both read.
+        let _ = self.raster.settle_device(ui_runtime);
+
+        // Frame-pacing fallback (ADR-0058). A frame that reached `present()`
+        // needs no bound: the present blocked at vsync or the compositor is
+        // pacing the redraws. A frame that did not present got neither, so
+        // with a ticker still asking for frames nothing would pace the loop;
+        // the deferral bounds it to one pipeline pass per display period, as
+        // a wake deadline rather than a sleep.
         let keeps_gate_open = keeps_frame_gate_open(
             ui_runtime.needs_redraw(),
             ui_runtime.scheduler().is_frame_scheduled(),
             ui_runtime.has_pending_work(),
         );
         let pace_now = web_time::Instant::now();
-        // The deferred first reveal: handed to the window on the
-        // first presented frame, or at the fallback bound after a
-        // frame that ran and presented nothing (`FirstReveal`).
-        if first_reveal.after_frame(outcome.presented, pace_now)
+        // The deferred first reveal: handed to the window on the first
+        // presented frame, or at the fallback bound after a frame that ran
+        // and presented nothing (`FirstReveal`).
+        if first_reveal.after_frame(presented, pace_now)
             && let Some(window) = reveal_window.upgrade()
         {
             window.reveal_after_first_frame();
         }
-        if outcome.presented {
+        if presented {
             fallback.record_present(pace_now);
         } else if keeps_gate_open {
             let deadline =

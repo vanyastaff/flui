@@ -32,7 +32,7 @@ use super::agent::{AgentError, window_of};
 use super::{UiCommandSender, UiRuntime};
 use crate::input_record::InputRecord;
 use crate::input_tap::{InputTap, InputTapHandle};
-use crate::recording_wire::Privacy;
+use crate::recording_wire::{Privacy, record_to_wire, start_to_wire};
 
 /// The most recordings one UI runtime holds at once. One past it is refused with
 /// [`AgentError::TooManyRecordings`]; one whose reader went no longer counts.
@@ -438,7 +438,7 @@ impl InputTap for RecordingTap {
                 self.queue.end(*lost_rows);
                 true
             }
-            record => match record.to_wire(self.privacy) {
+            record => match record_to_wire(record, self.privacy) {
                 Ok(row) => self.queue.push(row),
                 Err(error) => {
                     self.queue.lose();
@@ -655,13 +655,12 @@ impl UiRuntime {
             ClockSource::Manual(_) => rec::Clock::Virtual,
             _ => rec::Clock::Monotonic,
         };
-        let header = self
-            .recording_start()
-            .to_wire(clock, privacy)
-            .map_err(|_| AgentError::RecordingRefused {
+        let header = start_to_wire(&self.recording_start(), clock, privacy).map_err(|_| {
+            AgentError::RecordingRefused {
                 reason: "the runtime's windows or preferences hold a value the recording \
                          format does not",
-            })?;
+            }
+        })?;
         let queue = Arc::new(RecordQueue::default());
         let tap = self
             .input_taps

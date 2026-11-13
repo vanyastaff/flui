@@ -66,7 +66,7 @@
 - **Состояния — биты `u64`** (`flags.rs`, занято 32 бита) вместе с `Option<bool>` в
   `SemanticsProperties`. Допустимы невалидные сочетания: `IsChecked` без `HasCheckedState`,
   `IsLiveRegionAssertive` без `IsLiveRegion`, `IsCheckStateMixed` без отмечаемой роли.
-- **Слияние** (`configuration.rs`, `absorb`, `is_compatible_with`; вызовы в
+- **Слияние** (`configuration.rs`, `absorb` и проверка совместимости; вызовы в
   `crates/flui-rendering/src/pipeline/owner/semantics.rs:695`, `:715`, `:723`) считает
   конфликтом любое пересечение битов; правила по полям разбросаны по одной функции.
 - **Трансляция** (`accesskit_translation.rs`) — единственное место встречи с AccessKit, плюс

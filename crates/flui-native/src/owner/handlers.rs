@@ -159,7 +159,7 @@ mod tests {
 
     use crate::owner::call_point::call;
     use crate::owner::panic_boundary::contain_owner_callback;
-    use crate::owner::signal::OwnerSignal;
+    use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
 
     use super::*;
 
@@ -430,6 +430,7 @@ mod tests {
     fn worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn() {
         let posts = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&posts);
+        let slot = std::rc::Rc::new(OwnerTurnSlot::default());
         let signal = OwnerSignal::new(Arc::new(move || {
             recorded.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -437,14 +438,19 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&calls);
         let weak = Arc::downgrade(&signal);
+        let weak_slot = std::rc::Rc::downgrade(&slot);
         signal
-            .register(Box::new(move || {
-                if recorded.fetch_add(1, Ordering::SeqCst) == 0 {
-                    let signal = weak.upgrade().expect("live");
-                    signal.wake().expect("reentrant wake");
-                    assert!(!signal.drive());
-                }
-            }))
+            .register_in(
+                &slot,
+                Box::new(move || {
+                    if recorded.fetch_add(1, Ordering::SeqCst) == 0 {
+                        let signal = weak.upgrade().expect("live");
+                        let slot = weak_slot.upgrade().expect("live");
+                        signal.wake().expect("reentrant wake");
+                        assert!(!signal.drive_in(&slot));
+                    }
+                }),
+            )
             .expect("register");
         signal.start().expect("start");
         let worker = Arc::clone(&signal);
@@ -456,13 +462,13 @@ mod tests {
         .join()
         .expect("worker");
         assert_eq!(posts.load(Ordering::SeqCst), 1);
-        assert!(!signal.drive());
+        assert!(!signal.drive_in(&slot));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(posts.load(Ordering::SeqCst), 2);
-        assert!(!signal.drive());
+        assert!(!signal.drive_in(&slot));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert_eq!(posts.load(Ordering::SeqCst), 2);
-        signal.close();
+        signal.close_in(&slot);
     }
 
     /// A loop that reads what wakes asked of it begins the turn, reads, then
@@ -472,6 +478,7 @@ mod tests {
     fn a_wake_while_the_loop_reads_gets_a_turn_that_reads_again() {
         let posts = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&posts);
+        let slot = OwnerTurnSlot::default();
         let signal = OwnerSignal::new(Arc::new(move || {
             recorded.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -479,9 +486,12 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&calls);
         signal
-            .register(Box::new(move || {
-                counted.fetch_add(1, Ordering::SeqCst);
-            }))
+            .register_in(
+                &slot,
+                Box::new(move || {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }),
+            )
             .expect("register");
         signal.start().expect("start");
         // What a background source records for the loop to read, and wakes
@@ -503,7 +513,7 @@ mod tests {
                 changes.lock().push(2);
                 signal.wake().expect("wake");
             }
-            assert!(!turn.drive());
+            assert!(!turn.drive_in(&slot));
         }
         assert_eq!(
             read,
@@ -514,7 +524,7 @@ mod tests {
         // The wake during the read was the first turn's to run: the second
         // turn only read.
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        signal.close();
+        signal.close_in(&slot);
     }
 
     /// A turn begun and dropped before it was driven (a read that unwinds, a
@@ -523,6 +533,7 @@ mod tests {
     fn an_undriven_turn_posts_the_next_one() {
         let posts = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&posts);
+        let slot = OwnerTurnSlot::default();
         let signal = OwnerSignal::new(Arc::new(move || {
             recorded.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -530,9 +541,12 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&calls);
         signal
-            .register(Box::new(move || {
-                counted.fetch_add(1, Ordering::SeqCst);
-            }))
+            .register_in(
+                &slot,
+                Box::new(move || {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }),
+            )
             .expect("register");
         signal.start().expect("start");
         signal.wake().expect("wake");
@@ -549,10 +563,10 @@ mod tests {
             "the undriven turn posted no turn for the work it left owed"
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert!(!signal.drive());
+        assert!(!signal.drive_in(&slot));
         assert_eq!(calls.load(Ordering::SeqCst), 1, "the posted turn runs it");
         assert_eq!(posts.load(Ordering::SeqCst), 2);
-        signal.close();
+        signal.close_in(&slot);
     }
 
     /// The owner-thread machinery's contracts: failing callback captures and

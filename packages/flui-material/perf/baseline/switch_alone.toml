@@ -6,7 +6,7 @@
 
 [switch_alone]
 allocations = 119
-bytes = 16358
+bytes = 16342
 elements = 4
 reallocations = 3
 render_nodes = 2

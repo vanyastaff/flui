@@ -37,3 +37,72 @@ pub fn every_item_mounts_its_icon_and_label() {
     expected.sort_unstable();
     assert_eq!(painted, expected, "each icon and label must paint once");
 }
+
+/// Each item is one node that holds its label and says whether it is the
+/// current tab; with `on_tap` a click on the node taps its item, and
+/// without one the item offers no click yet is not disabled, as a
+/// `GestureDetector` without a handler is not.
+///
+/// Red-check: drop the item description's `selected` (no item reports its
+/// selection).
+pub fn each_item_is_one_node_its_click_reaches_on_tap() {
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    for tappable in [true, false] {
+        let name = if tappable {
+            "with on_tap"
+        } else {
+            "without on_tap"
+        };
+        let tapped = Rc::new(Cell::new(None));
+        let mut bar = CupertinoTabBar::new(two_items()).current_index(1);
+        if tappable {
+            let tapped = Rc::clone(&tapped);
+            bar = bar.on_tap(move |_ctx, index| tapped.set(Some(index)));
+        }
+        let mut laid = lay_out(
+            MediaQuery::new(MediaQueryData::default(), bar),
+            tight(400.0, 50.0),
+        );
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame");
+        let shown = tree.describe();
+        let mut home = None;
+        for (label, selected) in [("Home", false), ("Settings", true)] {
+            let node = tree
+                .find_by_label(label)
+                .unwrap_or_else(|error| panic!("{name}: no node labelled {label}: {error}"));
+            assert!(node.child_ids().is_empty(), "{name}: {label}\n{shown}");
+            assert_eq!(
+                node.raw().is_selected(),
+                Some(selected),
+                "{name}: {label}\n{shown}"
+            );
+            assert!(!node.is_disabled(), "{name}: {label}\n{shown}");
+            assert_eq!(
+                node.supports_action(Action::Click),
+                tappable,
+                "{name}: {label}\n{shown}"
+            );
+            if label == "Home" {
+                home = Some(node.id());
+            }
+        }
+        if tappable {
+            laid.invoke_semantics_action(ActionRequest {
+                action: Action::Click,
+                target_tree: TreeId::ROOT,
+                target_node: home.expect("Home was found"),
+                data: None,
+            })
+            .unwrap_or_else(|error| panic!("the item takes a click: {error}"));
+            laid.pump();
+            assert_eq!(tapped.get(), Some(0), "a click on Home taps item 0");
+        }
+    }
+}

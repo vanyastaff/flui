@@ -7,10 +7,12 @@ use flui_interaction::GestureProfiles;
 use flui_platform::WindowId;
 use flui_platform::pointer::{DeviceId, PointerKind};
 use flui_protocol::input_recording as rec;
-use flui_runtime::{InputRecord, PreferencesRow};
-use flui_runtime::{
-    WireError, device_from_wire, device_to_wire, profiles_from_wire, profiles_to_wire,
+use flui_runtime::__runtime::{
+    WireError, device_from_wire, device_to_wire, preferences_row_from_wire,
+    preferences_row_to_wire, profiles_from_wire, profiles_to_wire, record_from_wire,
+    record_to_wire,
 };
+use flui_runtime::{InputRecord, PreferencesRow};
 use serde::Serialize;
 
 pub use rec::FORMAT_VERSION;
@@ -249,7 +251,7 @@ fn header_to_wire(header: &RecordingHeader, privacy: Privacy) -> Result<rec::Hea
         preferences: header
             .preferences
             .as_ref()
-            .map(PreferencesRow::to_wire)
+            .map(preferences_row_to_wire)
             .transpose()?,
         keep_text: keep,
     })
@@ -289,7 +291,7 @@ fn header_from_wire(header: rec::Header, line: u64) -> Result<RecordingHeader, R
         devices,
         preferences: header
             .preferences
-            .map(PreferencesRow::from_wire)
+            .map(preferences_row_from_wire)
             .transpose()
             .map_err(|error| wire_error(line, error))?,
         privacy: if header.keep_text {
@@ -378,7 +380,7 @@ pub(crate) type PreparedRow = Result<rec::Row, WireError>;
 
 /// `record` as written under `privacy`.
 pub(crate) fn prepare(record: &InputRecord, privacy: Privacy) -> PreparedRow {
-    record.to_wire(privacy)
+    record_to_wire(record, privacy)
 }
 
 fn write_line(
@@ -476,7 +478,7 @@ impl<R: BufRead> Iterator for RecordingReader<R> {
                     .map_err(|source| json_error(line, source))
                     .and_then(|row| {
                         let redacted = row.is_redacted();
-                        InputRecord::from_wire(row)
+                        record_from_wire(row)
                             .map(|record| Record {
                                 line,
                                 record,
@@ -522,7 +524,7 @@ fn wire_error(line: u64, error: WireError) -> RecordingError {
 
 #[cfg(test)]
 mod tests {
-    use flui_runtime::WireError;
+    use flui_runtime::__runtime::WireError;
 
     use super::{RecordingClock, RecordingError, RecordingHeader, RecordingWriter};
 

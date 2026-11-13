@@ -98,6 +98,17 @@ pub use input_tap::{
     INPUT_TAP_TARGET, InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete,
     TapFailure, TapFailureSite,
 };
-pub use recording_wire::{
-    Privacy, WireError, device_from_wire, device_to_wire, profiles_from_wire, profiles_to_wire,
-};
+pub use recording_wire::Privacy;
+
+/// The input recording's wire conversions: the seam `flui-testing`'s recording format
+/// frames and replays through. Not part of an application's API and carries no semver promise.
+#[doc(hidden)]
+pub mod __runtime {
+    #[cfg(feature = "testing")]
+    pub use crate::recording_wire::record_from_wire;
+    pub use crate::recording_wire::{
+        WireError, device_from_wire, device_to_wire, preferences_row_from_wire,
+        preferences_row_to_wire, profiles_from_wire, profiles_to_wire, record_to_wire,
+        start_to_wire,
+    };
+}

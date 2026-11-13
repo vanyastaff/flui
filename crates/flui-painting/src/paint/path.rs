@@ -6,7 +6,7 @@
 //! and arcs are built as curves at one fixed construction tolerance. No kurbo type appears in
 //! the public API; [`PathCommand`] is FLUI's element vocabulary.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use kurbo::{Affine, ParamCurve, ParamCurveArclen, PathEl, Shape};
 
@@ -64,6 +64,58 @@ impl ShapeHint {
             Self::RRect(rrect) => Self::RRect(rrect.translate_offset(offset)),
         }
     }
+
+    /// Whether a path of this shape may leave its curves unbuilt: no shape, or a rounded
+    /// rectangle the GPU fills and shadows from [`Path::rrect_hint`] without reading curves.
+    ///
+    /// That rectangle runs left to right and top to bottom, and each corner is circular with
+    /// a radius between zero and half its shorter side: the shapes `flui-engine`'s direct
+    /// rounded-rectangle fill accepts. Any other shape is drawn from its curves, so it builds
+    /// them at once and its clones share them. Every coordinate is within
+    /// `DEFERRED_LIMIT`, so the curves built later are finite, as the path's flag already
+    /// says, and stay inside [`Self::bounds`], whose widening is still above a coordinate's
+    /// rounding there.
+    fn may_defer(self) -> bool {
+        /// Far beyond any coordinate a frame lays out, and low enough that a coordinate's
+        /// rounding (about 1e-7 at this size) stays far below [`CURVE_TOLERANCE`].
+        const DEFERRED_LIMIT: f64 = 1e9;
+        let small = |value: f64| value.is_finite() && value.abs() <= DEFERRED_LIMIT;
+        match self {
+            Self::None => true,
+            Self::Rect(_) | Self::Oval(_) => false,
+            Self::RRect(rrect) => {
+                let bounds = rrect.bounding_rect();
+                let (width, height) = (
+                    bounds.right() - bounds.left(),
+                    bounds.bottom() - bounds.top(),
+                );
+                let fits = width.min(height) * 0.5;
+                [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()]
+                    .into_iter()
+                    .all(small)
+                    && width >= 0.0
+                    && height >= 0.0
+                    && [
+                        rrect.top_left,
+                        rrect.top_right,
+                        rrect.bottom_right,
+                        rrect.bottom_left,
+                    ]
+                    .into_iter()
+                    .all(|radius| radius.x == radius.y && radius.x >= 0.0 && radius.x <= fits)
+            }
+        }
+    }
+
+    /// Bounds that hold the curves built for the shape: a rounded rectangle's box widened by
+    /// [`CURVE_TOLERANCE`], the most its corner curves stray outside the true ellipse. Only
+    /// a rounded rectangle or no shape leaves its curves unbuilt ([`Self::may_defer`]).
+    fn bounds(self) -> Rect<f64> {
+        match self {
+            Self::RRect(rrect) => rrect.bounding_rect().expand(CURVE_TOLERANCE),
+            Self::None | Self::Rect(_) | Self::Oval(_) => Rect::ZERO,
+        }
+    }
 }
 
 /// A vector shape: contours of lines and Bézier curves, filled by a [`PathFillType`].
@@ -73,27 +125,74 @@ impl ShapeHint {
 /// before it. The geometry is copy-on-write (Skia's `SkPath` over `SkPathRef`): a clone
 /// shares it, and the first mutation of a shared path copies it, so a path recorded into a
 /// display list or a clip is a pointer-sized handle, not a copy.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// A rounded rectangle made by its constructor that the GPU fills from its hint (circular
+/// corners that fit, see `ShapeHint::may_defer`), and an empty path, leave their curves
+/// unbuilt until something reads them ([`Self::commands`], [`Self::contains`], a stroke or
+/// an edit), and a [`Self::translate`] of such a path only records the move. Reading builds
+/// the curves an eager build would have laid down, moved the same way; a clone taken before
+/// that builds its own on its own read. A shape recorded, moved and drawn through
+/// its analytic route ([`Self::rrect_hint`]) never builds them at all. Any other shape,
+/// which is drawn from its curves, builds at once so its clones share them.
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(from = "PathRepr", into = "PathRepr"))]
 pub struct Path {
-    /// The geometry, shared until mutated.
-    geometry: Arc<kurbo::BezPath>,
+    /// The curves, shared by every clone made after they exist until one of them is
+    /// edited. Unset until the first read, which builds `hint`'s shape moved by `offset`
+    /// (no elements for no hint), so an unread shape allocates nothing.
+    curves: OnceLock<Arc<kurbo::BezPath>>,
 
-    /// The shape a constructor built, until any further edit.
+    /// The shape a constructor built, where it built it, until any further edit.
     hint: ShapeHint,
+
+    /// How far [`Self::translate`] moved the shape before its curves were built: the
+    /// curves are the hint's moved by it, and the shape the path names is the hint moved
+    /// by it. Zero after an edit.
+    offset: Offset<f64>,
 
     /// The fill type for this path.
     fill_type: PathFillType,
 
-    /// Cached bounding box (invalidated when the geometry changes).
-    bounds: Option<Rect<f64>>,
-
     /// Whether every point of the geometry is finite, kept current by every edit.
     ///
-    /// The cached bounds cannot stand in: kurbo folds segment boxes with `f64::min` and
+    /// The bounds cannot stand in: kurbo folds segment boxes with `f64::min` and
     /// `max`, which drop a NaN operand, so a path holding a NaN can report finite bounds.
     finite: bool,
+}
+
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "Debug shows what equality compares: the curves print built and the pending \
+              offset prints folded into the shape"
+)]
+impl std::fmt::Debug for Path {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Path")
+            .field("geometry", self.geometry())
+            .field("hint", &self.shape())
+            .field("fill_type", &self.fill_type)
+            .field("finite", &self.finite)
+            .finish()
+    }
+}
+
+/// Paths are equal when their elements, shape, fill type and finiteness are, whether or not
+/// either has built its curves.
+impl PartialEq for Path {
+    fn eq(&self, other: &Self) -> bool {
+        let unbuilt = |path: &Self| path.curves.get().is_none();
+        let same_geometry = self.shares_commands_with(other)
+            || (unbuilt(self)
+                && unbuilt(other)
+                && self.hint == other.hint
+                && self.offset == other.offset)
+            || self.geometry() == other.geometry();
+        same_geometry
+            && self.shape() == other.shape()
+            && self.fill_type == other.fill_type
+            && self.finite == other.finite
+    }
 }
 
 fn to_kurbo(point: Point<f64>) -> kurbo::Point {
@@ -304,30 +403,75 @@ impl Path {
     #[inline]
     pub fn with_fill_type(fill_type: PathFillType) -> Self {
         Self {
-            geometry: Arc::default(),
+            curves: OnceLock::new(),
             hint: ShapeHint::None,
+            offset: Offset::ZERO,
             fill_type,
-            bounds: None,
             finite: true,
+        }
+    }
+
+    /// A path that is exactly `hint`'s shape: its curves left unbuilt when
+    /// [`ShapeHint::may_defer`] allows, built now otherwise.
+    fn of_shape(hint: ShapeHint) -> Self {
+        let path = Self {
+            hint,
+            ..Self::new()
+        };
+        if hint.may_defer() {
+            return path;
+        }
+        let curves = Self::build(hint, Offset::ZERO);
+        Self {
+            finite: elements_are_finite(curves.elements()),
+            curves: OnceLock::from(curves),
+            ..path
+        }
+    }
+
+    /// The curves of `hint`'s shape as its constructor's builders lay them down, moved by
+    /// `offset` as [`Self::translate`] moves built curves.
+    fn build(hint: ShapeHint, offset: Offset<f64>) -> Arc<kurbo::BezPath> {
+        let mut path = Self::new();
+        match hint {
+            ShapeHint::None => {}
+            ShapeHint::Rect(rect) => path.add_rect(rect),
+            ShapeHint::Oval(rect) => path.add_oval(rect),
+            ShapeHint::RRect(rrect) => path.add_rrect_contour(rrect),
+        }
+        let mut built = path.curves.into_inner().unwrap_or_default();
+        if offset != Offset::ZERO {
+            // The path is this function's own and was never cloned: moved in place.
+            Arc::make_mut(&mut built).apply_affine(Affine::translate((offset.dx, offset.dy)));
+        }
+        built
+    }
+
+    /// The curves, built on the first read of a path that left them unbuilt.
+    fn geometry(&self) -> &kurbo::BezPath {
+        self.curves
+            .get_or_init(|| Self::build(self.hint, self.offset))
+    }
+
+    /// The shape the path is: the constructor's shape, moved by any translate since.
+    fn shape(&self) -> ShapeHint {
+        if self.offset == Offset::ZERO {
+            self.hint
+        } else {
+            self.hint.translate(self.offset)
         }
     }
 
     /// Creates a path consisting of a single rectangle.
     #[must_use]
     pub fn rectangle(rect: Rect<f64>) -> Self {
-        let mut path = Self::new();
-        path.add_rect(rect);
-        path.hint = ShapeHint::Rect(rect);
-        path
+        Self::of_shape(ShapeHint::Rect(rect))
     }
 
     /// Creates a path consisting of a single oval inscribed in `rect`.
     #[must_use]
     pub fn oval(rect: Rect<f64>) -> Self {
-        let mut path = Self::new();
-        path.add_oval(rect);
-        path.hint = ShapeHint::Oval(rect);
-        path
+        Self::of_shape(ShapeHint::Oval(rect))
     }
 
     /// Creates a circular path around `center` with the given `radius`.
@@ -373,6 +517,12 @@ impl Path {
         if rrect.is_rect() {
             return Self::rectangle(rrect.bounding_rect());
         }
+        Self::of_shape(ShapeHint::RRect(rrect))
+    }
+
+    /// Adds the outline of `rrect` as one contour, each corner an elliptical quarter arc
+    /// joined to the edges around it.
+    fn add_rrect_contour(&mut self, rrect: RRect) {
         use std::f64::consts::{FRAC_PI_2, PI};
         let rect = rrect.bounding_rect();
         let (l, t, r, b) = (rect.left(), rect.top(), rect.right(), rect.bottom());
@@ -392,19 +542,16 @@ impl Path {
             }
         };
 
-        let mut path = Self::new();
-        path.move_to(Point::new(l + tl.x, t));
-        path.line_to(Point::new(r - tr.x, t));
-        corner(&mut path, r - tr.x, t + tr.y, tr.x, tr.y, -FRAC_PI_2);
-        path.line_to(Point::new(r, b - br.y));
-        corner(&mut path, r - br.x, b - br.y, br.x, br.y, 0.0);
-        path.line_to(Point::new(l + bl.x, b));
-        corner(&mut path, l + bl.x, b - bl.y, bl.x, bl.y, FRAC_PI_2);
-        path.line_to(Point::new(l, t + tl.y));
-        corner(&mut path, l + tl.x, t + tl.y, tl.x, tl.y, PI);
-        path.close();
-        path.hint = ShapeHint::RRect(rrect);
-        path
+        self.move_to(Point::new(l + tl.x, t));
+        self.line_to(Point::new(r - tr.x, t));
+        corner(self, r - tr.x, t + tr.y, tr.x, tr.y, -FRAC_PI_2);
+        self.line_to(Point::new(r, b - br.y));
+        corner(self, r - br.x, b - br.y, br.x, br.y, 0.0);
+        self.line_to(Point::new(l + bl.x, b));
+        corner(self, l + bl.x, b - bl.y, bl.x, bl.y, FRAC_PI_2);
+        self.line_to(Point::new(l, t + tl.y));
+        corner(self, l + tl.x, t + tl.y, tl.x, tl.y, PI);
+        self.close();
     }
 
     /// The rounded rectangle this path was built from by [`Self::from_rrect`], while nothing
@@ -416,7 +563,7 @@ impl Path {
     /// hand-built path returns `None`.
     #[must_use]
     pub fn rrect_hint(&self) -> Option<RRect> {
-        match self.hint {
+        match self.shape() {
             ShapeHint::RRect(rrect) => Some(rrect),
             _ => None,
         }
@@ -452,7 +599,7 @@ impl Path {
 
     /// The winding number of `point` with every open contour closed.
     fn winding(&self, point: kurbo::Point) -> i32 {
-        let elements = self.geometry.elements();
+        let elements = self.geometry().elements();
         let mut closed = Vec::with_capacity(elements.len() + 1);
         let mut open = false;
         for &element in elements {
@@ -474,16 +621,21 @@ impl Path {
         closed.as_slice().winding(point)
     }
 
-    /// Applies `change` to the geometry, copied if it is shared, with the cached bounds and
-    /// the shape hint dropped and the finiteness flag brought up to date: every edit goes
+    /// Applies `change` to the geometry, copied if it is shared, with the shape hint and
+    /// pending offset dropped and the finiteness flag brought up to date: every edit goes
     /// through here.
     ///
     /// An edit appends elements or truncates them all away, so only the appended tail is
     /// checked; a shorter result is checked whole.
     fn edit(&mut self, change: impl FnOnce(&mut kurbo::BezPath)) {
-        self.bounds = None;
+        // Built while the hint and offset still name the shape the unbuilt geometry is.
+        self.geometry();
         self.hint = ShapeHint::None;
-        let geometry = Arc::make_mut(&mut self.geometry);
+        self.offset = Offset::ZERO;
+        // The cell holds the curves built above; they are copied out of the clones that
+        // share them.
+        let mut curves = self.curves.take().unwrap_or_default();
+        let geometry = Arc::make_mut(&mut curves);
         let before = geometry.elements().len();
         change(geometry);
         let elements = geometry.elements();
@@ -492,6 +644,7 @@ impl Path {
         } else {
             elements_are_finite(elements)
         };
+        self.curves = OnceLock::from(curves);
     }
 
     /// Where the pen is: the end of the last element, the start of a contour just closed, or
@@ -499,7 +652,7 @@ impl Path {
     fn pen(&self) -> kurbo::Point {
         let mut contour_start = kurbo::Point::ZERO;
         let mut pen = kurbo::Point::ZERO;
-        for element in self.geometry.elements() {
+        for element in self.geometry().elements() {
             match *element {
                 PathEl::MoveTo(p) => {
                     contour_start = p;
@@ -515,7 +668,7 @@ impl Path {
     /// Whether the last contour is still open (begun and not closed).
     fn contour_open(&self) -> bool {
         !matches!(
-            self.geometry.elements().last(),
+            self.geometry().elements().last(),
             None | Some(PathEl::ClosePath)
         )
     }
@@ -621,7 +774,7 @@ impl Path {
 
     /// The path's elements in order.
     pub fn commands(&self) -> impl ExactSizeIterator<Item = PathCommand> + '_ {
-        self.geometry
+        self.geometry()
             .elements()
             .iter()
             .map(|element| match *element {
@@ -635,18 +788,25 @@ impl Path {
             })
     }
 
-    /// Whether `self` and `other` share one geometry buffer — true for a clone until either
-    /// side is mutated.
+    /// Whether `self` and `other` share one geometry buffer: true for a clone of a path
+    /// whose curves are built, until either side is edited. A path whose curves are not
+    /// built yet shares nothing; a clone of it builds its own when read.
     #[must_use]
     pub fn shares_commands_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.geometry, &other.geometry)
+        match (self.curves.get(), other.curves.get()) {
+            (Some(mine), Some(theirs)) => Arc::ptr_eq(mine, theirs),
+            _ => false,
+        }
     }
 
     /// Returns `true` if the path has no elements.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.geometry.elements().is_empty()
+        match self.curves.get() {
+            Some(geometry) => geometry.elements().is_empty(),
+            None => self.hint == ShapeHint::None,
+        }
     }
 
     /// Removes every element. The fill type is kept.
@@ -654,45 +814,45 @@ impl Path {
         self.edit(|path| path.truncate(0));
     }
 
-    /// The cached bounding box, if [`Self::bounds`] computed one and no edit has invalidated
-    /// it since.
-    #[must_use]
-    #[inline]
-    pub fn cached_bounds(&self) -> Option<Rect<f64>> {
-        self.bounds
-    }
-
-    /// The path's tight bounding box, without caching it. `Rect::ZERO` for an empty path.
+    /// The path's tight bounding box. `Rect::ZERO` for an empty path.
+    ///
+    /// A rounded rectangle whose curves are not built yet reports its box without building
+    /// them, widened by the curve tolerance, so the box always holds the curves built later.
     #[must_use]
     pub fn compute_bounds(&self) -> Rect<f64> {
-        if let Some(bounds) = self.bounds {
-            return bounds;
-        }
         if self.is_empty() {
             return Rect::ZERO;
         }
-        let bounds = self.geometry.bounding_box();
+        let Some(geometry) = self.curves.get() else {
+            return self.shape().bounds();
+        };
+        let bounds = geometry.bounding_box();
         Rect::from_ltrb(bounds.x0, bounds.y0, bounds.x1, bounds.y1)
-    }
-
-    /// The path's tight bounding box, cached until the next edit.
-    pub fn bounds(&mut self) -> Rect<f64> {
-        let bounds = self.compute_bounds();
-        self.bounds = Some(bounds);
-        bounds
     }
 
     /// A copy of this path moved by `offset`.
     #[must_use]
     pub fn translate(&self, offset: Offset<f64>) -> Self {
-        let mut path = (*self.geometry).clone();
+        let shape = self.shape().translate(offset);
+        if self.curves.get().is_none() && self.offset == Offset::ZERO && shape.may_defer() {
+            // Still the constructor's shape: the move is recorded, and the curves built when
+            // read are this shape's curves moved, as below.
+            return Self {
+                curves: OnceLock::new(),
+                hint: self.hint,
+                offset,
+                fill_type: self.fill_type,
+                finite: true,
+            };
+        }
+        let mut path = self.geometry().clone();
         path.apply_affine(Affine::translate((offset.dx, offset.dy)));
         Self {
             finite: elements_are_finite(path.elements()),
-            geometry: Arc::new(path),
-            hint: self.hint.translate(offset),
+            curves: OnceLock::from(Arc::new(path)),
+            hint: shape,
+            offset: Offset::ZERO,
             fill_type: self.fill_type,
-            bounds: None,
         }
     }
 
@@ -700,10 +860,10 @@ impl Path {
     fn derived(&self, geometry: kurbo::BezPath) -> Self {
         Self {
             finite: elements_are_finite(geometry.elements()),
-            geometry: Arc::new(geometry),
+            curves: OnceLock::from(Arc::new(geometry)),
             hint: ShapeHint::None,
+            offset: Offset::ZERO,
             fill_type: self.fill_type,
-            bounds: None,
         }
     }
 
@@ -716,7 +876,7 @@ impl Path {
         let mut contour_start = kurbo::Point::ZERO;
         let mut pen = kurbo::Point::ZERO;
         let mut new_contour = true;
-        for element in self.geometry.elements() {
+        for element in self.geometry().elements() {
             let (curve, closing) = match *element {
                 PathEl::MoveTo(p) => {
                     contour_start = p;
@@ -1002,7 +1162,7 @@ impl Path {
             )
         };
         let mut geometry = kurbo::BezPath::new();
-        for &element in self.geometry.elements() {
+        for &element in self.geometry().elements() {
             geometry.push(match element {
                 PathEl::MoveTo(p) => PathEl::MoveTo(map(p)),
                 PathEl::LineTo(p) => PathEl::LineTo(map(p)),
@@ -1029,7 +1189,7 @@ impl Path {
         if !t.is_finite() || a.fill_type != b.fill_type {
             return None;
         }
-        let (from, to) = (a.geometry.elements(), b.geometry.elements());
+        let (from, to) = (a.geometry().elements(), b.geometry().elements());
         if from.len() != to.len() {
             return None;
         }
@@ -1118,13 +1278,17 @@ impl Default for Path {
     }
 }
 
-/// The serialized form of a [`Path`]: its elements, fill type and shape hint.
+/// The serialized form of a [`Path`]: its elements, fill type, the shape its constructor
+/// made and how far that shape was moved since (zero when absent, as from a writer that
+/// predates it).
 #[cfg(feature = "serde")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PathRepr {
     commands: Vec<PathCommand>,
     fill_type: PathFillType,
     hint: ShapeHint,
+    #[serde(default)]
+    offset: Offset<f64>,
 }
 
 #[cfg(feature = "serde")]
@@ -1134,6 +1298,7 @@ impl From<Path> for PathRepr {
             commands: path.commands().collect(),
             fill_type: path.fill_type,
             hint: path.hint,
+            offset: path.offset,
         }
     }
 }
@@ -1155,18 +1320,21 @@ impl From<PathRepr> for Path {
                 PathCommand::Close => path.close(),
             }
         }
-        // A hint may select a different renderer, so only retain it when its
-        // constructor reproduces the submitted geometry exactly.
+        // A hint may select a different renderer, so only retain it when its constructor,
+        // moved by the offset the serialized path still had pending, reproduces the
+        // submitted elements exactly. A path whose move was already applied to built curves
+        // carries them rounded in other steps, and its hint is dropped: the geometry is kept.
         let hinted = match repr.hint {
             ShapeHint::None => None,
             ShapeHint::Rect(rect) => Some(Self::rectangle(rect)),
             ShapeHint::Oval(rect) => Some(Self::oval(rect)),
             ShapeHint::RRect(rrect) => Some(Self::from_rrect(rrect)),
         };
+        let hinted = hinted.map(|hinted| hinted.translate(repr.offset));
         if let Some(hinted) = hinted
-            && path.geometry == hinted.geometry
+            && path.geometry() == hinted.geometry()
         {
-            path.hint = hinted.hint;
+            path.hint = hinted.shape();
         }
         path
     }

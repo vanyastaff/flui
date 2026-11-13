@@ -174,7 +174,8 @@ already reads; no parallel allowlist is added, and an entry that admits nothing 
   any other. An item that no package uses and that is not part of a documented extension surface
   (the input regions of ADR-0217, for one) stays out until it has a user. A type has one path in
   both crates: the haptics handle is `interaction::HapticsHandle`, not under `platform::haptics`,
-  and is present only under `unstable-input`.
+  and is present only under `unstable-input`. The facade's `app` module is curated too, and has
+  no SDK twin: a package does not start an application, and the SDK has no host edge.
 - **Surface ceiling.** When `flui-sdk` is created its Evolving surface is measured from rustdoc
   JSON. More than about 30 items beyond the hooks means the sdk is becoming a second facade, and
   this decision is revisited. At creation `pipeline` holds three items (`PathClipConfiguration`,

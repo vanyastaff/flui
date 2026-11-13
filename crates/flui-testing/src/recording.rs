@@ -15,7 +15,7 @@
 //!
 //! The vocabulary carries no serde: [`flui_protocol::input_recording`] declares the
 //! rows and the header with pinned spellings, `flui-runtime` converts between
-//! them and the vocabulary ([`InputRecord::to_wire`](flui_runtime::InputRecord::to_wire)),
+//! them and the vocabulary (`record_to_wire` in its hidden `__runtime` seam),
 //! and this module frames them as JSON Lines and replays them. A generated table
 //! of the vocabulary's variants keeps the conversions in step
 //! (`cargo xtask recording-vocabulary`).

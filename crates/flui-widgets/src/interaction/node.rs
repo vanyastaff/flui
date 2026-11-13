@@ -51,7 +51,7 @@ use super::listener::{ContactCallbacks, pointer_callback, release_targets};
 use super::raw_gesture_detector::RecognizerHost;
 use crate::support::{event_callback, value_callback};
 use crate::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
-use crate::{Listener, MouseRegion, Semantics, SemanticsRole, Toggled};
+use crate::{Listener, MouseRegion, Semantics, SemanticsAnchor, SemanticsRole, Toggled};
 
 /// The behaviours of a control around its child, in one element.
 ///
@@ -80,11 +80,27 @@ pub struct InteractiveNode {
 /// role. A view holds this in place of the [`Semantics`] it stands for,
 /// which the node builds only while its window collects semantics
 /// (ADR-0322 §8), so the view stays small in every copy the tree keeps.
+///
+/// It holds only what the control declares about itself: its role, name,
+/// toggle and selection state, anchor and whether it merges what is beneath
+/// it. Labels, hints and actions come from its children and from the node's
+/// own parts, never from here.
 #[derive(Clone, Debug)]
 pub struct Description {
     role: SemanticsRole,
-    identifier: Option<Arc<str>>,
     toggled: Option<Toggled>,
+    selected: Option<bool>,
+    merges_descendants: bool,
+    /// What names the node, which few controls set: shared and absent
+    /// otherwise, so the view of every other control stays small.
+    names: Option<Rc<Names>>,
+}
+
+/// The names a [`Description`] gives its node.
+#[derive(Clone, Debug, Default)]
+struct Names {
+    identifier: Option<Arc<str>>,
+    anchor: Option<SemanticsAnchor>,
 }
 
 impl Description {
@@ -93,16 +109,25 @@ impl Description {
     pub fn new(role: SemanticsRole) -> Self {
         Self {
             role,
-            identifier: None,
             toggled: None,
+            selected: None,
+            merges_descendants: false,
+            names: None,
         }
+    }
+
+    /// The names to write, allocated on the first one a control sets.
+    fn names_mut(&mut self) -> &mut Names {
+        Rc::make_mut(self.names.get_or_insert_with(Rc::default))
     }
 
     /// Name the node by the identifier its author gave the control
     /// (ADR-0240); `None` leaves it unnamed.
     #[must_use]
     pub fn identifier(mut self, identifier: Option<Arc<str>>) -> Self {
-        self.identifier = identifier;
+        if identifier.is_some() || self.names.is_some() {
+            self.names_mut().identifier = identifier;
+        }
         self
     }
 
@@ -113,17 +138,55 @@ impl Description {
         self
     }
 
+    /// Report whether the control is the selected one of its group, as
+    /// [`Semantics::selected`] does: a tab, a navigation destination.
+    #[must_use]
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    /// Name the node by `anchor`, as [`Semantics::anchor`] does.
+    #[must_use]
+    pub fn anchor(mut self, anchor: SemanticsAnchor) -> Self {
+        self.names_mut().anchor = Some(anchor);
+        self
+    }
+
+    /// Fold every node beneath the control into its own, as a
+    /// [`MergeSemantics`](crate::MergeSemantics) around it does: a tab or a
+    /// destination is one node with its icon's and label's text.
+    #[must_use]
+    pub fn merges_descendants(mut self) -> Self {
+        self.merges_descendants = true;
+        self
+    }
+
     fn build(&self) -> Semantics {
-        let semantics = Semantics::new()
+        let names = self.names.as_deref();
+        let mut semantics = Semantics::new()
             .container(true)
             .role(self.role)
-            .identifier_if(self.identifier.as_ref());
-        match self.toggled {
-            Some(state) => semantics.toggled(state),
-            None => semantics,
+            .identifier_if(names.and_then(|names| names.identifier.as_ref()));
+        if let Some(state) = self.toggled {
+            semantics = semantics.toggled(state);
         }
+        if let Some(selected) = self.selected {
+            semantics = semantics.selected(selected);
+        }
+        if let Some(anchor) = names.and_then(|names| names.anchor.as_ref()) {
+            semantics = semantics.anchor(anchor.clone());
+        }
+        if self.merges_descendants {
+            semantics = semantics.merging_descendants();
+        }
+        semantics
     }
 }
+
+// Every interactive control holds a description in its view; the names few
+// controls set stay behind one pointer so that copy stays at two words.
+const _: () = assert!(std::mem::size_of::<Description>() <= 16);
 
 impl std::fmt::Debug for InteractiveNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

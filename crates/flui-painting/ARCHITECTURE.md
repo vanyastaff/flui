@@ -75,11 +75,28 @@ The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-comma
 `Paint` is interned per canvas: each `draw_*` scans a small pool of `Arc<Paint>`s
 for an equal paint and shares the `Arc` (`Canvas::intern_paint`,
 `src/canvas/mod.rs:101`). `Path` is copy-on-write over `Arc<kurbo::BezPath>`
-(`src/paint/path.rs:75`): a path inside a `DrawOp` (`ClipPath`, `Path`,
-`Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a
-fill type, a cached bounds and a finiteness flag, and recording a caller's path copies no
-geometry. `PathCommand` (`src/paint/path.rs:24`) is the element
-`Path::commands` yields (`src/paint/path.rs:600`), not the storage.
+(`src/paint/path.rs:139`): a path inside a `DrawOp` (`ClipPath`, `Path`,
+`Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a pending
+offset, a fill type and a finiteness flag, and recording a caller's path
+copies no geometry. A rounded rectangle made by its constructor whose corners are circular
+with radii between zero and half its shorter side (the shapes `flui-engine`'s direct
+rounded-rectangle fill accepts), and an empty path, leave
+the `Arc` unset until something reads the elements, and a translate of such a path
+records the offset instead of moving curves: the hint moved by the offset is the shape,
+its bounds are that box widened by the curve tolerance, and the GPU's analytic
+rounded-rectangle routes read it, so a Material surface's shape is recorded, moved, filled
+and shadowed without building curves (a clip reads them when the engine draws it). The
+first read builds the hint's curves where the
+constructor would have and then moves them by the offset, the same steps an eager path
+takes, so when a path is read never changes its elements, its equality or what
+`Path::lerp` accepts; how serde keeps the hint is stated with `Path` deserialization below.
+A clone
+taken before that read builds its own curves. Any other rounded rectangle, one with a
+coordinate beyond 1e9 (so the bounds' 1e-3 widening stays far above any rounding), a
+rectangle and an oval
+are built at once: they are drawn from their curves, so their clones share one build.
+`PathCommand` (`src/paint/path.rs:28`) is the element `Path::commands` yields
+(`src/paint/path.rs:781`), not the storage.
 `DrawCommand.transform` is a full `Matrix4`, sixteen `f64` (128 bytes), so every
 command carries that much beside its `DrawOp`
 (`src/display_list/command.rs:30`;
@@ -1085,19 +1102,21 @@ rules through map and sequence deserializers, including NaN and infinity, and
 through a transform nested in `ImageFilter`. Affine and reflected transforms round
 trip without changing their coefficients.
 
-`Path` deserialization replays commands through its builders. A shape hint is
-retained only when the corresponding canonical constructor reproduces those
-commands exactly; submitted geometry remains authoritative. The engine uses
-rounded-rectangle hints to choose an analytic shadow, so an unrelated hint must
-not replace a polygon's shadow silhouette. `deserialized_paths_keep_geometry_authoritative`
+`Path` deserialization replays commands through its builders. The wire carries the
+constructor's hint and the offset the shape was moved by before its curves were built. A
+shape hint is retained only when the corresponding canonical constructor, moved by that
+offset, reproduces those commands exactly; submitted geometry remains authoritative. The
+engine uses rounded-rectangle hints to choose an analytic fill and shadow, so an unrelated
+hint must not replace a polygon's silhouette. `deserialized_paths_keep_geometry_authoritative`
 checks a triangle carrying another shape's hint, and
-`serialized_factory_paths_preserve_their_shapes` checks exact commands and hints
-through a lossless value round trip, and geometry and containment after a JSON
-string round trip (both rows of `value_contract`, enabled with `serde`). A format
-that changes floating-point coordinates may discard the hint even when the
-geometric difference is tiny. Retaining the submitted geometry takes priority
-over keeping an analytic rendering shortcut; no approximate hint admission is
-used.
+`serialized_factory_paths_preserve_their_shapes` checks exact commands and hints of factory
+shapes and of a rounded rectangle moved before it was read through a lossless value round
+trip, and geometry and containment after a JSON string round trip (both rows of
+`value_contract`, enabled with `serde`). A path whose move was applied to built curves, or
+a format that changes floating-point coordinates, may discard the hint even when the
+geometric difference is tiny: no tolerance keeps a hint safe under any later transform, so
+retaining the submitted geometry takes priority over keeping an analytic rendering
+shortcut; no approximate hint admission is used.
 
 ---
 

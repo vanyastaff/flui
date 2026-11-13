@@ -1292,15 +1292,29 @@ pub(crate) fn deserialized_paths_keep_geometry_authoritative() {
 #[cfg(feature = "serde")]
 pub(crate) fn serialized_factory_paths_preserve_their_shapes() {
     let rect = Rect::from_ltrb(2.0, 3.0, 42.0, 23.0);
+    // A move already applied to built curves rounds them in other steps than the replayed
+    // hint, so its hint may be dropped; the submitted geometry is kept exactly.
+    let read = Path::from_rrect(RRect::from_rect_circular(rect, 4.0));
+    let _ = read.commands().count();
+    let moved = read.translate(Offset::new(0.1, 0.2));
+    let wire = serde_json::to_value(&moved).expect("a moved path serializes");
+    let restored: Path = serde_json::from_value(wire).expect("a moved path deserializes");
+    assert_eq!(
+        restored.commands().collect::<Vec<_>>(),
+        moved.commands().collect::<Vec<_>>()
+    );
     for original in [
         Path::rectangle(rect),
         Path::oval(rect),
         Path::from_rrect(RRect::from_rect_xy(rect, 4.0, 4.0)),
+        // Moved before its curves were built, by an offset whose sums round.
+        Path::from_rrect(RRect::from_rect_xy(rect, 4.0, 4.0)).translate(Offset::new(0.1, 0.2)),
     ] {
         let lossless_wire = serde_json::to_value(&original).expect("a factory path serializes");
         let lossless: Path =
             serde_json::from_value(lossless_wire).expect("factory path values deserialize");
         assert_eq!(lossless.rrect_hint(), original.rrect_hint());
+        assert_eq!(lossless, original);
         assert_eq!(
             lossless.commands().collect::<Vec<_>>(),
             original.commands().collect::<Vec<_>>()

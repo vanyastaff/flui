@@ -322,7 +322,7 @@ host.
   `HostExecutors`, `HostComputePool`, `HostIoPool`, `ComputeJob`, `IoFuture`,
   `SpawnError` and `DeterministicExecutors` are defined in `execution` but
   re-exported as `flui_app::…` and, through the facade's
-  `pub use flui_app as app`, as `flui::app::…`; `AppConfig::executors`
+  curated `flui::app` module, as `flui::app::…`; `AppConfig::executors`
   takes `HostExecutors`. The promise follows the item, not its crate's
   `tier-kind` (ADR-0089 §1), so a change to any of these signatures is a
   breaking change of `flui` (`SpawnError` is `#[non_exhaustive]`, so a new
@@ -945,7 +945,8 @@ measured around each batch it sent. Pinned by `tests/contracts/agent_input.rs`.
 **Recordings.** `AgentWindow::record` sends `UiCommand::AgentRecord`; the drain starts the
 recording as a tap of the runtime's (`agent_record.rs`), beside the application's own, so it
 covers every presentation of the runtime, and answers with the header `recording_start` gives,
-in the recording format (`RecordingStart::to_wire`). The tap converts each row and queues it on
+in the recording format (`start_to_wire`, in the hidden `__runtime` seam with `flui-testing`).
+The tap converts each row and queues it on
 a queue the reader shares, bounded at 1024 rows: a row with no room is counted, the next that
 fits is preceded by a `gap` row, and the tap's `end` row goes in past the bound, counting the
 queue's losses with the tap's. The reader's stop and its drop are flags on that queue, recorded

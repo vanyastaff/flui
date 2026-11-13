@@ -150,7 +150,8 @@ substrate driver over raw owners, which the raw-owner suites still use.
 - **A recording crosses the wire only through mirror types.**
   `flui_protocol::input_recording` declares the rows and header with pinned
   spellings, `flui-runtime` converts `InputRecord` rows to and from them
-  (`InputRecord::to_wire`, `from_wire`), and `recording` frames them as JSON
+  (`record_to_wire`, `record_from_wire` in `flui_runtime::__runtime`), and
+  `recording` frames them as JSON
   Lines; the vocabulary carries no serde. Unknown fields are skipped, an
   unknown variant (or key, code or action spelling) is
   `RecordingError::UnknownVariant`, never a skipped row. The conversions cannot

@@ -105,3 +105,55 @@ pub fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_
         common::offset(400.0 - 16.0 - 56.0, 800.0 - 56.0 - 16.0),
     );
 }
+
+/// A floating action button is a button to assistive technology, as
+/// Flutter's `RawMaterialButton` beneath it is: enabled, it offers the click,
+/// which presses it; without `on_pressed` it says it is disabled and offers
+/// none. Its child's label is the button's own.
+///
+/// Red-check: drop the well's description (the label's node is no button).
+pub fn a_floating_action_button_is_a_button_node_enabled_or_disabled() {
+    use flui_sdk::widgets::Text;
+    use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    for enabled in [true, false] {
+        let name = if enabled { "enabled" } else { "disabled" };
+        let pressed = Rc::new(Cell::new(0_u32));
+        let mut fab = FloatingActionButton::new().child(Text::new("Add"));
+        if enabled {
+            let pressed = Rc::clone(&pressed);
+            fab = fab.on_pressed(move |_ctx| pressed.set(pressed.get() + 1));
+        }
+        let mut laid = lay_out(Theme::new(ThemeData::light(), fab), tight(56.0, 56.0));
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame");
+        let node = tree
+            .find_by_label("Add")
+            .unwrap_or_else(|error| panic!("{name}: no node labelled \"Add\": {error}"));
+        let shown = tree.describe();
+        assert_eq!(node.role(), Role::Button, "{name}:\n{shown}");
+        assert_eq!(node.is_disabled(), !enabled, "{name}:\n{shown}");
+        assert_eq!(
+            node.supports_action(Action::Click),
+            enabled,
+            "{name}:\n{shown}"
+        );
+        if enabled {
+            let target = node.id();
+            laid.invoke_semantics_action(ActionRequest {
+                action: Action::Click,
+                target_tree: TreeId::ROOT,
+                target_node: target,
+                data: None,
+            })
+            .unwrap_or_else(|error| panic!("the button takes a click: {error}"));
+            laid.pump();
+            assert_eq!(pressed.get(), 1, "a click on the node presses the button");
+        }
+    }
+}

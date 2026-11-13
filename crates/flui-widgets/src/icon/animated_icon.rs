@@ -31,8 +31,9 @@ use flui_view::environment::VsyncScope;
 ///
 /// The animation is the caller's, so its timing follows the caller's controller and the
 /// motion policy: under reduced motion a controller's run lands at its target on the next
-/// tick, and the icon shows that frame at once. Assistive technology sees an image with the
-/// [`semantic_label`](Self::semantic_label); the animation itself is never announced.
+/// tick, and the icon shows that frame at once. Assistive technology reads the
+/// [`semantic_label`](Self::semantic_label), which names the control the icon sits in, as an
+/// `Icon`'s does; the animation itself is never announced.
 ///
 /// On top of its own motion the icon takes a [`SymbolEffect`] and a [`PathEffect`] that
 /// draws its paths on or off.
@@ -248,9 +249,7 @@ impl ViewState<AnimatedIcon> for AnimatedIconState {
         };
         let mut semantics = Semantics::new();
         if let Some(label) = &view.semantic_label {
-            semantics = semantics
-                .label(label.clone())
-                .role(crate::SemanticsRole::Image);
+            semantics = semantics.label(label.clone());
         }
         let built = semantics.child(built).boxed();
         match view.effect.as_ref().or(theme.symbol_effect.as_ref()) {

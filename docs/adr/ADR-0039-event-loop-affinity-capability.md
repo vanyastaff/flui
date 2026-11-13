@@ -262,8 +262,7 @@ windows; the resident main window; the owner lane behind
 `PlatformProxy::open_window` on every host (`flui-native`'s `ARCHITECTURE.md`,
 "Window-independent owner turns").
 Not yet: moving the §1 methods off `Platform` into a `pub(crate)`
-owner-operations trait (after which `MacOSPlatform`'s `unsafe impl Send/Sync`
-covers only the residual surface). That move waits on on-device validation of
+owner-operations trait. That move waits on on-device validation of
 the Android bootstrap inside `on_ready`.
 
 ## Consequences
