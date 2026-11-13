@@ -1933,6 +1933,7 @@ mod tests {
 
         // What an unwind between the lend and the take-back leaves.
         let context = executor.backend_mut();
+        context.prepare_textures(slot);
         let mut painter = context.take_painter(wgpu::TextureFormat::Rgba8Unorm, (8, 8));
         let own = context.lend_textures(slot, &mut painter);
         assert!(own.is_some(), "the slot has textures to lend");

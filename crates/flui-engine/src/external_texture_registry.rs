@@ -532,6 +532,12 @@ impl KeptTextures {
     /// again, so a frame that never returns them costs a re-upload, not the
     /// textures.
     pub(crate) fn lend(&mut self, domain: &Arc<DeviceDomain>) -> ExternalTextureRegistry {
+        debug_assert!(
+            self.registry
+                .as_ref()
+                .is_some_and(|registry| registry.is_on(domain)),
+            "BUG: textures are put on the device before they are lent, outside the frame"
+        );
         self.on(domain);
         self.registry
             .take()
