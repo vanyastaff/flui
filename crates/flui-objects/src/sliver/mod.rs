@@ -41,7 +41,8 @@ pub use sliver_offstage::*;
 pub use sliver_opacity::*;
 pub use sliver_padding::*;
 pub use sliver_persistent_header::{
-    FloatingHeaderSnapConfiguration, OverScrollHeaderStretchConfiguration,
+    FloatingHeaderMode, FloatingHeaderSnapConfiguration, FloatingMode, FloatingPinnedMode,
+    OverScrollHeaderStretchConfiguration, RenderSliverFloatingHeaderBase,
     RenderSliverFloatingPersistentHeader, RenderSliverFloatingPinnedPersistentHeader,
     RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader, SnapAction,
     SnapCommand, StretchTriggerSignal,

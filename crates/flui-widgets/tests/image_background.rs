@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, loose, size};
 use flui_painting::paint::Image as PixelImage;
-use flui_widgets::{DecodeJob, Image, ImageCacheKey, ImageProvider, ImageProviderError};
+use flui_widgets::{
+    DecodeJob, FileImage, Image, ImageCacheKey, ImageProvider, ImageProviderError, MemoryImage,
+};
 
 /// A 5×3 PNG.
 const FIVE_BY_THREE: &[u8] = include_bytes!("fixtures/tiny.png");
@@ -199,6 +201,56 @@ fn a_saturated_lane_decodes_on_the_owner_thread() {
     );
 }
 
+/// A file past the encoded-image limit is refused before it is read, and
+/// bytes whose header asks for more pixels than the decoded-image limit are
+/// refused before they are decoded: a sparse 256 MiB file and a 5x3 PNG
+/// re-headed to 60000x60000 allocate neither.
+fn an_untrusted_image_is_bounded_before_it_is_held() {
+    fn png_declaring(width: u32, height: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = !0_u32;
+            for &byte in bytes {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        let mut png = FIVE_BY_THREE.to_vec();
+        assert_eq!(&png[12..16], b"IHDR", "the fixture starts with its header");
+        png[16..20].copy_from_slice(&width.to_be_bytes());
+        png[20..24].copy_from_slice(&height.to_be_bytes());
+        let crc = crc32(&png[12..29]);
+        png[29..33].copy_from_slice(&crc.to_be_bytes());
+        png
+    }
+
+    let refused = MemoryImage::new(png_declaring(60_000, 60_000)).resolve();
+    assert!(
+        matches!(&refused, Err(ImageProviderError::DecodeFailed { reason }) if reason.contains("larger than")),
+        "a 60000x60000 header is refused by size, got {refused:?}"
+    );
+
+    let directory =
+        std::env::temp_dir().join(format!("flui-image-oversized-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("scratch directory");
+    let path = directory.join("huge.png");
+    std::fs::File::create(&path)
+        .and_then(|file| file.set_len(flui_painting::paint::MAX_ENCODED_IMAGE_BYTES + 1))
+        .expect("a sparse oversized file is made");
+    let refused = FileImage::new(&path).resolve();
+    let _ = std::fs::remove_dir_all(directory);
+    assert!(
+        matches!(&refused, Err(ImageProviderError::ReadFailed { reason, .. }) if reason.contains("larger than")),
+        "an oversized file is refused by its length, got {refused:?}"
+    );
+}
+
 /// `Image::memory` and `Image::file` decode once per key on the background
 /// lanes, a new key shows only the new image, and a host without lanes
 /// runs the decode on the owner thread, as does a lane too full to take it.
@@ -209,4 +261,5 @@ fn image_decodes_in_the_background() {
     a_new_key_shows_only_the_new_bytes();
     without_background_lanes_a_decode_job_runs_on_the_owner_thread();
     a_saturated_lane_decodes_on_the_owner_thread();
+    an_untrusted_image_is_bounded_before_it_is_held();
 }

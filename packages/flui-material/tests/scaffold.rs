@@ -141,7 +141,7 @@ pub fn plain_body_text_takes_the_theme_body_style_and_components_keep_theirs() {
     let laid = lay_out(
         MaterialApp::new(Scaffold::new().body(Column::new(vec![
             Text::new("plain body").boxed(),
-            Card::new(Text::new("card body")).boxed(),
+            Card::new().child(Text::new("card body")).boxed(),
             ListTile::new().title(Text::new("tile title")).boxed(),
         ])))
         .theme(theme),

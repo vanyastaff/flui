@@ -197,6 +197,9 @@ the app): `flui run --scene --scene-crate <crate> --package <android.package>`.
 
 ## Driving an app from an agent
 
+**Experimental.** The agent protocol is 0.x: its methods, tool arguments and
+replies can change in any minor release.
+
 ```bash
 flui run --agent                         # debug build, on this desktop
 flui run --agent --release               # release build with the `driver` feature
@@ -241,7 +244,9 @@ runs. Tools:
 |------|------|
 | `flui_windows` | List the windows that have content. |
 | `flui_read` | Read a window's semantics tree (`root`, `max_depth`, `max_nodes`). |
+| `flui_locate` | Find the elements a locator (`role`, `name`, `state`, …) matches. |
 | `flui_act` | Perform an action a node advertises (`invoke`, `toggle`, `set_value`, …). |
+| `flui_wait` | Hold out until an element appears, goes or matches, the window settles or frames present (`timeout_ms`). |
 | `flui_motion` | Read, pause or step the animation clock. |
 
 `window` may be left out when the app has one. Failures carry the wire's

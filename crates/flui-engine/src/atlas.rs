@@ -3,7 +3,7 @@
 //! This module provides texture atlas management for packing multiple images
 //! into a single GPU texture, reducing draw calls and improving performance.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use wgpu::{
     Device, Extent3d, Queue, Texture, TextureDescriptor, TextureDimension, TextureFormat,
@@ -70,7 +70,7 @@ impl AtlasRect {
 ///
 /// The `image_id: u32` field was dropped from this struct. It was
 /// set on construction but read by zero consumers in the workspace
-/// -- the `HashMap<u32, AtlasEntry>` keying inside `TextureAtlas`
+/// -- the `FxHashMap<u32, AtlasEntry>` keying inside `TextureAtlas`
 /// is the canonical ID source, and the field was duplicate
 /// bookkeeping.
 #[derive(Clone, Debug)]
@@ -134,7 +134,7 @@ pub(crate) struct TextureAtlas {
     current_x: u32,
 
     /// Allocated entries
-    entries: HashMap<u32, AtlasEntry>,
+    entries: FxHashMap<u32, AtlasEntry>,
 
     /// Next available image ID
     next_image_id: u32,
@@ -172,7 +172,7 @@ impl TextureAtlas {
             current_shelf_y: 0,
             current_shelf_height: 0,
             current_x: 0,
-            entries: HashMap::new(),
+            entries: FxHashMap::default(),
             next_image_id: 1,
         }
     }
@@ -368,7 +368,7 @@ impl TextureAtlas {
 
     // The `get_entry(image_id)` and `texture()` getters were deleted.
     // Workspace grep returned zero callers for either; the entries
-    // `HashMap` is queried internally via `insert_image` / `pack_image`
+    // `FxHashMap` is queried internally via `insert_image` / `pack_image`
     // paths, and the texture is consumed exclusively through
     // `create_view()` (live). `Texture` is wgpu's own type so the
     // alternative `&self.texture` accessor is trivial to reintroduce if

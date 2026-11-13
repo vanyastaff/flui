@@ -432,7 +432,7 @@ pub trait ElementBase: Downcast + 'static {
     ///
     /// Hash-based lookup ([`Self::current_key_hash`]) is the entry point
     /// for keyed reconciliation: it indexes old children by `u64` for
-    /// O(1) HashMap claims. The hash alone is not enough to decide that
+    /// O(1) FxHashMap claims. The hash alone is not enough to decide that
     /// two keys are equal, though — distinct keys can hash to the same
     /// `u64`. This accessor surfaces the underlying
     /// [`flui_foundation::ViewKey`] so the reconciler can call

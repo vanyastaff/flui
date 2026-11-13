@@ -662,13 +662,21 @@ pub(crate) fn align_retarget_preserves_the_laid_out_velocity() {
     ));
     laid.pump_for(Duration::from_millis(1));
     laid.pump_for(Duration::from_millis(250));
+    // One-sided second-order differences, `(3x(0) − 4x(∓h) + x(∓2h)) / 2h`:
+    // the departing segment accelerates, and a first-order difference would
+    // read half a step of that acceleration as lost velocity.
     let h = Duration::from_micros(100);
+    let earlier = position(&mut laid);
+    laid.pump_for(h);
     let previous = position(&mut laid);
     laid.pump_for(h);
     let seam = position(&mut laid);
+    let rate = |near: f64, middle: f64, far: f64| {
+        (3.0 * near - 4.0 * middle + far) / (2.0 * h.as_secs_f64())
+    };
     let arriving = [
-        (seam.dx - previous.dx) / h.as_secs_f64(),
-        (seam.dy - previous.dy) / h.as_secs_f64(),
+        rate(seam.dx, previous.dx, earlier.dx),
+        rate(seam.dy, previous.dy, earlier.dy),
     ];
     assert!(arriving.iter().all(|velocity| *velocity > 1.0));
     laid.pump_widget(tree(Alignment::TOP_LEFT, SharedCurve::new(curves::EASE_IN)));
@@ -679,9 +687,11 @@ pub(crate) fn align_retarget_preserves_the_laid_out_velocity() {
     );
     laid.pump_for(h);
     let after = position(&mut laid);
+    laid.pump_for(h);
+    let later = position(&mut laid);
     let departing = [
-        (after.dx - seam.dx) / h.as_secs_f64(),
-        (after.dy - seam.dy) / h.as_secs_f64(),
+        -rate(seam.dx, after.dx, later.dx),
+        -rate(seam.dy, after.dy, later.dy),
     ];
     for (arriving, departing) in arriving.into_iter().zip(departing) {
         assert!(

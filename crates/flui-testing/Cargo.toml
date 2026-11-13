@@ -141,3 +141,11 @@ tier-kind = "internal"
 order = 6
 # The log capture's process state moves with it: `flui_log::testing` holds the
 # SINK and the interest-cache sentinels now (its own manifest carries them).
+# The heap counters a test target's `CountingAllocator` bumps: per thread,
+# read only by the test that installed the allocator.
+globals = [
+    { item = "heap::ALLOCATIONS", grant = "ADR-0097", class = "process", reason = "per-thread allocations behind the global allocator, which a test binary has once" },
+    { item = "heap::REALLOCATIONS", grant = "ADR-0097", class = "process", reason = "per-thread reallocations behind the global allocator, which a test binary has once" },
+    { item = "heap::ALLOCATED_BYTES", grant = "ADR-0097", class = "process", reason = "per-thread requested bytes behind the global allocator, which a test binary has once" },
+    { item = "heap::LIVE_BYTES", grant = "ADR-0097", class = "process", reason = "per-thread live bytes behind the global allocator, which a test binary has once" },
+]

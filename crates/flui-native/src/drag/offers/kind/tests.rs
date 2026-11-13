@@ -124,3 +124,28 @@ fn a_payload_past_its_limit_is_too_large() {
         })
     );
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+proptest::proptest! {
+    /// What a drag source sends becomes a payload of exactly the length
+    /// `decoded_len` measured, the figure a fetch refuses an oversized one by
+    /// before making it: text in every form, HTML in UTF-8 or behind either
+    /// byte-order mark, a URI list and a media type's own bytes.
+    #[test]
+    fn the_measured_length_is_the_payload_length(
+        prefix in proptest::sample::select(vec![&[][..], &[0xFF, 0xFE][..], &[0xFE, 0xFF][..]]),
+        body in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..256),
+    ) {
+        let bytes = [prefix, &body[..]].concat();
+        let kinds = TextForm::OFFERED.into_iter().map(Kind::Text).chain([
+            Kind::Html,
+            Kind::Bytes(TransferFormat::UriList),
+            Kind::Bytes(TransferFormat::Custom { mime: Mime::new("application/x-test") }),
+        ]);
+        for kind in kinds {
+            let measured = kind.decoded_len(&bytes);
+            let made = super::super::bytes_of(kind.payload(bytes.clone())).len();
+            proptest::prop_assert_eq!(measured, made, "{:?} {:?}", kind, bytes);
+        }
+    }
+}

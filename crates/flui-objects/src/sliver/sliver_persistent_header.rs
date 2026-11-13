@@ -792,7 +792,7 @@ mod sealed {
 /// [`RenderSliverFloatingHeaderBase::perform_layout`], which is
 /// verbatim-identical between the two variants — everything else about the
 /// two types is shared.
-pub trait FloatingHeaderMode: sealed::Sealed + Send + Sync + 'static {
+pub trait FloatingHeaderMode: sealed::Sealed + 'static {
     /// The inspect kind.
     const DIAGNOSTIC_NAME: &'static str;
 

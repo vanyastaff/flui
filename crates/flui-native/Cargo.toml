@@ -670,6 +670,13 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 # (`platform-parity.toml`, `testing::parity`).
 toml = { workspace = true }
 
+# Arbitrary bytes into the parsers of what another process sends (the XIM
+# codec, clipboard and drag payloads, Wayland arrays); the nightly run raises
+# `PROPTEST_CASES`. Not on wasm32: its random source, getrandom, has no
+# backend there without a feature this crate does not ship.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { workspace = true }
+
 # Browser API fixtures mutate JS globals and therefore have their own process.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test.workspace = true

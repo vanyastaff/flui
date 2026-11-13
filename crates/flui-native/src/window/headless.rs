@@ -6,6 +6,7 @@
 //! windows the platform tracks.
 
 use std::{
+    cell::RefCell,
     rc::Rc,
     sync::{Arc, Weak},
     thread,
@@ -87,7 +88,7 @@ static HEADLESS_WINDOW_IDS: Mutex<WindowIdMint> = Mutex::new(WindowIdMint::new()
 /// Public where it is defined, as the host's table names it, and nameable only
 /// inside the crate.
 pub struct HeadlessWindows {
-    tracked: Mutex<Tracked>,
+    tracked: RefCell<Tracked>,
     /// The windows deferred opens built, kept on the owner thread until they
     /// close, as a native host keeps the windows it opened: what the opener
     /// gets is their identity, and a weak reference on the owner.
@@ -97,13 +98,14 @@ pub struct HeadlessWindows {
 }
 
 impl std::fmt::Debug for HeadlessWindows {
-    // `try_lock`, as `parking_lot::Mutex<T>: Debug` does: formatting while the
-    // same thread holds the set would otherwise deadlock.
+    // `try_borrow`: formatting while the same thread borrows the set mutably
+    // would otherwise panic.
+
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("HeadlessWindows");
-        match self.tracked.try_lock() {
-            Some(tracked) => out.field("windows", &tracked.windows.len()),
-            None => out.field("windows", &format_args!("<locked>")),
+        match self.tracked.try_borrow() {
+            Ok(tracked) => out.field("windows", &tracked.windows.len()),
+            Err(_) => out.field("windows", &format_args!("<borrowed>")),
         };
         out.finish_non_exhaustive()
     }
@@ -129,7 +131,7 @@ impl HeadlessWindows {
     pub(crate) fn new(positions: WindowPositions<()>) -> Self {
         Self {
             deferred: crate::owner::slot::OwnerMap::new(),
-            tracked: Mutex::new(Tracked {
+            tracked: RefCell::new(Tracked {
                 windows: Vec::new(),
                 active: None,
                 placement: false,
@@ -143,7 +145,7 @@ impl HeadlessWindows {
     /// Stops tracking window `id`; another becomes active if it was.
     fn forget(&self, id: WindowId) {
         {
-            let mut tracked = self.tracked.lock();
+            let mut tracked = self.tracked.borrow_mut();
             tracked.windows.retain(|window| window.id != id);
             if tracked.active == Some(id) {
                 tracked.active = tracked.windows.first().map(|window| window.id);
@@ -156,7 +158,7 @@ impl HeadlessWindows {
 
 impl OpenWindows for HeadlessWindows {
     fn is_empty(&self) -> bool {
-        self.tracked.lock().windows.is_empty()
+        self.tracked.borrow_mut().windows.is_empty()
     }
 }
 
@@ -169,14 +171,14 @@ impl TrackedWindows for HeadlessWindows {
     fn open(
         self: Arc<Self>,
         state: &mut HeadlessState,
-        platform: Weak<Mutex<HeadlessState>>,
+        platform: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         let display = state.window_display();
         let window_id = HEADLESS_WINDOW_IDS.lock().next()?;
         let (capabilities, limits) = {
-            let tracked = self.tracked.lock();
+            let tracked = self.tracked.borrow_mut();
             (tracked.capabilities, tracked.policy)
         };
         // The capability snapshot reflects the devices already attached
@@ -216,7 +218,7 @@ impl TrackedWindows for HeadlessWindows {
         state.notices.mark_stale_on_wake(&window.window_state);
 
         {
-            let mut tracked = self.tracked.lock();
+            let mut tracked = self.tracked.borrow_mut();
             tracked.windows.push(window.clone());
             tracked.active = Some(window_id);
         }
@@ -237,7 +239,7 @@ impl TrackedWindows for HeadlessWindows {
 
     fn deliveries_of_all(&self) -> Vec<Arc<WindowDelivery>> {
         self.tracked
-            .lock()
+            .borrow_mut()
             .windows
             .iter()
             .map(|window| Arc::clone(&window.delivery))
@@ -246,7 +248,7 @@ impl TrackedWindows for HeadlessWindows {
 
     fn delivery_of(&self, id: WindowId) -> Option<Arc<WindowDelivery>> {
         self.tracked
-            .lock()
+            .borrow_mut()
             .windows
             .iter()
             .find(|window| window.id == id)
@@ -267,7 +269,7 @@ impl<H: Host<Loop = HeadlessLoop, Window = HeadlessHostWindow>> HostPlatform<H> 
     /// [`WindowAt::Unknown`](flui_platform::WindowAt::Unknown), as on Wayland.
     #[must_use]
     pub fn with_window_placement(self) -> Self {
-        self.window_shared().tracked.lock().placement = true;
+        self.window_shared().tracked.borrow_mut().placement = true;
         self
     }
 
@@ -277,7 +279,7 @@ impl<H: Host<Loop = HeadlessLoop, Window = HeadlessHostWindow>> HostPlatform<H> 
     /// capability is `false` is refused as unsupported and changes nothing.
     #[must_use]
     pub fn with_window_capabilities(self, capabilities: WindowCapabilities) -> Self {
-        self.window_shared().tracked.lock().capabilities = capabilities;
+        self.window_shared().tracked.borrow_mut().capabilities = capabilities;
         self
     }
 
@@ -286,7 +288,7 @@ impl<H: Host<Loop = HeadlessLoop, Window = HeadlessHostWindow>> HostPlatform<H> 
     /// The default imposes nothing.
     #[must_use]
     pub fn with_window_policy(self, limits: HeadlessWindowPolicy) -> Self {
-        self.window_shared().tracked.lock().policy = limits;
+        self.window_shared().tracked.borrow_mut().policy = limits;
         self
     }
 
@@ -316,14 +318,14 @@ impl HeadlessOpenWindows {
     pub fn all(&self) -> Vec<HeadlessHostWindow> {
         self.windows
             .upgrade()
-            .map_or_default(|windows| windows.tracked.lock().windows.clone())
+            .map_or_default(|windows| windows.tracked.borrow_mut().windows.clone())
     }
 
     /// The open window `id`, `None` once it closed.
     #[must_use]
     pub fn get(&self, id: WindowId) -> Option<HeadlessHostWindow> {
         let windows = self.windows.upgrade()?;
-        let tracked = windows.tracked.lock();
+        let tracked = windows.tracked.borrow_mut();
         tracked
             .windows
             .iter()
@@ -345,18 +347,18 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(?options, "Creating headless window");
 
-        let platform_state = Arc::downgrade(&owner.state);
+        let platform_state = std::rc::Rc::downgrade(&owner.state);
         owner.with_state(|state| {
             TrackedWindows::open(Arc::clone(windows), state, platform_state, options, handler)
         })
     }
 
     fn active(_: &HeadlessLoop, windows: &HeadlessWindows) -> Option<WindowId> {
-        windows.tracked.lock().active
+        windows.tracked.borrow_mut().active
     }
 
     fn capabilities(_: &HeadlessLoop, windows: &HeadlessWindows) -> WindowCapabilities {
-        windows.tracked.lock().capabilities
+        windows.tracked.borrow_mut().capabilities
     }
 
     fn frame_inset(_: &HeadlessLoop, _: &HeadlessWindows, _: f64) -> Size<f64> {
@@ -435,11 +437,11 @@ pub struct HeadlessWindowSystem {
 #[derive(Clone)]
 pub struct HeadlessHostWindow {
     id: WindowId,
-    state: Arc<Mutex<HeadlessHostWindowState>>,
+    state: Rc<RefCell<HeadlessHostWindowState>>,
     /// The published snapshot, shared by every clone of this window.
     window_state: Arc<WindowStateCell>,
     /// What the window's state publisher reads; the delivery holds it weakly.
-    source: Arc<SnapshotSource>,
+    source: Rc<SnapshotSource>,
     limits: HeadlessWindowPolicy,
     delivery: Arc<WindowDelivery>,
     /// What the window holds of the table's window-level positions.
@@ -448,13 +450,13 @@ pub struct HeadlessHostWindow {
     /// pull-model.
     text_store_host: Option<TextStoreHostFactory>,
     /// The input regions last handed to the simulated OS, and every change in order.
-    input_regions: Arc<Mutex<RecordedInputRegions>>,
+    input_regions: Rc<RefCell<RecordedInputRegions>>,
     /// Back-reference to the platform this window was opened on, so closing
     /// it can — only once every tracked window is gone — consult the
     /// exit-policy hook exactly like a native host's close
     /// handling does (see `notify_closed`). `Weak`: a window must never
     /// keep the platform state alive past the platform's own lifetime.
-    platform_state: Weak<Mutex<HeadlessState>>,
+    platform_state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
     /// The windows the platform tracks, which this one leaves when it closes
     /// and whose layout [`PlatformWindow::window_at`] reads. `Weak`, as above.
     windows: Weak<HeadlessWindows>,
@@ -538,7 +540,7 @@ impl flui_platform::SurfaceTarget for HeadlessSurface {
 
 impl std::fmt::Debug for HeadlessHostWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock();
+        let state = self.state.borrow_mut();
         f.debug_struct("HeadlessHostWindow")
             .field("id", &self.id)
             .field("title", &state.title)
@@ -757,18 +759,18 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Window
 /// Read what `model` says now into the snapshot, announcing nothing.
 fn read_window_state(
     cell: &WindowStateCell,
-    model: &Mutex<HeadlessHostWindowState>,
+    model: &RefCell<HeadlessHostWindowState>,
     delivery: &WindowDelivery,
 ) -> crate::window::state::Published {
     cell.invalidate();
-    cell.state_with(|| sample_window_state(&model.lock(), delivery.hovered()))
+    cell.state_with(|| sample_window_state(&model.borrow(), delivery.hovered()))
 }
 
 /// What a window's state publisher reads: the model standing in for the OS,
 /// held by every clone of the window.
 struct SnapshotSource {
     cell: Arc<WindowStateCell>,
-    model: Arc<Mutex<HeadlessHostWindowState>>,
+    model: Rc<RefCell<HeadlessHostWindowState>>,
     delivery: Weak<WindowDelivery>,
 }
 
@@ -786,7 +788,7 @@ impl HeadlessHostWindow {
     fn new(
         id: WindowId,
         options: WindowOptions,
-        platform_state: Weak<Mutex<HeadlessState>>,
+        platform_state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
         windows: Weak<HeadlessWindows>,
         host: HeadlessWindowSetup,
         delivery: WindowDelivery,
@@ -837,15 +839,15 @@ impl HeadlessHostWindow {
             model.normal_geometry = options.normal_geometry;
         }
         let initial = sample_window_state(&model, false);
-        let state = Arc::new(Mutex::new(model));
+        let state = Rc::new(RefCell::new(model));
         let window_state = Arc::new(WindowStateCell::new(initial));
         let delivery = Arc::new(delivery);
-        let source = Arc::new(SnapshotSource {
+        let source = Rc::new(SnapshotSource {
             cell: Arc::clone(&window_state),
-            model: Arc::clone(&state),
+            model: Rc::clone(&state),
             delivery: Arc::downgrade(&delivery),
         });
-        delivery.publish_through(Arc::downgrade(&source), SnapshotSource::read);
+        delivery.publish_through_owner(&source, SnapshotSource::read);
         let redraw_delivery = Arc::downgrade(&delivery);
         let redraw_retirement = delivery.retirement();
         Self {
@@ -857,7 +859,7 @@ impl HeadlessHostWindow {
             delivery,
             facets: positions.for_window(&()),
             text_store_host,
-            input_regions: Arc::default(),
+            input_regions: Rc::default(),
             platform_state,
             windows,
             drag: None,
@@ -873,10 +875,10 @@ impl HeadlessHostWindow {
     /// The window's display bounds in logical pixels, from the platform's
     /// current displays; `None` when the platform is gone or knows none.
     fn display_bounds(&self) -> Option<Bounds<f64>> {
-        let display = self.state.lock().display?;
+        let display = self.state.borrow_mut().display?;
         self.platform_state
             .upgrade()?
-            .lock()
+            .borrow_mut()
             .display_bounds(display)
     }
 
@@ -885,7 +887,7 @@ impl HeadlessHostWindow {
     /// grew.
     fn publish_state(&self) -> WindowState {
         // The model changed, so a snapshot reported in its place is over.
-        self.state.lock().reported = None;
+        self.state.borrow_mut().reported = None;
         let published = read_window_state(&self.source.cell, &self.source.model, &self.delivery);
         if published.changed {
             self.delivery.dispatch_state_changed();
@@ -908,7 +910,7 @@ impl HeadlessHostWindow {
     /// [`Self::simulate_close`] — so the two cannot drift apart.
     fn complete_close(&self) {
         {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             state.visible = false;
             state.closed = true;
         }
@@ -964,7 +966,7 @@ impl HeadlessHostWindow {
     /// ([`WindowCapabilities::reports_presentation`]).
     pub fn simulate_presented(&self, presented: flui_platform::FramePresented) {
         {
-            let state = self.state.lock();
+            let state = self.state.borrow_mut();
             if state.closed || !state.capabilities.reports_presentation.is_available() {
                 return;
             }
@@ -976,7 +978,7 @@ impl HeadlessHostWindow {
     /// delivery order: one entry per change of the projection, scale or display.
     #[must_use]
     pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
-        self.input_regions.lock().updates.clone()
+        self.input_regions.borrow_mut().updates.clone()
     }
     /// What the simulated window system holds for this window now, read from
     /// its model and never through the snapshot: what a conformance fixture
@@ -985,7 +987,7 @@ impl HeadlessHostWindow {
     #[must_use]
     pub fn window_system(&self) -> HeadlessWindowSystem {
         let input_capabilities = self.delivery.input_capabilities();
-        let state = self.state.lock();
+        let state = self.state.borrow_mut();
         HeadlessWindowSystem {
             input_capabilities,
             material: state.materials.last().copied().unwrap_or_default(),
@@ -1003,13 +1005,13 @@ impl HeadlessHostWindow {
     /// Every frame-rate hint the window took, oldest first.
     #[must_use]
     pub fn frame_rate_hints(&self) -> Vec<flui_platform::FrameRateHint> {
-        self.state.lock().frame_rate_hints.clone()
+        self.state.borrow_mut().frame_rate_hints.clone()
     }
 
     /// Every material the window applied, oldest first.
     #[must_use]
     pub fn materials(&self) -> Vec<WindowMaterial> {
-        self.state.lock().materials.clone()
+        self.state.borrow_mut().materials.clone()
     }
 
     /// Inject a platform input event for testing.
@@ -1029,7 +1031,7 @@ impl HeadlessHostWindow {
     /// Reads answer with `state` until a simulation or a command changes the
     /// window's own model, which publishes what the model says again.
     pub fn simulate_state(&self, state: WindowState) -> WindowState {
-        self.state.lock().reported = Some(state);
+        self.state.borrow_mut().reported = Some(state);
         let published = read_window_state(&self.source.cell, &self.source.model, &self.delivery);
         if published.changed {
             self.delivery.dispatch_state_changed();
@@ -1041,7 +1043,7 @@ impl HeadlessHostWindow {
     /// snapshot differs; a size that is not a drawable area keeps the metrics
     /// the snapshot already holds.
     pub fn simulate_resize(&self, width: f64, height: f64) {
-        self.state.lock().size = Size::new(width, height);
+        self.state.borrow_mut().size = Size::new(width, height);
         self.publish_state();
     }
 
@@ -1050,21 +1052,21 @@ impl HeadlessHostWindow {
     /// also where its content starts: [`PlatformWindow::window_at`] answers
     /// from it. Fires the handler's `state_changed` when the snapshot differs.
     pub fn simulate_move(&self, position: Point<f64>) {
-        self.state.lock().position = position;
+        self.state.borrow_mut().position = position;
         self.publish_state();
     }
 
     /// Simulate a monitor DPI change for testing: the scale factor moves with
     /// no logical size change, and the snapshot's metrics carry the new scale.
     pub fn simulate_scale_factor_change(&self, scale_factor: f64) {
-        self.state.lock().scale_factor = scale_factor;
+        self.state.borrow_mut().scale_factor = scale_factor;
         self.publish_state();
     }
 
     /// Simulate focus change for testing. Fires the handler's `state_changed` when the
     /// snapshot differs.
     pub fn simulate_focus(&self, focused: bool) {
-        self.state.lock().focused = focused;
+        self.state.borrow_mut().focused = focused;
         self.publish_state();
     }
 
@@ -1072,7 +1074,7 @@ impl HeadlessHostWindow {
     /// through the one hover report every host uses. Fires the handler's `state_changed`
     /// when the snapshot differs; a closed window ignores the report.
     pub fn simulate_hover(&self, hovered: bool) {
-        if self.state.lock().closed {
+        if self.state.borrow_mut().closed {
             return;
         }
         self.delivery.report_hover(hovered);
@@ -1083,7 +1085,7 @@ impl HeadlessHostWindow {
     /// ignore the report.
     pub fn simulate_insets(&self, insets: flui_platform::WindowInsets) {
         {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             if state.closed || state.execution == flui_platform::WindowExecutionState::Detached {
                 return;
             }
@@ -1095,7 +1097,7 @@ impl HeadlessHostWindow {
     /// Simulate reversible native execution eligibility; terminal close stays terminal.
     pub fn simulate_execution_state(&self, execution: flui_platform::WindowExecutionState) {
         {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             if state.closed {
                 return;
             }
@@ -1109,7 +1111,7 @@ impl HeadlessHostWindow {
     /// handler's `state_changed` when the snapshot differs. Hiding is
     /// [`WindowCommand::Hide`].
     pub fn simulate_occlusion(&self, occluded: bool) {
-        self.state.lock().occluded = occluded;
+        self.state.borrow_mut().occluded = occluded;
         self.publish_state();
     }
 
@@ -1118,7 +1120,7 @@ impl HeadlessHostWindow {
     /// report.
     pub fn simulate_appearance(&self, appearance: WindowAppearance) {
         {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             if state.closed {
                 return;
             }
@@ -1133,7 +1135,7 @@ impl HeadlessHostWindow {
     /// a new revision; a closed window ignores the report.
     pub fn simulate_capabilities(&self, capabilities: WindowCapabilities) {
         {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             if state.closed {
                 return;
             }
@@ -1153,12 +1155,12 @@ impl HeadlessHostWindow {
         let known = self
             .platform_state
             .upgrade()
-            .is_some_and(|platform| platform.lock().holds_display(id));
+            .is_some_and(|platform| platform.borrow_mut().holds_display(id));
         if !known {
             return Err(UnknownDisplay { display: id });
         }
         {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             if state.closed {
                 return Ok(());
             }
@@ -1189,11 +1191,17 @@ impl HeadlessHostWindow {
     /// answered `false` at once and asked behind it; the window then closes
     /// if the handler grants it.
     pub fn simulate_close(&self) -> bool {
-        let later = self.clone();
-        let should = self
-            .delivery
-            .dispatch_close_request(move || later.complete_close())
-            == flui_platform::CloseDecision::Close;
+        // The window is the owner thread's; the queued close carries it in an
+        // owner slot, as a native host's carries its window.
+        let later = crate::owner::slot::OwnerSlot::new();
+        if later.replace(self.clone()).is_err() {
+            tracing::error!("a queued close could not keep its window: owner slots are exhausted");
+        }
+        let should = self.delivery.dispatch_close_request(move || {
+            if let Some(window) = later.take() {
+                window.complete_close();
+            }
+        }) == flui_platform::CloseDecision::Close;
         if should {
             self.complete_close();
         }
@@ -1229,7 +1237,7 @@ impl PlatformWindow for HeadlessHostWindow {
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-        if self.state.lock().closed {
+        if self.state.borrow_mut().closed {
             return Err(ApplyError::Closed);
         }
         let command = command.against(&self.window_state.published_capabilities())?;
@@ -1246,7 +1254,7 @@ impl PlatformWindow for HeadlessHostWindow {
             _ => None,
         };
         {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             match command {
                 WindowCommand::SetTitle(title) => state.title = title,
                 WindowCommand::SetPosition(at) => {
@@ -1297,7 +1305,7 @@ impl PlatformWindow for HeadlessHostWindow {
         // The snapshot's lock is taken before the model's, never inside it:
         // a publication holds the snapshot while it reads the model.
         let availability = self.window_state.published_capabilities().frame_rate_hint;
-        let mut state = self.state.lock();
+        let mut state = self.state.borrow_mut();
         takes(&state, availability)?;
         state.frame_rate_hints.push(hint);
         Ok(())
@@ -1315,7 +1323,7 @@ impl PlatformWindow for HeadlessHostWindow {
             flui_platform::Availability::Unavailable
         };
         let (scale, display) = {
-            let state = self.state.lock();
+            let state = self.state.borrow_mut();
             takes(&state, availability)?;
             (state.scale_factor, state.display)
         };
@@ -1325,7 +1333,7 @@ impl PlatformWindow for HeadlessHostWindow {
             .copied()
             .collect();
         let regions = regions.as_slice();
-        let mut recorded = self.input_regions.lock();
+        let mut recorded = self.input_regions.borrow_mut();
         let RecordedInputRegions {
             projection,
             updates,
@@ -1358,14 +1366,14 @@ impl PlatformWindow for HeadlessHostWindow {
         };
         // The set's lock is released before any window's is taken.
         let windows = {
-            let tracked = tracked.tracked.lock();
+            let tracked = tracked.tracked.borrow_mut();
             if !tracked.placement {
                 return WindowAt::Unknown;
             }
             tracked.windows.clone()
         };
         // No frame: a window's outer top-left is where its content starts.
-        let origin = self.state.lock().position;
+        let origin = self.state.borrow_mut().position;
         let desktop = Point::new(origin.x + position.x, origin.y + position.y);
         if !(desktop.x.is_finite() && desktop.y.is_finite()) {
             return WindowAt::Outside;
@@ -1374,7 +1382,7 @@ impl PlatformWindow for HeadlessHostWindow {
             .iter()
             .rev()
             .find_map(|window| {
-                let state = window.state.lock();
+                let state = window.state.borrow_mut();
                 let (origin, size) = (state.position, state.size);
                 let local = Point::new(desktop.x - origin.x, desktop.y - origin.y);
                 let inside =
@@ -1398,7 +1406,7 @@ impl PlatformWindow for HeadlessHostWindow {
     // ==================== Control Methods ====================
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        self.state.lock().cursor = cursor;
+        self.state.borrow_mut().cursor = cursor;
         Ok(())
     }
 }

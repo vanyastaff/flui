@@ -239,7 +239,7 @@ impl super::GpuReplay {
             reason = "Hash and equality use immutable Arc identity; budget atomics are not key state"
         )]
         let mut uses =
-            std::collections::HashMap::<(crate::clip_chain::ClipChain, bool), ClipUse>::new();
+            rustc_hash::FxHashMap::<(crate::clip_chain::ClipChain, bool), ClipUse>::default();
         bindings
             .try_reserve_exact(segment.runs.len())
             .map_err(

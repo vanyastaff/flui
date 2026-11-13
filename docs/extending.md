@@ -47,5 +47,5 @@ counterpart has, adapted to Rust:
 - **Units.** A type generic over `Unit` defaults to logical pixels, `T: Unit = f64`, as `Size`,
   `Rect` and `Offset` do, so a signature writes `BoxDecoration`, not `BoxDecoration<f64>`.
 
-`flui-widgets`' `child_form` table test holds a row for each widget whose form was ever in
-doubt; a widget that changes form changes its row.
+The `child_form` table tests of `flui-widgets` and `flui-material` hold a row for each widget of
+their catalog whose form was ever in doubt; a widget that changes form changes its row.

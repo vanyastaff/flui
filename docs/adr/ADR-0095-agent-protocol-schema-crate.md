@@ -175,12 +175,14 @@ This settles ADR-0080's open item:
   enters the event stream. The file goes with the run.
 - *`flui mcp`.* An MCP server over stdio, written in the CLI with no MCP SDK, so the CLI links no
   FLUI crate and no `flui-mcp` library is needed. Its tools map one to one onto the endpoint's
-  operations: `flui_windows` (`windows`), `flui_read` (`read`), `flui_act` (`act`) and
-  `flui_motion` (`motion`). A tool that needs a window and is given none uses the app's only
-  one, and is refused with `invalid_argument` naming the windows when there are several. It
-  finds the session from `--session`, the environment, or the nearest `target/flui-agent.json`,
-  connects on the first call and again once per call after a broken connection. Replies carry
-  the endpoint's JSON as text; a failure carries ADR-0080's error object whole.
+  operations: `flui_windows` (`windows`), `flui_read` (`read`), `flui_locate` (`semantics.locate`),
+  `flui_act` (`act`), `flui_wait` (`wait.until`, whose reply the server awaits for as long as
+  the wait holds) and `flui_motion` (`motion`). A tool that needs a window and is given none
+  uses the app's only one, and is refused with `invalid_argument` naming the windows when
+  there are several. It finds the session from `--session`, the environment, or the nearest
+  `target/flui-agent.json`, connects on the first call and again once per call after a broken
+  connection. Replies carry the endpoint's JSON as text; a failure carries ADR-0080's error
+  object whole.
 - *Not built.* The handle table across windows (handles stay window-scoped and a call names its
   window), the Android, web and iOS runtime check, the lazy vend on the first client, and the
   [live-smoke](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/live-smoke) run of `agent_counter` under Xvfb.
