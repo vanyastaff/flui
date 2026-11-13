@@ -38,10 +38,12 @@ struct Target {
     seeds: &'static [&'static str],
     /// The longest input libFuzzer writes, in bytes.
     max_len: u32,
-    /// The largest single allocation an input may ask for, in MiB: one past
-    /// it ends the run as a finding. It is the bound the parsed entry
-    /// promises its caller, which no assertion on the parsed value can see.
-    malloc_limit_mb: u32,
+    /// A cap on a single allocation, in MiB, for a target whose entry
+    /// promises none of its own: libFuzzer reports a block of this size or
+    /// larger as a finding. `None` keeps libFuzzer's default, its RSS limit:
+    /// a target whose entry promises a bound holds it in its property, from
+    /// the entry's own constant.
+    malloc_limit_mb: Option<u32>,
 }
 
 /// Every fuzz target. Each parses bytes nobody vouches for: an encoded image
@@ -53,8 +55,9 @@ const TARGETS: [Target; 2] = [
         package: "flui-painting",
         seeds: &["crates/flui-painting/tests/fixtures"],
         max_len: 4096,
-        // `flui_painting::paint::MAX_DECODED_IMAGE_BYTES` on this host.
-        malloc_limit_mb: 256,
+        // The property bounds every block a decode asks for by
+        // `MAX_DECODED_IMAGE_BYTES`, which a decode may reach exactly.
+        malloc_limit_mb: None,
     },
     Target {
         name: "agent_wire",
@@ -62,7 +65,7 @@ const TARGETS: [Target; 2] = [
         seeds: &["crates/flui-runtime/fuzz/seeds/agent_wire"],
         max_len: 2048,
         // A conversation of 2 KiB asks a session for nothing near this.
-        malloc_limit_mb: 64,
+        malloc_limit_mb: Some(64),
     },
 ];
 
@@ -177,11 +180,14 @@ fn started(target: Target) -> Cmd {
 }
 
 /// The limits an input runs under, the same in a run and in its replay.
-fn limits(target: Target) -> [String; 2] {
-    [
-        format!("-timeout={UNIT_TIMEOUT_SECS}"),
-        format!("-malloc_limit_mb={}", target.malloc_limit_mb),
-    ]
+fn limits(target: Target) -> Vec<String> {
+    let mut limits = vec![format!("-timeout={UNIT_TIMEOUT_SECS}")];
+    limits.extend(
+        target
+            .malloc_limit_mb
+            .map(|mb| format!("-malloc_limit_mb={mb}")),
+    );
+    limits
 }
 
 /// One target's run: libFuzzer over the corpus in `dir` and the target's
@@ -226,7 +232,7 @@ mod tests {
                  -p flui-painting --example fuzz_image_decode -- \
                  target/fuzz/image_decode/corpus crates/flui-painting/tests/fixtures \
                  -artifact_prefix=target/fuzz/image_decode/findings/ -max_total_time=600 \
-                 -max_len=4096 -timeout=20 -malloc_limit_mb=256 -print_final_stats=1"
+                 -max_len=4096 -timeout=20 -print_final_stats=1"
             ),
             "{line}"
         );

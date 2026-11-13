@@ -1,8 +1,8 @@
 //! The fuzz target of `Image::decode`: `cargo xtask fuzz image_decode` builds
 //! it under `--cfg fuzzing` and libFuzzer mutates encoded images toward code
 //! no input has reached yet, starting from `tests/fixtures/`. A panic, an
-//! abort, a read out of bounds, an allocation past the limit or a decode past
-//! the time limit ends the run and leaves the input that did it;
+//! abort, a read out of bounds, a block past `MAX_DECODED_IMAGE_BYTES` or a
+//! decode past the time limit ends the run and leaves the input that did it;
 //! `cargo xtask fuzz image_decode --replay <file>` runs that input again in
 //! the same build.
 //!
@@ -15,6 +15,10 @@
 
 #[path = "../tests/support/foreign_image.rs"]
 mod foreign_image;
+
+/// The property bounds the largest block a decode asks for.
+#[global_allocator]
+static ALLOCATOR: foreign_image::LargestAllocation = foreign_image::LargestAllocation;
 
 #[cfg(fuzzing)]
 libfuzzer_sys::fuzz_target!(|bytes: &[u8]| {

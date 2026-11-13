@@ -490,16 +490,19 @@ input that reached new code and mutates it, so it gets past a header check
 or a method name that random bytes almost never satisfy. The property is one
 function under the crate's `tests/support/`, which both call.
 
-| Target | Entry | Property | Largest allocation |
-|--------|-------|----------|--------------------|
-| `image_decode` | `Image::decode` (flui-painting) | an image within `MAX_DECODED_IMAGE_BYTES` or a typed error | 256 MiB |
-| `agent_wire` | a development agent's `Session::receive` (flui-runtime) | whole lines of the protocol; a line that names a request names one sent and not yet answered; never more lines written than received, events aside; nothing to a client whose first line is not a hello with the token | 64 MiB |
+| Target | Entry | Property |
+|--------|-------|----------|
+| `image_decode` | `Image::decode` (flui-painting) | an image within `MAX_DECODED_IMAGE_BYTES` or a typed error, and no block the decode asks for larger than that limit |
+| `agent_wire` | a development agent's `Session::receive` (flui-runtime) | whole lines of the protocol; a line that names a request names one sent and not yet answered; never more lines written than received, events aside; nothing to a client whose first line is not a hello with the token |
 
-The property is checked as the session writes, against what the client had
-sent by then. The last column is a limit of the run, not of the property: an
-input that asks for one allocation past it ends the run as a finding, which
-is how a bound the parsed value cannot show (a decoder's working memory) is
-held.
+A bound the parsed value cannot show, such as a decoder's working memory,
+is held by the property from the entry's own constant: both binaries of
+`image_decode` install the property's global allocator, which keeps the
+largest block each thread asked for. The block is bounded, not the sum of
+the blocks live at once: a decode at the limit holds its decoder's buffer
+and the RGBA8 copy together. The wire property is checked as the session
+writes, against what the client had sent by then; its run also caps a single
+allocation at 64 MiB, which a conversation of 2 KiB comes nowhere near.
 
 A target is an example of the crate it tests, `crates/<crate>/fuzz/<name>.rs`,
 so it builds from the workspace's lockfile, with the versions an application

@@ -74,6 +74,21 @@ pub(crate) fn a_header_past_the_limit_is_refused_before_decoding() {
     ));
 }
 
+/// An RGBA8 header that declares exactly [`MAX_DECODED_IMAGE_BYTES`] is
+/// within the limit: its decoder asks for one block of that size, and the
+/// property takes it. The fuzzer reaches this header in a few bytes, so a
+/// bound off by one at the limit would fail every night on a legal image.
+pub(crate) fn a_header_at_the_limit_asks_for_one_block_of_the_limit() {
+    let width = 8192_u32;
+    let height = u32::try_from(MAX_DECODED_IMAGE_BYTES / (4 * u64::from(width)))
+        .expect("BUG: the limit's rows fit u32");
+    assert_eq!(
+        u64::from(width) * u64::from(height) * 4,
+        MAX_DECODED_IMAGE_BYTES
+    );
+    decodes_within_the_limit_or_fails_typed(&png_declaring(width, height));
+}
+
 /// Arbitrary bytes, and the fixture with arbitrary bytes overwritten, decode
 /// to an image within the limit or to a typed error; nothing panics. The fuzz
 /// target `fuzz/image_decode.rs` holds the same property under libFuzzer.
