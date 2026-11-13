@@ -9,14 +9,17 @@ use std::time::Duration;
 
 use flui_foundation::BuildPhase;
 use flui_foundation::notifier::ChangeNotifier;
+use flui_view::__runtime::{UrlOwnerRegistration, UrlOwnerScope, UrlOwnerSlot};
 use flui_view::element::ElementKind;
+use flui_view::navigation::{
+    NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, RoutePath, UrlOwner,
+};
 use flui_view::prelude::*;
 use flui_view::{AsyncDriver, BoxedView, BuildContextExt, TaskToken};
 
 use crate::navigator::lifecycle::{RetiredValues, Terminal};
 
 use super::handle::{RouterError, RouterHandle};
-use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
 use crate::navigator::{
     Navigator, NavigatorHandle, NavigatorObserver, PageRoute, RouteAnimation, RouteId,
@@ -26,6 +29,9 @@ use crate::semantics::Semantics;
 
 /// Builds the page for one route value.
 type PageBuilder<R> = Rc<dyn Fn(&R, &dyn BuildContext) -> BoxedView>;
+
+/// Hears an inbound path no route matches.
+type UnknownHook = Rc<dyn Fn(&RoutePath)>;
 
 /// Navigation state as a value: a stack of `R`, whose top, printed through
 /// [`Routable::to_path`], is the current location.
@@ -68,12 +74,24 @@ type PageBuilder<R> = Rc<dyn Fn(&R, &dyn BuildContext) -> BoxedView>;
 /// });
 /// # let _ = router;
 /// ```
+///
+/// # The presentation's URL
+///
+/// The outermost `Router` of a presentation's tree owns its URL (ADR-0330
+/// §5): a location addressed to the presentation from outside its widgets,
+/// such as a URL the platform opens for its window, is parsed with
+/// [`Routable::from_path`] and applied to this stack, as Flutter's Router
+/// applies what its route information provider reports. A path no route
+/// matches is reported to [`on_unknown`](Self::on_unknown) and leaves the
+/// stack unchanged. A `Router` inside another's page owns no URL: its stack
+/// belongs to that page.
 pub struct Router<R: Routable> {
     /// The stack the router opens with, bottom to top; never empty.
     initial: Vec<R>,
     page: Terminal<PageBuilder<R>>,
     transitions: Option<RouteTransitionsBuilder>,
     transition_duration: Option<Duration>,
+    on_unknown: Option<UnknownHook>,
 }
 
 impl<R: Routable> Drop for Router<R> {
@@ -81,7 +99,8 @@ impl<R: Routable> Drop for Router<R> {
         let initial = RetiredValues(std::mem::take(&mut self.initial));
         let page = self.page.withdraw();
         let transitions = Terminal::new(self.transitions.take());
-        drop((initial, page, transitions));
+        let on_unknown = Terminal::new(self.on_unknown.take());
+        drop((initial, page, transitions, on_unknown));
     }
 }
 
@@ -92,6 +111,7 @@ impl<R: Routable> Clone for Router<R> {
             page: Terminal::new(Rc::clone(&self.page)),
             transitions: self.transitions.clone(),
             transition_duration: self.transition_duration,
+            on_unknown: self.on_unknown.clone(),
         }
     }
 }
@@ -131,6 +151,7 @@ impl<R: Routable> Router<R> {
             page: Terminal::new(Rc::new(page)),
             transitions: None,
             transition_duration: None,
+            on_unknown: None,
         }
     }
 
@@ -152,6 +173,7 @@ impl<R: Routable> Router<R> {
             page,
             transitions: None,
             transition_duration: None,
+            on_unknown: None,
         })
     }
 
@@ -184,6 +206,7 @@ impl<R: Routable> Router<R> {
             page,
             transitions: None,
             transition_duration: None,
+            on_unknown: None,
         })
     }
 
@@ -213,6 +236,17 @@ impl<R: Routable> Router<R> {
     #[must_use]
     pub fn transition_duration(mut self, duration: Duration) -> Self {
         self.transition_duration = Some(duration);
+        self
+    }
+
+    /// Hear an inbound path no route matches: a URL the platform opened for
+    /// the presentation whose URL this router owns. The stack is left as it
+    /// is and the navigation is refused; the hook may navigate itself, to a
+    /// not-found page for example. A parent rebuild with a new hook replaces
+    /// it.
+    #[must_use]
+    pub fn on_unknown(mut self, hook: impl Fn(&RoutePath) + 'static) -> Self {
+        self.on_unknown = Some(Rc::new(hook));
         self
     }
 
@@ -305,15 +339,19 @@ impl<R: Routable> View for Router<R> {
 impl<R: Routable> StatefulView for Router<R> {
     type State = RouterState<R>;
 
+    /// The state is born with its build phase and, when this is the
+    /// presentation's outermost router, its place in the presentation's
+    /// URL-owner slot.
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
-        RouterState::new(self, ctx.build_phase())
+        RouterState::new(self, ctx.build_phase(), UrlOwnerScope::maybe_of(ctx))
     }
 }
 
 impl<R: Routable> RouterState<R> {
     /// The state of `router`: its shared stack, observer and a copy of its
-    /// initial routes.
-    fn new(router: &Router<R>, build_phase: BuildPhase) -> Self {
+    /// initial routes, registered as the URL owner of `url_slot` when there
+    /// is one.
+    fn new(router: &Router<R>, build_phase: BuildPhase, url_slot: Option<UrlOwnerSlot>) -> Self {
         let shared = Rc::new(RouterShared {
             navigator: Terminal::new(NavigatorHandle::addressed(
                 type_name::<R>(),
@@ -324,15 +362,23 @@ impl<R: Routable> RouterState<R> {
             transitions: Terminal::new(Rc::new(RefCell::new(router.transitions.clone()))),
             transition_duration: Cell::new(router.transition_duration),
             mounted: Cell::new(false),
+            editing: Cell::new(0),
             build_phase,
             announcer: StackAnnouncer::default(),
+            on_unknown: RefCell::new(router.on_unknown.clone()),
         });
         let observer: Rc<dyn NavigatorObserver> = Rc::new(RouterObserver {
             shared: Rc::downgrade(&shared),
         });
+        let url_owner: Rc<dyn UrlOwner> = Rc::new(RouterUrlOwner {
+            shared: Rc::downgrade(&shared),
+        });
+        let url = url_slot.map(|slot| slot.register(&url_owner));
         RouterState {
             shared: Terminal::new(shared),
             observer: Terminal::new(observer),
+            url_owner,
+            url,
             initial: clone_routes(router.initial.iter()),
         }
     }
@@ -343,6 +389,11 @@ impl<R: Routable> RouterState<R> {
 pub struct RouterState<R: Routable> {
     shared: Terminal<Rc<RouterShared<R>>>,
     observer: Terminal<Rc<dyn NavigatorObserver>>,
+    /// What the presentation's URL-owner slot reaches this router through.
+    url_owner: Rc<dyn UrlOwner>,
+    /// This router's place in its presentation's URL-owner slot; `None` for a
+    /// router nested in another's page, or one mounted outside a runtime.
+    url: Option<UrlOwnerRegistration>,
     /// Seeded in `init_state`, which receives no view.
     initial: Vec<R>,
 }
@@ -417,10 +468,30 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         .forget();
     }
 
+    /// Follow the presentation's URL-owner slot if the router moved: leave
+    /// the old slot, then join the new one.
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let slot = UrlOwnerScope::maybe_of(ctx);
+        let unchanged = match (&self.url, &slot) {
+            (Some(registration), Some(slot)) => registration.is_in(slot),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        drop(self.url.take());
+        self.url = slot.map(|slot| slot.register(&self.url_owner));
+    }
+
+    /// The pages sit below a scope with no URL-owner slot: a router inside
+    /// one of them owns no URL.
     fn build(&self, _view: &Router<R>, _ctx: &dyn BuildContext) -> impl IntoView {
         RouterScope {
             shared: Rc::clone(&self.shared),
-            child: Terminal::new(Navigator::new(self.shared.navigator.clone()).boxed()),
+            child: Terminal::new(
+                UrlOwnerScope::none(Navigator::new(self.shared.navigator.clone())).boxed(),
+            ),
         }
     }
 
@@ -438,14 +509,19 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         self.shared
             .transition_duration
             .set(new_view.transition_duration);
+        let old_hook = self.shared.on_unknown.replace(new_view.on_unknown.clone());
+        drop(old_hook);
         let ids: Vec<RouteId> = self.shared.stack.borrow().iter().map(|e| e.id).collect();
         for id in ids {
             self.shared.navigator.mark_route_needs_build(id);
         }
     }
 
+    /// Leave the URL-owner slot with the tree, so a sibling router still
+    /// mounted takes the URL at once.
     fn dispose(&mut self) {
         self.shared.mounted.set(false);
+        drop(self.url.take());
         self.shared.navigator.remove_observer(&self.observer);
     }
 }
@@ -499,8 +575,94 @@ pub(super) struct RouterShared<R: Routable> {
     /// The UI runtime's build phase, bound when the router's state is born: an edit
     /// made while it builds is refused (ADR-0330 §3).
     pub(super) build_phase: BuildPhase,
+    /// How many edits are running: a navigation addressed to the presentation
+    /// that arrives inside one is refused as busy rather than nested in it.
+    pub(super) editing: Cell<usize>,
     /// Tells the listeners of every [`RouterHandle`] of stack changes.
     pub(super) announcer: StackAnnouncer,
+    /// Hears an inbound path no route matches.
+    on_unknown: RefCell<Option<UnknownHook>>,
+}
+
+/// One running edit of a router, counted while it lives: see
+/// [`RouterShared::editing`]. It ends on every exit, an unwind included.
+pub(super) struct Editing<'a>(&'a Cell<usize>);
+
+impl<'a> Editing<'a> {
+    pub(super) fn begin(count: &'a Cell<usize>) -> Self {
+        // One count per nested edit on this thread's stack, so it cannot
+        // reach `usize::MAX`.
+        count.set(count.get() + 1);
+        Self(count)
+    }
+}
+
+impl Drop for Editing<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
+/// What a presentation's URL-owner slot reaches a router through: it parses
+/// the intent's path into `R` and applies it as the router's own handle does.
+struct RouterUrlOwner<R: Routable> {
+    shared: Weak<RouterShared<R>>,
+}
+
+impl<R: Routable> RouterUrlOwner<R> {
+    /// Tell the router's `on_unknown` hook of `path` and refuse it. The hook
+    /// runs with nothing borrowed, so it may navigate.
+    fn unknown(shared: &RouterShared<R>, path: RoutePath) -> NavigationRefused {
+        let hook = shared.on_unknown.borrow().clone();
+        if let Some(hook) = hook {
+            hook(&path);
+        }
+        NavigationRefused::NoMatch(path)
+    }
+
+    /// The refusal for an edit the handle refused.
+    fn refused(shared: &RouterShared<R>, error: RouterError, path: RoutePath) -> NavigationRefused {
+        match error {
+            RouterError::DuringBuild => NavigationRefused::Busy,
+            RouterError::Parse(_) => Self::unknown(shared, path),
+            RouterError::Disposed | RouterError::NoRouter { .. } | RouterError::EmptyStack => {
+                NavigationRefused::NoUrlOwner
+            }
+        }
+    }
+}
+
+impl<R: Routable> UrlOwner for RouterUrlOwner<R> {
+    fn navigate(&self, intent: NavigationIntent) -> Result<(), NavigationRefused> {
+        let Some(shared) = self.shared.upgrade() else {
+            return Err(NavigationRefused::NoUrlOwner);
+        };
+        if shared.editing.get() > 0 {
+            return Err(NavigationRefused::Busy);
+        }
+        let handle = RouterHandle::new(Rc::clone(&shared));
+        let NavigationIntent { op, .. } = intent;
+        let (outcome, path) = match op {
+            NavigationOp::Push(path) => match R::from_path(&path) {
+                Ok(route) => (handle.push(route), path),
+                Err(_) => return Err(Self::unknown(&shared, path)),
+            },
+            NavigationOp::Replace(path) => match R::from_path(&path) {
+                Ok(route) => (handle.replace(route), path),
+                Err(_) => return Err(Self::unknown(&shared, path)),
+            },
+            NavigationOp::Go(path) => (handle.go_path(&path), path),
+            NavigationOp::Pop => match handle.pop() {
+                Ok(true) => return Ok(()),
+                Ok(false) => return Err(NavigationRefused::NothingToPop),
+                Err(error) => (Err(error), RoutePath::root()),
+            },
+            // An operation added after this router was written has nothing
+            // here that applies it.
+            _ => return Err(NavigationRefused::NoUrlOwner),
+        };
+        outcome.map_err(|error| Self::refused(&shared, error, path))
+    }
 }
 
 /// Tells a router's listeners of committed stack changes, one delivery at a
@@ -526,7 +688,8 @@ impl<R: Routable> Drop for RouterShared<R> {
         let page = self.page.withdraw();
         let transitions = self.transitions.withdraw();
         let delivery = self.announcer.delivery.get_mut().take();
-        drop((navigator, stack, page, transitions, delivery));
+        let on_unknown = Terminal::new(self.on_unknown.get_mut().take());
+        drop((navigator, stack, page, transitions, delivery, on_unknown));
     }
 }
 
@@ -790,7 +953,7 @@ mod seed_tests {
             };
             let mut router = Router::new(value(0), |_, _| crate::Text::new("page").boxed());
             router.initial.extend([value(1), value(2)]);
-            let mut state = RouterState::new(&router, BuildPhase::default());
+            let mut state = RouterState::new(&router, BuildPhase::default(), None);
             drop(router);
             RouteId::leave_process_identities(1);
             armed.store(true, Ordering::SeqCst);
@@ -869,7 +1032,7 @@ mod seed_tests {
             let mut router = Router::new(route(false), |_, _| crate::Text::new("page").boxed());
             router.initial.push(route(true));
             let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                drop(RouterState::new(&router, BuildPhase::default()));
+                drop(RouterState::new(&router, BuildPhase::default(), None));
             }))
             .expect_err("the second route's copy fails");
             assert_eq!(

@@ -284,7 +284,8 @@ pub use reorderable::{
     ReorderableGridState, ReorderableItem, ReorderableList, ReorderableListState,
 };
 pub use router::{
-    Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
+    NavigationIntent, NavigationOp, NavigationRefused, Routable, RouteParseError, RoutePath,
+    Router, RouterError, RouterHandle, RouterState,
 };
 pub use scroll::{AnchorIntent, PageIntent};
 pub use scroll::{

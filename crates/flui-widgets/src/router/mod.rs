@@ -18,7 +18,6 @@
 //! module-dag`): it drives the navigator, and the app builds on it.
 
 mod handle;
-mod path;
 mod routable;
 #[expect(clippy::module_inception)]
 mod router;
@@ -31,7 +30,9 @@ pub mod __derive;
 /// `#[derive(Routable)]`: `to_path` and `from_path` from one
 /// `#[route("…")]` pattern per variant (ADR-0330 §1).
 pub use flui_macros::Routable;
+pub use flui_view::navigation::{
+    NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, RoutePath,
+};
 pub use handle::{RouterError, RouterHandle};
-pub use path::{RouteParseError, RoutePath};
 pub use routable::Routable;
 pub use router::{Router, RouterState};

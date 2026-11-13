@@ -212,6 +212,8 @@ mod transition_route;
 mod transitions;
 #[path = "unchanged_child.rs"]
 mod unchanged_child;
+#[path = "url_owner.rs"]
+mod url_owner;
 #[path = "visibility.rs"]
 mod visibility;
 #[path = "widgets_app.rs"]

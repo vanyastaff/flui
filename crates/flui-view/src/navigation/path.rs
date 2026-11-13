@@ -38,12 +38,12 @@ const SEGMENT: &AsciiSet = &CONTROLS
 /// literal route values rather than resolving relative to another location.
 ///
 /// ```
-/// use flui_widgets::RoutePath;
+/// use flui_view::navigation::RoutePath;
 ///
 /// let path = RoutePath::root().join("note").join(7);
 /// assert_eq!(path.as_str(), "/note/7");
 /// assert_eq!(RoutePath::parse("/note/7/")?, path);
-/// # Ok::<(), flui_widgets::RouteParseError>(())
+/// # Ok::<(), flui_view::navigation::RouteParseError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RoutePath(String);

@@ -1281,6 +1281,12 @@ fn router_and_widgets_app() {
             ("widgets_app_router::a_pushed_route_focuses_its_first_control_in_every_mount", crate::widgets_app_router::a_pushed_route_focuses_its_first_control_in_every_mount),
             ("widgets_app_router::switching_widgets_app_from_home_to_router_releases_the_navigator", crate::widgets_app_router::switching_widgets_app_from_home_to_router_releases_the_navigator),
             ("widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows", crate::widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows),
+            ("url_owner::an_intent_reaches_only_the_router_of_its_window", crate::url_owner::an_intent_reaches_only_the_router_of_its_window),
+            ("url_owner::a_window_without_a_router_has_no_url_owner", crate::url_owner::a_window_without_a_router_has_no_url_owner),
+            ("url_owner::an_unmatched_path_reaches_on_unknown_and_leaves_the_stack", crate::url_owner::an_unmatched_path_reaches_on_unknown_and_leaves_the_stack),
+            ("url_owner::an_intent_inside_another_edit_is_refused_as_busy", crate::url_owner::an_intent_inside_another_edit_is_refused_as_busy),
+            ("url_owner::a_sibling_router_takes_the_url_over_when_the_owner_leaves", crate::url_owner::a_sibling_router_takes_the_url_over_when_the_owner_leaves),
+            ("url_owner::a_router_inside_a_page_does_not_own_the_url", crate::url_owner::a_router_inside_a_page_does_not_own_the_url),
         ],
     );
 }

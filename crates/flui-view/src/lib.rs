@@ -100,6 +100,7 @@ pub mod element;
 pub mod environment;
 mod inspect;
 pub mod key;
+pub mod navigation;
 pub mod owner;
 pub mod persist;
 pub mod reactive;

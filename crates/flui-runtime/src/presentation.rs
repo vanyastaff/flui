@@ -468,6 +468,10 @@ pub struct PresentationState {
     /// their deadline passes. Answered `gone` when the presentation closes first. Owner
     /// thread only.
     pub(crate) agent_waits: RefCell<Vec<crate::ui_runtime::PendingWait>>,
+    /// The presentation's URL-owner slot (ADR-0330 §5): the outermost Router of its tree
+    /// registers into it through the `UrlOwnerScope` every root is wrapped in, and
+    /// `UiRuntime::navigate` reaches that Router through it. Owner thread only.
+    pub(crate) url_owner: flui_view::__runtime::UrlOwnerSlot,
     /// Reads of the layer tree parked for the next scene this window shows (owner thread only).
     pub(crate) agent_layer_reads: RefCell<Vec<crate::ui_runtime::PendingLayerRead>>,
     pub(crate) agent_layer_staged: RefCell<Vec<crate::ui_runtime::StagedLayerRead>>,
@@ -1106,6 +1110,7 @@ impl PresentationState {
             agent_reads: RefCell::default(),
             agent_input: RefCell::default(),
             agent_waits: RefCell::default(),
+            url_owner: flui_view::__runtime::UrlOwnerSlot::new(),
             agent_layer_reads: RefCell::default(),
             agent_layer_staged: RefCell::default(),
             agent_events: RefCell::default(),
@@ -1245,6 +1250,7 @@ impl PresentationState {
             agent_reads: RefCell::default(),
             agent_input: RefCell::default(),
             agent_waits: RefCell::default(),
+            url_owner: flui_view::__runtime::UrlOwnerSlot::new(),
             agent_layer_reads: RefCell::default(),
             agent_layer_staged: RefCell::default(),
             agent_events: RefCell::default(),

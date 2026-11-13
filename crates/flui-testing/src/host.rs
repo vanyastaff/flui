@@ -1606,6 +1606,26 @@ impl HeadlessHost {
         )
     }
 
+    /// Hand `intent` to `window`'s URL owner, the outermost `Router` of its
+    /// tree, as a runner hands it a URL the platform opened for that window
+    /// (ADR-0330 §5). The Router's edit is built by the next
+    /// [`pump`](Self::pump).
+    ///
+    /// # Errors
+    ///
+    /// What [`UiRuntime::navigate`] refuses with:
+    /// [`NoPresentation`](flui_view::navigation::NavigationRefused::NoPresentation)
+    /// for a window that has closed,
+    /// [`NoUrlOwner`](flui_view::navigation::NavigationRefused::NoUrlOwner)
+    /// for a tree with no `Router`, and the Router's own refusals.
+    pub fn navigate(
+        &self,
+        window: HeadlessWindowId,
+        intent: flui_view::navigation::NavigationIntent,
+    ) -> Result<(), flui_view::navigation::NavigationRefused> {
+        self.ui_runtime.navigate(window.0, intent)
+    }
+
     /// Attach assistive technology to `window`; see
     /// [`enable_semantics`](Self::enable_semantics).
     ///

@@ -248,15 +248,16 @@ There is no cross-thread navigation command. A navigation that does not come fro
 handle is a value on the owner thread, addressed to a presentation:
 
 ```rust
-// flui-view, beside `RoutePath`, which moves down from flui-widgets
+// flui-view, beside `RoutePath`
 #[non_exhaustive]
 pub enum NavigationOp { Push(RoutePath), Replace(RoutePath), Pop, Go(RoutePath) }
+#[non_exhaustive]
 pub struct NavigationIntent { pub op: NavigationOp }
 pub trait UrlOwner: 'static { // !Send: owner-thread state
     fn navigate(&self, intent: NavigationIntent) -> Result<(), NavigationRefused>;
 }
 #[non_exhaustive]
-pub enum NavigationRefused { NoPresentation, NoUrlOwner, NoMatch(RoutePath), Busy }
+pub enum NavigationRefused { NoPresentation, NoUrlOwner, NoMatch(RoutePath), NothingToPop, Busy }
 
 // flui-runtime
 impl UiRuntime {
@@ -265,12 +266,26 @@ impl UiRuntime {
 }
 ```
 
-The presentation's URL owner is its outermost `Router`, which registers itself through its
-`RouterScope` into the presentation's one `UrlOwner` slot, declared in `flui-view` so the runtime
-names no widget-catalog type (ADR-0083). An intent for a presentation that is gone, or has no URL
-owner, is refused, never applied to another window's Router. A path that no route matches goes to
-the Router's `on_unknown` and is refused. A `navigate` that re-enters the Router while it commits
-an edit is `Busy`, not a second edit inside the first.
+This is Flutter's route information pipeline: the presentation's slot is the
+`RouteInformationProvider` the platform reports a location to, `Routable::from_path` and
+`back_stack` are the `RouteInformationParser`, and the Router applies the parsed stack as a
+`RouterDelegate`'s `setNewRoutePath` does.
+
+Each presentation has one URL-owner slot, declared in `flui-view` so the runtime names no
+widget-catalog type (ADR-0083) and kept in its runtime seam (`flui_view::__runtime`). The runtime
+hands it to the tree through a `UrlOwnerScope` above every root. A `Router` registers into the
+slot it finds in `create_state`, so its state is born bound, and puts a `UrlOwnerScope` with no
+slot above its pages, so a Router nested in a page finds none: the URL owner is the outermost
+Router. The slot holds its owners weakly; when two Routers that are not nested claim it, the first
+mounted owns the URL with a warning, and the next takes over when it leaves.
+
+An intent for a presentation that is gone is `NoPresentation`, and one for a presentation with no
+URL owner is `NoUrlOwner`: neither is applied to another window's Router. A path that no route
+matches is reported to the Router's `on_unknown` hook, which runs with nothing borrowed and may
+navigate, and is refused as `NoMatch`. A `Pop` of the last page is `NothingToPop`, which leaves
+the Back to the platform as Flutter's `popRoute` answering `false` does. An intent that arrives
+while the Router commits an edit, or while its UI runtime builds, is `Busy`, not a second edit
+inside the first. A refused intent leaves the stack unchanged.
 
 The sources of an intent are on the owner thread already: the URLs the platform opens reach
 `AppHandler` (ADR-0254), the development agent's window methods arrive through
@@ -333,9 +348,15 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   `it_opens_under_a_router` run on `MaterialApp::router`; `api/flui.txt` (ADR-0324) lists no
   `Navigator`, `NavigatorHandle` or
   named-route item, and `cargo xtask send-positions` holds the navigator's rows at zero.
-- §5: the change that builds `UiRuntime::navigate` adds a test in which, in one UI runtime with
-  two presentations, an intent addressed to the second changes that presentation's Router and not
-  the first's, and an intent for a presentation without a Router is `NoUrlOwner`.
+- §5: in `crates/flui-widgets/tests/url_owner.rs`, rows of the `router_and_widgets_app` table
+  driven through `flui_testing::HeadlessHost::navigate`:
+  `an_intent_reaches_only_the_router_of_its_window` (two presentations of one UI runtime, a push,
+  a `go` and a `Pop` to `NothingToPop`), `a_window_without_a_router_has_no_url_owner`
+  (`NoUrlOwner`, and `NoPresentation` after the window closes),
+  `an_unmatched_path_reaches_on_unknown_and_leaves_the_stack` (`NoMatch`, a hook that navigates),
+  `an_intent_inside_another_edit_is_refused_as_busy`,
+  `a_sibling_router_takes_the_url_over_when_the_owner_leaves` and
+  `a_router_inside_a_page_does_not_own_the_url`.
 - `examples/navigation.rs` (`cargo check --example navigation --features material`): a push, a
   page popped with a result, and a dialog.
 
@@ -387,8 +408,9 @@ the same parse path, browser back and forward on the web.
 The order of the change: the named routes removed; `Router::of`, `PageHandle` and the popup
 callers moved onto it, with `MaterialApp::router` and `CupertinoApp::router`; then `Navigator`,
 `NavigatorHandle`, `WidgetsApp::navigator` and `NavigatorForm` leave the public API, and the
-navigator's state moves to `Rc`/`RefCell`; then the URL owner and inbound links (`RouterScope`
-as the `UrlOwner`, `UiRuntime::navigate`, `on_unknown`). Nesting (`#[nest]`), guards
+navigator's state moves to `Rc`/`RefCell`; then the URL owner (the outermost `Router`
+registered as the presentation's `UrlOwner`, `UiRuntime::navigate`, `on_unknown`), and the URLs
+the platform opens routed to it (`AppHandler`, ADR-0254). Nesting (`#[nest]`), guards
 (`Router::guard(|from: Option<&R>, to: &R| -> Guard<R>)` with `Guard::{Allow, Redirect(R), Deny}`,
 synchronous, more than five redirects being `RouterError::RedirectLoop`), and web history
 (`pushState`/`popstate`, query and fragment in `RoutePath`) follow as features.

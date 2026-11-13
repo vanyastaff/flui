@@ -18170,6 +18170,7 @@ pub fn flui::prelude::Router::from_location(location: &str, page: impl Fn(&R, &d
 pub fn flui::prelude::Router::from_stack(stack: Vec<R>, page: impl Fn(&R, &dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Result<Self, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::new(initial: R, page: impl Fn(&R, &dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::of(ctx: &dyn flui::app::BuildContext) -> Result<flui::prelude::RouterHandle<R>, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
+pub fn flui::prelude::Router::on_unknown(self, hook: impl Fn(&flui::prelude::RoutePath) + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::transition_duration(self, duration: core::time::Duration) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::transitions(self, transitions: impl Fn(&dyn flui::app::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation, flui::prelude::BoxedView) -> flui::prelude::BoxedView + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub struct flui::prelude::RouterHandle<R: flui::prelude::Routable> { .. }
@@ -25435,6 +25436,14 @@ reexport flui::view::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::view::key::ValueKey => flui::foundation::ValueKey
 reexport flui::view::key::ViewKey => flui::foundation::ViewKey
 reexport flui::view::key::WithKey => flui::foundation::WithKey
+pub mod flui::view::navigation
+reexport flui::view::navigation::NavigationIntent => flui::widgets::NavigationIntent
+reexport flui::view::navigation::NavigationOp => flui::widgets::NavigationOp
+reexport flui::view::navigation::NavigationRefused => flui::widgets::NavigationRefused
+reexport flui::view::navigation::RouteParseError => flui::widgets::RouteParseError
+reexport flui::view::navigation::RoutePath => flui::prelude::RoutePath
+pub trait flui::view::navigation::UrlOwner: 'static
+fn flui::view::navigation::UrlOwner::navigate(&self, intent: flui::widgets::NavigationIntent) -> Result<(), flui::widgets::NavigationRefused>
 pub mod flui::view::owner
 reexport flui::view::owner::BuildOwner => flui::app::BuildOwner
 reexport flui::view::owner::BuildPremise => flui::view::BuildPremise
@@ -27347,6 +27356,39 @@ reexport flui::widgets::MultiChildLayoutContext => flui::prelude::MultiChildLayo
 reexport flui::widgets::MultiChildLayoutDelegate => flui::prelude::MultiChildLayoutDelegate
 reexport flui::widgets::MultiTapCount => flui::interaction::MultiTapCount
 reexport flui::widgets::MultiTapCountError => flui::interaction::MultiTapCountError
+#[non_exhaustive] pub struct flui::widgets::NavigationIntent
+field flui::widgets::NavigationIntent::op: flui::widgets::NavigationOp // at 0
+impl Clone for flui::widgets::NavigationIntent
+impl Eq for flui::widgets::NavigationIntent
+impl From<flui::widgets::NavigationOp> for flui::widgets::NavigationIntent
+impl PartialEq for flui::widgets::NavigationIntent
+impl core::fmt::Debug for flui::widgets::NavigationIntent
+impl core::marker::StructuralPartialEq for flui::widgets::NavigationIntent
+pub fn flui::widgets::NavigationIntent::new(op: flui::widgets::NavigationOp) -> Self
+#[non_exhaustive] pub enum flui::widgets::NavigationOp
+impl Clone for flui::widgets::NavigationOp
+impl Eq for flui::widgets::NavigationOp
+impl From<flui::widgets::NavigationOp> for flui::widgets::NavigationIntent
+impl PartialEq for flui::widgets::NavigationOp
+impl core::fmt::Debug for flui::widgets::NavigationOp
+impl core::marker::StructuralPartialEq for flui::widgets::NavigationOp
+variant flui::widgets::NavigationOp::Go(flui::prelude::RoutePath) // at 3
+variant flui::widgets::NavigationOp::Pop // at 2
+variant flui::widgets::NavigationOp::Push(flui::prelude::RoutePath) // at 0
+variant flui::widgets::NavigationOp::Replace(flui::prelude::RoutePath) // at 1
+#[non_exhaustive] pub enum flui::widgets::NavigationRefused
+impl Clone for flui::widgets::NavigationRefused
+impl Eq for flui::widgets::NavigationRefused
+impl PartialEq for flui::widgets::NavigationRefused
+impl core::error::Error for flui::widgets::NavigationRefused
+impl core::fmt::Debug for flui::widgets::NavigationRefused
+impl core::fmt::Display for flui::widgets::NavigationRefused
+impl core::marker::StructuralPartialEq for flui::widgets::NavigationRefused
+variant flui::widgets::NavigationRefused::Busy // at 4
+variant flui::widgets::NavigationRefused::NoMatch(flui::prelude::RoutePath) // at 2
+variant flui::widgets::NavigationRefused::NoPresentation // at 0
+variant flui::widgets::NavigationRefused::NoUrlOwner // at 1
+variant flui::widgets::NavigationRefused::NothingToPop // at 3
 pub struct flui::widgets::NestedScroll { .. }
 impl Clone for flui::widgets::NestedScroll
 impl core::fmt::Debug for flui::widgets::NestedScroll
@@ -27886,7 +27928,6 @@ pub type flui::widgets::RoutePageBuilder = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::
 #[non_exhaustive] pub enum flui::widgets::RouteParseError
 impl Clone for flui::widgets::RouteParseError
 impl Eq for flui::widgets::RouteParseError
-impl From<flui::widgets::RouteParseError> for flui::widgets::RouterError
 impl PartialEq for flui::widgets::RouteParseError
 impl core::error::Error for flui::widgets::RouteParseError
 impl core::fmt::Debug for flui::widgets::RouteParseError
@@ -29459,6 +29500,9 @@ reexport flui::widgets::prelude::info! => tracing::info
 reexport flui::widgets::prelude::trace! => tracing::trace
 reexport flui::widgets::prelude::warn! => tracing::warn
 pub mod flui::widgets::router
+reexport flui::widgets::router::NavigationIntent => flui::widgets::NavigationIntent
+reexport flui::widgets::router::NavigationOp => flui::widgets::NavigationOp
+reexport flui::widgets::router::NavigationRefused => flui::widgets::NavigationRefused
 reexport flui::widgets::router::Routable => flui_macros::Routable
 reexport flui::widgets::router::Routable => flui::prelude::Routable
 reexport flui::widgets::router::RouteParseError => flui::widgets::RouteParseError
@@ -35984,6 +36028,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::install_window(&self, id: flui::foun
 pub fn flui_runtime::ui_runtime::UiRuntime::is_sole_presentation(&self, id: flui::foundation::PresentationId) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::mark_primary_needs_full_repaint(&self)
 pub fn flui_runtime::ui_runtime::UiRuntime::mark_rendered(&self)
+pub fn flui_runtime::ui_runtime::UiRuntime::navigate(&self, presentation: flui::foundation::PresentationId, intent: flui::widgets::NavigationIntent) -> Result<(), flui::widgets::NavigationRefused>
 pub fn flui_runtime::ui_runtime::UiRuntime::needs_redraw(&self) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::next_wake(&self) -> Option<std::time::Instant>
 pub fn flui_runtime::ui_runtime::UiRuntime::note_frame_request(&self, presentation_id: flui::foundation::PresentationId, request: flui::platform::FrameRequest)

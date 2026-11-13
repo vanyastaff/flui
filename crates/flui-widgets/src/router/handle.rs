@@ -6,10 +6,10 @@ use std::rc::Rc;
 use flui_foundation::notifier::{Listenable, ListenerObserver};
 use flui_foundation::{ListenerCallback, MutatedDuringBuild, Subscription};
 
-use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
-use super::router::{RouterEntry, RouterRetiredValues, RouterShared, clone_routes, paths};
+use super::router::{Editing, RouterEntry, RouterRetiredValues, RouterShared, clone_routes, paths};
 use crate::navigator::{RouteId, RouteResult};
+use flui_view::navigation::{RouteParseError, RoutePath};
 
 /// An owned, cloneable capability to drive the nearest
 /// [`Router<R>`](super::Router), acquired with
@@ -66,11 +66,13 @@ impl<R: Routable> RouterHandle<R> {
 
     /// Whether an edit may run now: the router is mounted and its UI runtime
     /// is not building (ADR-0330 §3). A refusal from `build` is reported on
-    /// the `flui.signals` target.
-    fn editable(&self) -> Result<(), RouterError> {
+    /// the `flui.signals` target. The edit counts as running while the
+    /// returned guard lives.
+    fn editable(&self) -> Result<Editing<'_>, RouterError> {
         self.mounted()?;
         let building = self.shared.build_phase.is_building();
-        MutatedDuringBuild::check(building, "Router").map_err(|_| RouterError::DuringBuild)
+        MutatedDuringBuild::check(building, "Router").map_err(|_| RouterError::DuringBuild)?;
+        Ok(Editing::begin(&self.shared.editing))
     }
 
     /// The id of the top page.
@@ -117,7 +119,7 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::Disposed`] once the router has unmounted, and
     /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn push_for_result<T: 'static>(&self, route: R) -> Result<RouteResult<T>, RouterError> {
-        self.editable()?;
+        let _editing = self.editable()?;
         let _told = self.shared.announce_on_exit();
         let page = self.shared.page_route::<T>(&route);
         let ((), result) = self.shared.navigator.push_page(page, |id| {
@@ -137,7 +139,7 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::Disposed`] once the router has unmounted, and
     /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn replace(&self, route: R) -> Result<(), RouterError> {
-        self.editable()?;
+        let _editing = self.editable()?;
         let _told = self.shared.announce_on_exit();
         self.dismiss_popups();
         let target = self.top_page();
@@ -169,7 +171,7 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::Disposed`] once the router has unmounted, and
     /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn pop(&self) -> Result<bool, RouterError> {
-        self.editable()?;
+        let _editing = self.editable()?;
         let popup_on_top = self.shared.navigator.current() != Some(self.top_page());
         if !popup_on_top && self.shared.stack.borrow().len() <= 1 {
             return Ok(false);
@@ -192,7 +194,7 @@ impl<R: Routable> RouterHandle<R> {
     /// [`RouterError::Disposed`] once the router has unmounted, and
     /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn pop_with<T: 'static>(&self, value: T) -> Result<bool, RouterError> {
-        self.editable()?;
+        let _editing = self.editable()?;
         let popup_on_top = self.shared.navigator.current() != Some(self.top_page());
         if !popup_on_top && self.shared.stack.borrow().len() <= 1 {
             return Ok(false);
@@ -217,11 +219,23 @@ impl<R: Routable> RouterHandle<R> {
     /// the router has unmounted, and [`RouterError::DuringBuild`] while its UI
     /// runtime builds.
     pub fn go(&self, location: &str) -> Result<(), RouterError> {
-        self.editable()?;
+        let editing = self.editable()?;
+        let path = RoutePath::parse(location)?;
+        self.go_within(editing, &path)
+    }
+
+    /// [`go`](Self::go) to a location already parsed: how an inbound URL
+    /// reaches the router.
+    pub(super) fn go_path(&self, path: &RoutePath) -> Result<(), RouterError> {
+        let editing = self.editable()?;
+        self.go_within(editing, path)
+    }
+
+    fn go_within(&self, _editing: Editing<'_>, path: &RoutePath) -> Result<(), RouterError> {
         let _told = self.shared.announce_on_exit();
         // Parsed values can own arbitrary destructors, including values in the
         // retained prefix. Protect them before popup dismissal delivers effects.
-        let mut target = RouterRetiredValues(R::back_stack(&RoutePath::parse(location)?)?);
+        let mut target = RouterRetiredValues(R::back_stack(path)?);
         // The routes' `==` runs on a snapshot, outside the stack's borrow, and
         // may navigate: only the matching pages still in place are kept.
         let common_prefix = || {

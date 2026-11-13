@@ -812,6 +812,17 @@ crate as a glob module with a private `mod __runtime {}` that shadows the glob's
 is not reachable through them; a `compile_fail,E0603` doctest on each pins it. Pinned from
 outside the crate by `tests/runtime_seam.rs`.
 
+### A presentation's URL owner is a slot below the catalog
+
+`navigation` holds `RoutePath`, `NavigationIntent` and the `UrlOwner` trait
+(ADR-0330 §5), so the runtime can address a presentation's Router without
+naming a catalog type (ADR-0083). The runtime makes one `UrlOwnerSlot` per
+presentation and installs a `UrlOwnerScope` above every root; both sit in the
+`__runtime` seam. The slot holds owners weakly, oldest first, so it keeps no
+Router alive, and a registration removes only its own entry when it drops. Its
+`navigate` takes the first live owner out of the slot's borrow before calling
+it, so the owner may register, leave or navigate again.
+
 ### Not adopted
 
 A branded `Cx<'build>` token (its role is taken by the `BuildContext`/`LifecycleContext` split,
