@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 use crate::host::{self, Host};
-use crate::owner::headless::{HeadlessLoop, HeadlessState};
+use crate::owner::headless::{HeadlessLoop, SimulatedPreferences};
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 
@@ -18,7 +18,8 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// window exists. The default reports every field unknown.
     #[must_use]
     pub fn with_preferences(self, values: flui_platform::SystemPreferences) -> Self {
-        self.owner().with_state(|state| state.preferences = values);
+        self.owner()
+            .with_state(|state| state.preferences.lock().values = values);
         self
     }
 
@@ -29,17 +30,21 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     pub fn preference_source(&self) -> HeadlessPreferences {
         HeadlessPreferences {
             signal: Arc::downgrade(&self.owner().signal),
-            state: Arc::downgrade(&self.owner().state),
+            preferences: self
+                .owner()
+                .with_state(|state| Arc::downgrade(&state.preferences)),
         }
     }
 }
 
 impl host::Preferences<HeadlessLoop> for HeadlessPreferences {
     fn sample(owner: &HeadlessLoop) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        owner.with_state(|state| match state.preference_failure.take() {
+        let preferences = owner.with_state(|state| Arc::clone(&state.preferences));
+        let mut preferences = preferences.lock();
+        match preferences.failure.take() {
             Some(message) => Err(PlatformError::Preferences { message }),
-            None => Ok(state.preferences.clone()),
-        })
+            None => Ok(preferences.values.clone()),
+        }
     }
 }
 
@@ -53,7 +58,7 @@ impl host::Preferences<HeadlessLoop> for HeadlessPreferences {
 #[derive(Clone)]
 pub struct HeadlessPreferences {
     signal: Weak<OwnerSignal>,
-    state: Weak<Mutex<HeadlessState>>,
+    preferences: Weak<Mutex<SimulatedPreferences>>,
 }
 
 impl std::fmt::Debug for HeadlessPreferences {
@@ -67,10 +72,10 @@ impl HeadlessPreferences {
     /// Report `values` as the system's preferences and wake the owner. A
     /// platform that is gone applies nothing.
     pub fn set(&self, values: flui_platform::SystemPreferences) {
-        let Some(state) = self.state.upgrade() else {
+        let Some(preferences) = self.preferences.upgrade() else {
             return;
         };
-        state.lock().preferences = values;
+        preferences.lock().values = values;
         self.wake();
     }
 
@@ -78,10 +83,10 @@ impl HeadlessPreferences {
     /// complete does, and wake the owner. The host keeps the values it accepted
     /// last; the read after that reports the platform's preferences again.
     pub fn fail_next_read(&self, message: impl Into<String>) {
-        let Some(state) = self.state.upgrade() else {
+        let Some(preferences) = self.preferences.upgrade() else {
             return;
         };
-        state.lock().preference_failure = Some(message.into());
+        preferences.lock().failure = Some(message.into());
         self.wake();
     }
 

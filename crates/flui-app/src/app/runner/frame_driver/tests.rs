@@ -1249,12 +1249,17 @@ fn agent_notification_follows_live_native_initialization() {
         CloseFromAgent,
     }
 
+    std::thread_local! {
+        /// The window to close from the agent's hook. The hook is `Send` and
+        /// the window is the owner thread's, so the hook finds it here, on the
+        /// owner thread it runs on.
+        static CLOSE_FROM_AGENT: std::cell::RefCell<Option<flui_native::HeadlessHostWindow>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
     struct Agent {
         opened: Arc<AtomicUsize>,
         live: Arc<AtomicUsize>,
-        /// The window to close from the agent's hook, which is `Send`: the
-        /// headless window's own type is, where `dyn PlatformWindow` is not.
-        close: Option<flui_native::HeadlessHostWindow>,
     }
     impl DevAgentHook for Agent {
         fn attach(&mut self) -> bool {
@@ -1265,7 +1270,7 @@ fn agent_notification_follows_live_native_initialization() {
             self.opened.fetch_add(1, Ordering::SeqCst);
             self.live
                 .fetch_add(usize::from(window.is_open()), Ordering::SeqCst);
-            if let Some(native) = self.close.take() {
+            if let Some(native) = CLOSE_FROM_AGENT.with(|slot| slot.borrow_mut().take()) {
                 native.close_now();
             }
         }
@@ -1289,11 +1294,14 @@ fn agent_notification_follows_live_native_initialization() {
         let window: Rc<dyn PlatformWindow> = host;
         let opened = Arc::new(AtomicUsize::new(0));
         let live = Arc::new(AtomicUsize::new(0));
+        CLOSE_FROM_AGENT.with(|slot| {
+            *slot.borrow_mut() =
+                matches!(case, DuringInstall::CloseFromAgent).then(|| mock.clone());
+        });
         // The loop's development agents, as a runner starts them.
         super::super::dev_agents::start(&crate::AppConfig::new().dev_agent(Agent {
             opened: Arc::clone(&opened),
             live: Arc::clone(&live),
-            close: matches!(case, DuringInstall::CloseFromAgent).then(|| mock.clone()),
         }));
         let runtime = UiRuntime::for_test();
         runtime
