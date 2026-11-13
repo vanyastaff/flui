@@ -333,9 +333,9 @@ impl Core {
     /// One activation for a tap and for the keyboard: the oracle's
     /// `activateOnIntent` (`ink_well.dart` `:883-900`) is both what its
     /// `ActivateIntent`/`ButtonActivateIntent` actions run and what the tap
-    /// runs. A well with no handler is disabled, and its node delivers
-    /// neither; the check keeps an activation that arrives anyway from
-    /// showing a press.
+    /// runs. A well that is off or has no handler cannot be operated, and its
+    /// node delivers neither; the check keeps an activation that arrives
+    /// anyway from showing a press.
     fn activate(&self, ctx: &mut flui_sdk::view::EventContext<'_>) -> ActionOutcome {
         // Cloned out, so the slot is free while the handler runs.
         let Some(handler) = self.on_tap.borrow().clone() else {
@@ -447,8 +447,8 @@ pub struct InkWellState {
     states_listener: Option<flui_sdk::foundation::Subscription>,
     core: Rc<Core>,
     /// The tap and the wave it drives, made once: it reads the handler from
-    /// `core` at event time. The node is handed it while the well is
-    /// enabled.
+    /// `core` at event time. The node is handed it while the well is enabled
+    /// and has a handler.
     tap: Rc<ControlTap>,
 }
 
@@ -750,22 +750,47 @@ fn press_feedback(core: &Rc<Core>) -> ControlTap {
 
 #[cfg(test)]
 mod tests {
-    use flui_sdk::widgets::SizedBox;
-    use flui_testing::widgets::{SharedSignal, lay_out, tight};
+    use std::cell::RefCell;
+
+    use flui_interaction::events::{Code, Key, KeyEvent, NamedKey};
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_sdk::widgets::{Actions, Focus, SizedBox};
+    use flui_testing::widgets::{LaidOut, SharedSignal, lay_out, tight};
 
     use super::*;
 
-    /// A well whose switch a test sets apart from its handler, as a
-    /// `ListTile` does.
+    /// A well whose switch and handler a test sets apart, as a `ListTile`
+    /// does, over a focusable descendant.
     #[derive(Clone, StatefulView)]
     struct SwitchedWell {
         enabled: SharedSignal<bool>,
-        handler: bool,
+        handler: SharedSignal<bool>,
         states: WidgetStatesController,
+        inner: Rc<FocusNode>,
+    }
+
+    impl SwitchedWell {
+        fn new(enabled: bool, handler: bool) -> Self {
+            Self {
+                enabled: SharedSignal::new(enabled),
+                handler: SharedSignal::new(handler),
+                states: WidgetStatesController::default(),
+                inner: FocusNode::with_debug_label("inside-a-switched-well"),
+            }
+        }
+
+        fn mount(&self) -> LaidOut {
+            lay_out(self.clone(), tight(80.0, 40.0))
+        }
+
+        fn has(&self, state: WidgetState) -> bool {
+            self.states.value().contains_state(state)
+        }
     }
 
     struct SwitchedWellState {
         enabled: SharedSignal<bool>,
+        handler: SharedSignal<bool>,
     }
 
     impl StatefulView for SwitchedWell {
@@ -773,6 +798,7 @@ mod tests {
         fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
             SwitchedWellState {
                 enabled: self.enabled.clone(),
+                handler: self.handler.clone(),
             }
         }
     }
@@ -780,19 +806,24 @@ mod tests {
     impl ViewState<SwitchedWell> for SwitchedWellState {
         fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             self.enabled.bind(ctx);
+            self.handler.bind(ctx);
         }
 
         fn build(&self, view: &SwitchedWell, ctx: &dyn BuildContext) -> impl IntoView {
             let well = InkWell::new()
-                .child(SizedBox::new(80.0, 40.0))
+                .child(Focus::new(SizedBox::new(80.0, 40.0)).focus_node(Rc::clone(&view.inner)))
                 .states_controller(view.states.clone())
                 .enabled(self.enabled.get(ctx));
-            if view.handler {
+            if self.handler.get(ctx) {
                 well.on_tap(|_ctx| {})
             } else {
                 well
             }
         }
+    }
+
+    fn key(code: Code, named: NamedKey) -> KeyEvent {
+        KeyEventBuilder::new(code).key(Key::Named(named)).build()
     }
 
     /// The well's switch, not its handler, writes `Disabled`: an enabled
@@ -805,22 +836,14 @@ mod tests {
     #[test]
     fn the_switch_writes_disabled_whatever_the_handler() {
         for handler in [true, false] {
-            let enabled = SharedSignal::new(true);
-            let states = WidgetStatesController::default();
-            let mut laid = lay_out(
-                SwitchedWell {
-                    enabled: enabled.clone(),
-                    handler,
-                    states: states.clone(),
-                },
-                tight(80.0, 40.0),
-            );
-            let disabled = || states.value().contains_state(WidgetState::Disabled);
+            let well = SwitchedWell::new(true, handler);
+            let mut laid = well.mount();
+            let disabled = || well.has(WidgetState::Disabled);
             assert!(!disabled(), "handler: {handler}: enabled is not disabled");
-            enabled.set(false);
+            well.enabled.set(false);
             laid.pump();
             assert!(disabled(), "handler: {handler}: turned off");
-            enabled.set(true);
+            well.enabled.set(true);
             laid.pump();
             assert!(!disabled(), "handler: {handler}: turned on again");
         }
@@ -835,15 +858,8 @@ mod tests {
     #[test]
     fn an_enabled_well_without_a_handler_tracks_no_pointer() {
         for handler in [true, false] {
-            let states = WidgetStatesController::default();
-            let mut laid = lay_out(
-                SwitchedWell {
-                    enabled: SharedSignal::new(true),
-                    handler,
-                    states: states.clone(),
-                },
-                tight(80.0, 40.0),
-            );
+            let well = SwitchedWell::new(true, handler);
+            let mut laid = well.mount();
             let node = laid
                 .try_find_by_render_type("RenderInteractive")
                 .expect("the well's node");
@@ -855,10 +871,69 @@ mod tests {
             laid.dispatch_pointer_hover(40.0, 20.0);
             laid.pump();
             assert_eq!(
-                states.value().contains_state(WidgetState::Hovered),
+                well.has(WidgetState::Hovered),
                 handler,
                 "handler: {handler}: hovered"
             );
         }
+    }
+
+    /// A hovered well that loses its handler and stays enabled keeps no
+    /// `Hovered` (no exit will come to clear it, its mouse part is gone), is
+    /// not disabled, and binds nothing live: an Enter from a focused
+    /// descendant stops at it instead of reaching an enclosing binding.
+    ///
+    /// Red-check: carry `Hovered` while the well is merely enabled
+    /// (`write_states` gating on `enabled`), and the hover sticks; give the
+    /// well its bindings while merely enabled, and the Enter reaches the
+    /// enclosing binding.
+    #[test]
+    fn a_well_that_loses_its_handler_keeps_no_state_and_binds_nothing_live() {
+        struct Outer(Rc<RefCell<u32>>);
+        impl Action<ActivateIntent> for Outer {
+            fn invoke(
+                &self,
+                _ctx: &mut flui_sdk::view::EventContext<'_>,
+                _intent: &ActivateIntent,
+            ) -> ActionOutcome {
+                *self.0.borrow_mut() += 1;
+                ActionOutcome::Performed
+            }
+        }
+
+        let outer = Rc::new(RefCell::new(0_u32));
+        let well = SwitchedWell::new(true, true);
+        let mut laid = lay_out(
+            Actions::new(well.clone()).action::<ActivateIntent>(Outer(Rc::clone(&outer))),
+            tight(80.0, 40.0),
+        );
+        laid.dispatch_pointer_hover(40.0, 20.0);
+        laid.pump();
+        assert!(well.has(WidgetState::Hovered), "a handled well hovers");
+
+        well.handler.set(false);
+        laid.pump();
+        assert!(
+            !well.has(WidgetState::Hovered),
+            "the hover ends with the handler"
+        );
+        assert!(
+            !well.has(WidgetState::Disabled),
+            "and the well is not disabled"
+        );
+
+        let manager = laid.focus_manager();
+        let _ =
+            laid.enter_owner_scope(|| manager.dispatch_key_event(&key(Code::Tab, NamedKey::Tab)));
+        laid.pump();
+        assert!(
+            well.inner.has_primary_focus(),
+            "Tab skips the well and reaches the focusable inside it"
+        );
+        let _ = laid
+            .enter_owner_scope(|| manager.dispatch_key_event(&key(Code::Enter, NamedKey::Enter)));
+        laid.pump();
+        assert_eq!(*outer.borrow(), 0, "the Enter stops at the well");
+        assert!(!well.has(WidgetState::Pressed), "and presses nothing");
     }
 }

@@ -66,7 +66,7 @@
 //! `Disabled`-synced from `on_pressed.is_some()` before any listener is
 //! attached, and handed to the inner `InkWell` via
 //! [`InkWell::states_controller`] — mirroring
-//! `crate::ink_well::InkWellState`'s own `init_state`/`did_update_view`
+//! `crate::ink_well::InkWellState`'s own `create_state`/`did_update_view`
 //! ordering precisely (see that module's docs for why the sync-before-listen
 //! order is load-bearing). Both this state and the inner `InkWell` state end
 //! up listening on the *same* controller and syncing the *same* `Disabled`
@@ -232,7 +232,7 @@ impl std::fmt::Debug for ButtonStyleButtonCore {
 }
 
 /// Persistent state behind [`ButtonStyleButtonCore`] — see
-/// `crate::ink_well::InkWellState`, whose `init_state`/`did_update_view`
+/// `crate::ink_well::InkWellState`, whose `create_state`/`did_update_view`
 /// ordering this mirrors exactly (see the module docs).
 pub(crate) struct ButtonStyleButtonCoreState {
     states: WidgetStatesController,
@@ -265,8 +265,8 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
 
-        // Sync BEFORE listening — see `InkWellState::init_state`'s module-doc
-        // rationale, which applies verbatim here.
+        // Sync BEFORE listening (ADR-0322 §3): this build reads `Disabled`
+        // above the node, which writes the same value during it.
         self.states
             .update(WidgetState::Disabled, !self.initially_enabled);
         self.states

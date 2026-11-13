@@ -102,27 +102,6 @@ pub fn disabled_ink_well_does_not_fire_a_tap_callback() {
     );
 }
 
-// A `build()`-vs-`init_state`/`did_update_view` regression test for the
-// Disabled-sync relocation was attempted and DELIBERATELY dropped, not
-// silently skipped: two different observability angles were tried —
-// (1) a `StatelessView` child counting its own `build()` invocations, and
-// (2) `BuildOwner::pending_external_builds()` (the out-of-frame rebuild
-// inbox `RebuildHandle::schedule()` enqueues into) read immediately after
-// `lay_out` returns. Both were run against the reintroduced original bug
-// (`self.states.update(WidgetState::Disabled, !enabled)` back at the top of
-// `build()`) via `cargo test`, and BOTH passed unchanged — `lay_out`'s
-// single bootstrap frame is a fixpoint (ADR-0017) that drains any rebuild
-// scheduled during its own pass before returning, regardless of which
-// lifecycle hook triggered it, so neither approach can observe "extra
-// rebuild" as a distinguishable side effect through this harness. The
-// architectural fix (never mutate a possibly-caller-shared controller from
-// `build`, i.e. no rebuild scheduled during build —
-// `ink_well.rs`'s `init_state`/`did_update_view`) is applied and is correct
-// independent of whether this harness can prove
-// the "spurious rebuild" symptom specifically; the existing `Disabled`-state
-// assertions (`disabled_ink_well_does_not_fire_a_tap_callback`) already prove the sync
-// itself still happens correctly at the new call sites.
-
 fn enter() -> KeyEvent {
     KeyEventBuilder::new(Code::Enter)
         .key(Key::Named(NamedKey::Enter))

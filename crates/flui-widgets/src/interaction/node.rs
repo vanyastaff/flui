@@ -60,7 +60,8 @@ use crate::{Listener, MouseRegion, Semantics, SemanticsAnchor, SemanticsRole, To
 #[derive(Clone)]
 pub struct InteractiveNode {
     behavior: HitTestBehavior,
-    /// The one switch of ADR-0322 §2.
+    /// The switch of ADR-0322 §2: `Disabled` and the semantics' `enabled`
+    /// read it alone; the parts that operate the control also need a press.
     enabled: bool,
     /// The tap family and the raw contact ends: the control's value, shared,
     /// so a control that only taps hands the one it already holds.
@@ -1014,8 +1015,10 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
 
 impl_stateful_render_view!(InteractiveNode);
 
-/// The node's switch is reachable from a mounted tree only through
-/// `RawButton`, whose disabled form has no press callback to begin with.
+/// The node's switch is reachable from a mounted tree through `RawButton`,
+/// whose disabled form has no press callback to begin with, and through
+/// Material's `InkWell`, whose crate-private `enabled` keeps a handler on a
+/// disabled `ListTile`.
 /// The pointer and action rows of the switch, for a control that keeps its
 /// callback while disabled, are checked here on the view.
 #[cfg(test)]
@@ -1063,5 +1066,30 @@ mod switch_tests {
             assert_eq!(*intent, TypeId::of::<ActivateIntent>());
             assert_eq!(action.is_enabled(&ActivateIntent), runs);
         }
+    }
+
+    /// An enabled node given no press cannot be operated: its bindings stay
+    /// declared and switched off, as a disabled node's, and it takes no
+    /// focus.
+    ///
+    /// Red-check: gate the bindings on the switch alone, and the enabled
+    /// node without a press declares them live.
+    #[test]
+    fn an_enabled_node_without_a_press_binds_nothing_live() {
+        let pressless = InteractiveNode::new(SizedBox::new(10.0, 10.0))
+            .bindings([super::ActionBinding::shared::<ActivateIntent, Willing>(
+                &Rc::new(Willing),
+            )])
+            .focusable("pressless")
+            .enabled(true);
+        let declared = pressless
+            .declared_actions()
+            .expect("a node with a binding declares it");
+        let [(_, action)] = declared.as_slice() else {
+            panic!("one binding stays declared");
+        };
+        assert!(!action.is_enabled(&ActivateIntent));
+        let focus = pressless.focus_config().expect("a focusable node");
+        assert_eq!(focus.can_request_focus, Some(false));
     }
 }
