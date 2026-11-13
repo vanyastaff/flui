@@ -89,7 +89,8 @@ and shadowed without building curves (a clip reads them when the engine draws it
 first read builds the hint's curves where the
 constructor would have and then moves them by the offset, the same steps an eager path
 takes, so when a path is read never changes its elements, its equality or what
-`Path::lerp` accepts, and serde carries the offset so a moved shape keeps its hint. A clone
+`Path::lerp` accepts. Serde carries the hint and the pending offset, and keeps the hint when
+the replayed shape matches the serialized elements up to the rounding of a move. A clone
 taken before that read builds its own curves. Any other rounded rectangle, one with a
 coordinate beyond 1e9 (where rounding passes the curve tolerance), a rectangle and an oval
 are built at once: they are drawn from their curves, so their clones share one build.

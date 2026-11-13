@@ -1298,6 +1298,16 @@ pub(crate) fn serialized_factory_paths_preserve_their_shapes() {
         Path::from_rrect(RRect::from_rect_xy(rect, 4.0, 4.0)),
         // Moved before its curves were built, by an offset whose sums round.
         Path::from_rrect(RRect::from_rect_xy(rect, 4.0, 4.0)).translate(Offset::new(0.1, 0.2)),
+        // Read before its move, and moved twice: curves moved in other steps than the
+        // replayed hint's.
+        {
+            let read = Path::from_rrect(RRect::from_rect_circular(rect, 4.0));
+            let _ = read.commands().count();
+            read.translate(Offset::new(0.1, 0.2))
+        },
+        Path::from_rrect(RRect::from_rect_circular(rect, 4.0))
+            .translate(Offset::new(0.1, 0.2))
+            .translate(Offset::new(-0.3, 0.7)),
     ] {
         let lossless_wire = serde_json::to_value(&original).expect("a factory path serializes");
         let lossless: Path =

@@ -1348,22 +1348,76 @@ impl From<PathRepr> for Path {
                 PathCommand::Close => path.close(),
             }
         }
-        // A hint may select a different renderer, so only retain it when its
-        // constructor reproduces the submitted geometry exactly.
+        // A hint may select a different renderer, so only retain it when its constructor,
+        // moved as the serialized path was, reproduces the submitted elements up to the
+        // rounding of a move: a path read before it was moved, or moved twice, carries curves
+        // moved in other steps than the replayed hint's, a few ulps apart.
         let hinted = match repr.hint {
             ShapeHint::None => None,
             ShapeHint::Rect(rect) => Some(Self::rectangle(rect)),
             ShapeHint::Oval(rect) => Some(Self::oval(rect)),
             ShapeHint::RRect(rrect) => Some(Self::from_rrect(rrect)),
         };
-        // Moved as the serialized path was, so its curves are the ones that path holds.
         let hinted = hinted.map(|hinted| hinted.translate(repr.offset));
         if let Some(hinted) = hinted
-            && path.geometry() == hinted.geometry()
+            && same_up_to_rounding(path.geometry(), hinted.geometry())
         {
             path.hint = hinted.shape();
         }
         path
+    }
+}
+
+/// Whether `a` and `b` trace the same elements with every coordinate within a few ulps of
+/// its counterpart: the difference two orders of moving the same curves leave, far below
+/// the curve tolerance at every coordinate a deferred shape may hold. A line to where the
+/// pen already is, within that rounding, is skipped on both sides: the arc builder adds
+/// such a join only when the pen and the arc's start differ in their last bits.
+#[cfg(feature = "serde")]
+fn same_up_to_rounding(a: &kurbo::BezPath, b: &kurbo::BezPath) -> bool {
+    use kurbo::PathEl;
+    /// Relative to the coordinate's magnitude: about 4 500 ulps, under 1e-3 up to 1e9.
+    const ROUNDING: f64 = 1e-12;
+    fn near(p: kurbo::Point, q: kurbo::Point) -> bool {
+        let close = |x: f64, y: f64| (x - y).abs() <= ROUNDING * (1.0 + x.abs().max(y.abs()));
+        close(p.x, q.x) && close(p.y, q.y)
+    }
+    /// The elements with degenerate joins left out.
+    fn traced(path: &kurbo::BezPath) -> impl Iterator<Item = PathEl> + '_ {
+        let mut pen = kurbo::Point::ZERO;
+        let mut start = kurbo::Point::ZERO;
+        path.elements().iter().filter_map(move |element| {
+            let element = *element;
+            match element {
+                PathEl::MoveTo(p) => {
+                    pen = p;
+                    start = p;
+                }
+                PathEl::LineTo(p) if near(p, pen) => return None,
+                PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => pen = p,
+                PathEl::ClosePath => pen = start,
+            }
+            Some(element)
+        })
+    }
+    let (mut a, mut b) = (traced(a), traced(b));
+    loop {
+        let same = match (a.next(), b.next()) {
+            (None, None) => return true,
+            (Some(PathEl::MoveTo(p)), Some(PathEl::MoveTo(q)))
+            | (Some(PathEl::LineTo(p)), Some(PathEl::LineTo(q))) => near(p, q),
+            (Some(PathEl::QuadTo(p1, p2)), Some(PathEl::QuadTo(q1, q2))) => {
+                near(p1, q1) && near(p2, q2)
+            }
+            (Some(PathEl::CurveTo(p1, p2, p3)), Some(PathEl::CurveTo(q1, q2, q3))) => {
+                near(p1, q1) && near(p2, q2) && near(p3, q3)
+            }
+            (Some(PathEl::ClosePath), Some(PathEl::ClosePath)) => true,
+            _ => false,
+        };
+        if !same {
+            return false;
+        }
     }
 }
 

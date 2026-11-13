@@ -322,7 +322,9 @@ impl super::WgpuPainter {
         // Elliptical corners stay on the path route: the direct shape shader
         // currently uses circular radii. Strokes and other Paint semantics
         // likewise retain their existing path implementation. `Path` leaves exactly the
-        // shapes this route accepts unbuilt (`ShapeHint::may_defer`): keep them in step.
+        // shapes this route accepts unbuilt (`ShapeHint::may_defer`): keep them in step. A
+        // stroke, another paint or a clip of such a shape reads its curves, which each
+        // recorded clone then builds for itself.
         if paint.style == flui_painting::PaintStyle::Fill
             && paint.blend_mode == flui_painting::BlendMode::SrcOver
             && paint.anti_alias
