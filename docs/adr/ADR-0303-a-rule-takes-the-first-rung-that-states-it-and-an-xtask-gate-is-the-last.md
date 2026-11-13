@@ -251,8 +251,9 @@ of its own.
   filter is left to main.
 - **What runs for every node of a frame is read by its path.** The `perf-gates` job compares the
   perf scenarios' counts with their baseline. `plan` sets `perf_required` when a changed file
-  sits under the pipeline owner's passes or the semantics model, where one more allocation is a
-  rise in every scenario, or is the baseline, the scenarios, the task or the rule
+  sits under the element owners, the render tree's storage, the pipeline owner's passes or the
+  semantics model, where one more allocation is a
+  rise in every scenario, or is the baseline, the scenarios, their counters, the task or the rule
   (`change_scope::perf_scope`). A pull request then runs the comparison; callgrind and a rise
   from any other source are left to main.
 - **The aggregator recomputes the run.** Each such job is a row of `ON_DEMAND`
