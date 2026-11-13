@@ -29,7 +29,7 @@
 //! module is outside its contract.
 //!
 //! An entry leaves when its tests assert through public API instead — for the
-//! navigator internals that is the Router conformance suite (ADR-0093). The
+//! navigator internals that is the Router conformance suite (ADR-0330). The
 //! module is deleted when it is empty. `tests::lists_exactly_the_temporary_entries`
 //! pins every name and probe method, and refuses a glob, a module re-export or
 //! any other kind of `pub` item, so adding to the surface is a reviewed edit.
@@ -408,7 +408,7 @@ mod tests {
     /// Every name this module makes reachable, with the reason it is still
     /// here. Each leaves when the integration tests that use it assert through
     /// public API instead: the navigator and hero entries with the Router
-    /// conformance suite (ADR-0093), the overlay entries once the overlay's
+    /// conformance suite (ADR-0330), the overlay entries once the overlay's
     /// entry list and entry flags have a public read, the text entry once the
     /// listener count is observable some other way.
     const ENTRIES: [(&str, &str); 30] = [

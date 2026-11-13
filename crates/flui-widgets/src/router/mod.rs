@@ -1,5 +1,5 @@
 //! The typed [`Router`]: navigation state as a stack of route values whose
-//! top is the current location (ADR-0093).
+//! top is the current location (ADR-0330).
 //!
 //! An application declares its locations as a [`Routable`] type — a value per
 //! screen, printed to and parsed from a [`RoutePath`] — and builds a
@@ -8,7 +8,7 @@
 //! with values (`push`, `replace`, `pop`) or with a location (`go`), and reads
 //! the location back.
 //!
-//! The navigator stays the page stack underneath (ADR-0093 §4): transitions,
+//! The navigator stays the page stack underneath (ADR-0330 §4): transitions,
 //! heroes, `PopScope` and local history are properties of the pages the
 //! router places. Its facade refuses pages that are not route values, keeps
 //! admitting pageless popups such as dialogs, and every pop it makes reaches
@@ -31,7 +31,7 @@ mod router;
 pub mod __derive;
 
 /// `#[derive(Routable)]`: `to_path` and `from_path` from one
-/// `#[route("…")]` pattern per variant (ADR-0093 §1).
+/// `#[route("…")]` pattern per variant (ADR-0330 §1).
 pub use flui_macros::Routable;
 pub use handle::{RouterError, RouterHandle};
 pub use path::{RouteParseError, RoutePath};

@@ -1,6 +1,10 @@
 # ADR-0093: Router is the primary navigation API
 
-- **Status:** Accepted (2026-11-04)
+- **Status:** Superseded (2026-11-13)
+- **Superseded-by:** [ADR-0330](ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md)
+  in full: the Router stays the one navigation API, a widget reaches it and its own route from
+  the build context (`Router::of`, `PageHandle::of`) instead of only from a lifecycle hook, and
+  dialogs stay pageless popup routes instead of moving to a modal surface
 - **Date:** 2026-09-25
 - **Supersedes:** [ADR-0024](ADR-0024-named-routes-seam.md) in full (string-named routes, their
   registration, `RouteKey<T>` and the named-route errors);

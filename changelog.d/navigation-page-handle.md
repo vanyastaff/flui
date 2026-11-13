@@ -1,0 +1,30 @@
+### Added
+
+- **`flui-widgets`**: `Router::<R>::of(ctx)` and `PageHandle::of(ctx)` resolve the nearest
+  router and the route a widget is on from any build context, Flutter's `GoRouter.of(context)`
+  and `ModalRoute.of(context)`. `PageHandle` has `is_current`, `can_pop`, `maybe_pop`, `pop`,
+  `pop_with` and `push_popup`; it acts only on its own route, so a callback that fires after a
+  popup covered its page does not pop the popup. `RouterHandle::maybe_pop` honours `PopScope`.
+  A navigation made while the UI runtime builds is refused with `RouterError::DuringBuild` or
+  `PageError::DuringBuild` and changes nothing
+  ([ADR-0330](/docs/adr/ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md)).
+- **`flui-material`, `flui-cupertino`**: `MaterialApp::router` and `CupertinoApp::router`, so a
+  design-system app can be rooted in a `Router`.
+- An `examples/navigation.rs`: a push, a page popped with a result, and a dialog.
+
+### Changed
+
+- **`flui-widgets`**: `Router::handle(&dyn LifecycleContext)` is now `Router::of(&dyn
+  BuildContext)`; a lifecycle context still passes. A `Router` given no `transitions` leaves its
+  pages to adopt the ambient `PageTransitions` page builder, so a Router's pages under a
+  `MaterialApp` run the theme's transition instead of a jump cut.
+- **`flui-material`**: `show_dialog` takes the opening page's `PageHandle` and returns
+  `Result<RouteResult<T>, PageError>`. `BackButton` pops the route it is on, and `AppBar`
+  implies a back button from its own route's `PageHandle::can_pop`, so a covered bottom page's
+  app bar shows none. `OpenContainer` opens its page as a popup over the page it sits on.
+
+### Removed
+
+- **`flui-material`, `flui-cupertino`**: `MaterialApp::navigator`, `MaterialApp::observer`,
+  `CupertinoApp::navigator` and `CupertinoApp::observer`. Root the app in `router(…)` and
+  navigate through `Router::of(ctx)`.

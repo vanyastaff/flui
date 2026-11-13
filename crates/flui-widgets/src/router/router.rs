@@ -8,6 +8,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
+use flui_foundation::BuildPhase;
 use flui_foundation::notifier::ChangeNotifier;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -33,11 +34,11 @@ type PageBuilder<R> = Rc<dyn Fn(&R, &dyn BuildContext) -> BoxedView>;
 /// A `Router` builds a [`Navigator`] and places one [`PageRoute`] on it per
 /// value in its stack, so page transitions, heroes, `PopScope` and local
 /// history work as they do on any navigator. Only `R` values enter that
-/// navigator as pages: its facade ([`NavigatorHandle`]) refuses any other page
-/// and admits only pageless popups such as dialogs (ADR-0093 §4).
+/// navigator as pages; a dialog or menu is a pageless popup a page pushes
+/// through its [`PageHandle`](crate::PageHandle) (ADR-0330 §2).
 ///
-/// Drive it with the [`RouterHandle`] that [`Router::handle`] returns from a
-/// descendant's `init_state`.
+/// Drive it with the [`RouterHandle`] that [`Router::of`] returns from a
+/// descendant's build context.
 ///
 /// ```
 /// use flui_widgets::prelude::*;
@@ -189,7 +190,9 @@ impl<R: Routable> Router<R> {
 
     /// Wrap each page in its entrance and exit transition — the
     /// [`PageRoute::transitions`] of every page on this router's stack. A
-    /// parent rebuild with new transitions reaches the pages already there.
+    /// parent rebuild with new transitions reaches the pages placed with
+    /// transitions. Without them, a page adopts the ambient
+    /// [`PageTransitions`](crate::PageTransitions) page builder, and keeps it.
     #[must_use]
     pub fn transitions(
         mut self,
@@ -214,32 +217,83 @@ impl<R: Routable> Router<R> {
         self
     }
 
-    /// A handle to the nearest ancestor `Router<R>`.
+    /// A handle to the nearest ancestor `Router<R>`, Flutter's
+    /// `GoRouter.of(context)` (ADR-0330 §3).
     ///
-    /// Lifecycle-only (ADR-0078): acquire it in `init_state` or
-    /// `did_change_dependencies` and keep it; callbacks use the handle their
-    /// state captured. A `build` context does not compile:
-    ///
-    /// ```compile_fail,E0308
-    /// # use flui_widgets::prelude::*; use flui_widgets::{Router, Routable};
-    /// fn acquire_handle<R: Routable>(ctx: &dyn BuildContext) { let _ = Router::<R>::handle(ctx); }
-    /// ```
-    ///
-    /// while the same call from a lifecycle context does:
+    /// Call it in `build` and move the handle into the callbacks that
+    /// navigate: a callback runs after the build, with no position in the
+    /// tree, so it captures the owned handle where a Flutter callback keeps
+    /// its context. The lookup registers a dependency on the router, so the
+    /// widget rebuilds with the right handle if it moves under another one. A
+    /// state that keeps a handle resolves it in `did_change_dependencies`.
     ///
     /// ```
     /// # use flui_widgets::prelude::*; use flui_widgets::{Router, Routable};
-    /// fn acquire_handle<R: Routable>(ctx: &dyn LifecycleContext) { let _ = Router::<R>::handle(ctx); }
+    /// fn open<R: Routable>(ctx: &dyn BuildContext, route: R) -> impl Fn() + 'static {
+    ///     let router = Router::<R>::of(ctx);
+    ///     move || {
+    ///         if let Ok(router) = &router {
+    ///             let _ = router.push(route.clone());
+    ///         }
+    ///     }
+    /// }
     /// ```
     ///
     /// # Errors
     ///
     /// [`RouterError::NoRouter`] when no `Router<R>` is above `ctx`.
-    pub fn handle(ctx: &dyn LifecycleContext) -> Result<RouterHandle<R>, RouterError> {
-        ctx.find_state::<RouterState<R>, _>(|state| RouterHandle::new(Rc::clone(&state.shared)))
+    pub fn of(ctx: &dyn BuildContext) -> Result<RouterHandle<R>, RouterError> {
+        ctx.depend_on::<RouterScope<R>, _>(|scope| RouterHandle::new(Rc::clone(&scope.shared)))
             .ok_or(RouterError::NoRouter {
                 route_type: type_name::<R>(),
             })
+    }
+}
+
+/// Provides a router's shared state to [`Router::of`] lookups below it.
+struct RouterScope<R: Routable> {
+    shared: Rc<RouterShared<R>>,
+    child: Terminal<BoxedView>,
+}
+
+impl<R: Routable> Clone for RouterScope<R> {
+    fn clone(&self) -> Self {
+        Self {
+            shared: Rc::clone(&self.shared),
+            child: Terminal::new(self.child.clone()),
+        }
+    }
+}
+
+impl<R: Routable> Drop for RouterScope<R> {
+    fn drop(&mut self) {
+        let child = self.child.withdraw();
+        drop(child);
+    }
+}
+
+impl<R: Routable> InheritedView for RouterScope<R> {
+    type Data = Rc<RouterShared<R>>;
+
+    fn data(&self) -> &Self::Data {
+        &self.shared
+    }
+
+    fn child(&self) -> &dyn View {
+        &*self.child
+    }
+
+    /// A router's element keeps one shared state for its life, so this
+    /// compares the same state to itself; identity, not structure, is what a
+    /// dependent's handle names.
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !Rc::ptr_eq(&self.shared, &old.shared)
+    }
+}
+
+impl<R: Routable> View for RouterScope<R> {
+    fn create_element(self: Rc<Self>) -> ElementKind {
+        ElementKind::inherited(self)
     }
 }
 
@@ -268,6 +322,7 @@ impl<R: Routable> RouterState<R> {
             transitions: Terminal::new(Rc::new(RefCell::new(router.transitions.clone()))),
             transition_duration: Cell::new(router.transition_duration),
             mounted: Cell::new(false),
+            build_phase: RefCell::new(None),
             announcer: StackAnnouncer::default(),
         });
         let observer: Arc<dyn NavigatorObserver> = Arc::new(RouterObserver {
@@ -333,6 +388,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// once when it mounts.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.mounted.set(true);
+        *self.shared.build_phase.borrow_mut() = Some(ctx.build_phase());
         self.shared
             .navigator
             .add_observer(Arc::clone(&self.observer));
@@ -361,7 +417,10 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     }
 
     fn build(&self, _view: &Router<R>, _ctx: &dyn BuildContext) -> impl IntoView {
-        Navigator::new(self.shared.navigator.clone())
+        RouterScope {
+            shared: Rc::clone(&self.shared),
+            child: Terminal::new(Navigator::new(self.shared.navigator.clone()).boxed()),
+        }
     }
 
     /// Take the new page builder and transitions, and rebuild every page so a
@@ -436,6 +495,9 @@ pub(super) struct RouterShared<R: Routable> {
     /// with.
     transition_duration: Cell<Option<Duration>>,
     pub(super) mounted: Cell<bool>,
+    /// The UI runtime's build phase, bound when the router mounts: an edit
+    /// made while it builds is refused (ADR-0330 §3).
+    pub(super) build_phase: RefCell<Option<BuildPhase>>,
     /// Tells the listeners of every [`RouterHandle`] of stack changes.
     pub(super) announcer: StackAnnouncer,
 }
@@ -485,16 +547,22 @@ impl<R: Routable> RouterShared<R> {
             semantics.child(page(&value, ctx)).boxed()
         })
         .named(route.to_path().as_str());
-        // Read at each build, so new transitions reach this page; with none,
-        // the page's own default, a jump cut.
-        let transitions = Terminal::new(Rc::clone(&self.transitions));
-        page = page.transitions(move |ctx, animation, secondary, child| {
-            let current = transitions.borrow().clone();
-            match current {
-                Some(transitions) => transitions(ctx, animation, secondary, child),
-                None => child,
-            }
-        });
+        // A router with transitions gives every page it places a builder
+        // that reads them at each build, so new transitions reach this page.
+        // A router with none leaves the page to adopt the ambient
+        // `PageTransitions` page builder when its navigator installs it, as
+        // any page given no transitions does (ADR-0221 D2): under a
+        // `MaterialApp` a Router's pages run the theme's transition.
+        if self.transitions.borrow().is_some() {
+            let transitions = Terminal::new(Rc::clone(&self.transitions));
+            page = page.transitions(move |ctx, animation, secondary, child| {
+                let current = transitions.borrow().clone();
+                match current {
+                    Some(transitions) => transitions(ctx, animation, secondary, child),
+                    None => child,
+                }
+            });
+        }
         if let Some(duration) = self.transition_duration.get() {
             page = page.transition_duration(duration);
         }

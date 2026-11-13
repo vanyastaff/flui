@@ -133,7 +133,7 @@ pub mod navigator;
 mod overlay;
 pub mod paint;
 pub mod physical_model;
-// The typed `Router` (ADR-0093); its items are re-exported from the crate root.
+// The typed `Router` (ADR-0330); its items are re-exported from the crate root.
 mod reorderable;
 pub mod router;
 pub mod scroll;
@@ -264,11 +264,11 @@ pub use form::{
 };
 pub use navigator::{
     AnimationRunFuture, FlightDirection, Hero, HeroController, HeroControllerScope, HeroMode,
-    Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageRoute,
-    PageTransitionBuilder, PageTransitions, ParallaxPageTransition, PopInvokedCallback, PopScope,
-    PopupRoute, PushCompletion, Route, RouteAnimation, RouteBindingSlot, RouteContentBuilder,
-    RouteId, RoutePageBuilder, RouteResult, RouteResultError, RouteSettings,
-    RouteTransitionsBuilder, RunCanceled, SimpleRoute,
+    Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageError,
+    PageHandle, PageRoute, PageTransitionBuilder, PageTransitions, ParallaxPageTransition,
+    PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route, RouteAnimation,
+    RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult,
+    RouteResultError, RouteSettings, RouteTransitionsBuilder, RunCanceled, SimpleRoute,
 };
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
@@ -441,7 +441,7 @@ pub mod prelude {
         LimitedBox, ListBody, ListView, Listener, Localizations, LocalizationsDelegate,
         MergeSemantics, MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent,
         Offstage, Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId,
-        OverlayHandle, Padding, PageController, PageRoute, PageView, PanClaimRegion,
+        OverlayHandle, Padding, PageController, PageHandle, PageRoute, PageView, PanClaimRegion,
         PasteTextIntent, PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned,
         PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton,
         RawTextField, RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox,

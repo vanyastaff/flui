@@ -1243,6 +1243,11 @@ fn router_and_widgets_app() {
         &[
             ("widgets_app::locale_override_removal_uses_the_nearest_current_preferences", crate::widgets_app::locale_override_removal_uses_the_nearest_current_preferences as fn()),
             ("router::popup_routes_are_admitted_and_leave_the_location_alone", crate::router::popup_routes_are_admitted_and_leave_the_location_alone as fn()),
+            ("router::router_of_resolves_the_nearest_router_from_build", crate::router::router_of_resolves_the_nearest_router_from_build),
+            ("router::a_mutation_from_build_is_refused", crate::router::a_mutation_from_build_is_refused),
+            ("router::page_handle_pops_only_its_own_route", crate::router::page_handle_pops_only_its_own_route),
+            ("router::page_handle_can_pop_follows_the_route_below", crate::router::page_handle_can_pop_follows_the_route_below),
+            ("router::a_popup_pushed_from_a_page_resolves_to_its_value", crate::router::a_popup_pushed_from_a_page_resolves_to_its_value),
             ("router::a_named_page_is_announced_when_pushed_and_when_uncovered", crate::router::a_named_page_is_announced_when_pushed_and_when_uncovered),
             ("router::router_never_pops_its_last_page", crate::router::router_never_pops_its_last_page),
             ("router::router_opens_at_a_location_with_its_back_stack", crate::router::router_opens_at_a_location_with_its_back_stack),

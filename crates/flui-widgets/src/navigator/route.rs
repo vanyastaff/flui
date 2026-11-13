@@ -183,7 +183,7 @@ impl RouteId {
 /// A description the navigator reads: its field is public, as Flutter's
 /// `RouteSettings` has final fields, and it is built with
 /// [`named`](Self::named). A `Router` page carries its location here; a value
-/// a page needs travels in its route value, not in the settings (ADR-0093).
+/// a page needs travels in its route value, not in the settings (ADR-0330).
 /// `#[non_exhaustive]` keeps room for a field without breaking a caller.
 #[derive(Default, Clone, PartialEq, Eq, Debug)]
 #[non_exhaustive]

@@ -18,7 +18,7 @@
 //! methods (`pop_with`, `remove_route_with`, `maybe_pop_with`).
 //!
 //! A page an application navigates to is a value of its `Router`'s route type
-//! (ADR-0093): there are no named routes, and the stack a location opens with
+//! (ADR-0330): there are no named routes, and the stack a location opens with
 //! is `Routable::back_stack`. Restoration is the Router's (ADR-0262 §6);
 //! `LocalHistoryRoute` stays `pub(crate)` (the doc-hidden, temporary
 //! `__test_access` names its handles for tests, ADR-0083 §4), and there is no
@@ -42,6 +42,7 @@ pub(crate) mod modal_route;
 mod navigator;
 mod observer;
 mod overlay_route;
+mod page_handle;
 mod page_route;
 mod page_transitions;
 mod parallax_transition;
@@ -68,6 +69,7 @@ pub use overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
     SimpleRoute,
 };
+pub use page_handle::{PageError, PageHandle};
 pub use page_route::{PageRoute, PopupRoute};
 pub use page_transitions::{PageTransitionBuilder, PageTransitions};
 pub use parallax_transition::ParallaxPageTransition;

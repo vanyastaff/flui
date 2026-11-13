@@ -2483,9 +2483,8 @@ impl flui::app::View for flui::cupertino::CupertinoApp where Self: flui::app::St
 pub fn flui::cupertino::CupertinoApp::builder(self, builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self
 pub fn flui::cupertino::CupertinoApp::locale(self, locale: flui::platform::Locale) -> Self
 pub fn flui::cupertino::CupertinoApp::localizations_delegates(self, delegates: Vec<flui::prelude::BoxedLocalizationsDelegate>) -> Self
-pub fn flui::cupertino::CupertinoApp::navigator(self, handle: flui::prelude::NavigatorHandle) -> Self
 pub fn flui::cupertino::CupertinoApp::new(home: impl flui::prelude::IntoView) -> Self
-pub fn flui::cupertino::CupertinoApp::observer(self, observer: alloc::rcs::arc::Arc<dyn flui::widgets::NavigatorObserver>) -> Self
+pub fn flui::cupertino::CupertinoApp::router<R: flui::prelude::Routable>(router: flui::prelude::Router<R>) -> Self
 pub fn flui::cupertino::CupertinoApp::supported_locales(self, locales: Vec<flui::platform::Locale>) -> Self
 pub fn flui::cupertino::CupertinoApp::theme(self, theme: flui::cupertino::CupertinoThemeData) -> Self
 pub fn flui::cupertino::CupertinoApp::with_builder(builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self
@@ -9435,9 +9434,8 @@ pub fn flui::material::MaterialApp::high_contrast_dark_theme(self, theme: flui::
 pub fn flui::material::MaterialApp::high_contrast_theme(self, theme: flui::material::ThemeData) -> Self
 pub fn flui::material::MaterialApp::locale(self, locale: flui::platform::Locale) -> Self
 pub fn flui::material::MaterialApp::localizations_delegates(self, delegates: Vec<flui::prelude::BoxedLocalizationsDelegate>) -> Self
-pub fn flui::material::MaterialApp::navigator(self, handle: flui::prelude::NavigatorHandle) -> Self
 pub fn flui::material::MaterialApp::new(home: impl flui::prelude::IntoView) -> Self
-pub fn flui::material::MaterialApp::observer(self, observer: alloc::rcs::arc::Arc<dyn flui::widgets::NavigatorObserver>) -> Self
+pub fn flui::material::MaterialApp::router<R: flui::prelude::Routable>(router: flui::prelude::Router<R>) -> Self
 pub fn flui::material::MaterialApp::supported_locales(self, locales: Vec<flui::platform::Locale>) -> Self
 pub fn flui::material::MaterialApp::theme(self, theme: flui::material::ThemeData) -> Self
 pub fn flui::material::MaterialApp::theme_mode(self, mode: flui::material::ThemeMode) -> Self
@@ -10200,7 +10198,7 @@ reexport flui::material::scaffold_messenger::SnackBarClosedReason => flui::mater
 reexport flui::material::scaffold_messenger::SnackBarController => flui::material::SnackBarController
 pub mod flui::material::shape
 reexport flui::material::shape::MaterialShape => flui::material::MaterialShape
-pub fn flui::material::show_dialog<T, F, W>(navigator: &flui::prelude::NavigatorHandle, builder: F) -> flui::widgets::RouteResult<T> where T: 'static, F: Fn(&dyn flui::app::BuildContext) -> W + 'static, W: flui::prelude::IntoView
+pub fn flui::material::show_dialog<T, F, W>(page: &flui::prelude::PageHandle, builder: F) -> Result<flui::widgets::RouteResult<T>, flui::widgets::PageError> where T: 'static, F: Fn(&dyn flui::app::BuildContext) -> W + 'static, W: flui::prelude::IntoView
 pub mod flui::material::sliver_app_bar
 reexport flui::material::sliver_app_bar::SliverAppBar => flui::material::SliverAppBar
 pub mod flui::material::snack_bar
@@ -17832,6 +17830,19 @@ pub fn flui::prelude::PageController::previous_page(&self, duration: core::time:
 pub fn flui::prelude::PageController::scroll_controller(&self) -> flui::prelude::ScrollController
 pub fn flui::prelude::PageController::viewport_fraction(&self) -> f64
 pub fn flui::prelude::PageController::with_params(initial_page: usize, viewport_fraction: flui::widgets::ViewportFraction) -> Self
+pub struct flui::prelude::PageHandle { .. }
+impl Clone for flui::prelude::PageHandle
+impl Eq for flui::prelude::PageHandle
+impl PartialEq for flui::prelude::PageHandle
+impl core::fmt::Debug for flui::prelude::PageHandle
+pub fn flui::prelude::PageHandle::can_pop(&self) -> bool
+pub fn flui::prelude::PageHandle::is_current(&self) -> bool
+pub fn flui::prelude::PageHandle::maybe_pop(&self) -> bool
+pub fn flui::prelude::PageHandle::of(ctx: &dyn flui::app::BuildContext) -> Option<Self>
+pub fn flui::prelude::PageHandle::pop(&self) -> Result<bool, flui::widgets::PageError>
+pub fn flui::prelude::PageHandle::pop_with<T: 'static>(&self, value: T) -> Result<bool, flui::widgets::PageError>
+pub fn flui::prelude::PageHandle::push_popup<T: 'static>(&self, popup: flui::prelude::PopupRoute<T>) -> Result<flui::widgets::RouteResult<T>, flui::widgets::PageError>
+pub fn flui::prelude::PageHandle::route(&self) -> flui::widgets::RouteId
 pub struct flui::prelude::PageRoute<T> { .. }
 impl<T: 'static> core::fmt::Debug for flui::prelude::PageRoute<T>
 impl<T: 'static> flui::widgets::NavigatorRoute for flui::prelude::PageRoute<T>
@@ -18195,8 +18206,8 @@ impl<R: flui::prelude::Routable> flui::app::View for flui::prelude::Router<R>
 impl<R: flui::prelude::Routable> flui::prelude::ViewState<flui::prelude::Router<R>> for flui::widgets::RouterState<R>
 pub fn flui::prelude::Router::from_location(location: &str, page: impl Fn(&R, &dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Result<Self, flui::widgets::RouteParseError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::from_stack(stack: Vec<R>, page: impl Fn(&R, &dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Result<Self, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
-pub fn flui::prelude::Router::handle(ctx: &dyn flui::prelude::LifecycleContext) -> Result<flui::prelude::RouterHandle<R>, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::new(initial: R, page: impl Fn(&R, &dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
+pub fn flui::prelude::Router::of(ctx: &dyn flui::app::BuildContext) -> Result<flui::prelude::RouterHandle<R>, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::transition_duration(self, duration: core::time::Duration) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::transitions(self, transitions: impl Fn(&dyn flui::app::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation, flui::prelude::BoxedView) -> flui::prelude::BoxedView + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub struct flui::prelude::RouterHandle<R: flui::prelude::Routable> { .. }
@@ -18207,6 +18218,7 @@ pub fn flui::prelude::RouterHandle::can_pop(&self) -> bool // impl<R: flui::prel
 pub fn flui::prelude::RouterHandle::current(&self) -> R // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::go(&self, location: &str) -> Result<(), flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::location(&self) -> flui::prelude::RoutePath // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
+pub fn flui::prelude::RouterHandle::maybe_pop(&self) -> bool // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::pop(&self) -> Result<bool, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::pop_with<T: 'static>(&self, value: T) -> Result<bool, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::push(&self, route: R) -> Result<(), flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
@@ -27484,6 +27496,18 @@ variant flui::widgets::OverscrollBehavior::Auto // at 0
 variant flui::widgets::OverscrollBehavior::Contain // at 1
 reexport flui::widgets::Padding => flui::prelude::Padding
 reexport flui::widgets::PageController => flui::prelude::PageController
+#[non_exhaustive] pub enum flui::widgets::PageError
+impl Clone for flui::widgets::PageError
+impl Copy for flui::widgets::PageError
+impl Eq for flui::widgets::PageError
+impl PartialEq for flui::widgets::PageError
+impl core::error::Error for flui::widgets::PageError
+impl core::fmt::Debug for flui::widgets::PageError
+impl core::fmt::Display for flui::widgets::PageError
+impl core::marker::StructuralPartialEq for flui::widgets::PageError
+variant flui::widgets::PageError::DuringBuild // at 1
+variant flui::widgets::PageError::Gone // at 0
+reexport flui::widgets::PageHandle => flui::prelude::PageHandle
 pub struct flui::widgets::PageIndicator { .. }
 impl Clone for flui::widgets::PageIndicator
 impl core::fmt::Debug for flui::widgets::PageIndicator
@@ -27983,6 +28007,7 @@ impl core::fmt::Debug for flui::widgets::RouterError
 impl core::fmt::Display for flui::widgets::RouterError
 impl core::marker::StructuralPartialEq for flui::widgets::RouterError
 variant flui::widgets::RouterError::Disposed // at 1
+variant flui::widgets::RouterError::DuringBuild // at 4
 variant flui::widgets::RouterError::EmptyStack // at 3
 variant flui::widgets::RouterError::NoRouter { route_type: &'static str } // at 0
 variant flui::widgets::RouterError::Parse(flui::widgets::RouteParseError) // at 2
@@ -29152,6 +29177,8 @@ reexport flui::widgets::navigator::NavigatorHandle => flui::prelude::NavigatorHa
 reexport flui::widgets::navigator::NavigatorObserver => flui::widgets::NavigatorObserver
 reexport flui::widgets::navigator::NavigatorRoute => flui::widgets::NavigatorRoute
 reexport flui::widgets::navigator::NavigatorState => flui::widgets::NavigatorState
+reexport flui::widgets::navigator::PageError => flui::widgets::PageError
+reexport flui::widgets::navigator::PageHandle => flui::prelude::PageHandle
 reexport flui::widgets::navigator::PageRoute => flui::prelude::PageRoute
 reexport flui::widgets::navigator::PageTransitionBuilder => flui::widgets::PageTransitionBuilder
 reexport flui::widgets::navigator::PageTransitions => flui::widgets::PageTransitions
@@ -29380,6 +29407,7 @@ reexport flui::widgets::prelude::OverlayEntryId => flui::prelude::OverlayEntryId
 reexport flui::widgets::prelude::OverlayHandle => flui::prelude::OverlayHandle
 reexport flui::widgets::prelude::Padding => flui::prelude::Padding
 reexport flui::widgets::prelude::PageController => flui::prelude::PageController
+reexport flui::widgets::prelude::PageHandle => flui::prelude::PageHandle
 reexport flui::widgets::prelude::PageRoute => flui::prelude::PageRoute
 reexport flui::widgets::prelude::PageView => flui::prelude::PageView
 reexport flui::widgets::prelude::PanClaimRegion => flui::prelude::PanClaimRegion

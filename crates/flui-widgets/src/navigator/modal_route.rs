@@ -85,6 +85,7 @@ use super::navigator::NavigatorHandle;
 use super::overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
 };
+use super::page_handle::PageScope;
 use super::page_transitions::{AdoptedTransition, transitions_of};
 use super::pop_scope::{PopEntryRegistry, PopEntryScope};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
@@ -637,7 +638,22 @@ impl<T: 'static> ModalRoute<T> {
                 // Barrier first: it paints below the page and is hit-tested after
                 // it.
                 let children = vec![inner.build_barrier(ctx), inner.build_scope()];
-                Stack::new(children).fit(StackFit::Expand).boxed()
+                let modal = Stack::new(children).fit(StackFit::Expand).boxed();
+                // The page and every builder of the route resolve
+                // `PageHandle::of` to this route (ADR-0330 §3). `None` only in
+                // the window before `install()` binds the route, the same
+                // window `build_scope` guards.
+                let route = inner
+                    .transition
+                    .get()
+                    .and_then(TransitionHandle::binding)
+                    .map(|binding| binding.route_id());
+                match (NavigatorHandle::maybe_of(ctx), route) {
+                    (Some(navigator), Some(route)) => {
+                        PageScope::new(navigator, route, modal).boxed()
+                    }
+                    _ => modal,
+                }
             }
         };
 

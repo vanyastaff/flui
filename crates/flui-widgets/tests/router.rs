@@ -1,4 +1,4 @@
-//! `Router` through the public surface (ADR-0093): a typed stack of route
+//! `Router` through the public surface (ADR-0330): a typed stack of route
 //! values on a navigator whose facade refuses unaddressable pages.
 //!
 //! Every page is mounted under a real `Vsync` and the transitions are driven by
@@ -21,8 +21,8 @@ use flui_painting::styling::Color;
 use flui_view::environment::VsyncScope;
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PopupRoute, RouteAnimation,
-    RouteId, RouteParseError, RouteResultError, RouterError, Text,
+    ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PageError, PageHandle,
+    PopupRoute, RouteAnimation, RouteId, RouteParseError, RouteResultError, RouterError, Text,
 };
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -79,7 +79,7 @@ impl Routable for AppRoute {
     }
 }
 
-/// What `Router::handle` answered.
+/// What `Router::of` answered.
 type Acquired = Result<RouterHandle<AppRoute>, RouterError>;
 
 /// What a page's state captured in `init_state`.
@@ -87,11 +87,16 @@ type Acquired = Result<RouterHandle<AppRoute>, RouterError>;
 struct Probe {
     handle: Rc<RefCell<Option<Acquired>>>,
     navigator: Rc<RefCell<Option<NavigatorHandle>>>,
+    page: Rc<RefCell<Option<PageHandle>>>,
     inits: Rc<Cell<usize>>,
     driver: Rc<RefCell<Option<flui_scheduler::AsyncDriver>>>,
 }
 
 impl Probe {
+    fn page(&self) -> PageHandle {
+        self.page.borrow().clone().expect("the page is on a route")
+    }
+
     fn handle(&self) -> RouterHandle<AppRoute> {
         self.handle
             .borrow()
@@ -145,8 +150,9 @@ struct PageState {
 impl ViewState<Page> for PageState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.probe.inits.set(self.probe.inits.get() + 1);
-        *self.probe.handle.borrow_mut() = Some(Router::<AppRoute>::handle(ctx));
+        *self.probe.handle.borrow_mut() = Some(Router::<AppRoute>::of(ctx));
         *self.probe.navigator.borrow_mut() = NavigatorHandle::maybe_of(ctx);
+        *self.probe.page.borrow_mut() = PageHandle::of(ctx);
         *self.probe.driver.borrow_mut() = ctx.async_driver();
     }
 
@@ -578,8 +584,7 @@ struct DropPageState(DropProbe);
 
 impl ViewState<DropPage> for DropPageState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.0.router.borrow_mut() =
-            Some(Router::<DropRoute>::handle(ctx).expect("router ancestor"));
+        *self.0.router.borrow_mut() = Some(Router::<DropRoute>::of(ctx).expect("router ancestor"));
         *self.0.navigator.borrow_mut() = NavigatorHandle::maybe_of(ctx);
     }
 
@@ -1712,7 +1717,7 @@ struct HandleKeeperState {
 impl ViewState<HandleKeeper> for HandleKeeperState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         *self.router.borrow_mut() =
-            Some(Router::<PoppingRoute>::handle(ctx).expect("a Router<PoppingRoute> above"));
+            Some(Router::<PoppingRoute>::of(ctx).expect("a Router<PoppingRoute> above"));
     }
 
     fn build(&self, _view: &HandleKeeper, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1834,13 +1839,274 @@ pub(crate) fn popup_routes_are_admitted_and_leave_the_location_alone() {
 // Lookup
 // ============================================================================
 
+/// What a [`BuildProbe`] saw in its last `build`.
+#[derive(Clone, Default)]
+struct Seen {
+    router: Rc<RefCell<Option<Acquired>>>,
+    page: Rc<RefCell<Option<PageHandle>>>,
+    /// Whether the probe has built at all.
+    built: Rc<Cell<bool>>,
+    /// What an edit attempted from `build` answered.
+    edits: Rc<RefCell<Vec<String>>>,
+}
+
+/// Resolves `Router::of` and `PageHandle::of` in `build`, optionally tries to
+/// navigate there, then builds `child`.
+#[derive(Clone, StatelessView)]
+struct BuildProbe {
+    seen: Seen,
+    edit_in_build: bool,
+    child: Rc<dyn Fn() -> BoxedView>,
+}
+
+impl StatelessView for BuildProbe {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let router = Router::<AppRoute>::of(ctx);
+        let page = PageHandle::of(ctx);
+        if self.edit_in_build {
+            let mut edits = self.seen.edits.borrow_mut();
+            if let Ok(router) = &router {
+                edits.push(format!("push {:?}", router.push(AppRoute::Note { id: 9 })));
+                edits.push(format!("maybe_pop {}", router.maybe_pop()));
+            }
+            if let Some(page) = &page {
+                let popup = PopupRoute::<()>::new(|_ctx, _a, _s| text("Built".to_owned()));
+                edits.push(format!("push_popup {:?}", page.push_popup(popup).err()));
+                edits.push(format!("pop {:?}", page.pop()));
+                edits.push(format!("maybe_pop {}", page.maybe_pop()));
+            }
+        }
+        *self.seen.router.borrow_mut() = Some(router);
+        *self.seen.page.borrow_mut() = page;
+        self.seen.built.set(true);
+        (self.child)()
+    }
+}
+
+fn build_probe(seen: &Seen, child: impl Fn() -> BoxedView + 'static) -> BoxedView {
+    BuildProbe {
+        seen: seen.clone(),
+        edit_in_build: false,
+        child: Rc::new(child),
+    }
+    .boxed()
+}
+
+/// `Router::of` and `PageHandle::of` resolve from a plain `build`: the
+/// nearest `Router<R>` wins over an outer one, each page sees its own route,
+/// and outside every Router the answer is `NoRouter` and no page.
+pub(crate) fn router_of_resolves_the_nearest_router_from_build() {
+    let (outer, inner, outside) = (Seen::default(), Seen::default(), Seen::default());
+    let inner_pages = {
+        let inner = inner.clone();
+        move |route: &AppRoute, _ctx: &dyn BuildContext| {
+            let label = format!("{route:?}");
+            build_probe(&inner, move || text(label.clone()))
+        }
+    };
+    let outer_pages = {
+        let outer = outer.clone();
+        move |_route: &AppRoute, _ctx: &dyn BuildContext| {
+            let inner_pages = inner_pages.clone();
+            build_probe(&outer, move || {
+                Router::new(AppRoute::Note { id: 7 }, inner_pages.clone()).boxed()
+            })
+        }
+    };
+    let mut laid = mount(Router::new(AppRoute::Home, outer_pages));
+    settle(&mut laid);
+
+    let resolved = |seen: &Seen| {
+        seen.router
+            .borrow()
+            .clone()
+            .expect("built")
+            .expect("a Router<AppRoute> is above")
+    };
+    let page = |seen: &Seen| {
+        assert!(seen.built.get(), "built");
+        seen.page.borrow().clone()
+    };
+    assert_eq!(resolved(&outer).current(), AppRoute::Home);
+    assert_eq!(
+        resolved(&inner).current(),
+        AppRoute::Note { id: 7 },
+        "the nearest Router<AppRoute> answers, not the outer one"
+    );
+    let (outer_page, inner_page) = (
+        page(&outer).expect("the outer probe is on a page"),
+        page(&inner).expect("the inner probe is on a page"),
+    );
+    assert_ne!(outer_page, inner_page, "each probe names its own route");
+    assert!(outer_page.is_current() && inner_page.is_current());
+
+    let _plain = lay_out_animated(
+        build_probe(&outside, || text("Alone".to_owned())),
+        tight(100.0, 100.0),
+        Vsync::new(),
+    );
+    assert_eq!(
+        outside.router.borrow().clone().expect("built").err(),
+        Some(RouterError::NoRouter {
+            route_type: std::any::type_name::<AppRoute>(),
+        })
+    );
+    assert_eq!(page(&outside), None, "no route above, no page");
+}
+
+/// An edit made while the UI runtime builds is refused, typed, and changes
+/// nothing: `build` describes the tree (ADR-0330 §3).
+pub(crate) fn a_mutation_from_build_is_refused() {
+    let seen = Seen::default();
+    let pages = {
+        let seen = seen.clone();
+        move |route: &AppRoute, _ctx: &dyn BuildContext| {
+            let label = format!("{route:?}");
+            BuildProbe {
+                seen: seen.clone(),
+                edit_in_build: true,
+                child: Rc::new(move || text(label.clone())),
+            }
+            .boxed()
+        }
+    };
+    let mut laid = mount(Router::new(AppRoute::Home, pages));
+    settle(&mut laid);
+
+    let edits = seen.edits.borrow().clone();
+    assert!(!edits.is_empty(), "the page built");
+    for edit in &edits {
+        assert!(
+            [
+                "push Err(DuringBuild)",
+                "maybe_pop false",
+                "push_popup Some(DuringBuild)",
+                "pop Err(DuringBuild)",
+            ]
+            .contains(&edit.as_str()),
+            "refused from build: {edit}"
+        );
+    }
+    let router = seen
+        .router
+        .borrow()
+        .clone()
+        .expect("built")
+        .expect("under the Router");
+    assert_eq!(
+        router.stack(),
+        vec![AppRoute::Home],
+        "the stack is unchanged"
+    );
+    assert!(laid.find_text("Built").is_none(), "no popup was pushed");
+    assert_eq!(
+        router.push(AppRoute::Note { id: 1 }),
+        Ok(()),
+        "outside build it acts"
+    );
+}
+
 // ============================================================================
 // Pages
 // ============================================================================
 
-// ============================================================================
-// The facade cannot take a Router's pages
-// ============================================================================
+/// A popup's builder reaches the popup's own route.
+fn recording_popup<T: 'static>(
+    label: &'static str,
+    page: &Rc<RefCell<Option<PageHandle>>>,
+) -> PopupRoute<T> {
+    let page = Rc::clone(page);
+    PopupRoute::<T>::new(move |ctx, _a, _s| {
+        *page.borrow_mut() = PageHandle::of(ctx);
+        text(label.to_owned())
+    })
+}
+
+/// A page's handle pops only its own route: once a popup covers the page, the
+/// page's `pop`, `pop_with` and `maybe_pop` leave the popup alone, and the
+/// popup's own handle pops it. A handle whose route has gone answers `Gone`.
+pub(crate) fn page_handle_pops_only_its_own_route() {
+    let (mut laid, home) = two_screen_app();
+    let home_page = home.page();
+    let popup_page = Rc::new(RefCell::new(None));
+    let _result = home_page
+        .push_popup(recording_popup::<()>("Covering popup", &popup_page))
+        .expect("the page is on its navigator");
+    settle(&mut laid);
+    assert!(laid_out_text(&laid, "Covering popup"));
+    assert!(!home_page.is_current());
+
+    assert_eq!(home_page.pop(), Ok(false));
+    assert_eq!(home_page.pop_with(3_u32), Ok(false));
+    assert!(!home_page.maybe_pop());
+    settle(&mut laid);
+    assert!(
+        laid_out_text(&laid, "Covering popup"),
+        "the page's handle left the popup"
+    );
+
+    let popup = popup_page.borrow().clone().expect("the popup built");
+    assert!(popup.is_current());
+    assert!(
+        popup.maybe_pop(),
+        "a dismissible pop of the popup is handled"
+    );
+    settle(&mut laid);
+    assert!(laid.find_text("Covering popup").is_none());
+    assert!(home_page.is_current());
+    assert_eq!(popup.pop(), Err(PageError::Gone));
+    assert_eq!(home.handle().stack(), vec![AppRoute::Home]);
+}
+
+/// `can_pop` follows the route below: the Router's only page has nothing to
+/// return to, a popup over it does, and a second page does.
+pub(crate) fn page_handle_can_pop_follows_the_route_below() {
+    let (mut laid, home) = two_screen_app();
+    let home_page = home.page();
+    assert!(!home_page.can_pop(), "the Router's last page cannot pop");
+    assert!(!home_page.maybe_pop(), "and its back request bubbles");
+
+    let popup_page = Rc::new(RefCell::new(None));
+    let _result = home_page
+        .push_popup(recording_popup::<()>("Popup", &popup_page))
+        .expect("mounted");
+    settle(&mut laid);
+    let popup = popup_page.borrow().clone().expect("the popup built");
+    assert!(popup.can_pop(), "a popup returns to its page");
+    assert_eq!(popup.pop(), Ok(true));
+    settle(&mut laid);
+    assert!(!popup.can_pop(), "a gone route cannot pop");
+
+    home.handle()
+        .push(AppRoute::Note { id: 1 })
+        .expect("mounted");
+    settle(&mut laid);
+    assert!(!home_page.can_pop(), "nothing is below the bottom page");
+    assert!(!home_page.is_current());
+}
+
+/// A popup a page pushes resolves to the value its own handle pops it with,
+/// and stays out of the Router's stack and location.
+pub(crate) fn a_popup_pushed_from_a_page_resolves_to_its_value() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let popup_page = Rc::new(RefCell::new(None));
+    let result = home
+        .page()
+        .push_popup(recording_popup::<Rc<str>>("Question", &popup_page))
+        .expect("mounted");
+    settle(&mut laid);
+    assert_eq!(router.stack(), vec![AppRoute::Home]);
+    assert_eq!(router.location(), RoutePath::root());
+    assert!(!result.is_completed());
+
+    let popup = popup_page.borrow().clone().expect("the popup built");
+    assert_eq!(popup.pop_with(Rc::<str>::from("yes")), Ok(true));
+    settle(&mut laid);
+    assert_eq!(result.try_take(), Some(Ok(Some(Rc::<str>::from("yes")))));
+    assert!(laid.find_text("Question").is_none());
+    assert_eq!(router.stack(), vec![AppRoute::Home]);
+}
 
 // ============================================================================
 // A parent rebuild

@@ -1,4 +1,4 @@
-//! Admission under a `Router` (ADR-0093 §4), and the `Router`'s own doors.
+//! Admission under a `Router` (ADR-0330 §4), and the `Router`'s own doors.
 //!
 //! A navigator made by [`NavigatorHandle::addressed`] belongs to a `Router`:
 //! every page on it is a route value with a path, and only the `Router` places
@@ -110,7 +110,7 @@ impl NavigatorHandle {
 
     /// Whether [`push`](Self::push) admits a page route here. `false` for a
     /// navigator a [`Router`](crate::Router) drives: the Router owns its pages,
-    /// so a push there places only a pageless popup (ADR-0093 §4).
+    /// so a push there places only a pageless popup (ADR-0330 §4).
     ///
     /// A widget that pushes its own transient page (a container transform)
     /// asks this to choose the route it builds instead of being refused.

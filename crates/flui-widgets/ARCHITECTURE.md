@@ -1282,7 +1282,7 @@ route. `go` recomputes its shared prefix after popup dismissal, which can itself
 reenter navigation. Outgoing and temporary route values retire outside stack
 borrows; after a failure the remaining owners are still destroyed, each under
 containment, and the first failure is the one raised (ADR-0281). This implements
-ADR-0093's single navigation authority.
+ADR-0330's single navigation authority.
 `router_and_widgets_app` covers reentrant push/replace/go, popup-prefix changes,
 observer failure and next navigation; `router_observer_failure_and_terminal_retirement`
 covers an observer failure followed by route-value and terminal retirement.
@@ -1405,9 +1405,9 @@ beneath it are found. **Test:** `a_drag_drops_on_the_target_that_accepted_its_la
 ### 4. A caller's result that reaches no route is reported outside any guard
 
 **Rule:** [ADR-0019](../../docs/adr/ADR-0019-navigator-routing-seam.md) §3 as
-[ADR-0093](../../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) §3
+[ADR-0330](../../docs/adr/ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md) §3
 narrows it: a pop result is typed and stays on the owner thread. There are no
-named routes (ADR-0093 §4): a page an application navigates to is a value of
+named routes (ADR-0330 §4): a page an application navigates to is a value of
 its `Router`'s route type, and a value the page needs travels in that value.
 
 **Choice:** every caller-supplied result is either delivered to a route or
@@ -2082,48 +2082,61 @@ on the second contact's DOWN before that contact lifts, and the
 participation-gating fix, since this detector sets `on_double_tap_down` alone
 and would otherwise never join the arena.
 
-### 21. The `Router` is derived from the route type, and its handle is lifecycle-only
+### 21. The `Router` is derived from the route type, and reached from the build context
 
-**Choice:** `Router<R>` (`src/router/`, ADR-0093) needs only `R: Routable` —
+**Choice:** `Router<R>` (`src/router/`, ADR-0330) needs only `R: Routable` —
 `to_path`, `from_path`, and a provided `back_stack` — and keeps its stack
 of `R` itself; the parser and delegate are the route type. The page per value
 is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
-builds, so transitions, heroes and `PopScope` are unchanged.
-`Router::<R>::handle` takes `&dyn LifecycleContext` (ADR-0078), so a handle
-is acquired in `create_state`/`init_state`/`did_change_dependencies` and resolves the
-**nearest** `Router<R>`, as `Navigator`'s handle does. The page builder
-and transitions are shared with every page, so a parent rebuild reaches the
-pages already on the stack; a transition duration is fixed when a page is
-placed, because the page's animation controller is made with it.
+builds, so transitions, heroes and `PopScope` are unchanged. The router's build
+places a private inherited `RouterScope<R>` above that navigator, and
+`Router::<R>::of(&dyn BuildContext)` resolves the **nearest** `Router<R>` through
+it with a dependency, Flutter's `GoRouter.of(context)`; a lifecycle context
+upcasts to a build context, so a state resolves it the same way. A handle
+mutation made while the UI runtime builds answers `RouterError::DuringBuild`
+and changes nothing (ADR-0086 §7). The page builder and transitions are shared
+with every page, so a parent rebuild reaches the pages already on the stack; a
+transition duration is fixed when a page is placed, because the page's
+animation controller is made with it.
 
-**Pinned by:** the `compile_fail` doctest on `Router::handle`. A nested handle
-resolving the nearest `Router<R>`, a parent rebuild reaching the pages already
+**Pinned by:** `router_of_resolves_the_nearest_router_from_build` and
+`a_mutation_from_build_is_refused`. A parent rebuild reaching the pages already
 on the stack, a handle with no `Router` above it answering `NoRouter`, and a
 hand-written `Routable` round trip: **Unasserted:** no test pins this.
 
-### 22. A Router's navigator refuses pages pushed through its facade, and admits pageless popups
+### 22. A page reaches its own route through `PageHandle`, and pushes only pageless popups
 
-**Choice:** every page on a Router's stack has a path (ADR-0093 §2), and only
-the Router places, replaces or seeds pages. The navigator a Router builds is
-*addressed*. A plain `push` admits only routes whose binding slot a framework
-`TransitionRoute` marked `TransitionGroup::Default` — `PopupRoute` — and
-refuses `PageRoute`, `SimpleRoute` and every third-party route. The doors that
-replace, sweep or seed (`push_replacement[_with]`, `push_and_remove_until`,
-`seed_initial`) refuse every route, a popup included, because what they remove
-or place beneath belongs to the Router, whose stack would otherwise name a page
-that is gone. They cannot return a `Result` without a public signature change,
-so a refusal disposes the route unpushed, returns a `RouteResult` already
-complete with `Ok(None)`, logs `tracing::error!` with the reason, and fails a
-`debug_assert!`. Popups stay admitted, because `show_dialog` pushes a `PopupRoute` on
-the root navigator, until dialogs move to overlay entries (ADR-0093 §4). Every
-pop the navigator makes — the facade's, a back gesture's, a barrier's —
-reaches the Router's stack through an internal `NavigatorObserver`, so the
-location follows it.
+**Choice:** every page on a Router's stack has a path (ADR-0330 §2), and only
+the Router places, replaces or seeds pages. Every modal route's overlay entry
+places a crate-private inherited `PageScope` above its barrier and page, so
+`PageHandle::of(ctx)` in the page, its builders or anything below them names
+that route, Flutter's `ModalRoute.of(context)`. The handle is bound to its
+route id, not to the top of the stack: `maybe_pop`, `pop` and `pop_with` act
+only while their route is current, so a callback that fires after a popup
+covered its page does not pop the popup. `can_pop` is whether a present route
+sits below the handle's and popping would not take a Router's last page.
+`push_popup` pushes a `PopupRoute` on the route's navigator; while the UI
+runtime builds, and once the route has left its navigator, it disposes the
+popup unpushed and answers `PageError`.
 
-**Pinned by:** `popup_routes_are_admitted_and_leave_the_location_alone`. A
-`PageRoute` pushed through the facade refused as not addressable, the doors that
-remove or seed refusing even a popup, and a facade pop updating the Router's
-location: **Unasserted:** no test pins this.
+The navigator a Router builds is *addressed*: a plain `push` admits only routes
+whose binding slot a framework `TransitionRoute` marked
+`TransitionGroup::Default` — `PopupRoute` — and refuses `PageRoute`,
+`SimpleRoute` and every third-party route. The doors that replace, sweep or
+seed (`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`)
+refuse every route, a popup included, because what they remove or place
+beneath belongs to the Router. They cannot return a `Result` without a public
+signature change, so a refusal disposes the route unpushed, returns a
+`RouteResult` already complete with `Ok(None)`, logs `tracing::error!` with the
+reason, and fails a `debug_assert!`. Every pop the navigator makes — a
+`PageHandle`'s, a back gesture's, a barrier's — reaches the Router's stack
+through an internal `NavigatorObserver`, so the location follows it.
+
+**Pinned by:** `popup_routes_are_admitted_and_leave_the_location_alone`,
+`page_handle_pops_only_its_own_route`, `page_handle_can_pop_follows_the_route_below`
+and `a_popup_pushed_from_a_page_resolves_to_its_value`. A `PageRoute` pushed
+through the facade refused as not addressable, and the doors that remove or
+seed refusing even a popup: **Unasserted:** no test pins this.
 
 ### 23. A Router never pops or removes its last page
 
@@ -2176,7 +2189,7 @@ route change on every navigation, with no app bar required.
 **Choice:** `RouterHandle::push_for_result::<T>` returns the page's
 `RouteResult<T>`, a future of `Result<Option<T>, RouteResultError>` over an
 `Rc`/`RefCell` channel, and `RouterHandle::pop_with` delivers the value as a
-`Box<dyn Any>`: neither `T`, the value nor the result is `Send` (ADR-0093 §3).
+`Box<dyn Any>`: neither `T`, the value nor the result is `Send` (ADR-0330 §3).
 A value of another type pops the page and resolves to
 `RouteResultError::TypeMismatch`; the value is dropped and reported outside the
 history lock. Every exit resolves the result: a value, `Ok(None)` for a page
@@ -2530,7 +2543,7 @@ it); only the navigator form has `navigator` and `observer`, so the
 configuration of a router app with a navigator key or observers does not compile. The two forms are two
 view types, so switching one to the other remounts the shell, and the
 navigator form's `dispose` releases its navigator and observers. Owning the
-presentation's URL waits for the URL owner of ADR-0093 §5 (`RouterScope`). **Tests:**
+presentation's URL waits for the URL owner of ADR-0330 §5 (`RouterScope`). **Tests:**
 `tests/widgets_app_router.rs`
 (`switching_widgets_app_from_home_to_router_releases_the_navigator`,
 `widgets_app_router_navigates_by_handle_and_the_url_follows`);

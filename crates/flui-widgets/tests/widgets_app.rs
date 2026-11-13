@@ -143,7 +143,7 @@ pub(crate) fn builder_only_app_receives_no_routing_and_supplies_the_subtree() {
     // The oracle builds no Navigator when home/routes/onGenerateRoute/
     // onUnknownRoute are all absent; builder receives a null child. Of
     // those four, only `home` is a knob this shell has: there are no named
-    // routes (ADR-0093).
+    // routes (ADR-0330).
     let received_none = Arc::new(Mutex::new(None::<bool>));
     let received = Arc::clone(&received_none);
     let (probe, captured) = capture(|_ctx| true);

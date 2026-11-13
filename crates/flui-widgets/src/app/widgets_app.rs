@@ -41,7 +41,7 @@
 //! - **Routes by name.** There is no `routes` table, `onGenerateRoute` or
 //!   `onUnknownRoute`: an application that navigates roots itself in a typed
 //!   [`Router`] with [`WidgetsApp::router`], whose route values carry their
-//!   paths (ADR-0093). The navigator form stays for code that has not moved.
+//!   paths (ADR-0330). The navigator form stays for code that has not moved.
 //! - **Restoration scope, `SharedAppData`, `NavigationNotification`,
 //!   shortcut/action overrides, performance overlay, debug banner.** Each
 //!   depends on infrastructure FLUI has not built (state restoration,
@@ -253,7 +253,7 @@ impl WidgetsApp<NavigatorForm> {
 impl WidgetsApp<RouterForm> {
     /// An app shell rooted in `router`: the [`Router`] is the app's routing
     /// subtree, below [`Localizations`] and the [`builder`](Self::builder)
-    /// hook, and its navigator is the app's only one (ADR-0093 §2).
+    /// hook, and its navigator is the app's only one (ADR-0330 §2).
     ///
     /// The result is a `WidgetsApp<RouterForm>`, which has no
     /// [`navigator`](WidgetsApp::navigator) handle and no

@@ -970,6 +970,13 @@ name = "acceptance_app_faults"
 path = "examples/acceptance_app_faults.rs"
 required-features = ["material", "serde"]
 
+# One typed Router: a push, a page popped with a result, and a dialog
+# (ADR-0330).
+[[example]]
+name = "navigation"
+path = "examples/navigation.rs"
+required-features = ["material"]
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles
 # ═══════════════════════════════════════════════════════════════════════════════

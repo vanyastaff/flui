@@ -22,7 +22,7 @@
 //! # Not implemented, and not claimed
 //!
 //! No Navigator 2.0/page-list API here: the typed `Router` in `crate::router`
-//! (ADR-0093) drives this navigator as its page stack, through the doors in
+//! (ADR-0330) drives this navigator as its page stack, through the doors in
 //! `addressing.rs`, which also make its facade refuse unaddressable pages. No
 //! restoration, `PopScope`,
 //! `LocalHistoryRoute`, `HeroControllerScope`, `NavigationNotification`,
@@ -32,7 +32,7 @@
 //! through the doc-hidden, temporary `__test_access`, ADR-0083 §4).
 //!
 //! There are no named routes: a page with a name is a `Router` route value,
-//! and its location is its name (ADR-0093).
+//! and its location is its name (ADR-0330).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -229,6 +229,11 @@ struct NavigatorShared {
     /// `Some` when a `Router` drives this navigator; fixed at construction.
     /// See `addressing.rs` for what it refuses.
     addressing: Option<Addressing>,
+
+    /// The UI runtime's build phase, bound when the navigator mounts: a
+    /// [`PageHandle`](super::PageHandle) mutation made while it builds is
+    /// refused (ADR-0330 §3).
+    build_phase: RefCell<Option<flui_foundation::BuildPhase>>,
 }
 
 impl Drop for NavigatorShared {
@@ -432,6 +437,14 @@ impl NavigatorShared {
                     // settle within that same flush instead of on the next
                     // one.
                     DeferredEffect::AwaitPush(route, future) => self.await_push(route, future),
+                    // Cloned out, so the registry guard is released before
+                    // `mark_needs_build` schedules the rebuild.
+                    DeferredEffect::NeighboursChanged(route) => {
+                        let entry = { self.registries.entries.lock().get(&route).cloned() };
+                        if let Some(entry) = entry {
+                            entry.mark_needs_build();
+                        }
+                    }
                 }
             }
             recovery.retire(modals);
@@ -880,6 +893,7 @@ impl NavigatorHandle {
             ),
             settle_wake: super::lifecycle::Terminal::new(Arc::new(Mutex::new(None))),
             addressing,
+            build_phase: RefCell::new(None),
         });
         Self {
             shared,
@@ -1127,7 +1141,7 @@ impl NavigatorHandle {
     ///
     /// A navigator a [`Router`](crate::Router) drives admits only pageless
     /// popups here (`PopupRoute`); any other route has no path and is refused
-    /// (ADR-0093 §4): it is disposed unpushed, the returned result is already
+    /// (ADR-0330 §4): it is disposed unpushed, the returned result is already
     /// complete with `Ok(None)`, the refusal is logged, and a debug build panics.
     /// `seed_initial`, `push_replacement[_with]` and `push_and_remove_until`
     /// refuse a popup too, the same way: what they replace, sweep or seed
@@ -1571,6 +1585,35 @@ impl NavigatorHandle {
         self.shared.history.lock().is_present(route)
     }
 
+    /// Whether a present route sits below `route` that popping it would
+    /// return to, without taking a Router's last page: what
+    /// [`PageHandle::can_pop`](super::PageHandle::can_pop) answers.
+    pub(crate) fn route_can_pop(&self, route: RouteId) -> bool {
+        let history = self.shared.history.lock();
+        history.is_present(route)
+            && history
+                .present_ids()
+                .take_while(|id| *id != route)
+                .next()
+                .is_some()
+            && !self.removes_last_page(&history, route)
+    }
+
+    /// Whether this navigator's UI runtime is building now. A mutation a
+    /// [`PageHandle`](super::PageHandle) makes then is refused (ADR-0330 §3).
+    pub(crate) fn is_building(&self) -> bool {
+        self.shared
+            .build_phase
+            .borrow()
+            .as_ref()
+            .is_some_and(flui_foundation::BuildPhase::is_building)
+    }
+
+    /// Whether `self` and `other` name the same navigator.
+    pub(crate) fn same_navigator(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
+    }
+
     /// The lifecycle state of `id`'s entry. Test-facing, read through
     /// `crate::__test_access::NavigatorProbe`; the same applies to the four
     /// accessors below.
@@ -1939,6 +1982,7 @@ impl ViewState<Navigator> for NavigatorState {
     /// captures below.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
+        *self.shared.build_phase.borrow_mut() = Some(ctx.build_phase());
 
         // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.

@@ -1,4 +1,4 @@
-//! [`WidgetsApp::router`] (ADR-0093 §2): the app's routing subtree is a typed
+//! [`WidgetsApp::router`] (ADR-0330 §2): the app's routing subtree is a typed
 //! `Router`, whose navigator is the app's only one and whose stack survives a
 //! rebuild of the app.
 //!
@@ -39,7 +39,7 @@ enum AppRoute {
     Note { id: u32 },
 }
 
-/// What `Router::handle` answered.
+/// What `Router::of` answered.
 type Acquired = Result<RouterHandle<AppRoute>, RouterError>;
 
 /// What the Home page's state saw in `init_state` and `build`.
@@ -93,7 +93,7 @@ impl ViewState<Home> for HomeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let probe = &self.probe;
         probe.inits.set(probe.inits.get() + 1);
-        *probe.handle.borrow_mut() = Some(Router::<AppRoute>::handle(ctx));
+        *probe.handle.borrow_mut() = Some(Router::<AppRoute>::of(ctx));
         *probe.nearest.borrow_mut() = NavigatorHandle::maybe_of(ctx);
         *probe.root.borrow_mut() = NavigatorHandle::maybe_of_root(ctx);
     }
