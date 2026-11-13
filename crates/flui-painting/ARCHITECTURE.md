@@ -89,8 +89,8 @@ and shadowed without building curves (a clip reads them when the engine draws it
 first read builds the hint's curves where the
 constructor would have and then moves them by the offset, the same steps an eager path
 takes, so when a path is read never changes its elements, its equality or what
-`Path::lerp` accepts. Serde carries the hint and the pending offset, and keeps the hint when
-the replayed shape matches the serialized elements up to the rounding of a move. A clone
+`Path::lerp` accepts; how serde keeps the hint is stated with `Path` deserialization below.
+A clone
 taken before that read builds its own curves. Any other rounded rectangle, one with a
 coordinate beyond 1e9 (where rounding passes the curve tolerance), a rectangle and an oval
 are built at once: they are drawn from their curves, so their clones share one build.
@@ -1101,19 +1101,22 @@ rules through map and sequence deserializers, including NaN and infinity, and
 through a transform nested in `ImageFilter`. Affine and reflected transforms round
 trip without changing their coefficients.
 
-`Path` deserialization replays commands through its builders. A shape hint is
-retained only when the corresponding canonical constructor reproduces those
-commands exactly; submitted geometry remains authoritative. The engine uses
-rounded-rectangle hints to choose an analytic shadow, so an unrelated hint must
-not replace a polygon's shadow silhouette. `deserialized_paths_keep_geometry_authoritative`
-checks a triangle carrying another shape's hint, and
-`serialized_factory_paths_preserve_their_shapes` checks exact commands and hints
-through a lossless value round trip, and geometry and containment after a JSON
-string round trip (both rows of `value_contract`, enabled with `serde`). A format
-that changes floating-point coordinates may discard the hint even when the
-geometric difference is tiny. Retaining the submitted geometry takes priority
-over keeping an analytic rendering shortcut; no approximate hint admission is
-used.
+`Path` deserialization replays commands through its builders; submitted geometry remains
+authoritative. The wire carries the constructor's hint and the offset the shape was moved
+by before its curves were built. A hint is retained only when its canonical constructor,
+moved by that offset, traces the submitted commands to within a move's rounding:
+coordinates within max(1e-6 px, 1e-12 of their magnitude), and a line to where the pen
+already is skipped on both sides. That admits a shape read before it was moved, moved
+twice, or made far out and moved back, whose curves differ from the replayed hint's in
+their last bits, and nothing a renderer could tell apart: 1e-6 px is far below what the
+GPU's `f32` coordinates resolve. The engine uses rounded-rectangle hints to choose an
+analytic fill and shadow, so an unrelated hint must not replace a polygon's silhouette:
+`deserialized_paths_keep_geometry_authoritative` checks a triangle carrying another
+shape's hint, and `serialized_factory_paths_preserve_their_shapes` checks hints, equality
+and commands of factory shapes and of moved rounded rectangles through a lossless value
+round trip, and geometry and containment after a JSON string round trip (both rows of
+`value_contract`, enabled with `serde`). A format that moves coordinates by more than the
+allowance discards the hint; the submitted geometry is kept.
 
 ---
 
