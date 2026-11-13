@@ -51,7 +51,7 @@ unstable-windows = []
 # The `testing` module (ADR-0243): an application run on the headless platform,
 # driven from the test thread. Off by default and not part of the release API;
 # this crate's tests turn it on through the dev-dependency on itself.
-testing = []
+testing = ["flui-engine/testing"]
 
 # The driver agent (ADR-0239) in an optimized build: a debug build always
 # carries it. It serves the app's windows only when the launch names an
@@ -96,6 +96,7 @@ flui-runtime = { workspace = true, features = ["hot-reload"] }
 # Utilities
 tracing.workspace = true
 parking_lot.workspace = true
+rustc-hash.workspace = true
 thiserror.workspace = true
 # UiRuntime owner inbox (bounded typed mailbox)
 crossbeam-channel.workspace = true

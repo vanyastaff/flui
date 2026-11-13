@@ -776,6 +776,25 @@ fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
     if let Some(memory) = memory {
         memory.reclaim(level);
     }
+    // The GPU memory behind every window's slot. A host already turning (a
+    // notice delivered from inside the GPU work) is trimmed by the next one.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    {
+        let host = APP_RUNTIME.with(|slot| {
+            slot.try_borrow()
+                .ok()
+                .map(|state| std::rc::Rc::clone(&state.raster_host))
+        });
+        if let Some(host) = host
+            && let Ok(mut host) = host.try_borrow_mut()
+        {
+            host.reclaim(level);
+        }
+    }
 }
 
 fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {

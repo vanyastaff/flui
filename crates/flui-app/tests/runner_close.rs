@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use flui_app::app::{
     AppConfig, AppHandle, Application, CloseReason, CloseRequestHandler, CloseResponse,
     DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureHandlerFactory, FrameFailureKind,
-    request_presentation_close,
+    WindowPolicy, open_window, request_presentation_close,
 };
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::PresentationAddress;
@@ -829,6 +829,111 @@ pub(crate) fn a_given_up_device_renders_again_when_the_application_asks() {
 }
 
 /// Close the last window and join the run.
+/// Every window of a run draws on the run's one device (ADR-0305): a lost
+/// device fails the frames of both windows, one rebuild brings it back for
+/// both, and both draw again.
+pub(crate) fn two_windows_draw_on_one_device() {
+    let main = Observed::default();
+    let secondary = Observed::default();
+    let ready = Rc::new(RefCell::new(None));
+    let ready_slot = Rc::clone(&ready);
+    let opened = secondary.clone();
+    let (application, root) = observed_app(main.clone(), Rc::clone(&ready), None);
+    let application = application.on_ready(move |handle| {
+        ready_slot.replace(Some(handle.clone()));
+        drop(
+            open_window(
+                AppConfig::new(),
+                WindowPolicy::Isolated,
+                ObservedRoot { observed: opened },
+            )
+            .expect("an isolated window opens on the headless platform"),
+        );
+    });
+    let run = HeadlessRun::start(application, root);
+    run.run_owner_turn();
+    run.run_owner_turn();
+    let windows = run.open_windows();
+    assert_eq!(windows.len(), 2, "both windows are open");
+    let renderers: Vec<StandInRenderer> = windows
+        .iter()
+        .map(|window| run.renderer(window).expect("each window renders"))
+        .collect();
+    let presented = |renderers: &[StandInRenderer]| -> Vec<u64> {
+        renderers
+            .iter()
+            .map(StandInRenderer::frames_presented)
+            .collect()
+    };
+    assert!(
+        presented(&renderers).iter().all(|frames| *frames > 0),
+        "both windows presented"
+    );
+
+    // One window's device is the other's: losing it fails both windows' frames.
+    renderers[0].fail_recoveries(u32::MAX);
+    renderers[0].lose_device();
+    let before = presented(&renderers);
+    main.schedule_rebuild();
+    secondary.schedule_rebuild();
+    for window in &windows {
+        flui_platform::PlatformWindow::request_redraw(window);
+    }
+    run.run_owner_turn();
+    assert_eq!(
+        presented(&renderers),
+        before,
+        "neither window presents on the lost device"
+    );
+    let attempts = renderers[1].recovery_attempts();
+    assert!(attempts > 0, "the second window's frame saw the loss");
+    assert_eq!(
+        renderers[0].recovery_attempts(),
+        attempts,
+        "both windows count the same rebuilds"
+    );
+
+    // The loop as a desktop runs it: each turn sleeps until the deadline the
+    // previous one asked to wake at. The next rebuild, at its deadline,
+    // brings the device back for both windows, and both draw again.
+    renderers[1].fail_recoveries(0);
+    let drawn = |renderers: &[StandInRenderer]| {
+        presented(renderers)
+            .iter()
+            .zip(&before)
+            .all(|(now, before)| now > before)
+    };
+    let mut turns = 0;
+    while !drawn(&renderers) {
+        turns += 1;
+        assert!(
+            turns <= 16,
+            "the windows never drew again: {before:?} -> {:?}",
+            presented(&renderers)
+        );
+        let deadline = run
+            .wake_deadline()
+            .expect("the loop wakes for the rebuild and the dropped frames");
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        for window in &windows {
+            flui_platform::PlatformWindow::request_redraw(window);
+        }
+        run.run_owner_turn();
+    }
+    assert_eq!(
+        renderers[0].recovery_attempts(),
+        attempts + 1,
+        "one rebuild served both windows"
+    );
+
+    for window in &windows {
+        assert!(window.simulate_close(), "the window closes");
+        run.run_owner_turn();
+    }
+    assert!(!run.is_running(), "closing both windows ended the loop");
+    join_ok(run);
+}
+
 fn join_ok_after_close(started: Started) {
     close(&started, CloseRoute::User);
     assert!(!started.run.is_running(), "the close ended the loop");
@@ -891,6 +996,10 @@ fn runner_close() {
             (
                 "a_given_up_device_renders_again_when_the_application_asks",
                 a_given_up_device_renders_again_when_the_application_asks,
+            ),
+            (
+                "two_windows_draw_on_one_device",
+                two_windows_draw_on_one_device,
             ),
         ],
     );

@@ -1,9 +1,16 @@
+#![cfg_attr(
+    not(any(target_os = "android", target_os = "ios")),
+    allow(
+        dead_code,
+        reason = "the Android and iOS runners pump the raster lane until they move to the raster executor (ADR-0305); the desktop runner draws through `runner::raster_host`"
+    )
+)]
 // ============================================================================
 // GPU device-loss recovery
 // ============================================================================
 //
 // The sync device-rebuild seam plus the shared retry/backoff logic the
-// desktop, Android and iOS frame drivers use around `UiRuntime::pump`. Web's own recovery (`bootstrap_web`)
+// Android and iOS frame drivers use around `UiRuntime::pump`. Web's own recovery (`bootstrap_web`)
 // stays un-unified: its `recover()` is driven through
 // `wasm_bindgen_futures::spawn_local`, not a synchronous call this trait
 // could wrap — see that call site's own comment for why.

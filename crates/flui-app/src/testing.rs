@@ -30,7 +30,7 @@ use flui_view::View;
 
 use crate::app::application::{DesktopRun, StartupWindow};
 use crate::app::runner::{
-    StandInRenderers, StartedLoop, WindowRenderers, loop_wake_deadline, start_loop,
+    RasterFactory, StandInRenderers, StartedLoop, loop_wake_deadline, start_loop,
 };
 use crate::app::{AppHandle, Application, LaunchError};
 
@@ -122,7 +122,7 @@ impl HeadlessRun {
                 application,
                 || Ok(Box::new(platform) as Box<dyn flui_native::Platform>),
                 Rc::clone(&teardown),
-                WindowRenderers::StandIn(renderers.clone()),
+                RasterFactory::StandIn(renderers.clone()),
             )
         }));
         let state = match started {

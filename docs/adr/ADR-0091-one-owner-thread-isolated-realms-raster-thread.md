@@ -52,10 +52,10 @@ not `Send + Sync`. The flip of §1 removed that bound (`crates/flui-view/src/vie
 On the raster side, [ADR-0045](ADR-0045-raster-lane.md) is still Proposed, and production runs
 inline:
 
-- Every runner builds one lane per window and wraps it in a lock:
-  `Arc<Mutex<RasterLane>>` on desktop (`crates/flui-app/src/app/runner/desktop.rs:312`), Android
-  (`runner/android.rs:269`) and iOS (`runner/ios.rs:322`). The lane pumps on the owner thread
-  (`crates/flui-app/src/app/raster_lane.rs:1-13`).
+- A desktop window is a slot on the loop's one inline raster executor
+  (`crates/flui-app/src/app/runner/raster_host.rs`, ADR-0305). Android (`runner/android.rs`) and
+  iOS (`runner/ios.rs`) build one lane per window and wrap it in a lock, `Arc<Mutex<RasterLane>>`.
+  The lane pumps on the owner thread (`crates/flui-app/src/app/raster_lane.rs`).
 - `RasterOwner::run_until_shutdown` (`crates/flui-engine/src/raster_owner.rs:1519`) has callers
   only inside that file's test module, which starts at `raster_owner.rs:1668`. No production
   raster thread exists.

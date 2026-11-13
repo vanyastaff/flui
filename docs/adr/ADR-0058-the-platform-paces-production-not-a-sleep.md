@@ -57,14 +57,11 @@ AppKit/Metal.
 
 **1. The platform's own frame-pacing signal is armed before every present.**
 `SurfaceTarget::pre_present_notify` (the window's surface target, ADR-0254 §5; a host
-without a frame callback returns at once) is called by the raster backend
-immediately before `queue.present`, through `RasterBackend::set_pre_present_hook`. The engine
-owns the *when* (only for a frame that will present, never on a skip path — a Wayland frame
-callback requested with no commit behind it withholds every later redraw); the app layer owns
-the *what*, wiring the window's notify into the backend at bootstrap
-(`install_pre_present_hook`). The hook is a backend capability rather than a direct call
-because `flui-engine` does not depend on `flui-native`: the raster side takes an owned scene
-and a closure, never a window.
+without a frame callback returns at once) is called immediately before `queue.present`, only for
+a frame that will present, never on a skip path: a Wayland frame callback requested with no
+commit behind it withholds every later redraw. A window's slot on the raster executor holds its
+`SurfaceTarget` and calls it itself (ADR-0305). `flui-engine` names only `flui-platform`'s
+`SurfaceTarget`, never a native window.
 
 **2. No sleep. What replaces it is a deadline.** `FallbackWake` defers the next ticker-only
 wake to `0.95 ×` one display period after the last present, and reaches the loop through the

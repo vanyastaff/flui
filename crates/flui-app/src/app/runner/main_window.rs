@@ -2,7 +2,7 @@
 #[cfg(test)]
 #[path = "host_delivery_tests.rs"]
 mod host_delivery_tests;
-use super::window_renderer::WindowRenderers;
+use super::raster_host::RasterFactory;
 use super::{
     desktop::{RenderedMain, install_desktop_window},
     host::{
@@ -818,7 +818,7 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
-    start_loop(application, platform, Rc::default(), WindowRenderers::Gpu)?.finish()
+    start_loop(application, platform, Rc::default(), RasterFactory::Gpu)?.finish()
 }
 
 /// A loop whose [`Platform::run`](flui_native::Platform::run) returned, with
@@ -890,7 +890,7 @@ pub(crate) fn start_loop<V, F>(
     mut application: DesktopRun<V, F>,
     platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, LaunchError>,
     teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
-    renderers: WindowRenderers,
+    renderers: RasterFactory,
 ) -> Result<StartedLoop, LaunchError>
 where
     V: View + Clone + 'static,
@@ -955,7 +955,9 @@ where
                 runtime.main_ingress = Some(Arc::clone(&ingress));
                 runtime.capabilities = Some(registry);
                 runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
-                runtime.window_renderers = renderers;
+                runtime.raster_host = std::rc::Rc::new(std::cell::RefCell::new(
+                    super::raster_host::RasterHost::new(renderers),
+                ));
                 runtime.reopen_lifecycles();
                 runtime.ensure_execution();
             });
