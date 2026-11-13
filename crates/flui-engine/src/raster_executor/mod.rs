@@ -57,7 +57,7 @@ pub use surface::{SlotSize, SlotSurface, SurfaceHold};
 
 use self::{
     device_health::{DeviceRebuilds, FailedRebuild},
-    inbox::{INLINE_DEPTH, SlotInbox},
+    inbox::{INLINE_DEPTH, InboxState, SlotInbox},
     sender::{Lifecycle, Shared},
 };
 use crate::{
@@ -177,6 +177,62 @@ impl<B: SlotBackend> RasterExecutor<B> {
     #[cfg(test)]
     pub(crate) fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
+    }
+
+    /// Render `scene`, which the caller lends for this call alone, into
+    /// window slot `slot` in full and outside its frames: the development
+    /// reload plugin's scene (ADR-0305 §10). Only the executor its owner
+    /// holds has it, so a lent scene never crosses a thread. The caller turns
+    /// the executor first, so the slot's newest size is applied.
+    ///
+    /// The slot's next frame draws in full, since the screen then shows a
+    /// scene its frames never described. A surface the render lost moves the
+    /// slot's generation as a frame's loss does, and one dropped asks the
+    /// owner for another; a lost device is noted on the next turn. A panic
+    /// is held as the slot's failure, for the owner to take, and nothing is
+    /// shown.
+    ///
+    /// Answers [`PresentDisposition::NotShown`] without rendering for a slot
+    /// that is not attached, not shown or not configured yet, and once the
+    /// executor stopped.
+    ///
+    /// # Errors
+    /// The backend's render error.
+    pub fn render_lent(
+        &mut self,
+        slot: SlotId,
+        scene: &flui_layer::Scene,
+        reset_fonts: bool,
+    ) -> Result<PresentDisposition, EngineError> {
+        if self.shared.health() != ExecutorHealth::Running {
+            return Ok(PresentDisposition::NotShown);
+        }
+        let Self { backend, slots, .. } = self;
+        let Some(held) = slots
+            .get_mut(slot.index() as usize)
+            .and_then(Option::as_mut)
+            .filter(|held| held.id == slot)
+        else {
+            return Ok(PresentDisposition::NotShown);
+        };
+        held.owe_full(RESET);
+        if !held.visibility.is_shown() || held.applied == SurfaceGeneration::ZERO {
+            return Ok(PresentDisposition::NotShown);
+        }
+        let mut caught = FirstPanic::new();
+        let Some(rendered) = caught.contain(|| backend.render_lent(slot, scene, reset_fonts))
+        else {
+            let mut first = FirstPanic::new();
+            hold_panic(&held.inbox, caught, &mut first);
+            first.resume();
+            return Ok(PresentDisposition::NotShown);
+        };
+        if let Err(error) = &rendered {
+            let (_, loss) = classify(error);
+            let mut state = held.inbox.lock();
+            surface_lost(&mut state, &mut held.applied, loss);
+        }
+        rendered
     }
 
     /// Apply everything sent since the last turn: the trim, then the
@@ -802,17 +858,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             {
                 state.surface = state.surface.on(answer);
             }
-            if surface_loss != SurfaceLoss::Kept {
-                state.generation = state.generation.next();
-                // A resize still pending or refused keeps its barrier: only a
-                // size the backend accepts authorises frames laid out for it.
-                if state.surface.size.is_settled() {
-                    slot.applied = state.generation;
-                }
-            }
-            if surface_loss == SurfaceLoss::Dropped {
-                state.surface = state.surface.on(SurfaceEvent::SurfaceDropped);
-            }
+            surface_lost(&mut state, &mut slot.applied, surface_loss);
             state.settle(&frame, verdict);
             failure.and_then(|failure| state.hold_failure(failure))
         };
@@ -821,6 +867,22 @@ impl<B: SlotBackend> RasterExecutor<B> {
         retire(None, discarded_render, first);
         report_each([resize_report, textures_report, render_report], first);
         1
+    }
+}
+
+/// Commit what a render did to its slot's surface: a lost one mints the
+/// slot's next generation, and one dropped asks the owner for another.
+fn surface_lost(state: &mut InboxState, applied: &mut SurfaceGeneration, loss: SurfaceLoss) {
+    if loss != SurfaceLoss::Kept {
+        state.generation = state.generation.next();
+        // A resize still pending or refused keeps its barrier: only a size
+        // the backend accepts authorises frames laid out for it.
+        if state.surface.size.is_settled() {
+            *applied = state.generation;
+        }
+    }
+    if loss == SurfaceLoss::Dropped {
+        state.surface = state.surface.on(SurfaceEvent::SurfaceDropped);
     }
 }
 

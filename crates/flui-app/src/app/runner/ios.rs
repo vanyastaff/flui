@@ -31,9 +31,7 @@ use flui_native::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::View;
 use flui_widgets::app_root;
 use std::rc::Rc;
-use std::sync::Arc;
 
-use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
 use super::frame_pacing::{FallbackGate, WakeAction, frame_is_dirty, wake_action};
 use super::host::{
     APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_wake_callback,
@@ -43,10 +41,7 @@ use super::owner_dispatch::{
     RuntimeEvent, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
     install_input_wiring, prepare_ui_runtime_alongside, teardown_platform_ui_runtime,
 };
-use super::surface_lifecycle::{
-    SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
-    retry_surface_recreation, settle_surface_availability,
-};
+use super::raster_host::{RasterSlot, raster_wake_at};
 use crate::app::hot_reload::WorkerReload;
 use crate::app::{AppConfig, LaunchError};
 
@@ -277,7 +272,7 @@ where
     })
 }
 
-/// The iOS bootstrap: window, GPU renderer, UI runtime, and callback wiring.
+/// The iOS bootstrap: window, GPU slot, UI runtime, and callback wiring.
 ///
 /// Runs once per fresh logical scene session, before native publication. A
 /// reconnect retains this UI runtime and does not call the installer again.
@@ -290,73 +285,27 @@ fn bootstrap_ios<V>(
 where
     V: View + Clone + 'static,
 {
-    use std::sync::Arc;
-
-    use flui_engine::Renderer;
-    use parking_lot::Mutex;
-
     let presentation_window = super::presentation_window(Rc::clone(&host))
         .with_pointer_resampling(config.pointer_resampling);
     let window = Rc::clone(presentation_window.window());
 
-    // 0b. This window's device-recovery backoff, constructed before the
-    // wake-deadline hook below so the hook can carry its deadline.
-    let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
+    // 0. Wire the wall-clock-wake hook to the runtime's deadlines and the
+    // raster host's own (a lost device's next rebuild, a surface's next
+    // attempt). CADisplayLink drives visible frames; owner wakes also keep
+    // native service and the host's work deliverable between those frames.
+    super::host::route_wake_deadline(move || {
+        super::host::merge_wake_deadlines(
+            APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
+            raster_wake_at(),
+        )
+    });
 
-    // 0b-2. Automatic surface-recreation retry: a genuine rebuild failure
-    // leaves the presentation released, and on a window that stays available
-    // nothing would re-ask (see `SurfaceRecreationRetry`'s own doc). The retry
-    // is deadline-paced exactly like device recovery, and its deadline joins
-    // the same wake hook below.
-    let surface_recreation_retry = Arc::new(SurfaceRecreationRetry::new());
-    // Separate handle for the availability callback below: the frame closure
-    // consumes the original by value on capture, so the callback needs its own
-    // `Arc` clone to share the same retry state.
-    let surface_retry_for_callback = Arc::clone(&surface_recreation_retry);
-
-    // 0c. Wire the wall-clock-wake hook to runtime/native-service deadlines and
-    // both recovery backoffs. CADisplayLink drives visible frames; owner wakes
-    // also keep native service and recovery deliverable between those frames.
-    {
-        let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
-        let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
-        super::host::route_wake_deadline(move || {
-            let device = device_recovery_backoff.next_attempt_at();
-            let surface = surface_recreation_retry.next_attempt_at();
-            super::host::merge_wake_deadlines(
-                APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
-                super::host::merge_wake_deadlines(device, surface),
-            )
-        });
-    }
-
-    // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes
-    // ownership of a `WindowTarget`: the window's surface
-    // target, never the window (ADR-0254 §5).
+    // 1. The window's measured geometry; its GPU slot is attached once the UI
+    // runtime is installed (step 4).
     let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
     let phys_size = geometry.physical;
-    let renderer = pollster::block_on(Renderer::with_surface_color(
-        window.surface_target(),
-        config.surface_color,
-        super::host::display_color_of(window.as_ref()),
-    ));
-    let mut renderer = match renderer {
-        Ok(r) => r,
-        Err(e) => {
-            // UIKit owns the process by now, so a refusal cannot reach
-            // `run_app`'s caller: it is logged as one, and the scene fails.
-            if let Some(unsupported) = crate::app::UnsupportedSystem::from_renderer(&e) {
-                tracing::error!(%unsupported, "this system cannot run FLUI");
-            } else {
-                tracing::error!("GPU init failed: {:?}", e);
-            }
-            return Err(anyhow::anyhow!(e).context("GPU init failed"));
-        }
-    };
-    renderer.resize(phys_size.width as u32, phys_size.height as u32);
-    renderer.set_frame_latency(config.frame_latency);
 
-    // 3. Mount the root widget at the LOGICAL size; the paint root's DPR
+    // 2. Mount the root widget at the LOGICAL size; the paint root's DPR
     // transform maps to physical.
     let scale_factor = geometry.scale;
     let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
@@ -408,18 +357,40 @@ where
     installation.text_sizing(native_sizing);
     let owner_dispatch = installation.dispatcher();
 
-    // 4. Adopt the raster mailbox (ADR-0045's inline lane).
-    let lane = Arc::new(Mutex::new(
-        crate::app::raster_lane::RasterLane::new(
-            renderer,
-            owner_dispatch.address,
-            phys_size.width as u32,
-            phys_size.height as u32,
-        )
-        .with_textures(textures),
-    ));
-
-    super::host::track_raster_lane(lane.lock().reclaim_handle());
+    // 4. The scene's slot on the loop's raster executor (ADR-0305): the
+    // first scene places the executor on its surface (Metal on iOS), and
+    // every later scene is a slot on the same device. The slot holds the
+    // window's surface target, never the window (ADR-0254 §5).
+    let raster_host = APP_RUNTIME.with(|slot| slot.borrow().raster_host.clone());
+    let display = super::host::display_color_of(window.as_ref());
+    let attached = raster_host
+        .try_with(|raster_host| {
+            raster_host.attach(
+                window.as_ref(),
+                owner_dispatch.address,
+                &config,
+                textures,
+                display,
+            )
+        })
+        .unwrap_or_else(|| Err(super::raster_host::host_busy()));
+    if let Err(error) = attached {
+        // UIKit owns the process by now, so a refusal cannot reach
+        // `run_app`'s caller: it is logged as one, and the scene fails.
+        if let Some(unsupported) = crate::app::UnsupportedSystem::from_renderer(&error) {
+            tracing::error!(%unsupported, "this system cannot run FLUI");
+        } else {
+            tracing::error!(%error, "GPU init failed");
+        }
+        return Err(anyhow::Error::from(error).context("GPU init failed"));
+    }
+    let raster = RasterSlot {
+        host: raster_host,
+        address: owner_dispatch.address,
+        size: (phys_size.width as u32, phys_size.height as u32),
+        device: flui_engine::DeviceHealth::Healthy,
+    };
+    let surface_host = raster.host.clone();
 
     // 5. Input -> entered ui_runtime input dispatch.
     install_input_wiring(owner_dispatch, window.as_ref());
@@ -427,10 +398,8 @@ where
     installation.dev_agent(agent_window);
     let frame =
         installation.frame_driver(super::frame_driver::FrameDriver::Ios(IosFrameDriver {
-            lane: Arc::clone(&lane),
+            raster,
             worker_reload,
-            device_recovery_backoff,
-            surface_recreation_retry,
         }))?;
     let binding = frame.binding;
     let routes = super::window_routes::WindowRoutes::of(&*window);
@@ -440,37 +409,26 @@ where
 
     // 8. Lifecycle.
     //
-    // Surface availability: release the wgpu surface before the
-    // `CAMetalLayer` behind it is torn down, and rebuild when one returns.
-    // The same shape Android uses — the engine's tracker mark runs inside
-    // the lane lock with the mint, and only the ui_runtime half is dispatched.
-    let lane_surface = Arc::clone(&lane);
+    // Surface availability: the slot's surface is released before the
+    // `CAMetalLayer` behind it is torn down, before this callback returns,
+    // and made again when one returns (`RasterHost::set_surface`), as on
+    // Android. Only the ui_runtime half, the full repaint, is dispatched.
+    let surface_address = owner_dispatch.address;
     routes.route_surface_changed(move |change| {
-        let has_surface = change == flui_platform::SurfaceChange::Rebuild;
-        let now = web_time::Instant::now();
-        let mut lane = lane_surface.lock();
-        let outcome =
-            settle_surface_availability(&mut lane, &surface_retry_for_callback, has_surface, now);
-        // The guard ends before the ui_runtime dispatch — see Android's matching
-        // route for the same-thread hazard that puts the `drop` here.
-        drop(lane);
-        if matches!(outcome, SurfaceLifecycleOutcome::Recreated) {
-            // The ui_runtime half is deferrable, so it goes through the ui_runtime
-            // dispatch rather than running inline.
+        let available = change == flui_platform::SurfaceChange::Rebuild;
+        if surface_host.set_surface(surface_address, available) {
             let _ = dispatch_platform_ui_runtime(
                 owner_dispatch,
                 RuntimeTask::Event(RuntimeEvent::PrimarySurfaceRestored),
             );
         }
-        report_surface_settlement("iOS", &outcome);
     });
 
     // The scene's facts — metrics, safe area, lifecycle, appearance and
     // display — reach the presentation through the window's one snapshot
-    // subscription; the resize applier installed above touches the renderer.
+    // subscription; the resize applier installed above sizes the slot.
     // Registered before the seed is read, so native facts changed during
-    // renderer bootstrap cannot be replaced by a synthetic Resumed
-    // observation.
+    // bootstrap cannot be replaced by a synthetic Resumed observation.
     installation.observe_window();
 
     installation.on_close(move || {
@@ -490,33 +448,31 @@ where
 }
 
 pub(super) struct IosFrameDriver {
-    lane: Arc<parking_lot::Mutex<crate::app::raster_lane::RasterLane<flui_engine::Renderer>>>,
+    raster: RasterSlot,
     worker_reload: WorkerReload,
-    device_recovery_backoff: Arc<super::device_recovery::DeviceRecoveryBackoff>,
-    surface_recreation_retry: Arc<SurfaceRecreationRetry>,
 }
 
 impl IosFrameDriver {
     pub(super) fn installed() {
         tracing::info!("iOS platform initialized with callbacks");
     }
+
+    /// The platform's new size, which layout reads and the next frame
+    /// configures the slot for.
     pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
-        let resize = self.lane.lock().resize_hook();
         let physical = metrics.physical();
-        resize.apply(
+        self.raster.size = (
             physical.width.unsigned_abs(),
             physical.height.unsigned_abs(),
         );
     }
+
     pub(super) fn wake(
         &mut self,
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         presentation: flui_foundation::PresentationId,
     ) {
-        let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;
-        let device_recovery_backoff = &self.device_recovery_backoff;
-        let surface_recreation_retry = &self.surface_recreation_retry;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
         let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
@@ -528,21 +484,15 @@ impl IosFrameDriver {
 
             let inbox_redraw = ui_runtime.drain_owner_inbox();
 
-            let has_pending = ui_runtime.has_pending_work();
-            // The surface-retry deadline joins the device-recovery one in
-            // the `dirty` predicate, for the same reason that one must be
-            // present: a deadline the platform faithfully actuates still
-            // reaches `WakeAction::Skip` and returns before the retry is
-            // consulted if it is absent from this gate.
-            let retry_deadline = super::host::merge_wake_deadlines(
-                device_recovery_backoff.next_attempt_at(),
-                surface_recreation_retry.next_attempt_at(),
-            );
+            // The host's own deadlines (a lost device's next rebuild, a
+            // surface's next attempt) are a dirty source as well as a wake
+            // deadline: one the platform faithfully actuates still reaches
+            // `WakeAction::Skip` if it is absent from this gate.
             let dirty = frame_is_dirty(
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
-                has_pending,
-                retry_deadline,
+                ui_runtime.has_pending_work(),
+                raster_wake_at(),
                 FallbackGate::default(),
             );
             let scheduler = ui_runtime.scheduler();
@@ -552,32 +502,6 @@ impl IosFrameDriver {
                 scheduler.is_frame_scheduled(),
                 FallbackGate::default(),
             );
-            if action != WakeAction::Render {
-                return (action, now, None);
-            }
-
-            // A retry owed by a genuine surface-recreation failure gets
-            // its gated attempt here, BEFORE the frame, through the shared
-            // helper (its own lane-lock scope, released before the ui_runtime
-            // half). This closure already runs as the ui_runtime's Pump task, so
-            // the full-repaint mark goes to `ui_runtime` directly and the frame
-            // about to run is the one that repaints into the new surface —
-            // re-dispatching it as another task would queue it behind
-            // this one (the dispatcher is mid-phase) and land it a frame late.
-            match retry_surface_recreation(lane_frame, surface_recreation_retry, now) {
-                Some(SurfaceLifecycleOutcome::Recreated) => {
-                    ui_runtime.mark_primary_needs_full_repaint();
-                }
-                Some(SurfaceLifecycleOutcome::Failed(source)) => {
-                    tracing::warn!(
-                        platform = "iOS",
-                        ?source,
-                        "surface recreation retry failed; the deadline-paced retry \
-                             continues"
-                    );
-                }
-                Some(SurfaceLifecycleOutcome::Released) | None => {}
-            }
             (
                 action,
                 now,
@@ -587,6 +511,11 @@ impl IosFrameDriver {
             )
         });
 
+        // A presentation whose frames are off cannot be seen: its slot is not
+        // drawn, and draws in full when frames come back (ADR-0305).
+        if action != WakeAction::Skip {
+            self.raster.show(action == WakeAction::Render);
+        }
         match action {
             WakeAction::Skip => return,
             WakeAction::PumpBackground => {
@@ -595,21 +524,14 @@ impl IosFrameDriver {
                 // by the display link, which ticks at most once per refresh and
                 // not at all while backgrounded (ADR-0268).
                 ui_runtime.pump_background();
+                // A backgrounded scene reports what its earlier frames left.
+                self.raster.report_frame_panic(ui_runtime);
                 return;
             }
             WakeAction::Render => {}
         }
 
-        // The frame: `UiRuntime::pump` at `now`, with device-loss
-        // recovery around it (`pump_with_device_recovery`). A changed colour
-        // profile of the window's display sets the surface up again before
-        // this frame paints (ADR-0256 §6).
-        if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
-            ui_runtime.mark_primary_needs_full_repaint();
-        }
-        if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
-        {
-            tracing::error!("frame skipped: raster lane busy at frame admission");
-        }
+        // The frame, through the scene's slot (`RasterSlot::pump`).
+        let _presented = self.raster.pump(ui_runtime, now, display_color);
     }
 }

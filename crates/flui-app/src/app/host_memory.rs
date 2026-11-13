@@ -1,13 +1,15 @@
 //! The memory the host gives back when the system asks for it (ADR-0237
 //! decision 9): the receivers the application registered
 //! ([`AppConfig::memory_reclaim`]), among them the asset registry that
-//! keeps decoded images, and the GPU memory behind each raster lane: pooled
-//! buffers, the glyph atlas and image textures.
+//! keeps decoded images. The GPU memory behind every window (pooled buffers,
+//! the glyph atlas and image textures) is the raster host's to trim, which
+//! the same notice reaches (`runner::raster_host`).
 //!
 //! One [`HostMemory`] per host is reclaimed once per notice, however many
-//! windows it has, and a window opened later is reached along with the lanes and
-//! receivers of the windows opened before it. The lists are cloned out before any receiver runs, so a receiver
-//! may register or release another without meeting this lock.
+//! windows it has, and a window opened later is reached along with the
+//! receivers of the windows opened before it. The list is cloned out before
+//! any receiver runs, so a receiver may register or release another without
+//! meeting this lock.
 //!
 //! [`AppConfig::memory_reclaim`]: crate::app::AppConfig::memory_reclaim
 
@@ -24,12 +26,6 @@ pub(crate) type SharedReceiver = Arc<dyn ReclaimMemory + Send + Sync>;
 #[derive(Default)]
 pub(crate) struct HostMemory {
     receivers: Mutex<Vec<SharedReceiver>>,
-    #[cfg(not(target_arch = "wasm32"))]
-    #[expect(
-        deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
-    )]
-    rasters: Mutex<Vec<flui_engine::RasterHandle>>,
 }
 
 impl HostMemory {
@@ -40,36 +36,9 @@ impl HostMemory {
         let previous = std::mem::replace(&mut *self.receivers.lock(), receivers);
         drop(previous);
     }
-
-    /// Trim the GPU memory behind `lane` along with the application's
-    /// receivers, until the lane's owner is gone.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[expect(
-        deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
-    )]
-    #[cfg_attr(
-        not(any(target_os = "android", target_os = "ios")),
-        allow(
-            dead_code,
-            reason = "the Android and iOS runners keep the raster lane until they move to the raster executor (ADR-0305)"
-        )
-    )]
-    pub(crate) fn track_raster_lane(&self, lane: flui_engine::RasterHandle) {
-        let mut rasters = self.rasters.lock();
-        rasters.retain(flui_engine::RasterHandle::is_live);
-        rasters.push(lane);
-    }
 }
 
 impl ReclaimMemory for HostMemory {
-    #[cfg_attr(
-        not(target_arch = "wasm32"),
-        expect(
-            deprecated,
-            reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
-        )
-    )]
     fn reclaim(&self, level: MemoryPressureLevel) {
         let receivers = self.receivers.lock().clone();
         let mut failure = FirstPanic::new();
@@ -78,15 +47,6 @@ impl ReclaimMemory for HostMemory {
             level,
             &mut failure,
         );
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let rasters = {
-                let mut rasters = self.rasters.lock();
-                rasters.retain(flui_engine::RasterHandle::is_live);
-                rasters.clone()
-            };
-            reclaim_each(rasters.iter(), level, &mut failure);
-        }
         failure.resume();
     }
 }

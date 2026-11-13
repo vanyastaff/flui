@@ -375,11 +375,7 @@ pub(crate) struct AppRuntime {
     ))]
     pub(super) main_controller: Option<super::runner::main_window::MainController>,
     /// Where this loop's windows get their renderers.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) raster_host: super::runner::raster_host::SharedRasterHost,
     #[cfg(target_os = "ios")]
     pub(super) ios_controller: Option<super::runner::ios::IOSController>,
@@ -572,11 +568,7 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             main_controller: None,
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
+            #[cfg(not(target_arch = "wasm32"))]
             raster_host: super::runner::raster_host::SharedRasterHost::default(),
             #[cfg(target_os = "ios")]
             ios_controller: None,

@@ -213,8 +213,8 @@ pub fn run_direct(
                 }
             }
 
-            // GPU device-loss recovery: same recovery as the runner's frame
-            // callbacks (`attempt_device_recovery`).
+            // GPU device-loss recovery, on this renderer's own device; a
+            // native window's device is rebuilt by the raster executor.
             if r.is_device_lost() {
                 match pollster::block_on(r.recover()) {
                     Ok(()) => {

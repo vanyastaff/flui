@@ -1704,8 +1704,7 @@ impl Renderer {
         // into `vkDeviceWaitIdle` (see `release_surface`'s doc for what that
         // wait costs and why it is accepted); a create that then fails leaves
         // the lease released, which is the documented post-state. The caller
-        // owns the log line for that failure — see `surface_lifecycle.rs`'s
-        // `a_failed_recreation_carries_the_error_and_leaves_the_presentation_released`.
+        // owns the log line for that failure.
         let released = lease.release();
 
         let surface = self

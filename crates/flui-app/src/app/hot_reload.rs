@@ -367,36 +367,31 @@ impl ScenePlugin {
         Self(config.dev_reload.clone())
     }
 
-    /// Let the hook's scene plugin own this frame. Returns `true` when it
-    /// rendered, in which case the caller must not run the widget pipeline
-    /// for this frame.
+    /// Let the hook's scene plugin own this frame, drawn at `width` by
+    /// `height` through `render` (the raster host's lent render, answering
+    /// whether the scene was shown). Returns `true` when it rendered, in which
+    /// case the caller must not run the widget pipeline for this frame.
     pub(crate) fn try_render_frame(
         &self,
-        renderer: &mut flui_engine::Renderer,
         width: f64,
         height: f64,
+        mut render: impl FnMut(&flui_layer::Scene, bool) -> bool,
     ) -> bool {
         let Some(reload) = &self.0 else {
             return false;
         };
         let rendered = reload.lend("scene_frame", |hook| {
-            // SAFETY: render_plugin_scene traverses the scene synchronously.
-            // It ignores AnnotatedRegion payloads; cached images are concrete
-            // Arc<Vec<u8>> data, and first font admission copies source bytes
-            // into the host registry's Arc<[u8]>. Recorded GPU commands retain
-            // no plugin trait objects. This callback retains no image-dependent
-            // payload, including when rendering unwinds.
+            // SAFETY: `render` lends the scene to the raster executor's
+            // `render_lent`, which traverses it synchronously and keeps no
+            // reference past the call. It ignores AnnotatedRegion payloads;
+            // cached images are concrete Arc<Vec<u8>> data, and first font
+            // admission copies source bytes into the host registry's
+            // Arc<[u8]>. Recorded GPU commands retain no plugin trait objects.
+            // This callback retains no image-dependent payload, including
+            // when rendering unwinds.
             #[expect(unsafe_code)]
             unsafe {
-                hook.scene_frame(width, height, &mut |scene, reset_fonts| match renderer
-                    .render_plugin_scene(scene, reset_fonts)
-                {
-                    Ok(_) => true,
-                    Err(error) => {
-                        tracing::error!(?error, "Plugin render failed");
-                        false
-                    }
-                })
+                hook.scene_frame(width, height, &mut render)
             }
         });
         matches!(rendered, Lent::Returned(true))

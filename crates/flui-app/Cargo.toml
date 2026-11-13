@@ -163,6 +163,9 @@ static_assertions.workspace = true
 tempfile.workspace = true
 # The driver agent's tests speak the protocol's JSON lines by hand.
 serde_json = { workspace = true }
+# A raster host test counts the times a window is asked for its native
+# surface.
+raw-window-handle.workspace = true
 # `HeldPointerQueue::append`/`len`, `SemanticsHost::ensure_semantics`,
 # `ExecutionServices::with_limits`/`default_pools_started`, the UI runtime's test
 # constructors and the `testing` doubles, which this crate's tests use and

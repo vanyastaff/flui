@@ -949,6 +949,17 @@ impl GpuContext {
         scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
+        self.draw_window(slot, scene, WindowDraw::Frame(damage))
+    }
+
+    /// Draw `scene` into window `slot` as `draw` asks and present it, as
+    /// [`render_window`](Self::render_window) does.
+    fn draw_window(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        draw: WindowDraw,
+    ) -> EngineResult<PresentDisposition> {
         if self.domain.is_lost() {
             return Err(EngineError::DeviceLost);
         }
@@ -987,13 +998,15 @@ impl GpuContext {
         let mut caught = FirstPanic::new();
         let rendered = caught.contain(|| {
             painter.resize(size.0, size.1);
-            window.render(
-                &gpu_of(adapter, domain),
-                &mut painter,
-                &mut blit,
-                scene,
-                damage,
-            )
+            let gpu = gpu_of(adapter, domain);
+            match draw {
+                WindowDraw::Frame(damage) => {
+                    window.render(&gpu, &mut painter, &mut blit, scene, damage)
+                }
+                WindowDraw::Lent { reset_fonts } => {
+                    window.render_lent(&gpu, &mut painter, &mut blit, scene, reset_fonts)
+                }
+            }
         });
         self.blit = Some(blit);
         self.take_back_textures(slot, &mut painter, own_textures);
@@ -1324,6 +1337,23 @@ impl SlotBackend for GpuContext {
         }
     }
 
+    fn render_lent(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        reset_fonts: bool,
+    ) -> EngineResult<PresentDisposition> {
+        if self.rebuilding {
+            return Err(EngineError::DeviceLost);
+        }
+        match self.slots.get(slot) {
+            Some(SurfaceSlot::Window(_)) => {
+                self.draw_window(slot, scene, WindowDraw::Lent { reset_fonts })
+            }
+            Some(SurfaceSlot::Offscreen(_)) | None => Err(not_attached()),
+        }
+    }
+
     fn detach(&mut self, slot: SlotId) {
         GpuContext::detach(self, slot);
     }
@@ -1345,6 +1375,16 @@ impl SlotBackend for GpuContext {
     fn rebuilds_inline(&self) -> bool {
         cfg!(not(target_arch = "wasm32"))
     }
+}
+
+/// What a window slot draws: one of its frames, or a scene lent outside
+/// them.
+#[derive(Clone, Copy)]
+enum WindowDraw {
+    /// A frame, repainting at least its damage.
+    Frame(DamageRegion),
+    /// A lent scene, in full, with the fonts it carries.
+    Lent { reset_fonts: bool },
 }
 
 /// `size` as a texture extent; a side of zero or less is refused.

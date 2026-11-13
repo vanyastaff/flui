@@ -2,7 +2,6 @@ use flui_scheduler::AppLifecycleState;
 use flui_view::View;
 use flui_widgets::app_root;
 
-use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
 use super::frame_pacing::{
     BackgroundPace, FallbackGate, WakeAction, frame_is_dirty, keeps_frame_gate_open, wake_action,
 };
@@ -11,10 +10,7 @@ use super::owner_dispatch::{
     ExitWatchdog, RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
     prepare_platform_ui_runtime, teardown_platform_ui_runtime_logged,
 };
-use super::surface_lifecycle::{
-    SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
-    retry_surface_recreation, settle_surface_availability,
-};
+use super::raster_host::{RasterSlot, raster_wake_at};
 use crate::app::AppConfig;
 
 // ============================================================================
@@ -33,10 +29,8 @@ where
 {
     use std::sync::Arc;
 
-    use flui_engine::Renderer;
     use flui_native::Platform;
     use flui_platform::WindowOptions;
-    use parking_lot::Mutex;
 
     use crate::app::hot_reload::ScenePlugin;
 
@@ -77,8 +71,8 @@ where
     /// before `run()` (ADR-0039 §1): `on_ready` is `FnOnce` and fires
     /// exactly once, matching the once-only pre-run bootstrap semantics it
     /// replaced. **The surface-recreation path is no longer untouched**: this
-    /// bootstrap routes the window's `surface_changed`, which releases the
-    /// renderer's surface on `Pause`/`TerminateWindow` and rebuilds it when a
+    /// bootstrap routes the window's `surface_changed`, which releases its
+    /// slot's surface on `Pause`/`TerminateWindow` and rebuilds it when a
     /// window returns — see that route below. **Unvalidated
     /// on-device**: no device and no CI compile target for
     /// `target_os = "android"` verify this; stated here and in the registry
@@ -104,42 +98,24 @@ where
         // 0. The platform clipboard (ADR-0312 §6) was installed with the
         // owner platform; the ui_runtime below takes it through `build_ui_runtime`.
         //
-        // 0b. This window's device-recovery backoff, constructed here (not
-        // down at step 6 alongside the renderer it paces) so the
-        // wake-deadline hook below can be wired to it from the start — see
-        // `bootstrap_desktop`'s matching comment.
-        let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
-
-        // 0b-2. Automatic surface-recreation retry: a genuine rebuild failure
-        // leaves the presentation released, and on a window that stays
-        // available nothing would re-ask (see `SurfaceRecreationRetry`'s own
-        // doc). The retry is deadline-paced exactly like device recovery, and
-        // its deadline joins the same wake hook below. One handle for the
-        // frame closure, one for the availability callback.
-        let surface_recreation_retry = Arc::new(SurfaceRecreationRetry::new());
-        let surface_retry_for_callback = Arc::clone(&surface_recreation_retry);
-
-        // 0b-3. The bound on backgrounded pumps: a deadline the wake hook
+        // 0b. The bound on backgrounded pumps: a deadline the wake hook
         // reports, not a sleep on the loop thread.
         let background_pace = Arc::new(BackgroundPace::default());
 
-        // The existing owner wake carries runtime deadlines as well as device
-        // and surface recovery and the background pace. Geometry refresh is
-        // owner work even while a hidden presentation cannot produce frames.
+        // The existing owner wake carries runtime deadlines as well as the
+        // raster host's own (a lost device's next rebuild, a surface's next
+        // attempt) and the background pace. Geometry refresh is owner work
+        // even while a hidden presentation cannot produce frames.
         {
-            let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
-            let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
             let background_pace = Arc::clone(&background_pace);
             super::host::route_wake_deadline(move || {
-                [
-                    APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
-                    device_recovery_backoff.next_attempt_at(),
-                    surface_recreation_retry.next_attempt_at(),
+                super::host::merge_wake_deadlines(
+                    super::host::merge_wake_deadlines(
+                        APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
+                        raster_wake_at(),
+                    ),
                     background_pace.next_wake(),
-                ]
-                .into_iter()
-                .flatten()
-                .min()
+                )
             });
         }
 
@@ -164,25 +140,10 @@ where
             .with_pointer_resampling(config.pointer_resampling);
         let window = std::rc::Rc::clone(presentation_window.window());
 
-        // 2. Create GPU renderer (Vulkan backend on Android). `Renderer::new`
-        // takes ownership of a `WindowTarget`: the window's
-        // surface target, never the window (ADR-0254 §5).
+        // 2. The window's measured geometry; its GPU slot is attached once
+        // the UI runtime is installed (step 4).
         let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
         let phys_size = geometry.physical;
-        let renderer = pollster::block_on(Renderer::with_surface_color(
-            window.surface_target(),
-            config.surface_color,
-            super::host::display_color_of(window.as_ref()),
-        ));
-        let mut renderer = match renderer {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("GPU init failed: {:?}", e);
-                return Err(anyhow::anyhow!(e).context("GPU init failed"));
-            }
-        };
-        renderer.resize(phys_size.width as u32, phys_size.height as u32);
-        renderer.set_frame_latency(config.frame_latency);
 
         // 3. Mount root widget (used when no plugin is active) at the
         // LOGICAL size; the paint root's DPR transform maps to physical.
@@ -263,33 +224,43 @@ where
             }
         }
 
-        // 4. Adopt the raster mailbox (ADR-0045's inline lane) — the same
-        // ownership shape as the desktop bootstrap: the lane's owner solely
-        // owns the renderer, the resize path holds only the mailbox handle
-        // plus the owner-affine stamp/size state, and every frame submit
-        // below crosses the raster boundary as an owned, stamped
-        // `SceneSnapshot`.
-        let lane = Arc::new(Mutex::new(
-            crate::app::raster_lane::RasterLane::new(
-                renderer,
-                owner_dispatch.address,
-                phys_size.width as u32,
-                phys_size.height as u32,
-            )
-            .with_textures(textures),
-        ));
-
-        super::host::track_raster_lane(lane.lock().reclaim_handle());
+        // 4. The window's slot on the loop's raster executor (ADR-0305), as
+        // on the desktop: the window places the executor on its surface,
+        // which picks the adapter (Vulkan on Android). The slot holds the
+        // window's surface target, never the window (ADR-0254 §5), and every
+        // frame crosses to it as an owned, stamped `SceneSnapshot`.
+        let host = APP_RUNTIME.with(|slot| slot.borrow().raster_host.clone());
+        let display = super::host::display_color_of(window.as_ref());
+        let attached = host
+            .try_with(|host| {
+                host.attach(
+                    window.as_ref(),
+                    owner_dispatch.address,
+                    &config,
+                    textures,
+                    display,
+                )
+            })
+            .unwrap_or_else(|| Err(super::raster_host::host_busy()));
+        if let Err(error) = attached {
+            tracing::error!(%error, "GPU init failed");
+            return Err(anyhow::Error::from(error).context("GPU init failed"));
+        }
+        let raster = RasterSlot {
+            host,
+            address: owner_dispatch.address,
+            size: (phys_size.width as u32, phys_size.height as u32),
+            device: flui_engine::DeviceHealth::Healthy,
+        };
+        let surface_host = raster.host.clone();
 
         // 5. Register input callback -> entered ui_runtime input dispatch
         install_input_wiring(owner_dispatch, window.as_ref());
 
         let frame = installation.frame_driver(super::frame_driver::FrameDriver::Android(
             AndroidFrameDriver {
-                lane: Arc::clone(&lane),
+                raster,
                 hot_reload,
-                device_recovery_backoff,
-                surface_recreation_retry,
                 background_pace,
             },
         ))?;
@@ -318,106 +289,43 @@ where
         // 8b. Surface availability (issue #1146): the release that has to
         // happen before the native window behind the surface dies, and the
         // rebuild for the window that replaces it. `flui-native` reports
-        // both as one bool out of its own event loop — `false` on
-        // `Pause`/`TerminateWindow`, `true` on `Resume`/`InitWindow`, with
+        // both out of its own event loop: `Release` on
+        // `Pause`/`TerminateWindow`, `Rebuild` on `Resume`/`InitWindow`, with
         // the mapping and its reason in `flui-native`'s
         // `owner/android/looper.rs`, "# Surface Lifecycle".
         //
-        // The lock below is BLOCKING, unlike the frame closure's `try_lock`
-        // above, and the difference is the failure mode: a skipped frame
-        // retries on the next wake and heals itself, while a skipped release
-        // is exactly the defect this callback exists to fix — the surface has
-        // to be gone before `TerminateWindow`'s callback returns, because
-        // that callback is the last moment the handle behind it is valid.
+        // The release is applied before this callback returns, since the
+        // callback is the last moment the handle behind the surface is valid:
+        // the host sends `RasterCommand::Release` and turns the executor at
+        // once (`RasterHost::set_surface`). Dropping a configured
+        // `wgpu::Surface` reaches `vkDeviceWaitIdle`, so the driver's
+        // device-idle wait is paid here, on this thread. **Unverified:** its
+        // length is the driver's and there is no Android device here to
+        // measure it; the contingent risk is Android's input-dispatch
+        // watchdog, which turns a wait past its budget into an ANR.
         //
-        // That hold carries the release's own unbounded cost, so the guard is
-        // not free either: dropping a configured `wgpu::Surface` reaches
-        // `vkDeviceWaitIdle`, which means the driver's device-idle wait is
-        // paid under this guard, on this thread (`SurfaceLifecycle::
-        // release_surface`'s doc names it as the price of the verb). Accepted
-        // for the same reason the lock is blocking at all: the wait has to
-        // finish before the callback returns. **Unverified:** the wait's length
-        // is the driver's and there is no Android device here to measure it;
-        // the contingent risk is Android's input-dispatch watchdog, since the
-        // thread that asked for this transition stays parked until the callback
-        // returns, which turns a wait past the watchdog's budget into an ANR
-        // rather than a skipped frame.
+        // The host is owner-local, not behind a lock: nothing off this thread
+        // reaches it. Only a callback re-entering from the host's own GPU work
+        // finds it turning, and then the release lands when that turn ends.
         //
-        // Blocking here is only safe while ONE invariant holds: **nothing
-        // off-thread ever holds this lane**. Today that follows from this
-        // backend's shape — the lane is taken inside `dispatch_request_frame`,
-        // which the Android platform's `run` loop calls after `poll_events`
-        // returns, on this same thread, and no event arm drives a frame. A
-        // second lane consumer on another thread (a worker service, a
-        // pipelined presentation) would make this lock a real deadlock, which
-        // is why the invariant is named here and not just its local
-        // consequences: this is the one path where a wrong assumption about
-        // it is not self-healing.
-        //
-        // The off-thread invariant is not the only hazard here, and it does not
-        // cover the same-thread one: `dispatch_platform_ui_runtime` drains the ui_runtime
-        // queue inline, so it can reach another owner operation right here, on this
-        // thread, where the frame path takes this same lane with `try_lock` and
-        // self-skips. Holding the guard across that costs a dropped frame
-        // rather than a deadlock, but it is a frame dropped for no reason,
-        // because nothing after the mint needs the lane. So the guard's scope
-        // ends at the mint and the dispatch runs outside it; the ui_runtime half is
-        // documented as deferrable below, so the ordering does not change.
-        //
-        // Two more invariants this route rests on, stated where it is set
-        // rather than assumed:
-        //
-        // * The window lets go of its handler exactly once, on the Android
-        //   platform's `run` exit path (`flui-native`'s `owner/android/looper.rs`,
-        //   after the loop and before the quit hook), on the loop's three
-        //   returning routes: `MainEvent::Destroy`, a `quit()`, a bootstrap
-        //   that failed, plus one named exception, a panic that unwinds out of
-        //   `run` and skips the release by decision (ADR-0063 decision 5). The
-        //   handler owns this route and the frame route above, which are the
-        //   only owners of `lane`, so the renderer and its surface lease go
-        //   with them and the window's `Arc` is released.
-        // * One window, one handler: `on_ready` is `FnOnce`, so this bootstrap
-        //   runs once per platform, and a recreated activity is a new
-        //   `android_main` with a new `AndroidApp`, a new platform and a new
-        //   window (`android-activity` 0.6.1, `native_activity/glue.rs`'s
-        //   `ANativeActivity_onCreate`).
-        let lane_surface = Arc::clone(&lane);
+        // The window lets go of its handler exactly once, on the Android
+        // platform's `run` exit path (`flui-native`'s `owner/android/looper.rs`,
+        // after the loop and before the quit hook); one window, one handler:
+        // `on_ready` is `FnOnce`, and a recreated activity is a new
+        // `android_main` with a new platform and window (`android-activity`
+        // 0.6.1, `native_activity/glue.rs`'s `ANativeActivity_onCreate`).
+        let surface_address = owner_dispatch.address;
         routes.route_surface_changed(move |change| {
-            let has_surface = change == flui_platform::SurfaceChange::Rebuild;
-            let now = web_time::Instant::now();
-            let mut lane = lane_surface.lock();
-            // The engine's tracker mark, the generation mint and the retry's
-            // classification all happen inside this lane lock scope, through
-            // the shared helper — so no stale in-flight work stays addressed
-            // to the destroyed surface, and this callback and the frame-path
-            // retry cannot disagree about which failure is genuine.
-            let outcome = settle_surface_availability(
-                &mut lane,
-                &surface_retry_for_callback,
-                has_surface,
-                now,
-            );
-            // The guard ends before the ui_runtime dispatch — see the same-thread
-            // hazard named above, which is what puts the `drop` here.
-            drop(lane);
-            if matches!(outcome, SurfaceLifecycleOutcome::Recreated) {
-                // The ui_runtime half is deferrable, so it goes through the ui_runtime
-                // dispatch rather than running inline: unlike the release, its
-                // ordering cannot affect completeness (the engine's tracker
-                // mark already ran above, and the mint with it), and the
-                // dispatcher may queue it when it is mid-phase.
+            let available = change == flui_platform::SurfaceChange::Rebuild;
+            // A surface on its way repaints the window in full. That half is
+            // deferrable, so it goes through the ui_runtime dispatch, which
+            // may queue it while the dispatcher is mid-phase.
+            if surface_host.set_surface(surface_address, available) {
                 let _ = dispatch_platform_ui_runtime(
                     owner_dispatch,
                     RuntimeTask::Event(RuntimeEvent::PrimarySurfaceRestored),
                 );
             }
-            // A release logs nothing here (the engine logs
-            // `surface_released_by_owner`). `SurfaceTargetUnavailable` is the
-            // expected outcome of the acquire half — `Resume` reaches this
-            // callback before any window exists, since the backend writes
-            // `Resume` independently of the window — and is traced; a genuine
-            // failure warns, and the frame-path retry above now polls it.
-            report_surface_settlement("Android", &outcome);
         });
 
         // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
@@ -523,94 +431,70 @@ where
 }
 
 pub(super) struct AndroidFrameDriver {
-    lane: std::sync::Arc<
-        parking_lot::Mutex<crate::app::raster_lane::RasterLane<flui_engine::Renderer>>,
-    >,
+    raster: RasterSlot,
     hot_reload: crate::app::hot_reload::ScenePlugin,
-    device_recovery_backoff: std::sync::Arc<super::device_recovery::DeviceRecoveryBackoff>,
-    surface_recreation_retry: std::sync::Arc<SurfaceRecreationRetry>,
     background_pace: std::sync::Arc<BackgroundPace>,
 }
 
 impl AndroidFrameDriver {
+    /// The platform's new size, which layout reads and the next frame
+    /// configures the slot for.
     pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
-        let resize = self.lane.lock().resize_hook();
         let physical = metrics.physical();
-        resize.apply(
+        self.raster.size = (
             physical.width.unsigned_abs(),
             physical.height.unsigned_abs(),
         );
     }
+
     pub(super) fn wake(
         &mut self,
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         presentation: flui_foundation::PresentationId,
     ) {
-        let lane_frame = &self.lane;
-        let hot_reload_frame = &self.hot_reload;
-        let device_recovery_backoff = &self.device_recovery_backoff;
-        let surface_recreation_retry = &self.surface_recreation_retry;
+        let raster = &self.raster;
+        let hot_reload = &self.hot_reload;
         // The gate half of the wake runs inside one ui_runtime entry
         // and decides; the pump below enters the ui_runtime itself.
         let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             let now = web_time::Instant::now();
             // Owner-inbox drain: commands and worker results commit HERE,
-            // at the frame boundary while the scheduler phase is Idle —
-            // never inside the frame transaction below. Runs before
-            // everything else in this callback, including the hot-reload
-            // plugin scene fast path below, so a command-driven redraw
-            // request is observed by the very frame its wake produced
-            // regardless of which rendering path this frame takes.
+            // at the frame boundary while the scheduler phase is Idle,
+            // never inside the frame transaction below, and before the
+            // scene plugin's fast path, so a command-driven redraw request is
+            // observed by the very frame its wake produced whichever path
+            // this frame takes.
             let inbox_redraw = ui_runtime.drain_owner_inbox();
 
-            // If a scene plugin is live it owns this presentation frame,
-            // but the callback still executes inside the ui_runtime entry
-            // scope. Always `false` without an installed development
-            // reload hook. The plugin renders through the backend directly
-            // (its own diagnostic scene, not a ui_runtime-produced frame),
-            // so it goes through the lane's scoped backend access —
-            // per ADR-0045 decision 6 the plugin path is one of the
-            // named inline-only lanes.
-            {
-                let Some(mut lane) = lane_frame.try_lock() else {
-                    tracing::error!(
-                        "frame skipped: raster lane already held by an outer \
-                                 frame dispatch"
-                    );
-                    return (WakeAction::Skip, now, None);
-                };
-                let plugin_rendered = lane.with_backend(|r| {
-                    let (w, h) = r.size();
-                    hot_reload_frame.try_render_frame(r, w as f64, h as f64)
-                });
-                if plugin_rendered {
-                    return (WakeAction::Skip, now, None);
-                }
+            // A live scene plugin owns this presentation's frame: its scene
+            // (not a ui_runtime-produced one) is lent to the window's slot
+            // for one render. Always `false` without an installed
+            // development reload hook.
+            let (address, size) = (raster.address, raster.size);
+            let plugin_rendered = hot_reload.try_render_frame(
+                f64::from(size.0),
+                f64::from(size.1),
+                |scene, reset_fonts| {
+                    raster
+                        .host
+                        .try_with(|host| host.render_lent(address, size, scene, reset_fonts))
+                        .unwrap_or(false)
+                },
+            );
+            if plugin_rendered {
+                return (WakeAction::Skip, now, None);
             }
 
-            let has_pending = ui_runtime.has_pending_work();
-            // See the desktop closure's matching comment: a wake-
-            // deadline source (here, the routed wake deadline forces
-            // a dispatch once due — `flui-native`'s
-            // `owner/android/looper.rs`'s own `run` loop) that is
-            // absent from `dirty` reaches `WakeAction::Skip` and
-            // returns before this closure ever calls
-            // `pump_with_device_recovery`, no matter how faithfully the
-            // platform actuates the wake. Calls the shared
-            // `frame_is_dirty` — see that function's own doc for why
-            // this must not be reimplemented locally.
-            //
-            // The surface-retry deadline joins the device-recovery one
-            // here for the same reason that one must be present.
-            let retry_deadline = super::host::merge_wake_deadlines(
-                device_recovery_backoff.next_attempt_at(),
-                surface_recreation_retry.next_attempt_at(),
-            );
+            // The host's own deadlines (a lost device's next rebuild, a
+            // surface's next attempt) are a dirty source as well as a wake
+            // deadline: one the wake hook actuates but this predicate ignores
+            // reaches `WakeAction::Skip` and never runs the turn that serves
+            // it (`frame_is_dirty`'s doc).
             let dirty = frame_is_dirty(
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
-                has_pending,
-                retry_deadline,
+                ui_runtime.has_pending_work(),
+                raster_wake_at(),
                 // Android paces only its backgrounded pump
                 // (`BackgroundPace`): a rendering wake has no fallback
                 // deferral to consult (ADR-0058).
@@ -623,32 +507,6 @@ impl AndroidFrameDriver {
                 scheduler.is_frame_scheduled(),
                 FallbackGate::default(),
             );
-            if action != WakeAction::Render {
-                return (action, now, None);
-            }
-
-            // A retry owed by a genuine surface-recreation failure gets
-            // its gated attempt here, BEFORE the frame, through the shared
-            // helper (its own lane-lock scope, released before the ui_runtime
-            // half). This closure already runs as the ui_runtime's Pump task, so
-            // the full-repaint mark goes to `ui_runtime` directly and the frame
-            // about to run is the one that repaints into the new surface —
-            // re-dispatching it as another task would queue it behind
-            // this one (the dispatcher is mid-phase) and land it a frame late.
-            match retry_surface_recreation(lane_frame, surface_recreation_retry, now) {
-                Some(SurfaceLifecycleOutcome::Recreated) => {
-                    ui_runtime.mark_primary_needs_full_repaint();
-                }
-                Some(SurfaceLifecycleOutcome::Failed(source)) => {
-                    tracing::warn!(
-                        platform = "Android",
-                        ?source,
-                        "surface recreation retry failed; the deadline-paced retry \
-                                 continues"
-                    );
-                }
-                Some(SurfaceLifecycleOutcome::Released) | None => {}
-            }
             (
                 action,
                 now,
@@ -660,6 +518,11 @@ impl AndroidFrameDriver {
 
         if action != WakeAction::PumpBackground {
             self.background_pace.clear();
+        }
+        // A presentation whose frames are off cannot be seen: its slot is not
+        // drawn, and draws in full when frames come back (ADR-0305).
+        if action != WakeAction::Skip {
+            self.raster.show(action == WakeAction::Render);
         }
         match action {
             WakeAction::Skip => return,
@@ -684,41 +547,18 @@ impl AndroidFrameDriver {
                 ) {
                     self.background_pace.defer(web_time::Instant::now());
                 }
+                // A backgrounded presentation reports what its earlier frames
+                // left.
+                self.raster.report_frame_panic(ui_runtime);
                 return;
             }
             WakeAction::Render => {}
         }
 
-        // The frame: `UiRuntime::pump` at `now`, with device-loss
-        // recovery around it, same shape as the desktop path — see
-        // `pump_with_device_recovery`.
-        //
-        // No sleep here, unlike an earlier version of this
-        // closure: both retries pace their ATTEMPT via a
-        // non-blocking deadline check (see `RetryBackoff`'s
-        // doc), never by blocking this thread.
-        // The Android platform's `run` poll loop calls
-        // `process_input_events`/`dispatch_request_frame`
-        // inline on this SAME thread, so a sleep here — even
-        // one bounded to the backoff's own growing interval —
-        // would stall input and `MainEvent` lifecycle delivery
-        // (Pause/Destroy/Resize) for its duration, which is ANR
-        // territory at the backoff's one-second cap. The
-        // deadline is carried by the wake hook wired at step 0c
-        // instead: this backend has no `ControlFlow::WaitUntil`,
-        // so the Android platform's `run` poll blocks no longer than
-        // the hook's deadline and forces a
-        // dispatch once the deadline is due (`flui-native`'s
-        // `owner/android/looper.rs`).
-        //
-        // A changed colour profile of the window's display sets the surface
-        // up again before this frame paints (ADR-0256 §6).
-        if super::surface_lifecycle::follow_display_color(lane_frame, display_color) {
-            ui_runtime.mark_primary_needs_full_repaint();
-        }
-        if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
-        {
-            tracing::error!("frame skipped: raster lane busy at frame admission");
-        }
+        // The frame, through the window's slot (`RasterSlot::pump`): the
+        // executor rebuilds a lost device on its own deadline, which the wake
+        // hook carries; no sleep runs on this thread, which also delivers
+        // input and `MainEvent` lifecycle.
+        let _presented = self.raster.pump(ui_runtime, now, display_color);
     }
 }

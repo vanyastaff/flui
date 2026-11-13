@@ -172,14 +172,14 @@ impl UiRuntime {
     /// failure or recovery event it alone owns:
     ///
     /// - [`Self::mark_primary_needs_full_repaint`] (below), for the
-    ///   pre-frame GPU device-recovery path (`flui-app`'s
-    ///   `device_recovery::attempt_device_recovery`), where the recovered device's
-    ///   backing store was invalidated by the loss — `Renderer::recover`
-    ///   already primes a full repaint (`damage_tracker.mark_full_repaint`)
-    ///   for whatever scene reaches it next, but nothing reaches it at all
-    ///   unless something forces one. That caller is still single-renderer/
-    ///   single-presentation shaped (see its own TODO(#559)), so `primary()`
-    ///   is the only presentation it has to address.
+    ///   pre-frame GPU device path (`flui-app`'s `RasterSlot::pump`, after
+    ///   the raster executor rebuilt a lost device or the window's display
+    ///   changed), where the rebuilt device's backing store was invalidated
+    ///   by the loss: the executor draws the next frame it is given in full,
+    ///   but nothing reaches it at all unless something forces one. That
+    ///   caller is still single-presentation shaped (see its own
+    ///   TODO(#559)), so `primary()` is the only presentation it has to
+    ///   address.
     /// - [`Self::render_frame`]'s own `retry_needed` arm (issue
     ///   #637), for a submit that failed with `SurfaceLost`, `DeviceLost`,
     ///   or `SurfaceValidation` mid-frame: the frame that just failed had
@@ -251,20 +251,18 @@ impl UiRuntime {
 
     /// `Self::mark_needs_full_repaint_for`, addressed to
     /// `self.presentations.primary()` — the shape its one caller
-    /// (`flui-app`'s `device_recovery::attempt_device_recovery`) needs: that
-    /// function runs BEFORE `render_frame`, driven purely by
-    /// `renderer.is_device_lost()`, with no per-pump `producer` of its own
-    /// to resolve which presentation actually owns the lost device.
+    /// (`flui-app`'s `RasterSlot::pump`) needs: it runs BEFORE
+    /// `render_frame`, driven by the raster executor's device health, with
+    /// no per-pump `producer` of its own to resolve which presentation
+    /// actually owns the lost device.
     // TODO(#559): marks `self.presentations.primary()` unconditionally --
     // a ui_runtime with a non-primary presentation hosting the device that just
     // recovered would mark the WRONG presentation's tree. Latent today
     // only because a secondary window carries no widget content yet
     // (`open_secondary_window`'s own doc); #559's addressing slice is
-    // where this needs to become presentation-addressed, matching how
-    // `attempt_device_recovery` itself is still single-renderer/
-    // single-presentation shaped. Its caller is the host's device recovery
-    // (`flui-app`'s `attempt_device_recovery`, desktop and Android);
-    // web's own recovery pokes `wake_handle()` directly instead.
+    // where this needs to become presentation-addressed. Its callers are
+    // `flui-app`'s `RasterSlot::pump` (every native window) and the web
+    // runner's device recovery.
     pub fn mark_primary_needs_full_repaint(&self) {
         self.mark_needs_full_repaint_for(self.presentations.primary());
     }

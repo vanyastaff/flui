@@ -437,6 +437,15 @@ impl flui_engine::SlotBackend for ReentersOwner {
         self.inner.render(slot, scene, damage)
     }
 
+    fn render_lent(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        reset_fonts: bool,
+    ) -> flui_engine::EngineResult<flui_engine::PresentDisposition> {
+        self.inner.render_lent(slot, scene, reset_fonts)
+    }
+
     fn detach(&mut self, slot: SlotId) {
         self.inner.detach(slot);
     }
@@ -895,6 +904,8 @@ enum Step {
     Resize(ScriptedAnswer),
     /// A frame whose render needs a new surface, which the turn drops.
     DropSurface,
+    /// The owner releases the surface, and the executor has not turned since.
+    SendRelease,
     /// The owner sends a surface, and the executor has not turned since.
     SendRestore,
     /// The owner restores a surface, which the backend answers this way.
@@ -912,7 +923,7 @@ enum Step {
 #[test]
 fn each_surface_event_reaches_the_record() {
     use SlotSize::{Applied, Pending, Refused};
-    use Step::{DropSurface, LoseDevice, Resize, Restore, SendRestore, Size, Turn};
+    use Step::{DropSurface, LoseDevice, Resize, Restore, SendRelease, SendRestore, Size, Turn};
     let sized = DeviceSize::new(32, 16);
     let wide = DeviceSize::new(64, 32);
     let over = |size: DeviceSize| EngineError::InvalidTargetSize {
@@ -1070,6 +1081,35 @@ fn each_surface_event_reaches_the_record() {
             Refused(sized),
         ),
         (
+            "a release",
+            vec![SendRelease, Turn],
+            SurfaceHold::Released,
+            Applied(sized),
+        ),
+        (
+            "a release, then a restore",
+            vec![SendRelease, Turn, SendRestore, Turn],
+            SurfaceHold::Held,
+            Applied(sized),
+        ),
+        (
+            "a restore taken before a release sent after it",
+            vec![DropSurface, SendRestore, SendRelease, Turn],
+            SurfaceHold::Released,
+            Applied(sized),
+        ),
+        (
+            "a released window the rebuilt device cannot present to",
+            vec![
+                SendRelease,
+                Turn,
+                LoseDevice(Some(EngineError::IncompatibleSurface)),
+                Turn,
+            ],
+            SurfaceHold::Released,
+            Applied(sized),
+        ),
+        (
             "a refused size on a rebuilt device",
             vec![
                 Resize(ScriptedAnswer::Fail(over(wide))),
@@ -1117,6 +1157,9 @@ fn each_surface_event_reaches_the_record() {
                     if let Some(error) = refusal {
                         rig.backend.refuse_on_rebuild(slot, error);
                     }
+                }
+                SendRelease => {
+                    let _ = rig.send(RasterCommand::Release { slot });
                 }
                 SendRestore => {
                     let _ = rig.send(RasterCommand::Restore {
@@ -1238,5 +1281,100 @@ fn a_resize_answer_is_matched_to_its_send_by_generation() {
     assert_eq!(
         sender.record(slot).expect("held").surface.size,
         SlotSize::Applied(wide)
+    );
+}
+
+/// A lent scene (the development reload plugin's) draws in full outside the
+/// slot's frames, so the frame after it repaints in full: the screen shows a
+/// scene the frames never described (ADR-0305 §10).
+///
+/// Red-check: drop the full repaint `render_lent` owes and the frame after
+/// it repaints only its own damage.
+#[test]
+fn a_lent_scene_draws_once_and_the_next_frame_draws_in_full() {
+    let mut rig = rig();
+    let (slot, generation) = rig.sized_window();
+    for epoch in 0..2 {
+        let _ = rig.frame(slot, generation, epoch);
+        let _ = rig.executor.turn();
+        assert_eq!(rig.verdicts(slot), [(epoch, RasterVerdict::Presented)]);
+    }
+    let lent = Scene::new(LayerTree::new(Layer::from(CanvasLayer::new())));
+    assert_eq!(
+        rig.executor.render_lent(slot, &lent, true).ok(),
+        Some(flui_engine::PresentDisposition::Presented)
+    );
+    let _ = rig.frame(slot, generation, 2);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(2, RasterVerdict::Presented)]);
+    let renders = rig.backend.renders();
+    assert_eq!(
+        renders[1].1,
+        DamageRegion::Unchanged,
+        "the second frame repaints only its damage"
+    );
+    assert!(
+        matches!(renders[2].1, DamageRegion::Full(_)),
+        "the frame after a lent scene repaints in full, not {:?}",
+        renders[2].1
+    );
+    assert!(
+        rig.backend.calls().contains(&SlotCall::Lent(slot, true)),
+        "the lent render asked its fonts reset"
+    );
+}
+
+/// A lent render is a frame's peer in what it does to the surface: one it
+/// drops asks the owner for another and stamps the frames before it stale; a
+/// panic is held as the slot's failure; a slot that is not shown is not
+/// drawn.
+///
+/// Red-check: leave the render's surface loss uncommitted and the record
+/// keeps `Held` with the old generation.
+#[test]
+fn a_lent_render_commits_what_it_did_to_the_surface() {
+    let lent = Scene::new(LayerTree::new(Layer::from(CanvasLayer::new())));
+
+    let mut rig = self::rig();
+    let (slot, before) = rig.sized_window();
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceReplacementNeeded));
+    assert!(matches!(
+        rig.executor.render_lent(slot, &lent, false),
+        Err(EngineError::SurfaceReplacementNeeded)
+    ));
+    let record = rig.sender.record(slot).expect("held");
+    assert_eq!(record.surface.hold, SurfaceHold::Wanted);
+    assert_ne!(record.required_generation, before);
+
+    let mut rig = self::rig();
+    let (slot, _) = rig.sized_window();
+    rig.backend.script_render(ScriptedAnswer::Panic);
+    assert_eq!(
+        rig.executor.render_lent(slot, &lent, false).ok(),
+        Some(flui_engine::PresentDisposition::NotShown)
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Panicked(_))
+    ));
+
+    let mut rig = self::rig();
+    let (slot, _) = rig.sized_window();
+    let _ = rig.send(RasterCommand::Configure {
+        slot,
+        change: SlotChange::Shown(flui_engine::SlotVisibility::Hidden),
+    });
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rig.executor.render_lent(slot, &lent, false).ok(),
+        Some(flui_engine::PresentDisposition::NotShown)
+    );
+    assert!(
+        !rig.backend
+            .calls()
+            .iter()
+            .any(|call| matches!(call, SlotCall::Lent(..))),
+        "a hidden slot is not drawn"
     );
 }

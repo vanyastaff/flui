@@ -1,7 +1,7 @@
 # Application runtime architecture
 
 `flui-app` is the composition root: the platform runners, the loop-scoped
-`AppRuntime`, the UI runtime dispatch layer, the raster lane and the platform
+`AppRuntime`, the UI runtime dispatch layer, the raster host and the platform
 wiring. The UI runtime itself (`UiRuntime`, its presentations and their frame
 transaction) lives in `flui-runtime` (ADR-0083); `crate::app::ui_runtime`,
 `presentation` and `lifecycle_state` alias its modules for the runners until
@@ -229,12 +229,12 @@ the dispatch layer moves there too.
   of the refused window's native identity by the next installation.
 - **The engine stays here.** The UI runtime renders through a
   `flui_runtime::sink::FrameSink` and names no engine type. This crate's
-  sinks are a desktop window's `RasterSlot` frame (ADR-0305), `RasterLane<B>`
-  (the Android and iOS runners, ADR-0045) and `DirectSink` (the web runner).
+  sinks are a native window's `RasterSlot` frame (ADR-0305) and `DirectSink`
+  (the web runner).
   The raster host maps a slot's `RasterVerdict` to its `SubmitVerdict` one to
   one; `DirectSink` maps `EngineError`s for the web runner; the UI runtime's own
   tests script verdicts and never reach either.
-- **Every desktop window is a slot on one GPU context.** The loop's
+- **Every native window is a slot on one GPU context.** The loop's
   `RasterHost` (`runner/raster_host.rs`) sits in the composition root as
   `Rc<RefCell<_>>`. The first window to attach bootstraps the context on the
   owner platform's display connection and places an inline `RasterExecutor`;
@@ -247,13 +247,25 @@ the dispatch layer moves there too.
   (`OwnerHostClearGuard`), never in the thread's teardown, where wgpu's own
   thread-locals are gone. `two_windows_draw_on_one_device` and `native_linux`
   exercise it.
+- **The platform owns a window's surface.** Android and iOS take a window's
+  native surface away (`TerminateWindow`, a backgrounded scene) and give it
+  back; desktop platforms never do. The runner reports both to
+  `RasterHost::set_surface`, which releases the slot's surface before it
+  returns or makes it again at once, and a device the executor gave up on is
+  asked to rebuild when the window returns. A released window's frames make
+  no surface of their own; a surface the backend refuses is asked for again
+  at the window's `RestorePace` (16 ms doubling to 1 s), whose deadline
+  `raster_wake_at` hands the wake hook with the device's. A window whose
+  native surface does not exist yet is taken as released until the platform
+  reports one. The development scene plugin draws through
+  `RasterHost::render_lent`, after which the window's next frame draws in
+  full. The `raster_host` tests exercise each over scripted slots.
 - **Resize uses the installed driver's lifetime.** Addressed resize checks out
   the same native driver as frame delivery. Its strong lease restores the exact
   registration or retires it after reentrant teardown, without consulting TLS.
   A sibling presentation cannot resize that driver's surface. A desktop window
-  records the size its next frame is configured for; Android
-  and iOS clone the raster resize hook under the lane guard and apply it after
-  releasing the guard; web preserves canvas rounding at fractional DPR.
+  records the size its next frame is configured for, on every native
+  platform; web preserves canvas rounding at fractional DPR.
   `resize_uses_the_installed_driver_lease_through_failure_and_teardown` pins
   retry, reentrant teardown, competing resource failure and subsequent delivery.
 - **Native operations retain their owning registry.** `NativeBindings` owns window
@@ -266,18 +278,18 @@ the dispatch layer moves there too.
 - **Transient render failure retains demand.** Both sinks distinguish `Retry`
   from terminal `Failed` and device recovery. The raster completion publishes
   retry debt reliably even when telemetry acks are full; the UI runtime retains epochs
-  and requests a paced full repaint (ADR-0101). Pinned by
-  `transient_and_hard_failures_map_consistently_in_lane_and_direct_sink`.
-- **Surface measurement retains its generation.** The raster sink samples
-  physical size and generation together for layout, and submits with that pair.
-  Replacement after measurement cannot make an old scene fresh, even when its
-  dimensions are unchanged. Rejection retains the sample until layout reads the
-  surface again; the mailbox still receives the scene's damage before refusing
-  rendering. `a_surface_change_after_measurement_refuses_the_old_scene` in the
-  private `raster_lane_outcome_matrix` exercises repeated stale submission,
-  same-size replacement, fresh measurement recovery and an ignored zero-size
-  observation through the product sink/mailbox and scripted backend. It proves
-  that boundary, not native callback reachability or GPU output.
+  and requests a paced full repaint (ADR-0101). Pinned for `DirectSink` by
+  `every_render_answer_maps_to_its_verdict`, and for a slot by flui-engine's
+  `window_slots` table.
+- **A frame carries the surface generation it was laid out for.** The host
+  stamps each frame with the generation the executor's record requires when it
+  is sent, and the executor refuses a frame of an older generation, even at an
+  unchanged size: a surface made again after measurement cannot make an old
+  scene fresh. flui-engine's
+  `a_frame_stamped_before_a_restore_is_refused_on_its_generation` and
+  `a_resize_answer_is_matched_to_its_send_by_generation` exercise it over
+  scripted slots; they prove that boundary, not native callback reachability
+  or GPU output.
 - **A runner's frame is gate → pump → pacing.** Each runner's frame wake carries
   `RuntimeTask::Frame` with its installed surface binding. The concrete driver
   owns its backend resources across wakes; one `UiRuntime::enter` holds the owner-inbox drain
@@ -314,7 +326,7 @@ the dispatch layer moves there too.
   Both use one FIFO and physical callback budget. `FontsChanged` invalidates all
   presentations; `PrimarySurfaceRestored`
   requests a full repaint of the primary, which owns the current UI runtime sink.
-  Native surface callbacks release their raster-lane guard before dispatch.
+  Native surface callbacks end the raster host's turn before dispatch.
   `TestCallback` exists only under `cfg(test)` for private failure injection.
   The installed driver executes its backend frame protocol; extracting the owner
   host remains ADR-0083's migration work.
@@ -324,32 +336,21 @@ the dispatch layer moves there too.
   `font_notification_survives_the_primary_window_closing_before_delivery`
   separates font invalidation from redraw caused by close. Background polling
   also survives primary close and rejects a replaced runtime incarnation.
-- **Device recovery brackets the pump.** On desktop the executor rebuilds a
-  lost device in the turn before the frame and in the frame's own turn, on its
-  own backoff; the frame driver maps its `DeviceHealth` to the presentation's
-  `DeviceRecovery` before and after the pump, and a device that came back
-  before the frame marks the tree for a full repaint. On Android and iOS,
-  `pump_with_device_recovery` runs its pre-frame recovery attempt before the
-  pump's begin frame and its post-frame attempt after the post-frame
-  callbacks; only `mark_primary_needs_full_repaint` touches the tree, and it
-  lands before the pipeline that repaints. The pump's frame timestamp is the
-  wake's own `now`.
-- **Native frame callbacks run outside the raster guard.** Android and iOS
-  pump through a private `RasterFrame` sink. It retains the surface
-  generation and dimensions sampled for layout and tries the lane only when
-  submitting. Contention returns `Retry` before modifying damage history or
-  admitting a mailbox snapshot. Pre-frame and post-frame device recovery borrow
-  the backend separately; runtime repaint and wake effects run after those
-  guards end. Busy initial admission preserves demand without consuming scheduler
-  phases, and a busy post-frame recovery check wakes after the pump's completion
-  so that completion cannot erase the obligation. The runtime and frame-driver
-  execution leases remain in force: reentrant owner operations join the FIFO.
-  `device_recovery_matrix` exercises real scheduler callbacks, callback resize,
-  contention recovery and successful and failed device recovery through this
-  private host seam; it does not execute native callbacks or a GPU backend.
-  Rendering and device recovery still guard their backend operations. Web uses
-  its borrowed renderer slot across the pump; its resize operations are queued
-  and its recovery future runs after the frame callback returns.
+- **Device recovery brackets the pump.** On every native platform the
+  executor rebuilds a lost device in the turn before the frame and in the
+  frame's own turn, on its own backoff; `RasterSlot::pump`, which the
+  desktop, Android and iOS drivers share, maps its `DeviceHealth` to the
+  presentation's `DeviceRecovery` before and after the pump, and a device
+  that came back before the frame marks the tree for a full repaint. The
+  pump's frame timestamp is the wake's own `now`.
+- **Native frame callbacks run outside the raster host's turn.** A frame
+  that finds the host already turning (a re-entry from code the turn runs) is
+  answered `Retry` before it touches damage history, and work that must not
+  be lost (a detach, a surface change, a memory trim) is deferred to the end
+  of the turn that holds the host. The runtime and frame-driver execution
+  leases remain in force: reentrant owner operations join the FIFO. Web uses
+  its borrowed renderer slot across the pump; its resize operations are
+  queued and its recovery future runs after the frame callback returns.
 - **Web runs no frame before its renderer exists.** The web renderer arrives
   asynchronously; until it does, a render wake returns without pumping, so no
   begin, draw or post-frame callback runs, and the UI runtime stays dirty for the

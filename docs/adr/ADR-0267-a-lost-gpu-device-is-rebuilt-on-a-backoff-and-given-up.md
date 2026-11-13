@@ -90,9 +90,8 @@ and every dropped frame carries the last value.
 
 ### §3 A rebuild failing at the ceiling is given up
 
-The raster executor's `DeviceRebuilds` (a desktop window's device, ADR-0305) and `flui-app`'s
-`DeviceRecoveryBackoff` (an Android or iOS window's) each wrap the shared `RetryBackoff` with a
-streak. A failed rebuild whose next attempt is a full ceiling away counts against
+The raster executor's `DeviceRebuilds` (every native window's device, ADR-0305) wraps the shared
+`RetryBackoff` with a streak. A failed rebuild whose next attempt is a full ceiling away counts against
 `DEVICE_RECOVERY_ATTEMPTS_AT_CAP = 10`. The backoff reaches its ceiling after seven failures, about
 two seconds after the loss, so the driver has about twelve seconds in all: longer than a Windows
 driver reset (TDR, two seconds by default) or a GPU switch takes. A rebuild still failing then is
@@ -126,6 +125,10 @@ dirty gate, and the frame driver, seeing the runtime no longer given up, starts 
 rebuilds at once. A window whose device is healthy or still being rebuilt ignores the request. The
 wakes run without the request list's lock held.
 
+On Android and iOS, where the platform takes a window's surface away and gives it back, the
+window's return asks a given-up device to rebuild (`RasterHost::set_surface` sends
+`RetryDevice`): a user who leaves the application and comes back to it is the request.
+
 ### Consequences
 
 - A lost device costs at most one frame per dropped-frame retry interval, and the headless host no
@@ -134,17 +137,18 @@ wakes run without the request list's lock held.
   shows its last frame until the application asks again.
 - An application that installs no `FrameFailureHandler` is not told; the runner logs the give-up at
   `error`.
-- `AppHandle` exists on the desktop runner, so only desktop windows can be asked again. An Android
-  or iOS window whose rebuild was given up stays given up until the process restarts; the gap is
-  listed in `docs/gaps.md`.
+- `AppHandle` exists on the desktop runner, so only desktop windows can be asked again by the
+  application. An Android or iOS window whose rebuild was given up stays given up until the
+  platform takes its surface away and gives it back; the gap is listed in `docs/gaps.md`.
 
 ### Confirmation
 
 - §1, §2: `a_frame_dropped_on_a_lost_device_waits_out_the_backoff`,
   `a_failed_rebuild_is_reported_with_the_dropped_frame` (`flui-runtime`, `tests/contracts/device_loss.rs`).
-- §3: `a_given_up_rebuild_holds_frames_until_the_application_asks_again` (`flui-runtime`), and the
-  `device_recovery_matrix` row
-  `a_rebuild_failing_at_the_ceiling_is_given_up_until_the_application_asks` (`flui-app`).
+- §3: `a_given_up_rebuild_holds_frames_until_the_application_asks_again` (`flui-runtime`), and
+  `a_given_up_rebuild_holds_until_the_owner_sends_retry_device` (`flui-engine`).
+- §4 on Android and iOS: `a_window_given_back_retries_a_given_up_device` (`flui-app`'s raster
+  host, over scripted slots).
 - §1, §3, §4 through the runner: the `runner_close` rows
   `a_lost_device_waits_out_its_rebuild_backoff` (one rebuild per turn and a wake deadline in the
   future; the old code never returned from the turn) and

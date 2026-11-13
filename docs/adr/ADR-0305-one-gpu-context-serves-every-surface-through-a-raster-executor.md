@@ -466,7 +466,8 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   on every platform, inline ones included, because one executor serves every window in both
   placements.
 - `render_lent` serves the hot-reload plugin's scene, lent by reference for the length of one
-  call (`crates/flui-app/src/app/hot_reload.rs:365-395`, `crates/flui-app/src/app/runner/android.rs:608`).
+  call (`ScenePlugin::try_render_frame` in `crates/flui-app/src/app/hot_reload.rs`, through
+  `RasterHost::render_lent` on Android).
   It exists only on the executor the owner holds, which a threaded placement does not have, so a
   lent scene cannot cross a thread.
 

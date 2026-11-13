@@ -3,7 +3,7 @@
 The frame runtime of [ADR-0083](../../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §1: the
 UI runtime (`ui_runtime::UiRuntime`) and the per-presentation frame machinery it
 drives, placed below the hosts (`flui-app`'s runners, platform wiring, raster
-lane and UI runtime dispatch layer) and above the widget spine. It arrived in
+host and UI runtime dispatch layer) and above the widget spine. It arrived in
 steps; the ADR's `## Migration` section lists them, and what is still to move
 (the UI runtime-neutral owner host and typed operation application). Native-window
 demultiplexing and the platform/raster tails of an owner turn remain in the
@@ -304,7 +304,7 @@ host.
   accepting local access to that same binding's pipeline.
 - **The UI runtime renders through a sink, never an engine.** `UiRuntime::pump`
   takes any `&mut dyn FrameSink`; the host picks one (`flui-app`'s raster
-  lane, or its direct sink over a borrowed backend on the web runner), and
+  host's window slot, or its direct sink over a borrowed backend on the web runner), and
   the UI runtime tests pick `testing::ScriptedSink`. How a host maps its
   backend's outcomes to verdicts is that host's to test.
 - **Internal, and only the hosts depend on it.** Tier K,
@@ -701,8 +701,8 @@ it marks full repaint as well as waking, so a static scene progresses without ne
 input (ADR-0101). A frame that
 rendered but could not be shown is retained rather than counted as done, and a
 frame with nothing to present falls back to no-present pacing (ADR-0068). The
-verdict is a crate contract. Pinned by `flui-app`'s raster-lane classification tests, for
-example `app::raster_lane::tests::a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks`,
+verdict is a crate contract. Pinned on the host side by `flui-engine`'s `window_slots`
+and `raster_executor` tests and `flui-app`'s `every_render_answer_maps_to_its_verdict`,
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 `the_withheld_retry_is_bounded_and_then_parks`.
 

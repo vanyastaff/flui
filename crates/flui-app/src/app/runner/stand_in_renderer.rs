@@ -306,6 +306,20 @@ impl SlotBackend for StandInBackend {
         Ok(PresentDisposition::Presented)
     }
 
+    /// A lent scene counts as a presented frame, as the stand-in draws none.
+    fn render_lent(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        _reset_fonts: bool,
+    ) -> EngineResult<PresentDisposition> {
+        self.render(
+            slot,
+            scene,
+            DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        )
+    }
+
     fn detach(&mut self, slot: SlotId) {
         if let Some(window) = self.shared.lock().slot(slot) {
             window.released = true;
