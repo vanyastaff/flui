@@ -453,3 +453,77 @@ fn a_chord_with_an_unnamed_key_presses_nothing() {
     assert!(matches!(error, TestError::Agent(_)), "{error:?}");
     assert!(log.borrow().is_empty(), "{:?}", log.borrow());
 }
+
+/// A field holding `Trip `, focused by a tap.
+fn title_field() -> Tester {
+    let field = flui_widgets::EditableText::new(
+        flui_widgets::TextEditingController::with_text("Trip "),
+        flui_interaction::FocusNode::with_debug_label("title"),
+    );
+    let mut t = Tester::mount(Center::new().child(SizedBox::new(300.0, 40.0).child(field)));
+    t.tap(&find::role(flui_testing::Role::TextInput));
+    t
+}
+
+/// The field's editable render object's `name` field, as an agent inspects it.
+fn editable_field(t: &mut Tester, name: &str) -> Option<flui_testing::InspectValue> {
+    fn find_editable(nodes: &[flui_testing::InspectNode]) -> Option<&flui_testing::InspectNode> {
+        nodes.iter().find_map(|node| {
+            if node.kind == "RenderEditable" {
+                Some(node)
+            } else {
+                find_editable(&node.children)
+            }
+        })
+    }
+    let reading = t.inspect_render();
+    let node = find_editable(&reading.roots).expect("the field has an editable render object");
+    node.fields
+        .iter()
+        .find(|field| field.name == name)
+        .map(|field| field.value.clone())
+}
+
+#[test]
+fn a_composition_shows_in_the_focused_field_until_it_is_committed() {
+    use flui_testing::InspectValue::{Bool, Uint};
+
+    let mut t = title_field();
+    t.compose("とう", Some(1));
+    t.expect(find::role(flui_testing::Role::TextInput))
+        .to_have_value("Trip とう");
+    assert_eq!(editable_field(&mut t, "composing_start"), Some(Uint(5)));
+    assert_eq!(editable_field(&mut t, "composing_end"), Some(Uint(11)));
+    assert_eq!(
+        editable_field(&mut t, "caret_byte_offset"),
+        Some(Uint(8)),
+        "the caret is one character into the composition"
+    );
+    assert_eq!(editable_field(&mut t, "show_caret"), Some(Bool(true)));
+
+    t.compose("東京", None);
+    assert_eq!(
+        editable_field(&mut t, "show_caret"),
+        Some(Bool(false)),
+        "a composition without a caret hides it"
+    );
+
+    t.commit_composition("東京");
+    t.expect(find::role(flui_testing::Role::TextInput))
+        .to_have_value("Trip 東京");
+    assert_ne!(editable_field(&mut t, "composing_start"), Some(Uint(5)));
+}
+
+#[test]
+fn a_cancelled_composition_leaves_the_text_as_it_was() {
+    let mut t = title_field();
+    t.compose("abc", Some(3));
+    t.cancel_composition();
+    t.expect(find::role(flui_testing::Role::TextInput))
+        .to_have_value("Trip ");
+
+    let error = t
+        .try_compose("ab", Some(3))
+        .expect_err("a caret past the composition is refused");
+    assert!(matches!(error, TestError::Agent(_)), "{error:?}");
+}

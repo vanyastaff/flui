@@ -37,8 +37,8 @@ use flui_protocol::method::{
 };
 use flui_protocol::{
     ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ErrorObject,
-    InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams, Locator,
-    LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
+    ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams,
+    Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
     ReadParams, Tree, outline,
 };
 use flui_view::View;
@@ -750,6 +750,78 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"));
     }
 
+    /// Show `text` as the focused field's input-method composition, with the
+    /// caret `caret` characters into it, or with no caret when `caret` is
+    /// `None`, as an input method that converts shows none. The composition
+    /// replaces the one shown before, or the selection when there is none.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::Agent`] when `caret` is past the end of `text`.
+    pub fn try_compose(&mut self, text: &str, caret: Option<u32>) -> Result<(), TestError> {
+        self.inject_ime(ImeAction::SetComposition {
+            text: text.to_owned(),
+            cursor: caret,
+            caret_hidden: caret.is_none(),
+        })
+    }
+
+    /// Show `text` as the focused field's composition, the caret `caret`
+    /// characters into it, or hidden when `None`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_compose`] fails.
+    #[track_caller]
+    pub fn compose(&mut self, text: &str, caret: Option<u32>) {
+        self.try_compose(text, caret)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// End the focused field's composition by committing `text` in its
+    /// place, or insert `text` at the selection when nothing is composed.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::Agent`] when the window refuses the input.
+    pub fn try_commit_composition(&mut self, text: &str) -> Result<(), TestError> {
+        self.inject_ime(ImeAction::Commit {
+            text: text.to_owned(),
+        })
+    }
+
+    /// End the focused field's composition by committing `text`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_commit_composition`] fails.
+    #[track_caller]
+    pub fn commit_composition(&mut self, text: &str) {
+        self.try_commit_composition(text)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// End the focused field's composition without committing: its text goes
+    /// and the caret returns to where it began.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::Agent`] when the window refuses the input.
+    pub fn try_cancel_composition(&mut self) -> Result<(), TestError> {
+        self.inject_ime(ImeAction::Cancel)
+    }
+
+    /// End the focused field's composition without committing.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_cancel_composition`] fails.
+    #[track_caller]
+    pub fn cancel_composition(&mut self) {
+        self.try_cancel_composition()
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
     // --- Expecting --------------------------------------------------------
 
     /// What a test expects of the elements `locator` matches. Each assertion
@@ -854,6 +926,13 @@ impl Tester {
                 covered_by: facts.covered_by,
             }),
         }
+    }
+
+    /// Deliver one input-method step to the focused field.
+    fn inject_ime(&mut self, step: ImeAction) -> Result<(), TestError> {
+        self.inject(vec![InputSource::Ime {
+            actions: vec![step],
+        }])
     }
 
     /// Deliver `sources` through the window's input lease and run the frame

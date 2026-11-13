@@ -364,7 +364,20 @@ fn key_named(name: &str) -> Result<Key, AgentError> {
 
 fn ime_event(action: &ImeAction) -> Result<ImeEvent, AgentError> {
     match action {
-        ImeAction::SetComposition { text, cursor } => {
+        ImeAction::SetComposition {
+            text,
+            caret_hidden: true,
+            cursor,
+        } => {
+            if cursor.is_some() {
+                return Err(invalid("a hidden caret has no position"));
+            }
+            Ok(ImeEvent::Preedit {
+                text: text.clone(),
+                cursor: None,
+            })
+        }
+        ImeAction::SetComposition { text, cursor, .. } => {
             let caret = match cursor {
                 None => text.len(),
                 Some(cursor) => {

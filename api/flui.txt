@@ -23338,7 +23338,10 @@ pub const fn flui::testing::TestWindow::new(width: u32, height: u32) -> Self
 pub const fn flui::testing::TestWindow::platform(self, platform: flui::platform::TargetPlatform) -> Self
 pub struct flui::testing::Tester { .. }
 impl core::fmt::Debug for flui::testing::Tester
+pub fn flui::testing::Tester::cancel_composition(&mut self)
 pub fn flui::testing::Tester::clock(&self) -> &flui::foundation::ManualClock
+pub fn flui::testing::Tester::commit_composition(&mut self, text: &str)
+pub fn flui::testing::Tester::compose(&mut self, text: &str, caret: Option<u32>)
 pub fn flui::testing::Tester::drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration)
 pub fn flui::testing::Tester::drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration)
 pub fn flui::testing::Tester::enter_text(&mut self, locator: &flui::testing::Locator, text: &str)
@@ -23359,6 +23362,9 @@ pub fn flui::testing::Tester::read(&mut self, locator: &flui::testing::Locator) 
 pub fn flui::testing::Tester::rect(&mut self, locator: &flui::testing::Locator) -> flui::testing::LogicalRect
 pub fn flui::testing::Tester::semantics(&mut self) -> flui::testing::Tree
 pub fn flui::testing::Tester::tap(&mut self, locator: &flui::testing::Locator)
+pub fn flui::testing::Tester::try_cancel_composition(&mut self) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_commit_composition(&mut self, text: &str) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_compose(&mut self, text: &str, caret: Option<u32>) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_enter_text(&mut self, locator: &flui::testing::Locator, text: &str) -> Result<(), flui::testing::TestError>

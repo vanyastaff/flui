@@ -216,6 +216,7 @@ fn input_is_a_per_device_action_sequence_and_gestures_flatten_their_options() {
             {"type": "text", "text": "héllo"},
             {"type": "ime", "actions": [
                 {"type": "set_composition", "text": "ni", "cursor": 2},
+                {"type": "set_composition", "text": "ni", "caret_hidden": true},
                 {"type": "commit", "text": "你"},
                 {"type": "cancel"},
             ]},
