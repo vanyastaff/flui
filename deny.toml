@@ -98,19 +98,23 @@ allow = [
 # above, so they are implicitly denied (unlisted licenses are rejected when
 # `allow` is set; cargo-deny has no `deny` list).
 
-# Allowed for one crate each, not added to `allow`:
-# - webpki-root-certs is Mozilla's root certificate store as data, under
-#   CDLA-Permissive-2.0, a permissive license written for data rather than
-#   code. It comes in through flui-native's `http` feature (ureq →
-#   rustls-platform-verifier).
-# - libfuzzer-sys carries LLVM's libFuzzer runtime, which is under NCSA, a
-#   permissive license of the BSD family. Only the fuzz targets link it
-#   (`cfg(fuzzing)`, `cargo xtask fuzz`); no application and no published
-#   crate does.
-exceptions = [
-    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
-    { crate = "libfuzzer-sys", allow = ["NCSA"] },
-]
+# Allowed for one crate each, not added to `allow`.
+
+# webpki-root-certs is Mozilla's root certificate store as data, under
+# CDLA-Permissive-2.0, a permissive license written for data rather than code.
+# It comes in through flui-native's `http` feature (ureq →
+# rustls-platform-verifier).
+[[licenses.exceptions]]
+crate = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
+
+# libfuzzer-sys carries LLVM's libFuzzer runtime, which is under NCSA, a
+# permissive license of the BSD family. Only the fuzz targets link it
+# (`cfg(fuzzing)`, `cargo xtask fuzz`); no application and no published crate
+# does.
+[[licenses.exceptions]]
+crate = "libfuzzer-sys"
+allow = ["NCSA"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Bans - Crate restrictions and duplicate detection
