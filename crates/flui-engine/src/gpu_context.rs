@@ -304,6 +304,10 @@ pub struct GpuContext {
     /// How many of the next offscreen frames panic after their recording.
     #[cfg(test)]
     panics_ahead: u32,
+    /// When set, the next frame's painter setup panics, as a tracing
+    /// subscriber can.
+    #[cfg(test)]
+    panic_in_next_setup: bool,
     /// When set, the next torn painter's drop panics.
     #[cfg(test)]
     panic_in_next_cleanup: bool,
@@ -547,6 +551,8 @@ impl GpuContext {
             #[cfg(test)]
             panic_in_next_cleanup: false,
             #[cfg(test)]
+            panic_in_next_setup: false,
+            #[cfg(test)]
             rebuilds_failing: 0,
             _one_mutator: PhantomData,
         }
@@ -788,6 +794,23 @@ impl GpuContext {
         wrote.unwrap_or(true)
     }
 
+    /// Run the frame setup that follows [`Self::prepare_textures`] (taking
+    /// the painter, building the blit): a panic there (a tracing subscriber
+    /// is not ours) flushes the texture writes the frame made, as a panic of
+    /// the draw does, before it is resumed.
+    fn after_uploads<T>(&mut self, wrote: bool, setup: impl FnOnce(&mut Self) -> T) -> T {
+        let mut caught = FirstPanic::new();
+        let made = caught.contain(|| setup(&mut *self));
+        if let Some(made) = made {
+            return made;
+        }
+        if wrote {
+            let _flushed = caught.contain(|| self.flush_texture_writes());
+        }
+        caught.resume();
+        unreachable!("BUG: a contained call that did not return holds its panic")
+    }
+
     /// Submit the texture writes a frame made and did not submit:
     /// `write_texture` holds staging memory until a queue submission, and a
     /// frame can end without one (no damage, a surface not acquired, an
@@ -859,7 +882,7 @@ impl GpuContext {
         };
         let submission_scope = self.domain.begin_frame_scope()?;
         let wrote = self.prepare_textures(slot);
-        let mut painter = self.take_painter(format, size);
+        let mut painter = self.after_uploads(wrote, |this| this.take_painter(format, size));
         let own_textures = self.lend_textures(slot, &mut painter);
         #[cfg(test)]
         let panics = self.injected_panic();
@@ -940,14 +963,17 @@ impl GpuContext {
         // Uploads run before the painter and the blit are taken, so a
         // panic there (a tracing subscriber is not ours) costs neither.
         let wrote = self.prepare_textures(slot);
-        let mut painter = self.take_painter(format, size);
-        painter.resize(size.0, size.1);
-        // The blit's pipelines, like the library's, are inserted only once
-        // built, so an unwound frame leaves them whole.
-        let mut blit = self
-            .blit
-            .take()
-            .unwrap_or_else(|| OffscreenRenderer::with_domain(Arc::clone(&self.domain)));
+        let (mut painter, mut blit) = self.after_uploads(wrote, |this| {
+            let mut painter = this.take_painter(format, size);
+            painter.resize(size.0, size.1);
+            // The blit's pipelines, like the library's, are inserted only
+            // once built, so an unwound frame leaves them whole.
+            let blit = this
+                .blit
+                .take()
+                .unwrap_or_else(|| OffscreenRenderer::with_domain(Arc::clone(&this.domain)));
+            (painter, blit)
+        });
         let own_textures = self.lend_textures(slot, &mut painter);
         let Self {
             adapter,
@@ -1038,6 +1064,13 @@ impl GpuContext {
         self.panics_ahead = frames;
     }
 
+    /// Make the next frame's painter setup panic, after its texture
+    /// uploads, as a tracing subscriber can.
+    #[cfg(test)]
+    pub(crate) fn panic_in_next_setup(&mut self) {
+        self.panic_in_next_setup = true;
+    }
+
     /// Make the drop of the next torn painter panic, as a cached value's
     /// destructor can.
     #[cfg(test)]
@@ -1069,6 +1102,11 @@ impl GpuContext {
     /// first when no complete frame left one, over the pipelines an unwound
     /// frame's painter left.
     fn take_painter(&mut self, format: wgpu::TextureFormat, size: (u32, u32)) -> WgpuPainter {
+        #[cfg(test)]
+        assert!(
+            !std::mem::take(&mut self.panic_in_next_setup),
+            "injected panic in a frame's painter setup"
+        );
         let taken = self.painter.take();
         let mut painter = if let Some(painter) = taken {
             painter
@@ -2186,6 +2224,26 @@ mod tests {
             .expect("the slot reads back");
         assert_eq!(pixels[0], 20, "the next frame draws the newest image");
         assert_eq!(flushes(&executor), 1);
+
+        // A panic after the uploads but before the draw (taking the painter)
+        // flushes too.
+        executor.backend_mut().panic_in_next_setup();
+        let _ = draw(&mut executor, Some(30));
+        let _ = sender.take_failure(slot);
+        assert_eq!(
+            flushes(&executor),
+            2,
+            "a frame unwound in its painter setup flushed its writes"
+        );
+        assert_eq!(draw(&mut executor, None), RasterVerdict::Presented);
+        let pixels = executor
+            .backend()
+            .read_slot(slot)
+            .expect("the slot reads back");
+        assert_eq!(
+            pixels[0], 30,
+            "the next frame draws the image the unwound one uploaded"
+        );
     }
 
     /// Dropping the painter a frame unwound with runs destructors that are not
