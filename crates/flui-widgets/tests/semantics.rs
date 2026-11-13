@@ -3053,6 +3053,33 @@ fn a_control_takes_the_content_roles_beneath_it_as_its_name() {
         list, "  Window\n  List\n  Image label=\"Add\"",
         "a list over an image"
     );
+
+    // A tap target without a role over an inner control gives the control
+    // its tap, inside a button as outside one: the check box is the node
+    // that is pressed, and it keeps its name.
+    let mut laid = lay_out(
+        node(SemanticsRole::Button).child(
+            flui_widgets::GestureDetector::new()
+                .on_tap(|_| {})
+                .child(content(SemanticsRole::CheckBox, "Pin")),
+        ),
+        loose(200.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let pin = tree
+        .find_by_label("Pin")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        pin.role(),
+        flui_testing::a11y::Role::CheckBox,
+        "{}",
+        tree.describe()
+    );
+    assert!(pin.supports_action(Action::Click), "{}", tree.describe());
 }
 
 /// A pressable button over a labelled image is one node that is pressed by

@@ -1637,14 +1637,16 @@ impl SemanticsConfiguration {
     /// any other role that is not content, ends it. A configuration without
     /// a role, or with a content role, that forms no node passes on
     /// `enclosing`, the answer of the configuration above it: what it
-    /// absorbs travels up to the same control.
+    /// absorbs travels up to the same control. A route scope ends it.
     #[must_use]
     pub fn names_a_control(&self, forms_node: bool, enclosing: bool) -> bool {
         let role = self.attributes.role;
         if is_named_by_content(role) {
             return true;
         }
-        let passes_on = !forms_node && (role == SemanticsRole::None || names_a_control(role));
+        let passes_on = !forms_node
+            && !self.scopes_route()
+            && (role == SemanticsRole::None || is_naming_role(role));
         passes_on && enclosing
     }
 
@@ -1662,19 +1664,11 @@ impl SemanticsConfiguration {
     /// this configuration, and it changes the role row (ADR-0332): what is
     /// absorbed here ends in a control's node, so a descendant whose role
     /// names content (an image, a heading, a text-level role) is taken
-    /// whatever role this configuration has, and a descendant with any other
-    /// role is refused even where this configuration has none, because the
-    /// control above could not take it. A button over a labelled image is
+    /// whatever role this configuration has. A button over a labelled image is
     /// one named button, not a nameless button with an image beneath it.
     #[must_use]
     pub fn can_absorb(&self, descendant: &SemanticsConfiguration, names_a_control: bool) -> bool {
-        if !names_a_control {
-            return self.shares_a_node_with(descendant, false);
-        }
-        if descendant.names_a_control_by_role() {
-            return self.shares_a_node_with(descendant, true);
-        }
-        !descendant.has_explicit_role() && self.shares_a_node_with(descendant, false)
+        self.shares_a_node_with(descendant, names_a_control && descendant.has_naming_role())
     }
 
     /// Returns whether this configuration and `sibling`, both absorbed by
@@ -1683,19 +1677,18 @@ impl SemanticsConfiguration {
     /// The rules are those of [`can_absorb`](Self::can_absorb), read between
     /// two siblings, which are in no order. Where they name a control
     /// (`names_a_control` of the configuration above them), two roles
-    /// compete only when neither names content: an icon and a heading in one
+    /// do not compete when both name content: an icon and a heading in one
     /// button are one name.
     #[must_use]
     pub fn can_join(&self, sibling: &SemanticsConfiguration, names_a_control: bool) -> bool {
-        let folds = names_a_control
-            && (self.names_a_control_by_role() || sibling.names_a_control_by_role());
+        let folds = names_a_control && self.has_naming_role() && sibling.has_naming_role();
         self.shares_a_node_with(sibling, folds)
     }
 
     /// Whether this configuration's role is content that names a control
     /// it is beneath. A route scope never is.
-    fn names_a_control_by_role(&self) -> bool {
-        names_a_control(self.attributes.role) && !self.scopes_route()
+    fn has_naming_role(&self) -> bool {
+        is_naming_role(self.attributes.role) && !self.scopes_route()
     }
 
     /// The rules the predicates share, which are symmetric; `roles_fold` says that the two
@@ -2068,7 +2061,7 @@ const fn is_content(role: SemanticsRole) -> bool {
 /// content role but the read-only values. A meter or a progress bar carries
 /// a numeric range, which a control's node cannot publish, so it stays a
 /// node of its own.
-const fn names_a_control(role: SemanticsRole) -> bool {
+const fn is_naming_role(role: SemanticsRole) -> bool {
     is_content(role) && !matches!(role, SemanticsRole::Meter | SemanticsRole::ProgressBar)
 }
 
@@ -2742,17 +2735,15 @@ mod tests {
                     !explicit,
                     "{receiver} beside {contributor}, outside a control"
                 );
-                // Inside a control: content is taken whatever takes it, and
-                // any other role is refused even by a configuration without
-                // one, since the control above could not take it.
+                // Inside a control a naming role is taken whatever takes it.
                 assert_eq!(
                     node.can_absorb(&beneath, true),
-                    contributor == R::None || names(contributor),
+                    !explicit || names(contributor),
                     "{receiver} over {contributor}, inside a control"
                 );
                 assert_eq!(
                     node.can_join(&beneath, true),
-                    !explicit || names(receiver) || names(contributor),
+                    !explicit || (names(receiver) && names(contributor)),
                     "{receiver} beside {contributor}, inside a control"
                 );
                 if NAMED.contains(&receiver) && names(contributor) {
@@ -2793,7 +2784,8 @@ mod tests {
         let mut page = with(R::Image, "page");
         page.set_scopes_route(true);
         assert!(!with(R::Button, "node").can_absorb(&page, true));
-        assert!(!page.can_join(&with(R::Button, "other"), true));
+        assert!(!page.can_join(&with(R::Heading, "other"), true));
+        assert!(!page.names_a_control(false, true));
     }
 
     /// A forced merge keeps the more specific role: an authored structural

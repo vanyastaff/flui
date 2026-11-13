@@ -70,7 +70,7 @@ a range from a button), so it stays a node of its own beneath the control.
 ### §2. The scope of a control
 
 The rule is decided by the control whose node the content ends in, not by the configuration
-directly above the content: a hint, a gesture or a tooltip between a button and its icon forms
+directly above the content: a hint or a tooltip between a button and its icon forms
 no node and must not undo the rule. The assembly carries one fact down the tree:
 
 ```rust
@@ -98,17 +98,18 @@ Outside a scope the predicates apply the conflict rows of ADR-0206 decision 4 un
 Inside one, the role row reads:
 
 - `can_absorb`: a descendant with a naming role is taken, whatever role the configuration
-  taking it has (a button over an image; a heading over an image inside a button). A
-  descendant with any other role is refused, also by a configuration that has no role: the
-  control above could not take it, so it forms its node where it stands instead of giving its
-  role to a wrapper.
-- `can_join`: two roles compete only when neither is a naming role. An icon and a heading in
-  one button are one name, and a check box beside an icon does not keep the icon from naming
+  taking it has (a button over an image; a heading over an image inside a button).
+- `can_join`: two naming roles do not compete. An icon and a heading in one button are one
+  name.
+- A fragment its parent refuses is a node already, so `mark_configuration_conflicts` does not
+  compare it with its siblings: a check box beside an icon does not keep the icon from naming
   the button around both.
 
-Every other row is unchanged in both: a state both declare, a repeated action, competing
-values or ranges still form separate nodes. A configuration that scopes a route never has a
-naming role, whatever role it declares.
+Every other row is unchanged: a state both declare, a repeated action, competing values or
+ranges still form separate nodes, and a configuration without a role still takes a control
+beneath it, so a tap target over a check box inside a button is still one pressable check box.
+A configuration that scopes a route never has a naming role, whatever role it declares, and
+ends the scope.
 
 The rule is not symmetric: an image over a button is an image with a button in it. The
 symmetric predicate (`is_compatible_with`) is removed.
@@ -134,9 +135,11 @@ its own node with `Semantics::container(true)`.
 - Bad, because a heading inside a tab or a list option loses its place in heading navigation.
   An author who needs both wraps the heading in `Semantics::container(true)`, which forms a
   node no rule absorbs.
-- Bad, because the scope is decided on the way down, before conflicts are known: a
-  configuration without a role inside a button that absorbs an image and a heading, and then
-  cannot join the button (it repeats the button's action), forms a node with the first one's
+- Bad, because a configuration between a control and its content that repeats the control's
+  action (a tap target inside a button) still cannot join the control: it forms a node, takes
+  the content with it, and the control stays without a name, as before this decision. The
+  scope is decided on the way down, before conflicts are known, so such a
+  configuration that absorbs an image and a heading forms a node with the first one's
   role and both names.
 - Neutral, because Flutter treats two images beneath one button as a conflict (the same flag
   twice) and forms two nodes; here they are one name. A typed role has no "same flag" case to
@@ -158,7 +161,8 @@ its own node with `Semantics::container(true)`.
   `a_button_over_a_labelled_image_is_pressed_by_its_name`
   (`crates/flui-widgets/tests/semantics.rs`): the published AccessKit tree of a button over an
   image; over an image and a heading; over a hint over both; over a heading over an image;
-  over an image beside a check box; over a progress bar; of a list over an image; and the
+  over an image beside a check box; over a progress bar; over a tap target over a check box;
+  of a list over an image; and the
   click on the named node.
 - `compatibility_rules_for_modeled_fields` keeps the rows that did not change.
 

@@ -1528,27 +1528,42 @@ fn in_reading_order(children: &mut Vec<BuiltSemanticsNode>, direction: TextDirec
     );
 }
 
+/// Which pending fragments form nodes of their own instead of being
+/// absorbed by `parent`: one `parent` cannot take, and two that cannot be in
+/// its node together.
+///
+/// Where the fragments name a control (ADR-0332), a fragment `parent`
+/// refuses is a node already and competes with no sibling: a check box
+/// beside an icon does not keep the icon from naming the button around
+/// both. Elsewhere every pair is compared, as before that decision.
 fn mark_configuration_conflicts(
     parent: &SemanticsConfiguration,
     fragments: &[SemanticsFragment],
     names_a_control: bool,
 ) -> Vec<bool> {
-    let mut conflicts = vec![false; fragments.len()];
+    let pending = |index: usize| match &fragments[index] {
+        SemanticsFragment::Pending(pending) => Some(&pending.config),
+        SemanticsFragment::Formed(_) => None,
+    };
+    let refused: Vec<bool> = (0..fragments.len())
+        .map(|index| {
+            pending(index).is_some_and(|config| !parent.can_absorb(config, names_a_control))
+        })
+        .collect();
+    let mut conflicts = refused.clone();
 
-    for (index, fragment) in fragments.iter().enumerate() {
-        let SemanticsFragment::Pending(pending) = fragment else {
+    for index in 0..fragments.len() {
+        let Some(config) = pending(index) else {
             continue;
         };
-
-        if !parent.can_absorb(&pending.config, names_a_control) {
-            conflicts[index] = true;
-        }
-
         for sibling_index in 0..index {
-            let SemanticsFragment::Pending(sibling) = &fragments[sibling_index] else {
+            let Some(sibling) = pending(sibling_index) else {
                 continue;
             };
-            if !pending.config.can_join(&sibling.config, names_a_control) {
+            if names_a_control && (refused[index] || refused[sibling_index]) {
+                continue;
+            }
+            if !config.can_join(sibling, names_a_control) {
                 conflicts[index] = true;
                 conflicts[sibling_index] = true;
             }
