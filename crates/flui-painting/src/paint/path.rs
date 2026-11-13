@@ -65,12 +65,13 @@ impl ShapeHint {
         }
     }
 
-    /// Whether a path of this shape may leave its curves unbuilt.
+    /// Whether a path of this shape may leave its curves unbuilt: no shape, or a rounded
+    /// rectangle, which the GPU draws from [`Path::rrect_hint`] without reading curves.
     ///
     /// Every coordinate is finite and small enough that no sum or product the builder forms
-    /// overflows, so the curves built later are finite, as the path's flag already says. A
-    /// rounded rectangle also runs left to right and top to bottom with radii that are not
-    /// negative and fit its sides, so its curves stay inside [`Self::bounds`].
+    /// overflows, so the curves built later are finite, as the path's flag already says. The
+    /// rectangle runs left to right and top to bottom with radii that are not negative and
+    /// fit its sides, so its curves stay inside [`Self::bounds`].
     fn may_defer(self) -> bool {
         /// Far beyond any coordinate a frame lays out, and far below where the builder's
         /// sums and products of two coordinates overflow.
@@ -81,7 +82,9 @@ impl ShapeHint {
         };
         match self {
             Self::None => true,
-            Self::Rect(r) | Self::Oval(r) => rect(r),
+            // No analytic route draws them, so a clone recorded and drawn many times would
+            // build them once per clone: they are built at once and shared.
+            Self::Rect(_) | Self::Oval(_) => false,
             Self::RRect(rrect) => {
                 let bounds = rrect.bounding_rect();
                 let (tl, tr, br, bl) = (
@@ -111,23 +114,13 @@ impl ShapeHint {
         }
     }
 
-    /// Bounds that hold the curves built for the shape: a rectangle's own, and for an
-    /// oval or a rounded rectangle the shape's box widened by [`CURVE_TOLERANCE`], the
-    /// most its curves stray outside the true ellipse.
+    /// Bounds that hold the curves built for the shape: a rounded rectangle's box widened by
+    /// [`CURVE_TOLERANCE`], the most its corner curves stray outside the true ellipse. Only
+    /// a rounded rectangle or no shape leaves its curves unbuilt ([`Self::may_defer`]).
     fn bounds(self) -> Rect<f64> {
-        let normalized = |rect: Rect<f64>| {
-            Rect::from_ltrb(
-                rect.left().min(rect.right()),
-                rect.top().min(rect.bottom()),
-                rect.left().max(rect.right()),
-                rect.top().max(rect.bottom()),
-            )
-        };
         match self {
-            Self::None => Rect::ZERO,
-            Self::Rect(rect) => normalized(rect),
-            Self::Oval(rect) => normalized(rect).expand(CURVE_TOLERANCE),
-            Self::RRect(rrect) => normalized(rrect.bounding_rect()).expand(CURVE_TOLERANCE),
+            Self::RRect(rrect) => rrect.bounding_rect().expand(CURVE_TOLERANCE),
+            Self::None | Self::Rect(_) | Self::Oval(_) => Rect::ZERO,
         }
     }
 }
@@ -140,12 +133,13 @@ impl ShapeHint {
 /// shares it, and the first mutation of a shared path copies it, so a path recorded into a
 /// display list or a clip is a pointer-sized handle, not a copy.
 ///
-/// A rectangle, oval or rounded rectangle made by its constructor, and an empty path, leave
-/// their curves unbuilt until something reads them ([`Self::commands`], [`Self::contains`],
-/// a stroke or an edit), and a [`Self::translate`] of such a path only records the move.
-/// Reading builds the curves an eager build would have laid down, moved the same way; a
-/// clone taken before that builds its own on its own read. A shape recorded, clipped, moved
-/// and drawn through its analytic route ([`Self::rrect_hint`]) never builds them at all.
+/// A rounded rectangle made by its constructor, and an empty path, leave their curves
+/// unbuilt until something reads them ([`Self::commands`], [`Self::contains`], a stroke or
+/// an edit), and a [`Self::translate`] of such a path only records the move. Reading builds
+/// the curves an eager build would have laid down, moved the same way; a clone taken before
+/// that builds its own on its own read. A shape recorded, clipped, moved and drawn through
+/// its analytic route ([`Self::rrect_hint`]) never builds them at all. A rectangle or an
+/// oval, which no analytic route draws, builds at once so its clones share the curves.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(from = "PathRepr", into = "PathRepr"))]

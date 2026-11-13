@@ -931,6 +931,14 @@ pub(crate) fn a_shape_reads_alike_before_and_after_its_curves_are_built() {
         copy.shares_commands_with(&first),
         "a clone shares the built curves"
     );
+    for drawn_from_curves in [Path::oval(rrect.rect), Path::rectangle(rrect.rect)] {
+        assert!(
+            drawn_from_curves
+                .clone()
+                .shares_commands_with(&drawn_from_curves),
+            "a shape no analytic route draws is built once for all its clones"
+        );
+    }
     let _ = copy.bounds();
     assert!(copy == second, "cached bounds leave equality alone");
     assert_eq!(Path::new(), Path::new().translate(Offset::new(3.0, 4.0)));
