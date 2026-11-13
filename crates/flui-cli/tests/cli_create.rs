@@ -188,7 +188,8 @@ fn assert_generated_project_compiles(template: &str, hot_reload: bool) {
 /// generated test that silently never executed, which is how a layout
 /// regression once passed this harness, now fails it.
 const GENERATED_COUNTER_TESTS: &[&str] = &[
-    "tests::counter_responds_to_pointer_input",
+    "tests::counter_increments",
+    "tests::each_app_owns_its_state",
     "tests::counter_content_is_centred",
 ];
 

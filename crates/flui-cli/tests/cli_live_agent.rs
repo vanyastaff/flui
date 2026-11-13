@@ -480,9 +480,10 @@ fn acceptance_project(workdir: &Path, storage: &str) -> PathBuf {
 }
 
 /// The acceptance application on the desktop, driven through `flui mcp` as
-/// an agent drives it: read the tree, press Settings, see the Settings page
-/// (a Back button, no Settings button), press Back, and read the home page
-/// again; the animation clock answers in between. Only on the desktop: the
+/// an agent drives it: read the tree until the app has drawn it, locate and
+/// press Settings, wait for the Settings page (a Back button, no Settings
+/// button), press Back, wait for the home page again and for the window to
+/// settle; the animation clock answers in between. Only on the desktop: the
 /// counter scenario covers the other devices.
 #[test]
 fn an_agent_drives_the_acceptance_app_on_the_desktop() {
@@ -513,28 +514,81 @@ fn an_agent_drives_the_acceptance_app_on_the_desktop() {
     started.unwrap_or_else(|message| panic!("{message}"));
 
     let mut mcp = connect(&project, &received);
-    let settings = mcp.read_until(&received, "home page with a Settings button", |tree| {
+    // The app may still be building its first frame: the first read retries.
+    mcp.read_until(&received, "home page with a Settings button", |tree| {
         button(tree, "Settings")
     });
     mcp.call("flui_motion", json!({}))
         .unwrap_or_else(|error| panic!("reading the animation clock failed: {error}"));
+    let settings = mcp.locate_button("Settings");
     mcp.call(
         "flui_act",
         json!({ "element": settings, "action": "invoke" }),
     )
     .unwrap_or_else(|error| panic!("pressing Settings failed: {error}"));
-    let back = mcp.read_until(&received, "Settings page with a Back button", |tree| {
-        button(tree, "Settings")
-            .is_none()
-            .then(|| button(tree, "Back"))?
-    });
+    // From here on the agent waits for the app instead of reading in a loop.
+    mcp.wait_for(
+        "the Settings page",
+        json!({ "all": [
+            { "appears": button_named("Back") },
+            { "gone": button_named("Settings") },
+        ] }),
+    );
+    let back = mcp.locate_button("Back");
     mcp.call("flui_act", json!({ "element": back, "action": "invoke" }))
         .unwrap_or_else(|error| panic!("pressing Back failed: {error}"));
-    mcp.read_until(&received, "home page again", |tree| {
-        button(tree, "Back")
-            .is_none()
-            .then(|| button(tree, "Settings"))?
-    });
+    mcp.wait_for(
+        "the home page again",
+        json!({ "all": [
+            { "appears": button_named("Settings") },
+            { "gone": button_named("Back") },
+        ] }),
+    );
+    mcp.wait_for("the window to settle", json!("settled"));
+}
+
+/// A locator of the button a user sees as `name`.
+fn button_named(name: &str) -> Value {
+    json!({ "role": "button", "name": { "match": "exact", "text": name } })
+}
+
+impl Mcp {
+    /// The element reference of the one button named `name`, found with
+    /// `flui_locate`.
+    fn locate_button(&mut self, name: &str) -> String {
+        let text = self
+            .call(
+                "flui_locate",
+                json!({ "locator": button_named(name), "max_matches": 2 }),
+            )
+            .unwrap_or_else(|error| panic!("locating the {name} button failed: {error}"));
+        let found: Value = serde_json::from_str(&text).expect("the matches are JSON");
+        let matches = found["matches"]
+            .as_array()
+            .expect("the reply lists matches");
+        assert_eq!(matches.len(), 1, "one {name} button: {text}");
+        matches[0]["element"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the match names its element: {text}"))
+            .to_owned()
+    }
+
+    /// Holds out with `flui_wait` until `condition` holds, for at most
+    /// [`SETTLE`]; an unsatisfied wait fails with what the app last saw.
+    fn wait_for(&mut self, what: &str, condition: Value) {
+        let timeout_ms = u64::try_from(SETTLE.as_millis()).expect("BUG: SETTLE fits in u64 ms");
+        let text = self
+            .call(
+                "flui_wait",
+                json!({ "condition": condition, "timeout_ms": timeout_ms }),
+            )
+            .unwrap_or_else(|error| panic!("waiting for {what} failed: {error}"));
+        let outcome: Value = serde_json::from_str(&text).expect("the outcome is JSON");
+        assert_eq!(
+            outcome["satisfied"], true,
+            "no {what} within {SETTLE:?}: {text}"
+        );
+    }
 }
 
 /// The directories a desktop outside Linux keeps the scenario's documents

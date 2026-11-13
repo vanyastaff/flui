@@ -473,7 +473,7 @@ fn trampoline_slot(krate: &Krate, defs: &[Def]) -> Option<String> {
             .file
             .strip_prefix(OWNER)?
             .split('/')
-            .map(|name| name.strip_suffix(".rs").unwrap_or(name));
+            .map(|name| name.trim_suffix(".rs"));
         let word = names.next()?;
         if !listed(&modules["platforms"], word) {
             return None;

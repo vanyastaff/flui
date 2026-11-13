@@ -843,7 +843,7 @@ fn harness_custom_paint_failed_subscription_is_inert_and_can_be_replaced() {
             let old = RemovalNotifier::new("old", old_cancellation_fails);
             let new = RemovalNotifier::new("new", false);
             let mut run = RenderTester::mount(box_node(RenderCustomPaint::new(
-                Some(Rc::new(ListeningPainter(old.clone(), Color::RED))),
+                Some(Rc::new(ListeningPainter(old, Color::RED))),
                 None,
                 Size::new(20.0, 20.0),
             )))

@@ -17,67 +17,23 @@
 //! process-global font system and installs the kit's counting global
 //! allocator.
 
-use std::fmt::Write as _;
-
-use flui_material::{ElevatedButton, InkWell, Theme, ThemeData};
+use flui_material::{
+    Checkbox, Chip, ElevatedButton, FilterChip, InkWell, Radio, Switch, Theme, ThemeData,
+};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::Text;
-use flui_testing::control_cost::{ControlCost, control_over_text, control_over_text_under};
+use flui_testing::control_cost::{
+    ControlCost, control_alone_under, control_over_text, control_over_text_under,
+};
 use flui_testing::heap::CountingAllocator;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-/// What `control` adds to the `Text` it holds, per control, recorded as
-/// `scenario` and held to its baseline file.
+/// `cost` recorded as `scenario` and held to this catalog's baseline file.
 fn held_to_baseline(scenario: &str, cost: ControlCost) -> ControlCost {
-    let counts = cost.counts();
-    record_counts(scenario, &counts);
-    let baseline = baseline(scenario);
-    for (name, value) in counts {
-        let held = baseline
-            .iter()
-            .find(|(counter, _)| *counter == name)
-            .map_or_else(
-                || panic!("{scenario}.toml holds no `{name}`"),
-                |(_, held)| *held,
-            );
-        assert!(
-            value <= held,
-            "{scenario}: {name} rose to {value} over the baseline's {held}"
-        );
-    }
-    cost
-}
-
-/// The counters of `perf/baseline/<scenario>.toml`.
-fn baseline(scenario: &str) -> Vec<(String, u64)> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("perf/baseline")
-        .join(format!("{scenario}.toml"));
-    let body = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    body.lines()
-        .filter_map(|line| {
-            let (name, value) = line.split_once('=')?;
-            let value = value.trim().parse::<u64>().ok()?;
-            Some((name.trim().to_owned(), value))
-        })
-        .collect::<Vec<(String, u64)>>()
-}
-
-/// Writes `counts` as `<FLUI_PERF_OUT>/<scenario>.toml` when that variable is set.
-fn record_counts(scenario: &str, counts: &[(&str, u64)]) {
-    let Some(dir) = std::env::var_os("FLUI_PERF_OUT") else {
-        return;
-    };
-    let dir = std::path::PathBuf::from(dir);
-    std::fs::create_dir_all(&dir).expect("create FLUI_PERF_OUT");
-    let mut body = format!("[{scenario}]\n");
-    for (name, value) in counts {
-        writeln!(body, "{name} = {value}").expect("writing to a String cannot fail");
-    }
-    std::fs::write(dir.join(format!("{scenario}.toml")), body).expect("write perf record");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("perf/baseline");
+    flui_testing::control_cost::held_to_baseline(&dir, scenario, cost)
 }
 
 /// What an `InkWell` adds to the `Text` it holds: its behaviours on the
@@ -130,6 +86,117 @@ fn perf_elevated_button_over_text() {
     assert!(
         cost.render_nodes <= 5,
         "a button adds {} render nodes",
+        cost.render_nodes
+    );
+}
+
+/// What a toggle costs in place of an empty box, under a theme: its own
+/// element, the well's three and its painter, less the box; its checked
+/// state rides on the well's node, with no `Semantics` element of its own.
+fn toggle_cost(scenario: &str, control: fn(usize) -> BoxedView) -> ControlCost {
+    let cost = held_to_baseline(
+        scenario,
+        control_alone_under(
+            |column| Theme::new(ThemeData::light(), column).boxed(),
+            control,
+        ),
+    );
+    assert!(
+        cost.elements <= 4,
+        "{scenario}: a toggle adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 2,
+        "{scenario}: a toggle adds {} render nodes",
+        cost.render_nodes
+    );
+    cost
+}
+
+#[test]
+fn perf_checkbox_alone() {
+    toggle_cost("checkbox_alone", |row| {
+        Checkbox::new(row % 2 == 0)
+            .on_changed(|_ctx, _value| {})
+            .boxed()
+    });
+}
+
+#[test]
+fn perf_switch_alone() {
+    toggle_cost("switch_alone", |row| {
+        Switch::new(row % 2 == 0)
+            .on_changed(|_ctx, _value| {})
+            .boxed()
+    });
+}
+
+#[test]
+fn perf_radio_alone() {
+    toggle_cost("radio_alone", |row| {
+        Radio::new(row % 3, Some(0))
+            .on_changed(|_ctx, _value| {})
+            .boxed()
+    });
+}
+
+/// What a pressable `Chip` adds to the `Text` it labels, under a theme: its
+/// composition (the chip, its border painter, `Material`, the well, padding,
+/// constraints, opacity and the label's row), and the `Semantics` that keeps
+/// the chip one node whether it has `on_pressed` or not.
+#[test]
+fn perf_chip_over_text() {
+    let cost = held_to_baseline(
+        "chip_over_text",
+        control_over_text_under(
+            |column| Theme::new(ThemeData::light(), column).boxed(),
+            |row| {
+                Chip::new(Text::new(format!("Row {row}")))
+                    .on_pressed(|_ctx| {})
+                    .boxed()
+            },
+        ),
+    );
+    // The well's three, the chip's own composition and its `Semantics`, which
+    // stays so that gaining or losing the handler keeps the subtree.
+    assert!(
+        cost.elements <= 15,
+        "a chip adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 10,
+        "a chip adds {} render nodes",
+        cost.render_nodes
+    );
+}
+
+/// What a `FilterChip` adds to the `Text` it labels, under a theme, its
+/// selection on the well's node as the button's toggled state.
+#[test]
+fn perf_filter_chip_over_text() {
+    let cost = held_to_baseline(
+        "filter_chip_over_text",
+        control_over_text_under(
+            |column| Theme::new(ThemeData::light(), column).boxed(),
+            |row| {
+                FilterChip::new(Text::new(format!("Row {row}")))
+                    .selected(row % 2 == 0)
+                    .on_selected(|_ctx, _selected| {})
+                    .boxed()
+            },
+        ),
+    );
+    // A chip's composition and the slot of its checkmark.
+    assert!(
+        cost.elements <= 15,
+        "a filter chip adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 10,
+        "a filter chip adds {} render nodes",
         cost.render_nodes
     );
 }

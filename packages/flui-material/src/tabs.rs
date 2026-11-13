@@ -722,6 +722,7 @@ impl ViewState<TabBar> for TabBarState {
 
 /// How a tab indicator moves between two tabs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TabIndicatorAnimation {
     /// Both edges move together: the indicator slides, interpolating its
     /// position and width between the two tabs.

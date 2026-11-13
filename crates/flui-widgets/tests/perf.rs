@@ -474,9 +474,9 @@ fn perf_raw_button_over_text() {
     });
     let mut counts = cost.counts().to_vec();
     counts.extend([
-        ("text_allocations", cost.text.allocations),
-        ("text_reallocations", cost.text.reallocations),
-        ("text_bytes", cost.text.live_bytes),
+        ("text_allocations", cost.bare.allocations),
+        ("text_reallocations", cost.bare.reallocations),
+        ("text_bytes", cost.bare.live_bytes),
     ]);
     record_counts("raw_button_over_text", &counts);
 

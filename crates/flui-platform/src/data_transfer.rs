@@ -80,7 +80,7 @@ impl std::fmt::Display for Mime {
 
 /// The typed format of one representation a source offers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "the transport names the formats it decodes; any other media type is `Custom`"
 )]
@@ -252,7 +252,7 @@ impl DataTransferOffer {
 /// media type arrive as the bytes of their type ([`TransferFormat::UriList`],
 /// [`TransferFormat::Image`]).
 #[derive(Debug, Clone)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "the transport decodes text and markup; every other media type is `Custom`"
 )]

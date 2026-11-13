@@ -8,7 +8,7 @@ use flui::rendering::{
     BoxConstraints, BoxDryLayoutContext, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintContext,
     RenderBox, RenderUpdateImpact, Single,
 };
-use flui::testing::widgets::{lay_out, loose};
+use flui::testing::harness::widgets::{lay_out, loose};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::AnimatedBuilder;
 use std::sync::{
@@ -114,7 +114,7 @@ impl CustomPainter for MotionPainter {
 #[test]
 fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     use flui::animation::{AnimatedValue, Linear, MotionSpec, SharedCurve, Vsync};
-    use flui::testing::widgets::{LaidOut, lay_out_animated};
+    use flui::testing::harness::widgets::{LaidOut, lay_out_animated};
     use flui::view::environment::VsyncScope;
     use flui::widgets::CustomPaint;
 
@@ -298,7 +298,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     use flui::interaction::{
         GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerDispatch, PointerId,
     };
-    let mut binding = flui::testing::HeadlessBinding::new();
+    let mut binding = flui::testing::harness::HeadlessBinding::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let callback = fired.clone();
     let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
@@ -310,10 +310,10 @@ fn gesture_recognizer_uses_headless_virtual_time() {
         })
         .build();
     let position = Offset::new(8.0, 8.0);
-    let down = flui::testing::replay::ScriptedPointer::new(
+    let down = flui::testing::harness::replay::ScriptedPointer::new(
         Duration::ZERO,
         PointerId::try_from(1_u64).expect("nonzero pointer"),
-        flui::testing::replay::PointerPhase::Down,
+        flui::testing::harness::replay::PointerPhase::Down,
         position,
     )
     .to_event();
@@ -430,11 +430,11 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
     use flui::interaction::{
         ArenaMembership, GestureArenaMember, GestureRecognizer, PointerId, PrimaryContact,
     };
-    use flui::testing::replay::{PointerPhase, ScriptedPointer};
+    use flui::testing::harness::replay::{PointerPhase, ScriptedPointer};
     use flui::widgets::PointerDispatch;
     use std::rc::Rc;
 
-    let binding = flui::testing::HeadlessBinding::new();
+    let binding = flui::testing::harness::HeadlessBinding::new();
     let arena = binding.arena();
     let recognizer = |threshold| {
         Rc::new_cyclic(
@@ -785,11 +785,11 @@ fn presentation_lifecycle_subscription_runs_through_the_facade() {
         captured: Rc::default(),
         events: Rc::default(),
     };
-    let mut binding = flui::testing::HeadlessBinding::new();
+    let mut binding = flui::testing::harness::HeadlessBinding::new();
     binding.mount_root(
         &view,
-        flui::testing::MountOwners::fresh(),
-        flui::testing::MountOptions::loose(100.0),
+        flui::testing::harness::MountOwners::fresh(),
+        flui::testing::harness::MountOptions::loose(100.0),
     );
     let handle = view.captured.borrow().as_ref().expect("captured").clone();
     binding
@@ -846,12 +846,12 @@ fn presentation_lifecycle_capability_is_absent_when_not_installed() {
         captured: Rc::default(),
         events: Rc::default(),
     };
-    let mut binding = flui::testing::HeadlessBinding::new();
+    let mut binding = flui::testing::harness::HeadlessBinding::new();
     binding.mount_root(
         &view,
-        flui::testing::MountOwners::fresh(),
-        flui::testing::MountOptions::loose(100.0)
-            .capabilities(flui::testing::BuildCapabilities::AsyncDriverOnly),
+        flui::testing::harness::MountOwners::fresh(),
+        flui::testing::harness::MountOptions::loose(100.0)
+            .capabilities(flui::testing::harness::BuildCapabilities::AsyncDriverOnly),
     );
     assert!(view.initialized.get());
     assert!(view.captured.borrow().is_none());
@@ -866,4 +866,30 @@ fn secondary_window_entry_point_requires_a_running_application() {
         )
         .is_err()
     );
+}
+
+/// The arguments `SemanticsConfiguration`'s setters take are named through `flui::semantics`, the
+/// way a render object's `describe_semantics_configuration` writes them.
+#[test]
+fn semantics_vocabulary_is_named_through_the_facade() {
+    use flui::semantics::{
+        SemanticsAnchor, SemanticsCollection, SemanticsCollectionKind, SemanticsConfiguration,
+        SemanticsRelation, SemanticsSortKey, SemanticsTag,
+    };
+
+    let mut config = SemanticsConfiguration::new();
+    let tag = SemanticsTag::new("row");
+    config.add_tag(tag.clone());
+    config.set_sort_key(SemanticsSortKey::named(2.0, "toolbar"));
+    config.set_collection(SemanticsCollection::new(SemanticsCollectionKind::List, Some(3)));
+    let anchor = SemanticsAnchor::new();
+    config.add_relation(SemanticsRelation::LabelledBy, anchor.clone());
+
+    assert!(config.has_tag(&tag));
+    assert_eq!(config.sort_key(), Some(&SemanticsSortKey::named(2.0, "toolbar")));
+    assert_eq!(
+        config.collection().map(SemanticsCollection::count),
+        Some(Some(3))
+    );
+    assert_eq!(config.relations(), &[(SemanticsRelation::LabelledBy, anchor)]);
 }

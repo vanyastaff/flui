@@ -1,6 +1,10 @@
 # ADR-0093: Router is the primary navigation API
 
-- **Status:** Accepted (2026-11-04)
+- **Status:** Superseded (2026-11-13)
+- **Superseded-by:** [ADR-0330](ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md)
+  in full: the Router stays the one navigation API, a widget reaches it and its own route from
+  the build context (`Router::of`, `PageHandle::of`) instead of only from a lifecycle hook, and
+  dialogs stay pageless popup routes instead of moving to a modal surface
 - **Date:** 2026-09-25
 - **Supersedes:** [ADR-0024](ADR-0024-named-routes-seam.md) in full (string-named routes, their
   registration, `RouteKey<T>` and the named-route errors);
@@ -34,7 +38,7 @@ restoration:
 
 | What | Where | Users |
 |:--|:--|:--|
-| String-named routes (ADR-0024): `route`, `on_generate_route`, `on_unknown_route`, seven `*_named*` doors, `push_keyed`, `RouteKey<T>`, `RouteArguments` | `crates/flui-widgets/src/navigator/named_route.rs`, `navigator.rs` | none outside `flui-widgets`: its tests and `widgets_app.rs`'s docs |
+| String-named routes (ADR-0024): `route`, `on_generate_route`, `on_unknown_route`, seven `*_named*` doors, `push_keyed`, `RouteKey<T>`, `RouteArguments` | the `named_route` and `navigator` modules of `crates/flui-widgets/src/navigator/` | none outside `flui-widgets`: its tests and `widgets_app.rs`'s docs |
 | Imperative pushes on `NavigatorHandle` (ADR-0019): `push`, `pop_with`, `remove_route`, `maybe_pop`, …, found from `build` through `maybe_of`/`maybe_of_root` | `crates/flui-widgets/src/navigator/navigator.rs` (38 `pub fn`) | `show_dialog`, popup menus, `OpenContainer`, Material's back button and app bar |
 | The typed `Router<R>` with `#[derive(Routable)]` | `crates/flui-widgets/src/router/`, `crates/flui-macros/src/derive_routable.rs` | the acceptance app (`tests/fixtures/acceptance_app/app.rs`: `Router::from_stack`, `WidgetsApp::router`) |
 

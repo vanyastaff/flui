@@ -196,8 +196,7 @@ impl SelectionModel {
             // grapheme boundaries.
             let text = painter
                 .text()
-                .map(flui_painting::typography::InlineSpan::to_plain_text)
-                .unwrap_or_default();
+                .map_or_default(flui_painting::typography::InlineSpan::to_plain_text);
             let byte = text_boundaries::grapheme_floor(&text, at.byte());
             let upstream = side == HandleSide::End;
             let position = if upstream {

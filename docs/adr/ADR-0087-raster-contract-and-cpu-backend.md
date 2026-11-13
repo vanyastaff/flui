@@ -57,7 +57,7 @@ crate::Renderer`, `raster.rs:179`) and seven test doubles, four in `flui-app`
 The GPU-free half of lowering a `Scene` — traversal order, clip and opacity discipline, effect
 decomposition — lives in the engine as crate-private traits: `CommandRenderer`
 (`crates/flui-engine/src/command_renderer.rs:31`), `LayerStateStack`
-(`crates/flui-engine/src/layer_state_stack.rs:41`) and `LayerVisitor`
+(`crates/flui-engine/src/layer_state_stack.rs:41`) and `SceneVisitor`
 (`crates/flui-engine/src/layer_walk.rs:94`). A second walker already exists and has diverged:
 `HeadlessRenderer` (`crates/flui-engine/src/headless.rs:54`) documents that it only approximates
 `BackdropFilter`, `ShaderMask` and `Follower` (`headless.rs:15-27`).

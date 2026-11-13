@@ -1,6 +1,6 @@
 //! Dismissible release: cancellation restores a dragged card, a fling keeps
 //! the finger's speed.
-use crate::common::{lay_out_animated, tight};
+use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
@@ -296,11 +296,9 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
 }
 
 pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
-    use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
-    use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
     use flui_widgets::{SizedBox, app_root};
+    const STEP: Duration = Duration::from_millis(10);
     for (vertical, sign) in [(false, 1.0), (false, -1.0), (true, 1.0), (true, -1.0)] {
-        let mut binding = HeadlessBinding::new();
         let progress = Rc::new(std::cell::RefCell::new(Vec::new()));
         let updates = Rc::clone(&progress);
         let sides = Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -328,97 +326,71 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         ] {
             card = card.dismiss_threshold(direction, DismissThreshold::NEVER);
         }
-        let root = GestureArenaScope::new(
-            binding.arena().clone(),
-            FocusTreeRoot::new(app_root(VsyncScope::new(binding.vsync().clone(), card))),
+        let vsync = Vsync::new();
+        let mut laid = lay_out_animated(
+            app_root(VsyncScope::new(vsync.clone(), card)),
+            tight(200.0, 200.0),
+            vsync.clone(),
         );
-        let _ = binding.mount_root(
-            &root,
-            MountOwners::fresh(),
-            MountOptions::tight(200.0, 200.0),
-        );
-        binding.pump_frame(Duration::ZERO);
-        let script = PointerScript::drag(
-            Offset::new(100.0, 100.0),
+        // Along the drag axis, `along` points from the card's centre.
+        let at = |along: f64| {
             if vertical {
-                Offset::new(100.0, 100.0 + sign * 80.0)
+                (100.0, 100.0 + along)
             } else {
-                Offset::new(100.0 + sign * 80.0, 100.0)
-            },
-            5,
-            Duration::from_millis(10),
-        );
-        let mut release_position = script
-            .pointer_events()
-            .last()
-            .expect("drag ends with release")
-            .position;
-        for (index, mut event) in script.pointer_events().iter().copied().enumerate() {
-            if event.phase == flui_testing::PointerPhase::Up {
-                event.position = release_position;
+                (100.0 + along, 100.0)
             }
-            event.at = if index == 0 {
-                Duration::ZERO
-            } else if event.phase == flui_testing::PointerPhase::Up {
-                // Held still before lifting: the release settles back from
-                // rest instead of flinging the card out against its
-                // threshold.
-                Duration::from_millis(200)
-            } else {
-                Duration::from_millis(10)
-            };
-            binding.replay_event(event);
-            binding.pump_frame(Duration::ZERO);
+        };
+        let built = |laid: &mut LaidOut| {
+            laid.with_build_owner_mut(|owner| owner.last_frame_build_report().elements_built)
+        };
+        laid.dispatch_pointer_down(100.0, 100.0);
+        laid.pump_for(Duration::ZERO);
+        // Five moves of 16 px each, 10 ms apart.
+        for step in 1..=5 {
+            let (x, y) = at(sign * 16.0 * f64::from(step));
+            laid.dispatch_pointer_move_after(x, y, STEP);
+            laid.pump_for(Duration::ZERO);
             // The row's menu long press competes for the finger, so the drag
             // takes the contact at its slop and the background mounts on the
             // third move; every frame after that only slides.
-            if (4..=5).contains(&index) {
+            if (4..=5).contains(&step) {
                 assert_eq!(
-                    binding.last_frame_report().build.elements_built,
+                    built(&mut laid),
                     0,
                     "drag motion does not rebuild after its background mounts"
                 );
             }
-            if index == 5 {
-                if vertical {
-                    event.position.dy -= sign * 160.0;
-                } else {
-                    event.position.dx -= sign * 160.0;
-                }
-                binding.replay_event(event);
-                binding.pump_frame(Duration::ZERO);
-                let expected = if sign > 0.0 {
-                    Color::rgb(110, 120, 130)
-                } else {
-                    Color::rgb(80, 90, 100)
-                };
-                let scene = binding.layer_tree().expect("dragged card scene");
-                assert!(scene.iter().any(|(_, node)| {
-                    if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
-                        picture.picture().iter().any(|command| matches!(&command.op,
-                            flui_painting::display_list::DrawOp::Rect { paint, .. } if paint.color == expected))
-                    } else { false }
-                }), "crossing the origin selects the other background");
-                if vertical {
-                    event.position.dy -= sign * 16.0;
-                } else {
-                    event.position.dx -= sign * 16.0;
-                }
-                release_position = event.position;
-                binding.replay_event(event);
-                binding.pump_frame(Duration::ZERO);
-                assert_eq!(
-                    binding.last_frame_report().build.elements_built,
-                    0,
-                    "motion after the sign change does not rebuild"
-                );
-            }
         }
-        binding.pump_frame(Duration::from_millis(16));
-        assert!(
-            binding.vsync().has_running(),
-            "release must start a return animation"
+        let (x, y) = at(sign * (80.0 - 160.0));
+        laid.dispatch_pointer_move_after(x, y, STEP);
+        laid.pump_for(Duration::ZERO);
+        let expected = if sign > 0.0 {
+            Color::rgb(110, 120, 130)
+        } else {
+            Color::rgb(80, 90, 100)
+        };
+        let scene = laid.layer_tree().expect("dragged card scene");
+        assert!(scene.iter().any(|(_, node)| {
+            if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+                picture.picture().iter().any(|command| matches!(&command.op,
+                    flui_painting::display_list::DrawOp::Rect { paint, .. } if paint.color == expected))
+            } else { false }
+        }), "crossing the origin selects the other background");
+        let (x, y) = at(sign * (80.0 - 176.0));
+        laid.dispatch_pointer_move_after(x, y, STEP);
+        laid.pump_for(Duration::ZERO);
+        assert_eq!(
+            built(&mut laid),
+            0,
+            "motion after the sign change does not rebuild"
         );
+        // Held still before lifting: the release settles back from rest
+        // instead of flinging the card out against its threshold.
+        laid.pump_for(Duration::from_millis(200));
+        laid.dispatch_pointer_up(x, y);
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_millis(16));
+        assert!(vsync.has_running(), "release must start a return animation");
         // The card came back out on the side opposite to where the drag began.
         let returning = match (vertical, sign > 0.0) {
             (false, true) => DismissSide::EndToStart,
@@ -434,12 +406,11 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         let mut previous = *progress.borrow().last().expect("drag update delivered");
         for _ in 0..4 {
             let delivered = progress.borrow().len();
-            binding.pump_frame(Duration::from_millis(16));
+            laid.pump_for(Duration::from_millis(16));
+            let report = laid.with_build_owner_mut(|owner| owner.last_frame_build_report());
             assert_eq!(
-                binding.last_frame_report().build.elements_built,
-                0,
-                "vertical {vertical}, sign {sign}: movement rebuilt {:?}",
-                binding.last_frame_report().build
+                report.elements_built, 0,
+                "vertical {vertical}, sign {sign}: movement rebuilt {report:?}"
             );
             let values = progress.borrow();
             assert_eq!(

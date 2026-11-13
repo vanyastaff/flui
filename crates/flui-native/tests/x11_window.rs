@@ -320,8 +320,7 @@ mod cases {
             .reply()
             .expect("the property")
             .value32()
-            .map(Iterator::collect)
-            .unwrap_or_default();
+            .map_or_default(Iterator::collect);
         atoms
             .into_iter()
             .map(|atom| {
@@ -512,8 +511,7 @@ mod cases {
                 .reply()
                 .expect("the property")
                 .value32()
-                .map(Iterator::collect)
-                .unwrap_or_default();
+                .map_or_default(Iterator::collect);
             let revised: Vec<u32> = supported
                 .iter()
                 .copied()
@@ -577,8 +575,7 @@ mod cases {
             .reply()
             .expect("the property")
             .value32()
-            .map(Iterator::collect)
-            .unwrap_or_default();
+            .map_or_default(Iterator::collect);
         let [left, right, top, bottom] = extents[..] else {
             panic!("openbox frames a decorated window: {extents:?}");
         };

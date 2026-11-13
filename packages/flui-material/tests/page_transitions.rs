@@ -10,7 +10,7 @@
 
 use crate::common;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -26,8 +26,8 @@ use flui_sdk::view::BuildContext;
 use flui_sdk::view::environment::{PlatformConvention, VsyncScope};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    ColoredBox, FadeTransition, NavigatorHandle, PageRoute, PageTransitionBuilder, RouteAnimation,
-    SizedBox,
+    ColoredBox, FadeTransition, PageHandle, PageTransitionBuilder, Routable, RouteAnimation,
+    Router, RouterHandle, SizedBox,
 };
 
 /// The pushed page's colour; nothing else in these apps paints it.
@@ -150,39 +150,92 @@ fn running(transition: PageTransition) -> Themed {
     )
 }
 
-fn mount((platform, theme): Themed) -> (NavigatorHandle, LaidOut, Vsync) {
+/// The screens these apps show: an empty home, the page a push covers, and
+/// the pushed page.
+#[derive(Routable, Clone, Debug, PartialEq)]
+enum Screen {
+    #[route("/")]
+    Home,
+    #[route("/covered")]
+    Covered,
+    #[route("/page")]
+    Page,
+}
+
+/// The app's router and home page, as the home page's builder resolved them.
+#[derive(Clone, Default)]
+struct Nav {
+    router: Rc<RefCell<Option<RouterHandle<Screen>>>>,
+    home: Rc<RefCell<Option<PageHandle>>>,
+}
+
+impl Nav {
+    fn router(&self) -> RouterHandle<Screen> {
+        self.router.borrow().clone().expect("the home page built")
+    }
+
+    fn push(&self, screen: Screen) {
+        self.router().push(screen).expect("the router is mounted");
+    }
+
+    fn pop(&self) -> bool {
+        self.router().pop().expect("the router is mounted")
+    }
+
+    fn home(&self) -> PageHandle {
+        self.home.borrow().clone().expect("the home page built")
+    }
+}
+
+fn mount(themed: Themed) -> (Nav, LaidOut, Vsync) {
+    mount_with(themed, false)
+}
+
+/// Mount under `theme`; with `jump_cut`, every page carries a jump cut of its
+/// own.
+fn mount_with((platform, theme): Themed, jump_cut: bool) -> (Nav, LaidOut, Vsync) {
     let registry = Vsync::new();
-    let navigator = NavigatorHandle::new();
+    let nav = Nav::default();
+    let pages = {
+        let nav = nav.clone();
+        move |screen: &Screen, ctx: &dyn BuildContext| {
+            let color = match screen {
+                Screen::Home => {
+                    *nav.router.borrow_mut() = Router::<Screen>::of(ctx).ok();
+                    *nav.home.borrow_mut() = PageHandle::of(ctx);
+                    return SizedBox::shrink().into_view().boxed();
+                }
+                Screen::Covered => COVERED,
+                Screen::Page => PAGE,
+            };
+            ColoredBox::new(color)
+                .child(SizedBox::expand())
+                .into_view()
+                .boxed()
+        }
+    };
+    let router = Router::new(Screen::Home, pages);
+    let router = if jump_cut {
+        router.transitions(|_ctx, _primary, _secondary, child| child)
+    } else {
+        router
+    };
     let app = lay_out_animated(
         VsyncScope::new(
             registry.clone(),
-            PlatformConvention::new(
-                platform,
-                MaterialApp::new(SizedBox::shrink())
-                    .navigator(navigator.clone())
-                    .theme(theme),
-            ),
+            PlatformConvention::new(platform, MaterialApp::router(router).theme(theme)),
         ),
         tight(WIDTH, HEIGHT),
         registry.clone(),
     );
-    (navigator, app, registry)
+    (nav, app, registry)
 }
 
-fn page_route() -> PageRoute<()> {
-    PageRoute::new(|_ctx, _primary, _secondary| {
-        ColoredBox::new(PAGE)
-            .child(SizedBox::expand())
-            .into_view()
-            .boxed()
-    })
-}
-
-/// Mount under `theme`, push a page route with no transitions of its own and
+/// Mount under `theme`, push a page with no transitions of its own and
 /// anchor its clock.
-fn pushed(theme: Themed) -> (NavigatorHandle, LaidOut, Vsync) {
+fn pushed(theme: Themed) -> (Nav, LaidOut, Vsync) {
     let (navigator, mut app, registry) = mount(theme);
-    let _result = navigator.push(page_route());
+    navigator.push(Screen::Page);
     app.pump_for(Duration::ZERO);
     (navigator, app, registry)
 }
@@ -343,9 +396,8 @@ fn a_custom_builder_runs_with_its_own_duration() {
 
 /// A route's own transitions win over the theme's.
 fn an_explicit_route_transition_wins_over_the_theme() {
-    let (navigator, mut app, _registry) = mount(running(PageTransition::FadeThrough));
-    let _result =
-        navigator.push(page_route().transitions(|_ctx, _primary, _secondary, child| child));
+    let (navigator, mut app, _registry) = mount_with(running(PageTransition::FadeThrough), true);
+    navigator.push(Screen::Page);
     app.pump_for(Duration::ZERO);
     app.pump_for(ms(100));
     let page = painted(&app);
@@ -364,7 +416,7 @@ fn reduced_motion_settles_on_the_first_frame() {
         let (navigator, mut app, registry) =
             mount(themed(platform, PageTransitionsTheme::default()));
         app.set_motion_override(MotionOverride::Reduce);
-        let _result = navigator.push(page_route());
+        navigator.push(Screen::Page);
         app.pump_for(Duration::ZERO);
         app.tick();
         assert_settled(&app, &registry);
@@ -374,7 +426,7 @@ fn reduced_motion_settles_on_the_first_frame() {
     let custom = PageTransition::Custom(Rc::new(CountingFade(Rc::clone(&builds))));
     let (navigator, mut app, registry) = mount(running(custom));
     app.set_motion_override(MotionOverride::Reduce);
-    let _result = navigator.push(page_route());
+    navigator.push(Screen::Page);
     app.pump_for(Duration::ZERO);
     app.tick();
     assert!(
@@ -399,18 +451,13 @@ fn covered_page(
 ) {
     let rest = duration.saturating_sub(at);
     let (navigator, mut app, registry) = mount(running(transition));
-    let _covered = navigator.push(PageRoute::<()>::new(|_ctx, _primary, _secondary| {
-        ColoredBox::new(COVERED)
-            .child(SizedBox::expand())
-            .into_view()
-            .boxed()
-    }));
+    navigator.push(Screen::Covered);
     app.pump_for(Duration::ZERO);
     app.pump_for(duration);
     app.tick();
     assert!(!registry.has_running(), "the covered page settled");
 
-    let _result = navigator.push(page_route());
+    navigator.push(Screen::Page);
     app.pump_for(Duration::ZERO);
     app.pump_for(at);
     expect(
@@ -541,9 +588,10 @@ pub fn page_transitions_by_platform_and_variant() {
 /// `EASE_OUT`: part-way at 75 ms, opaque at 150 ms.
 pub fn a_material_dialog_fades_in_over_150_ms() {
     let (navigator, mut app, registry) = mount((TargetPlatform::Unknown, ThemeData::light()));
-    let _result = show_dialog::<(), _, _>(&navigator, |_ctx| {
+    let _result = show_dialog::<(), _, _>(&navigator.home(), |_ctx| {
         ColoredBox::new(PAGE).child(SizedBox::new(100.0, 100.0))
-    });
+    })
+    .expect("the home page is on its navigator");
     app.pump_for(Duration::ZERO);
     app.pump_for(ms(75));
     close(

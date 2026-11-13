@@ -614,6 +614,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
             PointerPhase::Cancel | PointerPhase::Hover => {
                 unreachable!("this row scripts touch contact and release")
             }
+            _ => unreachable!("this row scripts only the phases above"),
         }
     };
     for (id, millis, y, phase) in [

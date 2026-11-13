@@ -183,6 +183,7 @@ mod wayland {
 
 #[cfg(x11_host)]
 mod x11 {
+    use std::rc::Rc;
     use std::sync::Arc;
 
     use super::{
@@ -251,7 +252,7 @@ mod x11 {
 
         /// XInput 2's pointers, XKB's keyboard and the cursor theme, on the
         /// platform's connection.
-        fn input(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Arc<dyn LoopInput> {
+        fn input(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Rc<dyn LoopInput> {
             X11Input::new(connection, text)
         }
 
@@ -268,14 +269,14 @@ mod x11 {
         /// The `CLIPBOARD` and `PRIMARY` selections on a connection and a
         /// thread of their own, which ring the loop's doorbell when the
         /// application's primary selection is asked for.
-        fn clipboard(doorbell: &Doorbell) -> Result<Arc<dyn LoopClipboard>, PlatformError> {
+        fn clipboard(doorbell: &Doorbell) -> Result<Rc<dyn LoopClipboard>, PlatformError> {
             let doorbell = doorbell.clone();
             let wake = move || {
                 if let Err(error) = doorbell.ring() {
                     tracing::error!(%error, "the X11 clipboard cannot wake the loop");
                 }
             };
-            Ok(Arc::new(X11Clipboard::start(Box::new(wake))?))
+            Ok(Rc::new(X11Clipboard::start(Box::new(wake))?))
         }
 
         /// XDND drops on the windows, on the platform's connection.

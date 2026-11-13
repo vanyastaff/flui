@@ -98,13 +98,11 @@ fn pointer(event: &PointerEvent) -> String {
             let pressure = press
                 .sample
                 .pressure
-                .map(|pressure| format!(" pressure {}", pressure.get()))
-                .unwrap_or_default();
+                .map_or_default(|pressure| format!(" pressure {}", pressure.get()));
             let size = press
                 .sample
                 .contact_size
-                .map(|size| format!(" size {:?}", size.get()))
-                .unwrap_or_default();
+                .map_or_default(|size| format!(" size {:?}", size.get()));
             format!(
                 "{} {:?} at {:?}{pressure}{size}",
                 head("down", &press.pointer),

@@ -50,11 +50,12 @@ one at a different progress mapping.
 
 **D3 — Policy lives in packages.** `flui-material` maps `TargetPlatform` to a `PageTransition`
 in its theme and installs, in `MaterialApp`, the `PageTransitions` the tree's `PlatformConvention`
-selects (ADR-0028). `flui-cupertino` builds its route through the same trait.
+selects (ADR-0028). `flui-cupertino` installs, in `CupertinoApp`, a `PageTransitions` whose page
+builder is the shared iOS slide.
 
 **D4 — Shared transitions move down, not sideways.** A transition used by more than one package
 lives in `flui-widgets`. The iOS parallax slide moves out of `flui-cupertino` into
-`flui-widgets`. `flui-cupertino`'s route and Material's Apple-platform default both use that
+`flui-widgets`. `CupertinoApp` and Material's Apple-platform default both use that
 single copy. Material-only transitions (fade-forwards, zoom, shared axis, fade through) live in
 `flui-material`.
 

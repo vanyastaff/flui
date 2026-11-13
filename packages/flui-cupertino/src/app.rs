@@ -5,7 +5,9 @@
 //! knows nothing about this widget; this widget resolves the
 //! [`CupertinoThemeData`] and publishes it through [`CupertinoTheme`],
 //! **above** the `WidgetsApp` (unlike `MaterialApp`,
-//! which resolves inside the `WidgetsApp` builder).
+//! which resolves inside the `WidgetsApp` builder), and installs the iOS
+//! parallax slide, [`ParallaxPageTransition`], as the ambient page transition
+//! (ADR-0221), so a [`Router`]'s pages slide in as `CupertinoPage`s do.
 //!
 //! ## Brightness — Apple's model, no `ThemeMode` (ADR-0042 §2)
 //!
@@ -30,20 +32,24 @@
 //!   behavior lands with its scrollbar and overscroll indicator.
 //! - **`HeroControllerScope`** — FLUI's `Navigator` auto-installs a default
 //!   hero controller, so no explicit scope is needed here.
+//! - **`CupertinoPageRoute`'s route chrome** — the transition-only barrier
+//!   dim and the edge-swipe back gesture are options of a route, which the
+//!   ambient page transition does not carry, so a Router's pages here slide
+//!   but have neither ([gaps](../../../docs/gaps.md#a-router-page-carries-no-route-chrome)).
 //! - **`CupertinoLocalizations`** — FLUI ships no Cupertino resource set
 //!   yet; when one lands its delegate is appended here.
-//! - **`Title`/`color`, named routes/`Router`, restoration, debug overlays**
+//! - **`Title`/`color`, restoration, debug overlays**
 //!   — deferred at the `WidgetsApp` layer; see its module docs.
 
 use std::fmt;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_sdk::platform::Locale;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    AppBuilder, BoxedLocalizationsDelegate, NavigatorHandle, NavigatorObserver, WidgetsApp,
+    AppBuilder, BoxedLocalizationsDelegate, PageTransitions, ParallaxPageTransition, Routable,
+    Router, WidgetsApp,
 };
 
 use crate::theme::{CupertinoTheme, CupertinoThemeData};
@@ -69,9 +75,7 @@ use crate::theme::{CupertinoTheme, CupertinoThemeData};
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct CupertinoApp {
-    home: Option<BoxedView>,
-    navigator: Option<NavigatorHandle>,
-    observers: Vec<Arc<dyn NavigatorObserver>>,
+    routing: Routing,
     builder: Option<AppBuilder>,
     theme: Option<CupertinoThemeData>,
     locale: Option<Locale>,
@@ -82,7 +86,7 @@ pub struct CupertinoApp {
 impl fmt::Debug for CupertinoApp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CupertinoApp")
-            .field("has_home", &self.home.is_some())
+            .field("routing", &self.routing)
             .field("has_builder", &self.builder.is_some())
             .field("has_theme", &self.theme.is_some())
             .finish_non_exhaustive()
@@ -90,11 +94,9 @@ impl fmt::Debug for CupertinoApp {
 }
 
 impl CupertinoApp {
-    fn bare() -> Self {
+    fn bare(routing: Routing) -> Self {
         Self {
-            home: None,
-            navigator: None,
-            observers: Vec::new(),
+            routing,
             builder: None,
             theme: None,
             locale: None,
@@ -103,14 +105,38 @@ impl CupertinoApp {
         }
     }
 
-    /// A Cupertino app whose navigator shows `home` as its root route — see
-    /// `WidgetsApp::new` for the seeding contract.
+    /// A Cupertino app showing `home`, Flutter's `CupertinoApp(home:)`: one
+    /// page with no URL, on which popups open — see `WidgetsApp::new` for the
+    /// seeding contract.
     #[must_use]
     pub fn new(home: impl IntoView) -> Self {
-        Self {
-            home: Some(home.into_view().boxed()),
-            ..Self::bare()
-        }
+        Self::bare(Routing::Home(home.into_view().boxed()))
+    }
+
+    /// A Cupertino app rooted in `router`, Flutter's `CupertinoApp.router`:
+    /// the [`Router`] is the app's routing subtree, under the published
+    /// [`CupertinoTheme`], and its navigator is the app's only one
+    /// (ADR-0330 §4).
+    ///
+    /// ```
+    /// use flui_cupertino::CupertinoApp;
+    /// use flui_sdk::view::prelude::*;
+    /// use flui_sdk::widgets::{Routable, Router, Text};
+    ///
+    /// #[derive(Routable, Clone, PartialEq)]
+    /// enum AppRoute {
+    ///     #[route("/")]
+    ///     Home,
+    /// }
+    ///
+    /// let app = CupertinoApp::router(Router::new(AppRoute::Home, |_route: &AppRoute, _ctx| {
+    ///     Text::new("Home").into_view().boxed()
+    /// }));
+    /// # let _ = app;
+    /// ```
+    #[must_use]
+    pub fn router<R: Routable>(router: Router<R>) -> Self {
+        Self::bare(Routing::Router(Box::new(WidgetsApp::router(router))))
     }
 
     /// A Cupertino app with no navigator: `builder` receives `None` and
@@ -122,7 +148,7 @@ impl CupertinoApp {
     ) -> Self {
         Self {
             builder: Some(Rc::new(builder)),
-            ..Self::bare()
+            ..Self::bare(Routing::Builder)
         }
     }
 
@@ -132,22 +158,6 @@ impl CupertinoApp {
     #[must_use]
     pub fn theme(mut self, theme: CupertinoThemeData) -> Self {
         self.theme = Some(theme);
-        self
-    }
-
-    /// Drive the navigator through a caller-owned handle — see
-    /// `WidgetsApp::navigator` for the pre-seeded-handle contract.
-    #[must_use]
-    pub fn navigator(mut self, handle: NavigatorHandle) -> Self {
-        self.navigator = Some(handle);
-        self
-    }
-
-    /// Register `observer` on the navigator at mount; see
-    /// `WidgetsApp::observer`.
-    #[must_use]
-    pub fn observer(mut self, observer: Arc<dyn NavigatorObserver>) -> Self {
-        self.observers.push(observer);
         self
     }
 
@@ -210,40 +220,71 @@ impl StatelessView for CupertinoApp {
         // The resolved theme's text style is the application-level text style.
         let text_style = effective.text_theme().text_style();
 
-        let pass_through = |builder: &AppBuilder| {
-            let shared = Rc::clone(builder);
-            move |ctx: &dyn BuildContext, child: Option<BoxedView>| (*shared)(ctx, child)
-        };
-        let mut app = match (&self.home, &self.builder) {
-            (Some(home), Some(builder)) => {
-                WidgetsApp::new(home.clone()).builder(pass_through(builder))
-            }
-            (Some(home), None) => WidgetsApp::new(home.clone()),
-            (None, Some(builder)) => WidgetsApp::with_builder(pass_through(builder)),
-            (None, None) => {
-                // `WidgetsApp` requires a home or a builder; mirror its own
-                // construction guarantee at this crate's boundary.
-                unreachable!(
-                    "BUG: CupertinoApp has neither home nor builder; CupertinoApp::new and \
-                     CupertinoApp::with_builder each guarantee one"
+        let app = match &self.routing {
+            Routing::Home(home) => self
+                .configure(WidgetsApp::new(home.clone()), text_style)
+                .boxed(),
+            Routing::Router(app) => self.configure((**app).clone(), text_style).boxed(),
+            Routing::Builder => {
+                let builder = self
+                    .builder
+                    .clone()
+                    .expect("BUG: CupertinoApp::with_builder always sets a builder");
+                // `configure` installs the builder again; the shell needs one
+                // to start from.
+                self.configure(
+                    WidgetsApp::with_builder(move |ctx, child| builder(ctx, child)),
+                    text_style,
                 )
+                .boxed()
             }
         };
-        app = app
+
+        // The published theme and the page transition sit ABOVE the
+        // WidgetsApp, so its navigator and a Router's read them.
+        let app = PageTransitions::new(app).page(Rc::new(ParallaxPageTransition::new()));
+        CupertinoTheme::new(effective, app)
+    }
+}
+
+impl CupertinoApp {
+    /// The shell configuration every routing form shares.
+    fn configure(&self, app: WidgetsApp, text_style: flui_sdk::painting::TextStyle) -> WidgetsApp {
+        let app = match &self.builder {
+            Some(builder) => {
+                let builder = Rc::clone(builder);
+                app.builder(move |ctx, child| builder(ctx, child))
+            }
+            None => app,
+        };
+        let app = app
             .supported_locales(self.supported_locales.clone())
             .localizations_delegates(self.localizations_delegates.clone())
             .text_style(text_style);
-        if let Some(locale) = &self.locale {
-            app = app.locale(locale.clone());
+        match &self.locale {
+            Some(locale) => app.locale(locale.clone()),
+            None => app,
         }
-        if let Some(handle) = &self.navigator {
-            app = app.navigator(handle.clone());
-        }
-        for observer in &self.observers {
-            app = app.observer(Arc::clone(observer));
-        }
+    }
+}
 
-        // The published theme sits ABOVE the WidgetsApp.
-        CupertinoTheme::new(effective, app)
+/// What a [`CupertinoApp`] routes with.
+#[derive(Clone)]
+enum Routing {
+    /// [`CupertinoApp::new`]: one home page.
+    Home(BoxedView),
+    /// [`CupertinoApp::router`]: the router shell, already built.
+    Router(Box<WidgetsApp>),
+    /// [`CupertinoApp::with_builder`]: no routing.
+    Builder,
+}
+
+impl fmt::Debug for Routing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Home(_) => "Home",
+            Self::Router(_) => "Router",
+            Self::Builder => "Builder",
+        })
     }
 }

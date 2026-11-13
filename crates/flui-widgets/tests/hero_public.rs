@@ -1,7 +1,7 @@
 //! Public-API tests for `Hero`.
 //!
 //! Driven through the real `flui_widgets::prelude` surface, a real `Vsync`, and a
-//! `HeadlessBinding` frame — the production path. If `Hero` or `HeroController` were
+//! frame of a UI runtime — the production path. If `Hero` or `HeroController` were
 //! not exported, this file would not compile.
 //!
 //! A flight is observed the only way public API allows: by scanning the render tree
@@ -25,6 +25,7 @@ use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::environment::VsyncScope;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle};
 use flui_widgets::prelude::*;
 
 const TRANSITION: Duration = Duration::from_millis(100);
@@ -84,7 +85,7 @@ fn hero_page() -> PageRoute<i32> {
 }
 
 fn seeded() -> NavigatorHandle {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(hero_page());
     navigator
 }
@@ -295,7 +296,7 @@ pub(crate) fn hero_builder_cancellation_and_failure_account_for_the_matched_tail
             .transition_duration(TRANSITION)
         };
         let vsync = Vsync::new();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         navigator.seed_initial(source());
         let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
         let owner = laid.pipeline_owner();

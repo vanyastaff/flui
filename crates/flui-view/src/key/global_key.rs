@@ -17,6 +17,7 @@ use crate::view::ElementBase;
 /// The outcome of a [`GlobalKey::current_element`](GlobalKey::current_element)
 /// lookup: a miss says why it missed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyLookup {
     /// An element is mounted for the key.
     Mounted(ElementId),

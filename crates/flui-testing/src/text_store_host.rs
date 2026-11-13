@@ -12,6 +12,7 @@ use flui_platform::{Unsupported, UnsupportedReason};
 
 /// One call a presentation made on its [`RecordingTextStoreHost`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StoreHostCall {
     /// `focus_store(Some(_))`: a field's store now takes input.
     Focus,

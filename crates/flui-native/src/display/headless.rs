@@ -18,7 +18,7 @@ use flui_platform::{
 use parking_lot::Mutex;
 
 use crate::host::Host;
-use crate::owner::headless::{HeadlessLoop, HeadlessState};
+use crate::owner::headless::{HeadlessLoop, SimulatedDisplays};
 use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 
@@ -189,7 +189,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn with_displays(self, displays: Vec<DisplaySpec>) -> Self {
         self.owner()
-            .with_state(|state| state.displays = laid_out(displays));
+            .with_state(|state| state.displays.lock().snapshot = laid_out(displays));
         self
     }
 
@@ -200,7 +200,9 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     pub fn display_controls(&self) -> HeadlessDisplayControls {
         HeadlessDisplayControls {
             signal: Arc::downgrade(&self.owner().signal),
-            state: Arc::downgrade(&self.owner().state),
+            displays: self
+                .owner()
+                .with_state(|state| Arc::downgrade(&state.displays)),
         }
     }
 }
@@ -215,7 +217,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
 #[derive(Clone)]
 pub struct HeadlessDisplayControls {
     signal: Weak<OwnerSignal>,
-    state: Weak<Mutex<HeadlessState>>,
+    displays: Weak<Mutex<SimulatedDisplays>>,
 }
 
 impl std::fmt::Debug for HeadlessDisplayControls {
@@ -229,8 +231,8 @@ impl HeadlessDisplayControls {
     /// The platform's current snapshot, `None` once the platform is gone.
     #[must_use]
     pub fn snapshot(&self) -> Option<DisplaySnapshot> {
-        let state = self.state.upgrade()?;
-        let snapshot = state.lock().displays.clone();
+        let displays = self.displays.upgrade()?;
+        let snapshot = displays.lock().snapshot.clone();
         Some(snapshot)
     }
 
@@ -246,10 +248,10 @@ impl HeadlessDisplayControls {
         id: DisplayId,
         change: DisplayChange,
     ) -> Result<(), DisplayChangeError> {
-        let Some(state) = self.state.upgrade() else {
+        let Some(displays) = self.displays.upgrade() else {
             return Ok(());
         };
-        apply(&mut state.lock().displays, id, change)?;
+        apply(&mut displays.lock().snapshot, id, change)?;
         self.wake();
         Ok(())
     }
@@ -262,12 +264,12 @@ impl HeadlessDisplayControls {
     /// [`DisplayChangeError::RevisionExhausted`] when the snapshot revision
     /// cannot advance.
     pub fn replace(&self, displays: Vec<DisplayInfo>) -> Result<(), DisplayChangeError> {
-        let Some(state) = self.state.upgrade() else {
+        let Some(simulated) = self.displays.upgrade() else {
             return Ok(());
         };
         {
-            let mut state = state.lock();
-            state.displays = state.displays.successor(displays)?;
+            let mut simulated = simulated.lock();
+            simulated.snapshot = simulated.snapshot.successor(displays)?;
         }
         self.wake();
         Ok(())
@@ -277,10 +279,10 @@ impl HeadlessDisplayControls {
     /// source that cannot complete a sample does, and wake the owner. The
     /// read after that reports the platform's displays again.
     pub fn fail_next_read(&self, message: impl Into<String>) {
-        let Some(state) = self.state.upgrade() else {
+        let Some(displays) = self.displays.upgrade() else {
             return;
         };
-        state.lock().display_failure = Some(message.into());
+        displays.lock().failure = Some(message.into());
         self.wake();
     }
 

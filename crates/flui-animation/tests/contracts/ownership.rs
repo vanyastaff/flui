@@ -1944,7 +1944,7 @@ fn fixed_parent_wrappers_retire_value_listeners_before_status_observers() {
     ];
     for (name, wrap) in wrappers {
         let parent = controller();
-        let wrapper = wrap(Rc::new(parent.clone()));
+        let wrapper = wrap(Rc::new(parent));
         let value = ValueBomb;
         let _listening = wrapper.listen(Rc::new(move || {
             let _keep = &value;
@@ -2056,7 +2056,7 @@ fn value_listener_removed_during_a_status_round_waits_for_the_round() {
 
     for (name, wrap) in combinators() {
         let parent = controller();
-        let wrapper = wrap(Rc::new(parent.clone()));
+        let wrapper = wrap(Rc::new(parent));
         let (drops, capture) = drop_probe();
         let listening = wrapper.listen(Rc::new(move || {
             let _keep = &capture;

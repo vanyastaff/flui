@@ -22,6 +22,10 @@ use crate::scene::{Scene, SceneVersion, SceneVersionId};
 /// Exhaustive, as `PresentDisposition` is: a consumer matches every variant
 /// with no wildcard, so a new one is a compile error wherever damage is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every reader of damage matches each variant, so a new one is a compile error wherever damage is read"
+)]
 pub enum DamageRegion {
     /// Nothing changed; a backend with no older debt may skip the frame.
     Unchanged,
@@ -54,6 +58,7 @@ impl DamageRegion {
 
 /// Why a frame repaints in full.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FullReason {
     /// Nothing was presented before this frame to repaint over.
     FirstFrame,
@@ -74,6 +79,7 @@ pub enum FullReason {
 
 /// Why a frame's damage could not be computed against the frame before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ResyncReason {
     /// The frame names a base the raster side does not hold.
     BaseMismatch,
@@ -374,11 +380,8 @@ pub struct SceneSnapshot {
     /// The version the damage is relative to, `None` when it is full
     /// (ADR-0304 §7).
     pub base: Option<SceneVersionId>,
-    /// The version drawn, which the raster side reports once it is shown;
-    /// `None` for a scene built by hand.
-    pub version: Option<SceneVersion>,
-    /// The composited layer tree, ready to render: the version flattened,
-    /// until the engine walks versions itself.
+    /// What is drawn: the published version the raster side walks, which it
+    /// reports once shown, or a scene built by hand.
     pub scene: Scene,
 }
 
@@ -391,13 +394,11 @@ impl SceneSnapshot {
             stamp,
             damage,
             base: None,
-            version: None,
             scene,
         }
     }
 
-    /// Packages a published `version`, drawn with `damage` against `base`:
-    /// the version is flattened into the scene the engine renders.
+    /// Packages a published `version`, drawn with `damage` against `base`.
     #[must_use]
     pub fn of_version(
         stamp: FrameStamp,
@@ -405,13 +406,11 @@ impl SceneSnapshot {
         damage: DamageRegion,
         version: SceneVersion,
     ) -> Self {
-        let scene = Scene::new(version.flatten());
         Self {
             stamp,
             damage,
             base,
-            version: Some(version),
-            scene,
+            scene: Scene::of_version(version),
         }
     }
 }

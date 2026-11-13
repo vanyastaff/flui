@@ -1,0 +1,96 @@
+error[E0277]: `Rc<RefCell<flui_native::window::headless::HeadlessHostWindowState>>` cannot be sent between threads safely
+ --> tests/ui/window_is_not_send.rs:8:19
+  |
+8 |     assert_send::<HeadlessHostWindow>();
+  |                   ^^^^^^^^^^^^^^^^^^ `Rc<RefCell<flui_native::window::headless::HeadlessHostWindowState>>` cannot be sent between threads safely
+  |
+  = help: within `HeadlessHostWindow`, the trait `Send` is not implemented for `Rc<RefCell<flui_native::window::headless::HeadlessHostWindowState>>`
+note: required because it appears within the type `HeadlessHostWindow`
+ --> src/window/headless.rs
+  |
+  | pub struct HeadlessHostWindow {
+  |            ^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/window_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<flui_native::window::headless::SnapshotSource>` cannot be sent between threads safely
+ --> tests/ui/window_is_not_send.rs:8:19
+  |
+8 |     assert_send::<HeadlessHostWindow>();
+  |                   ^^^^^^^^^^^^^^^^^^ `Rc<flui_native::window::headless::SnapshotSource>` cannot be sent between threads safely
+  |
+  = help: within `HeadlessHostWindow`, the trait `Send` is not implemented for `Rc<flui_native::window::headless::SnapshotSource>`
+note: required because it appears within the type `HeadlessHostWindow`
+ --> src/window/headless.rs
+  |
+  | pub struct HeadlessHostWindow {
+  |            ^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/window_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<RefCell<flui_native::window::headless::RecordedInputRegions>>` cannot be sent between threads safely
+ --> tests/ui/window_is_not_send.rs:8:19
+  |
+8 |     assert_send::<HeadlessHostWindow>();
+  |                   ^^^^^^^^^^^^^^^^^^ `Rc<RefCell<flui_native::window::headless::RecordedInputRegions>>` cannot be sent between threads safely
+  |
+  = help: within `HeadlessHostWindow`, the trait `Send` is not implemented for `Rc<RefCell<flui_native::window::headless::RecordedInputRegions>>`
+note: required because it appears within the type `HeadlessHostWindow`
+ --> src/window/headless.rs
+  |
+  | pub struct HeadlessHostWindow {
+  |            ^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/window_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `std::rc::Weak<RefCell<flui_native::owner::headless::HeadlessState>>` cannot be sent between threads safely
+ --> tests/ui/window_is_not_send.rs:8:19
+  |
+8 |     assert_send::<HeadlessHostWindow>();
+  |                   ^^^^^^^^^^^^^^^^^^ `std::rc::Weak<RefCell<flui_native::owner::headless::HeadlessState>>` cannot be sent between threads safely
+  |
+  = help: within `HeadlessHostWindow`, the trait `Send` is not implemented for `std::rc::Weak<RefCell<flui_native::owner::headless::HeadlessState>>`
+note: required because it appears within the type `HeadlessHostWindow`
+ --> src/window/headless.rs
+  |
+  | pub struct HeadlessHostWindow {
+  |            ^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/window_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `RefCell<flui_native::window::headless::Tracked>` cannot be shared between threads safely
+ --> tests/ui/window_is_not_send.rs:8:19
+  |
+8 |     assert_send::<HeadlessHostWindow>();
+  |                   ^^^^^^^^^^^^^^^^^^ `RefCell<flui_native::window::headless::Tracked>` cannot be shared between threads safely
+  |
+  = help: within `flui_native::window::headless::HeadlessWindows`, the trait `Sync` is not implemented for `RefCell<flui_native::window::headless::Tracked>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `flui_native::window::headless::HeadlessWindows`
+ --> src/window/headless.rs
+  |
+  | pub struct HeadlessWindows {
+  |            ^^^^^^^^^^^^^^^
+  = note: required for `std::sync::Weak<flui_native::window::headless::HeadlessWindows>` to implement `Send`
+note: required because it appears within the type `HeadlessHostWindow`
+ --> src/window/headless.rs
+  |
+  | pub struct HeadlessHostWindow {
+  |            ^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/window_is_not_send.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`

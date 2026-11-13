@@ -382,7 +382,6 @@ impl<B: RasterBackend> RasterLane<B> {
         }
         let damage = self.damage.damage_for(&publication, surface.surface_key());
         let shown = publication.scene.id();
-        // The engine draws the flattened tree until it walks versions itself.
         let snapshot =
             SceneSnapshot::of_version(stamp, publication.base, damage, publication.scene);
         if let Err(error) = self.handle.submit(snapshot) {
@@ -606,7 +605,7 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
         // Every frame is full on this path: it tracks no version on screen, so the web
         // runner repaints in full until it moves onto the lane.
         self.renderer.mark_full_repaint();
-        let scene = Scene::new(publication.scene.flatten());
+        let scene = Scene::of_version(publication.scene);
         match self.renderer.render_scene(&scene) {
             Ok(PresentDisposition::Presented) => SubmitVerdict::Presented,
             Ok(PresentDisposition::NoDamage) => SubmitVerdict::NoPresent,

@@ -2,6 +2,8 @@
 //! and stays quiet on the animated version of the same change, findings are charged to the
 //! outermost node that shows them, and the allowlist refuses rows that match nothing.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{SpringDescription, Vsync};
@@ -22,10 +24,11 @@ use flui_view::element::ElementKind;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{IntoView, View, ViewExt};
-use flui_widgets::navigator::{Navigator, NavigatorHandle, PopupRoute, SimpleRoute};
+use flui_widgets::navigator::{PageHandle, PopupRoute};
 use flui_widgets::{
     Align, AnimatedLerp, AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, Column, Container,
     Flow, HitTestBehavior, Listener, MotionBuilder, Opacity, Padding, SizedBox, UnconstrainedBox,
+    WidgetsApp,
 };
 
 const FRAME: Duration = Duration::from_millis(16);
@@ -693,20 +696,31 @@ pub(crate) fn presented_nodes_compose_opacity_and_clip() {
     );
 }
 
+/// An app's one page: the square, recording the page handle it is built on.
+#[derive(Clone, StatelessView)]
+struct SquarePage(Rc<RefCell<Option<PageHandle>>>);
+
+impl StatelessView for SquarePage {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        *self.0.borrow_mut() = PageHandle::of(ctx);
+        square()
+    }
+}
+
 pub(crate) fn a_page_under_a_popup_stays_presented() {
     // A popup is modal and not opaque: the page below leaves the semantics tree but is still
     // painted, so it stays in the recording and does not pop out.
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| square().into_view().boxed()));
+    let slot = Rc::new(RefCell::new(None));
     let mut laid = lay_out_animated(
-        Navigator::new(navigator.clone()),
+        WidgetsApp::new(SquarePage(Rc::clone(&slot))),
         loose(200.0),
         Vsync::new(),
     );
+    let home = slot.borrow().clone().expect("the square is the app's page");
     let mut run = MotionRun::new(&mut laid);
     run.frame(FRAME);
     run.act(|_| {
-        drop(navigator.push(PopupRoute::<()>::new(|_ctx, _a, _s| {
+        drop(home.push_popup(PopupRoute::<()>::new(|_ctx, _a, _s| {
             SizedBox::new(10.0, 10.0).into_view().boxed()
         })));
     });

@@ -416,15 +416,12 @@ pub(crate) fn parse(xml: &str, fonts_dir: &Path, locale: &str) -> SystemFallback
                     path: fonts_dir.join(file),
                     index,
                 },
-                langs: family
-                    .attribute("lang")
-                    .map(|langs| {
-                        langs
-                            .split([' ', ','])
-                            .filter(|l| !l.is_empty())
-                            .collect::<Vec<&str>>()
-                    })
-                    .unwrap_or_default(),
+                langs: family.attribute("lang").map_or_default(|langs| {
+                    langs
+                        .split([' ', ','])
+                        .filter(|l| !l.is_empty())
+                        .collect::<Vec<&str>>()
+                }),
             })
         })
         .collect();

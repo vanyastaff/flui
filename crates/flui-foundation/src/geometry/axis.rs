@@ -5,6 +5,7 @@ use crate::geometry::Size;
 /// The two cardinal directions in two dimensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(clippy::exhaustive_enums, reason = "a plane has two axes")]
 pub enum Axis {
     /// The horizontal axis (left to right).
     #[default]

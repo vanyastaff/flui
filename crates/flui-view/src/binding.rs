@@ -125,6 +125,7 @@ pub struct ViewFocusEvent {
 
 /// The state of view focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums, reason = "a view gains focus or loses it")]
 pub enum ViewFocusState {
     /// View gained focus.
     Focused,
@@ -134,6 +135,7 @@ pub enum ViewFocusState {
 
 /// The direction of focus change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ViewFocusDirection {
     /// Focus moved forward (e.g., Tab).
     Forward,

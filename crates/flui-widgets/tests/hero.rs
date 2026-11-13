@@ -131,9 +131,8 @@ mod registry_reentry {
 
     fn fly(operation: &str) {
         use flui_view::environment::VsyncScope;
-        use flui_widgets::navigator::{
-            HeroController, Navigator, NavigatorHandle, NavigatorObserver, PageRoute,
-        };
+        use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver};
+        use flui_widgets::navigator::{HeroController, PageRoute};
         let page = || {
             PageRoute::<i32>::new(|_ctx, _primary, _secondary| {
                 Center::new()
@@ -143,7 +142,7 @@ mod registry_reentry {
             .transition_duration(std::time::Duration::from_millis(100))
         };
         let vsync = flui_animation::Vsync::new();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         navigator.seed_initial(page());
         let mut laid = crate::common::lay_out_animated(
             VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),

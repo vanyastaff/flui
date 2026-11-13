@@ -20,6 +20,8 @@ help: the following other types implement trait `WriteTarget`
 note: required by a bound in `set`
  --> src/reactive/mod.rs
   |
+  | pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
+...
   |     fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError>;
   |               ^^^^^^^^^^^ required by this bound in `SignalWriteExt::set`
 

@@ -10,6 +10,7 @@ Choose a recipe by the behavior you want to add.
 | Animate a value over time | [Animation](animation.md) |
 | Exercise a view without opening a window | [Testing](testing.md) |
 
-For typed navigation, root an app in `WidgetsApp::router` over a `#[derive(Routable)]` route
-enum; its pages push and pop route values through a `RouterHandle` (ADR-0093; see the
+For typed navigation, root an app in `MaterialApp::router` (or `WidgetsApp::router`) over a
+`#[derive(Routable)]` route
+enum; its pages push and pop route values through a `RouterHandle` (ADR-0330; see the
 [mapping](../mapping.md) notes).

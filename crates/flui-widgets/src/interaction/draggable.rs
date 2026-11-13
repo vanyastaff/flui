@@ -940,12 +940,10 @@ impl DraggableState {
                         .on_long_press_start(move |_| {
                             // The hold won one of the pressed contacts; only
                             // that one is handed to the drag.
-                            let contacts: Vec<PointerId> = pressed
-                                .upgrade()
-                                .map(|source| {
+                            let contacts: Vec<PointerId> =
+                                pressed.upgrade().map_or_default(|source| {
                                     source.pressed.borrow().iter().map(|info| info.id).collect()
-                                })
-                                .unwrap_or_default();
+                                });
                             for pointer in contacts {
                                 if hand_off.hand_off(pointer) {
                                     break;

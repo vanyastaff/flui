@@ -256,6 +256,7 @@ fn the_overlay_shapes_through_the_ui_runtime_text_context() {
         .expect("the first frame paints");
     let overlay = scene
         .tree()
+        .expect("draw_frame flattens the version into a tree")
         .iter()
         .find_map(|(_, node)| node.layer().as_performance_overlay().cloned())
         .expect("the overlay is attached");

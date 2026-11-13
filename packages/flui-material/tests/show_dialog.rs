@@ -1,10 +1,11 @@
-//! `show_dialog` end-to-end coverage — a real [`NavigatorHandle`] mounted
-//! under a [`Theme`], pumped through a real [`Vsync`] clock, driving the
-//! `PopupRoute` machinery `show_dialog` is built on.
+//! `show_dialog` end-to-end coverage — a page of a real `Router`, mounted
+//! under a [`Theme`] and pumped through a real [`Vsync`] clock, opens the
+//! dialog through its `PageHandle`, driving the `PopupRoute` machinery
+//! `show_dialog` is built on.
 
 use crate::common;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,7 +18,7 @@ use flui_sdk::painting::Color;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Center, ColoredBox, GestureDetector, Navigator, NavigatorHandle, Semantics, SimpleRoute, Text,
+    Center, ColoredBox, GestureDetector, PageHandle, Routable, Router, Semantics, Text,
 };
 use flui_testing::a11y::Role;
 
@@ -78,11 +79,33 @@ impl StatefulView for HomePage {
     }
 }
 
-fn app(vsync: &Vsync, navigator: &NavigatorHandle) -> impl View {
-    Theme::new(
-        ThemeData::light(),
-        VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
+/// The one screen these apps show.
+#[derive(Routable, Clone, Debug, PartialEq)]
+enum Screen {
+    #[route("/")]
+    Home,
+}
+
+/// The home page's route, as its page builder resolved it.
+type PageSlot = Rc<RefCell<Option<PageHandle>>>;
+
+fn app(vsync: &Vsync, home: impl Fn() -> BoxedView + 'static) -> (impl View, PageSlot) {
+    let slot = PageSlot::default();
+    let page = Rc::clone(&slot);
+    let router = Router::new(Screen::Home, move |_route: &Screen, ctx| {
+        *page.borrow_mut() = PageHandle::of(ctx);
+        home()
+    });
+    (
+        Theme::new(ThemeData::light(), VsyncScope::new(vsync.clone(), router)),
+        slot,
     )
+}
+
+fn page(slot: &PageSlot) -> PageHandle {
+    slot.borrow()
+        .clone()
+        .expect("the home page built on its route")
 }
 
 /// A dialog pushed with `show_dialog` covers the page with a dismissible
@@ -94,11 +117,10 @@ pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_
     let vsync = Vsync::new();
     let created = Rc::new(Cell::new(0_u32));
     let taps = Arc::new(AtomicUsize::new(0));
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(SimpleRoute::<()>::new({
+    let (app, slot) = app(&vsync, {
         let created = Rc::clone(&created);
         let taps = Arc::clone(&taps);
-        move |_ctx| {
+        move || {
             HomePage {
                 created: Rc::clone(&created),
                 taps: Arc::clone(&taps),
@@ -106,8 +128,9 @@ pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_
             .into_view()
             .boxed()
         }
-    }));
-    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(800.0, 600.0), vsync);
+    });
+    let mut laid = lay_out_animated(app, tight(800.0, 600.0), vsync);
+    let home = page(&slot);
 
     // Sanity: the home page is tappable before any dialog is shown.
     laid.dispatch_pointer_down(400.0, 300.0);
@@ -123,22 +146,19 @@ pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_
         "home page's State must have been created exactly once so far"
     );
 
-    let _result = show_dialog::<(), _, _>(&navigator, |_ctx| {
+    let _result = show_dialog::<(), _, _>(&home, |_ctx| {
         // A title that forms its own semantics node still names the dialog.
         AlertDialog::new().title(
             Semantics::new()
                 .container(true)
                 .child(Text::new("Discard changes?")),
         )
-    });
+    })
+    .expect("the home page is on its navigator");
     for _ in 0..PUMPS {
         laid.pump_for(FRAME);
     }
-    assert_eq!(
-        navigator.route_ids().len(),
-        2,
-        "the dialog route is now on the stack"
-    );
+    assert!(!home.is_current(), "the dialog route is now on the stack");
 
     let material = laid
         .try_find_by_render_type("RenderPhysicalShape")
@@ -160,9 +180,8 @@ pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_
         "the modal barrier must absorb the pointer — the home page must not see a second tap \
          while the dialog is up"
     );
-    assert_eq!(
-        navigator.route_ids().len(),
-        2,
+    assert!(
+        !home.is_current(),
         "a tap over the dialog's own footprint must not dismiss it"
     );
 
@@ -174,9 +193,8 @@ pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_
     for _ in 0..PUMPS {
         laid.pump_for(FRAME);
     }
-    assert_eq!(
-        navigator.route_ids().len(),
-        1,
+    assert!(
+        home.is_current(),
         "show_dialog's default barrier_dismissible(true) must let a barrier tap pop the dialog"
     );
 
@@ -203,14 +221,14 @@ pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_
 /// reachable again.
 pub fn a_shown_dialog_hides_the_page_beneath_from_assistive_technology() {
     let vsync = Vsync::new();
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
+    let (app, slot) = app(&vsync, || {
         Center::new()
             .child(Text::new("Page body"))
             .into_view()
             .boxed()
-    }));
-    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(800.0, 600.0), vsync);
+    });
+    let mut laid = lay_out_animated(app, tight(800.0, 600.0), vsync);
+    let home = page(&slot);
     laid.enable_semantics();
     laid.pump();
     let page_announced = |laid: &common::LaidOut| {
@@ -222,14 +240,15 @@ pub fn a_shown_dialog_hides_the_page_beneath_from_assistive_technology() {
         "the page is announced before a dialog"
     );
 
-    let _result = show_dialog::<(), _, _>(&navigator, |_ctx| {
+    let _result = show_dialog::<(), _, _>(&home, |_ctx| {
         // A title that forms its own semantics node still names the dialog.
         AlertDialog::new().title(
             Semantics::new()
                 .container(true)
                 .child(Text::new("Discard changes?")),
         )
-    });
+    })
+    .expect("the home page is on its navigator");
     for _ in 0..PUMPS {
         laid.pump_for(FRAME);
     }
@@ -258,7 +277,7 @@ pub fn a_shown_dialog_hides_the_page_beneath_from_assistive_technology() {
     for _ in 0..PUMPS {
         laid.pump_for(FRAME);
     }
-    assert_eq!(navigator.route_ids().len(), 1, "the dialog was dismissed");
+    assert!(home.is_current(), "the dialog was dismissed");
     assert!(
         page_announced(&laid),
         "the page is reachable again once the dialog is gone"

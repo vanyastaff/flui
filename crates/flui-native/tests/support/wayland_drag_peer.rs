@@ -385,8 +385,7 @@ impl Dispatch<WlDataDevice, ()> for State {
             } => {
                 let types = offer
                     .data::<OfferTypes>()
-                    .map(|types| types.0.lock().expect("the types").clone())
-                    .unwrap_or_default();
+                    .map_or_default(|types| types.0.lock().expect("the types").clone());
                 let accepted = wanted.mime.clone().filter(|mime| types.contains(mime));
                 offer.set_actions(wanted.action, wanted.action);
                 offer.accept(serial, accepted);

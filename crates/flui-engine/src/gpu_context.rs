@@ -18,7 +18,7 @@
 use std::{cell::Cell, marker::PhantomData, sync::Arc};
 
 use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel, panic::FirstPanic};
-use flui_layer::{DamageRegion, LayerTree, Scene};
+use flui_layer::{DamageRegion, Scene};
 use flui_platform::{DisplayColor, DisplayConnection, SurfaceTarget};
 
 use crate::{
@@ -736,7 +736,11 @@ impl GpuContext {
     /// # Panics
     /// A panic of the frame is resumed once the painter's pipelines are kept
     /// for the next frame (ADR-0305 §7).
-    pub(crate) fn render_slot(&mut self, slot: SlotId, tree: &LayerTree) -> EngineResult<()> {
+    pub(crate) fn render_slot(
+        &mut self,
+        slot: SlotId,
+        scene: flui_layer::SceneContent<'_>,
+    ) -> EngineResult<()> {
         let (texture, format, size) = {
             let entry = self.offscreen_slot(slot)?;
             (entry.target()?.clone(), entry.format, entry.size)
@@ -755,7 +759,7 @@ impl GpuContext {
                 crate::headless::clear_to_background(domain, &view)?;
                 {
                     let mut backend = LayerDispatcher::new(&mut painter);
-                    crate::layer_walk::record_layer_tree(tree, tree.root(), &mut backend)?;
+                    crate::layer_walk::record_scene(scene, None, &mut backend)?;
                 }
                 #[cfg(test)]
                 assert!(!panics, "injected panic in the middle of a slot's frame");
@@ -1134,7 +1138,7 @@ impl SlotBackend for GpuContext {
         match self.slots.get(slot) {
             Some(SurfaceSlot::Window(_)) => self.render_window(slot, scene, damage),
             Some(SurfaceSlot::Offscreen(_)) | None => {
-                self.render_slot(slot, scene.tree())?;
+                self.render_slot(slot, scene.content())?;
                 Ok(PresentDisposition::Presented)
             }
         }

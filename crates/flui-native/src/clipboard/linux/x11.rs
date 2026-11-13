@@ -26,6 +26,7 @@
 
 mod selection;
 
+use std::cell::RefCell;
 use std::os::fd::OwnedFd;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -41,7 +42,6 @@ use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_ret
 use crate::error::PlatformError;
 use crate::host;
 use crate::owner::linux::x11::LoopClipboard;
-use crate::owner::slot::OwnerCell;
 
 /// The X11 clipboard: a handle on the thread that owns and reads the
 /// `CLIPBOARD` and `PRIMARY` selections.
@@ -50,8 +50,8 @@ pub(crate) struct X11Clipboard {
     bell: Arc<OwnedFd>,
     notice: Arc<Notice>,
     /// The application's primary selection, on the owner thread.
-    offer: OwnerCell<Offer>,
-    thread: parking_lot::Mutex<Option<JoinHandle<()>>>,
+    offer: RefCell<Offer>,
+    thread: Option<JoinHandle<()>>,
 }
 
 /// The application's primary selection, as the owner thread holds it.
@@ -104,8 +104,8 @@ impl X11Clipboard {
             commands,
             bell,
             notice,
-            offer: OwnerCell::new(),
-            thread: parking_lot::Mutex::new(Some(thread)),
+            offer: RefCell::default(),
+            thread: Some(thread),
         })
     }
 
@@ -120,12 +120,10 @@ impl X11Clipboard {
 
     /// The application's closure, while its offer is the primary selection.
     fn current(&self) -> Option<SelectionText> {
-        self.offer
-            .with(|offer| match &offer.current {
-                Some((made, text)) if self.notice.holds(*made) => Some(Rc::clone(text)),
-                _ => None,
-            })
-            .flatten()
+        match &self.offer.borrow().current {
+            Some((made, text)) if self.notice.holds(*made) => Some(Rc::clone(text)),
+            _ => None,
+        }
     }
 }
 
@@ -135,31 +133,26 @@ impl LoopClipboard for X11Clipboard {
     /// the selection from, then answer the thread's request for the current
     /// offer's text, asking the closure with nothing held.
     fn deliver(&self) {
-        let retired = self
-            .offer
-            .with(|offer| {
-                if offer
-                    .current
-                    .as_ref()
-                    .is_some_and(|(made, _)| !self.notice.holds(*made))
-                    && let Some((_, text)) = offer.current.take()
-                {
-                    offer.retired.push(text);
-                }
-                std::mem::take(&mut offer.retired)
-            })
-            .unwrap_or_default();
+        let retired = {
+            let mut offer = self.offer.borrow_mut();
+            if offer
+                .current
+                .as_ref()
+                .is_some_and(|(made, _)| !self.notice.holds(*made))
+                && let Some((_, text)) = offer.current.take()
+            {
+                offer.retired.push(text);
+            }
+            std::mem::take(&mut offer.retired)
+        };
         drop_retired(retired);
         let Some(asked) = self.notice.take_asked() else {
             return;
         };
-        let text = self
-            .offer
-            .with(|offer| match &offer.current {
-                Some((made, text)) if *made == asked => Some(Rc::clone(text)),
-                _ => None,
-            })
-            .flatten();
+        let text = match &self.offer.borrow().current {
+            Some((made, text)) if *made == asked => Some(Rc::clone(text)),
+            _ => None,
+        };
         // The requests waiting are answered whatever the closure does: a
         // closure that panics answers them with nothing as it unwinds.
         let unanswered = Unanswered {
@@ -215,13 +208,11 @@ impl host::NativeClipboard for X11Clipboard {
 
 impl host::NativePrimarySelection for X11Clipboard {
     fn offer(&self, text: SelectionText) {
-        let made = self.offer.with(|offer| {
+        let (made, replaced) = {
+            let mut offer = self.offer.borrow_mut();
             offer.made = offer.made.next();
-            (offer.made, offer.current.replace((offer.made, text)))
-        });
-        let Some((made, replaced)) = made else {
-            tracing::error!("the X11 primary selection is offered on the owner thread only");
-            return;
+            let made = offer.made;
+            (made, offer.current.replace((made, text)))
         };
         self.send(Command::Offer(made));
         // The closure replaced is dropped with nothing held.
@@ -229,7 +220,7 @@ impl host::NativePrimarySelection for X11Clipboard {
     }
 
     fn withdraw(&self) {
-        let withdrawn = self.offer.with(|offer| offer.current.take()).flatten();
+        let withdrawn = self.offer.borrow_mut().current.take();
         if let Some((made, text)) = withdrawn {
             self.send(Command::Withdraw(made));
             drop(text);
@@ -255,7 +246,7 @@ impl Drop for X11Clipboard {
     /// drop after, in one contained sequence (ADR-0281).
     fn drop(&mut self) {
         self.send(Command::Stop);
-        if let Some(thread) = self.thread.get_mut().take()
+        if let Some(thread) = self.thread.take()
             && let Err(payload) = thread.join()
         {
             // The thread contains its own panics; one that escaped anyway
@@ -263,16 +254,14 @@ impl Drop for X11Clipboard {
             tracing::error!("the X11 clipboard's thread panicked");
             flui_foundation::panic::discard_payload(payload);
         }
-        let held = self
-            .offer
-            .with(|offer| {
-                let current = offer.current.take().map(|(_, text)| text);
-                current
-                    .into_iter()
-                    .chain(std::mem::take(&mut offer.retired))
-                    .collect::<Vec<SelectionText>>()
-            })
-            .unwrap_or_default();
+        let held = {
+            let offer = self.offer.get_mut();
+            let current = offer.current.take().map(|(_, text)| text);
+            current
+                .into_iter()
+                .chain(std::mem::take(&mut offer.retired))
+                .collect::<Vec<SelectionText>>()
+        };
         drop_retired(held);
     }
 }

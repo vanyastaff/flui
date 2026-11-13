@@ -119,7 +119,7 @@ impl ParameterCurve {
 
 /// One event of a [`HapticPattern`].
 #[derive(Debug, Clone, PartialEq)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a haptic event is a tap or a sustained vibration"
 )]

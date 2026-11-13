@@ -47,7 +47,7 @@ fn window_chrome() {
     );
 }
 
-/// Navigator failure paths: panicking hooks and factories, mismatched result types,
+/// Navigator failure paths: panicking hooks, mismatched result types,
 /// undeliverable results, and every re-entrant push or observer callback that must not
 /// deadlock the history lock.
 #[test]
@@ -57,14 +57,10 @@ fn navigator_failure_containment_and_reentrancy() {
         &[
             ("navigator::a_panicking_route_hook_leaves_the_navigator_usable", crate::navigator::a_panicking_route_hook_leaves_the_navigator_usable as fn()),
             ("navigator::navigator_of_then_push_from_a_route_build_does_not_deadlock", crate::navigator::navigator_of_then_push_from_a_route_build_does_not_deadlock),
-            ("navigator_public::a_factory_that_panics_after_the_result_is_erased_loses_only_the_report", crate::navigator_public::a_factory_that_panics_after_the_result_is_erased_loses_only_the_report),
-            ("navigator_public::a_factory_that_pushes_re_entrantly_does_not_deadlock", crate::navigator_public::a_factory_that_pushes_re_entrantly_does_not_deadlock),
             ("navigator_public::a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock", crate::navigator_public::a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock),
             ("navigator_public::every_operation_that_cannot_deliver_a_result_reports_it", crate::navigator_public::every_operation_that_cannot_deliver_a_result_reports_it),
             ("navigator_public::delivered_route_results_remain_completed", crate::navigator_public::delivered_route_results_remain_completed),
             ("navigator_public::explicit_finish_commits_an_authored_page_and_retires_the_old_route", crate::navigator_public::explicit_finish_commits_an_authored_page_and_retires_the_old_route),
-            ("navigator_public::push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing", crate::navigator_public::push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing),
-            ("navigator_public::a_route_key_carries_its_result_type_from_registration_to_delivery", crate::navigator_public::a_route_key_carries_its_result_type_from_registration_to_delivery),
             ("hero_controller::a_hero_controller_does_not_deadlock_the_observer_callback", crate::hero_controller::a_hero_controller_does_not_deadlock_the_observer_callback),
             ("hero_controller::replacing_a_hero_navigator_retires_routes_after_attachment", crate::hero_controller::replacing_a_hero_navigator_retires_routes_after_attachment),
             ("hero_seam::an_observer_may_push_from_did_push_without_deadlocking", crate::hero_seam::an_observer_may_push_from_did_push_without_deadlocking),
@@ -1248,6 +1244,11 @@ fn router_and_widgets_app() {
         &[
             ("widgets_app::locale_override_removal_uses_the_nearest_current_preferences", crate::widgets_app::locale_override_removal_uses_the_nearest_current_preferences as fn()),
             ("router::popup_routes_are_admitted_and_leave_the_location_alone", crate::router::popup_routes_are_admitted_and_leave_the_location_alone as fn()),
+            ("router::router_of_resolves_the_nearest_router_from_build", crate::router::router_of_resolves_the_nearest_router_from_build),
+            ("router::a_mutation_from_build_is_refused", crate::router::a_mutation_from_build_is_refused),
+            ("router::page_handle_pops_only_its_own_route", crate::router::page_handle_pops_only_its_own_route),
+            ("router::page_handle_can_pop_follows_the_route_below", crate::router::page_handle_can_pop_follows_the_route_below),
+            ("router::a_popup_pushed_from_a_page_resolves_to_its_value", crate::router::a_popup_pushed_from_a_page_resolves_to_its_value),
             ("router::a_named_page_is_announced_when_pushed_and_when_uncovered", crate::router::a_named_page_is_announced_when_pushed_and_when_uncovered),
             ("router::router_never_pops_its_last_page", crate::router::router_never_pops_its_last_page),
             ("router::router_opens_at_a_location_with_its_back_stack", crate::router::router_opens_at_a_location_with_its_back_stack),
@@ -1277,7 +1278,6 @@ fn router_and_widgets_app() {
             ("router::an_unmounted_router_resolves_its_pending_results_to_none", crate::router::an_unmounted_router_resolves_its_pending_results_to_none),
             ("widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree", crate::widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree),
             ("widgets_app::home_is_seeded_once_as_the_root_route", crate::widgets_app::home_is_seeded_once_as_the_root_route),
-            ("widgets_app::observers_attach_at_mount_and_see_the_home_route", crate::widgets_app::observers_attach_at_mount_and_see_the_home_route),
             ("widgets_app_router::a_pushed_route_focuses_its_first_control_in_every_mount", crate::widgets_app_router::a_pushed_route_focuses_its_first_control_in_every_mount),
             ("widgets_app_router::switching_widgets_app_from_home_to_router_releases_the_navigator", crate::widgets_app_router::switching_widgets_app_from_home_to_router_releases_the_navigator),
             ("widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows", crate::widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows),

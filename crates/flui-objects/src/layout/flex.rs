@@ -18,6 +18,10 @@ use flui_rendering::{
 
 /// Direction of the flex layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a flex lays its children out along one of two axes"
+)]
 pub enum FlexDirection {
     /// Children are laid out horizontally (Row).
     #[default]
@@ -28,6 +32,7 @@ pub enum FlexDirection {
 
 /// How children are aligned along the main axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
+#[non_exhaustive]
 pub enum MainAxisAlignment {
     /// Children are placed at the start.
     #[default]
@@ -48,6 +53,7 @@ pub use super::main_axis_size::MainAxisSize;
 
 /// How children are aligned along the cross axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
+#[non_exhaustive]
 pub enum CrossAxisAlignment {
     /// Children are aligned at the start.
     #[default]

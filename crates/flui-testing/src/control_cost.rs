@@ -1,8 +1,9 @@
 //! What a control costs to mount, counted rather than timed (ADR-0322).
 //!
-//! A scenario mounts [`MOUNT_ROWS`] controls, each over a `Text`, in one
+//! A scenario mounts [`MOUNT_ROWS`] controls, each over a `Text` (or, for a
+//! control that holds no child, alone in place of an empty box), in one
 //! eager column on a headless host with semantics off, pumps the first
-//! frame, and records what each control adds to the `Text` it holds: its
+//! frame, and records what each control adds to the row it stands for: its
 //! elements and render nodes, and what its mount asked of the heap and left
 //! live. The heap figures need the target to install
 //! [`CountingAllocator`](crate::heap::CountingAllocator) (see
@@ -10,15 +11,17 @@
 //!
 //! The scenarios of `flui-widgets`' `perf` target (`raw_button_over_text`)
 //! and of the catalogs' `perf` targets measure through
-//! [`control_over_text`], so a control in any crate is held to the same
-//! measure.
+//! [`control_over_text`] and [`control_alone_under`], so a control in any
+//! crate is held to the same measure.
 
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
 use flui_view::prelude::*;
-use flui_widgets::{Column, SingleChildScrollView, Text};
+use flui_widgets::{Column, SingleChildScrollView, SizedBox, Text};
 
 use crate::heap::HeapCounts;
 use crate::{HeadlessHost, HeadlessWindow};
@@ -102,8 +105,9 @@ pub struct ControlCost {
     pub reallocations: u64,
     /// Bytes it leaves live.
     pub bytes: u64,
-    /// What one `Text` row asks of the heap and leaves live, on its own.
-    pub text: HeapCounts,
+    /// What one row the control stands in place of (the `Text`, or the
+    /// empty box) asks of the heap and leaves live, on its own.
+    pub bare: HeapCounts,
 }
 
 impl ControlCost {
@@ -139,22 +143,99 @@ pub fn control_over_text_under(
     scope: fn(BoxedView) -> BoxedView,
     control: fn(usize) -> BoxedView,
 ) -> ControlCost {
+    control_in_place_of(
+        scope,
+        |row| Text::new(format!("Row {row}")).boxed(),
+        control,
+    )
+}
+
+/// What a control that holds no child (a checkbox, a switch) costs in place
+/// of an empty `SizedBox`, per row, under what `scope` puts around both
+/// columns: its own elements and render nodes, less the box's one of each.
+#[must_use]
+pub fn control_alone_under(
+    scope: fn(BoxedView) -> BoxedView,
+    control: fn(usize) -> BoxedView,
+) -> ControlCost {
+    control_in_place_of(scope, |_row| SizedBox::shrink().boxed(), control)
+}
+
+/// What a column of `control` rows costs beyond a column of `bare` rows,
+/// per row, both under `scope`.
+fn control_in_place_of(
+    scope: fn(BoxedView) -> BoxedView,
+    bare: fn(usize) -> BoxedView,
+    control: fn(usize) -> BoxedView,
+) -> ControlCost {
     let _warm_up = mount_cost(control, scope);
-    let text = mount_cost(|row| Text::new(format!("Row {row}")).boxed(), scope);
+    let bare = mount_cost(bare, scope);
     let with = mount_cost(control, scope);
     let rows = MOUNT_ROWS as u64;
     let per_row = |with: u64, without: u64| with.saturating_sub(without).div_ceil(rows);
     ControlCost {
-        elements: per_row(with.elements as u64, text.elements as u64),
-        render_nodes: per_row(with.render_nodes as u64, text.render_nodes as u64),
-        allocations: per_row(with.heap.allocations, text.heap.allocations),
-        reallocations: per_row(with.heap.reallocations, text.heap.reallocations),
-        bytes: per_row(with.heap.live_bytes, text.heap.live_bytes),
-        text: HeapCounts {
-            allocations: text.heap.allocations / rows,
-            reallocations: text.heap.reallocations / rows,
-            allocated_bytes: text.heap.allocated_bytes / rows,
-            live_bytes: text.heap.live_bytes / rows,
+        elements: per_row(with.elements as u64, bare.elements as u64),
+        render_nodes: per_row(with.render_nodes as u64, bare.render_nodes as u64),
+        allocations: per_row(with.heap.allocations, bare.heap.allocations),
+        reallocations: per_row(with.heap.reallocations, bare.heap.reallocations),
+        bytes: per_row(with.heap.live_bytes, bare.heap.live_bytes),
+        bare: HeapCounts {
+            allocations: bare.heap.allocations / rows,
+            reallocations: bare.heap.reallocations / rows,
+            allocated_bytes: bare.heap.allocated_bytes / rows,
+            live_bytes: bare.heap.live_bytes / rows,
         },
     }
+}
+
+/// Records `cost` as `scenario` and holds it to `<baseline_dir>/<scenario>.toml`,
+/// which only falls: it panics when a counter of `cost` is over the file's,
+/// or the file holds no such counter.
+///
+/// When `FLUI_PERF_OUT` names a directory, the record is written to
+/// `<FLUI_PERF_OUT>/<scenario>.toml` first, so a broken budget still reports
+/// its numbers; a lower record is copied into the baseline by hand.
+pub fn held_to_baseline(baseline_dir: &Path, scenario: &str, cost: ControlCost) -> ControlCost {
+    let counts = cost.counts();
+    record(scenario, &counts);
+    let path = baseline_dir.join(format!("{scenario}.toml"));
+    let body = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let baseline = body
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once('=')?;
+            let value = value.trim().parse::<u64>().ok()?;
+            Some((name.trim().to_owned(), value))
+        })
+        .collect::<Vec<(String, u64)>>();
+    for (name, value) in counts {
+        let held = baseline
+            .iter()
+            .find(|(counter, _)| *counter == name)
+            .map_or_else(
+                || panic!("{scenario}.toml holds no `{name}`"),
+                |(_, held)| *held,
+            );
+        assert!(
+            value <= held,
+            "{scenario}: {name} rose to {value} over the baseline's {held}"
+        );
+    }
+    cost
+}
+
+/// Writes `counts` as `<FLUI_PERF_OUT>/<scenario>.toml` when that variable is set.
+fn record(scenario: &str, counts: &[(&str, u64)]) {
+    let Some(dir) = std::env::var_os("FLUI_PERF_OUT") else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).expect("BUG: FLUI_PERF_OUT names a directory it can create");
+    let mut body = format!("[{scenario}]\n");
+    for (name, value) in counts {
+        writeln!(body, "{name} = {value}").expect("BUG: writing to a String cannot fail");
+    }
+    std::fs::write(dir.join(format!("{scenario}.toml")), body)
+        .expect("BUG: FLUI_PERF_OUT takes a perf record");
 }

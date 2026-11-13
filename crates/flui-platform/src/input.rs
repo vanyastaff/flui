@@ -152,7 +152,7 @@ impl PointerFrame {
 /// constructing those values; one reporting points or CSS pixels passes them
 /// through. Geometry and device metadata remain distinct typed values.
 #[derive(Debug, Clone)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "every consumer routes every kind of input, so a new kind is a change each of them makes"
 )]
@@ -242,7 +242,7 @@ impl PlatformInput {
 /// reply half flows the other way, through
 /// [`crate::data_transfer::DragTransport::update_drop_feedback`].
 #[derive(Debug, Clone)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "the stages of the transport protocol (ADR-0312), each of which a target answers"
 )]
