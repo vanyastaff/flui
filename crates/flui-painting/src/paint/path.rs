@@ -154,21 +154,17 @@ pub struct Path {
     /// The fill type for this path.
     fill_type: PathFillType,
 
-    /// Cached bounding box (invalidated when the geometry changes).
-    bounds: Option<Rect<f64>>,
-
     /// Whether every point of the geometry is finite, kept current by every edit.
     ///
-    /// The cached bounds cannot stand in: kurbo folds segment boxes with `f64::min` and
+    /// The bounds cannot stand in: kurbo folds segment boxes with `f64::min` and
     /// `max`, which drop a NaN operand, so a path holding a NaN can report finite bounds.
     finite: bool,
 }
 
 #[expect(
     clippy::missing_fields_in_debug,
-    reason = "Debug shows what equality compares: the curves print built, the pending offset \
-              prints folded into the shape, and the cached bounds, which equality leaves out, \
-              do not print"
+    reason = "Debug shows what equality compares: the curves print built and the pending \
+              offset prints folded into the shape"
 )]
 impl std::fmt::Debug for Path {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -181,8 +177,8 @@ impl std::fmt::Debug for Path {
     }
 }
 
-/// Paths are equal when their elements, shape, fill type and finiteness are. The cached
-/// bounds are left out: whether a path was asked for them says nothing about the path.
+/// Paths are equal when their elements, shape, fill type and finiteness are, whether or not
+/// either has built its curves.
 impl PartialEq for Path {
     fn eq(&self, other: &Self) -> bool {
         let unbuilt = |path: &Self| path.curves.get().is_none();
@@ -411,7 +407,6 @@ impl Path {
             hint: ShapeHint::None,
             offset: Offset::ZERO,
             fill_type,
-            bounds: None,
             finite: true,
         }
     }
@@ -626,8 +621,8 @@ impl Path {
         closed.as_slice().winding(point)
     }
 
-    /// Applies `change` to the geometry, copied if it is shared, with the cached bounds and
-    /// the shape hint dropped and the finiteness flag brought up to date: every edit goes
+    /// Applies `change` to the geometry, copied if it is shared, with the shape hint and
+    /// pending offset dropped and the finiteness flag brought up to date: every edit goes
     /// through here.
     ///
     /// An edit appends elements or truncates them all away, so only the appended tail is
@@ -635,7 +630,6 @@ impl Path {
     fn edit(&mut self, change: impl FnOnce(&mut kurbo::BezPath)) {
         // Built while the hint and offset still name the shape the unbuilt geometry is.
         self.geometry();
-        self.bounds = None;
         self.hint = ShapeHint::None;
         self.offset = Offset::ZERO;
         // The cell holds the curves built above; they are copied out of the clones that
@@ -820,24 +814,12 @@ impl Path {
         self.edit(|path| path.truncate(0));
     }
 
-    /// The cached bounding box, if [`Self::bounds`] computed one and no edit has invalidated
-    /// it since.
-    #[must_use]
-    #[inline]
-    pub fn cached_bounds(&self) -> Option<Rect<f64>> {
-        self.bounds
-    }
-
-    /// The path's tight bounding box, without caching it. `Rect::ZERO` for an empty path.
+    /// The path's tight bounding box. `Rect::ZERO` for an empty path.
     ///
-    /// A rectangle, oval or rounded rectangle whose curves are not built yet reports its
-    /// box without building them, an oval or a rounded rectangle widened by the curve
-    /// tolerance, so the box always holds the curves built later.
+    /// A rounded rectangle whose curves are not built yet reports its box without building
+    /// them, widened by the curve tolerance, so the box always holds the curves built later.
     #[must_use]
     pub fn compute_bounds(&self) -> Rect<f64> {
-        if let Some(bounds) = self.bounds {
-            return bounds;
-        }
         if self.is_empty() {
             return Rect::ZERO;
         }
@@ -846,13 +828,6 @@ impl Path {
         };
         let bounds = geometry.bounding_box();
         Rect::from_ltrb(bounds.x0, bounds.y0, bounds.x1, bounds.y1)
-    }
-
-    /// The path's tight bounding box, cached until the next edit.
-    pub fn bounds(&mut self) -> Rect<f64> {
-        let bounds = self.compute_bounds();
-        self.bounds = Some(bounds);
-        bounds
     }
 
     /// A copy of this path moved by `offset`.
@@ -867,7 +842,6 @@ impl Path {
                 hint: self.hint,
                 offset,
                 fill_type: self.fill_type,
-                bounds: None,
                 finite: true,
             };
         }
@@ -879,7 +853,6 @@ impl Path {
             hint: shape,
             offset: Offset::ZERO,
             fill_type: self.fill_type,
-            bounds: None,
         }
     }
 
@@ -891,7 +864,6 @@ impl Path {
             hint: ShapeHint::None,
             offset: Offset::ZERO,
             fill_type: self.fill_type,
-            bounds: None,
         }
     }
 

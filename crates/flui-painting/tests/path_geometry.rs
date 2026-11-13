@@ -926,7 +926,7 @@ pub(crate) fn a_shape_reads_alike_before_and_after_its_curves_are_built() {
         !unbuilt_copy.shares_commands_with(&first),
         "an unbuilt clone builds its own curves"
     );
-    let mut copy = first.clone();
+    let copy = first.clone();
     assert!(
         copy.shares_commands_with(&first),
         "a clone shares the built curves"
@@ -964,7 +964,5 @@ pub(crate) fn a_shape_reads_alike_before_and_after_its_curves_are_built() {
     let far_bounds = far.compute_bounds();
     let built: Vec<_> = elements(&far);
     assert_eq!(far_bounds, far.compute_bounds(), "far bounds: {built:?}");
-    let _ = copy.bounds();
-    assert!(copy == second, "cached bounds leave equality alone");
     assert_eq!(Path::new(), Path::new().translate(Offset::new(3.0, 4.0)));
 }

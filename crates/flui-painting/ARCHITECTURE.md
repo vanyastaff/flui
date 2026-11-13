@@ -77,7 +77,7 @@ for an equal paint and shares the `Arc` (`Canvas::intern_paint`,
 `src/canvas/mod.rs:101`). `Path` is copy-on-write over `Arc<kurbo::BezPath>`
 (`src/paint/path.rs:139`): a path inside a `DrawOp` (`ClipPath`, `Path`,
 `Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a pending
-offset, a fill type, a cached bounds and a finiteness flag, and recording a caller's path
+offset, a fill type and a finiteness flag, and recording a caller's path
 copies no geometry. A rounded rectangle made by its constructor whose corners are circular
 with radii between zero and half its shorter side (the shapes `flui-engine`'s direct
 rounded-rectangle fill accepts), and an empty path, leave
