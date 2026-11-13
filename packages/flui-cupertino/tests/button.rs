@@ -270,3 +270,64 @@ pub fn a_held_press_long_presses_and_a_quick_one_taps() {
     laid.dispatch_pointer_up(50.0, 22.0);
     assert_eq!((taps.get(), long_presses.get()), (1, 1), "a quick press");
 }
+
+/// A rebuild that adds or removes the long press reshapes the button's press
+/// group: once the rebuilt button has a long press, a held press calls it;
+/// once it has none again, a held press taps, as a tap with no long press
+/// beside it does in Flutter, and so does a quick one.
+pub fn a_rebuild_that_adds_or_removes_the_long_press_reshapes_the_press() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use flui_sdk::view::SignalWriteExt;
+
+    let (taps, long_presses) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let with_long_press = Rc::new(Cell::new(false));
+    let signals = Rc::new(Cell::new(None));
+    let probe = {
+        let (taps, long_presses) = (Rc::clone(&taps), Rc::clone(&long_presses));
+        let (with_long_press, signals) = (Rc::clone(&with_long_press), Rc::clone(&signals));
+        common::SignalProbe::new(move |probe_signals| {
+            signals.set(Some(probe_signals));
+            let tapped = Rc::clone(&taps);
+            let button = CupertinoButton::new(SizedBox::shrink())
+                .on_pressed(move |_ctx| tapped.set(tapped.get() + 1));
+            if with_long_press.get() {
+                let held = Rc::clone(&long_presses);
+                button.on_long_press(move |_ctx| held.set(held.get() + 1))
+            } else {
+                button
+            }
+        })
+    };
+    let mut laid = lay_out(probe.view(), tight(100.0, 44.0));
+    let rebuild_with = |laid: &mut common::LaidOut, long_press: bool| {
+        with_long_press.set(long_press);
+        let count = signals.get().expect("the probe built").count;
+        probe
+            .write(|ctx| count.update(ctx, |n| *n += 1))
+            .expect("the probe's signal takes a write");
+        laid.pump();
+    };
+    let held = |laid: &mut common::LaidOut| {
+        laid.dispatch_pointer_down(50.0, 22.0);
+        laid.pump_for(Duration::from_millis(700));
+        laid.dispatch_pointer_up(50.0, 22.0);
+    };
+
+    rebuild_with(&mut laid, true);
+    held(&mut laid);
+    assert_eq!((taps.get(), long_presses.get()), (0, 1), "long press added");
+
+    rebuild_with(&mut laid, false);
+    held(&mut laid);
+    assert_eq!(
+        (taps.get(), long_presses.get()),
+        (1, 1),
+        "long press removed"
+    );
+    laid.dispatch_pointer_down(50.0, 22.0);
+    laid.dispatch_pointer_up(50.0, 22.0);
+    assert_eq!((taps.get(), long_presses.get()), (2, 1), "a quick press");
+}

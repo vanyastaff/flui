@@ -46,7 +46,7 @@ use super::actions::{
 use super::focus::{FocusChangeHandler, render_box_rect_provider};
 use super::focus_host::{FocusConfig, FocusHost, FocusNodeOwnership};
 use super::focus_ring::DefaultFocusRingStyle;
-use super::gesture_detector::{PressCallbacks, PressSource, TapSlot};
+use super::gesture_detector::{PressCallbacks, PressShape, PressSource, TapSlot};
 use super::listener::{ContactCallbacks, pointer_callback, release_targets};
 use super::raw_gesture_detector::RecognizerHost;
 use crate::support::{event_callback, value_callback};
@@ -274,6 +274,10 @@ impl ControlTap {
 impl PressSource for ControlTap {
     fn callbacks(&self) -> PressCallbacks {
         self.press.clone()
+    }
+
+    fn shape(&self) -> PressShape {
+        self.press.shape()
     }
 }
 

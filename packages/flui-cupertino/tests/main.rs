@@ -110,6 +110,10 @@ fn component_contracts() {
             button::a_held_press_long_presses_and_a_quick_one_taps,
         ),
         (
+            "button::a rebuild that adds or removes the long press reshapes the press",
+            button::a_rebuild_that_adds_or_removes_the_long_press_reshapes_the_press,
+        ),
+        (
             "button::disabled button announces disabled",
             button::disabled_button_announces_disabled,
         ),

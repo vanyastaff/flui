@@ -448,7 +448,7 @@ impl PressCallbacks {
         }
     }
 
-    fn shape(&self) -> PressShape {
+    pub(super) fn shape(&self) -> PressShape {
         PressShape {
             tap: self.tap.is_some()
                 || self.tap_down.is_some()
@@ -464,7 +464,7 @@ impl PressCallbacks {
 /// group, so a lone double tap never meets a tap that would steal its first
 /// up.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-struct PressShape {
+pub(super) struct PressShape {
     tap: bool,
     long_press: bool,
     double_tap: bool,
@@ -472,7 +472,7 @@ struct PressShape {
 
 impl PressShape {
     /// The lone tap.
-    const TAP: Self = Self {
+    pub(super) const TAP: Self = Self {
         tap: true,
         long_press: false,
         double_tap: false,
@@ -1248,6 +1248,10 @@ pub(super) trait PressSource {
     /// The tap-family callbacks as they are now: cheap clones, read at
     /// event time. Its implementations run no user code here.
     fn callbacks(&self) -> PressCallbacks;
+
+    /// The recognizers [`callbacks`](Self::callbacks) would mount, read
+    /// without cloning them.
+    fn shape(&self) -> PressShape;
 }
 
 /// What a control's tap reads at event time. The one cell is the control's
@@ -1285,7 +1289,7 @@ impl TapLive {
             .borrow()
             .tap
             .as_deref()
-            .map_or(PressShape::TAP, |source| source.callbacks().shape())
+            .map_or(PressShape::TAP, PressSource::shape)
     }
 }
 
