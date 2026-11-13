@@ -524,6 +524,8 @@ impl DesktopFrameDriver {
                 // frame. `pump_background` clears the frame latch before
                 // polling so accepted work can request another owner wake.
                 ui_runtime.pump_background();
+                // A hidden window reports what its earlier frames left.
+                self.raster.report_frame_panic(ui_runtime);
                 return;
             }
             WakeAction::Render => {}

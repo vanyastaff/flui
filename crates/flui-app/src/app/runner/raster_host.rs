@@ -72,6 +72,10 @@ pub(crate) struct SharedRasterHost {
 struct Deferred {
     detach: RefCell<Vec<PresentationAddress>>,
     trim: std::cell::Cell<Option<flui_foundation::memory::MemoryPressureLevel>>,
+    /// The first panic of that work, held until a window's wake resumes it
+    /// ([`SharedRasterHost::take_deferred_panic`]) instead of in place of
+    /// the answer of whatever ran before the work.
+    panic: RefCell<FirstPanic>,
 }
 
 impl SharedRasterHost {
@@ -119,8 +123,19 @@ impl SharedRasterHost {
         }
     }
 
+    /// Take the first panic of the work that met the host busy, for a
+    /// window's wake to resume once it has nothing left to answer.
+    pub(crate) fn take_deferred_panic(&self) -> FirstPanic {
+        self.deferred
+            .panic
+            .try_borrow_mut()
+            .map_or_else(|_| FirstPanic::new(), |mut held| std::mem::take(&mut *held))
+    }
+
     /// Run the work that met the host busy. Each item runs whatever an
-    /// earlier one did, and the first panic is resumed once all have run.
+    /// earlier one did; the first panic is held for
+    /// [`take_deferred_panic`](Self::take_deferred_panic), so it does not
+    /// take the place of the answer `try_with` returns.
     fn run_deferred(&self, host: &mut RasterHost) {
         let mut caught = FirstPanic::new();
         loop {
@@ -136,7 +151,12 @@ impl SharedRasterHost {
                 host.reclaim_held(level, &mut caught);
             }
         }
-        caught.resume();
+        if let Ok(mut held) = self.deferred.panic.try_borrow_mut() {
+            held.absorb(caught);
+        } else {
+            // Only a payload's own `Drop` runs while it is borrowed.
+            caught.resume();
+        }
     }
 }
 
@@ -371,15 +391,19 @@ impl RasterHost {
         let Some(mut slot) = placed.slots.remove(&address) else {
             return;
         };
-        if let Some(payload) = slot.panic.held() {
-            // A wake that unwound between its frame and its report left it.
+        if let Some(payload) = std::mem::replace(&mut slot.panic, FirstPanic::new()).into_payload()
+        {
+            // A window that closed before it reported its frame's panic (a
+            // wake that unwound first, a window hidden since): the closing
+            // window has no handler left to tell, and its close must not
+            // throw a panic that is not the close's.
             tracing::error!(
                 panic =
-                    flui_foundation::panic::payload_text(payload).unwrap_or("<non-text payload>"),
+                    flui_foundation::panic::payload_text(&*payload).unwrap_or("<non-text payload>"),
                 "raster host: a closing window's GPU panic was never reported"
             );
+            flui_foundation::panic::discard_payload(payload);
         }
-        caught.absorb(std::mem::replace(&mut slot.panic, FirstPanic::new()));
         if let Err(error) = placed
             .sender
             .send(RasterCommand::Detach { slot: slot.slot })
@@ -476,12 +500,15 @@ impl RasterHost {
         }
     }
 
-    /// Forget every size a lost device refused: its rebuild may take them.
-    fn forget_refused_sizes(&mut self) {
-        let Some(placed) = self.placed.as_mut() else {
-            return;
-        };
-        for slot in placed.slots.values_mut() {
+    /// Forget the size the lost device refused `address`'s window: the
+    /// rebuilt device may take it. Each window forgets its own when it sees
+    /// the device back, and repaints then.
+    fn forget_refused_size(&mut self, address: PresentationAddress) {
+        if let Some(slot) = self
+            .placed
+            .as_mut()
+            .and_then(|placed| placed.slots.get_mut(&address))
+        {
             slot.refused_size = None;
         }
     }
@@ -701,12 +728,28 @@ impl RasterHost {
             .slots
             .get_mut(&address)
             .expect("BUG: the slot is still there");
+        let settled = placed
+            .settlements
+            .iter()
+            .find(|settlement| settlement.epoch == epoch)
+            .map(|settlement| settlement.verdict);
         if turned == SlotTurn::Panicked {
-            // The image may be torn: the next frame is drawn in full. Not
-            // retried: a renderer that panics on this scene panics on its
-            // retry too, and the next change of the window draws again.
+            let verdict = match settled {
+                // The render itself panicked, which the executor settles as
+                // a retry. Not retried: a renderer that panics on this scene
+                // panics on its retry too, and the window's next change
+                // draws again.
+                Some(RasterVerdict::Retry) | None => SubmitVerdict::Failed,
+                // A command before the frame panicked (a resize, an upload)
+                // and the frame settled otherwise: what it became stands,
+                // and a retry it asks for (a stale surface) applies what is
+                // still pending.
+                Some(verdict) => Self::verdict(&mut slot.base, verdict, shown, key),
+            };
+            // The image may be torn or miss an upload: the next frame is
+            // drawn in full.
             slot.base.forget();
-            return SubmitVerdict::Failed;
+            return verdict;
         }
         if slot.refused_size.is_some() {
             // Drawn at no size the device accepts: nothing until the next
@@ -714,33 +757,40 @@ impl RasterHost {
             slot.base.forget();
             return SubmitVerdict::Failed;
         }
-        let Some(settlement) = placed
-            .settlements
-            .iter()
-            .find(|settlement| settlement.epoch == epoch)
-        else {
+        let Some(verdict) = settled else {
             tracing::error!(?epoch, "raster host: an inline frame settled nothing");
             return SubmitVerdict::Failed;
         };
-        match settlement.verdict {
+        Self::verdict(&mut slot.base, verdict, shown, key)
+    }
+
+    /// What a settled frame of `version`, drawn on `surface`, became, with
+    /// the slot's base moved to what the screen now holds.
+    fn verdict(
+        base: &mut RasterBase,
+        verdict: RasterVerdict,
+        version: flui_layer::SceneVersionId,
+        surface: SurfaceKey,
+    ) -> SubmitVerdict {
+        match verdict {
             RasterVerdict::Presented => {
-                slot.base.shown(shown, key);
+                base.shown(version, surface);
                 SubmitVerdict::Presented
             }
             RasterVerdict::NoPresent => {
-                slot.base.shown(shown, key);
+                base.shown(version, surface);
                 SubmitVerdict::NoPresent
             }
             RasterVerdict::NotShown => SubmitVerdict::NotShown,
             RasterVerdict::Retry => SubmitVerdict::Retry,
             RasterVerdict::SurfaceStale => {
                 // The surface the image was on is gone.
-                slot.base.forget();
+                base.forget();
                 SubmitVerdict::SurfaceStale
             }
             RasterVerdict::DeviceLost => {
                 // The image went with the device: the next frame is drawn in full.
-                slot.base.forget();
+                base.forget();
                 SubmitVerdict::DeviceLost
             }
             RasterVerdict::Failed => SubmitVerdict::Failed,
@@ -843,19 +893,23 @@ impl RasterSlot {
 
     /// Report the first panic of the window's frames since the last report
     /// to `ui_runtime`, which hands it to the application's frame-failure
-    /// handler. Run with no borrow of the host held: the handler is not ours.
+    /// handler, then resume a panic of the work that met the host busy (a
+    /// closed window's detach), which no window's handler owns. Run at the
+    /// end of a wake, with no borrow of the host held: the handler is not
+    /// ours.
     pub(crate) fn report_frame_panic(&self, ui_runtime: &crate::app::ui_runtime::UiRuntime) {
         let address = self.address;
-        let Some(payload) = self
+        let mut caught = FirstPanic::new();
+        if let Some(payload) = self
             .host
             .try_with(|host| host.take_frame_panic(address))
             .flatten()
-        else {
-            return;
-        };
-        let mut caught = FirstPanic::new();
-        let _reported = caught.contain(|| ui_runtime.report_contained_panic(address, &*payload));
-        flui_foundation::panic::discard_payload(payload);
+        {
+            let _reported =
+                caught.contain(|| ui_runtime.report_contained_panic(address, &*payload));
+            flui_foundation::panic::discard_payload(payload);
+        }
+        caught.absorb(self.host.take_deferred_panic());
         caught.resume();
     }
 
@@ -882,15 +936,22 @@ impl RasterSlot {
             return false;
         }
         let was_lost = self.device.is_lost();
+        if was_lost && health == DeviceHealth::Healthy {
+            // The rebuilt device may take what the lost one refused. A host
+            // still turning up the stack leaves the recovery unseen, for the
+            // next settle to see again.
+            let address = self.address;
+            if self
+                .host
+                .try_with(|host| host.forget_refused_size(address))
+                .is_none()
+            {
+                return false;
+            }
+        }
         self.device = health;
         match health {
             DeviceHealth::Healthy => {
-                if was_lost {
-                    // The rebuilt device may take what the lost one refused.
-                    // Busy only while a caller up the stack turns the host,
-                    // which leaves it to the next recovery.
-                    let _forgotten = self.host.try_with(RasterHost::forget_refused_sizes);
-                }
                 ui_runtime.note_primary_device_recovery(None);
                 if was_lost {
                     tracing::warn!("GPU device lost — recovered successfully");

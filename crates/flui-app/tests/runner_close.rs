@@ -1092,6 +1092,37 @@ pub(crate) fn a_rebuilt_device_tries_the_refused_size_again() {
     join_ok_after_close(started);
 }
 
+/// A panic of the renderer while it resizes a window is reported, and the
+/// window still reaches its new size: the frame that met the panic is
+/// retried, and the retry applies the size.
+pub(crate) fn a_panicking_resize_is_reported_and_the_window_reaches_its_size() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    let presented = started.renderer.frames_presented();
+    started.renderer.panic_in_next_resize();
+    started.window.simulate_resize(700.0, 500.0);
+    started.run.run_owner_turn();
+    assert_eq!(
+        observed.frame_panics.load(Ordering::SeqCst),
+        1,
+        "the resize's panic was reported to the frame-failure handler"
+    );
+    for _ in 0..8 {
+        if started.renderer.frames_presented() > presented {
+            break;
+        }
+        let Some(deadline) = started.run.wake_deadline() else {
+            break;
+        };
+        wake_at(&started, deadline);
+    }
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the window drew at its new size after the panic"
+    );
+    join_ok_after_close(started);
+}
+
 fn join_ok_after_close(started: Started) {
     close(&started, CloseRoute::User);
     assert!(!started.run.is_running(), "the close ended the loop");
@@ -1174,6 +1205,10 @@ fn runner_close() {
             (
                 "a_rebuilt_device_tries_the_refused_size_again",
                 a_rebuilt_device_tries_the_refused_size_again,
+            ),
+            (
+                "a_panicking_resize_is_reported_and_the_window_reaches_its_size",
+                a_panicking_resize_is_reported_and_the_window_reaches_its_size,
             ),
         ],
     );

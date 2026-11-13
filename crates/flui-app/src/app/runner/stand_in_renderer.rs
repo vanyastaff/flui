@@ -44,6 +44,8 @@ struct Device {
     rebuild_attempts: u32,
     /// How many of the next frames, of any window, panic.
     panics_ahead: u32,
+    /// Whether the next resize of any window panics.
+    panic_resize: bool,
     /// Whether the next slot's attach is refused.
     refuse_attach: bool,
     /// The largest side a slot can be sized to.
@@ -94,6 +96,12 @@ impl StandInRenderer {
     /// renderer, as a driver or wgpu's error handler can.
     pub fn panic_in_next_frames(&self, frames: u32) {
         self.shared.lock().device.panics_ahead = frames;
+    }
+
+    /// Make the next resize, of any window of the run, panic in the
+    /// renderer, as a driver reconfiguring a surface can.
+    pub fn panic_in_next_resize(&self) {
+        self.shared.lock().device.panic_resize = true;
     }
 
     /// Refuse the next window's slot, as a GPU that cannot present to that
@@ -195,7 +203,13 @@ impl SlotBackend for StandInBackend {
     }
 
     fn resize(&mut self, _slot: SlotId, size: DeviceSize) -> EngineResult<()> {
-        let max = self.shared.lock().device.max_side;
+        let mut shared = self.shared.lock();
+        if std::mem::take(&mut shared.device.panic_resize) {
+            drop(shared);
+            panic!("injected panic in a stand-in resize");
+        }
+        let max = shared.device.max_side;
+        drop(shared);
         if max.is_some_and(|max| size.width > max || size.height > max) {
             return Err(EngineError::InvalidTargetSize {
                 width: size.width.unsigned_abs(),
