@@ -1797,7 +1797,7 @@ struct PaintOutcome {
 /// paints, and buffers the patch that publishes them (ADR-0304 §3, §8).
 ///
 /// Sealing discipline mirrors the recorder's: the open run is sealed into a
-/// [`Chunk`](flui_layer::scene::Chunk) whenever an effect or a slot needs ordering, whenever the
+/// [`Chunk`](flui_layer::Chunk) whenever an effect or a slot needs ordering, whenever the
 /// render object painting the next run changes, and when the boundary's
 /// content ends. A chunk therefore holds one render object's output
 /// (ADR-0304 §2), and a render object that repaints changes only its own
