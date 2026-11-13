@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use flui_protocol::framing::MAX_LINE;
-use flui_protocol::version::{PROTOCOL_VERSION, ProtocolVersion};
+use flui_protocol::version::{BREAKING, PROTOCOL_VERSION, ProtocolVersion};
 use flui_protocol::{ActParams, ActionName, AppInfo, Condition, Locator, Node, Target, Tree};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
@@ -670,12 +670,31 @@ fn a_connection_without_the_right_hello_is_refused() {
         assert_eq!(refusal["error"]["client"], "0.4", "{refusal}");
         assert!(matches!(old.recv(RECV), Recv::Closed), "then it closes");
 
-        // An older client no break separates from the app is served, in the app's version.
-        let older = ProtocolVersion::new(PROTOCOL_VERSION.major, PROTOCOL_VERSION.minor - 1);
+        // A client older than the last break is refused; one the break does not separate from
+        // the app (the version that broke, or a later one) is served, in the app's version.
+        let broke = BREAKING
+            .iter()
+            .map(|broke| broke.version)
+            .max()
+            .expect("a break is listed");
+        let before = ProtocolVersion::new(broke.major, broke.minor - 1);
+        let mut across = Client::connect(&at);
+        across.send(&json!({ "hello": { "token": TOKEN, "protocol": before.to_string() } }));
+        let Recv::Line(refusal) = across.recv(RECV) else {
+            panic!("a client across the break is answered");
+        };
+        assert_eq!(refusal["error"]["code"], "version", "{refusal}");
+        assert_eq!(
+            refusal["error"]["client"],
+            json!(before.to_string()),
+            "{refusal}"
+        );
+        assert!(matches!(across.recv(RECV), Recv::Closed), "then it closes");
+
         let mut earlier = Client::connect(&at);
-        earlier.send(&json!({ "hello": { "token": TOKEN, "protocol": older.to_string() } }));
+        earlier.send(&json!({ "hello": { "token": TOKEN, "protocol": broke.to_string() } }));
         let Recv::Line(welcome) = earlier.recv(RECV) else {
-            panic!("an older client is greeted");
+            panic!("a client the break does not separate is greeted");
         };
         assert_eq!(
             welcome["hello"]["protocol"],

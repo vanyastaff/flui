@@ -5,8 +5,8 @@
 use core::num::NonZeroU32;
 
 use flui_foundation::inspect::{
-    Change, DiffOptions, Inspect, Link, OwnedValue, SnapshotError, SnapshotNode, SnapshotQuery,
-    Variant, diff,
+    Change, DiffOptions, Inspect, Link, OwnedValue, SceneLayer, SnapshotError, SnapshotNode,
+    SnapshotQuery, Variant, diff,
 };
 use flui_testing::widgets::{LaidOut, lay_out, tight};
 use flui_view::prelude::*;
@@ -384,32 +384,61 @@ fn an_id_from_before_a_removal_is_gone() {
     );
 }
 
-/// A layer id kept from an earlier frame answers `gone` after a repaint, although the new
-/// frame's tree mints the same slots from the first.
+/// A layer id names its boundary for as long as the boundary stays in the scene: a frame that
+/// changes nothing reads every id back, and a repaint keeps the root's. An id of another
+/// generation, another scene owner, or an entry past the boundary's content names nothing.
 ///
-/// Fails when the layer tree resolves a kept id by its slot alone, which reads an unrelated layer
-/// of the newer scene.
+/// Fails when the layers are flattened afresh each frame, which mints new ids, or when a kept id
+/// is resolved by its slot alone.
 #[test]
-fn a_layer_id_from_an_earlier_frame_is_gone() {
+fn a_layer_id_names_its_boundary_while_it_stays() {
     let mut app = counter();
     let layers = app.inspect_layers(everything()).expect("painted");
-    let kept = layers.id.link();
-    assert!(app.inspect_layers(from(kept)).is_ok());
+    let ids: Vec<Link> = layers.iter().map(|node| node.id.link()).collect();
+    assert!(ids.len() > 1, "a counter paints more than its root");
+
+    app.tick();
+    let idle = app.inspect_layers(everything()).expect("painted");
+    assert_eq!(
+        idle.iter().map(|node| node.id.link()).collect::<Vec<_>>(),
+        ids,
+        "a frame that changes nothing keeps every id"
+    );
 
     app.pump_widget(Labelled { label: "replaced" });
     app.tick();
-
+    let root = layers.id.link();
     let after = app.inspect_layers(everything()).expect("painted");
-    let (Link::Layer(old), Link::Layer(new)) = (kept, after.id.link()) else {
-        unreachable!("a layer tree names layers")
+    assert_eq!(after.id.link(), root, "the scene's root boundary stays");
+    assert!(app.inspect_layers(from(root)).is_ok());
+
+    let Link::Layer(node) = root else {
+        unreachable!("a scene names layers")
     };
-    assert_eq!(
-        new.id, old.id,
-        "both scenes mint their root in the first slot"
-    );
-    assert_ne!(new.scene, old.scene);
-    assert_eq!(
-        app.inspect_layers(from(kept)),
-        Err(SnapshotError::Gone(kept.into()))
-    );
+    let later = node
+        .generation
+        .next()
+        .expect("a fixture generation has a successor");
+    let other_scene = node.scene.checked_add(1).expect("a fixture lineage fits");
+    for stale in [
+        SceneLayer {
+            generation: later,
+            ..node
+        },
+        SceneLayer {
+            scene: other_scene,
+            ..node
+        },
+        SceneLayer {
+            entry: Some(u32::MAX),
+            ..node
+        },
+    ] {
+        let stale = Link::Layer(stale);
+        assert_eq!(
+            app.inspect_layers(from(stale)),
+            Err(SnapshotError::Gone(stale.into())),
+            "{stale}"
+        );
+    }
 }

@@ -681,6 +681,7 @@ pub enum RasterAck {
 /// assert_eq!(name(FrameDropReason::Superseded), "superseded");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FrameDropReason {
     /// A newer [`RasterHandle::submit`] replaced this frame in the mailbox
     /// before [`RasterOwner::pump`] ever started it — the mailbox is
@@ -733,6 +734,7 @@ impl FrameDropReason {
 /// assert!(is_permanent(RasterSubmitError::OwnerGone));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum RasterSubmitError {
     /// [`RasterHandle::shutdown`] has already been called; no further
     /// frames are accepted. Retrying cannot succeed — the mailbox never
@@ -1142,6 +1144,10 @@ impl ReclaimMemory for RasterHandle {
 /// ```
 #[must_use]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a caller acts on each outcome of a pump, and a `_` arm would lose a frame's fate"
+)]
 pub enum PumpOutcome {
     /// No frame was pending. A coalesced resize may still have been applied
     /// to the backend.

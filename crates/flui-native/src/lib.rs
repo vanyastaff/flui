@@ -816,7 +816,7 @@ pub fn headless_platform() -> Box<dyn Platform> {
 /// The one public item of the core host that names an `android-activity`
 /// type: the system hands the Activity only to the application's
 /// `android_main`, and the composition root passes it on here, as the
-/// facade's `run_app_android` takes it (ADR-0151 §8). Nothing the platform
+/// `android_main` that `#[flui::main]` writes hands it to the run (ADR-0151 §8). Nothing the platform
 /// hands back names it.
 ///
 /// ```rust,ignore

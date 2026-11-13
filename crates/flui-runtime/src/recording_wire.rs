@@ -77,6 +77,7 @@ pub enum WireError {
 
 /// Whether text is kept in a recording (ADR-0215 §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Privacy {
     /// Key text, IME strings, assistive action text, window titles and device
     /// names are replaced, and each row that lost text is marked redacted.

@@ -13,6 +13,10 @@ use flui_foundation::{ChangeNotifier, Subscription};
 /// This indicates the direction that the user is scrolling, not the direction
 /// that the scroll offset is changing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a scroll is idle or moves one of two ways along its axis"
+)]
 pub enum ScrollDirection {
     /// No scrolling is underway.
     #[default]

@@ -44,6 +44,10 @@ use flui_foundation::geometry::Size;
 /// caller-side construction via `From<BoxConstraints>` / `From<SliverConstraints>`;
 /// callee-side downcast via `TryFrom`.
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each layout protocol has its own constraints, and every walk dispatches on the protocol"
+)]
 pub enum ErasedConstraints {
     /// Box-protocol constraints (`min_width`, `max_width`, `min_height`, `max_height`).
     Box(BoxConstraints),
@@ -106,6 +110,10 @@ impl TryFrom<ErasedConstraints> for SliverConstraints {
 /// caller-side construction via `From<Size>` / `From<SliverGeometry>`;
 /// callee-side downcast via `TryFrom`.
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each layout protocol has its own geometry, and every walk dispatches on the protocol"
+)]
 pub enum ErasedGeometry {
     /// Box-protocol geometry (a 2D size).
     Box(Size),

@@ -27,6 +27,7 @@ pub const LIFECYCLE_CAPACITY: usize = 64;
 /// slot's inbox; `Trim` coalesces to the strongest level. A turn drains the lifecycle queue
 /// before any inbox, so a frame never reaches a slot that is not attached yet.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum RasterCommand {
     /// Give `slot`, a freshly minted id, a target and bind it to `address`.
     Attach {
@@ -102,6 +103,7 @@ impl RasterCommand {
 
 /// What a slot renders into.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SlotTarget {
     /// A window's surface. It attaches without a size: the slot's first
     /// [`SlotChange::Size`] configures it.
@@ -175,6 +177,7 @@ impl SlotConfig {
 
 /// One change to a slot, sent in [`RasterCommand::Configure`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SlotChange {
     /// A new target size in device pixels. A side of zero or less leaves the
     /// slot's configuration as it is and mints no generation.
@@ -197,6 +200,7 @@ pub enum SlotChange {
 /// [`RasterVerdict::NotShown`]; the slot redraws in full once it is shown
 /// again (ADR-0305 §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum SlotVisibility {
     /// Shown and not covered.
     #[default]
@@ -222,6 +226,10 @@ impl SlotVisibility {
 
 /// What an accepted [`RasterCommand`] answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the owner stamps the next frame from a changed configuration, and a `_` arm would drop the generation"
+)]
 pub enum SendReceipt {
     /// Queued or coalesced; nothing for the owner to stamp.
     Accepted,
@@ -239,6 +247,7 @@ pub enum SendReceipt {
 /// No send drops a command: every answer accepts it or returns it, boxed, so
 /// a refusal costs one allocation and an accepted send moves no more than it
 /// sent.
+#[non_exhaustive]
 pub enum RasterSendError {
     /// The lifecycle queue holds [`LIFECYCLE_CAPACITY`] commands; send it
     /// again after the executor's next turn.
@@ -305,6 +314,10 @@ impl std::error::Error for RasterSendError {}
 /// The UI runtime's submit verdict without its `Queued` answer, which only a
 /// send gives: the host maps one to the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the host maps each verdict to the one its submit gives, and a `_` arm would misreport a frame"
+)]
 pub enum RasterVerdict {
     /// The frame rendered and reached its target.
     Presented,
@@ -345,6 +358,7 @@ pub struct SlotSettlement {
 /// An inline executor stops only by shutting down; the state of a raster
 /// thread that stops without one arrives with the threaded placement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExecutorHealth {
     /// It takes commands.
     Running,

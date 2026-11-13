@@ -28,10 +28,11 @@ use flui_native::{
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 use flui_view::View;
 
+use crate::app::application::{DesktopRun, StartupWindow};
 use crate::app::runner::{
     StandInRenderers, StartedLoop, WindowRenderers, loop_wake_deadline, start_loop,
 };
-use crate::app::{AppHandle, AppRunError, Application};
+use crate::app::{AppHandle, Application, LaunchError};
 
 pub use crate::app::runner::{StandInRenderer, TeardownStep};
 
@@ -45,21 +46,61 @@ pub const EXIT_CODE_PANIC: i32 = 101;
 pub struct HeadlessRun;
 
 impl HeadlessRun {
-    /// Run `application` on a fresh [`HeadlessPlatform`] until it is up.
+    /// Run `application` with `root` as [`Application::run`] does, on a fresh
+    /// [`HeadlessPlatform`], until it is up.
     #[must_use]
-    pub fn start<V, F>(application: Application<V, F>) -> HeadlessRunHandle
+    pub fn start<V>(application: Application, root: V) -> HeadlessRunHandle
+    where
+        V: View + Clone + 'static,
+    {
+        Self::start_on(application, root, HeadlessPlatform::new())
+    }
+
+    /// [`start`](Self::start) on `platform`, built with the controls the test
+    /// needs.
+    #[must_use]
+    pub fn start_on<V>(
+        application: Application,
+        root: V,
+        platform: HeadlessPlatform,
+    ) -> HeadlessRunHandle
+    where
+        V: View + Clone + 'static,
+    {
+        Self::start_run(
+            application.into_run(move |_: &AppHandle| root.clone(), StartupWindow::Open),
+            platform,
+        )
+    }
+
+    /// Run `application` as [`Application::run_resident`] does, with no
+    /// startup window and `factory` building each main window, on a fresh
+    /// [`HeadlessPlatform`], until it is up.
+    #[must_use]
+    pub fn start_resident<V, F>(application: Application, factory: F) -> HeadlessRunHandle
     where
         V: View + Clone + 'static,
         F: FnMut(&AppHandle) -> V + 'static,
     {
-        Self::start_on(application, HeadlessPlatform::new())
+        Self::start_resident_on(application, factory, HeadlessPlatform::new())
     }
 
-    /// Run `application` on `platform`, built with the controls the test
-    /// needs, until it is up.
+    /// [`start_resident`](Self::start_resident) on `platform`.
     #[must_use]
-    pub fn start_on<V, F>(
-        application: Application<V, F>,
+    pub fn start_resident_on<V, F>(
+        application: Application,
+        factory: F,
+        platform: HeadlessPlatform,
+    ) -> HeadlessRunHandle
+    where
+        V: View + Clone + 'static,
+        F: FnMut(&AppHandle) -> V + 'static,
+    {
+        Self::start_run(application.into_run(factory, StartupWindow::None), platform)
+    }
+
+    fn start_run<V, F>(
+        application: DesktopRun<V, F>,
         platform: HeadlessPlatform,
     ) -> HeadlessRunHandle
     where
@@ -104,7 +145,7 @@ impl HeadlessRun {
 enum Started {
     Running(StartedLoop),
     /// The run failed before its loop started.
-    Failed(AppRunError),
+    Failed(LaunchError),
     /// A panic unwound out of the platform's `run`; the loop's teardown ran
     /// during the unwind.
     Panicked(String),
@@ -181,7 +222,7 @@ impl HeadlessRunHandle {
     /// # Errors
     ///
     /// What [`Application::run`] returns for the same run.
-    pub fn join(self) -> Result<ExitReport, AppRunError> {
+    pub fn join(self) -> Result<ExitReport, LaunchError> {
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: the kit reports a run's panic as its exit"
