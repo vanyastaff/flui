@@ -89,7 +89,8 @@ impl LayerDiffer {
             .map_or(0, |frame| frame.boundaries.len())
     }
 
-    /// The damage of `scene` against the scene this differ saw last, on a
+    /// The damage of `scene` (a version compared as its flattened tree) against
+    /// the scene this differ saw last, on a
     /// surface of `surface` physical pixels `(width, height)`.
     pub fn diff(&mut self, scene: &Scene, surface: (u32, u32)) -> DamageRegion {
         let DamageMode::On { full_above } = self.mode else {
@@ -100,7 +101,10 @@ impl LayerDiffer {
             self.previous = None;
             return DamageRegion::Full(FullReason::SurfaceChanged);
         }
-        let current = Frame::capture(scene.tree(), surface);
+        let current = match scene.content() {
+            crate::SceneContent::Tree(tree) => Frame::capture(tree, surface),
+            crate::SceneContent::Version(version) => Frame::capture(&version.flatten(), surface),
+        };
         let region = match (&self.previous, &current) {
             (Some(previous), Some(current)) => compare(previous, current, full_above),
             (None, _) => DamageRegion::Full(FullReason::FirstFrame),

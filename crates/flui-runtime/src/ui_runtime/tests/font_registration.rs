@@ -81,6 +81,7 @@ fn paragraph_width(ui_runtime: &UiRuntime) -> f64 {
 fn painted_widths(scene: &flui_layer::Scene) -> Vec<f64> {
     scene
         .tree()
+        .expect("draw_frame flattens the version into a tree")
         .iter()
         .filter_map(|(_, node)| match node.layer() {
             flui_layer::Layer::Picture(picture) => Some(picture),
