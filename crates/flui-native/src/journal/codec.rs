@@ -55,6 +55,7 @@ use crate::error::PlatformError;
 
 /// Why a native recording could not be read or written.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CodecError {
     /// Reading or writing the stream failed.
     #[error("native recording I/O failed: {0}")]
@@ -197,6 +198,10 @@ impl Header {
 
 /// One registry call.
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "replay reproduces each row or refuses it, never skipping one"
+)]
 pub enum Row {
     /// `decode(reading)`.
     Reading(NativeReading),
@@ -494,6 +499,7 @@ impl Row {
 /// Why a recording could not be replayed: a row the target does not take, or
 /// one whose text was redacted. Replay stops there, never skipping a row.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ReplayError {
     /// Line `line` is a row of a kind this replay does not reproduce.
     #[error("line {line} is a `{row}` row, which this replay does not reproduce")]

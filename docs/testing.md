@@ -538,9 +538,14 @@ counters"). `HeadlessBinding::last_frame_report()` pairs that difference with
 run) for the last pump.
 
 `crates/flui-widgets/tests/perf.rs` drives a fixed app — a label over a lazy
-10 000-row list — through a one-screen scroll and a full reassemble, a
-`SlideTransition` tick over a painted panel, and a label change over an eager
-column of 500 and of 5 000 buttons, and asserts budgets on those reports. Each
+10 000-row list — through a one-screen scroll (measured once as the first after
+mount on the binding, and once after earlier scrolls through the UI runtime,
+where it must build every newly visible row, two consecutive scrolls must cost
+the same within a slack, and the frame after a scroll must cost what an idle
+one does; the two rows run on different drivers and are not compared) and a
+full reassemble, a `SlideTransition` tick over a painted panel, and a label
+change over an eager column of 500 and of 5 000 buttons, and asserts budgets
+on those reports. Each
 record also carries what the measured frames asked of the heap on the test
 thread, counted by the target's `#[global_allocator]`: `allocations` (a
 `realloc` included), `reallocations` (buffers that outgrew their capacity) and
@@ -1169,7 +1174,15 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main, and closes it after the next green one (`.github/actions/tracking-issue`, which `advisories.yml` shares) |
 
-The `Native xtask` checks are independent of the `ci` lane aggregator. The
+`expectations.yml` runs `cargo xtask expectations --body` on every pull request
+and again when its body is edited: it lists the expectations the diff edits
+(lines gone from `api/flui.txt`, a changed `*.stderr`, `*.snap` or protocol
+schema, a raised perf baseline, a grown allowlist, fewer tests, a new
+`#[ignore]`, a new `deny.toml` or `typos.toml` value) and fails unless the
+body's `## Expectations` section names each path with its reason (ADR-0331).
+Locally, `cargo xtask expectations` prints the list against `origin/main`, and
+`--worktree` adds uncommitted work. It is independent of the `ci` lane
+aggregator, as the `Native xtask` checks are. The
 other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
 event-driven, not per-PR gates. Release workflows build platform artifacts;
 they do not run native validation jobs. The native runtime suites run every

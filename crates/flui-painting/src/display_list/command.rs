@@ -47,6 +47,10 @@ impl DrawCommand {
 
 /// The closed vocabulary of paint operations.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every backend and the recorder lower each op, and a `_` arm would drop paint"
+)]
 pub enum DrawOp {
     // === Clipping Commands ===
     /// Clip to a rectangle.

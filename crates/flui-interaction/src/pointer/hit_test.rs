@@ -39,6 +39,7 @@ use crate::{
 /// (standing in for a scale gesture arena until FLUI has a scale
 /// recognizer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(clippy::exhaustive_enums, reason = "a walk continues or stops")]
 pub enum EventPropagation {
     /// Keep dispatching to the remaining entries on the walk.
     #[default]
@@ -174,6 +175,10 @@ impl PanZoomRoute {
 
 /// How an element takes part in hit testing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each hit test decides every behavior, and a `_` arm would miss or block a hit"
+)]
 pub enum HitTestBehavior {
     /// Receive events only if a child is hit.
     #[default]
@@ -208,6 +213,10 @@ impl HitTestBehavior {
 
 /// A hit target's mouse cursor contribution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a target defers or names a cursor, and the icon set is CursorIcon's"
+)]
 pub enum CursorRequest {
     /// Let the next target in the hit path choose the cursor.
     #[default]

@@ -80,6 +80,7 @@ impl CounterAnchor {
 /// Which clock stamps a sequence: chosen per device when its sequence starts
 /// and kept until that sequence ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ClockChoice {
     /// The performance counter.
     Counter,

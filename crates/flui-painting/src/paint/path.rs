@@ -21,6 +21,10 @@ const CURVE_TOLERANCE: f64 = 1e-3;
 /// A single element of a [`Path`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every backend lowers each command, and a `_` arm would drop part of a path"
+)]
 pub enum PathCommand {
     /// Start a new contour at a point.
     MoveTo(Point<f64>),
