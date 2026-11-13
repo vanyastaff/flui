@@ -50,7 +50,7 @@ jobs:
           persist-credentials: false
 
       - name: Install mdbook
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           # Pinned like every CI tool: a new release is a deliberate bump.
           tool: mdbook@0.5.4
