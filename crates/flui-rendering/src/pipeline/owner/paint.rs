@@ -1653,21 +1653,18 @@ impl PaintScratch {
         recycle_vec(&mut composer.stale);
         recycle_vec(&mut composer.orphans);
         recycle_vec(&mut composer.own_effects);
-        // The pass's buffer keeps the room two passes in a row needed, so a
-        // pass that repeats over the same tree (a list scrolled by a screen)
-        // grows nothing, while one large pass, a mount, leaves no room behind.
         let peak = std::mem::take(&mut composer.fragment_peak);
-        let kept = peak.min(composer.last_fragment_peak).min(KEPT_CAPACITY);
-        composer.last_fragment_peak = peak;
+        let kept = composer.fragment_room.after_pass(peak);
         let ops = composer.recorder.0.ops_mut();
         ops.clear();
         if kept <= KEPT_FRAGMENT_OPS {
             if ops.capacity() > KEPT_FRAGMENT_OPS {
                 *ops = Vec::new();
             }
-        } else if ops.capacity() > kept.saturating_mul(2) {
-            // Half of it idle: a pass that needs a little more than the last
-            // finds room, and one a little less gives none back.
+        } else if ops.capacity() > kept.saturating_mul(2) || ops.capacity() > KEPT_CAPACITY {
+            // Half of it idle, or past the cap: a pass that needs a little
+            // more than the last finds room, one a little less gives none
+            // back, and no pass keeps more than the cap.
             ops.shrink_to(kept);
         }
     }
@@ -1698,10 +1695,47 @@ impl PaintScratch {
 const KEPT_CAPACITY: usize = 1024;
 
 /// The least room for fragment operations the pass's shared buffer keeps
-/// between passes, whatever the last pass needed: enough for the path down a
-/// deep tree. Past it the buffer keeps the smaller of what the last two passes
-/// held at once, up to [`KEPT_CAPACITY`].
+/// between passes, whatever the last passes needed: enough for the path down
+/// a deep tree. Past it the buffer keeps what [`FragmentRoom`] answers.
 const KEPT_FRAGMENT_OPS: usize = 64;
+
+/// The passes [`FragmentRoom`] remembers.
+const FRAGMENT_PASSES: usize = 8;
+
+/// How much room the pass's shared fragment buffer keeps between passes: the
+/// most that two of the last [`FRAGMENT_PASSES`] passes each needed, up to
+/// [`KEPT_CAPACITY`].
+///
+/// A size that recurs is kept, so a list scrolled frame after frame grows
+/// nothing even when a small repaint (a caret, a scrollbar's fade) falls
+/// between its frames, while a size one pass needed once, a mount, leaves no
+/// room behind.
+#[derive(Debug, Default)]
+struct FragmentRoom {
+    /// The peaks of the last passes, the oldest overwritten first.
+    peaks: [usize; FRAGMENT_PASSES],
+    /// Where the next pass's peak goes.
+    next: usize,
+}
+
+impl FragmentRoom {
+    /// Records the peak of the pass that just ended and answers the room to
+    /// keep for the next.
+    fn after_pass(&mut self, peak: usize) -> usize {
+        self.peaks[self.next] = peak;
+        self.next = (self.next + 1) % FRAGMENT_PASSES;
+        let (mut largest, mut second) = (0, 0);
+        for &peak in &self.peaks {
+            if peak > largest {
+                second = largest;
+                largest = peak;
+            } else if peak > second {
+                second = peak;
+            }
+        }
+        second.min(KEPT_CAPACITY)
+    }
+}
 
 fn recycle_map<K, V>(map: &mut FxHashMap<K, V>) {
     if map.capacity() > KEPT_CAPACITY {
@@ -1758,12 +1792,11 @@ struct ComposerScratch {
     /// paints it interned, from node to node and pass to pass. A node whose
     /// paint panics leaves it a fresh canvas.
     recorder: PassRecorder,
-    /// The most operations the recorder's buffer held at once this pass:
-    /// what the pass's end weighs against the pass before.
+    /// The most operations the recorder's buffer held at once this pass,
+    /// which the pass's end hands to `fragment_room`.
     fragment_peak: usize,
-    /// The peak of the pass before: room is kept only for what two passes in
-    /// a row needed.
-    last_fragment_peak: usize,
+    /// The room the recorder's buffer keeps between passes.
+    fragment_room: FragmentRoom,
     /// The layers of the node being painted for its own effects, collected
     /// inside its paint's containment and pushed before its children paint:
     /// empty between nodes.
@@ -2423,4 +2456,44 @@ pub(super) type ChildPaintOrder = SmallVec<[PaintedChild; 4]>;
 pub(super) struct PaintedChild {
     pub(super) slot: usize,
     pub(super) opacity: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FRAGMENT_PASSES, FragmentRoom, KEPT_CAPACITY};
+
+    fn room_after(peaks: &[usize]) -> usize {
+        let mut room = FragmentRoom::default();
+        peaks
+            .iter()
+            .map(|&peak| room.after_pass(peak))
+            .last()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn fragment_room_keeps_a_size_that_recurs() {
+        // A list scrolled frame after frame.
+        assert_eq!(room_after(&[300, 300]), 300);
+        // A small repaint between its frames keeps the scroll's room.
+        assert_eq!(room_after(&[300, 40, 300, 40]), 300);
+        // Two sizes that alternate keep the larger.
+        assert_eq!(room_after(&[1000, 400, 1000, 400]), 1000);
+    }
+
+    #[test]
+    fn fragment_room_leaves_nothing_for_a_size_needed_once() {
+        // A mount, then small passes.
+        assert_eq!(room_after(&[5000, 10]), 10);
+        assert_eq!(room_after(&[5000, 10, 10]), 10);
+        // A size forgotten after the window passes it by.
+        let mut peaks = vec![300, 300];
+        peaks.extend(std::iter::repeat_n(10, FRAGMENT_PASSES - 1));
+        assert_eq!(room_after(&peaks), 10);
+    }
+
+    #[test]
+    fn fragment_room_never_passes_the_cap() {
+        assert_eq!(room_after(&[1500, 1500]), KEPT_CAPACITY);
+    }
 }
