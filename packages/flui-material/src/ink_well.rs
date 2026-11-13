@@ -44,7 +44,8 @@
 //! [`InkWell::on_tap`] only, so its switch is `on_tap.is_some()`, unless the
 //! control around it sets one: a `ListTile` is enabled or not whatever its
 //! handler. The switch is the node's (ADR-0322 §2, §3): while it is off
-//! [`WidgetState::Disabled`] is set and the semantics say disabled. The
+//! [`WidgetState::Disabled`] is set, and a well that describes a control
+//! says in its semantics that it is disabled. The
 //! well responds only while it is on and has a handler; otherwise no
 //! recognizer joins an arena, hover stops updating [`WidgetState::Hovered`]
 //! (oracle: `handleMouseEnter` gates `handleHoverChange` on `enabled`), the
@@ -250,7 +251,7 @@ impl InkWell {
 
     /// Sets the well's switch apart from its handler: an enabled well with
     /// no handler is not disabled, and still mounts no tap, takes no focus
-    /// and tracks no pointer (ADR-0322 §3). Defaults to whether
+    /// and tracks no pointer (ADR-0322 §2). Defaults to whether
     /// [`InkWell::on_tap`] is set.
     #[must_use]
     pub(crate) fn enabled(mut self, enabled: bool) -> Self {
@@ -879,16 +880,18 @@ mod tests {
     }
 
     /// A hovered well that loses its handler and stays enabled keeps no
-    /// `Hovered` (no exit will come to clear it, its mouse part is gone), is
-    /// not disabled, and binds nothing live: an Enter from a focused
-    /// descendant stops at it instead of reaching an enclosing binding.
+    /// `Hovered` (no exit will come to clear it, its mouse part is gone) and
+    /// is not disabled; Tab passes it, and an Enter from a focused descendant
+    /// stops at it and presses nothing. Its activation declines without a
+    /// handler, so this Enter does not tell switched-off bindings from live
+    /// ones: the node's
+    /// `switch_tests::an_enabled_node_without_a_press_binds_nothing_live`
+    /// holds that row.
     ///
     /// Red-check: carry `Hovered` while the well is merely enabled
-    /// (`write_states` gating on `enabled`), and the hover sticks; give the
-    /// well its bindings while merely enabled, and the Enter reaches the
-    /// enclosing binding.
+    /// (`write_states` gating on `enabled`), and the hover sticks.
     #[test]
-    fn a_well_that_loses_its_handler_keeps_no_state_and_binds_nothing_live() {
+    fn a_well_that_loses_its_handler_keeps_no_hover() {
         struct Outer(Rc<RefCell<u32>>);
         impl Action<ActivateIntent> for Outer {
             fn invoke(
