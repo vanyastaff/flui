@@ -69,7 +69,7 @@ base with the pull request and lists:
 | `perf/size.toml`, `*/perf/baseline/*.toml` | a ceiling that rose (a size, a package count, a cost counter of `cargo xtask perf`), a work count that changed either way (it has to match, so a fall is work that stopped happening), a count no longer written, or the file deleted |
 | `tools/xtask/allowlists/*.toml` | an entry with no counterpart before, a count that rose, a list of names that gained one |
 | a Rust file | fewer tests than before: test attributes (`#[test]`, a path ending in `test`, `#[wasm_bindgen_test]`, also under `cfg_attr`) plus table-test cases (`case as fn()`); or more `#[ignore]` attributes |
-| `deny.toml`, `typos.toml` | a value the file did not have: a new key, a new array item, a changed setting (a `reason` is prose and is not compared) |
+| `deny.toml`, `typos.toml` | a value the file did not have: a new key, a new array item, a value added to an entry, a changed setting (an entry is named by its own fields, wherever it stands; a `reason` is prose and is not compared) |
 
 A file is compared whole, before and after, so moving a test inside a file or turning attributes
 into a table of cases is no edit, and moving tests to another file is one the body explains by

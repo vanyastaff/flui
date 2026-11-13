@@ -430,53 +430,62 @@ fn lines_removed(old: &str, new: &str) -> usize {
         .count()
 }
 
-/// The leaves of a TOML value as a path and a value, with `[]` for an array's items, so an item
-/// is the same wherever it stands in its array. A `reason` is prose about its entry and is left
-/// out.
-fn toml_leaves(prefix: &str, value: &toml::Value, leaves: &mut Vec<(String, toml::Value)>) {
+/// What a TOML value says, one line per fact: `path = value` for a key, `path[] = value` for
+/// an item of an array of scalars, and `path[key = value, …]` for an item of an array of
+/// tables, named by its own scalar fields. An item is the same wherever it stands in its
+/// array, and what it holds is written under its name, so a value added to one entry is not
+/// taken for the same value in another. A `reason` is prose about its entry and is left out.
+fn written_values(prefix: &str, value: &toml::Value, out: &mut BTreeSet<String>) {
+    let is_scalar = |value: &toml::Value| !value.is_table() && !value.is_array();
     match value {
         toml::Value::Table(table) => {
-            for (key, value) in table {
-                if key == "reason" {
-                    continue;
-                }
+            for (key, value) in table.iter().filter(|(key, _)| *key != "reason") {
                 let path = if prefix.is_empty() {
                     key.clone()
                 } else {
                     format!("{prefix}.{key}")
                 };
-                toml_leaves(&path, value, leaves);
+                written_values(&path, value, out);
             }
         }
         toml::Value::Array(items) => {
             for item in items {
-                toml_leaves(&format!("{prefix}[]"), item, leaves);
+                let Some(entry) = item.as_table() else {
+                    written_values(&format!("{prefix}[]"), item, out);
+                    continue;
+                };
+                let mut name: Vec<String> = entry
+                    .iter()
+                    .filter(|(key, value)| *key != "reason" && is_scalar(value))
+                    .map(|(key, value)| format!("{key} = {value}"))
+                    .collect();
+                name.sort_unstable();
+                let entry_path = format!("{prefix}[{}]", name.join(", "));
+                for (key, value) in entry.iter().filter(|(_, value)| !is_scalar(value)) {
+                    written_values(&format!("{entry_path}.{key}"), value, out);
+                }
+                out.insert(entry_path);
             }
         }
-        leaf => leaves.push((prefix.to_owned(), leaf.clone())),
+        scalar => {
+            out.insert(format!("{prefix} = {scalar}"));
+        }
     }
 }
 
-fn leaves_of(text: &str) -> Option<Vec<(String, toml::Value)>> {
-    let table = text.parse::<toml::Table>().ok()?;
-    let mut leaves = Vec::new();
-    toml_leaves("", &toml::Value::Table(table), &mut leaves);
-    Some(leaves)
-}
-
 /// The values `new` has and `old` did not, of `deny.toml` or `typos.toml`: a new key, a new
-/// array item, or a key whose value changed. `None` when there is none.
+/// array item, a value added to an entry, or a key whose value changed. `None` when there is
+/// none.
 fn values_added(old: &str, new: &str) -> Option<String> {
-    let (Some(old), Some(new)) = (leaves_of(old), leaves_of(new)) else {
+    let written = |text: &str| -> Option<BTreeSet<String>> {
+        let table = text.parse::<toml::Table>().ok()?;
+        let mut out = BTreeSet::new();
+        written_values("", &toml::Value::Table(table), &mut out);
+        Some(out)
+    };
+    let (Some(old), Some(new)) = (written(old), written(new)) else {
         return Some("does not parse as TOML".to_owned());
     };
-    let written = |leaves: Vec<(String, toml::Value)>| -> BTreeSet<String> {
-        leaves
-            .into_iter()
-            .map(|(path, value)| format!("{path} = {value}"))
-            .collect()
-    };
-    let (old, new) = (written(old), written(new));
     let added: Vec<&str> = new.difference(&old).map(String::as_str).collect();
     if added.is_empty() {
         return None;
@@ -491,23 +500,43 @@ fn values_added(old: &str, new: &str) -> Option<String> {
     Some(format!("{} value(s) added: {shown}{more}", added.len()))
 }
 
+/// The integer counts of a perf baseline, by `scenario.counter`.
+fn counts_of(text: &str) -> Option<BTreeMap<String, i64>> {
+    fn collect(prefix: &str, table: &toml::Table, counts: &mut BTreeMap<String, i64>) {
+        for (key, value) in table {
+            let path = if prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{prefix}.{key}")
+            };
+            match value {
+                toml::Value::Table(inner) => collect(&path, inner, counts),
+                toml::Value::Integer(count) => {
+                    counts.insert(path, *count);
+                }
+                _ => {}
+            }
+        }
+    }
+    let table = text.parse::<toml::Table>().ok()?;
+    let mut counts = BTreeMap::new();
+    collect("", &table, &mut counts);
+    Some(counts)
+}
+
 /// What a perf baseline no longer holds the code to, between `old` and `new`: a ceiling that
 /// rose, a work count that changed, a count that is no longer written. A ceiling is a count the
 /// code only has to stay at or under (`cargo xtask perf`'s cost counters, and every count when
 /// `ceilings_only`), so its fall tightens the baseline; a work count has to match, so its fall
 /// is work that stopped happening. A new count adds to the baseline.
 fn baseline_edits(old: &str, new: &str, ceilings_only: bool) -> Vec<String> {
-    let (Some(old), Some(new)) = (leaves_of(old), leaves_of(new)) else {
+    let (Some(old), Some(new)) = (counts_of(old), counts_of(new)) else {
         return vec!["does not parse as TOML".to_owned()];
     };
-    let new: BTreeMap<String, toml::Value> = new.into_iter().collect();
     let mut edits = Vec::new();
     for (path, was) in &old {
         let Some(is) = new.get(path) else {
             edits.push(format!("{path} removed"));
-            continue;
-        };
-        let (Some(was), Some(is)) = (was.as_integer(), is.as_integer()) else {
             continue;
         };
         let counter = path.rsplit('.').next().unwrap_or(path);
@@ -851,9 +880,29 @@ mod tests {
         assert_eq!(kinds(&found), [("deny.toml", Kind::Exemption)]);
         assert_eq!(
             found[0].detail,
-            "2 value(s) added: advisories.ignore[].id = \"RUSTSEC-2\", \
+            "2 value(s) added: advisories.ignore[id = \"RUSTSEC-2\"], \
              bans.multiple-versions = \"warn\""
         );
+        // A value added to one entry is not hidden by the same value in another, and the
+        // entries may stand in any order.
+        let skips = |winit: &str| {
+            format!(
+                "[bans]\nskip = [\n  {{ crate = \"winit\"{winit} }},\n  \
+                 {{ crate = \"unicode\", wrappers = [\"convert_case\"] }},\n]\n"
+            )
+        };
+        let found = edits(&modified(
+            "deny.toml",
+            &skips(""),
+            &skips(", wrappers = [\"convert_case\"]"),
+        ));
+        assert_eq!(
+            found[0].detail,
+            "1 value(s) added: bans.skip[crate = \"winit\"].wrappers[] = \"convert_case\""
+        );
+        let reordered = "[bans]\nskip = [\n  { crate = \"unicode\", wrappers = [\"convert_case\"] },\n  \
+                         { crate = \"winit\" },\n]\n";
+        assert_eq!(edits(&modified("deny.toml", &skips(""), reordered)), []);
         let shrunk = "[bans]\nmultiple-versions = \"deny\"\n";
         assert_eq!(edits(&modified("typos.toml", old, shrunk)), []);
         assert_eq!(
