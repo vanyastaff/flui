@@ -1,7 +1,7 @@
 //! `flui devices` — list run targets: this desktop, Android devices/emulators
 //! visible to `adb`, iOS simulators, and installed web browsers.
 //!
-//! Every probe is bounded by [`PROBE_TIMEOUT`] and a missing tool is a
+//! Every probe is bounded ([`PROBE_TIMEOUT`], or the `simctl` budgets) and a missing tool is a
 //! [`Problem`] row, never a hard failure: the command always exits `0` and
 //! reports what it *could* find. This is also the regression guard for the
 //! macOS hang this module used to have — `flui devices` once shelled out to
@@ -336,6 +336,41 @@ fn parse_adb_devices(adb: &Path, output: &str, details: bool) -> Vec<Device> {
 // iOS (simctl) — reused by `emulators.rs`
 // ============================================================================
 
+/// The budgets of the attempts at `xcrun simctl list`. CoreSimulator can be
+/// slow to answer its first client after a simulator boots: on the nightly
+/// iOS runner, the first `simctl list` after the boot passed
+/// [`PROBE_TIMEOUT`] in two runs of three on one day, and the booted
+/// simulator was missing from the list. An attempt that times out has been
+/// killed, and the next one gets a longer budget; a hung service still ends
+/// as a [`Problem`] once the last one passes.
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(dead_code, reason = "only the macOS simulator probe retries")
+)]
+const SIMCTL_BUDGETS: [std::time::Duration; 2] =
+    [PROBE_TIMEOUT, std::time::Duration::from_secs(30)];
+
+/// Runs `attempt` with each of `budgets` in turn until one answers within
+/// its budget: the first answer that is not `ErrorKind::TimedOut`, or the
+/// last attempt's timeout.
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(dead_code, reason = "only the macOS simulator probe retries")
+)]
+fn retry_on_timeout<T>(
+    budgets: &[std::time::Duration],
+    mut attempt: impl FnMut(std::time::Duration) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut outcome = Err(std::io::Error::from(std::io::ErrorKind::TimedOut));
+    for &budget in budgets {
+        outcome = attempt(budget);
+        if !matches!(&outcome, Err(error) if error.kind() == std::io::ErrorKind::TimedOut) {
+            break;
+        }
+    }
+    outcome
+}
+
 /// List available iOS Simulators via `xcrun simctl list -j devices
 /// available`. `pub(crate)` so `emulators.rs` can reuse the same probe and
 /// JSON parsing for `flui emulators list`/`launch`.
@@ -349,10 +384,12 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
         });
     }
 
-    match output_with_timeout(
-        Command::new("xcrun").args(["simctl", "list", "-j", "devices", "available"]),
-        PROBE_TIMEOUT,
-    ) {
+    match retry_on_timeout(&SIMCTL_BUDGETS, |budget| {
+        output_with_timeout(
+            Command::new("xcrun").args(["simctl", "list", "-j", "devices", "available"]),
+            budget,
+        )
+    }) {
         Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout);
             parse_simctl_json(&text).map_err(|error| Problem {
@@ -368,7 +405,11 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
         }),
         Err(error) if error.kind() == std::io::ErrorKind::TimedOut => Err(Problem {
             platform: DevicePlatform::Ios,
-            message: format!("xcrun did not answer within {PROBE_TIMEOUT:?}"),
+            message: format!(
+                "xcrun did not answer within {:?} in {} attempts",
+                SIMCTL_BUDGETS.iter().sum::<std::time::Duration>(),
+                SIMCTL_BUDGETS.len()
+            ),
             hint: "Xcode's simulator service may be hung; try restarting it".to_string(),
         }),
         Err(error) => Err(Problem {
@@ -749,4 +790,80 @@ fn format_device_lines(device: &Device, show_details: bool) -> Vec<String> {
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::io::{Error, ErrorKind};
+    use std::time::Duration;
+
+    use super::{SIMCTL_BUDGETS, retry_on_timeout};
+
+    /// What the attempts answer in turn (`None` is an answer in time), then
+    /// the outcome and how many attempts ran.
+    struct Case {
+        name: &'static str,
+        answers: &'static [Option<ErrorKind>],
+        outcome: Result<usize, ErrorKind>,
+        attempts: usize,
+    }
+
+    #[test]
+    fn an_attempt_that_times_out_is_retried_with_the_next_budget() {
+        let cases = [
+            Case {
+                name: "answers at once",
+                answers: &[None],
+                outcome: Ok(1),
+                attempts: 1,
+            },
+            Case {
+                name: "times out, then answers",
+                answers: &[Some(ErrorKind::TimedOut), None],
+                outcome: Ok(2),
+                attempts: 2,
+            },
+            Case {
+                name: "times out every time",
+                answers: &[Some(ErrorKind::TimedOut), Some(ErrorKind::TimedOut)],
+                outcome: Err(ErrorKind::TimedOut),
+                attempts: 2,
+            },
+            Case {
+                name: "fails otherwise",
+                answers: &[Some(ErrorKind::NotFound)],
+                outcome: Err(ErrorKind::NotFound),
+                attempts: 1,
+            },
+        ];
+        for case in cases {
+            let given = RefCell::new(Vec::<Duration>::new());
+            let outcome = retry_on_timeout(&SIMCTL_BUDGETS, |budget| {
+                given.borrow_mut().push(budget);
+                let attempt = given.borrow().len();
+                match case.answers[attempt - 1] {
+                    Some(kind) => Err(Error::from(kind)),
+                    None => Ok(attempt),
+                }
+            });
+            assert_eq!(
+                outcome.map_err(|error| error.kind()),
+                case.outcome,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                given.into_inner(),
+                SIMCTL_BUDGETS[..case.attempts],
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_later_attempt_gets_a_longer_budget() {
+        assert!(SIMCTL_BUDGETS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 }
