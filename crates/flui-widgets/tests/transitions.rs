@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::common::{LaidOut, lay_out, loose};
+use crate::common::{LaidOut, lay_out, lay_out_animated, loose, tight};
 use flui_animation::Animatable;
 use flui_animation::{Animation, AnimationController, Tween};
 use flui_foundation::RenderId;
@@ -27,10 +27,9 @@ use flui_painting::styling::BoxDecoration;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
-use flui_view::RebuildReason;
-use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+
 use flui_view::{BoxedView, View, ViewExt};
+use flui_view::{FrameBuildReport, RebuildReason};
 use flui_widgets::{
     Align, AlignTransition, ColoredBox, Column, DecoratedBoxTransition, GestureDetector,
     PositionedTransition, RotationTransition, ScaleTransition, SizeTransition, SizedBox,
@@ -67,31 +66,32 @@ fn child_box() -> SizedBox {
 /// One 60 Hz frame of virtual time.
 const FRAME: Duration = Duration::from_nanos(16_666_667);
 
-/// A tree on the headless binding, whose per-frame report runs the build
-/// phase on every frame — so `elements_built == 0` means nothing rebuilt,
-/// not that the build phase was skipped.
+/// A tree on a UI runtime. Every frame runs the build phase, so a report of
+/// `elements_built == 0` means nothing rebuilt, not that the build phase was
+/// skipped.
 struct Headless {
-    binding: HeadlessBinding,
+    laid: LaidOut,
 }
 
 impl Headless {
     fn mount<V: View + Clone + 'static>(view: V) -> Self {
-        let mut binding = HeadlessBinding::new();
-        let root = GestureArenaScope::new(
-            binding.arena().clone(),
-            FocusTreeRoot::new(app_root(Align::new(Alignment::TOP_LEFT).child(view))),
+        let mut laid = lay_out(
+            app_root(Align::new(Alignment::TOP_LEFT).child(view)),
+            tight(200.0, 200.0),
         );
-        let _ = binding.mount_root(
-            &root,
-            MountOwners::fresh(),
-            MountOptions::tight(200.0, 200.0),
-        );
-        binding.pump_frame(FRAME);
-        Self { binding }
+        laid.pump_for(FRAME);
+        Self { laid }
     }
 
-    fn pipeline(&self) -> &PipelineCell {
-        self.binding.pipeline_owner().expect("tree-bound")
+    /// Drive one frame `dt` after the last and report what it built.
+    fn frame(&mut self, dt: Duration) -> FrameBuildReport {
+        self.laid.pump_for(dt);
+        self.laid
+            .with_build_owner_mut(|owner| owner.last_frame_build_report())
+    }
+
+    fn pipeline(&self) -> PipelineCell {
+        self.laid.pipeline_owner()
     }
 
     /// The child of the `index`-th transition node, mapped into that node.
@@ -168,17 +168,12 @@ fn rotate_by(turns: f64) -> impl Fn(f64, f64) -> (f64, f64) {
     }
 }
 
-fn assert_no_rebuild(report: &FrameReport, what: &str) {
+fn assert_no_rebuild(report: &FrameBuildReport, what: &str) {
     assert_eq!(
-        report.build.elements_built, 0,
-        "{what} must not rebuild any element: {:?}",
-        report.build
+        report.elements_built, 0,
+        "{what} must not rebuild any element: {report:?}"
     );
-    assert_eq!(
-        report.build.count(RebuildReason::AnimationTick),
-        0,
-        "{what}"
-    );
+    assert_eq!(report.count(RebuildReason::AnimationTick), 0, "{what}");
 }
 
 /// Mounts `view`, then for every value sets the controller and drives one
@@ -198,7 +193,7 @@ fn tick_without_rebuilding<V, E, F>(
     let mut tree = Headless::mount(view);
     for value in VALUES {
         controller.set_value(value).expect("no build is running");
-        let report = tree.binding.pump_frame_report(FRAME);
+        let report = tree.frame(FRAME);
         assert_no_rebuild(&report, &format!("{what}: a tick to {value}"));
         for index in 0..nodes {
             assert_matrix(
@@ -270,7 +265,7 @@ impl Headless {
     /// The color of the first painted rectangle that is not the child's fill.
     fn decoration_fill(&self) -> Color {
         use flui_painting::display_list::DrawOp;
-        let tree = self.binding.layer_tree().expect("a painted frame");
+        let tree = self.laid.layer_tree().expect("a painted frame");
         tree.iter()
             .filter_map(|(_, node)| match node.layer() {
                 flui_rendering::layer::Layer::Picture(picture) => Some(picture.picture().clone()),
@@ -297,7 +292,7 @@ fn ticks_without_rebuilding<V: View + Clone + 'static>(
     let mut tree = Headless::mount(view);
     for value in VALUES {
         controller.set_value(value).expect("no build is running");
-        let report = tree.binding.pump_frame_report(FRAME);
+        let report = tree.frame(FRAME);
         assert_no_rebuild(&report, &format!("{what}: a tick to {value}"));
         check(&tree, value);
     }
@@ -488,30 +483,32 @@ pub(crate) fn virtual_time_ticks_follow_the_controller_value() {
     let owner = AnimationController::builder(Duration::from_millis(300)).build_on(Some(&vsync));
     let c = owner.controller();
     let mut tree = Headless::mount(ScaleTransition::new(scalar(c)).child(child_box()));
-    tree.binding.adopt_vsync(vsync);
+    tree.laid
+        .adopt_vsync(vsync)
+        .expect("an open registry without a parent is admitted");
     c.forward().expect("a fresh controller forwards");
-    tree.binding.pump_frame_report(FRAME);
-    let report = tree.binding.pump_frame_report(Duration::from_millis(150));
+    tree.frame(FRAME);
+    let report = tree.frame(Duration::from_millis(150));
     assert_no_rebuild(&report, "a time tick");
     assert_matrix(tree.matrix(0), scale_by(c.value()), "mid-run");
 
-    let report = tree.binding.pump_frame_report(Duration::ZERO);
+    let report = tree.frame(Duration::ZERO);
     assert_no_rebuild(&report, "a zero-dt frame");
-    assert_eq!(
-        report.pipeline.nodes_painted, 0,
+    assert!(
+        !tree.laid.did_paint_last_frame(),
         "a zero-dt frame paints nothing: {report:?}"
     );
     assert_matrix(tree.matrix(0), scale_by(c.value()), "after a zero-dt frame");
 
     c.reverse().expect("a running controller reverses");
-    tree.binding.pump_frame_report(FRAME);
-    let report = tree.binding.pump_frame_report(Duration::from_millis(60));
+    tree.frame(FRAME);
+    let report = tree.frame(Duration::from_millis(60));
     let value = c.value();
     assert!(value < 0.5, "the reverse run moved back, got {value}");
     assert_no_rebuild(&report, "a reversing tick");
     assert_matrix(tree.matrix(0), scale_by(value), "reverse mid-run");
 
-    tree.binding.pump_frame_report(Duration::from_secs(10));
+    tree.frame(Duration::from_secs(10));
     assert_eq!(c.value(), 0.0, "a 10 s jump completes the reverse run");
     assert_matrix(tree.matrix(0), scale_by(0.0), "after a 10 s jump");
 }
@@ -547,18 +544,18 @@ fn taps_at(
 /// A selected path owns its coordinate mapping through delivery, while a
 /// later selection observes the newly committed animation sample.
 pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::rc::Rc;
 
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_animation::Vsync;
+    use flui_foundation::geometry::Point;
     use flui_platform::pointer::PointerEvent;
-    use flui_testing::PointerScript;
+    use flui_view::environment::VsyncScope;
     use flui_widgets::Listener;
 
     for (direction, sign) in [(TextDirection::Ltr, 1.0), (TextDirection::Rtl, -1.0)] {
-        let mut binding = HeadlessBinding::new();
-        let owner =
-            AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
+        let vsync = Vsync::new();
+        let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
         let controller = owner.controller();
         let received = Rc::new(RefCell::new(Vec::new()));
         let delivered = Rc::clone(&received);
@@ -577,57 +574,51 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
         let slide = SlideTransition::new(fraction(controller, TranslationFraction::new(2.0, 0.0)))
             .child(listener)
             .text_direction(direction);
-        let root = GestureArenaScope::new(
-            binding.arena().clone(),
-            FocusTreeRoot::new(app_root(Align::new(Alignment::CENTER).child(slide))),
+        let mut laid = lay_out_animated(
+            app_root(VsyncScope::new(
+                vsync.clone(),
+                Align::new(Alignment::CENTER).child(slide),
+            )),
+            tight(200.0, 200.0),
+            vsync,
         );
-        let _mounted = binding.mount_root(
-            &root,
-            MountOwners::fresh(),
-            MountOptions::tight(200.0, 200.0),
-        );
-        binding.pump_frame(Duration::ZERO);
+        let built =
+            |laid: &mut LaidOut| laid.with_build_owner_mut(|owner| owner.last_frame_build_report());
+        laid.pump_for(Duration::ZERO);
         controller.forward().expect("fresh slide run");
-        binding.pump_frame(Duration::ZERO);
-        binding.pump_frame(Duration::from_millis(250));
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_millis(250));
         assert!((controller.value() - 0.25).abs() < 1e-9);
-        assert_no_rebuild(
-            binding.last_frame_report(),
-            "running slide before selection",
-        );
+        assert_no_rebuild(&built(&mut laid), "running slide before selection");
 
-        let first = Offset::new(90.0 + sign * 20.0, 90.0);
-        let selected = Cell::new(false);
-        binding.replay_with(&PointerScript::tap(first), |binding, position, kind| {
-            let path = binding.hit_test(position, kind);
-            if !selected.replace(true) {
-                // Change the public animation after choosing the path, before
-                // the owner lane receives it. Its mapping must remain admitted.
-                controller.set_value(0.5).expect("no build is running");
-            }
-            path
-        });
+        let first = (90.0 + sign * 20.0, 90.0);
+        laid.dispatch_pointer_down(first.0, first.1);
+        // Change the public animation after the down selected its path and
+        // before the frame that commits the new sample: the delivered
+        // coordinates stay those of the selected path.
+        controller.set_value(0.5).expect("no build is running");
+        laid.dispatch_pointer_up(first.0, first.1);
+        laid.pump_for(Duration::ZERO);
         assert_eq!(
             &*received.borrow(),
-            &[(Point::new(10.0, 10.0), Point::new(first.dx, first.dy))],
+            &[(Point::new(10.0, 10.0), Point::new(first.0, first.1))],
             "{direction:?}: selected coordinates survive a newer animation sample"
         );
-        assert_no_rebuild(
-            binding.last_frame_report(),
-            "committing the replacement sample",
-        );
+        assert_no_rebuild(&built(&mut laid), "committing the replacement sample");
 
-        let second = Offset::new(90.0 + sign * 40.0, 90.0);
-        binding.replay(&PointerScript::tap(second));
+        let second = (90.0 + sign * 40.0, 90.0);
+        laid.dispatch_pointer_down(second.0, second.1);
+        laid.dispatch_pointer_up(second.0, second.1);
+        laid.pump_for(Duration::ZERO);
         assert_eq!(
             &*received.borrow(),
             &[
-                (Point::new(10.0, 10.0), Point::new(first.dx, first.dy)),
-                (Point::new(10.0, 10.0), Point::new(second.dx, second.dy)),
+                (Point::new(10.0, 10.0), Point::new(first.0, first.1)),
+                (Point::new(10.0, 10.0), Point::new(second.0, second.1)),
             ],
             "{direction:?}: the next selection uses the current sample"
         );
-        assert_no_rebuild(binding.last_frame_report(), "the next pointer selection");
+        assert_no_rebuild(&built(&mut laid), "the next pointer selection");
     }
 }
 

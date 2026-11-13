@@ -1,5 +1,5 @@
 //! ADR-0074: UI runtime-scoped signals driven through the real widget pipeline
-//! (`lay_out` mounts a tree in a `HeadlessBinding`; `tick` pumps one frame
+//! (`lay_out` mounts a tree on a UI runtime; `tick` pumps one frame
 //! without dirtying anything itself).
 //!
 //! Every test counts `build` calls per element, because the claim under test
