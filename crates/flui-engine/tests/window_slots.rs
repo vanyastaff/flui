@@ -801,11 +801,11 @@ fn a_size_the_lost_device_refused_is_tried_on_the_rebuilt_one() {
     );
 }
 
-/// A rebuild drops only the old device's refusal of the size it tries
-/// again: a refusal of a size no resize was refused at stays held for the
-/// owner, since nothing answers it again.
+/// A rebuild that configures every slot anew answers each slot's size
+/// afresh: a size refusal by the device before it, which the owner had not
+/// taken, goes with that device.
 #[test]
-fn a_second_rebuild_keeps_a_refusal_it_does_not_try_again() {
+fn a_rebuild_that_takes_the_size_drops_the_old_devices_refusal() {
     let mut rig = rig();
     let (slot, _) = rig.sized_window();
     rig.backend.lose_device();
@@ -820,10 +820,7 @@ fn a_second_rebuild_keeps_a_refusal_it_does_not_try_again() {
     rig.backend.lose_device();
     let _ = rig.executor.turn();
     assert!(
-        matches!(
-            rig.sender.take_failure(slot),
-            Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
-        ),
-        "the refusal waits for the owner"
+        rig.sender.take_failure(slot).is_none(),
+        "the second device took the size"
     );
 }

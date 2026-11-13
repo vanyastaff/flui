@@ -362,7 +362,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             // slots are restamped all the same, so "healthy after lost" always
             // means every frame stamped before the loss is refused.
             self.rebuilds.recovered();
-            self.after_rebuild(Vec::new(), first);
+            self.after_rebuild(None, first);
             rebuilt = true;
         }
         let mut failure = None;
@@ -380,7 +380,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                         // The slots are restamped before the health says the
                         // device renders, so no owner stamps a frame for the
                         // old device after reading it.
-                        self.after_rebuild(refused, first);
+                        self.after_rebuild(Some(refused), first);
                         rebuilt = true;
                     }
                     Some(Err(error)) => {
@@ -398,7 +398,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     // slots are restamped before this turn serves them, as
                     // after a rebuild that succeeded.
                     self.rebuilds.recovered();
-                    self.after_rebuild(Vec::new(), first);
+                    self.after_rebuild(None, first);
                     rebuilt = true;
                 }
             } else {
@@ -475,32 +475,38 @@ impl<B: SlotBackend> RasterExecutor<B> {
     /// its generation, as after a restore, and every slot redraws in full. A
     /// size still pending or refused keeps its barrier: only a size the
     /// backend accepts authorises frames laid out for it, and a size the lost
-    /// device refused is tried on the new one, its old refusal dropped if the
-    /// owner has not taken it. A slot the new
-    /// device cannot present to waits for a new surface from its owner.
-    fn after_rebuild(&mut self, refused: Vec<(SlotId, EngineError)>, first: &mut FirstPanic) {
+    /// device refused is tried on the new one. A slot the new device cannot
+    /// present to waits for a new surface from its owner.
+    ///
+    /// `refused` is `Some` when the backend configured every slot on the new
+    /// device and named those it refused: a size refusal the owner has not
+    /// taken yet is then the old device's and goes. `None` when the device
+    /// came back without such an answer (a rebuild that panicked or failed
+    /// with its device in place): only the refusal of a size tried again
+    /// goes, since nothing answers the others anew.
+    fn after_rebuild(
+        &mut self,
+        refused: Option<Vec<(SlotId, EngineError)>>,
+        first: &mut FirstPanic,
+    ) {
+        let answered = refused.is_some();
         for slot in self.slots.iter_mut().flatten() {
             slot.owe_full(RESET);
             let stale = {
                 let mut state = slot.inbox.lock();
-                // A size the lost device refused is the new device's to
-                // answer: it is tried again, and a refusal of it the owner
-                // has not taken yet is the old device's, so it goes.
-                if let Some(size) = slot.refused_size {
+                let retried = slot.refused_size;
+                if let Some(size) = retried {
                     state.size.get_or_insert(size);
                 }
-                // Only the refusal of that size goes: any other (a size over
-                // the limit that no resize was refused at) is not answered
-                // again, so it stays held for the owner.
-                let refused = slot.refused_size;
                 let stale = match &state.failure {
                     Some(SlotFailure::Refused(EngineError::InvalidTargetSize {
                         width,
                         height,
-                    })) if refused.is_some_and(|size| {
-                        u32::try_from(size.width) == Ok(*width)
-                            && u32::try_from(size.height) == Ok(*height)
-                    }) =>
+                    })) if answered
+                        || retried.is_some_and(|size| {
+                            u32::try_from(size.width) == Ok(*width)
+                                && u32::try_from(size.height) == Ok(*height)
+                        }) =>
                     {
                         state.failure.take()
                     }
@@ -517,7 +523,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             };
             retire(None, stale, first);
         }
-        for (id, error) in refused {
+        for (id, error) in refused.into_iter().flatten() {
             let Some(slot) = self.attached(id) else {
                 let _dropped = first.contain(move || drop(error));
                 continue;
