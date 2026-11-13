@@ -192,10 +192,10 @@ fn an_app_serves_every_older_client_no_break_separates_from_it() {
     let table: &[(&str, ProtocolVersion, ProtocolVersion, bool)] = &[
         ("the same version", PROTOCOL_VERSION, PROTOCOL_VERSION, true),
         ("an older minor", v(0, 9), v(0, 8), true),
-        ("the version that broke", v(0, 9), broke, true),
+        ("the version that broke", PROTOCOL_VERSION, broke, true),
         (
             "a minor before the break",
-            v(0, 9),
+            PROTOCOL_VERSION,
             v(broke.major, broke.minor - 1),
             false,
         ),

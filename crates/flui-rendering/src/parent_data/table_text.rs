@@ -19,6 +19,10 @@ use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the table layout places a cell by each alignment, and a `_` arm would misplace a new one"
+)]
 pub enum TableCellVerticalAlignment {
     /// Align to the top of the row.
     #[default]

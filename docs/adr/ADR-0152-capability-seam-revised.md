@@ -169,7 +169,7 @@ values.
   owner thread whether or not the owner-thread flip lands.
 - Precedence: application override, then built-in, then a single plugin. Two plugins for one
   capability, or two capabilities sharing a `NAME`, fail `Application::run` with
-  `AppRunError::CapabilityConflict` before any window opens, in a deterministic order.
+  `LaunchError::CapabilityConflict` before any window opens, in a deterministic order.
 - No `inventory`/`linkme`. The erased entry point `capability_erased(TypeId, &'static str)` is
   hidden and object-safe; the generic `capability::<C>()` is a blanket `LifecycleContextExt`
   method, so calling it on a `BuildContext` does not compile.
@@ -585,11 +585,10 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   `overrides`, `built_ins` and each `plugin`; `build` answers `CapabilityConflict::Duplicate`
   (one capability twice in one tier, checked in every tier even where a higher one answers) or
   `CapabilityConflict::SharedName`. An application registers through
-  `flui_app::AppCapabilities` (`capability::<C>(provider)`, `plugin(plugin)`), which every
-  platform's one entry point takes in its `AppLaunch` (`run_app`, `run_app_android`), and which
-  `Application::capability` and `Application::plugin` build on the desktop. The conflict is found
-  before the platform is created: the entry point answers `LaunchError::CapabilityConflict`,
-  `Application::run` answers `AppRunError::CapabilityConflict`. `RuntimeHostServices` takes
+  `flui_app::Application`'s `capability::<C>(provider)` and `plugin(plugin)`, the one builder
+  every platform starts a run from (`run_app(root)` is `Application::new().run(root)`). The
+  conflict is found before the platform is created: the run answers
+  `LaunchError::CapabilityConflict`. `RuntimeHostServices` takes
   the registry through `with_capabilities`; without one every acquisition answers
   `NotRegistered`.
 - **The core host's clipboard.** `flui_native::NativeClipboard` is owner-local and

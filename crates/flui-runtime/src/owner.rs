@@ -114,6 +114,10 @@ enum RetiredRuntime {
 
 /// Whether mandatory host cleanup must preserve an already active failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "cleanup either runs normally or preserves a held failure"
+)]
 pub enum RecoveryState {
     /// No failure has occurred in this operation.
     Healthy,

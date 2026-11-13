@@ -28,6 +28,10 @@ use crate::{
 /// How a view answered [`RendererBinding::hit_test_in_view`].
 #[derive(Debug)]
 #[must_use = "a busy tree or a contained panic is lost if the answer is dropped"]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a caller acts on each answer, and a `_` arm would lose a busy tree or a contained panic"
+)]
 pub enum ViewHitTest {
     /// The walk ran; the result holds its path.
     ///

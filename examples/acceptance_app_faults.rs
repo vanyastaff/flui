@@ -24,5 +24,5 @@ fn main() -> Result<(), flui::LaunchError> {
             eprintln!("acceptance_app_faults: {unknown}");
             std::process::exit(2);
         });
-    flui::run_app(AcceptanceApp::new(Faults::from(fault)), app::launch())
+    app::launch().run(AcceptanceApp::new(Faults::from(fault)))
 }

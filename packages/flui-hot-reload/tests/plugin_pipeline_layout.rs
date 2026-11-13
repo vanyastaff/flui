@@ -27,8 +27,9 @@ impl View for Fill {
 /// The area the scene paints: the union of every layer's bounds.
 fn painted_size(scene: &Scene) -> Size {
     let area = scene
-        .tree()
-        .expect("a plugin builds a layer tree")
+        .version()
+        .expect("a plugin hands over its retained version")
+        .flatten()
         .iter()
         .filter_map(|(_, node)| node.layer().bounds())
         .reduce(|a: Rect<f64>, b| a.union(&b))

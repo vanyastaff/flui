@@ -1,28 +1,24 @@
-//! The layer tree as an [`InspectTree`] (ADR-0242), and each layer's own fields.
+//! Each layer's own fields, as the retained scene's [`InspectTree`] reports an effect
+//! (ADR-0242; the tree is `scene::inspect`).
 //!
-//! A node is named by its [`LayerId`] and the tree's [`scene`](LayerTree::scene) (`l4.37`): ids
-//! are minted per frame, so a layer of the next frame's tree is a different node even when it
-//! paints the same thing, and an id kept from an earlier scene is gone here. A layer that a
-//! repaint boundary originated links to that boundary's render object. Its rect is the rectangle
-//! the layer defines in its own coordinates, for the variants that define one. Every variant
-//! reports the parameters that change what it paints: a typed value where the inspect model has
-//! one, and otherwise (a filter, shader, annotation, or a clip shape that is not a rectangle) its
-//! `Debug` text. A clip layer also reports how it rasterises its edge, and a picture a fingerprint
-//! of its commands next to their count, so a changed drawing reads apart. A backdrop filter names
-//! its group as a [`Shared`] object, `BackdropGroup#1`, numbered in the order the snapshot meets
-//! the groups, and an annotated region its payload the same way next to the payload's `Debug` text.
+//! Its rect is the rectangle the layer defines in its own coordinates, for the variants that
+//! define one. Every variant reports the parameters that change what it paints: a typed value
+//! where the inspect model has one, and otherwise (a filter, shader, annotation, or a clip shape
+//! that is not a rectangle) its `Debug` text. A clip layer also reports how it rasterises its
+//! edge, and a picture a fingerprint of its commands next to their count, so a changed drawing
+//! reads apart. A backdrop filter names its group as a [`Shared`] object, `BackdropGroup#1`,
+//! numbered in the order the snapshot meets the groups, and an annotated region its payload the
+//! same way next to the payload's `Debug` text.
+//!
+//! [`InspectTree`]: flui_foundation::inspect::InspectTree
 
 use core::fmt::{self, Write as _};
-use flui_foundation::LayerId;
-use flui_foundation::inspect::{
-    Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, SceneLayer, Shared,
-    Unit, Untyped, Value,
-};
+use flui_foundation::inspect::{Fields, Inspect, Level, Shared, Unit, Untyped, Value};
 use std::hash::{DefaultHasher, Hasher};
 
 use flui_painting::DisplayList;
 
-use crate::{Layer, LayerTree};
+use crate::Layer;
 
 impl Inspect for Layer {
     fn kind(&self) -> &'static str {
@@ -154,58 +150,10 @@ impl Inspect for Layer {
     }
 }
 
-impl LayerTree {
-    /// `id` as a layer of this scene.
-    fn in_scene(&self, id: LayerId) -> SceneLayer {
-        SceneLayer {
-            scene: self.scene(),
-            id,
-        }
-    }
-
-    /// The layer `id` names, when it names one of this scene.
-    fn layer_id(&self, id: InspectId) -> Option<LayerId> {
-        match id.link() {
-            Link::Layer(layer) if layer.scene == self.scene() => Some(layer.id),
-            _ => None,
-        }
-    }
-}
-
-impl InspectTree for LayerTree {
-    type Node = Layer;
-
-    fn root(&self) -> Option<InspectId> {
-        Some(self.in_scene(LayerTree::root(self)).into())
-    }
-
-    fn node(&self, id: InspectId) -> Option<NodeView<'_, Layer>> {
-        let id = self.layer_id(id)?;
-        let node = self.get(id)?;
-        Some(NodeView {
-            object: node.layer(),
-            rect: node.layer().bounds(),
-            links: Links {
-                layer: Some(self.in_scene(id)),
-                render: node.render_id(),
-                ..Links::default()
-            },
-        })
-    }
-
-    fn children(&self, id: InspectId) -> impl Iterator<Item = InspectId> + '_ {
-        self.layer_id(id)
-            .and_then(|id| LayerTree::children(self, id))
-            .unwrap_or_default()
-            .iter()
-            .map(|&child| self.in_scene(child).into())
-    }
-}
-
 /// A fingerprint of a display list's commands, so two pictures of one length and bounds that
 /// draw differently read apart. It hashes each command's `Debug` text as it is written, keeping
 /// none of it; equal within one build of the program, not across builds.
-fn fingerprint(list: &DisplayList) -> u64 {
+pub(crate) fn fingerprint(list: &DisplayList) -> u64 {
     struct Hashing(DefaultHasher);
 
     impl fmt::Write for Hashing {

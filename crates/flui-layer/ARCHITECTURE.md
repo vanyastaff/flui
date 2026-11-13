@@ -221,9 +221,12 @@ entries are the old ones. `ContentVersion` and `SceneVersionId` draw from one `I
 under a `Lineage` from a process `AtomicIdMint`, so a replaced or renewed owner never repeats one;
 a spent sequence refuses with `VersionsExhausted`; `renew` starts a new lineage, runs the
 sequence on unless it is spent, and starts with empty
-slots, whose next publication is `Full(Resync(_))`. `SceneVersion::flatten` is the layer tree the
-oracle a walked frame is compared against (ADR-0304 §11): the engine walks the version itself, and
-the agent's layer reads are the one production reader left ([`docs/gaps.md`](../../docs/gaps.md)).
+slots, whose next publication is `Full(Resync(_))`. Nothing in production builds a layer tree from
+a version: the engine walks it, and the inspector reads it in place as an `InspectTree`
+(`src/scene/inspect.rs`), naming a boundary by its slot, generation and lineage and an effect or
+chunk by its position in the boundary's content, so an id survives every frame that keeps the
+boundary. `SceneVersion::flatten`, behind the `testing` feature, is the oracle both are compared
+against (ADR-0304 §11).
 
 An apply's damage is the footprint of its operations (ADR-0304 §4, `src/scene/footprint.rs`),
 read under the version before and the version after. A node record keeps its subtree bounds in

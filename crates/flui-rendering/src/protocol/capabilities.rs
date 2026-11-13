@@ -117,6 +117,10 @@ pub enum ChildLayout {
 /// change what every such parent may keep, so it has to fail to compile there.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[must_use = "a stand-in is not a measurement; match on it or call size()"]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a child's size is measured or a stand-in, and a caller must tell them apart"
+)]
 pub enum BoxChildSize {
     /// The child produced this size.
     Measured(Size),

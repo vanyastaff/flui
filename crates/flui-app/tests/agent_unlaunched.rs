@@ -5,9 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_app::app::{
-    AppConfig, Application, ExitPolicy, StartupWindow, WindowPolicy, open_secondary_window,
-};
+use flui_app::app::{AppConfig, Application, ExitPolicy, WindowPolicy, open_secondary_window};
 use flui_app::testing::HeadlessRun;
 use flui_protocol::launch::ENDPOINT_ENV;
 
@@ -28,16 +26,16 @@ fn an_app_launched_without_an_endpoint_starts_no_agent() {
     );
     let opened = Rc::new(RefCell::new(false));
     let ready = Rc::clone(&opened);
-    let application =
-        Application::new(|_| -> flui_widgets::Text { panic!("no main window is opened") })
-            .startup_window(StartupWindow::None)
-            .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed))
-            .on_ready(move |_| {
-                open_secondary_window(AppConfig::new(), WindowPolicy::Isolated)
-                    .expect("an isolated window opens on the headless platform");
-                ready.replace(true);
-            });
-    let run = HeadlessRun::start(application);
+    let application = Application::new()
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed))
+        .on_ready(move |_| {
+            open_secondary_window(AppConfig::new(), WindowPolicy::Isolated)
+                .expect("an isolated window opens on the headless platform");
+            ready.replace(true);
+        });
+    let run = HeadlessRun::start_resident(application, |_| -> flui_widgets::Text {
+        panic!("no main window is opened")
+    });
     run.run_owner_turn();
     assert!(*opened.borrow(), "the app is up with its window");
 

@@ -149,7 +149,9 @@ impl HeadlessRenderer {
     ///
     /// The surface is cleared to opaque white before the scene is drawn, so
     /// any area the scene does not paint reads as white rather than
-    /// uninitialized GPU memory. A capture that failed or unwound costs the
+    /// uninitialized GPU memory. A capture returns once the work it submitted
+    /// has retired, refused or not, so the next one starts with the whole
+    /// prepared budget. A capture that failed or unwound costs the
     /// next one a fresh painter, not a failure.
     ///
     /// # Errors
@@ -183,17 +185,32 @@ impl HeadlessRenderer {
             .try_borrow_mut()
             .map_err(|_busy| EngineError::FrameAlreadyActive)?;
         let Capture { context, slot } = &mut *capture;
-        let slot = if let Some(attached) = *slot {
-            context.resize_slot(attached, size)?;
-            attached
-        } else {
-            // The renderer's one slot: the only id its own mint issues.
-            let id = SlotMint::default().mint()?;
-            context.attach_offscreen(id, size, CAPTURE_FORMAT)?;
-            *slot.insert(id)
-        };
-        context.render_slot(slot, content)?;
-        context.read_slot(slot)
+        // One that unwound partway left its work in flight too.
+        drain(context)?;
+        let captured = (|| {
+            let slot = if let Some(attached) = *slot {
+                context.resize_slot(attached, size)?;
+                attached
+            } else {
+                // The renderer's one slot: the only id its own mint issues.
+                let id = SlotMint::default().mint()?;
+                context.attach_offscreen(id, size, CAPTURE_FORMAT)?;
+                *slot.insert(id)
+            };
+            context.render_slot(slot, content)?;
+            context.read_slot(slot)
+        })();
+        // A capture is synchronous, so it returns once its work has retired,
+        // refused or not. One that reaches its readback has waited for that
+        // work already; one refused partway (a frame past the prepared
+        // budget) leaves what it submitted before the refusal in flight, and
+        // on a hardware queue the next capture would find that room still
+        // held and answer `GpuBackpressure` for room that is only late. The
+        // capture's own failure is the one it reports.
+        let drained = drain(context);
+        let pixels = captured?;
+        drained?;
+        Ok(pixels)
     }
 
     /// A capture that keeps its frames: see [`RetainedCapture`].
@@ -824,6 +841,25 @@ const fn readback_wait<T>(submission: T) -> wgpu::wgt::PollType<T> {
     }
 }
 
+/// The poll that drains a capture's device: every submission so far, at most
+/// [`READBACK_TIMEOUT`].
+const fn drain_wait() -> wgpu::wgt::PollType<wgpu::SubmissionIndex> {
+    wgpu::wgt::PollType::Wait {
+        submission_index: None,
+        timeout: Some(READBACK_TIMEOUT),
+    }
+}
+
+/// Waits for every submission on `context`'s device and retires what it held.
+fn drain(context: &GpuContext) -> EngineResult<()> {
+    readback_wait_outcome(
+        context.domain().device().poll(drain_wait()),
+        READBACK_TIMEOUT,
+    )?;
+    context.domain().poll()?;
+    Ok(())
+}
+
 /// The readback wait's outcome as the capture's result: a wait that ran out
 /// is [`EngineError::ReadbackTimedOut`]; a wrong submission index cannot
 /// happen, because the index is the one the copy's own submit returned.
@@ -961,6 +997,67 @@ mod twin_readback_tests {
         );
     }
 
+    /// A capture returns once its work has retired, so one refused partway
+    /// leaves nothing in flight that holds the budget: the next capture of a
+    /// frame that does not fit is refused for good, as when nothing came
+    /// before it, not held back with `GpuBackpressure`.
+    ///
+    /// A capture of a frame past the budget, then the whole budget reserved
+    /// at once.
+    ///
+    /// Red-check: drop the drain after the capture in `render_content` and
+    /// the reserve answers `Backpressure`.
+    fn a_refused_capture_returns_with_its_work_retired() {
+        use crate::error::EngineError;
+        use flui_foundation::geometry::{Point, Rect};
+        use flui_layer::{BackdropFilterLayer, Layer, PictureLayer};
+        use flui_painting::paint::{BlendMode, ImageFilter};
+
+        let Some(renderer) = crate::test_support::renderer_or_skip() else {
+            return;
+        };
+        let side = 4096_u32;
+        let span = f64::from(side);
+        let mut canvas = flui_painting::Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, span, span),
+            &flui_painting::Paint::fill(flui_painting::styling::Color::WHITE),
+        );
+        let mut tree = LayerTree::new(Layer::from(PictureLayer::new(canvas.finish())));
+        for _ in 0..3 {
+            tree.push_child(
+                tree.root(),
+                Layer::from(BackdropFilterLayer::new(
+                    ImageFilter::try_magnify(Point::new(span / 2.0, span / 2.0), 1024.0)
+                        .expect("a valid scale"),
+                    BlendMode::Multiply,
+                    Rect::from_xywh(0.0, 0.0, span, span),
+                )),
+            );
+        }
+        // Refused partway, after it submitted its target clear and the passes
+        // before the refusal.
+        let outcome = renderer.render_layer_tree(&tree, (side, side));
+        assert!(
+            matches!(
+                outcome,
+                Err(EngineError::PreparedResourceLimit {
+                    resource: "GPU payload bytes",
+                    ..
+                })
+            ),
+            "{:?}",
+            outcome.map(|bytes| bytes.len())
+        );
+        let domain = std::sync::Arc::clone(renderer.context().domain());
+        let whole = crate::device_domain::PreparedIrLimits::default().cost;
+        let reserved = domain.reserve(whole).map(drop);
+        assert!(
+            reserved.is_ok(),
+            "the refused capture's work still holds the budget: {reserved:?}"
+        );
+    }
+
     /// A capture that unwinds in the middle of its frame costs the next one a
     /// fresh painter over the same pipelines, not a failure: the painter is
     /// taken for the frame, so the unwound frame's half-recorded state never
@@ -1020,6 +1117,7 @@ mod twin_readback_tests {
         // zero-sized or overflowing capture is a typed error, not a panic.
         super::target_size_tests::zero_sized_capture_is_a_typed_error();
         an_unwound_capture_leaves_the_next_capture_drawing();
+        a_refused_capture_returns_with_its_work_retired();
         repeated_capture_resizes_and_recovers_after_invalid_geometry();
         let instances = || crate::gpu_context::INSTANCES_CREATED.with(std::cell::Cell::get);
         for _ in 0..12 {

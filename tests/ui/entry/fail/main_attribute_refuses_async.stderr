@@ -1,0 +1,5 @@
+error: `#[flui::main]` function cannot be `async`; the run drives its own loop: write `pub fn run() -> Result<(), flui::LaunchError>`
+ --> tests/ui/entry/fail/main_attribute_refuses_async.rs:3:5
+  |
+3 | pub async fn run() -> Result<(), flui::LaunchError> {
+  |     ^^^^^

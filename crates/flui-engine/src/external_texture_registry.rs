@@ -28,6 +28,10 @@ pub enum ExternalSampling {
 
 /// How the encoded source components represent coverage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "encoded coverage is opaque, straight or premultiplied"
+)]
 pub enum ExternalAlpha {
     /// Coverage is one; the stored alpha channel is ignored.
     Opaque,

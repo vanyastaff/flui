@@ -6,6 +6,7 @@ mod content;
 mod footprint;
 mod geometry;
 mod id;
+mod inspect;
 mod owner;
 mod pending;
 mod table;
