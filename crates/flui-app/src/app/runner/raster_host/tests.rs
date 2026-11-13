@@ -14,7 +14,9 @@ use flui_foundation::{
 use flui_layer::{DamageMode, DamageRegion, ScenePublication};
 use flui_runtime::sink::SubmitVerdict;
 
-use super::{RasterFactory, RasterHost, RestorePace, damage_mode_from};
+use super::{
+    RasterFactory, RasterHost, RasterSlot, RestorePace, SharedRasterHost, damage_mode_from,
+};
 
 const SIZE: (u32, u32) = (640, 480);
 
@@ -613,6 +615,8 @@ impl CountingNoSurface {
 /// Red-check: let `surface_on_pace` exclude any refused size (not only
 /// the one the window wants) and the window at its new size gets no
 /// deadline; drop its visibility check and the hidden window reports one.
+/// Drop the pace reset on `Shown` and the frame after it, stamped before the
+/// refusal armed the pace, makes no surface.
 #[test]
 fn a_surface_is_paced_only_for_a_shown_window_at_a_size_the_device_takes() {
     let (mut host, slots) = host();
@@ -628,6 +632,9 @@ fn a_surface_is_paced_only_for_a_shown_window_at_a_size_the_device_takes() {
     let _ = host.submit(address(), over, scene.publication());
     let _ = host.set_surface(address(), false);
     slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+    // The frame that follows is stamped with the instant before the refusal,
+    // so its pace, armed at the refusal, is not due by the clock alone.
+    let before_refusal = web_time::Instant::now();
     assert!(!host.set_surface(address(), true));
     assert_eq!(hold(&host), SurfaceHold::Refused);
     assert_eq!(
@@ -647,9 +654,10 @@ fn a_surface_is_paced_only_for_a_shown_window_at_a_size_the_device_takes() {
     host.set_visibility(address(), flui_engine::SlotVisibility::Hidden);
     assert_eq!(host.surface_retry_at(), None, "no frame would serve it");
     host.set_visibility(address(), flui_engine::SlotVisibility::Shown);
-    // Shown again, the window tries at once: its first frame makes it.
+    // Shown again, the window tries at once, at an instant its old pace
+    // would not admit: its first frame makes it.
     let tried = restores(&slots);
-    assert!(host.before_frame(address(), web_time::Instant::now(), None, false));
+    assert!(host.before_frame(address(), before_refusal, None, false));
     assert_eq!(restores(&slots), tried + 1);
     assert_eq!(hold(&host), SurfaceHold::Held);
 }
@@ -724,32 +732,58 @@ fn what_the_full_queue_refused_is_sent_again() {
     );
 }
 
-/// A surface deadline is its own window's: another window's frame gate
-/// does not count it, so a window the platform stopped sending frames to
-/// cannot make every other window render on each wake.
+/// A surface deadline is its own window's: another window's frame gate and
+/// wake hook do not count it, so a window whose frames are off, or that the
+/// platform stopped sending frames to, cannot make the loop wake and every
+/// other window render for an instant only its own frame moves.
 ///
-/// Red-check: answer the host-wide `surface_retry_at` from
-/// `surface_retry_at_for` and the other window reports the deadline too.
+/// Red-check: answer `RasterHost::window_deadline` or
+/// `RasterSlot::frame_deadline` from the host-wide `surface_retry_at` and
+/// the other window reports the deadline too.
 #[test]
 fn a_surface_deadline_is_only_its_own_windows() {
-    let (mut host, slots) = self::host();
-    let mut scene = TestScene::new(AT);
-    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    let slots = ScriptedSlots::new();
+    let shared = SharedRasterHost::new(RasterFactory::Scripted(slots.clone()));
     let other = PresentationAddress {
         ui_runtime_id: UiRuntimeId::new(1),
         presentation_id: PresentationId::new(2),
     };
-    host.attach_target(
-        Arc::new(FakeWindow::new(2)),
-        other,
-        &crate::app::AppConfig::default(),
-        None,
-        None,
-    )
-    .expect("the scripted backend attaches any window");
-    let _ = host.set_surface(address(), false);
-    slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
-    assert!(!host.set_surface(address(), true));
-    assert!(host.surface_retry_at_for(address()).is_some());
-    assert_eq!(host.surface_retry_at_for(other), None);
+    for (window, at) in [(1, address()), (2, other)] {
+        shared
+            .try_with(|host| {
+                host.attach_target(
+                    Arc::new(FakeWindow::new(window)),
+                    at,
+                    &crate::app::AppConfig::default(),
+                    None,
+                    None,
+                )
+            })
+            .expect("the host is idle")
+            .expect("the scripted backend attaches any window");
+    }
+    let slot = |at| RasterSlot {
+        host: shared.clone(),
+        address: at,
+        size: SIZE,
+        device: DeviceHealth::Healthy,
+    };
+    let (own, others) = (slot(address()), slot(other));
+    let mut scene = TestScene::new(AT);
+    shared
+        .try_with(|host| assert_eq!(scene.submit(host), SubmitVerdict::Presented))
+        .expect("the host is idle");
+    shared
+        .try_with(|host| {
+            let _ = host.set_surface(address(), false);
+            slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+            assert!(!host.set_surface(address(), true));
+        })
+        .expect("the host is idle");
+
+    assert!(own.frame_deadline().is_some(), "its own frame serves it");
+    assert_eq!(others.frame_deadline(), None, "no frame of this one does");
+    shared
+        .try_read(|host| assert_eq!(host.window_deadline(other), None))
+        .expect("the host is idle");
 }

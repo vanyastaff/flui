@@ -1045,7 +1045,7 @@ impl RasterHost {
 
     /// Make `address`'s window the surface it is owed once its pace is due at
     /// `now`, with no frame of its own: the deadline
-    /// [`surface_retry_at`](Self::surface_retry_at) reports is served by the
+    /// [`window_deadline`](Self::window_deadline) reports is served by the
     /// wake it schedules, and the attempt moves it on, so a window the
     /// backend keeps refusing does not hand the loop the same past instant
     /// again. Answers whether the window holds a surface again.
@@ -1094,6 +1094,17 @@ impl RasterHost {
     }
 
     /// The earliest moment a window owed a surface may try for one again.
+    #[cfg_attr(
+        not(any(
+            target_os = "android",
+            target_os = "ios",
+            all(test, feature = "testing")
+        )),
+        expect(
+            dead_code,
+            reason = "only the one-window mobile loops wake for the whole host"
+        )
+    )]
     fn surface_retry_at(&self) -> Option<Instant> {
         let placed = self.placed.as_ref()?;
         placed
@@ -1118,6 +1129,20 @@ impl RasterHost {
         slot.surface_on_pace(&record.surface)
             .then_some(slot.restore.next)
             .flatten()
+    }
+
+    /// The deadline `address`'s own frame serves, which both its wake hook
+    /// and its frame's dirty gate count: the device's next rebuild, which
+    /// any window's turn runs, and the next attempt at the surface this
+    /// window is owed. Another window's surface deadline is that window's:
+    /// counted here, a window whose frames are off would hand the loop a
+    /// past instant through this one on every wake, which this window's
+    /// frame cannot move.
+    pub(crate) fn window_deadline(&self, address: PresentationAddress) -> Option<Instant> {
+        match (self.device_retry_at(), self.surface_retry_at_for(address)) {
+            (Some(device), Some(surface)) => Some(device.min(surface)),
+            (device, surface) => device.or(surface),
+        }
     }
 
     /// Whether the device refused `surface`, the size `address`'s window is
@@ -1381,10 +1406,18 @@ impl FrameSink for SlotFrame {
     }
 }
 
-/// When the loop's raster host next has work of its own, for a window's wake
-/// deadline: the executor's next rebuild of a lost device, or a window's next
-/// attempt at a surface it is owed. `None` while the host is turning: the
-/// turn that is running answers it.
+/// When the loop's raster host next has work of its own, for the wake of a
+/// loop with one window (Android, iOS): the executor's next rebuild of a lost
+/// device, or the window's next attempt at a surface it is owed. A loop with
+/// several windows asks each window ([`raster_wake_at_for`]). `None` while
+/// the host is turning: the turn that is running answers it.
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "ios")),
+    expect(
+        dead_code,
+        reason = "only the one-window mobile loops wake for the whole host"
+    )
+)]
 pub(crate) fn raster_wake_at() -> Option<Instant> {
     super::host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
@@ -1394,6 +1427,24 @@ pub(crate) fn raster_wake_at() -> Option<Instant> {
                 (device, surface) => device.or(surface),
             }
         })?
+    })
+}
+
+/// When the loop's raster host next has work that `address`'s window serves,
+/// for that window's wake deadline: [`RasterHost::window_deadline`]. A window
+/// whose frames are off asks for no wake, so its surface deadline is not
+/// handed to the loop by another window, whose frames would not serve it.
+/// `None` while the host is turning: the turn that is running answers it.
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    expect(dead_code, reason = "the mobile loops have one window")
+)]
+pub(crate) fn raster_wake_at_for(address: PresentationAddress) -> Option<Instant> {
+    super::host::APP_RUNTIME.with(|slot| {
+        let state = slot.try_borrow().ok()?;
+        state
+            .raster_host
+            .try_read(|host| host.window_deadline(address))?
     })
 }
 
@@ -1436,21 +1487,11 @@ impl RasterSlot {
     }
 
     /// The deadline this window's own frame serves, for its wake's dirty
-    /// gate: the device's next rebuild, which any window's turn runs, and
-    /// the next attempt at the surface this window is owed. Another
-    /// window's surface deadline is that window's: counting it here would
-    /// render this window on every wake while the other gets none
-    /// (a window the platform stopped sending frames to), and hand the
-    /// loop the same past instant again after each frame.
+    /// gate: [`RasterHost::window_deadline`], the one its wake hook reports.
     pub(crate) fn frame_deadline(&self) -> Option<Instant> {
         let address = self.address;
         self.host
-            .try_read(
-                |host| match (host.device_retry_at(), host.surface_retry_at_for(address)) {
-                    (Some(device), Some(surface)) => Some(device.min(surface)),
-                    (device, surface) => device.or(surface),
-                },
-            )
+            .try_read(|host| host.window_deadline(address))
             .flatten()
     }
 
@@ -1493,7 +1534,7 @@ impl RasterSlot {
     /// full. After it: the frame's GPU
     /// panic goes to the application's frame-failure handler, and a device
     /// the frame lost is reported with the frames it drops; its rebuild is
-    /// due at the executor's deadline, which [`raster_wake_at`] reads.
+    /// due at the executor's deadline, which [`RasterHost::window_deadline`] reads.
     pub(crate) fn pump(
         &mut self,
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,

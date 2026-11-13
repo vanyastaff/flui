@@ -107,8 +107,10 @@ pub(super) fn wake_action(
 /// Four sources, all required: `inbox_redraw` (a command drained this frame
 /// boundary asked for a redraw), `needs_redraw`/`has_pending_work` (the
 /// UI runtime's own pre-existing dirty state), and `next_attempt_at.is_some()` —
-/// an armed raster deadline (`raster_wake_at`: a device rebuild or a surface
-/// restore the raster host paces). Dropping that last term loses the
+/// an armed raster deadline of the window's own (`RasterSlot::frame_deadline`:
+/// a device rebuild, or a restore of this window's surface the raster host
+/// paces; the window's wake hook reports the same deadline). Dropping that
+/// last term loses the
 /// deadline: wired into the wake-deadline hook but invisible to this gate,
 /// it reaches `WakeAction::Skip` and returns before the raster host's turn
 /// (`RasterSlot::pump`) is ever reached, no matter how faithfully the
