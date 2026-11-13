@@ -6,7 +6,7 @@
 
 [cupertino_button_over_text]
 allocations = 141
-bytes = 13261
+bytes = 13253
 elements = 9
 reallocations = 1
 render_nodes = 6

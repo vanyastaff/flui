@@ -542,6 +542,14 @@ fn navigation_and_layout_contracts() {
             tabs::mixed_and_empty_tab_bars_keep_their_content_height_rules,
         ),
         (
+            "tabs::a tab is one node that takes its contents and their actions",
+            tabs::a_tab_is_one_node_that_takes_its_contents_and_their_actions,
+        ),
+        (
+            "tabs::a selection change keeps every tab in place",
+            tabs::a_selection_change_keeps_every_tab_in_place,
+        ),
+        (
             "app_bar::tapping the implied back button pops the route",
             app_bar::tapping_the_implied_back_button_pops_the_route,
         ),
