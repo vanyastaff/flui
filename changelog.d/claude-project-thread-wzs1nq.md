@@ -46,3 +46,8 @@
   errors (`RasterCommand`, `SlotTarget`, `SlotChange`, `SlotVisibility`, `SlotPhase`, `SlotFailure`,
   `ExecutorHealth`, `DeviceHealth`, `RasterSendError`, `RasterSubmitError`, `FrameDropReason`) and
   its testing enums.
+- Also `#[non_exhaustive]` (ADR-0329): the painting `TextAlign`, `TextAlignVertical`, `TextOverflow`,
+  `TextWidthBasis`, `TextLeadingDistribution`, `PlaceholderAlignment`, `FontStyle`, `FilterQuality`,
+  `ImageRepeat`, `ClipBehavior`, `BorderStyle`, `BorderPosition`, `PhysicalShape`, `MaterialType`,
+  `ShadowQuality`, `BlurQuality`, `BlurMode`, `ColorAdjustment`, `PathPaintMode`, `FaceRef` and
+  the painting error enums.

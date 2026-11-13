@@ -6,6 +6,7 @@ use flui_foundation::geometry::traits::{NumericUnit, Unit};
 /// Style of a border.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum BorderStyle {
     /// Draw the border as a solid line.
     #[default]
@@ -241,6 +242,7 @@ impl<T: Unit> Default for BorderSide<T> {
 /// Physical position of a border side on a box.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum BorderPosition {
     /// Top side of the border
     Top,
