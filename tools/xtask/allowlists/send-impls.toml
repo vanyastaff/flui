@@ -82,4 +82,3 @@ traits = ["Send", "Sync"]
 crate = "flui-native"
 type = "WindowsAccessibility"
 traits = ["Send", "Sync"]
-
