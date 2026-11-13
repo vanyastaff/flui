@@ -209,9 +209,7 @@ mod sealed {
 /// Downstream crates cannot add new variants — this preserves engine-level
 /// dispatch invariants and lets the compiler monomorphise the clip-emission
 /// path per shape.
-pub trait ClipGeometry:
-    sealed::Sealed + Clone + fmt::Debug + PartialEq + 'static
-{
+pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + PartialEq + 'static {
     /// Diagnostics label (`RenderClipRect`, `RenderClipRRect`, …).
     ///
     /// Generic `RenderClip<S>` would otherwise surface as
