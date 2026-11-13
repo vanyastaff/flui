@@ -501,38 +501,45 @@ impl WebState {
 // never leaves the page's one thread.
 static_assertions::assert_not_impl_any!(WebLoop: Send, Sync);
 
-/// The running loop the owner signal's wake hook reaches. The hook is
-/// `Send + Sync`, as the signal holds every host's, and the loop is neither,
-/// so the hook carries only its loop's state and finds the loop here, on the
-/// page's one thread.
+/// A loop that ran on the page, which the owner signal's wake hook reaches.
+/// The hook is `Send + Sync`, as the signal holds every host's, and the loop is
+/// neither, so the hook carries only its loop's state and finds the loop here,
+/// on the page's one thread. Every loop that entered and is alive has its
+/// entry: a second loop on the page leaves the first one's wakes and quit
+/// reaching it.
 struct PageLoop {
-    /// The state of the loop that entered: a hook of another loop's state
-    /// finds nothing.
+    /// The state of the loop that entered: a hook finds the entry of its own
+    /// loop's state and no other.
     state: Weak<Mutex<WebState>>,
     owner: Weak<WebLoop>,
 }
 
 thread_local! {
-    static PAGE_LOOP: RefCell<Option<PageLoop>> = const { RefCell::new(None) };
+    static PAGE_LOOPS: RefCell<Vec<PageLoop>> = const { RefCell::new(Vec::new()) };
 }
 
 impl PageLoop {
-    /// `owner` runs: the wake hook of its state reaches it from now on.
+    /// `owner` runs: the wake hook of its state reaches it from now on. The
+    /// entries of loops that are gone are dropped here, so the list holds the
+    /// live loops only.
     fn enter(owner: &Arc<WebLoop>) {
         let entered = PageLoop {
             state: Arc::downgrade(&owner.state),
             owner: Arc::downgrade(owner),
         };
-        // The replaced entry holds only weak handles: dropping it runs no
-        // loop code.
-        let _replaced = PAGE_LOOP.replace(Some(entered));
+        // The entries hold weak handles only: dropping one runs no loop code.
+        PAGE_LOOPS.with_borrow_mut(|loops| {
+            loops.retain(|page| page.owner.strong_count() > 0);
+            loops.push(entered);
+        });
     }
 
     /// The loop whose state is `state`, if it entered and is still alive.
     fn of(state: &Weak<Mutex<WebState>>) -> Option<Arc<WebLoop>> {
-        PAGE_LOOP.with_borrow(|page| {
-            page.as_ref()
-                .filter(|page| Weak::ptr_eq(&page.state, state))
+        PAGE_LOOPS.with_borrow(|loops| {
+            loops
+                .iter()
+                .find(|page| Weak::ptr_eq(&page.state, state))
                 .and_then(|page| page.owner.upgrade())
         })
     }
