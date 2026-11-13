@@ -1105,6 +1105,10 @@ trait depends on `flui-platform` instead.
   ends before it would block, so they are applied first, and a flush the socket cut short makes the
   wait watch the socket for writing (`wait::before_poll`). A frame callback a
   skipped present never committed is given up after `frame::CALLBACK_GRACE`.
+  The loop belongs to the thread that made it: its event queue, window table
+  and the outputs the compositor announces are `Rc`/`RefCell` state of that
+  thread (ADR-0327 §5), while the objects' dispatch data stays `Send + Sync`,
+  as `wayland-client` requires of it.
   The host and the display source connect to the one socket `WAYLAND_DISPLAY`
   names. The window (`window::linux::wayland`) sizes its surface
   through `wp_viewport`, so a buffer of any size is valid during a resize and
