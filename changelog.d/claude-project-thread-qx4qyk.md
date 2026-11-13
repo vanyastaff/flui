@@ -31,3 +31,5 @@
   `RawChip` is: its label, its `identifier` and its disabled state stay on it instead of folding
   into the row or toolbar that holds it. The chip describes itself on its well, one element and
   one render node fewer per chip.
+- A `Chip` or `FilterChip` delete button is a button node of its own, disabled with its chip, so
+  activating a chip without `on_pressed` no longer deletes it.
