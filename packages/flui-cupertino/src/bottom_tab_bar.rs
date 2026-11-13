@@ -17,8 +17,8 @@
 //! - `opaque(ctx)`: whether the resolved background is fully opaque —
 //!   consumed by [`crate::CupertinoTabScaffold`]'s content-padding math (the
 //!   opaque and translucent branches).
-//! - Per-item `Semantics(selected: active)`, with each item keeping its own
-//!   semantics node rather than merging into one.
+//! - Each item is one node, its interactive node's: the selection and the
+//!   label's text in it, and the click while the bar has `on_tap`.
 //!
 //! ## `CupertinoTabBarItem`, not a shared item type
 //!
@@ -54,10 +54,11 @@ use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::interaction::node::{ControlTap, Description, InteractiveNode};
 use flui_sdk::widgets::{
-    Column, CrossAxisAlignment, DecoratedBox, DefaultTextStyle, Expanded, GestureDetector,
-    HitTestBehavior, IconTheme, IconThemeData, MainAxisAlignment, Padding, PreferredSizeView, Row,
-    Semantics, SizedBox, Text,
+    Column, CrossAxisAlignment, DecoratedBox, DefaultTextStyle, Expanded, HitTestBehavior,
+    IconTheme, IconThemeData, MainAxisAlignment, Padding, PreferredSizeView, Row, Semantics,
+    SemanticsRole, SizedBox, Text,
 };
 
 use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
@@ -361,19 +362,23 @@ impl StatelessView for CupertinoTabBar {
                     ),
                 );
 
-                let mut detector = GestureDetector::new().behavior(HitTestBehavior::Opaque);
+                // Flutter's `Semantics(selected:)` and opaque `GestureDetector`
+                // around the item are one interactive node here (ADR-0322
+                // §1): its description carries the selection, and the label's
+                // text joins the item's node as it joined that `Semantics`.
+                // Its tap, while the bar has `on_tap`, offers the click. An
+                // item without a tap is not disabled, only inert, so the node
+                // stays enabled.
+                let mut node = InteractiveNode::new(content)
+                    .behavior(HitTestBehavior::Opaque)
+                    .semantics(Description::new(SemanticsRole::None).selected(is_active));
                 if let Some(on_tap) = self.on_tap.clone() {
-                    detector = detector.on_tap(move |ctx| on_tap(ctx, index));
+                    node = node.tap(ControlTap::new().on_tap(move |ctx| on_tap(ctx, index)));
                 }
 
-                // `selected` is set; the localized `hint` is deferred (no
+                // The localized `hint` is deferred (no
                 // `CupertinoLocalizations`-equivalent tab label in this crate).
-                Expanded::new(
-                    Semantics::new()
-                        .selected(is_active)
-                        .child(detector.child(content)),
-                )
-                .boxed()
+                Expanded::new(node).boxed()
             })
             .collect();
 
