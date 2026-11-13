@@ -583,11 +583,10 @@ impl SceneOwner {
                 let forward = self.acked.is_none_or(|acked| rastered.seq() > acked.seq());
                 rastered.lineage() == self.lineage && rastered.seq() <= current.seq() && forward
             })
-            .map(|rastered| {
+            .map_or_default(|rastered| {
                 self.acked = Some(rastered);
                 self.pending.acknowledge(rastered)
-            })
-            .unwrap_or_default();
+            });
         self.released(contents)
     }
 
