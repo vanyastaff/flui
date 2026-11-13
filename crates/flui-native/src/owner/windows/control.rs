@@ -628,13 +628,15 @@ pub(crate) struct WindowsOwnerHooks {
 
 impl WindowsOwnerHooks {
     pub(crate) fn new(platform: Arc<dyn Platform>, control: &OwnerControl) -> Self {
-        // The owner window gone, registration is refused through the gate
-        // below, so the direct hooks' slot is never driven.
-        let turn = control
-            .shares("owner hooks")
-            .map_or_else(|_| Rc::default(), |shares| shares.turn);
         Self {
-            direct: DirectOwnerHooks::with_signal(platform, Arc::clone(&control.signal), turn),
+            // The callback goes to the owner context's slot through the gate
+            // below; the direct hooks get a slot of their own, never
+            // registered into, so the context's slot dies with the context.
+            direct: DirectOwnerHooks::with_signal(
+                platform,
+                Arc::clone(&control.signal),
+                Rc::default(),
+            ),
             signal: Arc::clone(&control.signal),
             gate: control.gate(),
         }
