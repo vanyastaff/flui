@@ -74,6 +74,10 @@ pub struct Canvas {
 /// once, and the scan an intern costs stays short.
 const KEPT_PAINTS: usize = 4;
 
+/// The most saved states whose room [`Canvas::take_recording`] keeps for the
+/// next recording.
+const KEPT_SAVES: usize = 32;
+
 /// A paint of the canvas's pool and whether its values are finite.
 #[derive(Debug, Clone)]
 pub(crate) struct InternedPaint {
@@ -168,6 +172,14 @@ impl Canvas {
             .retain(|interned| interned.paint.shader.is_none());
         let surplus = self.paint_pool.len().saturating_sub(KEPT_PAINTS);
         self.paint_pool.drain(..surplus);
+        // The canvas lives on between recordings: one that interned or saved
+        // far more than the next needs keeps none of that room.
+        if self.paint_pool.spilled() {
+            self.paint_pool.shrink_to_fit();
+        }
+        if self.save_stack.capacity() > KEPT_SAVES {
+            self.save_stack = Vec::new();
+        }
         recording
     }
 
@@ -226,6 +238,14 @@ impl Canvas {
     }
 
     // ===== Query Methods =====
+
+    /// The room, in paints and in saved states, the canvas holds for its next
+    /// recording.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn kept_room(&self) -> (usize, usize) {
+        (self.paint_pool.capacity(), self.save_stack.capacity())
+    }
 
     /// Returns `true` if no drawing commands have been recorded.
     #[inline]

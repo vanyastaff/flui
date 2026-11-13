@@ -194,6 +194,27 @@ pub(crate) fn a_taken_recording_shares_its_plain_paints_with_the_next() {
     );
 }
 
+/// A canvas kept between recordings lets go of the room a recording that
+/// interned many paints or saved deeply grew, so one heavy frame does not pin
+/// its memory for every frame after it.
+pub(crate) fn a_taken_recording_lets_go_of_a_heavy_frames_room() {
+    let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+    let mut canvas = Canvas::new();
+    for shade in 0..=u8::MAX {
+        canvas.save();
+        canvas.draw_rect(rect, &Paint::fill(Color::rgb(shade, 0, 0)));
+    }
+    for _ in 0..256 {
+        canvas.restore();
+    }
+    let (paints, saves) = canvas.kept_room();
+    assert!(paints >= 256 && saves >= 256, "the heavy frame grew both");
+    drop(canvas.take_recording());
+    let (paints, saves) = canvas.kept_room();
+    assert!(paints <= 4, "the paint pool kept room for {paints} paints");
+    assert!(saves <= 32, "the save stack kept room for {saves} states");
+}
+
 /// A finished `DisplayList` moves to another thread (the GPU hand-off) intact.
 pub(crate) fn a_finished_display_list_is_sendable_to_another_thread() {
     let mut canvas = Canvas::new();

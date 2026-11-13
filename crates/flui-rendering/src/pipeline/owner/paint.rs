@@ -1653,6 +1653,8 @@ impl PaintScratch {
         recycle_map(&mut composer.placed);
         recycle_vec(&mut composer.stale);
         recycle_vec(&mut composer.orphans);
+        recycle_vec(&mut composer.own_effects);
+        recycle_vec(composer.recorder.0.ops_mut());
     }
 
     /// Hands back the maps a staged patch held, for the next pass to stage
