@@ -248,6 +248,8 @@ pub struct AndroidLoop {
     /// ([`AndroidHost::input`]).
     pub(crate) input: Box<dyn ActivityInput>,
     pub(crate) owner_signal: Arc<OwnerSignal>,
+    /// The application's wake callback between owner turns.
+    turn: Rc<crate::owner::signal::OwnerTurnSlot>,
     /// The system preference source the table made
     /// ([`AndroidHost::preferences`]).
     pub(crate) preferences: Arc<dyn ActivityPreferences>,
@@ -335,6 +337,7 @@ impl AndroidLoop {
             clipboard,
             input: H::input(),
             owner_signal,
+            turn: Rc::default(),
             preferences,
             displays: H::displays(api, Arc::clone(&library), owner),
             api,
@@ -669,6 +672,7 @@ impl host::Loop for AndroidLoop {
         let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.owner_signal),
+            Rc::clone(&self.turn),
         ));
         self.activity.resumed.store(false, Ordering::SeqCst);
         // Set when `on_ready` returns `Err`: a fallible bootstrap
@@ -714,7 +718,7 @@ impl host::Loop for AndroidLoop {
                 }
                 next_preference_sample = (!observed).then(|| now + Duration::from_millis(500));
             }
-            if self.owner_signal.drive() {
+            if self.owner_signal.drive_in(&self.turn) {
                 self.running.set(false);
                 continue;
             }
@@ -733,7 +737,7 @@ impl host::Loop for AndroidLoop {
                 // Once per deadline: the wake also wakes the looper, and a
                 // deadline only a frame clears stays behind until one runs.
                 let _ = self.owner_signal.wake();
-                if self.owner_signal.drive() {
+                if self.owner_signal.drive_in(&self.turn) {
                     self.running.set(false);
                     continue;
                 }
@@ -1008,7 +1012,7 @@ impl host::Loop for AndroidLoop {
             // Process input events (touch, key) and dispatch through callbacks
             // Install accepted preference/configuration changes before the
             // first input packet translated in the new context.
-            if self.owner_signal.drive() {
+            if self.owner_signal.drive_in(&self.turn) {
                 self.running.set(false);
                 continue;
             }
@@ -1049,7 +1053,7 @@ impl host::Loop for AndroidLoop {
         // Unregister the choreographer callback on the thread it was registered
         // on, before its data can be freed with the loop.
         drop(refresh_rate);
-        self.owner_signal.close();
+        self.owner_signal.close_in(&self.turn);
 
         // The loop's one exit, reached by its three returning routes: a
         // `MainEvent::Destroy`, a `quit()` from any thread, a bootstrap
