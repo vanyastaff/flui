@@ -29,8 +29,11 @@ impl ViewState<RebuildProbe> for RebuildProbeState {
         flui_sdk::widgets::SizedBox::shrink()
     }
 }
+/// A probe on its own bare owner, built by hand: its wake hook is the
+/// owner's `on_build_scheduled`, the seam a fanout delivery reaches.
 struct MountedProbe {
-    binding: flui_testing::HeadlessBinding,
+    owner: flui_sdk::view::BuildOwner,
+    tree: flui_sdk::view::tree::ElementTree,
     handle: RebuildHandle,
     builds: Rc<Cell<usize>>,
 }
@@ -42,24 +45,29 @@ impl MountedProbe {
             handle: Rc::clone(&handle),
             builds: Rc::clone(&builds),
         };
-        let mut owners = flui_testing::MountOwners::fresh();
-        owners.build_owner.set_on_build_scheduled(wake);
-        let mut binding = flui_testing::HeadlessBinding::new();
-        binding.mount_root(&view, owners, flui_testing::MountOptions::tight(32.0, 32.0));
-        binding.pump_frame(Duration::from_millis(16));
+        let mut owner = flui_sdk::view::BuildOwner::new();
+        owner.set_on_build_scheduled(wake);
+        let mut tree = flui_sdk::view::tree::ElementTree::new();
+        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        owner.schedule_build_for(root, 0, flui_sdk::view::RebuildReason::InitialMount);
+        owner.build_scope(&mut tree);
         let handle = handle
             .borrow()
             .clone()
             .expect("lifecycle acquired mounted rebuild");
         Self {
-            binding,
+            owner,
+            tree,
             handle,
             builds,
         }
     }
+    fn pump(&mut self) {
+        self.owner.build_scope(&mut self.tree);
+    }
     fn pump_and_check(&mut self) {
         let before = self.builds.get();
-        self.binding.pump_frame(Duration::from_millis(16));
+        self.pump();
         assert!(
             self.builds.get() > before,
             "accepted wake must rebuild its actual mounted element"
@@ -106,20 +114,14 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
     }
     // Independent owners can mint equal local ElementIds. Map keys here only
     // identify fanout slots, so take two distinct slots from one owner.
-    let root_id = fanout[1]
-        .binding
-        .tree_mut()
-        .iter()
-        .next()
-        .expect("a mounted slot");
+    let root_id = fanout[1].tree.iter().next().expect("a mounted slot");
     handle
         .shared
         .scaffolds
         .borrow_mut()
         .insert(root_id, fanout[0].handle.clone());
     let second_id = fanout[1]
-        .binding
-        .tree_mut()
+        .tree
         .iter()
         .find(|id| *id != root_id)
         .expect("distinct mounted slot");
@@ -155,9 +157,9 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
             .set_value(0.0)
             .expect("no build is running");
     }
-    forward.binding.pump_frame(Duration::from_millis(16));
+    forward.pump();
     for probe in &mut fanout {
-        probe.binding.pump_frame(Duration::from_millis(16));
+        probe.pump();
     }
     let front = handle
         .shared
