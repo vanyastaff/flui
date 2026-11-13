@@ -86,10 +86,11 @@ the route's `Output` on delivery. Flutter has the same runtime failure mode (an 
   announcements — handing out `&mut dyn ErasedRoute` for one entry while the history holds the
   rest is not expressible.
 - **The flush decides, the navigator performs.** `RouteHistory` walks the stack under the
-  history lock and returns owned notifications and dying routes in `FlushOutcome`;
-  `NavigatorShared::apply` delivers observer callbacks, disposes routes, removes their overlay
-  entries and rearranges the overlay with the lock released. Neighbour announcements stay
-  under the lock and therefore precede observer callbacks (Flutter: after). An observer may
+  history's `RefCell` borrow and returns owned notifications and dying routes in
+  `FlushOutcome`; `NavigatorShared::apply` delivers observer callbacks, disposes routes, removes
+  their overlay entries and rearranges the overlay with the borrow released. Neighbour
+  announcements stay under the borrow and therefore precede observer callbacks (Flutter:
+  after). An observer may
   read or mutate the stack from any callback (ADR-0021).
 - **The overlay entry map lives on the navigator**, keyed by `RouteId`; the route supplies only
   a builder.

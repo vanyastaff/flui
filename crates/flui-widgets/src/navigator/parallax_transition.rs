@@ -114,7 +114,9 @@ impl Animatable for EdgeShadow {
     }
 }
 
-/// The iOS parallax page slide, 500 ms.
+/// The iOS parallax page slide, 500 ms, with the edge swipe that pops the
+/// page ([`back_gesture`](PageTransitionBuilder::back_gesture)) and, when
+/// [`barrier`](Self::barrier) sets one, the dim faded in under the page.
 ///
 /// ```
 /// use std::rc::Rc;
@@ -128,20 +130,39 @@ impl Animatable for EdgeShadow {
 /// .transition_builder(Rc::new(ParallaxPageTransition::new()));
 /// # let _ = route;
 /// ```
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ParallaxPageTransition;
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ParallaxPageTransition {
+    barrier: Option<Color>,
+}
 
 impl ParallaxPageTransition {
-    /// The slide.
+    /// The slide, with no dim under the page.
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self { barrier: None }
+    }
+
+    /// Dim the page below with `color` while this page slides over it: the
+    /// barrier colour of the routes that adopt this transition
+    /// ([`barrier_color`](PageTransitionBuilder::barrier_color)).
+    #[must_use]
+    pub const fn barrier(mut self, color: Color) -> Self {
+        self.barrier = Some(color);
+        self
     }
 }
 
 impl PageTransitionBuilder for ParallaxPageTransition {
     fn duration(&self) -> Duration {
         DURATION
+    }
+
+    fn back_gesture(&self) -> bool {
+        true
+    }
+
+    fn barrier_color(&self) -> Option<Color> {
+        self.barrier
     }
 
     fn build(
