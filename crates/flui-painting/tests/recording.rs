@@ -215,6 +215,45 @@ pub(crate) fn a_taken_recording_lets_go_of_a_heavy_frames_room() {
     assert!(saves <= 32, "the save stack kept room for {saves} states");
 }
 
+/// A canvas handed an emptied list records into it, so a frame recorded
+/// after the first starts with the room the earlier one grew; a canvas that
+/// has already recorded keeps its own list.
+pub(crate) fn a_canvas_records_into_a_buffer_it_was_handed() {
+    let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+    let heavy = || {
+        let mut heavy = Canvas::new();
+        for _ in 0..64 {
+            heavy.draw_rect(rect, &Paint::fill(Color::RED));
+        }
+        heavy.take_recording()
+    };
+    let buffer = heavy();
+    let room = buffer.room();
+    assert!(room >= 64, "the heavy recording grew its list");
+
+    let mut canvas = Canvas::new();
+    canvas.record_into(buffer);
+    canvas.draw_rect(rect, &Paint::fill(Color::BLUE));
+    let recorded = canvas.take_recording();
+    assert_eq!(
+        recorded.commands().iter().count(),
+        1,
+        "the old ops are gone"
+    );
+    assert!(
+        recorded.room() >= room,
+        "the recording kept the buffer's room"
+    );
+
+    let mut touched = Canvas::new();
+    touched.draw_rect(rect, &Paint::fill(Color::BLUE));
+    touched.record_into(heavy());
+    assert_eq!(
+        touched.take_recording().commands().iter().count(),
+        1,
+        "a canvas that recorded keeps its ops"
+    );
+}
 /// A finished `DisplayList` moves to another thread (the GPU hand-off) intact.
 pub(crate) fn a_finished_display_list_is_sendable_to_another_thread() {
     let mut canvas = Canvas::new();

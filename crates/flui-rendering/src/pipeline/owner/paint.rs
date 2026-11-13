@@ -5,10 +5,10 @@ use std::sync::Arc;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
 use flui_layer::{
-    AnnotatedRegionLayer, BackdropFilterLayer, BoundaryContent, Chunk, ClipPathLayer,
-    ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ContentBuilder, EntryIndex, Layer,
-    LeaderLayer, Lineage, OffsetLayer, OpacityLayer, Placement, SceneNodeId, SceneOp, SceneWriter,
-    ShaderMaskLayer, TransformLayer,
+    AnnotatedRegionLayer, BackdropFilterLayer, BoundaryContent, ClipPathLayer, ClipRRectLayer,
+    ClipRectLayer, ClipSuperellipseLayer, ContentBuilder, EntryIndex, Layer, LeaderLayer, Lineage,
+    OffsetLayer, OpacityLayer, Placement, SceneNodeId, SceneOp, SceneWriter, ShaderMaskLayer,
+    TransformLayer,
 };
 use flui_painting::DisplayList;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1956,7 +1956,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         if build.open.is_empty() {
             return;
         }
-        let list = std::mem::take(&mut build.open);
+        let mut list = std::mem::take(&mut build.open);
         let Some(owner) = owner else {
             debug_assert!(
                 false,
@@ -1981,10 +1981,13 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             .entry((build.serial, owner))
             .or_default()
             .1;
-        let chunk = Chunk::new(owner, *ordinal, version, list);
+        // Written into a chunk the scene owner reclaimed when it holds one,
+        // whose emptied buffer the canvas records the next run into.
+        let chunk = self.writer.chunk(owner, *ordinal, version, &mut list);
         *ordinal += 1;
-        build.builder.chunk(Arc::new(chunk));
+        build.builder.chunk(chunk);
         self.counts.layers_produced += 1;
+        self.work.recorder.0.record_into(list);
     }
 
     /// Pushes `layer`, an effect `owner` painted, and opens it.

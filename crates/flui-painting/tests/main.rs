@@ -556,6 +556,10 @@ fn recording_contract() {
                 recording::a_taken_recording_lets_go_of_a_heavy_frames_room,
             ),
             (
+                "a_canvas_records_into_a_buffer_it_was_handed",
+                recording::a_canvas_records_into_a_buffer_it_was_handed,
+            ),
+            (
                 "a_finished_display_list_is_sendable_to_another_thread",
                 recording::a_finished_display_list_is_sendable_to_another_thread,
             ),

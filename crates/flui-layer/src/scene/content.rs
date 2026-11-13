@@ -78,32 +78,81 @@ impl Chunk {
         version: ContentVersion,
         commands: DisplayList,
     ) -> Self {
-        let bounds = match commands.damage_extent() {
+        let mut chunk = Self {
+            owner,
+            ordinal,
+            version,
+            commands: Arc::new(commands),
+            bounds: Bounds::Finite(Rect::ZERO),
+            textures: SmallVec::new(),
+            reads_destination: false,
+        };
+        chunk.measure();
+        chunk
+    }
+
+    /// Becomes the `ordinal`th run `owner` painted, recorded as `version`,
+    /// holding `commands`, and leaves in `commands` the emptied list it held:
+    /// how a chunk the owner reclaimed is written again
+    /// ([`SceneWriter::chunk`](super::SceneWriter::chunk)). `None` when its
+    /// commands are shared, as a reclaimed chunk's never are.
+    pub(crate) fn refill(
+        &mut self,
+        owner: RenderId,
+        ordinal: u32,
+        version: ContentVersion,
+        commands: &mut DisplayList,
+    ) -> Option<()> {
+        let held = Arc::get_mut(&mut self.commands)?;
+        std::mem::swap(held, commands);
+        self.owner = owner;
+        self.ordinal = ordinal;
+        self.version = version;
+        self.measure();
+        Some(())
+    }
+
+    /// Lets go of its commands, keeping their room, when nothing else holds
+    /// them: what a reclaimed chunk is kept as. The commands drop here, so a
+    /// caller runs this with no borrow held.
+    pub(crate) fn empty(&mut self) -> bool {
+        let Some(held) = Arc::get_mut(&mut self.commands) else {
+            return false;
+        };
+        held.clear();
+        self.textures.clear();
+        self.bounds = Bounds::Finite(Rect::ZERO);
+        self.reads_destination = false;
+        true
+    }
+
+    /// The commands' room: what recording into the chunk again saves.
+    pub(crate) fn room(&self) -> usize {
+        self.commands.room()
+    }
+
+    /// Reads its bounds, the textures it draws and whether it reads the
+    /// destination from its commands.
+    fn measure(&mut self) {
+        let commands = &*self.commands;
+        self.bounds = match commands.damage_extent() {
             None => Bounds::Finite(Rect::ZERO),
             Some(extent) => match extent.covering_rect() {
                 Some(rect) if rect.is_finite() => Bounds::Finite(rect),
                 _ => Bounds::Unbounded,
             },
         };
-        let mut textures = SmallVec::<[TextureId; 1]>::new();
+        self.textures.clear();
         let mut destination = false;
-        for command in &commands {
+        for command in commands {
             if let DrawOp::Texture { texture_id, .. } = command.op
-                && !textures.contains(&texture_id)
+                && !self.textures.contains(&texture_id)
             {
-                textures.push(texture_id);
+                self.textures.push(texture_id);
             }
             destination |= reads_destination(&command.op);
         }
-        Self {
-            owner,
-            ordinal,
-            version,
-            commands: Arc::new(commands),
-            bounds,
-            textures,
-            reads_destination: destination,
-        }
+        self.reads_destination = destination;
     }
 
     /// Whether a command blends by a mode that reads the pixels under it, so
@@ -566,6 +615,35 @@ impl BoundaryContent {
             stream: Arc::clone(&self.stream),
             layers: Vec::with_capacity(self.layers.len()),
             indexes: LayerIndexes::default(),
+        }
+    }
+
+    /// Moves into `into`, emptied, the chunks of a stream nothing else holds
+    /// whose commands nothing else holds and hold room for at most
+    /// `kept_room` commands, while `into` holds fewer than `cap`. It takes the
+    /// stream's entries apart, so it runs just before [`Self::scrub`] or the
+    /// content's drop, with no borrow held: the commands drop here.
+    pub(crate) fn harvest_chunks(
+        &mut self,
+        into: &mut Vec<Arc<Chunk>>,
+        cap: usize,
+        kept_room: usize,
+    ) {
+        let Some(stream) = Arc::get_mut(&mut self.stream) else {
+            return;
+        };
+        for entry in stream.entries.drain(..) {
+            let Entry::Chunk { mut chunk, .. } = entry else {
+                continue;
+            };
+            if into.len() >= cap {
+                continue;
+            }
+            let kept = Arc::get_mut(&mut chunk)
+                .is_some_and(|held| held.room() <= kept_room && held.empty());
+            if kept {
+                into.push(chunk);
+            }
         }
     }
 

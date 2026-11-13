@@ -183,6 +183,20 @@ impl Canvas {
         recording
     }
 
+    /// Gives the canvas `buffer`'s room for its next recording: a list a
+    /// scene let go of is recorded into again instead of a new one growing
+    /// from nothing. It takes the buffer only while it has recorded nothing
+    /// (no command, no refused op) and holds less room; otherwise `buffer`
+    /// drops.
+    pub fn record_into(&mut self, mut buffer: DisplayList) {
+        let untouched = self.display_list.is_empty()
+            && self.display_list.non_finite() == crate::display_list::NonFiniteOps::default();
+        if untouched && self.display_list.room() < buffer.room() {
+            buffer.clear();
+            self.display_list = buffer;
+        }
+    }
+
     /// What [`Self::finish`] and [`Self::take_recording`] report about the
     /// recording they end.
     fn report_finished(&self) {
