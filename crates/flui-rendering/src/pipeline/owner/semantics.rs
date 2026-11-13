@@ -180,6 +180,7 @@ impl PipelineOwner<Semantics> {
                         let first = placed.len();
                         let placeable = placement_anchors(
                             &self.render_tree,
+                            self.root_id,
                             owner.tree(),
                             moved.id,
                             &mut walk,
@@ -385,7 +386,7 @@ pub(super) struct RegionIdentities {
     /// stack, kept between passes for the same reason.
     marked: Vec<RenderId>,
     placed: Vec<RenderId>,
-    placement_walk: Vec<RenderId>,
+    placement_walk: PlacementScratch,
     /// Set by a test that measures a pass and so must not pay for
     /// [`check_placement_against_rebuild`].
     #[cfg(any(test, feature = "testing"))]
@@ -1768,19 +1769,41 @@ fn plan_graft_pass(
 ///
 /// `false` when that cannot be shown: a node on the way contributes (a
 /// pending fragment, a boundary the clip dropped last pass), authors
-/// regions, or bars its earlier siblings. The caller then treats `moved` as
-/// an ordinary semantics mark.
+/// regions, bars its earlier siblings, or lands where a paint clip above it
+/// hides it, which annotates it the way assembly does. The caller then treats
+/// `moved` as an ordinary semantics mark.
 fn placement_anchors(
     tree: &RenderTree,
+    pipeline_root: Option<RenderId>,
     arena: &SemanticsTree,
     moved: RenderId,
-    walk: &mut Vec<RenderId>,
+    scratch: &mut PlacementScratch,
     anchors: &mut Vec<RenderId>,
     regions: &mut AssemblyRegions,
 ) -> bool {
+    let Some(pipeline_root) = pipeline_root else {
+        return false;
+    };
+    let Some((context, transform, clips, _)) =
+        assembly_inputs_into(tree, pipeline_root, moved, regions, &mut scratch.chain)
+    else {
+        return false;
+    };
+    let walk = &mut scratch.walk;
     walk.clear();
-    walk.push(moved);
-    while let Some(id) = walk.pop() {
+    walk.push(PlacementStep {
+        id: moved,
+        transform,
+        clips,
+        context,
+    });
+    while let Some(step) = walk.pop() {
+        let PlacementStep {
+            id,
+            transform,
+            clips,
+            context,
+        } = step;
         let Some(node) = tree.get(id) else {
             continue;
         };
@@ -1797,6 +1820,14 @@ fn placement_anchors(
             || config.has_been_annotated()
             || config.blocks_previous_siblings()
         {
+            return false;
+        }
+        // Assembly marks a node that lands outside the paint clip hidden,
+        // and a hidden node contributes: a move can turn a transparent
+        // wrapper into a node of its own.
+        let hidden = node_semantics_rect(node, transform)
+            .is_some_and(|rect| clips.apply(rect, context.has_reveal_ancestor).hidden);
+        if hidden {
             return false;
         }
         let authored = match node {
@@ -1824,18 +1855,50 @@ fn placement_anchors(
             continue;
         }
         let parent_generation = node.layout_generation();
+        let child_context = assembly_decisions(&config, context).child_context;
         // Pushed in reverse so the walk visits children in slot order, the
         // order the anchors' grafts are later sorted into anyway.
         for (child_slot, &child_id) in node.children().iter().enumerate().rev() {
-            let placed = tree
-                .get(child_id)
-                .is_some_and(|child| child.was_placed_by(id, parent_generation));
-            if placed && visits_child_for_semantics(node, child_slot) {
-                walk.push(child_id);
+            let Some(child) = tree.get(child_id) else {
+                continue;
+            };
+            if !child.was_placed_by(id, parent_generation)
+                || !visits_child_for_semantics(node, child_slot)
+            {
+                continue;
             }
+            // The same fold assembly applies on its way down.
+            let Some(child_transform) = child_transform(node, child, child_slot, transform) else {
+                return false;
+            };
+            let (local_paint, local_semantics) = child_clips_of(node, transform, child_slot);
+            walk.push(PlacementStep {
+                id: child_id,
+                transform: child_transform,
+                clips: clips.descend(local_paint, local_semantics),
+                context: child_context,
+            });
         }
     }
     true
+}
+
+/// One node of the placement walk, with the transform, clips and context
+/// assembly would give it.
+#[derive(Debug, Clone, Copy)]
+struct PlacementStep {
+    id: RenderId,
+    transform: Matrix4,
+    clips: SemanticsClips,
+    context: SemanticsAssemblyContext,
+}
+
+/// The placement walk's buffers, kept between passes so a steady pass
+/// allocates nothing for them.
+#[derive(Debug, Default)]
+pub(super) struct PlacementScratch {
+    walk: Vec<PlacementStep>,
+    chain: Vec<RenderId>,
 }
 
 /// Whether re-assembling `anchor` in place keeps it where a full rebuild
@@ -1916,7 +1979,19 @@ fn assembly_inputs_for(
     target: RenderId,
     regions: &mut AssemblyRegions,
 ) -> Option<(SemanticsAssemblyContext, Matrix4, SemanticsClips, bool)> {
-    let mut chain = vec![target];
+    assembly_inputs_into(tree, pipeline_root, target, regions, &mut Vec::new())
+}
+
+/// [`assembly_inputs_for`] over a caller's buffer for the ancestor chain.
+fn assembly_inputs_into(
+    tree: &RenderTree,
+    pipeline_root: RenderId,
+    target: RenderId,
+    regions: &mut AssemblyRegions,
+    chain: &mut Vec<RenderId>,
+) -> Option<(SemanticsAssemblyContext, Matrix4, SemanticsClips, bool)> {
+    chain.clear();
+    chain.push(target);
     let mut cursor = target;
     while let Some(parent) = tree.parent(cursor) {
         chain.push(parent);
@@ -2100,9 +2175,9 @@ fn apply_graft(
 /// differs. The handlers the check's assembly retained are returned for the
 /// caller to retire after the phase, as the pass's own are.
 ///
-/// Skipped while the owner announces (its announcer nodes are not part of
-/// assembly) or when the full assembly itself refuses the tree, which the
-/// next ordinary mark reports.
+/// The owner's announcer nodes are not part of assembly, so the comparison
+/// leaves them out of the placed tree. Skipped when the full assembly itself
+/// refuses the tree, which the next ordinary mark reports.
 #[cfg(any(test, feature = "testing"))]
 fn check_placement_against_rebuild(
     tree: &RenderTree,
@@ -2111,9 +2186,17 @@ fn check_placement_against_rebuild(
     identities: &mut RegionIdentities,
 ) -> AssemblyCallbacks {
     let mut regions = AssemblyRegions::default();
-    if identities.existing_announcements().is_some() {
-        return std::mem::take(&mut regions.callbacks);
-    }
+    let announcers: Vec<accesskit::NodeId> = identities
+        .existing_announcements()
+        .map(|announcements| {
+            [
+                flui_semantics::Urgency::Polite,
+                flui_semantics::Urgency::Assertive,
+            ]
+            .map(|urgency| accesskit::NodeId(announcements.node_id(urgency).as_u64()))
+            .to_vec()
+        })
+        .unwrap_or_default();
     let Ok(built) = assemble_semantics_root(tree, root, &mut regions) else {
         return std::mem::take(&mut regions.callbacks);
     };
@@ -2136,6 +2219,22 @@ fn check_placement_against_rebuild(
     let expected = rebuilt.to_accesskit_tree_update(None);
     let nodes = |update: Option<accesskit::TreeUpdate>| {
         let mut nodes = update.map(|update| update.nodes).unwrap_or_default();
+        nodes.retain(|(id, _)| !announcers.contains(id));
+        for (_, node) in &mut nodes {
+            if node
+                .children()
+                .iter()
+                .any(|child| announcers.contains(child))
+            {
+                let kept: Vec<accesskit::NodeId> = node
+                    .children()
+                    .iter()
+                    .copied()
+                    .filter(|child| !announcers.contains(child))
+                    .collect();
+                node.set_children(kept);
+            }
+        }
         nodes.sort_by_key(|(id, _)| id.0);
         nodes
     };

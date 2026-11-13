@@ -3059,6 +3059,50 @@ fn a_node_moved_out_of_its_clip_comes_back() {
     assert_eq!(seen[0], seen[2], "moving back restores the node");
 }
 
+/// A layout wrapper the move takes from the visible part of a viewport into
+/// its cache extent is painted nowhere yet still published, so assembly marks
+/// it hidden, and a hidden wrapper forms a node of its own. The label inside
+/// is moved back into view, so only the wrapper changes: the moved tree must
+/// publish what building it afresh does, the hidden wrapper node included.
+fn a_wrapper_moved_into_the_cache_extent_is_hidden_with_it() {
+    use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    let position = ScrollPosition::fixed(0.0);
+    let content = |dy: f64| {
+        SizedBox::new(100.0, 100.0).child(Viewport::new(
+            position.clone(),
+            (SliverToBoxAdapter::new().child(
+                Transform::translate(0.0, dy).child(
+                    SizedBox::new(40.0, 20.0)
+                        .child(Transform::translate(0.0, -dy).child(labelled("cached", 40.0))),
+                ),
+            ),),
+        ))
+    };
+    // Compared by id, as published: the flat description would not show
+    // which node holds which.
+    let published = |laid: &crate::common::LaidOut| {
+        let mut nodes = laid
+            .a11y_tree()
+            .expect("semantics enabled")
+            .raw()
+            .nodes
+            .clone();
+        nodes.sort_by_key(|(id, _)| id.0);
+        nodes
+    };
+    let mut moved = lay_out(content(0.0), loose(400.0));
+    moved.enable_semantics();
+    moved.tick();
+    for dy in [150.0, 0.0] {
+        moved.pump_widget(content(dy));
+        moved.tick();
+        let mut fresh = lay_out(content(dy), loose(400.0));
+        fresh.enable_semantics();
+        fresh.tick();
+        assert_eq!(published(&moved), published(&fresh), "moved to {dy}");
+    }
+}
+
 fn reading_order_in_a_document_follows_the_move() {
     use flui_widgets::{Column, SelectionArea, Text, Transform};
     let seen = placements(
@@ -3121,6 +3165,10 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
             ("sibling stays", a_sibling_outside_the_transform_stays),
             ("partial clip", a_partly_clipped_node_stays_published),
             ("full clip", a_node_moved_out_of_its_clip_comes_back),
+            (
+                "a wrapper moved into the cache extent",
+                a_wrapper_moved_into_the_cache_extent_is_hidden_with_it,
+            ),
             (
                 "reading order in a document",
                 reading_order_in_a_document_follows_the_move,
