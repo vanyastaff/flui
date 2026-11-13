@@ -600,16 +600,14 @@ impl LaidOut {
     }
 
     /// End the session the tree runs in, as the operating system does at log
-    /// off or shut down once the session is ending: what the documents
-    /// published is written, then the presentation closes, past every hold
+    /// off or shut down once the session is ending, in a runner's order: the
+    /// session-ended notice, then the presentation commits its composition
+    /// and closes past every hold
     /// ([`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd) can
-    /// no longer be refused once the session is ending).
-    pub fn end_session(&self) {
-        let runtime = self.host.ui_runtime();
-        let _answer = runtime.end_session(flui_platform::SessionEndPhase::Ending);
-        runtime
-            .ui_runtime()
-            .enter(flui_runtime::ui_runtime::UiRuntime::stop_presentations);
+    /// no longer be refused once the session is ending), then what the
+    /// documents published is written.
+    pub fn end_session(&mut self) {
+        self.host.ui_runtime_mut().end_session_now();
     }
 
     /// Deliver an accessibility action to the node it addresses, as a platform

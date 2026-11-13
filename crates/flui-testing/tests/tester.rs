@@ -567,6 +567,8 @@ struct Opened {
 #[derive(Clone, StatefulView)]
 struct Notebook {
     hold_close: bool,
+    /// Written into the note when the window detaches.
+    save_on_detach: Option<&'static str>,
     opened: Rc<std::cell::RefCell<Opened>>,
 }
 
@@ -586,10 +588,22 @@ impl ViewState<Notebook> for NotebookState {
             .close_guard()
             .expect("a hosted window has a close guard");
         let lifecycle = Rc::clone(&self.0.opened);
+        let save_on_detach = self.0.save_on_detach;
         let (_, observation) = ctx
             .lifecycle_handle()
             .expect("a hosted window has a lifecycle")
-            .subscribe(move |state| lifecycle.borrow_mut().lifecycle.push(state))
+            .subscribe(move |state| {
+                if state == flui_view::AppLifecycleState::Detached
+                    && let Some(text) = save_on_detach
+                {
+                    let note = lifecycle.borrow().note.clone();
+                    if let Some(note) = note {
+                        note.set(Note(text.to_owned()))
+                            .expect("a loaded note takes a value");
+                    }
+                }
+                lifecycle.borrow_mut().lifecycle.push(state);
+            })
             .expect("the window is open");
         *self.0.opened.borrow_mut() = Opened {
             note: Some(flui_view::persist::Persisted::open(ctx)),
@@ -605,9 +619,17 @@ impl ViewState<Notebook> for NotebookState {
 }
 
 fn notebook(hold_close: bool) -> (Notebook, Rc<std::cell::RefCell<Opened>>) {
+    notebook_saving(hold_close, None)
+}
+
+fn notebook_saving(
+    hold_close: bool,
+    save_on_detach: Option<&'static str>,
+) -> (Notebook, Rc<std::cell::RefCell<Opened>>) {
     let opened = Rc::new(std::cell::RefCell::new(Opened::default()));
     let view = Notebook {
         hold_close,
+        save_on_detach,
         opened: Rc::clone(&opened),
     };
     (view, opened)
@@ -710,4 +732,44 @@ fn the_window_losing_focus_makes_the_application_inactive() {
     t.set_window_focused(false);
     t.set_window_focused(true);
     assert_eq!(opened.borrow().lifecycle, [Inactive, Resumed]);
+}
+
+/// A restart is the user quitting and opening the application again: a write
+/// the run accepted and had not yet carried out still reaches the storage.
+#[test]
+fn a_restart_writes_what_the_run_accepted_before_it_stops() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    note(&opened)
+        .set(Note("unsaved".to_owned()))
+        .expect("a loaded note takes a value");
+
+    let mut t = t.restart();
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("unsaved".to_owned()));
+}
+
+/// At a session's end the window detaches before the documents are written,
+/// so what a Detached observer publishes is in the storage the run leaves.
+#[test]
+fn a_session_end_writes_what_the_window_publishes_as_it_detaches() {
+    let (view, opened) = notebook_saving(false, Some("draft"));
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    t.end_session();
+    assert!(
+        opened
+            .borrow()
+            .lifecycle
+            .contains(&flui_view::AppLifecycleState::Detached),
+        "the window detached"
+    );
+    let storage = t.storage().expect("a window keeps a storage").clone();
+    drop(t);
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("draft".to_owned()));
 }

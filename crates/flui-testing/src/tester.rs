@@ -32,16 +32,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::ManualClock;
-use flui_platform::SessionEndPhase;
 use flui_protocol::method::{
-    ElementActionability, InputInject, InspectRender, InspectWidgets, SemanticsLocate,
-    SemanticsRead,
+    ElementActionability, InputInject, InputRelease, InspectRender, InspectWidgets,
+    SemanticsLocate, SemanticsRead,
 };
 use flui_protocol::{
     ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ErrorObject,
     ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams,
     Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
-    ReadParams, Tree, outline,
+    ReadParams, Tree, WindowParams, outline,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
@@ -895,14 +894,17 @@ impl Tester {
     }
 
     /// Stop this run and launch the same view in the same window over the
-    /// same storage, as across a process restart: the old tree, its states
-    /// and its runtime are gone before the new one mounts.
+    /// same storage, as when the user quits and opens the application again:
+    /// the window commits its composition and closes, what the documents
+    /// published is written, and the old tree, its states and its runtime
+    /// are gone before the new one mounts.
     ///
     /// # Panics
     ///
     /// When the new run's first frame fails.
     #[must_use]
-    pub fn restart(self) -> Self {
+    pub fn restart(mut self) -> Self {
+        self.host.quit_now();
         let relaunch = Rc::clone(&self.relaunch);
         let config = self.config.clone();
         drop(self);
@@ -928,12 +930,12 @@ impl Tester {
         self.host.is_closed(self.host.primary_window())
     }
 
-    /// The operating system ends the user's session: what the application's
-    /// documents published is written, then the window closes past every
-    /// hold, as a session that is ending no longer asks.
+    /// The operating system ends the user's session: the session-ended notice
+    /// reaches the application, the window commits its composition and closes
+    /// past every hold, as a session that is ending no longer asks, and then
+    /// what the application's documents published is written.
     pub fn end_session(&mut self) {
-        let _answer = self.host.end_session(SessionEndPhase::Ending);
-        self.host.close_every_window();
+        self.host.end_session_now();
     }
 
     /// The window loses (`false`) or regains (`true`) the operating system's
@@ -1074,8 +1076,19 @@ impl Tester {
         let budget = ANSWER_FRAMES
             .saturating_add(ticks)
             .saturating_add(span_frames);
-        let _outcome = self.answered_within(call, budget)?;
-        Ok(())
+        let outcome = self.answered_within(call, budget);
+        if matches!(outcome, Err(TestError::Unanswered { .. })) {
+            // Whatever the sequence still plays, the keys and contacts it
+            // holds are let go once it ends, so a later action does not start
+            // with a modifier or a button down.
+            if let Ok(release) = self
+                .lease
+                .call::<InputRelease>(WindowParams::new(self.lease.window()))
+            {
+                let _released = self.answered_within(release, budget);
+            }
+        }
+        outcome.map(|_outcome| ())
     }
 
     /// The window's outline, cut to its first lines, for a failure.

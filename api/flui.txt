@@ -23891,7 +23891,7 @@ pub fn flui::testing::harness::widgets::LaidOut::dispatch_window_hover_left(&sel
 pub fn flui::testing::harness::widgets::LaidOut::draw_ops(&self) -> Vec<flui::painting::DrawCommand>
 pub fn flui::testing::harness::widgets::LaidOut::element_node_count(&mut self) -> usize
 pub fn flui::testing::harness::widgets::LaidOut::enable_semantics(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::end_session(&self)
+pub fn flui::testing::harness::widgets::LaidOut::end_session(&mut self)
 pub fn flui::testing::harness::widgets::LaidOut::enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R
 pub fn flui::testing::harness::widgets::LaidOut::find_all_by_render_type(&self, render_type_name: &str) -> Vec<flui::foundation::RenderId>
 pub fn flui::testing::harness::widgets::LaidOut::find_all_text(&self, text: &str) -> Vec<flui::foundation::RenderId>

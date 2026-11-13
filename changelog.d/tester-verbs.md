@@ -9,4 +9,5 @@
 ### Changed
 
 - `input.inject`: pressing a key the keyboard source already holds sends that key's auto-repeat, as WebDriver dispatches a second `keyDown`; before, it sent nothing.
-- `TestWindow` is `Clone` but no longer `Copy` or `PartialEq`, since it carries the storage.
+- `TestWindow` is `Clone` but no longer `Copy` or `PartialEq`, and `TestWindow::platform` is no longer a `const fn`, since it carries the storage.
+- `LaidOut::end_session` takes `&mut self` and ends the session in a runner's order: the session-ended notice, the window's close (its composition committed, its Detached observers run), then the documents' write; before, it wrote first and so missed what the close published.

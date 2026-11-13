@@ -557,7 +557,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** all · **Who it hurts:** Application authors who find two ways to test in `flui::testing` · **Parity:** none (API shape)
 
-- `flui::testing::Tester` is the application test API; the harnesses the facade exported before it sit under the deprecated `flui::testing::harness` (`src/testing.rs`). Their last users are the facade's consumer fixtures, `tests/fixtures/facade_extensions.rs` and `tests/fixtures/acceptance_app/`, whose rows need verbs `Tester` lacks: key chords, IME composition, a mount with a storage double, a teardown ledger and a gesture-only clock with no tree.
+- `flui::testing::Tester` is the application test API; the harnesses the facade exported before it sit under the deprecated `flui::testing::harness` (`src/testing.rs`). Their last users are the facade's consumer fixtures, `tests/fixtures/facade_extensions.rs` and `tests/fixtures/acceptance_app/`, whose rows need verbs `Tester` lacks: a teardown ledger and a gesture-only clock with no tree.
 - `Tester` gains those verbs under the agent protocol's names (`element.press_keys`, `input.inject` of IME steps, a mount with a storage double, a teardown ledger), both fixtures move to it, and `harness` is deleted whole. The module does not ship in a release: the application test API is ready only once it is gone.
 - The check is `rg 'testing::harness' tests src` finding nothing and the module deleted.
 

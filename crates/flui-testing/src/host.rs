@@ -1508,13 +1508,25 @@ impl HeadlessHost {
             .unwrap_or(true)
     }
 
-    /// Close every window now, past every hold, as the operating system
-    /// takes the windows of a session that is ending.
-    pub(crate) fn close_every_window(&mut self) {
+    /// The session ends now, in the order a runner carries it out: the
+    /// session-ended notice reaches every subscriber, then the application
+    /// quits as [`quit_now`](Self::quit_now) does.
+    pub(crate) fn end_session_now(&mut self) {
+        self.ui_runtime
+            .deliver_host_notice(&flui_platform::HostNotice::SessionEnded);
+        self.quit_now();
+    }
+
+    /// The application quits now: each window commits its composition and
+    /// closes past every hold, so its Detached observers publish what they
+    /// keep, and then what the documents published is written within
+    /// [`SESSION_END_BUDGET`].
+    pub(crate) fn quit_now(&mut self) {
         for id in self.presentation_ids() {
             self.ui_runtime.commit_composition_for_close(id);
             let _closed = self.close_presentation(id);
         }
+        let _answer = self.end_session(SessionEndPhase::Ending);
     }
 
     /// One phase of the user's session ending, as the operating system reports
