@@ -5,9 +5,10 @@
 //! # Scenarios
 //!
 //! Each window has its own owner; a tree without a Router has none; a path no
-//! route matches reaches `on_unknown` and leaves the stack; an intent that
-//! arrives inside another edit is refused; and when the owning Router leaves,
-//! a sibling Router takes the URL over.
+//! route matches reaches `on_unknown` and leaves the stack; a `Pop` honours the
+//! page's `PopScope`; an intent that arrives inside another edit, inside its
+//! own parse or during a build is refused; an unmounted Router lets go of its
+//! hook; and when the owning Router leaves, a sibling Router takes the URL over.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -18,8 +19,8 @@ use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::CloseReason;
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    AnimatedBuilder, NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, SizedBox,
-    Stack,
+    AnimatedBuilder, NavigationIntent, NavigationOp, NavigationRefused, PopScope, RouteParseError,
+    SizedBox, Stack,
 };
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -188,10 +189,14 @@ thread_local! {
     // Run once by the next comparison of two `EqRoute`s.
     #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static ON_EQ: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    // Run once by the next parse of an `EqRoute`.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    static ON_PARSE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
 }
 
-/// A route whose comparison runs a test hook: `go` compares the stack it
-/// opens with the current one in the middle of its edit.
+/// A route whose comparison and parse run test hooks: `go` compares the stack it
+/// opens with the current one in the middle of its edit, and an intent
+/// parses its path inside its own.
 #[derive(Debug, Clone)]
 enum EqRoute {
     Home,
@@ -221,6 +226,10 @@ impl Routable for EqRoute {
     }
 
     fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
+        let hook = ON_PARSE.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
         let segments: Vec<_> = path.segments().collect();
         match segments.as_slice() {
             [] => Ok(Self::Home),
@@ -366,4 +375,174 @@ pub(crate) fn a_router_inside_a_page_does_not_own_the_url() {
     assert_eq!(stack(&outer), [AppRoute::Home, AppRoute::Note { id: 5 }]);
     assert_eq!(stack(&inner), [Tab::Inbox]);
     settle(&mut host);
+}
+
+pub(crate) fn a_parser_that_navigates_again_is_refused_as_busy() {
+    let host = Rc::new(RefCell::new(HeadlessHost::new(HeadlessWindow::new(
+        400, 400,
+    ))));
+    let window = host.borrow().primary_window();
+    let captured = Captured::default();
+    host.borrow()
+        .attach(&router(EqRoute::Home, &captured))
+        .expect("a fresh window");
+    settle(&mut host.borrow_mut());
+
+    let inner = Rc::new(RefCell::new(None));
+    {
+        let host = Rc::downgrade(&host);
+        let inner = Rc::clone(&inner);
+        let hook: Box<dyn FnOnce()> = Box::new(move || {
+            let host = host.upgrade().expect("the host is alive");
+            *inner.borrow_mut() = Some(host.borrow().navigate(window, push("/note/9")));
+        });
+        ON_PARSE.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+    let outer = host.borrow().navigate(window, push("/note/3"));
+    ON_PARSE.with(|slot| slot.borrow_mut().take());
+
+    assert_eq!(*inner.borrow(), Some(Err(NavigationRefused::Busy)));
+    assert_eq!(outer, Ok(()));
+    assert_eq!(stack(&captured), [EqRoute::Home, EqRoute::Note(3)]);
+    settle(&mut host.borrow_mut());
+}
+
+pub(crate) fn an_intent_during_a_build_is_busy_before_it_is_parsed() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(400, 400));
+    let captured = Captured::default();
+    let unknown = Rc::new(Cell::new(0));
+    let answers = Rc::new(RefCell::new(Vec::new()));
+    // A sibling of the Router, below the runtime's scope: it reaches the slot
+    // the Router owns and navigates while it builds.
+    let sibling = NavigatesInBuild {
+        on_build: {
+            let answers = Rc::clone(&answers);
+            Rc::new(move |ctx: &dyn BuildContext| {
+                let slot = flui_view::__runtime::UrlOwnerScope::maybe_of(ctx)
+                    .expect("the runtime provides the slot above the root");
+                answers.borrow_mut().push(slot.navigate(push("/missing")));
+                answers.borrow_mut().push(slot.navigate(push("/note/1")));
+            })
+        },
+    };
+    let owner = {
+        let unknown = Rc::clone(&unknown);
+        router(AppRoute::Home, &captured).on_unknown(move |_: &RoutePath| {
+            unknown.set(unknown.get() + 1);
+        })
+    };
+    host.attach(&Stack::new(vec![
+        owner.into_view().boxed(),
+        sibling.into_view().boxed(),
+    ]))
+    .expect("a fresh window");
+    settle(&mut host);
+
+    assert_eq!(
+        *answers.borrow(),
+        [Err(NavigationRefused::Busy), Err(NavigationRefused::Busy)]
+    );
+    assert_eq!(unknown.get(), 0, "no hook ran during the build");
+    assert_eq!(stack(&captured), [AppRoute::Home]);
+}
+
+pub(crate) fn a_pop_intent_honours_the_pages_pop_scope() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(400, 400));
+    let window = host.primary_window();
+    let captured = Captured::<AppRoute>::default();
+    let invoked = Rc::new(RefCell::new(Vec::new()));
+    let guarded = {
+        let (captured, invoked) = (Rc::clone(&captured), Rc::clone(&invoked));
+        Router::new(
+            AppRoute::Home,
+            move |route: &AppRoute, ctx: &dyn BuildContext| {
+                *captured.borrow_mut() = Router::<AppRoute>::of(ctx).ok();
+                let page = SizedBox::new(10.0, 10.0);
+                match route {
+                    AppRoute::Home => page.into_view().boxed(),
+                    AppRoute::Note { .. } => {
+                        let invoked = Rc::clone(&invoked);
+                        PopScope::new(page)
+                            .can_pop(false)
+                            .on_pop_invoked(move |_ctx, did_pop| invoked.borrow_mut().push(did_pop))
+                            .into_view()
+                            .boxed()
+                    }
+                }
+            },
+        )
+    };
+    host.attach(&guarded).expect("a fresh window");
+    settle(&mut host);
+    assert_eq!(host.navigate(window, push("/note/1")), Ok(()));
+    settle(&mut host);
+
+    assert_eq!(
+        host.navigate(window, NavigationIntent::new(NavigationOp::Pop)),
+        Ok(()),
+        "the veto handled the Back"
+    );
+    settle(&mut host);
+    assert_eq!(stack(&captured), [AppRoute::Home, AppRoute::Note { id: 1 }]);
+    assert_eq!(
+        *invoked.borrow(),
+        [false],
+        "the scope heard the refused pop"
+    );
+}
+
+pub(crate) fn an_unmounted_router_lets_go_of_its_unknown_hook() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(400, 400));
+    let captured = Captured::<AppRoute>::default();
+    let token = Rc::new(());
+    let kept = Rc::downgrade(&token);
+    let show = Rc::new(Cell::new(true));
+    let toggle = Rc::new(ChangeNotifier::new());
+    let root = {
+        let show = Rc::clone(&show);
+        // The hook holds the cell the Router's own handle is captured in: a
+        // cycle through the Router's shared state.
+        let held = Rc::clone(&captured);
+        let owner = router(AppRoute::Home, &captured).on_unknown(move |_: &RoutePath| {
+            let _ = (&token, &held);
+        });
+        AnimatedBuilder::new(
+            Rc::clone(&toggle) as Rc<dyn flui_foundation::Listenable>,
+            move || {
+                if show.get() {
+                    owner.clone().into_view().boxed()
+                } else {
+                    SizedBox::new(10.0, 10.0).into_view().boxed()
+                }
+            },
+        )
+    };
+    host.attach(&root).expect("a fresh window");
+    settle(&mut host);
+    assert!(captured.borrow().is_some(), "the Router built its page");
+
+    show.set(false);
+    toggle.notify_listeners();
+    settle(&mut host);
+    drop((host, root, captured));
+    assert!(
+        kept.upgrade().is_none(),
+        "the unmounted Router released its hook and the cycle through it"
+    );
+}
+
+/// What a [`NavigatesInBuild`] runs when it builds.
+type OnBuild = Rc<dyn Fn(&dyn BuildContext)>;
+
+/// Runs `on_build` each time it builds.
+#[derive(StatelessView, Clone)]
+struct NavigatesInBuild {
+    on_build: OnBuild,
+}
+
+impl StatelessView for NavigatesInBuild {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        (self.on_build)(ctx);
+        SizedBox::new(10.0, 10.0)
+    }
 }

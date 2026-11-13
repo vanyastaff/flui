@@ -523,6 +523,10 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         self.shared.mounted.set(false);
         drop(self.url.take());
         self.shared.navigator.remove_observer(&self.observer);
+        // The hook may hold a handle to this router, which would keep its
+        // shared state alive past the unmount; it is retired here, out of
+        // its cell, rather than with the shared state.
+        drop(Terminal::new(self.shared.on_unknown.take()));
     }
 }
 
@@ -621,15 +625,27 @@ impl<R: Routable> RouterUrlOwner<R> {
     }
 
     /// The refusal for an edit the handle refused.
-    fn refused(shared: &RouterShared<R>, error: RouterError, path: RoutePath) -> NavigationRefused {
+    fn refused(error: RouterError) -> NavigationRefused {
         match error {
             RouterError::DuringBuild => NavigationRefused::Busy,
-            RouterError::Parse(_) => Self::unknown(shared, path),
-            RouterError::Disposed | RouterError::NoRouter { .. } | RouterError::EmptyStack => {
-                NavigationRefused::NoUrlOwner
-            }
+            // A handle edit parses nothing but `go`'s location, which
+            // `navigate` reports as unknown before it gets here.
+            RouterError::Parse(_)
+            | RouterError::Disposed
+            | RouterError::NoRouter { .. }
+            | RouterError::EmptyStack => NavigationRefused::NoUrlOwner,
         }
     }
+}
+
+/// Why an intent was not applied, before the unknown-path hook is told.
+enum Refusal {
+    /// No route matches the path: `on_unknown` hears of it.
+    Unknown(RoutePath),
+    /// The handle refused the edit.
+    Edit(RouterError),
+    /// Refused as it stands.
+    Refused(NavigationRefused),
 }
 
 impl<R: Routable> UrlOwner for RouterUrlOwner<R> {
@@ -642,26 +658,44 @@ impl<R: Routable> UrlOwner for RouterUrlOwner<R> {
         }
         let handle = RouterHandle::new(Rc::clone(&shared));
         let NavigationIntent { op, .. } = intent;
-        let (outcome, path) = match op {
-            NavigationOp::Push(path) => match R::from_path(&path) {
-                Ok(route) => (handle.push(route), path),
-                Err(_) => return Err(Self::unknown(&shared, path)),
-            },
-            NavigationOp::Replace(path) => match R::from_path(&path) {
-                Ok(route) => (handle.replace(route), path),
-                Err(_) => return Err(Self::unknown(&shared, path)),
-            },
-            NavigationOp::Go(path) => (handle.go_path(&path), path),
-            NavigationOp::Pop => match handle.pop() {
-                Ok(true) => return Ok(()),
-                Ok(false) => return Err(NavigationRefused::NothingToPop),
-                Err(error) => (Err(error), RoutePath::root()),
-            },
-            // An operation added after this router was written has nothing
-            // here that applies it.
-            _ => return Err(NavigationRefused::NoUrlOwner),
+        let applied = {
+            // One edit covers the parse and the change, so a parser that
+            // navigates again is `Busy`; it ends before `on_unknown` runs, so
+            // the hook may redirect.
+            let _editing = handle.editable().map_err(Self::refused)?;
+            match op {
+                NavigationOp::Push(path) => match R::from_path(&path) {
+                    Ok(route) => handle.push(route).map_err(Refusal::Edit),
+                    Err(_) => Err(Refusal::Unknown(path)),
+                },
+                NavigationOp::Replace(path) => match R::from_path(&path) {
+                    Ok(route) => handle.replace(route).map_err(Refusal::Edit),
+                    Err(_) => Err(Refusal::Unknown(path)),
+                },
+                NavigationOp::Go(path) => handle.go_path(&path).map_err(|error| match error {
+                    RouterError::Parse(_) => Refusal::Unknown(path),
+                    other => Refusal::Edit(other),
+                }),
+                // The Back key's path: a `PopScope` that refuses keeps its
+                // page and the pop counts as handled; the last page is
+                // left to the platform.
+                NavigationOp::Pop => {
+                    if shared.navigator.maybe_pop() {
+                        Ok(())
+                    } else {
+                        Err(Refusal::Refused(NavigationRefused::NothingToPop))
+                    }
+                }
+                // An operation added after this router was written has
+                // nothing here that applies it.
+                _ => Err(Refusal::Refused(NavigationRefused::NoUrlOwner)),
+            }
         };
-        outcome.map_err(|error| Self::refused(&shared, error, path))
+        applied.map_err(|refusal| match refusal {
+            Refusal::Unknown(path) => Self::unknown(&shared, path),
+            Refusal::Edit(error) => Self::refused(error),
+            Refusal::Refused(refused) => refused,
+        })
     }
 }
 

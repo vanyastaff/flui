@@ -2116,9 +2116,12 @@ nested in a page registers nothing. `UiRuntime::navigate` reaches it through
 the slot: `Push` and `Replace` parse with `from_path`, `Go` opens
 `back_stack` as `go` does, and a path that does not parse is reported to the
 `on_unknown` hook, cloned out of its cell and called with nothing borrowed,
-then refused as `NoMatch`. Every handle edit holds an `Editing` count on the
+then refused as `NoMatch`; the Router lets go of the hook when it unmounts. A
+`Pop` goes through the navigator's `maybe_pop`, so a `PopScope` veto keeps the
+page. Every handle edit holds an `Editing` count on the
 shared state for its whole commit, observers and route clones included, so an
-intent that arrives inside one is `Busy`, as is one during a build.
+intent that arrives inside one is `Busy`, as is one during a build; an intent
+holds its own count from before it parses its path to its commit.
 
 **Pinned by:** the `url_owner::` rows of `router_and_widgets_app`
 (`tests/url_owner.rs`), through `HeadlessHost::navigate`.

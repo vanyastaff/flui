@@ -1287,6 +1287,10 @@ fn router_and_widgets_app() {
             ("url_owner::an_intent_inside_another_edit_is_refused_as_busy", crate::url_owner::an_intent_inside_another_edit_is_refused_as_busy),
             ("url_owner::a_sibling_router_takes_the_url_over_when_the_owner_leaves", crate::url_owner::a_sibling_router_takes_the_url_over_when_the_owner_leaves),
             ("url_owner::a_router_inside_a_page_does_not_own_the_url", crate::url_owner::a_router_inside_a_page_does_not_own_the_url),
+            ("url_owner::a_parser_that_navigates_again_is_refused_as_busy", crate::url_owner::a_parser_that_navigates_again_is_refused_as_busy),
+            ("url_owner::an_intent_during_a_build_is_busy_before_it_is_parsed", crate::url_owner::an_intent_during_a_build_is_busy_before_it_is_parsed),
+            ("url_owner::a_pop_intent_honours_the_pages_pop_scope", crate::url_owner::a_pop_intent_honours_the_pages_pop_scope),
+            ("url_owner::an_unmounted_router_lets_go_of_its_unknown_hook", crate::url_owner::an_unmounted_router_lets_go_of_its_unknown_hook),
         ],
     );
 }

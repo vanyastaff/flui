@@ -282,10 +282,12 @@ mounted owns the URL with a warning, and the next takes over when it leaves.
 An intent for a presentation that is gone is `NoPresentation`, and one for a presentation with no
 URL owner is `NoUrlOwner`: neither is applied to another window's Router. A path that no route
 matches is reported to the Router's `on_unknown` hook, which runs with nothing borrowed and may
-navigate, and is refused as `NoMatch`. A `Pop` of the last page is `NothingToPop`, which leaves
+navigate, and is refused as `NoMatch`. A `Pop` is the Back key: a `PopScope` that refuses keeps its
+page and the pop counts as handled, and a `Pop` of the last page is `NothingToPop`, which leaves
 the Back to the platform as Flutter's `popRoute` answering `false` does. An intent that arrives
-while the Router commits an edit, or while its UI runtime builds, is `Busy`, not a second edit
-inside the first. A refused intent leaves the stack unchanged.
+while the Router commits an edit (the parse of the intent's own path included), or while its UI
+runtime builds, is `Busy` before its path is parsed, not a second edit inside the first. A refused
+intent leaves the stack unchanged.
 
 The sources of an intent are on the owner thread already: the URLs the platform opens reach
 `AppHandler` (ADR-0254), the development agent's window methods arrive through
@@ -355,6 +357,10 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   (`NoUrlOwner`, and `NoPresentation` after the window closes),
   `an_unmatched_path_reaches_on_unknown_and_leaves_the_stack` (`NoMatch`, a hook that navigates),
   `an_intent_inside_another_edit_is_refused_as_busy`,
+  `a_parser_that_navigates_again_is_refused_as_busy`,
+  `an_intent_during_a_build_is_busy_before_it_is_parsed`,
+  `a_pop_intent_honours_the_pages_pop_scope` (a `PopScope` veto keeps the page),
+  `an_unmounted_router_lets_go_of_its_unknown_hook`,
   `a_sibling_router_takes_the_url_over_when_the_owner_leaves` and
   `a_router_inside_a_page_does_not_own_the_url`.
 - `examples/navigation.rs` (`cargo check --example navigation --features material`): a push, a

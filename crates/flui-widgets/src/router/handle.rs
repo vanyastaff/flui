@@ -68,7 +68,7 @@ impl<R: Routable> RouterHandle<R> {
     /// is not building (ADR-0330 §3). A refusal from `build` is reported on
     /// the `flui.signals` target. The edit counts as running while the
     /// returned guard lives.
-    fn editable(&self) -> Result<Editing<'_>, RouterError> {
+    pub(super) fn editable(&self) -> Result<Editing<'_>, RouterError> {
         self.mounted()?;
         let building = self.shared.build_phase.is_building();
         MutatedDuringBuild::check(building, "Router").map_err(|_| RouterError::DuringBuild)?;
