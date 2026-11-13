@@ -19,6 +19,11 @@
   constructors of `flui::foundation` ids; the safe constructors stay.
 - `flui_sdk::pipeline::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction}`: they are
   `flui_sdk::rendering::objects::*`, at the facade's path.
+- `to_wire`/`from_wire` on `flui::app::InputRecord`, `PreferencesRow` and `RecordingStart`, and the
+  root `WireError` and device and gesture-profile conversions of `flui-runtime`: the recording's
+  wire form is the runtime's seam with `flui-testing`'s recording format, now in the hidden
+  `flui_runtime::__runtime`. Recordings are written and read through `flui-testing`'s
+  `recording` module.
 
 ### Changed
 
