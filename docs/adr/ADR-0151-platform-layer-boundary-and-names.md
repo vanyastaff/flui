@@ -471,8 +471,8 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
   runtime its creator lends it ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §3). Deeper control from outside goes through
   capability crates and the host bridge (ADR-0152). The Activity, which the system hands only to
   the application's `android_main`, enters through one function of the core host,
-  `android_platform(app)`, as the facade's `run_app_android` takes it; nothing the core host hands
-  back names it.
+  `android_platform(app)`, to which the run passes the `AndroidApp` that the `android_main`
+  `#[flui::main]` writes hands it; nothing the core host hands back names it.
 
 ### 9. `Platform` slims; one `AppHandler` replaces the application-level registrations
 

@@ -63,6 +63,9 @@ driver = []
 flui-platform = { workspace = true }
 # Core FLUI crates
 flui-view = { workspace = true }
+# `#[flui::main]`, the entry attribute this crate re-exports beside the run it
+# starts.
+flui-macros = { workspace = true }
 flui-rendering = { workspace = true }
 flui-foundation = { workspace = true }
 # Composition-only logging backend. `flui-app` is a composition root, so it is

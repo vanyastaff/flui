@@ -12,5 +12,5 @@
 mod app;
 
 fn main() -> Result<(), flui::LaunchError> {
-    flui::run_app(app::AcceptanceApp::new(app::Faults::NONE), app::launch())
+    app::launch().run(app::AcceptanceApp::new(app::Faults::NONE))
 }
