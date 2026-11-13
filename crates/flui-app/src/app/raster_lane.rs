@@ -53,6 +53,13 @@
     deprecated,
     reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
 )]
+#![cfg_attr(
+    not(any(target_os = "android", target_os = "ios")),
+    allow(
+        dead_code,
+        reason = "the Android and iOS runners pump the raster lane until they move to the raster executor (ADR-0305); the desktop runner draws through `runner::raster_host`"
+    )
+)]
 
 // The mailbox-lane half of this module is not wired on wasm32: the web
 // runner still drives the direct sink (see `DirectSink`'s doc), so the lane
@@ -205,6 +212,12 @@ fn damage_mode_from(value: Option<&str>) -> DamageMode {
     }
 }
 
+/// The damage mode the process's [`DAMAGE_ENV`] selects.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn damage_mode_from_env() -> DamageMode {
+    damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref())
+}
+
 /// The inline raster lane: a [`RasterOwner`] pumped synchronously on the
 /// owner thread, plus the stamp state that keeps its frames fresh.
 ///
@@ -265,7 +278,7 @@ impl<B: RasterBackend> RasterLane<B> {
             damage: RasterBase::default(),
             textures: None,
         };
-        lane.set_damage_mode(damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref()));
+        lane.set_damage_mode(damage_mode_from_env());
         lane
     }
 

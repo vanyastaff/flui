@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_app::app::{
-    AppConfig, AppHandle, Application, CloseReason, CloseRequestHandler, CloseResponse,
-    DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureHandlerFactory, FrameFailureKind,
-    request_presentation_close,
+    AppConfig, AppHandle, AppWindowError, Application, CloseReason, CloseRequestHandler,
+    CloseResponse, DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureHandlerFactory,
+    FrameFailureKind, WindowPolicy, open_window, request_presentation_close,
 };
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::PresentationAddress;
@@ -50,6 +50,8 @@ struct Observed {
     /// While set, the leaf under the load fails its paint: the frame is
     /// dropped.
     fail_paint: Arc<AtomicBool>,
+    /// How many times the leaf under the load painted.
+    paints: Arc<std::sync::atomic::AtomicU32>,
     /// The presentation the root's next build closes, and what the close
     /// answered.
     close_from_build: Rc<Cell<Option<PresentationAddress>>>,
@@ -60,6 +62,8 @@ struct Observed {
     guard: Rc<RefCell<Option<CloseGuard>>>,
     /// The device rebuild each frame dropped on a lost device reported.
     device_reports: Arc<Mutex<Vec<DeviceRecovery>>>,
+    /// Frames a panic dropped, as the frame-failure handler was told.
+    frame_panics: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Observed {
@@ -126,11 +130,13 @@ impl std::future::Future for GatedLoad {
 #[derive(Clone)]
 struct PaintTrip {
     armed: Arc<AtomicBool>,
+    paints: Arc<std::sync::atomic::AtomicU32>,
 }
 
 #[derive(Debug)]
 struct PaintTripBox {
     armed: Arc<AtomicBool>,
+    paints: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl flui_foundation::inspect::Inspect for PaintTripBox {
@@ -153,6 +159,7 @@ impl RenderBox for PaintTripBox {
     }
 
     fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
+        self.paints.fetch_add(1, Ordering::SeqCst);
         assert!(
             !self.armed.load(Ordering::SeqCst),
             "the leaf's paint failed"
@@ -167,6 +174,7 @@ impl RenderView for PaintTrip {
     fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> PaintTripBox {
         PaintTripBox {
             armed: Arc::clone(&self.armed),
+            paints: Arc::clone(&self.paints),
         }
     }
 
@@ -222,6 +230,7 @@ impl ViewState<ObservedRoot> for ObservedRootState {
         }
         let observed = self.observed.clone();
         let trip = Arc::clone(&self.observed.fail_paint);
+        let paints = Arc::clone(&self.observed.paints);
         FutureBuilder::keyed(
             Some(0_u32),
             Rc::new(move || {
@@ -233,6 +242,7 @@ impl ViewState<ObservedRoot> for ObservedRootState {
             Rc::new(move |_, _| {
                 PaintTrip {
                     armed: Arc::clone(&trip),
+                    paints: Arc::clone(&paints),
                 }
                 .boxed()
             }),
@@ -252,17 +262,21 @@ fn observed_app(
     handler: Option<CloseRequestHandler>,
 ) -> (Application, ObservedRoot) {
     let device_reports = Arc::clone(&observed.device_reports);
+    let frame_panics = Arc::clone(&observed.frame_panics);
     let mut config = AppConfig::new()
         .exit_policy(ExitPolicy::OnLastWindowClosed)
         .frame_failure_handler(FrameFailureHandlerFactory::new(move || {
             let reports = Arc::clone(&device_reports);
-            FrameFailureHandler::new(move |report| {
-                if let FrameFailureKind::DeviceLost { recovery, .. } = report.kind {
-                    reports
-                        .lock()
-                        .expect("BUG: the frame-failure handler does not panic")
-                        .push(recovery);
+            let panics = Arc::clone(&frame_panics);
+            FrameFailureHandler::new(move |report| match report.kind {
+                FrameFailureKind::DeviceLost { recovery, .. } => reports
+                    .lock()
+                    .expect("BUG: the frame-failure handler does not panic")
+                    .push(recovery),
+                FrameFailureKind::CallbackPanic { .. } => {
+                    panics.fetch_add(1, Ordering::SeqCst);
                 }
+                _ => {}
             })
         }));
     if let Some(handler) = handler {
@@ -829,6 +843,409 @@ pub(crate) fn a_given_up_device_renders_again_when_the_application_asks() {
 }
 
 /// Close the last window and join the run.
+/// Every window of a run draws on the run's one device (ADR-0305): a lost
+/// device fails the frames of both windows, one rebuild brings it back for
+/// both, and both draw again.
+pub(crate) fn two_windows_draw_on_one_device() {
+    let main = Observed::default();
+    let secondary = Observed::default();
+    let ready = Rc::new(RefCell::new(None));
+    let ready_slot = Rc::clone(&ready);
+    let opened = secondary.clone();
+    let (application, root) = observed_app(main.clone(), Rc::clone(&ready), None);
+    let application = application.on_ready(move |handle| {
+        ready_slot.replace(Some(handle.clone()));
+        drop(
+            open_window(
+                AppConfig::new(),
+                WindowPolicy::Isolated,
+                ObservedRoot { observed: opened },
+            )
+            .expect("an isolated window opens on the headless platform"),
+        );
+    });
+    let run = HeadlessRun::start(application, root);
+    run.run_owner_turn();
+    run.run_owner_turn();
+    let windows = run.open_windows();
+    assert_eq!(windows.len(), 2, "both windows are open");
+    let renderers: Vec<StandInRenderer> = windows
+        .iter()
+        .map(|window| run.renderer(window).expect("each window renders"))
+        .collect();
+    let presented = |renderers: &[StandInRenderer]| -> Vec<u64> {
+        renderers
+            .iter()
+            .map(StandInRenderer::frames_presented)
+            .collect()
+    };
+    assert!(
+        presented(&renderers).iter().all(|frames| *frames > 0),
+        "both windows presented"
+    );
+
+    // One window's device is the other's: losing it fails both windows' frames.
+    renderers[0].fail_recoveries(u32::MAX);
+    renderers[0].lose_device();
+    let before = presented(&renderers);
+    main.schedule_rebuild();
+    secondary.schedule_rebuild();
+    for window in &windows {
+        flui_platform::PlatformWindow::request_redraw(window);
+    }
+    run.run_owner_turn();
+    assert_eq!(
+        presented(&renderers),
+        before,
+        "neither window presents on the lost device"
+    );
+    let attempts = renderers[1].recovery_attempts();
+    assert!(attempts > 0, "the second window's frame saw the loss");
+    assert_eq!(
+        renderers[0].recovery_attempts(),
+        attempts,
+        "both windows count the same rebuilds"
+    );
+
+    // The loop as a desktop runs it: each turn sleeps until the deadline the
+    // previous one asked to wake at. The next rebuild, at its deadline,
+    // brings the device back for both windows, and both draw again.
+    renderers[1].fail_recoveries(0);
+    let drawn = |renderers: &[StandInRenderer]| {
+        presented(renderers)
+            .iter()
+            .zip(&before)
+            .all(|(now, before)| now > before)
+    };
+    let mut turns = 0;
+    while !drawn(&renderers) {
+        turns += 1;
+        assert!(
+            turns <= 16,
+            "the windows never drew again: {before:?} -> {:?}",
+            presented(&renderers)
+        );
+        let deadline = run
+            .wake_deadline()
+            .expect("the loop wakes for the rebuild and the dropped frames");
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        for window in &windows {
+            flui_platform::PlatformWindow::request_redraw(window);
+        }
+        run.run_owner_turn();
+    }
+    assert_eq!(
+        renderers[0].recovery_attempts(),
+        attempts + 1,
+        "one rebuild served both windows"
+    );
+
+    for window in &windows {
+        assert!(window.simulate_close(), "the window closes");
+        run.run_owner_turn();
+    }
+    assert!(!run.is_running(), "closing both windows ended the loop");
+    join_ok(run);
+}
+
+/// A panic in the renderer reaches the application's frame-failure handler
+/// as the frame's failure, and the window draws again after it.
+pub(crate) fn a_panicking_frame_is_reported_and_the_window_draws_again() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    let presented = started.renderer.frames_presented();
+    // A renderer that panics on this frame and on the next ones: a retry
+    // would panic again.
+    started.renderer.panic_in_next_frames(8);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    assert_eq!(
+        observed.frame_panics.load(Ordering::SeqCst),
+        1,
+        "the renderer's panic was reported to the frame-failure handler after its frame"
+    );
+    let paints = observed.paints.load(Ordering::SeqCst);
+    // The loop's own deadlines pass with nothing asked of the window: the
+    // panicked frame is not retried into the same panic.
+    for _ in 0..3 {
+        let Some(deadline) = started.run.wake_deadline() else {
+            break;
+        };
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        started.run.run_owner_turn();
+    }
+    assert_eq!(
+        observed.frame_panics.load(Ordering::SeqCst),
+        1,
+        "the panic was reported once, and its frame not retried into the same panic"
+    );
+    assert_eq!(
+        observed.paints.load(Ordering::SeqCst),
+        paints,
+        "a panicked frame repaints nothing on its own"
+    );
+    started.renderer.panic_in_next_frames(0);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the window's next change drew again after the panic"
+    );
+    join_ok_after_close(started);
+}
+
+/// A window whose surface the run's GPU cannot draw to fails to open with
+/// a renderer error, instead of opening blank.
+pub(crate) fn a_window_the_gpu_refuses_does_not_open() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.renderer.refuse_next_window();
+    let mut request = open_window(
+        AppConfig::new(),
+        WindowPolicy::Isolated,
+        ObservedRoot {
+            observed: Observed::default(),
+        },
+    )
+    .expect("the window is admitted");
+    for _ in 0..4 {
+        started.run.run_owner_turn();
+    }
+    let answer = request
+        .try_result()
+        .expect("the window request is answered");
+    assert!(
+        matches!(answer, Err(AppWindowError::Renderer { .. })),
+        "{answer:?}"
+    );
+    assert_eq!(
+        started.run.open_windows().len(),
+        1,
+        "only the main window is open"
+    );
+    join_ok_after_close(started);
+}
+
+/// A window resized past what the device can draw shows nothing at that
+/// size without retrying it every frame, and draws again at a size the
+/// device takes.
+pub(crate) fn a_window_past_the_device_limit_waits_for_a_size_it_takes() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    let presented = started.renderer.frames_presented();
+    started.renderer.limit_size(4096);
+    started.window.simulate_resize(8192.0, 600.0);
+    started.run.run_owner_turn();
+    assert_eq!(
+        started.run.wake_deadline(),
+        None,
+        "no retry of the refused size is armed"
+    );
+    assert_eq!(
+        started.renderer.frames_presented(),
+        presented,
+        "nothing is drawn at the refused size"
+    );
+    started.window.simulate_resize(800.0, 600.0);
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "a size the device takes draws again"
+    );
+    join_ok_after_close(started);
+}
+
+/// A size a lost device refused is tried again once the device is rebuilt,
+/// since the new device may take it, without waiting for a resize: whether
+/// the window saw the device lost (a rebuild failed first) or the loss and
+/// the rebuild fell in one turn.
+pub(crate) fn a_rebuilt_device_tries_the_refused_size_again() {
+    for failing_rebuilds in [1, 0] {
+        let observed = Observed::default();
+        let started = start(&observed);
+        started.renderer.limit_size(4096);
+        started.window.simulate_resize(8192.0, 600.0);
+        started.run.run_owner_turn();
+        let presented = started.renderer.frames_presented();
+        // The rebuilt device takes any size.
+        started.renderer.limit_size(i32::MAX);
+        started.renderer.lose_device();
+        started.renderer.fail_recoveries(failing_rebuilds);
+        observed.schedule_rebuild();
+        started.run.run_owner_turn();
+        for _ in 0..8 {
+            if started.renderer.frames_presented() > presented {
+                break;
+            }
+            let Some(deadline) = started.run.wake_deadline() else {
+                break;
+            };
+            wake_at(&started, deadline);
+        }
+        assert_eq!(
+            started.renderer.recovery_attempts(),
+            failing_rebuilds + 1,
+            "the device was rebuilt"
+        );
+        assert!(
+            started.renderer.frames_presented() > presented,
+            "the rebuilt device drew at the size the lost one refused \
+             ({failing_rebuilds} failed rebuilds first)"
+        );
+        join_ok_after_close(started);
+    }
+}
+
+/// A panic of the renderer while it resizes a window is reported, and the
+/// window still reaches its new size: the frame that met the panic is
+/// retried, and the retry applies the size. An earlier frame's panic of
+/// another kind does not take that retry away.
+pub(crate) fn a_panicking_resize_is_reported_and_the_window_reaches_its_size() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    // A render that panicked: its frame fails, unretried.
+    started.renderer.panic_in_next_frames(1);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    let presented = started.renderer.frames_presented();
+    started.renderer.panic_in_next_resizes(1);
+    started.window.simulate_resize(700.0, 500.0);
+    started.run.run_owner_turn();
+    assert_eq!(
+        observed.frame_panics.load(Ordering::SeqCst),
+        2,
+        "the render's and the resize's panics were reported to the frame-failure handler"
+    );
+    for _ in 0..8 {
+        if started.renderer.frames_presented() > presented {
+            break;
+        }
+        let Some(deadline) = started.run.wake_deadline() else {
+            break;
+        };
+        wake_at(&started, deadline);
+    }
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the window drew at its new size after the panic"
+    );
+    join_ok_after_close(started);
+}
+
+/// A resize the renderer panics on every time is retried once, not on every
+/// frame after it.
+pub(crate) fn a_resize_that_keeps_panicking_is_not_retried_forever() {
+    const PANICS: u32 = 8;
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.renderer.panic_in_next_resizes(PANICS);
+    started.window.simulate_resize(700.0, 500.0);
+    started.run.run_owner_turn();
+    // The loop as a desktop runs it, until it has nothing to wake for. A
+    // wake of the window for its own reasons may try the size again; a
+    // retry on every display period would report a panic on each.
+    for _ in 0..2 * PANICS {
+        let Some(deadline) = started.run.wake_deadline() else {
+            break;
+        };
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        started.run.run_owner_turn();
+    }
+    assert_eq!(
+        started.run.wake_deadline(),
+        None,
+        "no retry of the panicking resize is armed"
+    );
+    let panics = observed.frame_panics.load(Ordering::SeqCst);
+    assert!(
+        (2..=3).contains(&panics),
+        "the resize's panic and its one retry's were reported, and at most \
+         one more from a wake the window has for its own reasons: {panics} panics"
+    );
+    let presented = started.renderer.frames_presented();
+    started.renderer.panic_in_next_resizes(0);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the window's next change draws at its size"
+    );
+    join_ok_after_close(started);
+}
+
+/// A window at a refused size whose surface a rebuilt device dropped, and
+/// whose new surface the GPU refuses, arms no retry: the frame's retry would
+/// meet the refused surface the same way, every display period. Its next
+/// change asks for a surface again, and a size the device takes draws.
+pub(crate) fn a_window_whose_new_surface_is_refused_waits_for_its_next_change() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    let presented = started.renderer.frames_presented();
+    // A window at a size past the device's limit, so its frames stop.
+    started.renderer.limit_size(4096);
+    started.window.simulate_resize(8192.0, 600.0);
+    started.run.run_owner_turn();
+    started.renderer.drop_surfaces_on_rebuild();
+    started.renderer.refuse_next_restores(1);
+    started.renderer.lose_device();
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.recovery_attempts() >= 1,
+        "the device was rebuilt"
+    );
+    assert_eq!(
+        started.run.wake_deadline(),
+        None,
+        "no retry of a frame with no surface is armed"
+    );
+    started.window.simulate_resize(800.0, 600.0);
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "a size the device takes draws again"
+    );
+    join_ok_after_close(started);
+}
+
+/// A window whose new surface is configured at its old size, past a rebuilt
+/// device's lower limit, while the platform resizes it to a size that fits,
+/// draws at that size: the refusal of the old size is not its new size's.
+pub(crate) fn a_new_surface_refused_at_the_old_size_draws_at_the_new_one() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.window.simulate_resize(1000.0, 800.0);
+    started.run.run_owner_turn();
+    let presented = started.renderer.frames_presented();
+    started.renderer.drop_surfaces_on_rebuild();
+    started.renderer.lose_device();
+    started.renderer.limit_size(700);
+    started.window.simulate_resize(640.0, 480.0);
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.recovery_attempts() >= 1,
+        "the device was rebuilt"
+    );
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the window drew at the size that fits"
+    );
+    assert_eq!(
+        started.run.wake_deadline(),
+        None,
+        "nothing is left to retry"
+    );
+    // The size is the window's: its next frame draws at it too.
+    let drawn = started.renderer.frames_presented();
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > drawn,
+        "the window's next frame draws at the size that fits"
+    );
+    join_ok_after_close(started);
+}
+
 fn join_ok_after_close(started: Started) {
     close(&started, CloseRoute::User);
     assert!(!started.run.is_running(), "the close ended the loop");
@@ -891,6 +1308,42 @@ fn runner_close() {
             (
                 "a_given_up_device_renders_again_when_the_application_asks",
                 a_given_up_device_renders_again_when_the_application_asks,
+            ),
+            (
+                "two_windows_draw_on_one_device",
+                two_windows_draw_on_one_device,
+            ),
+            (
+                "a_panicking_frame_is_reported_and_the_window_draws_again",
+                a_panicking_frame_is_reported_and_the_window_draws_again,
+            ),
+            (
+                "a_window_the_gpu_refuses_does_not_open",
+                a_window_the_gpu_refuses_does_not_open,
+            ),
+            (
+                "a_window_past_the_device_limit_waits_for_a_size_it_takes",
+                a_window_past_the_device_limit_waits_for_a_size_it_takes,
+            ),
+            (
+                "a_rebuilt_device_tries_the_refused_size_again",
+                a_rebuilt_device_tries_the_refused_size_again,
+            ),
+            (
+                "a_panicking_resize_is_reported_and_the_window_reaches_its_size",
+                a_panicking_resize_is_reported_and_the_window_reaches_its_size,
+            ),
+            (
+                "a_resize_that_keeps_panicking_is_not_retried_forever",
+                a_resize_that_keeps_panicking_is_not_retried_forever,
+            ),
+            (
+                "a_window_whose_new_surface_is_refused_waits_for_its_next_change",
+                a_window_whose_new_surface_is_refused_waits_for_its_next_change,
+            ),
+            (
+                "a_new_surface_refused_at_the_old_size_draws_at_the_new_one",
+                a_new_surface_refused_at_the_old_size_draws_at_the_new_one,
             ),
         ],
     );

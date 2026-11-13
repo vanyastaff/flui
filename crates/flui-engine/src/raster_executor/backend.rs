@@ -46,8 +46,11 @@ pub trait SlotBackend {
     /// Give window slot `slot` a new surface, configured at its size.
     ///
     /// # Errors
-    /// The surface cannot be used (the adapter cannot present to it, it
-    /// cannot be configured); the slot stays released.
+    /// [`EngineError::InvalidTargetSize`]
+    /// when the slot's size is over the device's limit: the surface is kept,
+    /// unconfigured, until a resize fits. Any other error: the surface cannot
+    /// be used (the adapter cannot present to it, it cannot be configured),
+    /// and the slot stays released.
     fn restore(&mut self, slot: SlotId, surface: UnconfiguredSurface) -> EngineResult<()>;
 
     /// Window slot `slot`'s display now reports `color`.
@@ -114,4 +117,65 @@ pub trait SlotBackend {
     /// future the owner spawns) is given up at the first due attempt instead
     /// of walking the backoff.
     fn rebuilds_inline(&self) -> bool;
+}
+
+/// A boxed backend is one, so a host that picks its backend at run time (a
+/// GPU context, or a testing stand-in) keeps one executor type.
+impl<B: SlotBackend + ?Sized> SlotBackend for Box<B> {
+    fn attach(&mut self, slot: SlotId, target: SlotTarget, config: SlotConfig) -> EngineResult<()> {
+        (**self).attach(slot, target, config)
+    }
+
+    fn resize(&mut self, slot: SlotId, size: DeviceSize) -> EngineResult<()> {
+        (**self).resize(slot, size)
+    }
+
+    fn release(&mut self, slot: SlotId) {
+        (**self).release(slot);
+    }
+
+    fn restore(&mut self, slot: SlotId, surface: UnconfiguredSurface) -> EngineResult<()> {
+        (**self).restore(slot, surface)
+    }
+
+    fn set_display_color(&mut self, slot: SlotId, color: DisplayColor) -> EngineResult<()> {
+        (**self).set_display_color(slot, color)
+    }
+
+    fn set_latency(&mut self, slot: SlotId, latency: FrameLatency) {
+        (**self).set_latency(slot, latency);
+    }
+
+    fn apply_textures(&mut self, slot: SlotId, updates: TextureUpdates) -> EngineResult<()> {
+        (**self).apply_textures(slot, updates)
+    }
+
+    fn render(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        damage: DamageRegion,
+    ) -> EngineResult<PresentDisposition> {
+        (**self).render(slot, scene, damage)
+    }
+
+    fn detach(&mut self, slot: SlotId) {
+        (**self).detach(slot);
+    }
+
+    fn reclaim(&mut self, level: MemoryPressureLevel) {
+        (**self).reclaim(level);
+    }
+
+    fn device_lost(&self) -> bool {
+        (**self).device_lost()
+    }
+
+    fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
+        (**self).rebuild_device()
+    }
+
+    fn rebuilds_inline(&self) -> bool {
+        (**self).rebuilds_inline()
+    }
 }

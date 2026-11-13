@@ -566,6 +566,126 @@ fn a_window_the_rebuilt_device_cannot_present_to_asks_for_a_new_surface() {
     assert!(!rig.sender.record(slot).expect("held").wants_surface);
 }
 
+/// The record tells a new surface the backend refused from a surface dropped
+/// after a restore it took: the owner gives up on a frame only in the first
+/// case, since in the second the next restore can draw it.
+#[test]
+fn a_refused_restore_is_told_apart_from_a_surface_dropped_after_one() {
+    let mut rig = rig();
+    let (slot, before) = rig.sized_window();
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceReplacementNeeded));
+    let _ = rig.frame(slot, before, 0);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(0, RasterVerdict::NotShown)]);
+    let record = rig.sender.record(slot).expect("held");
+    assert!(record.wants_surface && !record.surface_refused);
+
+    rig.backend
+        .script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+    let _ = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    });
+    let _ = rig.executor.turn();
+    let record = rig.sender.record(slot).expect("held");
+    assert!(
+        record.wants_surface && record.surface_refused,
+        "the refused restore is named"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
+    ));
+
+    // The next restore is taken, and the frame of the same turn drops the
+    // new surface again.
+    let SendReceipt::Configured(restored) = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    }) else {
+        panic!("a restore of a sized window mints a generation");
+    };
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceReplacementNeeded));
+    let _ = rig.frame(slot, restored, 1);
+    let _ = rig.executor.turn();
+    let record = rig.sender.record(slot).expect("held");
+    assert!(
+        record.wants_surface && !record.surface_refused,
+        "a surface dropped after a taken restore is not a refusal"
+    );
+    let _ = rig.verdicts(slot);
+
+    // A refused restore, then one that panics: the newest was not refused.
+    rig.backend
+        .script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+    let _ = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    });
+    let _ = rig.executor.turn();
+    assert!(rig.sender.record(slot).expect("held").surface_refused);
+    let _ = rig.sender.take_failure(slot);
+    rig.backend.script_restore(ScriptedAnswer::Panic);
+    let _ = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    });
+    let _ = rig.executor.turn();
+    let record = rig.sender.record(slot).expect("held");
+    assert!(
+        record.wants_surface && !record.surface_refused,
+        "a panicked restore is not a refusal"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Panicked(_))
+    ));
+}
+
+/// A restore over the device's size limit keeps its surface, as a rebuild
+/// does: the slot waits for a size that fits, not for another surface, and
+/// that size draws.
+#[test]
+fn a_restore_over_the_size_limit_keeps_its_surface() {
+    let mut rig = rig();
+    let (slot, before) = rig.sized_window();
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceReplacementNeeded));
+    let _ = rig.frame(slot, before, 0);
+    let _ = rig.executor.turn();
+    let _ = rig.verdicts(slot);
+    rig.backend
+        .script_restore(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+            width: 32,
+            height: 16,
+        }));
+    let _ = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    });
+    let _ = rig.executor.turn();
+    let record = rig.sender.record(slot).expect("held");
+    assert!(
+        !record.wants_surface && !record.surface_refused,
+        "the surface is kept"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
+    ));
+    let SendReceipt::Configured(resized) = rig.send(RasterCommand::Configure {
+        slot,
+        change: SlotChange::Size(DeviceSize::new(16, 8)),
+    }) else {
+        panic!("a positive size mints a generation");
+    };
+    let _ = rig.frame(slot, resized, 1);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::Presented)]);
+}
+
 /// A window over the rebuilt device's size limit keeps its surface: its
 /// record holds why and asks for no new surface, and a size that fits
 /// renders again.
@@ -646,4 +766,94 @@ fn a_rebuild_refusal_is_committed_before_the_clock_is_read_again() {
         rig.sender.take_failure(slot),
         Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
     ));
+}
+
+/// A size the lost device refused is the rebuilt device's to answer: it is
+/// tried again, and a refusal of it the owner had not taken yet is dropped
+/// with the old device, so the owner does not hold the new device to it.
+#[test]
+fn a_size_the_lost_device_refused_is_tried_on_the_rebuilt_one() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    let _ = rig.send(RasterCommand::Configure {
+        slot,
+        change: SlotChange::Size(DeviceSize::new(64, 32)),
+    });
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+            width: 64,
+            height: 32,
+        }));
+    let _ = rig.executor.turn();
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    assert!(
+        rig.sender.take_failure(slot).is_none(),
+        "the old device's refusal went with it"
+    );
+    let required = rig.sender.record(slot).expect("held").required_generation;
+    let _ = rig.frame(slot, required, 1);
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rig.verdicts(slot),
+        [(1, RasterVerdict::Presented)],
+        "the rebuilt device took the size"
+    );
+}
+
+/// A rebuild that configures every slot anew answers each slot's size
+/// afresh: a size refusal by the device before it, which the owner had not
+/// taken, goes with that device.
+#[test]
+fn a_rebuild_that_takes_the_size_drops_the_old_devices_refusal() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    rig.backend.lose_device();
+    rig.backend.refuse_on_rebuild(
+        slot,
+        EngineError::InvalidTargetSize {
+            width: 32,
+            height: 16,
+        },
+    );
+    let _ = rig.executor.turn();
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    assert!(
+        rig.sender.take_failure(slot).is_none(),
+        "the second device took the size"
+    );
+}
+
+/// A device that comes back from a rebuild that panicked with it in place
+/// has answered no slot anew: a size refusal the owner has not taken stays
+/// held for it, since nothing answers that size again.
+#[test]
+fn a_rebuild_that_panics_in_place_keeps_a_refusal_it_does_not_answer() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    rig.backend.lose_device();
+    rig.backend.refuse_on_rebuild(
+        slot,
+        EngineError::InvalidTargetSize {
+            width: 32,
+            height: 16,
+        },
+    );
+    let _ = rig.executor.turn();
+    rig.backend.lose_device();
+    rig.backend.script_rebuild(ScriptedAnswer::Panic);
+    let mut caught = flui_foundation::panic::FirstPanic::new();
+    let turn = caught.contain(|| rig.executor.turn());
+    assert!(
+        turn.is_none() && caught.into_payload().is_some(),
+        "the rebuild's panic is resumed"
+    );
+    assert!(
+        matches!(
+            rig.sender.take_failure(slot),
+            Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
+        ),
+        "the refusal waits for the owner"
+    );
 }

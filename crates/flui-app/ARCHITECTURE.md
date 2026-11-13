@@ -228,15 +228,30 @@ the dispatch layer moves there too.
   callbacks, authorizer closure with and without a surviving sibling, and reuse
   of the refused window's native identity by the next installation.
 - **The engine stays here.** The UI runtime renders through a
-  `flui_runtime::sink::FrameSink` and names no engine type. This crate's two
-  sinks are `RasterLane<B>` (the desktop, Android and iOS runners, ADR-0045)
-  and `DirectSink` (the web runner). `DirectSink` alone maps `EngineError`s to
-  `SubmitVerdict`s for the web runner; the UI runtime's own tests script verdicts
-  and never reach it.
+  `flui_runtime::sink::FrameSink` and names no engine type. This crate's
+  sinks are a desktop window's `RasterSlot` frame (ADR-0305), `RasterLane<B>`
+  (the Android and iOS runners, ADR-0045) and `DirectSink` (the web runner).
+  The raster host maps a slot's `RasterVerdict` to its `SubmitVerdict` one to
+  one; `DirectSink` maps `EngineError`s for the web runner; the UI runtime's own
+  tests script verdicts and never reach either.
+- **Every desktop window is a slot on one GPU context.** The loop's
+  `RasterHost` (`runner/raster_host.rs`) sits in the composition root as
+  `Rc<RefCell<_>>`. The first window to attach bootstraps the context on the
+  owner platform's display connection and places an inline `RasterExecutor`;
+  each later window mints a slot on it. A frame is sent and the executor turns
+  at once, so its settlement is in hand before the pump returns; a frame that
+  finds the host already turning is answered `Retry`. The host stamps each
+  frame with the generation the executor's record requires at that moment, and
+  makes a window's surface again over its kept `SurfaceTarget` when the record
+  asks for one. The context retires with the loop's owner platform
+  (`OwnerHostClearGuard`), never in the thread's teardown, where wgpu's own
+  thread-locals are gone. `two_windows_draw_on_one_device` and `native_linux`
+  exercise it.
 - **Resize uses the installed driver's lifetime.** Addressed resize checks out
   the same native driver as frame delivery. Its strong lease restores the exact
   registration or retires it after reentrant teardown, without consulting TLS.
-  A sibling presentation cannot resize that driver's surface. Desktop, Android
+  A sibling presentation cannot resize that driver's surface. A desktop window
+  records the size its next frame is configured for; Android
   and iOS clone the raster resize hook under the lane guard and apply it after
   releasing the guard; web preserves canvas rounding at fractional DPR.
   `resize_uses_the_installed_driver_lease_through_failure_and_teardown` pins
@@ -309,14 +324,18 @@ the dispatch layer moves there too.
   `font_notification_survives_the_primary_window_closing_before_delivery`
   separates font invalidation from redraw caused by close. Background polling
   also survives primary close and rejects a replaced runtime incarnation.
-- **Device recovery brackets the pump.** On desktop, Android and iOS,
+- **Device recovery brackets the pump.** On desktop the executor rebuilds a
+  lost device in the turn before the frame and in the frame's own turn, on its
+  own backoff; the frame driver maps its `DeviceHealth` to the presentation's
+  `DeviceRecovery` before and after the pump, and a device that came back
+  before the frame marks the tree for a full repaint. On Android and iOS,
   `pump_with_device_recovery` runs its pre-frame recovery attempt before the
   pump's begin frame and its post-frame attempt after the post-frame
   callbacks; only `mark_primary_needs_full_repaint` touches the tree, and it
   lands before the pipeline that repaints. The pump's frame timestamp is the
   wake's own `now`.
-- **Native frame callbacks run outside the raster guard.** Desktop, Android
-  and iOS pump through a private `RasterFrame` sink. It retains the surface
+- **Native frame callbacks run outside the raster guard.** Android and iOS
+  pump through a private `RasterFrame` sink. It retains the surface
   generation and dimensions sampled for layout and tries the lane only when
   submitting. Contention returns `Retry` before modifying damage history or
   admitting a mailbox snapshot. Pre-frame and post-frame device recovery borrow
