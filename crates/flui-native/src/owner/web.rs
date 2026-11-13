@@ -521,7 +521,8 @@ thread_local! {
 impl PageLoop {
     /// `owner` runs: the wake hook of its state reaches it from now on. The
     /// entries of loops that are gone are dropped here, so the list holds the
-    /// live loops only.
+    /// loops alive at the last `enter` and any that died since: a dead entry
+    /// finds nothing, as its loop cannot be upgraded.
     fn enter(owner: &Arc<WebLoop>) {
         let entered = PageLoop {
             state: Arc::downgrade(&owner.state),
