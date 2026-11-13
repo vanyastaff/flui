@@ -802,7 +802,7 @@ impl StatelessView for ListTile {
         }
         let semantics = semantics.child(content);
 
-        let mut ink_well = InkWell::new(semantics).shape(resolved.shape);
+        let mut ink_well = InkWell::new().child(semantics).shape(resolved.shape);
         if self.is_interactive() {
             let on_tap = self
                 .on_tap

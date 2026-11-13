@@ -351,7 +351,8 @@ impl CarouselCard {
         let body: BoxedView = match &self.on_tap {
             Some(on_tap) => {
                 let on_tap = Rc::clone(on_tap);
-                InkWell::new(surface)
+                InkWell::new()
+                    .child(surface)
                     .shape(shape)
                     .overlay_color(overlay)
                     .on_tap(move |ctx| on_tap(ctx, index))
