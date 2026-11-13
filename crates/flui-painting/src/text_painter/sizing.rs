@@ -209,6 +209,7 @@ pub struct TextSizingConflict {
 
 /// A batch refused before changing any admitted answers.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum TextSizingAdmissionError {
     /// An answer contradicts another answer in the batch or a retained answer.
     #[error(transparent)]
@@ -550,6 +551,10 @@ pub struct TextPreparationPending {
 
 /// Preparation debt differs from an invalid authored layout.
 #[derive(Debug, thiserror::Error)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the rendering error maps each measurement failure, and a `_` arm would lose a pending preparation"
+)]
 pub enum TextMeasurementError {
     /// Authored input or shaping failed.
     #[error(transparent)]

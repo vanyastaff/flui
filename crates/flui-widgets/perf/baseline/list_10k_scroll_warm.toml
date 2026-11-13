@@ -1,0 +1,7 @@
+# Written by `cargo xtask perf --bless`; counts, not timings.
+# One scenario of crates/flui-widgets/tests/perf.rs.
+
+[list_10k_scroll_warm]
+allocated_bytes = 792559
+allocations = 3510
+reallocations = 126

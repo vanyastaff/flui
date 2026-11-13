@@ -72,8 +72,10 @@ pub enum InvalidDurationConfig {
 /// let total = ms + Milliseconds::new(10.0);
 /// assert!((total.value() - 22.5).abs() < 0.01);
 ///
-/// // Convert to std::time::Duration
-/// let std_duration: std::time::Duration = ms.into();
+/// // A count that is no `Duration` (negative, NaN, too large) is refused, not a panic
+/// let std_duration = std::time::Duration::try_from(ms).expect("12.5 ms is a duration");
+/// assert_eq!(std_duration, std::time::Duration::from_micros(12_500));
+/// assert!(std::time::Duration::try_from(Milliseconds::new(-1.0)).is_err());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -228,10 +230,14 @@ impl From<std::time::Duration> for Milliseconds {
     }
 }
 
-impl From<Milliseconds> for std::time::Duration {
+/// A millisecond count is any `f64`, and a [`std::time::Duration`] is neither negative nor
+/// unbounded: a negative, NaN or too large count is refused.
+impl TryFrom<Milliseconds> for std::time::Duration {
+    type Error = std::time::TryFromFloatSecsError;
+
     #[inline]
-    fn from(ms: Milliseconds) -> Self {
-        std::time::Duration::from_secs_f64(ms.0 / 1000.0)
+    fn try_from(ms: Milliseconds) -> Result<Self, Self::Error> {
+        std::time::Duration::try_from_secs_f64(ms.0 / 1000.0)
     }
 }
 
@@ -370,10 +376,14 @@ impl From<std::time::Duration> for Seconds {
     }
 }
 
-impl From<Seconds> for std::time::Duration {
+/// A second count is any `f64`, and a [`std::time::Duration`] is neither negative nor
+/// unbounded: a negative, NaN or too large count is refused.
+impl TryFrom<Seconds> for std::time::Duration {
+    type Error = std::time::TryFromFloatSecsError;
+
     #[inline]
-    fn from(secs: Seconds) -> Self {
-        std::time::Duration::from_secs_f64(secs.0)
+    fn try_from(secs: Seconds) -> Result<Self, Self::Error> {
+        std::time::Duration::try_from_secs_f64(secs.0)
     }
 }
 

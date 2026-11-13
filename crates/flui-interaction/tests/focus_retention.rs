@@ -450,6 +450,7 @@ fn directional_edges_match_linear_scope_outcomes() {
                     assert!(moved);
                     assert!(nodes[1].has_primary_focus());
                 }
+                _ => unreachable!("this row lists only the behaviors above"),
             }
         }
     }

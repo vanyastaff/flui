@@ -1081,6 +1081,10 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
 /// [`GestureAlternatives`] name it. Past the last or before the first anchor
 /// it is not performed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an anchor step goes to the next or the previous anchor"
+)]
 pub enum AnchorIntent {
     /// The anchor after the current one by offset.
     Next,

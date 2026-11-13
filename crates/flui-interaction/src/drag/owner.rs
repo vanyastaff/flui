@@ -44,6 +44,10 @@ use flui_platform::CursorIcon;
 
 /// How a drag ended, as its source is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a drag ends dropped or not dropped"
+)]
 pub enum DragOutcome {
     /// A receiver took the drop with this action.
     Dropped {
@@ -78,6 +82,7 @@ pub trait DragObserver {
 
 /// What a session is doing, without the data each stage carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DragStage {
     /// Started; the pointer has not moved yet.
     Armed,
@@ -93,6 +98,7 @@ pub enum DragStage {
 
 /// What one pointer move did to a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MoveOutcome {
     /// The drag runs in its window; the innermost accepting receiver would take
     /// the drop with this action, if any accepts.

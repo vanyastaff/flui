@@ -59,6 +59,7 @@ const MIN_FLING_VELOCITY: f64 = 700.0;
 
 /// The direction(s) in which a [`Dismissible`] can be dismissed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DismissDirection {
     /// Dismissible by dragging up or down.
     Vertical,
@@ -114,6 +115,10 @@ impl DismissDirection {
 /// The side a [`Dismissible`] went out toward: one of the four a
 /// [`DismissDirection`] can allow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the four sides a dismissal can go out toward"
+)]
 pub enum DismissSide {
     /// Out with the reading direction (to the right in LTR, to the left in
     /// RTL).

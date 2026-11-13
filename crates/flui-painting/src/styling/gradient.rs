@@ -7,6 +7,10 @@ use crate::{Alignment, styling::Color};
 /// A description of a color gradient.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every backend draws each gradient, and a `_` arm would draw a new one as nothing"
+)]
 pub enum Gradient {
     /// A linear gradient.
     Linear(LinearGradient),

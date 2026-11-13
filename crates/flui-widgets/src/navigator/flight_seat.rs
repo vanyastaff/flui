@@ -65,6 +65,10 @@ impl SeatClaim {
 
 /// Who may release a frozen seat.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a frozen seat is held by one flight or by none"
+)]
 pub enum SeatHold {
     /// The flight with this claim, and only it.
     Claimed(SeatClaim),

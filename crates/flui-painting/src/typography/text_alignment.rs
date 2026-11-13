@@ -4,6 +4,7 @@
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// How text is aligned horizontally within its container.
 #[derive(flui_foundation::inspect::Inspect)]
+#[non_exhaustive]
 pub enum TextAlign {
     /// Align text to the left edge.
     #[default]
@@ -65,6 +66,7 @@ impl TextAlign {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// How text is aligned vertically within its container.
+#[non_exhaustive]
 pub enum TextAlignVertical {
     /// Align text to the top.
     Top,
@@ -99,6 +101,10 @@ pub use flui_foundation::TextDirection;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Which side of a text position the cursor associates with when the
 /// position is ambiguous (e.g. at a line break or bidi boundary).
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a caret sits before or after the boundary it names"
+)]
 pub enum TextAffinity {
     /// Cursor has affinity for the upstream (previous) character.
     #[default]

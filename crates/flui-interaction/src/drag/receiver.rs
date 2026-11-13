@@ -51,6 +51,7 @@ impl Default for SpringLoading {
 
 /// A receiver's answer to one autoscroll frame (ADR-0211 §8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Autoscroll {
     /// Nothing to scroll here: the drag is not near an edge this receiver
     /// can move toward. The receivers outside it are asked next.

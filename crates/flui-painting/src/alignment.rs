@@ -296,6 +296,10 @@ impl Neg for AlignmentDirectional {
 /// Call [`resolve`](Self::resolve) to obtain an absolute `Alignment`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an alignment is absolute or follows the text direction"
+)]
 pub enum AlignmentGeometry {
     /// Absolute alignment (x, y).
     Absolute(Alignment),

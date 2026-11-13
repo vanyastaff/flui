@@ -6,6 +6,7 @@ use thiserror::Error;
 ///
 /// [`FontRegistry::register_face`]: crate::glyphs::FontRegistry::register_face
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RegisterFaceError {
     /// The bytes hold no face at the key's index.
     #[error("font data holds no face at the requested index")]

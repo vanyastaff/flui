@@ -129,6 +129,14 @@ struct PerfApp {
     position: ScrollPosition,
 }
 
+thread_local! {
+    /// Rows [`PerfApp`]'s list has built on this thread, so a scenario can see
+    /// that a scroll reached new rows. A thread-local rather than a captured
+    /// handle: the row builder stays a zero-sized closure, so counting adds
+    /// nothing to what a rebuild of the app allocates.
+    static ROWS_BUILT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 impl StatelessView for PerfApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         // Each row paints, so a retained row carries a picture layer that a
@@ -139,6 +147,7 @@ impl StatelessView for PerfApp {
             ROW_HEIGHT,
             std::rc::Rc::new(|index| {
                 (index < ROWS).then(|| {
+                    ROWS_BUILT.with(|built| built.set(built.get() + 1));
                     RepaintBoundary::new()
                         .child(
                             SizedBox::new(WIDTH, ROW_HEIGHT)
@@ -290,6 +299,77 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     assert!(report.pipeline.layout_passes >= 1, "{report:#?}");
     assert!(report.pipeline.nodes_painted >= 1, "{report:#?}");
     assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
+}
+
+/// One-screen scrolls a scenario pumps before it measures a steady one. A
+/// margin, not a measured threshold: the scenario asserts that the two scrolls
+/// after it cost the same within [`STEADY_SLACK`], so a warm-up that runs past
+/// it fails there.
+const WARM_SCROLLS: u32 = 8;
+
+/// How many allocations or reallocations two steady scrolls may differ by: the
+/// rows a band rebuilds are not the same rows from one screen to the next.
+const STEADY_SLACK: u64 = 2;
+
+/// A one-screen scroll after [`WARM_SCROLLS`] others, driven through the UI
+/// runtime's frame transaction: what every scroll after the first few asks of
+/// the heap, and the baseline's ratchet fails a change that makes it cost
+/// more. The first-scroll row above runs on another driver, so the two rows'
+/// counts are not comparable.
+#[test]
+fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
+    let (position, writer) = ScrollPosition::with_writer(0.0);
+    let app = PerfApp {
+        label: SharedSignal::new(String::from("label")),
+        position,
+    };
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(&app).expect("a fresh host takes a root");
+    host.enable_semantics();
+    let visible_rows = ((HEIGHT - LABEL_HEIGHT) / ROW_HEIGHT) as u64;
+    // One frame a screen: the runtime's frame transaction lands the lazy band
+    // in the frame that shows it. The frame after must cost what a later, idle
+    // one does and build no row, so no work of the scroll slips past the frame
+    // it measures.
+    let rows_built = || ROWS_BUILT.with(std::cell::Cell::get);
+    let mut scroll_to = |screen: u32| {
+        writer.set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
+        let before = rows_built();
+        let ((), heap) = perf_measured(|| {
+            let _ = host.pump(FRAME);
+        });
+        let built = rows_built() - before;
+        let ((), after) = perf_measured(|| {
+            let _ = host.pump(FRAME);
+        });
+        let ((), idle) = perf_measured(|| {
+            let _ = host.pump(FRAME);
+        });
+        assert!(
+            rows_built() - before == built
+                && after.allocations == idle.allocations
+                && after.allocated_bytes == idle.allocated_bytes,
+            "screen {screen}'s scroll did work after the frame it measures: \
+             the next frame asked {after:?} of the heap against an idle {idle:?}"
+        );
+        (heap, built)
+    };
+    for screen in 0..=WARM_SCROLLS {
+        scroll_to(screen);
+    }
+    let (first, first_built) = scroll_to(WARM_SCROLLS + 1);
+    let (next, next_built) = scroll_to(WARM_SCROLLS + 2);
+    record_counts("list_10k_scroll_warm", &heap_counts(first));
+
+    assert!(
+        first_built >= visible_rows && next_built >= visible_rows,
+        "a warm scroll builds every newly visible row ({visible_rows}): built {first_built}, then {next_built}"
+    );
+    assert!(
+        first.allocations.abs_diff(next.allocations) <= STEADY_SLACK
+            && first.reallocations.abs_diff(next.reallocations) <= STEADY_SLACK,
+        "a warm scroll is still warming up: one asked {first:?} of the heap, the next {next:?}"
+    );
 }
 
 /// Rows under the sliding panel: enough painted content that a subtree

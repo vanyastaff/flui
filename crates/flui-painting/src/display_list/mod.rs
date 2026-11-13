@@ -123,6 +123,24 @@ impl DisplayList {
         }
     }
 
+    /// Empties the list and keeps its room, so a buffer a scene let go of is
+    /// recorded into again without allocating. The commands drop last, once
+    /// the empty state is committed, so a destructor that panics leaves an
+    /// empty list (ADR-0306 §7).
+    pub fn clear(&mut self) {
+        self.bounds = None;
+        self.damage = None;
+        self.volatile = None;
+        self.non_finite = NonFiniteOps::default();
+        self.commands.clear();
+    }
+
+    /// The commands the list holds room for without allocating.
+    #[must_use]
+    pub fn room(&self) -> usize {
+        self.commands.capacity()
+    }
+
     /// The ops refused at record because they were not finite, by reason
     /// (ADR-0306 §4).
     ///
