@@ -29,7 +29,7 @@
 //! This is seam infrastructure. `LayoutBuilder` is public,
 //! but only its element registers here; app code never touches the registry.
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -249,17 +249,18 @@ impl BuildOwner {
     fn unchanged_layout_builder_registrations(
         &self,
         scheduled: &FxHashMap<ElementId, (RenderId, Rc<dyn BuildDuringLayoutCell>)>, // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
-    ) -> FxHashSet<ElementId> {
+    ) -> SlotSet<ElementId> {
         self.layout_builder_registry.with_entries(|registry| {
-            scheduled
-                .iter()
-                .filter_map(|(element, (render_id, cell))| {
-                    registry.get(render_id).and_then(|entry| {
-                        (entry.element == *element && Rc::ptr_eq(&entry.cell, cell))
-                            .then_some(*element)
-                    })
-                })
-                .collect()
+            let mut unchanged = SlotSet::new();
+            for (element, (render_id, cell)) in scheduled {
+                if registry
+                    .get(render_id)
+                    .is_some_and(|entry| entry.element == *element && Rc::ptr_eq(&entry.cell, cell))
+                {
+                    unchanged.insert(*element);
+                }
+            }
+            unchanged
         })
     }
 
@@ -475,7 +476,7 @@ impl BuildOwner {
         pipeline.with_mut(|pipeline_owner| {
             for (element, (render_id, cell)) in &scheduled {
                 if rebuilt_scopes.contains(*element)
-                    && unchanged_registrations.contains(element)
+                    && unchanged_registrations.contains(*element)
                     && tree.contains(*element)
                     && pipeline_owner.render_tree().get(*render_id).is_some()
                 {

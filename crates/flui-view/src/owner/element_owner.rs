@@ -28,7 +28,6 @@
 //! shape was tried first and held; we did not need the
 //! `for<'a> Fn(&'a mut ElementOwner<'a>)` HRTB fallback.
 
-use rustc_hash::FxHashSet;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -172,7 +171,7 @@ pub struct ElementOwner<'a> {
     /// [`ViewState::did_change_dependencies`](crate::view::ViewState::did_change_dependencies)
     /// hook fires exactly once per dependency-change-then-rebuild
     /// cycle.
-    pub(crate) pending_dependency_changes: &'a mut FxHashSet<ElementId>,
+    pub(crate) pending_dependency_changes: &'a mut flui_foundation::SlotSet<ElementId>,
 
     /// Sparse reverse index for inherited dependency ownership.
     pub(crate) inherited_dependencies: &'a mut InheritedDependencies,
@@ -455,7 +454,7 @@ impl ElementOwner<'_> {
     /// hook (via `ElementBase::notify_dependency_change`) BEFORE the
     /// actual rebuild.
     ///
-    /// Idempotent: re-marking the same id is a no-op (FxHashSet dedup) —
+    /// Idempotent: re-marking the same id is a no-op (SlotSet dedup) —
     /// `did_change_dependencies` fires at most once per
     /// dependency-change-then-rebuild cycle even if multiple inherited
     /// ancestors fire in the same update phase.
@@ -469,7 +468,7 @@ impl ElementOwner<'_> {
     /// leaves the tree before its rebuild ever runs does not leave a
     /// stale entry behind. No-op if the id is not present.
     pub fn clear_pending_dependency_change(&mut self, id: ElementId) {
-        self.pending_dependency_changes.remove(&id);
+        self.pending_dependency_changes.remove(id);
     }
 
     /// Remove an active element from all providers and retain the fact that a
@@ -507,7 +506,7 @@ impl ElementOwner<'_> {
     /// dispatch queued. Used by tests; `BuildOwner::build_scope` reads
     /// (and removes) the entry directly via field access.
     pub fn has_pending_dependency_change(&self, id: ElementId) -> bool {
-        self.pending_dependency_changes.contains(&id)
+        self.pending_dependency_changes.contains(id)
     }
 
     /// Push an element onto the inactive-elements queue.

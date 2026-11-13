@@ -400,7 +400,7 @@ pub struct BuildOwner {
     ///
     /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
     /// split-borrow.
-    pub(crate) pending_dependency_changes: rustc_hash::FxHashSet<ElementId>,
+    pub(crate) pending_dependency_changes: SlotSet<ElementId>,
 
     /// Sparse dependent -> providers ownership index.
     ///
@@ -726,7 +726,7 @@ impl BuildOwner {
             global_key_reservations: Box::new(GlobalKeyReservations::new()),
             global_key_diagnostics: Vec::new(),
             inactive_elements: Vec::new(),
-            pending_dependency_changes: rustc_hash::FxHashSet::default(),
+            pending_dependency_changes: SlotSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
             reactive: crate::reactive::Reactive::new(),
             keep_alive: super::KeepAliveHolds::default(),
@@ -1543,7 +1543,7 @@ impl BuildOwner {
         };
 
         self.dirty_reasons.remove(&failed);
-        self.pending_dependency_changes.remove(&failed);
+        self.pending_dependency_changes.remove(failed);
         let mut element_owner = self.element_owner_mut();
         let substitute = crate::element::sparse_children::replace_failed_child(
             parent,
@@ -1725,7 +1725,7 @@ impl BuildOwner {
             // last build, fire `ViewState::did_change_dependencies` BEFORE
             // the build. Consumed here so the typed hook runs exactly once
             // per dependency-change-then-rebuild cycle.
-            let needs_did_change = self.pending_dependency_changes.contains(&id);
+            let needs_did_change = self.pending_dependency_changes.contains(id);
 
             // Guard (still holding only a brief `&mut node`): an
             // inherited-dependency change marks an otherwise-clean dependent
@@ -1738,7 +1738,7 @@ impl BuildOwner {
                 let Some(node) = tree.get_mut(id) else {
                     // Stale / removed id — nothing to build.
                     self.dirty_reasons.remove(&id);
-                    self.pending_dependency_changes.remove(&id);
+                    self.pending_dependency_changes.remove(id);
                     continue;
                 };
                 if needs_did_change {
@@ -1746,7 +1746,7 @@ impl BuildOwner {
                 }
                 if !node.element().lifecycle().can_build() || !node.element().is_dirty() {
                     self.dirty_reasons.remove(&id);
-                    self.pending_dependency_changes.remove(&id);
+                    self.pending_dependency_changes.remove(id);
                     continue;
                 }
             }
@@ -1917,7 +1917,7 @@ impl BuildOwner {
             result.any_rebuilt = true;
             result.target_rebuilt |=
                 matches!(target, BuildScopeTarget::LayoutBuilder(scope) if scope == id);
-            self.pending_dependency_changes.remove(&id);
+            self.pending_dependency_changes.remove(id);
             // A LATER mid-drain absorb of this same id is a re-entry, not a
             // first-time absorb, whether it comes from this element
             // rescheduling itself, a child notifying it back, or one half of
@@ -3456,10 +3456,10 @@ mod tests {
             owner.pending_rebuild_reasons(moved).is_some(),
             "the old scope cannot consume work after the live reparent"
         );
-        assert!(owner.pending_dependency_changes.contains(&moved));
+        assert!(owner.pending_dependency_changes.contains(moved));
         owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope_b));
         assert!(owner.pending_rebuild_reasons(moved).is_none());
-        assert!(!owner.pending_dependency_changes.contains(&moved));
+        assert!(!owner.pending_dependency_changes.contains(moved));
         assert_eq!(dependency_calls.load(Ordering::Relaxed), 1);
         assert_eq!(build_calls.load(Ordering::Relaxed), builds_after_mount + 1);
 
@@ -3480,7 +3480,7 @@ mod tests {
         owner.build_scope(&mut tree);
 
         assert!(owner.pending_rebuild_reasons(moved).is_none());
-        assert!(!owner.pending_dependency_changes.contains(&moved));
+        assert!(!owner.pending_dependency_changes.contains(moved));
         assert_eq!(dependency_calls.load(Ordering::Relaxed), 2);
         assert_eq!(build_calls.load(Ordering::Relaxed), builds_after_mount + 2);
     }

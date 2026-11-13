@@ -3,7 +3,7 @@
 //! Elements are stored in a Slab for O(1) access by ElementId; they form the
 //! retained tree.
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::any::TypeId;
 use std::cell::Cell;
 
@@ -1593,7 +1593,7 @@ impl ElementTree {
         // is acyclic by construction (`child_ids` come from the reconciler),
         // so this never trips in practice — but it converts a malformed
         // `child_ids` cycle from an unbounded hang into clean termination.
-        let mut visited = rustc_hash::FxHashSet::default();
+        let mut visited = flui_foundation::SlotSet::new();
         let mut stack = vec![root_id];
         while let Some(id) = stack.pop() {
             if !visited.insert(id) {
@@ -2529,7 +2529,7 @@ fn preflight_render_relocation(
         let destination_render_parent = destination.element().child_render_id();
         let is_valid = pipeline.with(|owner| {
             let render_tree = owner.render_tree();
-            let mut moved_render_nodes = FxHashSet::default();
+            let mut moved_render_nodes = flui_foundation::SlotSet::new();
             let mut stack = Vec::new();
             for &(_, render_root) in &frontier {
                 if !render_tree.contains(render_root) {
@@ -2604,7 +2604,7 @@ fn provisional_child_order(
     unclaimed_old_slots: &[Option<ElementId>],
 ) -> Vec<ElementId> {
     let mut order = Vec::with_capacity(reconciled_prefix.len() + unclaimed_old_slots.len() + 1);
-    let mut seen = FxHashSet::with_capacity_and_hasher(order.capacity(), rustc_hash::FxBuildHasher);
+    let mut seen = flui_foundation::SlotSet::new();
     for element_id in reconciled_prefix
         .iter()
         .copied()
