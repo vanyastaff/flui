@@ -221,7 +221,7 @@ pub(crate) trait X11Host: 'static {
     /// The windows' input on `connection`: the pointers, the keyboard and
     /// the cursor, made on the thread that builds the loop. Every key goes
     /// through `text`.
-    fn input(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Rc<dyn LoopInput>;
+    fn input(connection: &Arc<X11Connection>, text: Rc<dyn LoopText>) -> Rc<dyn LoopInput>;
 
     /// The windows' text input: the input method's D-Bus input context,
     /// reached on `executor`, which rings `doorbell` when the input method
@@ -230,7 +230,7 @@ pub(crate) trait X11Host: 'static {
         connection: &Arc<X11Connection>,
         executor: &NativeExecutor,
         doorbell: &Doorbell,
-    ) -> Arc<dyn LoopText>;
+    ) -> Rc<dyn LoopText>;
 
     /// The clipboard and the primary selection: the `CLIPBOARD` and
     /// `PRIMARY` selections, owned and read on a connection and a thread of
@@ -584,7 +584,7 @@ pub struct X11Loop {
     displays: Arc<dyn HostDisplays>,
     windows: Arc<dyn LoopWindows>,
     input: Rc<dyn LoopInput>,
-    text: Arc<dyn LoopText>,
+    text: Rc<dyn LoopText>,
     clipboard: Rc<dyn LoopClipboard>,
     drag: Arc<dyn LoopDrag>,
     start_preferences: fn(&NativeExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
@@ -598,8 +598,8 @@ pub struct X11Loop {
     /// which alone runs the loop.
     affinity: flui_foundation::OwnerAffinity,
 }
-// Owner-local (ADR-0327 §5): the loop, its input and its clipboard never
-// leave the thread that built them.
+// Owner-local (ADR-0327 §5): the loop, its input, input method and clipboard
+// never leave the thread that built them.
 static_assertions::assert_not_impl_any!(X11Loop: Send, Sync);
 
 impl std::fmt::Debug for X11Loop {
@@ -630,7 +630,7 @@ impl X11Loop {
         let displays = H::displays();
         let background_executor = executor;
         let text = H::text(&connection, &background_executor, &doorbell);
-        let input = H::input(&connection, Arc::clone(&text));
+        let input = H::input(&connection, Rc::clone(&text));
         let clipboard = H::clipboard(&doorbell)?;
         let drag = H::drag(&connection, &doorbell)?;
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as Weak<dyn StaleOnWake>);
@@ -687,7 +687,7 @@ impl X11Loop {
 
     /// The windows' text input, which a window opens and closes its field's
     /// input method with.
-    pub(crate) fn text(&self) -> &Arc<dyn LoopText> {
+    pub(crate) fn text(&self) -> &Rc<dyn LoopText> {
         &self.text
     }
 

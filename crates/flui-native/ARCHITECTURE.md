@@ -3633,9 +3633,9 @@ it, tablet tools included. A keymap past 8 MiB is refused.
 run time): the windows send their requests on it, the loop reads every event
 off it, and a window's surface target names it as the window's display, so a
 renderer's surface lives on the connection its window lives on. The platform
-belongs to the thread that builds it: its window table, input and clipboard are
-`Rc`/`RefCell` state of that thread (ADR-0327 §5), and `run` on another thread
-is refused with `PlatformError::EventLoop`.
+belongs to the thread that builds it: its window table, input, input method and
+clipboard are `Rc`/`RefCell` state of that thread (ADR-0327 §5), and `run` on
+another thread is refused with `PlatformError::EventLoop`.
 
 The loop (`X11Loop::run`) waits in `poll` on the connection and an eventfd
 doorbell, with no timeout but the application's wake deadline, so an idle
