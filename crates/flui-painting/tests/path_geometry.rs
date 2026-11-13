@@ -823,39 +823,64 @@ pub(crate) fn lerp_morphs_compatible_paths_only() {
     );
 }
 
-/// A rectangle, oval or rounded rectangle leaves its curves unbuilt until they are read:
-/// its emptiness and a moved copy read the same before the curves exist as after, its
-/// bounds hold the curves built later and stray from theirs by no more than the curve
-/// tolerance, and a copy moved before its curves are built lays down the curves of the
-/// shape moved after they were.
+/// A rectangle, oval or rounded rectangle leaves its curves unbuilt until they are read,
+/// and a move of it only records the offset. Whether its curves were built before a move,
+/// after it or never, it is the same path: equal, with the same elements to the bit, so a
+/// morph between the two still works; its bounds hold the curves; and a clone shares the
+/// curves the first read builds. A rounded rectangle whose radii overrun its sides is built
+/// at once, so its bounds are its curves'.
 pub(crate) fn a_shape_reads_alike_before_and_after_its_curves_are_built() {
     /// How far the curves built for an oval or an arc stray from the true ellipse.
     const CURVE_TOLERANCE: f64 = 1e-3;
-    let rrect = RRect::from_rect_xy(Rect::from_ltrb(10.5, 20.25, 130.0, 64.0), 12.0, 7.5);
-    let shapes = [
-        (
-            "rectangle",
-            Path::rectangle(Rect::from_ltrb(3.0, 4.0, 50.0, 25.0)),
-        ),
-        (
-            "rectangle given right to left",
-            Path::rectangle(Rect::from_ltrb(50.0, 25.0, 3.0, 4.0)),
-        ),
-        ("oval", Path::oval(Rect::from_ltrb(-20.0, 5.0, 40.0, 35.0))),
-        ("circle", Path::circle(Point::new(7.0, -3.0), 11.0)),
-        ("rounded rectangle", Path::from_rrect(rrect)),
-        ("empty", Path::new()),
-    ];
-    let offset = Offset::new(37.25, -18.5);
-    for (what, unbuilt) in shapes {
-        let (bounds, empty) = (unbuilt.compute_bounds(), unbuilt.is_empty());
-        let moved_unbuilt = unbuilt.translate(offset);
+    // A fixed linear congruential sequence: the same shapes on every run.
+    let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = |scale: f64| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 11) as f64 / (1u64 << 53) as f64 * scale
+    };
+    let elements = |path: &Path| {
+        path.commands()
+            .map(|command| format!("{command:?}"))
+            .collect::<Vec<_>>()
+    };
+    for case in 0..600 {
+        let (left, top) = (next(2000.0) - 1000.0, next(2000.0) - 1000.0);
+        let (width, height) = (next(400.0), next(400.0));
+        let rect = Rect::from_ltrb(left, top, left + width, top + height);
+        let radius = next(width.min(height) / 2.0);
+        let shape = match case % 4 {
+            0 => Path::rectangle(rect),
+            1 => Path::oval(rect),
+            2 => Path::from_rrect(RRect::from_rect_circular(rect, radius)),
+            _ => Path::from_rrect(RRect::from_rect_xy(rect, radius, radius * 0.5)),
+        };
+        let offset = Offset::new(next(1000.0) - 500.0, next(1000.0) - 500.0);
+        let what = format!("case {case}: {rect:?} radius {radius} moved by {offset:?}");
 
-        let built = unbuilt;
-        let elements = commands(&built);
-        let built_bounds = built.compute_bounds();
-        assert_eq!(empty, elements.is_empty(), "{what}: emptiness");
-        // How far each edge of the unbuilt bounds lies outside the built curves' bounds.
+        let moved_unbuilt = shape.translate(offset);
+        let bounds = moved_unbuilt.compute_bounds();
+        // Read after the unbuilt move was taken, so that move saw no curves.
+        let _ = elements(&shape);
+        let moved_built = shape.translate(offset);
+
+        assert!(moved_unbuilt == moved_built, "{what}: equality");
+        assert_eq!(
+            elements(&moved_unbuilt),
+            elements(&moved_built),
+            "{what}: elements"
+        );
+        assert_eq!(
+            moved_unbuilt.rrect_hint(),
+            moved_built.rrect_hint(),
+            "{what}: analytic shape"
+        );
+        assert!(
+            Path::lerp(&moved_unbuilt, &moved_built, 0.5).is_some(),
+            "{what}: morph"
+        );
+        let built_bounds = moved_built.compute_bounds();
         for (edge, outside) in [
             ("left", built_bounds.left() - bounds.left()),
             ("top", built_bounds.top() - bounds.top()),
@@ -867,31 +892,46 @@ pub(crate) fn a_shape_reads_alike_before_and_after_its_curves_are_built() {
                 "{what}: the {edge} bound lies {outside} outside the built curves'"
             );
         }
-
-        let moved_built = built.translate(offset);
-        assert_eq!(
-            moved_unbuilt.rrect_hint(),
-            moved_built.rrect_hint(),
-            "{what}: a moved copy keeps the analytic shape"
-        );
-        let (late, early) = (commands(&moved_unbuilt), commands(&moved_built));
-        assert_eq!(late.len(), early.len(), "{what}: moved elements");
-        for (late, early) in late.iter().zip(&early) {
-            let points = |command: &PathCommand| match *command {
-                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => vec![p],
-                PathCommand::QuadraticTo(c, p) => vec![c, p],
-                PathCommand::CubicTo(c1, c2, p) => vec![c1, c2, p],
-                PathCommand::Close => vec![],
-            };
-            assert_eq!(
-                std::mem::discriminant(late),
-                std::mem::discriminant(early),
-                "{what}: moved element kinds"
-            );
-            for (a, b) in points(late).into_iter().zip(points(early)) {
-                close(a.x, b.x, 1e-9, &format!("{what}: moved x"));
-                close(a.y, b.y, 1e-9, &format!("{what}: moved y"));
-            }
-        }
     }
+
+    // A rounded rectangle whose radii overrun its sides, or are negative, reaches past its
+    // rectangle: its bounds are the curves'.
+    let square = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+    for rrect in [
+        RRect::from_rect_circular(square, 30.0),
+        RRect::from_rect_circular(square, -5.0),
+    ] {
+        let path = Path::from_rrect(rrect);
+        let bounds = path.compute_bounds();
+        let _ = elements(&path);
+        assert_eq!(bounds, path.compute_bounds(), "{rrect:?}: bounds");
+    }
+
+    // Separate constructions share nothing; a clone of an unbuilt shape builds alike but
+    // apart; a clone of built curves shares them; the bounds a path cached do not make it a
+    // different path.
+    let rrect = RRect::from_rect_circular(Rect::from_ltrb(10.0, 20.0, 130.0, 64.0), 12.0);
+    let (first, second) = (Path::from_rrect(rrect), Path::from_rrect(rrect));
+    assert!(
+        !first.shares_commands_with(&second),
+        "separate constructions"
+    );
+    let unbuilt_copy = first.clone();
+    assert_eq!(
+        elements(&unbuilt_copy),
+        elements(&first),
+        "an unbuilt clone"
+    );
+    assert!(
+        !unbuilt_copy.shares_commands_with(&first),
+        "an unbuilt clone builds its own curves"
+    );
+    let mut copy = first.clone();
+    assert!(
+        copy.shares_commands_with(&first),
+        "a clone shares the built curves"
+    );
+    let _ = copy.bounds();
+    assert!(copy == second, "cached bounds leave equality alone");
+    assert_eq!(Path::new(), Path::new().translate(Offset::new(3.0, 4.0)));
 }

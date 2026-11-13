@@ -75,17 +75,21 @@ The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-comma
 `Paint` is interned per canvas: each `draw_*` scans a small pool of `Arc<Paint>`s
 for an equal paint and shares the `Arc` (`Canvas::intern_paint`,
 `src/canvas/mod.rs:101`). `Path` is copy-on-write over `Arc<kurbo::BezPath>`
-(`src/paint/path.rs:132`): a path inside a `DrawOp` (`ClipPath`, `Path`,
-`Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a
-fill type, a cached bounds and a finiteness flag, and recording a caller's path copies no
-geometry. A rectangle, oval or rounded rectangle made by its constructor, and an empty
-path, leave the `Arc` unset until something reads the elements: the hint is the shape, its
-bounds and a moved copy come from the hint, and the GPU's analytic rounded-rectangle routes
-read the hint, so a Material surface's shape is recorded, clipped and shadowed without
-building curves. A rounded rectangle's curves are laid down at the origin and moved, so a
-copy moved before they are built has the elements of one moved after.
+(`src/paint/path.rs:152`): a path inside a `DrawOp` (`ClipPath`, `Path`,
+`Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a pending
+offset, a fill type, a cached bounds and a finiteness flag, and recording a caller's path
+copies no geometry. A rectangle, oval or rounded rectangle made by its constructor, and an
+empty path, leave the `Arc` unset until something reads the elements, and a translate of
+such a path records the offset instead of moving curves: the hint moved by the offset is
+the shape, its bounds come from that box (an oval's or a rounded rectangle's widened by the
+curve tolerance), and the GPU's analytic rounded-rectangle routes read it, so a Material
+surface's shape is recorded, clipped, moved and shadowed without building curves. The first
+read builds the hint's curves where the constructor would have and then moves them by the
+offset, the same steps an eager path takes, so when a path is read never changes its
+elements, its equality or what `Path::lerp` accepts. A rounded rectangle whose radii do not
+fit its sides, or whose coordinates are not finite or exceed 1e150, is built at once.
 `PathCommand` (`src/paint/path.rs:28`) is the element `Path::commands` yields
-(`src/paint/path.rs:760`), not the storage.
+(`src/paint/path.rs:789`), not the storage.
 `DrawCommand.transform` is a full `Matrix4`, sixteen `f64` (128 bytes), so every
 command carries that much beside its `DrawOp`
 (`src/display_list/command.rs:30`;
