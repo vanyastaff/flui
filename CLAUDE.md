@@ -9,5 +9,6 @@ The project guide is shared by every agent runtime and lives in one place:
 ## Models
 
 Opus quota is the scarce resource. Subagent work names its model: `haiku` for locating code,
-`sonnet` for mechanical edits, check runs, PR bodies and fact-finding, `opus` for design,
-review against "Recurring defects" and hard diagnosis.
+`sonnet` for mechanical edits, check runs, PR bodies and fact-finding, `opus` for design, the
+review before a merge (AGENTS.md, "Before a merge") and any other review against "Recurring
+defects", and hard diagnosis.
