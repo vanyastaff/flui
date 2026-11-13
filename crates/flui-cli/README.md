@@ -241,7 +241,9 @@ runs. Tools:
 |------|------|
 | `flui_windows` | List the windows that have content. |
 | `flui_read` | Read a window's semantics tree (`root`, `max_depth`, `max_nodes`). |
+| `flui_locate` | Find the elements a locator (`role`, `name`, `state`, …) matches. |
 | `flui_act` | Perform an action a node advertises (`invoke`, `toggle`, `set_value`, …). |
+| `flui_wait` | Hold out until an element appears, goes or matches, the window settles or frames present (`timeout_ms`). |
 | `flui_motion` | Read, pause or step the animation clock. |
 
 `window` may be left out when the app has one. Failures carry the wire's

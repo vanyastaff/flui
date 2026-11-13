@@ -8,9 +8,10 @@
 //! for an answer meanwhile ([`Connection::request_seeing`]).
 //!
 //! A thread of the connection's own reads every line the app sends and another writes, so a
-//! peer that stops answering, or stops reading, costs a bounded wait ([`REPLY_TIMEOUT`])
-//! instead of a stuck `flui mcp`. A request takes the first line that answers its id: a late
-//! answer to an earlier request that timed out is passed over.
+//! peer that stops answering, or stops reading, costs a bounded wait ([`REPLY_TIMEOUT`], past
+//! the time a wait asked the app to hold its answer) instead of a stuck `flui mcp`. A request
+//! takes the first line that answers its id: a late answer to an earlier request that timed out
+//! is passed over.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -115,7 +116,7 @@ impl Connection {
             Failure::Transport(why) | Failure::Unsent(why) => refused(why),
             Failure::Wire(error) => error.to_string(),
         })?;
-        match connection.next(Instant::now() + REPLY_TIMEOUT) {
+        match connection.next(Instant::now() + REPLY_TIMEOUT, REPLY_TIMEOUT) {
             Ok(ServerLine::Hello { .. }) => Ok(connection),
             // A `version` refusal names what the app speaks; a `not_driver` one, that another
             // client drives the app (ADR-0288 §8).
@@ -136,10 +137,16 @@ impl Connection {
         }
     }
 
-    /// Calls `method` with `params` and returns its result. The events that arrive meanwhile
-    /// are passed over.
-    pub(crate) fn request(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
-        self.request_seeing(method, params, |_| {})
+    /// Calls `method` with `params` and returns its result. `holds` is how long the app may
+    /// hold the answer past serving it (a wait's timeout, `Addressed::holds_for`); the reply is
+    /// awaited that much longer. The events that arrive meanwhile are passed over.
+    pub(crate) fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+        holds: Duration,
+    ) -> Result<Value, Failure> {
+        self.exchange(method, params, holds, |_| {})
     }
 
     /// Calls `method` with `params` and returns its result, handing `event` each event that
@@ -148,6 +155,16 @@ impl Connection {
         &mut self,
         method: &str,
         params: Value,
+        event: impl FnMut(Event),
+    ) -> Result<Value, Failure> {
+        self.exchange(method, params, Duration::ZERO, event)
+    }
+
+    fn exchange(
+        &mut self,
+        method: &str,
+        params: Value,
+        holds: Duration,
         mut event: impl FnMut(Event),
     ) -> Result<Value, Failure> {
         let id = RequestId::Number(self.next_id);
@@ -155,9 +172,12 @@ impl Connection {
         let line = serde_json::to_string(&Request::new(id.clone(), method, params))
             .map_err(|e| Failure::Unsent(format!("the request did not serialize: {e}")))?;
         self.send(line)?;
-        let deadline = Instant::now() + REPLY_TIMEOUT;
+        // A wait's hold is at most `WaitParams::MAX_TIMEOUT_MS` (a day), which an `Instant`
+        // names on every host.
+        let wait = REPLY_TIMEOUT.saturating_add(holds);
+        let deadline = Instant::now() + wait;
         loop {
-            match self.next(deadline)? {
+            match self.next(deadline, wait)? {
                 ServerLine::Event(arrived) => event(arrived),
                 ServerLine::Answered {
                     id: answered,
@@ -204,11 +224,10 @@ impl Connection {
     }
 
     /// The next line the app sent, waiting until `deadline` for it; a reply that has not come
-    /// by then is a failure.
-    fn next(&self, deadline: Instant) -> Result<ServerLine<Value>, Failure> {
-        self.line(deadline)?.ok_or_else(|| {
-            Failure::Transport(format!("no reply within {} s", REPLY_TIMEOUT.as_secs()))
-        })
+    /// by then, `waited` after the request, is a failure.
+    fn next(&self, deadline: Instant, waited: Duration) -> Result<ServerLine<Value>, Failure> {
+        self.line(deadline)?
+            .ok_or_else(|| Failure::Transport(format!("no reply within {} s", waited.as_secs())))
     }
 
     /// The next line the app sent, waiting until `deadline` for it: `None` when none came.

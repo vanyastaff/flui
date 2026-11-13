@@ -9,7 +9,7 @@ use flui_cupertino::CupertinoButton;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::SizedBox;
 use flui_sdk::widgets::Text;
-use flui_testing::a11y::Role;
+use flui_testing::a11y::{Action, Role};
 
 pub fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
     let probe = common::SignalProbe::new(|signals| {
@@ -137,26 +137,50 @@ fn exercise_button_fade_migration(releasing: bool) {
 }
 
 /// The child label merges into one button node, with the same enabled state
-/// that governs pointer interaction.
+/// that governs pointer interaction and the click a screen reader activates.
 pub fn cupertino_button_with_text_child_announces_one_labelled_button_node() {
     assert_button_announcement(
         CupertinoButton::new(Text::new("Tap")).on_pressed(|_ctx| {}),
-        false,
+        Announced {
+            disabled: false,
+            click: true,
+            context_menu: false,
+        },
     );
 }
 
+/// A button that only long presses is enabled and offers its long press as
+/// the context menu, as a detector with `on_long_press` does.
 pub fn long_press_only_button_announces_enabled() {
     assert_button_announcement(
         CupertinoButton::new(Text::new("Tap")).on_long_press(|_ctx| {}),
-        false,
+        Announced {
+            disabled: false,
+            click: false,
+            context_menu: true,
+        },
     );
 }
 
 pub fn disabled_button_announces_disabled() {
-    assert_button_announcement(CupertinoButton::new(Text::new("Tap")), true);
+    assert_button_announcement(
+        CupertinoButton::new(Text::new("Tap")),
+        Announced {
+            disabled: true,
+            click: false,
+            context_menu: false,
+        },
+    );
 }
 
-fn assert_button_announcement(button: CupertinoButton, disabled: bool) {
+/// What a button's node says and offers.
+struct Announced {
+    disabled: bool,
+    click: bool,
+    context_menu: bool,
+}
+
+fn assert_button_announcement(button: CupertinoButton, expected: Announced) {
     let mut laid = lay_out(button, loose(200.0));
     laid.enable_semantics();
     laid.pump();
@@ -171,8 +195,17 @@ fn assert_button_announcement(button: CupertinoButton, disabled: bool) {
     assert_eq!(node.role(), Role::Button);
     assert_eq!(
         node.is_disabled(),
-        disabled,
+        expected.disabled,
         "the accessibility node must report interaction availability. Tree was:\n{}",
+        tree.describe()
+    );
+    assert_eq!(
+        (
+            node.supports_action(Action::Click),
+            node.supports_action(Action::ShowContextMenu),
+        ),
+        (expected.click, expected.context_menu),
+        "the node offers the click and the context menu its callbacks give. Tree was:\n{}",
         tree.describe()
     );
     assert!(
@@ -209,4 +242,92 @@ pub fn button_publishes_its_identifier() {
         tree.describe()
     );
     assert!(node.raw().description().is_none() && node.value().is_none());
+}
+
+/// A button with both callbacks answers a held contact with its long press
+/// alone, and a quick one with its tap alone: the two compete in one press
+/// group, as Flutter's `GestureDetector` with both slots does.
+pub fn a_held_press_long_presses_and_a_quick_one_taps() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    let (taps, long_presses) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (tapped, held) = (Rc::clone(&taps), Rc::clone(&long_presses));
+    let mut laid = lay_out(
+        CupertinoButton::new(SizedBox::shrink())
+            .on_pressed(move |_ctx| tapped.set(tapped.get() + 1))
+            .on_long_press(move |_ctx| held.set(held.get() + 1)),
+        tight(100.0, 44.0),
+    );
+
+    laid.dispatch_pointer_down(50.0, 22.0);
+    laid.pump_for(Duration::from_millis(700));
+    laid.dispatch_pointer_up(50.0, 22.0);
+    assert_eq!((taps.get(), long_presses.get()), (0, 1), "a held press");
+
+    laid.dispatch_pointer_down(50.0, 22.0);
+    laid.dispatch_pointer_up(50.0, 22.0);
+    assert_eq!((taps.get(), long_presses.get()), (1, 1), "a quick press");
+}
+
+/// A rebuild that adds or removes the long press reshapes the button's press
+/// group: once the rebuilt button has a long press, a held press calls it;
+/// once it has none again, a held press taps, as a tap with no long press
+/// beside it does in Flutter, and so does a quick one.
+pub fn a_rebuild_that_adds_or_removes_the_long_press_reshapes_the_press() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use flui_sdk::view::SignalWriteExt;
+
+    let (taps, long_presses) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let with_long_press = Rc::new(Cell::new(false));
+    let signals = Rc::new(Cell::new(None));
+    let probe = {
+        let (taps, long_presses) = (Rc::clone(&taps), Rc::clone(&long_presses));
+        let (with_long_press, signals) = (Rc::clone(&with_long_press), Rc::clone(&signals));
+        common::SignalProbe::new(move |probe_signals| {
+            signals.set(Some(probe_signals));
+            let tapped = Rc::clone(&taps);
+            let button = CupertinoButton::new(SizedBox::shrink())
+                .on_pressed(move |_ctx| tapped.set(tapped.get() + 1));
+            if with_long_press.get() {
+                let held = Rc::clone(&long_presses);
+                button.on_long_press(move |_ctx| held.set(held.get() + 1))
+            } else {
+                button
+            }
+        })
+    };
+    let mut laid = lay_out(probe.view(), tight(100.0, 44.0));
+    let rebuild_with = |laid: &mut common::LaidOut, long_press: bool| {
+        with_long_press.set(long_press);
+        let count = signals.get().expect("the probe built").count;
+        probe
+            .write(|ctx| count.update(ctx, |n| *n += 1))
+            .expect("the probe's signal takes a write");
+        laid.pump();
+    };
+    let held = |laid: &mut common::LaidOut| {
+        laid.dispatch_pointer_down(50.0, 22.0);
+        laid.pump_for(Duration::from_millis(700));
+        laid.dispatch_pointer_up(50.0, 22.0);
+    };
+
+    rebuild_with(&mut laid, true);
+    held(&mut laid);
+    assert_eq!((taps.get(), long_presses.get()), (0, 1), "long press added");
+
+    rebuild_with(&mut laid, false);
+    held(&mut laid);
+    assert_eq!(
+        (taps.get(), long_presses.get()),
+        (1, 1),
+        "long press removed"
+    );
+    laid.dispatch_pointer_down(50.0, 22.0);
+    laid.dispatch_pointer_up(50.0, 22.0);
+    assert_eq!((taps.get(), long_presses.get()), (2, 1), "a quick press");
 }

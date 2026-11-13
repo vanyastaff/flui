@@ -40,6 +40,10 @@ workspace = true
 name = "cupertino_it"
 path = "tests/main.rs"
 
+[[test]]
+name = "perf"
+path = "tests/perf.rs"
+
 [package.metadata.flui]
 tier = "pkg"
 tier-kind = "official"

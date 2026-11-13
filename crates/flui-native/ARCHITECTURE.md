@@ -1027,7 +1027,8 @@ trait depends on `flui-platform` instead.
   `RuntimeEvent::of_state_change`). Whether a window is seen is
   `WindowState::is_seen`: shown, not minimized and not occluded. Each host sets a
   `StatePublisher` on the window's `WindowDelivery` when the window opens
-  (`publish_through`, over a weak reference to the window). The publisher
+  (`publish_through_owner`, over an owner-thread weak reference to the window;
+  Android's looper-shared window uses `publish_through`). The publisher
   reads the window again and answers `Publication` (changed, unchanged,
   held) without announcing anything; `publish_state` runs it and
   raises the handler's `state_changed` when the revision grew, so each fact the OS
@@ -2413,12 +2414,22 @@ root-window creation API. It needs a macOS host with an active GUI session.
 
 `HeadlessLoop::quit` uses the same discipline as its window close and
 exit-policy re-evaluation paths: it marks the loop stopped, then reports the
-quit to the application's handler with the state lock released. The delivery
+quit to the application's handler with the state borrow released. The delivery
 hears the quit once per run, so a recursive or repeated quit does not reach
 the handler again. A handler's panic propagates to the Rust caller after the
 state is released. `explicit_quit_reenters_and_reaches_the_handler_outside_the_state_lock`
-re-enters the quit from inside the handler and checks the lock was free; its
-nonblocking lock read makes a regression fail instead of hanging.
+re-enters the quit from inside the handler and checks the state was not
+borrowed (`try_borrow_mut`), so a regression fails the assertion instead of
+panicking inside the handler.
+
+The headless loop is owner-local: its state, its windows and each window's
+model are `Rc`/`RefCell`, and a `HeadlessHostWindow` is not `Send`
+(`window_is_not_send`). What the simulated operating system changes from any
+thread, as a native source does (Linux's display thread, its portal
+preferences, logind's notices), keeps its own `Arc<Mutex<_>>` outside that
+state: `HeadlessDisplayControls`, `HeadlessPreferences` and
+`HeadlessHostEvents` are `Send + Sync`, commit there or to the shared delivery,
+and wake the owner.
 
 ### Standalone AppKit stops its loop and returns through Rust cleanup
 

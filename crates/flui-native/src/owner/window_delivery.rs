@@ -87,7 +87,7 @@ impl HandlerSlot for ResidentHandler<'_> {
 /// Reads a window from its window system again and publishes what it read,
 /// announcing nothing: [`WindowDelivery::dispatch_state_changed`] calls
 /// [`WindowHandler::state_changed`]. A window's host builds it over a weak
-/// reference to the window ([`WindowDelivery::publish_through`]), so the
+/// reference to the window ([`WindowDelivery::publish_through_owner`]), so the
 /// delivery never keeps its window alive.
 pub(crate) type StatePublisher = Arc<dyn Fn() -> Publication + Send + Sync>;
 
@@ -340,6 +340,7 @@ impl WindowDelivery {
     /// [`Self::set_state_publisher`] over a weak reference to the window:
     /// `publish` reads the window again and says what it published, and a
     /// window that is gone publishes nothing.
+    #[cfg(target_os = "android")]
     pub(crate) fn publish_through<W: Send + Sync + 'static>(
         &self,
         window: std::sync::Weak<W>,
@@ -352,21 +353,14 @@ impl WindowDelivery {
         }));
     }
 
-    /// [`Self::publish_through`] for a window that lives on the owner thread
-    /// (ADR-0254 §5): the window is reached, and read, there alone; a
+    /// [`Self::set_state_publisher`] for a window that lives on the owner
+    /// thread (ADR-0254 §5): the window is reached, and read, there alone; a
     /// publication raised elsewhere publishes nothing, and the owner's next
     /// read publishes what changed.
     ///
-    /// The X11, Wayland, AppKit, UIKit and web windows publish this way; the
-    /// Win32 window publishes through its window procedure, and the Android
-    /// window, which its looper shares, through [`Self::publish_through`].
-    #[cfg(any(
-        all(target_os = "linux", feature = "x11"),
-        target_os = "macos",
-        target_os = "ios",
-        target_arch = "wasm32",
-        all(target_os = "linux", feature = "wayland")
-    ))]
+    /// The headless, X11, Wayland, AppKit, UIKit and web windows publish this
+    /// way; the Win32 window publishes through its window procedure, and the
+    /// Android window, which its looper shares, through `publish_through`.
     pub(crate) fn publish_through_owner<W: 'static>(
         &self,
         window: &Rc<W>,
