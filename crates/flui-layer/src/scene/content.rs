@@ -113,16 +113,17 @@ impl Chunk {
     }
 
     /// Lets go of its commands, keeping their room, when nothing else holds
-    /// them: what a reclaimed chunk is kept as. The commands drop here, so a
-    /// caller runs this with no borrow held.
+    /// them: what a reclaimed chunk is kept as. The commands drop last, after
+    /// the empty state is committed, so a caller runs this with no borrow
+    /// held.
     pub(crate) fn empty(&mut self) -> bool {
         let Some(held) = Arc::get_mut(&mut self.commands) else {
             return false;
         };
-        held.clear();
-        self.textures.clear();
         self.bounds = Bounds::Finite(Rect::ZERO);
         self.reads_destination = false;
+        self.textures.clear();
+        held.clear();
         true
     }
 

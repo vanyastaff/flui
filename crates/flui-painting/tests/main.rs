@@ -571,6 +571,10 @@ fn recording_contract() {
                 "a_destructor_that_panics_during_reset_leaves_the_canvas_empty",
                 recording::a_destructor_that_panics_during_reset_leaves_the_canvas_empty,
             ),
+            (
+                "a_destructor_that_panics_during_clear_leaves_the_list_empty",
+                recording::a_destructor_that_panics_during_clear_leaves_the_list_empty,
+            ),
         ],
     );
 }

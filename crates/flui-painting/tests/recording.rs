@@ -679,6 +679,45 @@ impl Drop for PanicOnDrop {
     }
 }
 
+/// `DisplayList::clear` resets what the list caches before it drops what it
+/// recorded, so a destructor that panics leaves an empty list with no cached
+/// extent, and what is appended to it next reports only its own (ADR-0306 §7).
+pub(crate) fn a_destructor_that_panics_during_clear_leaves_the_list_empty() {
+    use flui_foundation::geometry::Offset;
+
+    let bytes: flui_painting::glyphs::FontBytes = Arc::new(PanicOnDrop(b""));
+    let paragraph = Arc::new(flui_painting::testing::paragraph_with_font_bytes(
+        &shaped_paragraph(),
+        &bytes,
+    ));
+    drop(bytes);
+    let mut canvas = Canvas::new();
+    canvas.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 40.0, 40.0),
+        &Paint::fill(Color::RED),
+    );
+    canvas.draw_paragraph(&paragraph, Offset::ZERO, Color::BLACK);
+    drop(paragraph);
+    let mut list = canvas.take_recording();
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| list.clear()));
+    assert!(
+        unwound.is_err(),
+        "the recorded paragraph was the bytes' last owner"
+    );
+    assert!(list.is_empty());
+    assert_eq!(list.bounds(), None);
+    assert_eq!(list.damage_extent(), None);
+    assert_eq!(list.volatile_extent(), None);
+    assert_eq!(list.non_finite(), NonFiniteOps::default());
+
+    let rect = Rect::from_xywh(1.0, 2.0, 3.0, 4.0);
+    let mut next = Canvas::new();
+    next.draw_rect(rect, &Paint::fill(Color::RED));
+    list.append(next.finish());
+    assert_eq!(list.bounds(), Some(rect), "the list records again");
+}
+
 /// `Canvas::reset` resets every field before it drops what it recorded, so a
 /// destructor that panics leaves an empty canvas with no cached extent, an
 /// identity transform and no open save, and the canvas records again
