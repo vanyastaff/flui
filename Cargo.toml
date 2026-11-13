@@ -747,18 +747,6 @@ edge-exceptions = [
     { to = "flui-material", exit = "ADR-0088", reason = "the optional `material` catalog re-export" },
 ]
 
-# cargo-shear reports these as unlinked: `tests/thread_boundary_ui.rs` hands the
-# trybuild inputs to rustc by glob.
-[package.metadata.cargo-shear]
-ignored-paths = [
-    "tests/ui/thread_boundary/*.rs",
-    "tests/ui/thread_boundary/material/*.rs",
-    "tests/ui/thread_boundary/cupertino/*.rs",
-    "tests/ui/unstable_input/*.rs",
-    "tests/ui/unstable_windows/*.rs",
-    "tests/ui/native/*.rs",
-]
-
 [lints]
 workspace = true
 
