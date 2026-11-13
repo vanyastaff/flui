@@ -445,6 +445,7 @@ impl DesktopFrameDriver {
         let reveal_window = &self.reveal_window;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
+        let raster_deadline = self.raster.frame_deadline();
         let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             worker_reload_frame.poll_and_apply(ui_runtime);
 
@@ -479,7 +480,7 @@ impl DesktopFrameDriver {
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
                 ui_runtime.has_pending_work(),
-                merge_wake_deadlines(raster_wake_at(), first_reveal.next_deadline()),
+                merge_wake_deadlines(raster_deadline, first_reveal.next_deadline()),
                 fallback_gate,
             );
             let action = wake_action(

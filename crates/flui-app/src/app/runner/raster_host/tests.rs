@@ -647,21 +647,109 @@ fn a_surface_is_paced_only_for_a_shown_window_at_a_size_the_device_takes() {
     host.set_visibility(address(), flui_engine::SlotVisibility::Hidden);
     assert_eq!(host.surface_retry_at(), None, "no frame would serve it");
     host.set_visibility(address(), flui_engine::SlotVisibility::Shown);
-    assert!(host.surface_retry_at().is_some());
+    // Shown again, the window tries at once: its first frame makes it.
+    let tried = restores(&slots);
+    assert!(host.before_frame(address(), web_time::Instant::now(), None, false));
+    assert_eq!(restores(&slots), tried + 1);
+    assert_eq!(hold(&host), SurfaceHold::Held);
 }
 
-/// A release refused by a full lifecycle queue is sent again once a turn
-/// has made room: the native window behind the surface goes when the
-/// platform's callback returns.
+/// Fill the executor's lifecycle queue with releases of a second window's
+/// slot, which the window under test does not see.
+fn fill_the_lifecycle_queue(host: &mut RasterHost) {
+    let other = PresentationAddress {
+        ui_runtime_id: UiRuntimeId::new(1),
+        presentation_id: PresentationId::new(2),
+    };
+    host.attach_target(
+        Arc::new(FakeWindow::new(2)),
+        other,
+        &crate::app::AppConfig::default(),
+        None,
+        None,
+    )
+    .expect("the scripted backend attaches any window");
+    let placed = host.placed.as_ref().expect("placed");
+    let slot = placed.slots[&other].slot;
+    let mut sent = 0_usize;
+    while placed
+        .sender
+        .send(flui_engine::RasterCommand::Release { slot })
+        .is_ok()
+    {
+        sent += 1;
+        assert!(sent <= 1024, "the lifecycle queue is bounded");
+    }
+}
+
+/// What the owner changes and the full lifecycle queue refuses is sent
+/// again once a turn has made room, since nothing asks for it again: a
+/// release before the native window goes, and a device retry when the
+/// window comes back.
 ///
-/// Red-check: send the release once and the slot keeps its surface.
+/// Red-check: send each once (`send_with_room` answering the first
+/// refusal) and the slot keeps its surface, and the given-up device is not
+/// tried.
 #[test]
-fn a_release_the_full_queue_refused_is_sent_again() {
-    let (mut host, _slots) = host();
+fn what_the_full_queue_refused_is_sent_again() {
+    // A release.
+    let (mut host, _slots) = self::host();
     let mut scene = TestScene::new(AT);
     assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
-    let sender = &host.placed.as_ref().expect("placed").sender;
-    while sender.send(flui_engine::RasterCommand::RetryDevice).is_ok() {}
+    fill_the_lifecycle_queue(&mut host);
     assert!(!host.set_surface(address(), false));
     assert_eq!(hold(&host), SurfaceHold::Released);
+
+    // A device retry when the window comes back.
+    let (mut host, slots) = self::host();
+    let mut scene = TestScene::new(AT);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    slots.cannot_rebuild_inline();
+    slots.lose_device();
+    host.service(address());
+    let _ = host.set_surface(address(), false);
+    let _ = host
+        .placed
+        .as_ref()
+        .expect("placed")
+        .sender
+        .take_device_failure();
+    slots.can_rebuild_inline();
+    fill_the_lifecycle_queue(&mut host);
+    let _ = host.set_surface(address(), true);
+    assert_eq!(
+        host.placed.as_ref().expect("placed").sender.device_health(),
+        DeviceHealth::Healthy,
+        "the device retry reached the executor"
+    );
+}
+
+/// A surface deadline is its own window's: another window's frame gate
+/// does not count it, so a window the platform stopped sending frames to
+/// cannot make every other window render on each wake.
+///
+/// Red-check: answer the host-wide `surface_retry_at` from
+/// `surface_retry_at_for` and the other window reports the deadline too.
+#[test]
+fn a_surface_deadline_is_only_its_own_windows() {
+    let (mut host, slots) = self::host();
+    let mut scene = TestScene::new(AT);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    let other = PresentationAddress {
+        ui_runtime_id: UiRuntimeId::new(1),
+        presentation_id: PresentationId::new(2),
+    };
+    host.attach_target(
+        Arc::new(FakeWindow::new(2)),
+        other,
+        &crate::app::AppConfig::default(),
+        None,
+        None,
+    )
+    .expect("the scripted backend attaches any window");
+    let _ = host.set_surface(address(), false);
+    slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+    assert!(!host.set_surface(address(), true));
+    assert!(host.surface_retry_at_for(address()).is_some());
+    assert_eq!(host.surface_retry_at_for(other), None);
 }

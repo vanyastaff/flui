@@ -804,18 +804,22 @@ impl RasterHost {
         if slot.visibility == visibility {
             return;
         }
-        // Recorded whether or not it is taken, as a colour change is.
         slot.visibility = visibility;
+        // A window shown again tries for a surface it is owed at once, not
+        // at the end of a backoff run up while it could not be seen.
+        if visibility == SlotVisibility::Shown {
+            slot.restore = RestorePace::default();
+        }
         let command = RasterCommand::Configure {
             slot: slot.slot,
             change: SlotChange::Shown(visibility),
         };
-        let mut caught = FirstPanic::new();
-        if let Err(error) = Self::send_with_room(placed, address, command, &mut caught) {
+        // A configuration is folded into the slot's inbox, never queued, so
+        // no full queue refuses it; an executor that stopped, or a slot it
+        // no longer holds, draws nothing whatever the window's visibility.
+        if let Err(error) = placed.sender.send(command) {
             tracing::warn!(%error, "raster host: a visibility change was refused");
         }
-        // Reached from a frame driver, which may run during an unwind.
-        resume_unless_unwinding(caught);
     }
 
     /// Bring `address`'s slot to `size`, and a surface if the executor
@@ -1103,6 +1107,17 @@ impl RasterHost {
             })
             .filter_map(|slot| slot.restore.next)
             .min()
+    }
+
+    /// When `address`'s own window may try for the surface it is owed: the
+    /// deadline only that window's frame serves.
+    fn surface_retry_at_for(&self, address: PresentationAddress) -> Option<Instant> {
+        let placed = self.placed.as_ref()?;
+        let slot = placed.slots.get(&address)?;
+        let record = placed.sender.record(slot.slot)?;
+        slot.surface_on_pace(&record.surface)
+            .then_some(slot.restore.next)
+            .flatten()
     }
 
     /// Whether the device refused `surface`, the size `address`'s window is
@@ -1418,6 +1433,25 @@ impl RasterSlot {
         }
         caught.absorb(self.host.take_deferred_panic());
         caught.resume();
+    }
+
+    /// The deadline this window's own frame serves, for its wake's dirty
+    /// gate: the device's next rebuild, which any window's turn runs, and
+    /// the next attempt at the surface this window is owed. Another
+    /// window's surface deadline is that window's: counting it here would
+    /// render this window on every wake while the other gets none
+    /// (a window the platform stopped sending frames to), and hand the
+    /// loop the same past instant again after each frame.
+    pub(crate) fn frame_deadline(&self) -> Option<Instant> {
+        let address = self.address;
+        self.host
+            .try_read(
+                |host| match (host.device_retry_at(), host.surface_retry_at_for(address)) {
+                    (Some(device), Some(surface)) => Some(device.min(surface)),
+                    (device, surface) => device.or(surface),
+                },
+            )
+            .flatten()
     }
 
     /// Tell the executor whether the window can be seen (`shown`): a slot

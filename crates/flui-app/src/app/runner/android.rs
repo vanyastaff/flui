@@ -456,6 +456,7 @@ impl AndroidFrameDriver {
         let hot_reload = &self.hot_reload;
         // The gate half of the wake runs inside one ui_runtime entry
         // and decides; the pump below enters the ui_runtime itself.
+        let raster_deadline = raster.frame_deadline();
         let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             let now = web_time::Instant::now();
             // Owner-inbox drain: commands and worker results commit HERE,
@@ -501,7 +502,7 @@ impl AndroidFrameDriver {
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
                 ui_runtime.has_pending_work(),
-                raster_wake_at(),
+                raster_deadline,
                 // Android paces only its backgrounded pump
                 // (`BackgroundPace`): a rendering wake has no fallback
                 // deferral to consult (ADR-0058).
