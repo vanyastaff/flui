@@ -554,8 +554,13 @@ impl RasterSender {
             // The superseded frame never renders, but its damage is real:
             // the producer compared the new frame against it, not against
             // what the target shows.
-            if let Some(pending) = state.frame.as_ref() {
+            // Its texture updates are accepted work too: the new frame
+            // applies them before its own.
+            if let Some(pending) = state.frame.as_mut() {
                 snapshot.damage = snapshot.damage.union(pending.damage);
+                let mut textures = std::mem::take(&mut pending.textures);
+                textures.merge(std::mem::take(&mut snapshot.textures));
+                snapshot.textures = textures;
             } else {
                 state.in_flight += 1;
             }
