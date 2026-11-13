@@ -85,7 +85,7 @@ fn hero_page() -> PageRoute<i32> {
 }
 
 fn seeded() -> NavigatorHandle {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(hero_page());
     navigator
 }
@@ -296,7 +296,7 @@ pub(crate) fn hero_builder_cancellation_and_failure_account_for_the_matched_tail
             .transition_duration(TRANSITION)
         };
         let vsync = Vsync::new();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         navigator.seed_initial(source());
         let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
         let owner = laid.pipeline_owner();

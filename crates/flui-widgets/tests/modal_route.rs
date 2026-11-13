@@ -61,7 +61,7 @@ fn plain_page() -> SimpleRoute<i32> {
 
 /// A navigator with `bottom` seeded, mounted and settled.
 fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     handle.seed_initial(plain_page());
     let harness = mount(Navigator::new(handle.clone()));
     let bottom = handle.route_ids()[0];

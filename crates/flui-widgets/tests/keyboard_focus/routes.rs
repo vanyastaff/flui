@@ -92,7 +92,7 @@ fn field_page(
 
 /// A navigator whose home page is one control at the top left.
 fn home(activations: &Rc<Cell<u32>>) -> (NavigatorHandle, Harness) {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let counted = Rc::clone(activations);
     navigator.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
         control("home", &counted)
@@ -294,7 +294,7 @@ impl LateAutofocus {
 /// that appears in the page afterwards does not take it back.
 pub(crate) fn late_autofocus_does_not_override_the_restored_focus() {
     let counts = Rc::new(Cell::new(0));
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(page("base", &counts));
     let mut harness = mount(Navigator::new(navigator.clone()));
     harness.tick();
@@ -323,7 +323,7 @@ pub(crate) fn late_autofocus_does_not_override_the_restored_focus() {
 /// when the route opened, not to the first control of the page.
 pub(crate) fn pop_restores_the_opening_element() {
     let counts = Rc::new(Cell::new(0));
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let shared = Rc::clone(&counts);
     navigator.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
         Column::new((control("first", &shared), control("second", &shared)))
@@ -351,7 +351,7 @@ pub(crate) fn pop_restores_the_opening_element() {
 
     // A row of a focusable list, moved to by the arrow keys, is the opening
     // element as any other control is.
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let shared = Rc::clone(&counts);
     navigator.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
         let shared = Rc::clone(&shared);
@@ -412,7 +412,7 @@ impl NavigatorObserver for Removals {
 pub(crate) fn a_panicking_restored_focus_listener_still_closes_the_route() {
     let counts = Rc::new(Cell::new(0));
     let armed = Rc::new(Cell::new(false));
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let trap = Rc::clone(&armed);
     navigator.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
         let trap = Rc::clone(&trap);
@@ -535,8 +535,8 @@ pub(crate) fn a_panicking_observer_keeps_the_removal_failure_first() {
 /// opened the dialog.
 pub(crate) fn a_covered_nested_navigator_does_not_take_the_restored_focus() {
     let counts = Rc::new(Cell::new(0));
-    let outer = NavigatorHandle::new();
-    let inner = NavigatorHandle::new();
+    let outer = NavigatorHandle::new(flui_foundation::BuildPhase::default());
+    let inner = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     inner.seed_initial(page("inner-home", &counts));
     let (nested, shared) = (inner.clone(), Rc::clone(&counts));
     outer.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
@@ -703,7 +703,7 @@ pub(crate) fn back_keys_pop_only_the_current_page() {
 
     // The mouse's back button (XButton1), through the runtime's pointer
     // input, pops the current page and nothing at the bottom of the stack.
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let counted = Rc::clone(&counts);
     navigator.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
         control("home", &counted)
@@ -741,7 +741,7 @@ pub(crate) fn back_keys_pop_only_the_current_page() {
 pub(crate) fn back_keys_pop_the_enclosing_navigator_at_a_nested_root() {
     let counts = Rc::new(Cell::new(0));
     let (outer, mut harness) = home(&counts);
-    let inner = NavigatorHandle::new();
+    let inner = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     inner.seed_initial(page("inner-home", &counts));
     let nested = inner.clone();
     drop(outer.push(PageRoute::<i32>::new(move |_, _, _| {

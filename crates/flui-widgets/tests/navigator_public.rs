@@ -131,7 +131,7 @@ pub(crate) fn delivered_route_results_remain_completed() {
         (false, None),
         (true, None),
     ] {
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         let built = Built::default();
         navigator.push(page(&built, "root"));
         let mut result = navigator.push(page(&built, "details"));
@@ -294,7 +294,7 @@ pub(crate) fn explicit_finish_commits_an_authored_page_and_retires_the_old_route
     let original = Rc::new(RefCell::new(None));
     let old_disposals = Rc::new(Cell::new(0));
     let new_disposals = Rc::new(Cell::new(0));
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     handle.seed_initial(AuthoredPage {
         settings: RouteSettings::named("/old"),
         builder: Rc::new(leaf),
@@ -487,7 +487,7 @@ pub(crate) fn a_mismatched_pop_result_is_reported_and_dropped_outside_the_histor
 
     let built = Built::default();
     let drops = Arc::new(AtomicUsize::new(0));
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     handle.seed_initial(page(&built, "/"));
     OWNER_NAVIGATOR.with(|cell| *cell.borrow_mut() = Some(handle.clone()));
     let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
@@ -556,7 +556,7 @@ pub(crate) fn every_operation_that_cannot_deliver_a_result_reports_it() {
     /// Drive one scenario and report how many "no route" warnings it emitted.
     fn warnings_from(drive: impl FnOnce(&NavigatorHandle)) -> Vec<String> {
         let ((), log) = flui_testing::log_capture::capture(|| {
-            let handle = NavigatorHandle::new();
+            let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
             drive(&handle);
         });
         undelivered_operations(&log)
@@ -589,7 +589,7 @@ pub(crate) fn every_operation_that_cannot_deliver_a_result_reports_it() {
     // 3. `remove_route_with` for an id that is not there. The id comes from a
     //    *different* navigator, since `RouteId::next` is crate-private — which
     //    also makes it a genuinely absent id rather than a fabricated one.
-    let stranger = NavigatorHandle::new();
+    let stranger = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     stranger.seed_initial(DeferredExitRoute::new("/elsewhere", 0));
     let absent = stranger.route_ids()[0];
     assert_eq!(
@@ -607,7 +607,7 @@ pub(crate) fn every_operation_that_cannot_deliver_a_result_reports_it() {
     //    is not an edge case.
     let bubbled = flui_testing::log_capture::capture(|| {
         let built = Built::default();
-        let handle = NavigatorHandle::new();
+        let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         handle.seed_initial(page(&built, "/"));
         let _laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
         assert!(
@@ -633,7 +633,7 @@ pub(crate) fn every_operation_that_cannot_deliver_a_result_reports_it() {
     let vetoed_drops = Arc::new(AtomicUsize::new(0));
     let vetoed = flui_testing::log_capture::capture(|| {
         let built = Built::default();
-        let handle = NavigatorHandle::new();
+        let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         handle.seed_initial(page(&built, "/"));
         let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
         handle.push(VetoingRoute::new());
@@ -670,7 +670,7 @@ pub(crate) fn every_operation_that_cannot_deliver_a_result_reports_it() {
     //    `is_present`, so the disposition query has no top to ask.
     let dispositionless = flui_testing::log_capture::capture(|| {
         let built = Built::default();
-        let handle = NavigatorHandle::new();
+        let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         handle.seed_initial(page(&built, "/"));
         let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
         let root = handle.current().expect("seeded");

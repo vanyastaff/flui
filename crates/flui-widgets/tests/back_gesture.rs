@@ -23,7 +23,7 @@ use crate::common::harness::{Harness, mount};
 /// controller, or the pacing it applies through `pop_paced` lands on a
 /// route with no relationship to the controller the test observes.
 fn mounted_with_transition_route() -> (NavigatorHandle, Harness, RouteId, AnimationController) {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(1.0, 1.0).into_view().boxed()
     }));
@@ -124,7 +124,7 @@ pub(crate) fn cancelling_a_back_swipe_past_halfway_keeps_the_route() {
     use flui_painting::styling::Color;
     use flui_view::environment::VsyncScope;
     use flui_widgets::ColoredBox;
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
         ColoredBox::new(Color::BLACK).boxed()
     }));
@@ -196,7 +196,7 @@ pub(crate) fn mounted_back_swipe_reads_retained_admission_settings() {
             .expect("finite axis slop")
     };
     let source = GestureSettingsSource::new(profile(20.0));
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
         ColoredBox::new(Color::BLACK).boxed()
     }));
@@ -280,7 +280,7 @@ pub(crate) fn replacing_authored_back_swipe_policy_cancels_the_outgoing_contact(
     use flui_view::environment::VsyncScope;
     use flui_widgets::{ColoredBox, GestureDetector};
 
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
         ColoredBox::new(Color::BLACK).boxed()
     }));
@@ -426,7 +426,7 @@ pub(crate) fn mounted_back_swipe_settle_uses_the_admitted_fling_bound() {
             .expect("finite fling range")
     };
     let source = GestureSettingsSource::new(profile(200.0));
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
         ColoredBox::new(Color::BLACK).boxed()
     }));

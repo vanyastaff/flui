@@ -75,7 +75,7 @@ fn page(_ctx: &dyn BuildContext, _a: &RouteAnimation, _s: &RouteAnimation) -> Bo
 /// A navigator with a plain home route, under `wrap`, on a fresh clock.
 fn mount(wrap: impl FnOnce(Navigator) -> BoxedView) -> (NavigatorHandle, LaidOut, Vsync) {
     let registry = Vsync::new();
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
@@ -228,7 +228,7 @@ pub(crate) fn a_replaced_hook_does_not_swap_a_running_transition() {
     let (first, first_builds) = CountingFade::counting(1000);
     let (second, second_builds) = CountingFade::counting(100);
     let registry = Vsync::new();
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
@@ -317,7 +317,7 @@ pub(crate) fn an_adopted_builder_may_query_its_navigator() {
         );
         return;
     }
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let queries = Rc::new(Cell::new(0));
     let fade: Rc<dyn PageTransitionBuilder> = Rc::new(NavigatorAwareFade {
         navigator: navigator.clone(),
@@ -364,7 +364,7 @@ pub(crate) fn an_adopted_transition_settles_on_the_first_reduced_motion_frame() 
 pub(crate) fn a_route_pushed_before_mount_adopts_the_hook_at_mount() {
     let (fade, builds) = CountingFade::counting(400);
     let registry = Vsync::new();
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
@@ -433,7 +433,7 @@ impl PageTransitionBuilder for PushingFade {
 /// runs the resolved builder's duration.
 pub(crate) fn a_route_pushed_while_durations_are_read_adopts_the_new_hooks() {
     let registry = Vsync::new();
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));

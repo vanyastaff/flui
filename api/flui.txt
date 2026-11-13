@@ -37020,7 +37020,6 @@ impl core::fmt::Debug for flui_widgets::navigator::hero::HeroState
 impl flui::prelude::ViewState<flui::prelude::Hero> for flui_widgets::navigator::hero::HeroState
 pub struct flui_widgets::navigator::navigator::NavigatorHandle { .. }
 impl Clone for flui_widgets::navigator::navigator::NavigatorHandle
-impl Default for flui_widgets::navigator::navigator::NavigatorHandle
 impl core::fmt::Debug for flui_widgets::navigator::navigator::NavigatorHandle
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::add_observer(&self, observer: alloc::rcs::arc::Arc<dyn flui_widgets::navigator::observer::NavigatorObserver>)
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::admits_pages(&self) -> bool
@@ -37034,7 +37033,7 @@ pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_of(ctx: &dyn f
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_of_root(ctx: &dyn flui::app::BuildContext) -> Option<Self>
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_pop(&self) -> bool
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_pop_with<T: 'static>(&self, result: T) -> bool
-pub fn flui_widgets::navigator::navigator::NavigatorHandle::new() -> Self
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::new(build_phase: flui::foundation::BuildPhase) -> Self
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::pop(&self) -> bool
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::pop_until(&self, keep: impl FnMut(flui::widgets::RouteId) -> bool)
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::pop_with<T: 'static>(&self, result: T) -> bool

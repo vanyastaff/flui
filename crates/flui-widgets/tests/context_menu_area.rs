@@ -127,7 +127,7 @@ impl Scene {
     /// log its commands write.
     fn view(self, shown: &SharedSignal<bool>) -> (BoxedView, Log) {
         let log: Log = Rc::default();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         let (page_log, shown) = (Rc::clone(&log), shown.clone());
         navigator.seed_initial(PageRoute::<()>::new(move |_, _, _| {
             let row = Shown {

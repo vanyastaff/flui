@@ -194,7 +194,7 @@ pub(crate) fn authored_cubic_hero_geometry_is_painted_and_retraced() {
         let source_samples = Rc::new(Cell::new(0));
         let destination_samples = Rc::new(Cell::new(0));
         let vsync = Vsync::new();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         navigator.seed_initial(authored_hero_page(
             30.0,
             20.0,
@@ -352,7 +352,7 @@ fn authored_easing_flight(spring: bool) {
     let source_samples = Rc::new(Cell::new(0));
     let destination_samples = Rc::new(Cell::new(0));
     let vsync = Vsync::new();
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(authored_eased_hero_page(
         30.0,
         20.0,

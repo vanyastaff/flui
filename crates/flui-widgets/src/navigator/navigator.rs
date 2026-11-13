@@ -230,10 +230,10 @@ struct NavigatorShared {
     /// See `addressing.rs` for what it refuses.
     addressing: Option<Addressing>,
 
-    /// The UI runtime's build phase, bound when the navigator mounts: a
-    /// [`PageHandle`](super::PageHandle) mutation made while it builds is
-    /// refused (ADR-0330 §3).
-    build_phase: RefCell<Option<flui_foundation::BuildPhase>>,
+    /// The build phase of the UI runtime the navigator mounts in, bound at
+    /// construction: a [`PageHandle`](super::PageHandle) mutation made while
+    /// it builds is refused (ADR-0330 §3).
+    build_phase: flui_foundation::BuildPhase,
 }
 
 impl Drop for NavigatorShared {
@@ -305,7 +305,7 @@ pub(super) fn terminal_binding_authority_is_closed_before_route_retirement() {
         }
     }
 
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let entries = navigator.shared.registries.entries.clone();
     let queue = navigator.shared.history.lock().command_queue();
     let slot = RouteBindingSlot::new();
@@ -868,13 +868,17 @@ pub struct NavigatorHandle {
 
 impl NavigatorHandle {
     /// A handle to an empty, unmounted navigator. Seed it, hand it to
-    /// [`Navigator::new`], and keep a clone.
+    /// [`Navigator::new`], and keep a clone. `build_phase` is the build phase
+    /// of the UI runtime it will mount in.
     #[must_use]
-    pub fn new() -> Self {
-        Self::with_addressing(None)
+    pub fn new(build_phase: flui_foundation::BuildPhase) -> Self {
+        Self::with_addressing(None, build_phase)
     }
 
-    fn with_addressing(addressing: Option<Addressing>) -> Self {
+    fn with_addressing(
+        addressing: Option<Addressing>,
+        build_phase: flui_foundation::BuildPhase,
+    ) -> Self {
         let shared = Arc::new(NavigatorShared {
             history: super::lifecycle::Terminal::new(Mutex::new(RouteHistory::new())),
             overlay: super::lifecycle::Terminal::new(OverlayHandle::new()),
@@ -893,7 +897,7 @@ impl NavigatorHandle {
             ),
             settle_wake: super::lifecycle::Terminal::new(Arc::new(Mutex::new(None))),
             addressing,
-            build_phase: RefCell::new(None),
+            build_phase,
         });
         Self {
             shared,
@@ -1602,11 +1606,7 @@ impl NavigatorHandle {
     /// Whether this navigator's UI runtime is building now. A mutation a
     /// [`PageHandle`](super::PageHandle) makes then is refused (ADR-0330 §3).
     pub(crate) fn is_building(&self) -> bool {
-        self.shared
-            .build_phase
-            .borrow()
-            .as_ref()
-            .is_some_and(flui_foundation::BuildPhase::is_building)
+        self.shared.build_phase.is_building()
     }
 
     /// Whether `self` and `other` name the same navigator.
@@ -1796,12 +1796,6 @@ impl NavigatorHandle {
     }
 }
 
-impl Default for NavigatorHandle {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl fmt::Debug for NavigatorHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NavigatorHandle")
@@ -1982,7 +1976,6 @@ impl ViewState<Navigator> for NavigatorState {
     /// captures below.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
-        *self.shared.build_phase.borrow_mut() = Some(ctx.build_phase());
 
         // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.

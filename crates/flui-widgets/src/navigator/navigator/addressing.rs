@@ -103,9 +103,12 @@ impl fmt::Display for RefusalReport {
 
 impl NavigatorHandle {
     /// An empty, unmounted navigator that a `Router<R>` drives; `route_type`
-    /// names `R` in refusals.
-    pub(crate) fn addressed(route_type: &'static str) -> Self {
-        Self::with_addressing(Some(Addressing::new(route_type)))
+    /// names `R` in refusals, and `build_phase` is its UI runtime's.
+    pub(crate) fn addressed(
+        route_type: &'static str,
+        build_phase: flui_foundation::BuildPhase,
+    ) -> Self {
+        Self::with_addressing(Some(Addressing::new(route_type)), build_phase)
     }
 
     /// Whether [`push`](Self::push) admits a page route here. `false` for a

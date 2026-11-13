@@ -440,7 +440,9 @@ fn swipe_inbox(rows: SwipeRows) -> AlternativesSubject<Mailbox> {
     };
     let view = match rows {
         SwipeRows::PlainMenu => {
-            let navigator = flui_widgets::__test_access::NavigatorHandle::new();
+            let navigator = flui_widgets::__test_access::NavigatorHandle::new(
+                flui_foundation::BuildPhase::default(),
+            );
             navigator.seed_initial(flui_widgets::PageRoute::<()>::new(move |_, _, _| {
                 inbox.clone().boxed()
             }));

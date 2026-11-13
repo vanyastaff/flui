@@ -33,7 +33,7 @@ fn plain_page() -> SimpleRoute<i32> {
 
 /// A navigator with one non-animated route seeded, mounted and settled.
 fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     handle.seed_initial(plain_page());
     let harness = mount(Navigator::new(handle.clone()));
     let bottom = handle.route_ids()[0];
@@ -121,7 +121,7 @@ pub(crate) fn page_route_paints_its_separate_entrance_and_exit_durations() {
 
     for (entrance, exit) in [(1000, 2000), (2000, 1000)] {
         let registry = Vsync::new();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         navigator.seed_initial(plain_page());
         let mut app = crate::common::lay_out_animated(
             VsyncScope::new(registry.clone(), Navigator::new(navigator.clone())),

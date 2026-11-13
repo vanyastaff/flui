@@ -75,7 +75,7 @@ fn assert_identity_admission_custody(case: &str) {
     } else {
         u64::MAX
     });
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.push(SimpleRoute::<()>::new(|_| crate::Text::new("base").boxed()));
     let base = navigator.current().expect("base route");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -198,7 +198,7 @@ fn assert_identity_batch_admission_custody(case: &str) {
     let commit = CommitCapture {
         calls: Rc::clone(&commit_calls),
     };
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.push(SimpleRoute::<()>::new(|_| {
         crate::Text::new("batch base").boxed()
     }));

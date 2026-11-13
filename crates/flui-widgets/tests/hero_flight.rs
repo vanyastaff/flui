@@ -33,7 +33,7 @@ fn tag(name: &'static str) -> HeroTag {
 }
 
 fn seeded_navigator() -> NavigatorHandle {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
@@ -474,7 +474,7 @@ pub(crate) fn cancelling_a_hero_mapping_does_not_refreeze_the_previous_page() {
     let frame = Duration::from_millis(16);
     for phase in ["factory", "transform", "drop"] {
         let vsync = flui_animation::Vsync::new();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         navigator.seed_initial(hero_page("shared", 30.0, 20.0));
         let mut laid = crate::common::lay_out_animated(
             flui_view::environment::VsyncScope::new(

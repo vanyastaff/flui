@@ -316,7 +316,10 @@ impl<R: Routable> RouterState<R> {
     /// initial routes.
     fn new(router: &Router<R>, build_phase: BuildPhase) -> Self {
         let shared = Rc::new(RouterShared {
-            navigator: Terminal::new(NavigatorHandle::addressed(type_name::<R>())),
+            navigator: Terminal::new(NavigatorHandle::addressed(
+                type_name::<R>(),
+                build_phase.clone(),
+            )),
             stack: RefCell::new(Vec::new()),
             page: Terminal::new(Rc::new(RefCell::new(Rc::clone(&router.page)))),
             transitions: Terminal::new(Rc::new(RefCell::new(router.transitions.clone()))),

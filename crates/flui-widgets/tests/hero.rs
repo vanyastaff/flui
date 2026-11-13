@@ -142,7 +142,7 @@ mod registry_reentry {
             .transition_duration(std::time::Duration::from_millis(100))
         };
         let vsync = flui_animation::Vsync::new();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         navigator.seed_initial(page());
         let mut laid = crate::common::lay_out_animated(
             VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),

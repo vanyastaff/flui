@@ -150,7 +150,7 @@ impl StatefulView for Desk {
     type State = DeskState;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> DeskState {
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         let shelf = self.0.clone();
         navigator.seed_initial(PageRoute::<()>::new(move |_, _, _| {
             ShelfList(shelf.clone()).into_view().boxed()

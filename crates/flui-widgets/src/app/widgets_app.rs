@@ -65,6 +65,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
+use flui_foundation::BuildPhase;
 use flui_painting::typography::TextStyle;
 use flui_platform::Locale;
 use flui_view::BoxedView;
@@ -307,6 +308,9 @@ pub struct WidgetsAppState {
     /// `did_update_view` writes the current view's `home` into the cell and
     /// marks the route, so a rebuilt `WidgetsApp` shows the new home.
     home_route: Option<(RouteId, Rc<RefCell<BoxedView>>)>,
+    /// The build phase of the UI runtime the app mounts in, from
+    /// `create_state`: the home navigator is bound to it.
+    build_phase: BuildPhase,
 }
 
 impl fmt::Debug for WidgetsAppState {
@@ -314,6 +318,7 @@ impl fmt::Debug for WidgetsAppState {
         f.debug_struct("WidgetsAppState")
             .field("has_navigator", &self.navigator.is_some())
             .field("has_home_route", &self.home_route.is_some())
+            .field("building", &self.build_phase.is_building())
             .finish()
     }
 }
@@ -323,14 +328,15 @@ impl WidgetsAppState {
     /// has one and no Router, otherwise none. Shared by `create_state`
     /// (mount) and `did_update_view` (an element updated to or from the
     /// home form).
-    fn for_view(view: &WidgetsApp) -> Self {
+    fn for_view(view: &WidgetsApp, build_phase: BuildPhase) -> Self {
         let Some(home) = view.home.as_ref().filter(|_| view.router.is_none()) else {
             return WidgetsAppState {
                 navigator: None,
                 home_route: None,
+                build_phase,
             };
         };
-        let handle = NavigatorHandle::new();
+        let handle = NavigatorHandle::new(build_phase.clone());
         let cell = Rc::new(RefCell::new(home.clone()));
         let reader = Rc::clone(&cell);
         // A page route, as the router form's pages are: it owns a focus
@@ -347,6 +353,7 @@ impl WidgetsAppState {
         WidgetsAppState {
             navigator: Some(handle),
             home_route: Some((id, cell)),
+            build_phase,
         }
     }
 }
@@ -354,8 +361,8 @@ impl WidgetsAppState {
 impl StatefulView for WidgetsApp {
     type State = WidgetsAppState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        WidgetsAppState::for_view(self)
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        WidgetsAppState::for_view(self, ctx.build_phase())
     }
 }
 
@@ -375,7 +382,9 @@ impl ViewState<WidgetsApp> for WidgetsAppState {
             }
             // An element updated into or out of the home form: the
             // navigator is created or released with it.
-            (None, true) | (Some(_), false) => *self = WidgetsAppState::for_view(new_view),
+            (None, true) | (Some(_), false) => {
+                *self = WidgetsAppState::for_view(new_view, self.build_phase.clone());
+            }
             (None, false) => {}
         }
     }

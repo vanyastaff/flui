@@ -824,7 +824,7 @@ fn assert_terminal_failure(failure: Box<dyn std::any::Any + Send>, expected: &st
         Some(expected)
     );
     // A fresh owner must remain operational after terminal containment.
-    let next = NavigatorHandle::new();
+    let next = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     next.push(SimpleRoute::<()>::new(|_| Text::new("first").boxed()));
     next.push(SimpleRoute::<()>::new(|_| Text::new("second").boxed()));
     assert_eq!(next.route_ids().len(), 2);
@@ -862,7 +862,7 @@ impl NavigatorObserver for CountingObserver {
     reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
 )]
 fn terminal_observer_competition() {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let first = TerminalBomb::new("first observer");
     let first_calls = Rc::clone(&first.calls);
     let second = TerminalBomb::counting("second observer");
@@ -881,7 +881,7 @@ fn terminal_observer_competition() {
     reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
 )]
 fn terminal_navigator_during_incoming_unwind() {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let first = TerminalBomb::counting("first observer");
     let first_calls = Rc::clone(&first.calls);
     let second = TerminalBomb::counting("second observer");
@@ -903,7 +903,7 @@ fn terminal_navigator_during_incoming_unwind() {
     reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
 )]
 fn terminal_aliases_preserve_healthy_observers() {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let alias = navigator.clone();
     let probe = TerminalBomb::counting("healthy observer");
     let probe_calls = Rc::clone(&probe.calls);
@@ -951,7 +951,7 @@ fn terminal_router_config_destroys_factories_after_route_failure() {
     reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
 )]
 fn terminal_route_result_failure_destroys_later_observer() {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let result = TerminalResult::new("route result", true);
     let result_calls = Arc::clone(&result.calls);
     navigator
@@ -1011,7 +1011,7 @@ fn terminal_route_record_destroys_pending_waker() {
     use std::future::Future as _;
     use std::pin::Pin;
     use std::task::{Context, Poll};
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let route = TerminalBomb::new("route owner");
     let route_calls = Rc::clone(&route.calls);
     let mut result = navigator.seed_initial(TerminalRoute {
@@ -1194,7 +1194,7 @@ fn terminal_router_construction_matrix(case: &str) {
 }
 
 fn terminal_seeded_modal_releases_its_factories() {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let page = TerminalBomb::new("healthy seeded page");
     page.armed.set(false);
     let page_calls = Rc::clone(&page.calls);
@@ -1214,7 +1214,7 @@ fn terminal_modal_aliases_remain_usable_until_last_release() {
     use flui_animation::Animation;
     use flui_widgets::__test_access::{PageRouteProbe, RouteProbe};
     for mounted in [false, true] {
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         let page = TerminalBomb::new("healthy aliased page");
         page.armed.set(false);
         let page_calls = Rc::clone(&page.calls);

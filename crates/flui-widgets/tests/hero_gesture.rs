@@ -100,7 +100,7 @@ fn gesture_fixture_with(
     RouteId,
     AnimationController,
 ) {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(1.0, 1.0).into_view().boxed()
     }));
@@ -172,7 +172,7 @@ fn gesture_fixture(
 // ============================================================================
 
 pub(crate) fn an_excluding_gesture_restores_pending_programmatic_placeholders() {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(hero_page(false, 40.0, 24.0));
     let mut harness = mount_navigator(&navigator);
     let controller = install(&navigator);

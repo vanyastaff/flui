@@ -29,7 +29,7 @@ use flui_widgets::{SizedBox, Text};
 use crate::common::harness::{Harness, mount};
 
 fn seeded_navigator() -> NavigatorHandle {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));

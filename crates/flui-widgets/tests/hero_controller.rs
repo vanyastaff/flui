@@ -23,7 +23,7 @@ use crate::common::harness::{Harness, mount};
 const TRANSITION: Duration = Duration::from_millis(300);
 
 fn seeded_navigator() -> NavigatorHandle {
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
@@ -159,7 +159,7 @@ pub(crate) fn replacing_a_hero_navigator_retires_routes_after_attachment() {
         }
         assert!(!fails, "outgoing Hero navigator capture failed");
     }));
-    let old = NavigatorHandle::new();
+    let old = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     old.seed_initial(SimpleRoute::<()>::new(move |_ctx| {
         let _capture = &capture;
         SizedBox::new(10.0, 10.0).into_view().boxed()
