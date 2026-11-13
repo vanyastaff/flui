@@ -38,3 +38,6 @@
   `MatchError`, `Link` and `Role`, and the testing kit's `BuildCapabilities`, `PointerPhase`,
   `A11yQuery`, `A11yQueryError`, `InvokeActionError`, `RowOutcome`, `StoreHostCall` and
   `HandlerCall`.
+- Also `#[non_exhaustive]` (ADR-0329): the semantics `AccessibilityFocusBlockType`,
+  `DebugSemanticsDumpOrder`, `StringAttributeType` and `SemanticsCollectionOrigin`, and the runtime's
+  `Privacy`, `ReloadTier`, `CommandSendError` and `UiCommand`.

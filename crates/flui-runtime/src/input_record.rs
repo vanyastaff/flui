@@ -86,6 +86,10 @@ impl From<InputSequenceId> for RecordedSequence {
 /// (ADR-0207 §5). A replay resolves an embedded value against the surfaces
 /// its own host embedded, in the same order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a recorded surface is the window's own or one it embeds"
+)]
 pub enum RecordedSurface {
     /// The window's own surface.
     #[default]
