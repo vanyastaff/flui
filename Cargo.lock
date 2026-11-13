@@ -1918,6 +1918,7 @@ dependencies = [
  "criterion",
  "flui-log",
  "flui-objects",
+ "flui-platform",
  "flui-rendering",
  "flui-scheduler",
  "flui-sdk",

@@ -17,6 +17,7 @@
 //! tighter by design (no fill or outline to visually separate from
 //! surrounding content).
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::view::prelude::*;
@@ -46,7 +47,7 @@ use crate::theme::Theme;
 #[derive(Clone, StatelessView)]
 pub struct TextButton {
     on_pressed: Option<PressCallback>,
-    style: Option<ButtonStyle>,
+    style: Option<Rc<ButtonStyle>>,
     identifier: Option<Arc<str>>,
     child: BoxedView,
 }
@@ -87,7 +88,7 @@ impl TextButton {
     /// falling through to the default).
     #[must_use]
     pub fn style(mut self, style: ButtonStyle) -> Self {
-        self.style = Some(style);
+        self.style = Some(Rc::new(style));
         self
     }
 
@@ -104,7 +105,7 @@ impl StatelessView for TextButton {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let mut core = ButtonStyleButtonCore::new(default_style(&theme), self.child.clone())
-            .style(self.style.clone().unwrap_or_default());
+            .style(self.style.clone());
         // Middle cascade tier — see `crate::elevated_button`'s identical
         // "simplified from `ElevatedButtonTheme.of`" note.
         if let Some(theme_style) = theme
@@ -112,7 +113,7 @@ impl StatelessView for TextButton {
             .as_ref()
             .and_then(|t| t.style.clone())
         {
-            core = core.theme_style(theme_style);
+            core = core.theme_style(Rc::new(theme_style));
         }
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
