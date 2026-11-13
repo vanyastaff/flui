@@ -760,6 +760,16 @@ impl GpuContext {
             .apply(&self.domain, updates)
     }
 
+    /// Put `slot`'s external textures on the current device, uploading its
+    /// kept images again when they are on no device (after a rebuild, or a
+    /// frame that unwound with them lent), so the lend itself uploads
+    /// nothing.
+    fn prepare_textures(&mut self, slot: SlotId) {
+        if let Some(kept) = self.textures.get_mut(&slot) {
+            kept.on(&self.domain);
+        }
+    }
+
     /// Lend `slot`'s external textures to `painter` for the slot's frame,
     /// handing back the painter's own registry, which
     /// [`Self::take_back_textures`] returns to it.
@@ -814,6 +824,7 @@ impl GpuContext {
             (entry.target()?.clone(), entry.format, entry.size)
         };
         let _submission_scope = self.domain.begin_frame_scope()?;
+        self.prepare_textures(slot);
         let mut painter = self.take_painter(format, size);
         let own_textures = self.lend_textures(slot, &mut painter);
         #[cfg(test)]
@@ -884,6 +895,9 @@ impl GpuContext {
             // Released, or not sized yet: nothing to present into.
             return Ok(PresentDisposition::NotShown);
         };
+        // Uploads run before the painter and the blit are taken, so a
+        // panic there (a tracing subscriber is not ours) costs neither.
+        self.prepare_textures(slot);
         let mut painter = self.take_painter(format, size);
         painter.resize(size.0, size.1);
         // The blit's pipelines, like the library's, are inserted only once
@@ -892,8 +906,6 @@ impl GpuContext {
             .blit
             .take()
             .unwrap_or_else(|| OffscreenRenderer::with_domain(Arc::clone(&self.domain)));
-        // Lent last, after everything outside the contained frame that can
-        // unwind.
         let own_textures = self.lend_textures(slot, &mut painter);
         let Self {
             adapter,

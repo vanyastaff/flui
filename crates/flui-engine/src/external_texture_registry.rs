@@ -549,3 +549,41 @@ impl KeptTextures {
         self.registry = None;
     }
 }
+
+#[cfg(all(test, feature = "testing"))]
+mod tests {
+    use super::*;
+
+    /// A frame of a new size whose allocation the registry refuses leaves the
+    /// previous image registered, as the kept images still hold it.
+    ///
+    /// Red-check: unregister the previous allocation before registering the
+    /// new one, without putting it back on a refusal, and the texture is gone.
+    #[test]
+    fn a_refused_resize_keeps_the_previous_image() {
+        let Some((device, queue)) = crate::test_support::try_test_device_and_queue(
+            "a_refused_resize_keeps_the_previous_image",
+        ) else {
+            return;
+        };
+        let domain = DeviceDomain::new(device, queue);
+        let mut registry = ExternalTextureRegistry::new(&domain);
+        let id = TextureId::new(1);
+        let red = flui_painting::paint::Image::from_rgba8(2, 2, [255, 0, 0, 255].repeat(4));
+        registry
+            .upload(&domain, id, &red)
+            .expect("the first frame is accepted");
+        registry.generation = u64::MAX;
+
+        let larger = flui_painting::paint::Image::from_rgba8(4, 4, [0, 0, 255, 255].repeat(16));
+        assert!(
+            registry.upload(&domain, id, &larger).is_err(),
+            "no generation is left for the new allocation"
+        );
+        assert_eq!(
+            registry.get(id).map(ExternalTextureEntry::size),
+            Some((2, 2)),
+            "the previous image stays registered"
+        );
+    }
+}
