@@ -366,7 +366,9 @@ struct Scratch {
     damage: footprint::DamageScratch,
     /// Emptied version records and table nodes a patch writes into before
     /// allocating, from versions nobody reads any more (ADR-0304 §7).
-    spares: VersionSpares,
+    /// Boxed, once per owner: its inline stocks are 600 bytes an owner held by
+    /// value would otherwise carry.
+    spares: Box<VersionSpares>,
 }
 
 impl Scratch {
