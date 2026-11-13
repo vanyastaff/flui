@@ -151,6 +151,5 @@ state the gates and the kinds of value that cross.
   `frame_waker_wakes_the_ui_runtime_from_a_worker`.
 - The latch tests keep their assertions: `finish_async_pump_reissues_a_stranded_live_waiters_demand`,
   `frame_scheduled_hook_fires_once_per_transition`,
-  `lifecycle_reenable_edge_schedules_exactly_one_frame`,
-  `headless_wake_from_another_thread_is_polled_on_the_frame_thread`, and the table in
+  `lifecycle_reenable_edge_schedules_exactly_one_frame`, and the table in
   `crates/flui-scheduler/tests/wake_delivery.rs`.

@@ -1,106 +1,45 @@
-//! End-to-end: a mounted render tree becomes a queryable accessibility tree.
+//! End-to-end: a laid-out widget tree becomes a queryable accessibility tree.
 //!
 //! The module tests in `src/a11y.rs` build a `TreeUpdate` by hand, so they pin
 //! the query logic and say nothing about whether the harness is wired to the
-//! semantics phase at all. These tests start where a user does — a render tree
-//! and a pumped frame — and are the ones that fail if `enable_semantics` stops
-//! reaching the pipeline owner, if the semantics phase stops assembling, or if
-//! the translation stops being invoked.
+//! semantics phase at all. These tests start where a user does — a widget tree
+//! and a pumped frame of its UI runtime — and are the ones that fail if
+//! `enable_semantics` stops reaching the pipeline owner, if the semantics phase
+//! stops assembling, or if the translation stops being invoked.
 
-use flui_foundation::geometry::Size;
-use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_rendering::prelude::*;
-use flui_rendering::protocol::BoxProtocol;
+use std::time::Duration;
+
+use flui_rendering::pipeline::PipelineCell;
 use flui_semantics::{SemanticsConfiguration, SemanticsRole};
-use flui_testing::HeadlessBinding;
 use flui_testing::a11y::Role;
+use flui_testing::widgets::{LaidOut, lay_out, loose};
 use flui_testing::{A11yQuery, A11yQueryError, A11yTree};
-use flui_view::{BuildOwner, tree::ElementTree};
+use flui_widgets::{Semantics, SizedBox};
 
-/// A leaf carrying whatever semantics the test wants to see come out the other
-/// end. Layout is fixed and irrelevant; the point is the config.
-#[derive(Debug, Default)]
-struct SemanticLeaf {
-    label: String,
-    button: bool,
-    focused: bool,
-    role: SemanticsRole,
-    /// `None` leaves the node with no enabled-state concept at all, which is
-    /// the case that distinguishes "not disabled" from "has no such state".
-    enabled: Option<bool>,
-    /// A selection the role may not carry.
-    selected: Option<bool>,
-}
-
-impl flui_foundation::inspect::Inspect for SemanticLeaf {
-    fn kind(&self) -> &'static str {
-        "SemanticLeaf"
+/// A 10×10 leaf labelled `label` with the button role, `selected` when given,
+/// laid out with semantics on.
+fn button_with(label: &str, selected: Option<bool>) -> LaidOut {
+    let mut config = SemanticsConfiguration::default();
+    config.set_label(label.to_owned());
+    config.set_role(SemanticsRole::Button);
+    if let Some(selected) = selected {
+        config.set_selected(selected);
     }
-
-    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    let mut laid = lay_out(
+        Semantics::from_configuration(config).child(SizedBox::new(10.0, 10.0)),
+        loose(200.0),
+    );
+    laid.enable_semantics();
+    laid
 }
 
-impl RenderBox for SemanticLeaf {
-    type Arity = Leaf;
-    type ParentData = BoxParentData;
-
-    fn perform_layout(
-        &mut self,
-        _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
-    ) -> flui_rendering::RenderResult<Size> {
-        Ok(Size::new(10.0, 10.0))
-    }
-
-    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
-
-    fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
-        config.set_label(self.label.clone());
-        if self.button {
-            config.set_role(SemanticsRole::Button);
-        }
-        config.set_focused(self.focused);
-        // One role per node: an unset role leaves the button's in place.
-        if self.role != SemanticsRole::None {
-            config.set_role(self.role);
-        }
-        config.set_enabled(self.enabled);
-        if let Some(selected) = self.selected {
-            config.set_selected(selected);
-        }
-    }
-}
-
-fn binding_with(leaf: SemanticLeaf) -> HeadlessBinding {
-    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-    let root = owner.insert::<BoxProtocol>(Box::new(leaf));
-    owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
-
-    HeadlessBinding::with_tree(
-        BuildOwner::new(),
-        ElementTree::new(),
-        PipelineCell::new(owner),
-    )
-}
-
-fn pump(binding: &mut HeadlessBinding) {
-    binding.pump_frame(std::time::Duration::from_millis(16));
-}
-
-/// **The acceptance test.** A button in the render tree is findable by role,
-/// with its label, through the same translation a screen reader receives.
+/// **The acceptance test.** A button in the tree is findable by role, with its
+/// label, through the same translation a screen reader receives.
 pub(crate) fn a_button_in_the_render_tree_is_findable_by_role() {
-    let mut binding = binding_with(SemanticLeaf {
-        label: "Submit".to_string(),
-        button: true,
-        ..Default::default()
-    });
+    let mut laid = button_with("Submit", None);
+    laid.pump_for(Duration::from_millis(16));
 
-    binding.enable_semantics().expect("binding is tree-bound");
-    pump(&mut binding);
-
-    let tree = binding
+    let tree = laid
         .a11y_tree()
         .expect("semantics was enabled before the frame, so a tree exists");
     let button = tree
@@ -110,10 +49,9 @@ pub(crate) fn a_button_in_the_render_tree_is_findable_by_role() {
     assert_eq!(button.label(), Some("Submit"));
 }
 
-/// A `HeadlessBinding` frame fails a test that leaves out an attribute its
-/// role does not support, as the widget host's frames do: a button carries no
-/// `selected`. A subscriber that disables semantics while it handles the
-/// warning does not hide the finding.
+/// A frame fails a test that leaves out an attribute its role does not
+/// support: a button carries no `selected`. A subscriber that disables
+/// semantics while it handles the warning does not hide the finding.
 pub(crate) fn a_headless_frame_fails_on_an_attribute_its_role_does_not_support() {
     thread_local! {
         #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
@@ -146,16 +84,9 @@ pub(crate) fn a_headless_frame_fails_on_an_attribute_its_role_does_not_support()
     }
 
     let fails = |subscriber: Option<Disabling>| {
-        let mut binding = binding_with(SemanticLeaf {
-            label: "Submit".to_string(),
-            button: true,
-            selected: Some(true),
-            ..Default::default()
-        });
-        binding.enable_semantics().expect("binding is tree-bound");
-        let pipeline = binding.pipeline_owner().expect("tree-bound").clone();
-        PIPELINE.with(|cell| *cell.borrow_mut() = Some(pipeline));
-        let frame = std::panic::AssertUnwindSafe(|| pump(&mut binding));
+        let mut laid = button_with("Submit", Some(true));
+        PIPELINE.with(|cell| *cell.borrow_mut() = Some(laid.pipeline_owner()));
+        let frame = std::panic::AssertUnwindSafe(|| laid.pump_for(Duration::from_millis(16)));
         let failure = match subscriber {
             Some(subscriber) => {
                 tracing::subscriber::with_default(subscriber, || std::panic::catch_unwind(frame))
