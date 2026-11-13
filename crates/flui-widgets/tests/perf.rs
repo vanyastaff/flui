@@ -292,15 +292,20 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
 }
 
-/// Frames a scenario pumps before it measures a steady one: enough for every
-/// buffer the app keeps between frames (the scene owner's spares, the
-/// recorder's room) to have come back once.
+/// One-screen scrolls a scenario pumps before it measures a steady one. Eight
+/// is where a scroll stops costing less than the one before it: the next two
+/// differ by at most [`STEADY_SLACK`] allocations, which the scenario asserts.
 const WARM_SCROLLS: u32 = 8;
 
-/// A one-screen scroll once the app has scrolled before: what every scroll
-/// after the first few costs, with the buffers kept between frames already
-/// back. The first-frames row above shows what filling them costs; this one
-/// fails when a frame stops reusing them.
+/// How many allocations two steady scrolls may differ by: the rows a band
+/// rebuilds are not the same rows from one screen to the next.
+const STEADY_SLACK: u64 = 2;
+
+/// A one-screen scroll once the app has scrolled eight screens: what every
+/// scroll after the first few costs. The first-scroll row above includes the
+/// leading cache rows and what the first frames add to the buffers the app
+/// keeps; this row holds the cost of a scroll that only reuses them, and the
+/// baseline's ratchet fails a change that makes it cost more.
 #[test]
 fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     let mut app = mount();
@@ -310,23 +315,33 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
         app.pump_many(2);
     }
     let band = app.render_nodes();
-    app.writer.set_pixels(
-        HEIGHT * f64::from(WARM_SCROLLS + 1),
-        OffsetWriteCause::Programmatic,
-    );
-    let (report, allocations) = perf_measured(|| app.pump_many(2));
+    let mut scroll_to = |screen: u32| {
+        app.writer
+            .set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
+        perf_measured(|| app.pump_many(2))
+    };
+    let (report, allocations) = scroll_to(WARM_SCROLLS + 1);
+    let (_, next) = scroll_to(WARM_SCROLLS + 2);
     record("list_10k_scroll_warm", &report, allocations);
 
+    assert!(
+        allocations.allocations.abs_diff(next.allocations) <= STEADY_SLACK,
+        "the warm-up is not over: one scroll asked {allocations:?} of the heap, the next {next:?}"
+    );
+    let visible_rows = ((HEIGHT - LABEL_HEIGHT) / ROW_HEIGHT) as u64;
     let laid_out = counter(&report, "nodes_laid_out");
     assert!(
-        laid_out >= 1 && laid_out <= band as u64,
-        "a warm scroll lays out only a band ({band}), got {laid_out}: {report:#?}"
+        laid_out >= visible_rows && laid_out <= band as u64,
+        "a warm scroll lays out every newly visible row ({visible_rows}) and no more than a \
+         band ({band}), got {laid_out}: {report:#?}"
     );
     assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
 }
 
 /// A full reassemble after two others: what a hot-reload loop costs once the
-/// buffers kept between frames are back, against the first one above.
+/// semantics tree and the buffers the app keeps between frames exist. The
+/// first reassemble above also builds the semantics tree the mount enabled,
+/// so the two rows differ by more than the buffers they reuse.
 #[test]
 fn perf_a_repeated_full_reassemble_reuses_what_the_last_one_kept() {
     let mut app = mount();
