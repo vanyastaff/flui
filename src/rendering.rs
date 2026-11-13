@@ -3,7 +3,8 @@
 //! Implement [`RenderBox`] or [`RenderSliver`] and connect it to a
 //! [`crate::view::RenderView`]. Layout, painting, hit testing, semantics, and
 //! invalidation use the same types as built-in widgets. Arena storage and the
-//! GPU compositor remain implementation details outside this authoring module.
+//! GPU compositor remain implementation details outside this authoring module; the built-in
+//! render objects are in [`objects`].
 
 pub use flui_foundation::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
 pub use flui_rendering::constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
@@ -37,3 +38,13 @@ pub use flui_rendering::{
     forward_single_child_box_hit_test, forward_single_child_box_layout,
     forward_single_child_box_queries, forward_single_child_intrinsics,
 };
+
+/// The concrete render objects behind the built-in widgets, such as [`objects::RenderAlign`],
+/// [`objects::RenderFlex`] and [`objects::RenderSliverList`], with the configuration types they
+/// take.
+///
+/// A custom widget wraps one of these in its [`crate::view::RenderView`] the way the built-in
+/// widgets do, and each built-in widget's `RenderView::RenderObject` names its object here.
+pub mod objects {
+    pub use flui_objects::*;
+}
