@@ -954,7 +954,9 @@ pub(crate) fn a_panicking_frame_is_reported_and_the_window_draws_again() {
     let observed = Observed::default();
     let started = start(&observed);
     let presented = started.renderer.frames_presented();
-    started.renderer.panic_in_next_frames(1);
+    // A renderer that panics on this frame and on the next ones: a retry
+    // would panic again.
+    started.renderer.panic_in_next_frames(8);
     observed.schedule_rebuild();
     started.run.run_owner_turn();
     assert_eq!(
@@ -962,12 +964,32 @@ pub(crate) fn a_panicking_frame_is_reported_and_the_window_draws_again() {
         1,
         "the renderer's panic was reported to the frame-failure handler"
     );
-    // The dropped frame's retry is armed by the same turn.
-    let deadline = started.run.wake_deadline().unwrap_or_else(Instant::now);
-    wake_at(&started, deadline);
+    let paints = observed.paints.load(Ordering::SeqCst);
+    // The loop's own deadlines pass with nothing asked of the window: the
+    // panicked frame is not retried into the same panic.
+    for _ in 0..3 {
+        let Some(deadline) = started.run.wake_deadline() else {
+            break;
+        };
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        started.run.run_owner_turn();
+    }
+    assert_eq!(
+        observed.frame_panics.load(Ordering::SeqCst),
+        1,
+        "a panicked frame is not retried into the same panic"
+    );
+    assert_eq!(
+        observed.paints.load(Ordering::SeqCst),
+        paints,
+        "a panicked frame repaints nothing on its own"
+    );
+    started.renderer.panic_in_next_frames(0);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
     assert!(
         started.renderer.frames_presented() > presented,
-        "the window drew again after the panic"
+        "the window's next change drew again after the panic"
     );
     join_ok_after_close(started);
 }
@@ -1010,24 +1032,14 @@ pub(crate) fn a_window_the_gpu_refuses_does_not_open() {
 pub(crate) fn a_window_past_the_device_limit_waits_for_a_size_it_takes() {
     let observed = Observed::default();
     let started = start(&observed);
+    let presented = started.renderer.frames_presented();
     started.renderer.limit_size(4096);
     started.window.simulate_resize(8192.0, 600.0);
     started.run.run_owner_turn();
-    let presented = started.renderer.frames_presented();
-    let paints = observed.paints.load(Ordering::SeqCst);
-    // The loop's own deadlines pass with nothing asked of the window: a
-    // refused size is not retried, frame after frame, as a stale surface.
-    for _ in 0..3 {
-        let Some(deadline) = started.run.wake_deadline() else {
-            break;
-        };
-        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
-        started.run.run_owner_turn();
-    }
     assert_eq!(
-        observed.paints.load(Ordering::SeqCst),
-        paints,
-        "a refused size repaints nothing on its own"
+        started.run.wake_deadline(),
+        None,
+        "no retry of the refused size is armed"
     );
     assert_eq!(
         started.renderer.frames_presented(),
@@ -1039,6 +1051,43 @@ pub(crate) fn a_window_past_the_device_limit_waits_for_a_size_it_takes() {
     assert!(
         started.renderer.frames_presented() > presented,
         "a size the device takes draws again"
+    );
+    join_ok_after_close(started);
+}
+
+/// A size a lost device refused is tried again once the device is rebuilt,
+/// since the new device may take it, without waiting for a resize.
+pub(crate) fn a_rebuilt_device_tries_the_refused_size_again() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.renderer.limit_size(4096);
+    started.window.simulate_resize(8192.0, 600.0);
+    started.run.run_owner_turn();
+    let presented = started.renderer.frames_presented();
+    // The rebuilt device takes any size; its first rebuild fails, so the
+    // window sees the device lost before it sees it back.
+    started.renderer.limit_size(i32::MAX);
+    started.renderer.lose_device();
+    started.renderer.fail_recoveries(1);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    for _ in 0..8 {
+        if started.renderer.frames_presented() > presented {
+            break;
+        }
+        let Some(deadline) = started.run.wake_deadline() else {
+            break;
+        };
+        wake_at(&started, deadline);
+    }
+    assert_eq!(
+        started.renderer.recovery_attempts(),
+        2,
+        "the device was rebuilt"
+    );
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the rebuilt device drew at the size the lost one refused"
     );
     join_ok_after_close(started);
 }
@@ -1121,6 +1170,10 @@ fn runner_close() {
             (
                 "a_window_past_the_device_limit_waits_for_a_size_it_takes",
                 a_window_past_the_device_limit_waits_for_a_size_it_takes,
+            ),
+            (
+                "a_rebuilt_device_tries_the_refused_size_again",
+                a_rebuilt_device_tries_the_refused_size_again,
             ),
         ],
     );

@@ -542,7 +542,7 @@ impl DesktopFrameDriver {
                 host.retry_device();
             }
             let changed = host.follow_display(address, display_color);
-            host.service();
+            host.service(address);
             changed
         });
         // A host already turning is asked again on the next wake.
