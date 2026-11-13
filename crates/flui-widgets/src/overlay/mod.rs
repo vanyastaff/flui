@@ -93,6 +93,10 @@ use crate::anchored_box::AnchoredBox;
 /// A reference entry the overlay does not hold (never inserted, or removed
 /// since) falls back to [`Top`](Self::Top).
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an entry goes on top, above or below another"
+)]
 pub enum InsertPosition {
     /// Append — the new entry paints above every existing one. The default.
     Top,

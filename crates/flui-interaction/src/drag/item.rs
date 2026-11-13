@@ -38,6 +38,7 @@ impl fmt::Debug for LazyPayload {
 
 /// One way a drag item can be received.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DragRepresentation {
     /// A Rust value, redeemed only from the source's own runtime.
     InProcess(Rc<dyn Any>),

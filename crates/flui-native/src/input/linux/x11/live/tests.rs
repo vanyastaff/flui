@@ -78,7 +78,7 @@ fn a_handler_dropped_with_its_entry_may_set_a_cursor() {
         eprintln!("no X server answers: nothing to run");
         return;
     };
-    let input = X11Input::new(&connection, Arc::new(KeysAsTyped));
+    let input = X11Input::new(&connection, Rc::new(KeysAsTyped));
     let xid = connection.root();
     let dropped = Rc::new(Cell::new(false));
     let first = WindowRef {
@@ -144,8 +144,8 @@ fn a_button_press_reaches_the_text_input_first() {
         eprintln!("no X server answers: nothing to run");
         return;
     };
-    let heard = Arc::new(PressesHeard::default());
-    let input = X11Input::new(&connection, Arc::clone(&heard) as _);
+    let heard = Rc::new(PressesHeard::default());
+    let input = X11Input::new(&connection, Rc::clone(&heard) as _);
     let xid = connection.root();
     let press = x11rb::protocol::xinput::ButtonPressEvent {
         event: xid,

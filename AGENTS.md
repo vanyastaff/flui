@@ -156,11 +156,12 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | **ID offset** — plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize` (`slab_index + 1`); generational keys (`ElementId`, `RenderId`, `UiRuntimeId`) are minted with `new_gen(slab_index, generation)` and read with `.index()` | ID newtypes |
 | Logical and device geometry don't mix (ADR-0098) | trybuild `crates/flui-painting/tests/compile_fail/` |
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
-| A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it ([gaps](docs/gaps.md#public-enums-whose-closure-is-not-decided)) | clippy `exhaustive_enums` (ADR-0329) |
+| A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
 | Dependencies point down the tiers; an exception names the ADR that removes it | `xtask workspace`, `xtask reach` (ADR-0081) |
 | A Stable crate's public API names upstream types only as ADR-0089 §2 allows | `xtask api-closure` (CI `api-contracts` job, nightly rustdoc JSON) |
 | Every item the facade reaches is in `api/flui.txt`, so a pull request that changes the facade's API carries the diff (`--write` restates it) | `xtask public-api` (CI `public-api` job, nightly rustdoc JSON; ADR-0324) |
+| A pull request that edits an expectation (the API snapshot, a `*.stderr`, a `*.snap`, a protocol schema, a perf baseline, an allowlist, a test, a `deny.toml` or `typos.toml` value) names each path and its reason under `## Expectations` in its body | `xtask expectations --body` (`expectations.yml`, on every pull request and every edit of its body; ADR-0331) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
 | Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit handler, a closure handed to the OS) is a constant or one call of `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16) | `xtask panic-boundary` |
@@ -237,6 +238,39 @@ with an answer you can point to in the code; the reviewers ask the same ones.
 13. **Replaced forms.** What does the diff replace or reverse? Name the old form, `rg` it across
     code and documents, and point to zero users left, or to the deprecation and its
     `docs/gaps.md` entry. Does any new line use a form from the "Not" column of "Current forms"?
+14. **Expectations.** `cargo xtask expectations` lists what the diff edits of what the checks
+    compare against: lines gone from `api/flui.txt`, a changed `*.stderr`, `*.snap` or protocol
+    schema, a raised perf baseline, a grown allowlist, fewer tests, a new `#[ignore]`, a new
+    `deny.toml` or `typos.toml` value. For each, was the old expectation wrong, or is the code?
+    An expectation moved to turn a check green is the defect the check was there to find. The
+    pull request's body names each path under `## Expectations` with that answer (ADR-0331).
+
+## Before a merge
+
+The author merges a pull request once CI is green, so the author's reading is the only one a
+change is sure to get, and it is the one least able to find what is wrong: the list above is
+answered by the reasoning that wrote the code. Before the merge, a reviewer that did not write
+the change reads it to break it:
+
+- **A fresh context.** A subagent or a separate session that has seen none of the author's
+  conversation. It gets the diff against the merge base, the list `cargo xtask expectations`
+  prints and the checkout; not the plan, not the PR body, not the author's account of why the
+  change is right.
+- **One job.** It assumes the change has a defect and looks for the input, the order of events
+  or the state that shows it, in the code around the diff as much as in the changed lines,
+  working from "Recurring defects", "Before each push" and "Review guidelines". It does not fix,
+  and it does not sum up what is good.
+- **A finding is a failure scenario**, in the form [`REVIEW.md`](REVIEW.md) asks for: the state,
+  the operation, the wrong result, the `file:line`. A reviewer that finds none names the
+  scenarios it tried.
+- **The author answers each finding** under `## Review` in the PR body: fixed, with its class
+  (item 12), or refuted by the line or the test that shows the scenario cannot happen. That it
+  is unlikely is not a refutation.
+- **A fix is read again.** The review that found a defect has not seen its fix: a change pushed
+  after the review gets the same reading of its own diff.
+
+The implementer does not review and the reviewer does not implement. A pull request the `docs`
+lane takes (documentation only) skips the step; its body says so under `## Review`.
 
 ## Where to read next
 
@@ -245,13 +279,15 @@ tiers), `docs/platform-parity.md` and `docs/gaps.md`, [`CONTRIBUTING.md`](CONTRI
 
 ## Review guidelines
 
-Pull request reviewers (Codex, Claude Code Review, a local `/code-review`) work from this
-section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code Review. Report defects
-with a concrete failure scenario, and code an experienced Rust developer would be embarrassed
-by, with the better shape. What this repository keeps getting wrong:
+Pull request reviewers (Codex, Claude Code Review, a local `/code-review`, the reader of "Before a
+merge") work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code
+Review. Report defects with a concrete failure scenario, and code an experienced Rust developer
+would be embarrassed by, with the better shape. What this repository keeps getting wrong:
 
 - a new `pub` item that no production path reaches, unless the PR names the follow-up;
-- a regenerated `*.snap` the PR doesn't explain;
+- an edited expectation (the list `cargo xtask expectations` prints) whose line under
+  `## Expectations` in the PR body does not say why the old one was wrong: a snapshot
+  regenerated, a test removed or a baseline raised because the check was red;
 - the "Recurring defects" above, checked at each failure point alone, two in competition, and
   the next operation after containment ([matrix](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/signal-unwind-contract.ru.md));
 - `SliverGeometry { ..SliverGeometry::ZERO }` (drops `layout_extent`, `visible`), geometry from a

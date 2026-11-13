@@ -57,6 +57,7 @@ pub const MAX_ENCODED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Why RGBA8 pixel data was rejected by [`Image::try_from_rgba8`].
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ImageDataError {
     /// `width * height * 4` doesn't fit in `usize`.
     #[error("{width}x{height} RGBA8 byte count overflows usize")]
@@ -314,6 +315,7 @@ pub use crate::{BoxFit, FittedSizes};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(flui_foundation::inspect::Inspect)]
+#[non_exhaustive]
 pub enum ImageRepeat {
     /// Repeat the image in both the x and y directions until the box is filled.
     Repeat,

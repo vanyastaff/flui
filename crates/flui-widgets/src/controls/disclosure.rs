@@ -26,6 +26,10 @@ use crate::{
 
 /// The application-owned state of a [`Disclosure`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a disclosure is collapsed or expanded"
+)]
 pub enum ExpansionState {
     /// Show only the header.
     #[default]

@@ -172,6 +172,7 @@ pub(super) struct BranchLink {
 /// [`GestureArena::sequenced`] the first is the hold and the second its
 /// successor; [`GestureComposition::Exclusive`] ranks neither.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[expect(clippy::exhaustive_enums, reason = "a composition pairs two branches")]
 pub enum CompositionBranch {
     /// The first handle of the pair.
     First,

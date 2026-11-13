@@ -18,6 +18,10 @@ use crate::events::PointerKind;
 
 /// Where a drag comes from, relative to the target looking at it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the source's own window, its runtime, another runtime and elsewhere cover every source"
+)]
 pub enum DragScope {
     /// Started in the target's own window and still running there: no OS
     /// session, no offer.
@@ -36,6 +40,10 @@ pub enum DragScope {
 /// Which drag a view is of, so a receiver over which several drags hover
 /// keeps them apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a drag is a FLUI session or an OS offer that names none"
+)]
 pub enum DragIdentity {
     /// A session of a FLUI runtime, this one or another.
     Session(DragSessionKey),

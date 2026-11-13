@@ -269,10 +269,13 @@ released annotation value's destructor is user code and finds the owner free. An
 version it replaced among two retiring ones and releases it once no other holder reads it (an
 `Arc` count of one) or a newer one pushes it out; a fold, a completion or a renewal releases
 contents. `ReleasedContents::reclaim`, run with no borrow held, drops what was released and keeps,
-emptied, the version records, table nodes (`table.rs` `Spares`) and contents the owner held alone;
-`SceneOwner::restock` takes them back under small caps. A write that copies a shared table node
-copies it into an emptied one, an apply's version takes an emptied record, and `with_effects`
-writes into an emptied content, so a steady layer update reuses the same buffers each frame. A
+emptied, the version records, table nodes (`table.rs` `Spares`), contents and their chunks the
+owner held alone; `SceneOwner::restock` takes them back under small caps (a chunk only while its
+command list's room is at most `KEPT_CHUNK_ROOM`). A write that copies a shared table node
+copies it into an emptied one, an apply's version takes an emptied record, `with_effects`
+writes into an emptied content, and `SceneWriter::chunk` writes a repainted run into an emptied
+chunk and hands back its emptied command list for the next recording, so a steady layer update
+and a steady repaint reuse the same buffers each frame. A
 painter that gives up contents it recorded for a patch never applied hands them to
 `SceneWriter::discard`; the owner drops them when `writer` opens the next patch or `renew` returns
 them, both outside the painter's borrows.
@@ -286,7 +289,8 @@ test against `BTreeMap` is `scene::table::tests`. `scene_reclaim`: a version som
 what it was applied with while the owner reuses what it held alone
 (`reclaimed_buffers_never_change_a_version_someone_holds`, against an owner that reclaims nothing),
 an update takes what a completion handed back (`an_update_writes_into_what_the_owner_reclaimed`),
-and a refused update drops none of its layers while the writer borrows the owner
+a repaint writes into a reclaimed chunk and never into a held one
+(`a_repaint_records_into_the_chunks_the_owner_reclaimed`), and a refused update drops none of its layers while the writer borrows the owner
 (`a_refused_effect_update_drops_its_layers_outside_the_writer`).
 
 ### Deleted, with the reason

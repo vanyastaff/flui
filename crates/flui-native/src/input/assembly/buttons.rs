@@ -10,6 +10,10 @@ use super::RawPoint;
 
 /// What a button reading does to a contact's sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "assembly carries out each transition, and a `_` arm would drop a press or a release"
+)]
 pub enum ButtonTransition {
     /// The sequence starts.
     Down,

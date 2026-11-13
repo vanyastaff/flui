@@ -82,6 +82,10 @@ impl fmt::Display for ErrorCode {
     serde(rename_all = "snake_case")
 )]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a polling tool acts on each answer, and a `_` arm would poll forever or never"
+)]
 pub enum Retry {
     /// Not without changing the call.
     Never,

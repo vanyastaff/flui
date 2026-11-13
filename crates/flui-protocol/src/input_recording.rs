@@ -33,6 +33,10 @@ pub const REDACTED: &str = "\u{fffd}";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum Clock {
     /// A virtual clock a test advanced; times count from its start.
     #[cfg_attr(feature = "serde", serde(rename = "virtual"))]
@@ -97,6 +101,10 @@ pub struct Window {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum Row {
     /// An input a window applied.
     #[cfg_attr(feature = "serde", serde(rename = "input"))]
@@ -163,6 +171,10 @@ pub struct InputRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum Outcome {
     /// The `handled` outcome.
     #[cfg_attr(feature = "serde", serde(rename = "handled"))]
@@ -239,6 +251,10 @@ pub struct Deadline {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum Disposition {
     /// The `accepted` gesture disposition.
     #[cfg_attr(feature = "serde", serde(rename = "accepted"))]
@@ -252,6 +268,10 @@ pub enum Disposition {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum HostInput {
     /// An event the platform delivered.
     #[cfg_attr(feature = "serde", serde(rename = "platform"))]
@@ -304,6 +324,10 @@ pub struct FramePresented {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum PlatformInput {
     /// A pointer event.
     #[cfg_attr(feature = "serde", serde(rename = "pointer"))]
@@ -329,6 +353,10 @@ pub enum PlatformInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum PointerKind {
     /// The `mouse` pointer kind.
     #[cfg_attr(feature = "serde", serde(rename = "mouse"))]
@@ -479,6 +507,10 @@ pub struct Signal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum CancelReason {
     /// The `platform` cancellation reason.
     #[cfg_attr(feature = "serde", serde(rename = "platform"))]
@@ -511,6 +543,10 @@ pub enum CancelReason {
     derive(schemars::JsonSchema),
     schemars(rename = "InputRecordingScrollUnit")
 )]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum ScrollUnit {
     /// The `lines` scroll unit.
     #[cfg_attr(feature = "serde", serde(rename = "lines"))]
@@ -530,6 +566,10 @@ pub enum ScrollUnit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum ScrollPrecision {
     /// The `unknown` scroll precision.
     #[cfg_attr(feature = "serde", serde(rename = "unknown"))]
@@ -546,6 +586,10 @@ pub enum ScrollPrecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum ScrollPhase {
     /// The `began` scroll phase.
     #[cfg_attr(feature = "serde", serde(rename = "began"))]
@@ -609,6 +653,10 @@ pub struct Scroll {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum PanZoomPhase {
     /// The gesture started.
     #[cfg_attr(feature = "serde", serde(rename = "start"))]
@@ -677,6 +725,10 @@ pub struct PanZoom {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum SqueezePhase {
     /// The `began` pen squeeze phase.
     #[cfg_attr(feature = "serde", serde(rename = "began"))]
@@ -709,6 +761,10 @@ pub struct DeviceChange {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum PointerEvent {
     /// A pointer made contact.
     #[cfg_attr(feature = "serde", serde(rename = "down"))]
@@ -814,6 +870,10 @@ pub enum PointerEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum Key {
     /// A character key; its text.
     #[cfg_attr(feature = "serde", serde(rename = "character"))]
@@ -827,6 +887,10 @@ pub enum Key {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum KeyState {
     /// The `down` key state.
     #[cfg_attr(feature = "serde", serde(rename = "down"))]
@@ -840,6 +904,10 @@ pub enum KeyState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum Location {
     /// The `standard` key location.
     #[cfg_attr(feature = "serde", serde(rename = "standard"))]
@@ -900,6 +968,10 @@ pub struct KeyEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum ImeEvent {
     /// The input method was enabled.
     #[cfg_attr(feature = "serde", serde(rename = "enabled"))]
@@ -939,6 +1011,10 @@ pub struct TransferId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum TransferFormat {
     /// Plain text.
     #[cfg_attr(feature = "serde", serde(rename = "text"))]
@@ -982,6 +1058,10 @@ pub struct Representation {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum DragDrop {
     /// A drag entered the window.
     #[cfg_attr(feature = "serde", serde(rename = "entered"))]
@@ -1035,6 +1115,10 @@ pub enum DragDrop {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum Availability {
     /// The `native` availability.
     #[cfg_attr(feature = "serde", serde(rename = "native"))]
@@ -1080,6 +1164,10 @@ pub struct Capabilities {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum Execution {
     /// The `running` execution state.
     #[cfg_attr(feature = "serde", serde(rename = "running"))]
@@ -1096,6 +1184,10 @@ pub enum Execution {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum WindowObservation {
     #[cfg_attr(feature = "serde", serde(rename = "metrics"))]
     /// The drawable area in device pixels and its pixel ratio.
@@ -1157,6 +1249,10 @@ pub enum WindowObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum Brightness {
     /// The `light` appearance.
     #[cfg_attr(feature = "serde", serde(rename = "light"))]
@@ -1170,6 +1266,10 @@ pub enum Brightness {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum ScrollHint {
     /// The `top_left` scroll hint.
     #[cfg_attr(feature = "serde", serde(rename = "top_left"))]
@@ -1206,6 +1306,10 @@ pub struct TextPosition {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum ActionData {
     /// A custom action's id.
     #[cfg_attr(feature = "serde", serde(rename = "custom_action"))]
@@ -1242,6 +1346,10 @@ pub enum ActionData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum AxScrollUnit {
     /// The `item` assistive scroll unit.
     #[cfg_attr(feature = "serde", serde(rename = "item"))]
@@ -1367,6 +1475,10 @@ pub struct GestureValues {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum VelocityEstimator {
     /// The `least_squares` velocity estimator.
     #[cfg_attr(feature = "serde", serde(rename = "least_squares"))]
@@ -1386,6 +1498,10 @@ pub enum VelocityEstimator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
 pub enum RemainderHandoff {
     /// The `next_sequence` remainder handoff.
     #[cfg_attr(feature = "serde", serde(rename = "next_sequence"))]

@@ -10,11 +10,11 @@ use flui_foundation::RenderId;
 use flui_foundation::SurfaceGeneration;
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_layer::{
-    AnnotatedRegionLayer, Applied, BoundaryContent, Chunk, ContentVersion, EntryIndex, Layer,
-    Placement, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SurfaceKey, TransformLayer,
+    AnnotatedRegionLayer, Applied, BoundaryContent, Bounds, Chunk, ContentVersion, EntryIndex,
+    Layer, Placement, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SurfaceKey, TransformLayer,
 };
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, DisplayList, Paint};
 
 const SURFACE: SurfaceKey = SurfaceKey {
     size: (800, 600),
@@ -258,5 +258,78 @@ fn a_refused_effect_update_drops_its_layers_outside_the_writer() {
             placed.load(Ordering::SeqCst) && refused.load(Ordering::SeqCst),
             "{case}: the next patch drops the layers"
         );
+    }
+}
+
+/// Repaints the root with one run `width` wide through
+/// [`SceneWriter::chunk`], applies it, and restocks what the apply released.
+/// Returns the chunk, and the buffer `chunk` left behind.
+fn repaint_root(owner: &mut SceneOwner, width: f64) -> (Arc<Chunk>, DisplayList) {
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let version = writer.next_content_version().expect("a version");
+    let mut canvas = Canvas::new();
+    canvas.draw_rect(
+        Rect::from_xywh(0.0, 0.0, width, 10.0),
+        &Paint::fill(Color::RED),
+    );
+    let mut commands = canvas.take_recording();
+    let chunk = writer.chunk(RenderId::new(1), 0, version, &mut commands);
+    let mut content = BoundaryContent::builder();
+    content.chunk(Arc::clone(&chunk));
+    writer.push(SceneOp::Publish {
+        node: root,
+        content: Arc::new(content.finish()),
+    });
+    let applied = owner.apply(SURFACE).expect("a repaint applies");
+    owner.restock(applied.released.reclaim());
+    (chunk, commands)
+}
+
+/// Shows the current version and restocks what its completion released.
+fn show(owner: &mut SceneOwner) {
+    let shown = owner.current().id();
+    let completed = owner.completed(Some(shown));
+    owner.restock(completed.reclaim());
+}
+
+/// Once a completion hands back the content a repaint replaced, the next
+/// repaint's run is written into its chunk, commands and all, and hands back
+/// that chunk's emptied buffer for the canvas to record into; a chunk someone
+/// still holds is never taken.
+#[test]
+fn a_repaint_records_into_the_chunks_the_owner_reclaimed() {
+    for held in [false, true] {
+        let mut owner = SceneOwner::new();
+        let (first, _) = repaint_root(&mut owner, 10.0);
+        let first_at = Arc::as_ptr(&first);
+        let kept = held.then(|| Arc::clone(&first));
+        drop(first);
+        drop(repaint_root(&mut owner, 20.0));
+        show(&mut owner);
+        let (third, left) = repaint_root(&mut owner, 30.0);
+        assert_eq!(
+            third.bounds(),
+            Bounds::Finite(Rect::from_xywh(0.0, 0.0, 30.0, 10.0)),
+            "held {held}: the chunk holds the new run"
+        );
+        if let Some(kept) = kept {
+            assert_ne!(Arc::as_ptr(&third), first_at, "a held chunk is not reused");
+            assert_eq!(
+                kept.bounds(),
+                Bounds::Finite(Rect::from_xywh(0.0, 0.0, 10.0, 10.0)),
+                "a held chunk keeps what it recorded"
+            );
+        } else {
+            assert_eq!(
+                Arc::as_ptr(&third),
+                first_at,
+                "the run is written into the reclaimed chunk"
+            );
+            assert!(
+                left.is_empty() && left.room() > 0,
+                "the reclaimed chunk's emptied buffer comes back for the canvas"
+            );
+        }
     }
 }

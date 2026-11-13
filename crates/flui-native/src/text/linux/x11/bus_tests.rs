@@ -755,9 +755,7 @@ fn a_window_closed_while_the_bus_is_behind_still_destroys_its_context() {
     };
     let context = rig
         .ime
-        .state
-        .with(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
-        .flatten()
+        .ime(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
         .expect("the window's context");
     let mut full = false;
     for _ in 0..1_000_000 {
@@ -1053,9 +1051,7 @@ fn an_edit_for_the_field_before_an_unsent_focus_reaches_no_field() {
     std::thread::sleep(Duration::from_millis(100));
     let context = rig
         .ime
-        .state
-        .with(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
-        .flatten()
+        .ime(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
         .expect("the window's context");
     let mut full = false;
     for _ in 0..1_000_000 {
@@ -1154,9 +1150,7 @@ fn a_key_the_bus_refuses_mid_composition_reaches_a_field_no_longer_composing() {
     rig.settle("the preedit", || rig.store.composition().is_some());
     let context = rig
         .ime
-        .state
-        .with(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
-        .flatten()
+        .ime(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
         .expect("the window's context");
     // The bus task may take a command between the queue filling and the
     // key: the key is tried until the bus refuses it, which delivers it at
@@ -1256,9 +1250,7 @@ fn a_context_told_too_much_while_it_is_made_is_retired() {
     });
     let context = rig
         .ime
-        .state
-        .with(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
-        .flatten()
+        .ime(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
         .expect("the window's context");
     for _ in 0..=MAX_WAITING {
         assert!(
