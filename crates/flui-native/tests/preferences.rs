@@ -27,16 +27,8 @@ fn windows_reads_preferences_before_a_user_window_exists() {
         previous.preferences().expect("previous native observation");
     }
     let platform = flui_native::WindowsPlatform::try_new().expect("native platform");
-    let refused = std::thread::scope(|scope| {
-        scope
-            .spawn(|| platform.preferences())
-            .join()
-            .expect("foreign reader returned without panic")
-    });
-    assert!(
-        matches!(refused, Err(flui_native::PlatformError::Preferences { .. })),
-        "a foreign thread must not create an independent native observation set"
-    );
+    // Another thread cannot reach the platform: the compiler refuses it
+    // (`WindowsPlatform` is neither `Send` nor `Sync`, ADR-0327 §5).
     let native_ui = UISettings::new().expect("independent native preference reader");
     for _ in 0..3 {
         let observed = platform

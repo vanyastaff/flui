@@ -16,7 +16,7 @@ use flui_foundation::inspect::{
     SceneLayer, Seq, Shared, Sink, SnapshotError, SnapshotNode, SnapshotQuery, ToValue, Unit,
     Untyped, Value, Variant, diff, kind_args_of, kind_of, render, snapshot,
 };
-use flui_foundation::{ElementId, LayerId, RenderId, SemanticsId};
+use flui_foundation::{ElementId, RenderId, SemanticsId};
 
 /// One received field: name, value text, level, unit and default text.
 type Row = (String, String, Level, Option<Unit>, Option<String>);
@@ -174,23 +174,15 @@ fn each_field_type_maps_to_its_value_and_compact_text() {
         ),
         (
             "layer link",
-            SceneLayer {
-                scene: NonZeroU64::MIN,
-                id: LayerId::new(4),
-            }
-            .into_boxed(),
+            scene_layer(4, 1, None, 7).into_boxed(),
             "link",
-            "l4",
+            "l4@7",
         ),
         (
-            "layer link, later scene",
-            SceneLayer {
-                scene: NonZeroU64::new(37).expect("37 is nonzero"),
-                id: LayerId::new(4),
-            }
-            .into_boxed(),
+            "layer entry, later generation",
+            scene_layer(4, 2, Some(3), 7).into_boxed(),
             "link",
-            "l4.37",
+            "l4.2:3@7",
         ),
         (
             "semantics link",
@@ -794,11 +786,8 @@ fn a_snapshot_reads_fields_by_type_and_finds_nodes_by_link_and_kind() {
         .expect("the node r4");
     assert_eq!(by_id.get::<&str>("text"), Ok("Cancel"));
     assert!(
-        root.find_by_link(Link::Layer(SceneLayer {
-            scene: NonZeroU64::MIN,
-            id: LayerId::new(1),
-        }))
-        .is_none()
+        root.find_by_link(Link::Layer(scene_layer(1, 1, None, 1)))
+            .is_none()
     );
     let flex = root
         .find_by_link(Link::Element(ElementId::new(10)))
@@ -1343,15 +1332,14 @@ fn a_node_reference_prints_and_parses_as_one_text() {
     use flui_foundation::PresentationId;
     use flui_foundation::inspect::NodeRef;
 
-    let layer = Link::Layer(SceneLayer {
-        scene: NonZeroU64::new(37).expect("37 is not zero"),
-        id: LayerId::new(4),
-    });
+    let layer = Link::Layer(scene_layer(4, 2, Some(3), 37));
+    let node = Link::Layer(scene_layer(0, 1, None, 1));
     let links = [
         (Link::Element(ElementId::new_gen(3, nz32(2))), "v3.2"),
         (Link::Element(ElementId::new_gen(12, nz32(1))), "v12"),
         (Link::Render(RenderId::new_gen(12, nz32(4))), "r12.4"),
-        (layer, "l4.37"),
+        (layer, "l4.2:3@37"),
+        (node, "l0@1"),
         (Link::Semantics(SemanticsId::new(7)), "s7"),
     ];
     for (link, text) in links {
@@ -1363,12 +1351,12 @@ fn a_node_reference_prints_and_parses_as_one_text() {
     let reference = NodeRef::new(window, Link::Element(ElementId::new_gen(12, nz32(4))));
     assert_eq!(reference.to_string(), "p3/v12.4");
     assert_eq!("p3/v12.4".parse::<NodeRef>(), Ok(reference));
-    let reused = NodeRef::new(PresentationId::new_gen(3, nz32(2)), links[4].0);
+    let reused = NodeRef::new(PresentationId::new_gen(3, nz32(2)), links[5].0);
     assert_eq!(reused.to_string(), "p3.2/s7");
     assert_eq!("p3.2/s7".parse::<NodeRef>(), Ok(reused));
     assert_ne!(
         reused,
-        NodeRef::new(window, links[4].0),
+        NodeRef::new(window, links[5].0),
         "a reused slot is another window"
     );
 
@@ -1384,6 +1372,13 @@ fn a_node_reference_prints_and_parses_as_one_text() {
         "v3.2.1",
         "s7.2",
         "l0",
+        "l0@0",
+        "l0@01",
+        "l0:@1",
+        "l0:01@1",
+        "l0.1@1",
+        "l0:1",
+        "l0@1@1",
         "s0",
         "v99999999999",
         " v3",
@@ -1442,4 +1437,14 @@ fn a_compound_value_is_compared_within_the_tolerance_of_its_unit() {
         vec![],
         "half a hundredth of a pixel is not a change"
     );
+}
+
+/// Entry `entry` of the node at `slot` and `generation` of scene `scene`, or the node itself.
+fn scene_layer(slot: u32, generation: u32, entry: Option<u32>, scene: u64) -> SceneLayer {
+    SceneLayer {
+        scene: NonZeroU64::new(scene).expect("a fixture scene is not zero"),
+        slot,
+        generation: nz32(generation),
+        entry,
+    }
 }

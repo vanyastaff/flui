@@ -157,8 +157,8 @@ pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};
 pub use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
 pub use flui_protocol::{
-    InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalRect, Match, Node,
-    Pick, Role, StateFilter, TextMatch, Tree,
+    InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalPoint, LogicalRect,
+    Match, Node, Pick, Role, StateFilter, TextMatch, Tree,
 };
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
 pub use gesture_alternatives::{

@@ -318,3 +318,50 @@ fn a_drag_scrolls_a_default_scroll_view() {
     let after = t.rect(&find::text("Item 1"));
     assert!(after.y < before.y - 50.0, "{before:?} -> {after:?}");
 }
+
+#[test]
+fn a_drag_from_a_point_presses_there_and_moves_by_the_offset() {
+    use std::cell::RefCell;
+
+    use flui_interaction::events::PointerEvent;
+    use flui_testing::LogicalPoint;
+    use flui_widgets::{ColoredBox, Listener};
+
+    // An edge swipe starts where no element's centre is: the press lands at
+    // the point named, not at the centre of what is under it.
+    let pressed = Rc::new(RefCell::new(Vec::new()));
+    let released = Rc::new(RefCell::new(Vec::new()));
+    let (on_down, on_up) = (Rc::clone(&pressed), Rc::clone(&released));
+    let surface = Listener::new()
+        .on_pointer_down(move |_, dispatch| {
+            if let PointerEvent::Down(down) = dispatch.global {
+                let at = down.sample.position.get();
+                on_down.borrow_mut().push((at.x, at.y));
+            }
+        })
+        .on_pointer_up(move |_, dispatch| {
+            if let PointerEvent::Up(up) = dispatch.global {
+                let at = up.sample.position.get();
+                on_up.borrow_mut().push((at.x, at.y));
+            }
+        })
+        .child(
+            SizedBox::new(200.0, 300.0)
+                .child(ColoredBox::new(flui_painting::styling::Color::WHITE)),
+        );
+    let mut t = Tester::mount_in(surface, TestWindow::new(200, 300));
+
+    t.drag_from(
+        LogicalPoint::new(4.0, 150.0),
+        120.0,
+        -10.0,
+        Duration::from_millis(100),
+    );
+
+    assert_eq!(*pressed.borrow(), [(4.0, 150.0)], "one press, at the start");
+    assert_eq!(
+        *released.borrow(),
+        [(124.0, 140.0)],
+        "one release, at start + offset"
+    );
+}

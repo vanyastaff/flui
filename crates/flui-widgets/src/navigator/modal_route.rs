@@ -52,8 +52,6 @@
 //!   The barrier publishes no dismiss action
 //!   and no label, and there is no semantics sort key; it absorbs *pointers*
 //!   only.
-//! * **No animated modal barrier.** `barrier_color` is a flat colour, not driven
-//!   through a barrier curve by the route's animation.
 //! * **The barrier is not pointer-ignoring while the route pops.** It absorbs
 //!   pointers for the whole life of the route, including while it pops.
 //! * **No `filter` / `BackdropFilter`, and no cached modal scope.**
@@ -62,20 +60,20 @@
 // consumers and do not surface every knob. `ModalHandle::set_offstage` in
 // particular has no public caller until `Hero` drives it.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use std::sync::OnceLock;
+use std::cell::OnceCell;
 
-use flui_animation::{Animation, ProxyAnimation};
+use flui_animation::{Animation, Curve, ProxyAnimation, curves};
 use flui_foundation::{ChangeNotifier, Listenable};
 use flui_painting::styling::Color;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 use super::back_gesture::BackGestureDetector;
 use super::binding::{HookLookup, RouteBindingSlot, TransitionGroup};
@@ -97,8 +95,13 @@ use super::transition_route::{
 use flui_interaction::focus::FocusScopeNode;
 
 use crate::{
-    AbsorbPointer, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox, Stack, StackFit,
+    AbsorbPointer, AnimatedBuilder, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox,
+    Stack, StackFit,
 };
+
+/// The curve the barrier's colour fades in along (Flutter's
+/// `ModalRoute.barrierCurve` default, `Curves.ease`).
+const BARRIER_CURVE: flui_animation::Cubic = curves::EASE;
 
 /// The default transitions builder: a jump cut.
 pub(crate) fn default_transitions_builder() -> RouteTransitionsBuilder {
@@ -110,15 +113,15 @@ pub(crate) fn default_transitions_builder() -> RouteTransitionsBuilder {
 /// outlives every borrow of the route, so nothing it reads can live on `self`.
 struct ModalInner {
     /// Whether the route is forced offstage.
-    offstage: AtomicBool,
+    offstage: Cell<bool>,
     /// Whether a covered route keeps its subtree mounted.
-    maintain_state: AtomicBool,
+    maintain_state: Cell<bool>,
     /// Whether a tap on the barrier pops the route.
     ///
-    /// Fixed after construction. A cell here only because `ModalInner` is `Arc`-shared
+    /// Fixed after construction. A cell here only because `ModalInner` is `Rc`-shared
     /// with the content builder from the moment the route is constructed, so a
     /// `.barrier_dismissible(true)` builder cannot reach it through `&mut`.
-    barrier_dismissible: AtomicBool,
+    barrier_dismissible: Cell<bool>,
     /// Whether this route opts into the edge-swipe-back gesture substrate
     /// (`back_gesture.rs`). Default `false` — see `PageRoute::back_gesture`'s
     /// doc for why. Set only before the route is pushed, exactly like
@@ -126,24 +129,24 @@ struct ModalInner {
     /// supported path, so the detector wrapper's presence in the built tree
     /// never flips (`ModalScopeState::build` reads it once per build, but the
     /// value itself never changes after construction).
-    back_gesture_enabled: AtomicBool,
+    back_gesture_enabled: Cell<bool>,
     /// The barrier colour. `None` means an invisible barrier that still absorbs
     /// pointers.
-    barrier_color: Mutex<Option<Color>>,
+    barrier_color: Cell<Option<Color>>,
 
     /// Builds the page.
     page: super::lifecycle::Terminal<RoutePageBuilder>,
     /// Builds the transitions, defaulting to a jump cut. A cell because the
     /// content closure captures `inner` at construction, before a
     /// `.transitions(…)` builder can run.
-    transitions: super::lifecycle::Terminal<Mutex<RouteTransitionsBuilder>>,
+    transitions: super::lifecycle::Terminal<RefCell<RouteTransitionsBuilder>>,
     /// Set once, immediately after the `TransitionRoute` is constructed. The
-    /// content builder is `Arc`-captured *before* that route exists, so the two
+    /// content builder is `Rc`-captured *before* that route exists, so the two
     /// cannot be wired the other way round.
     ///
     /// It carries both animations the page and transitions builders read, and the
     /// [`RouteBindingSlot`] `changed_internal_state` writes through.
-    transition: OnceLock<TransitionHandle>,
+    transition: OnceCell<TransitionHandle>,
 
     /// One notifier the modal scope subscribes to, fed by *both* animations.
     ///
@@ -154,7 +157,7 @@ struct ModalInner {
     relay: super::lifecycle::Terminal<Rc<ChangeNotifier>>,
     /// The relay's subscriptions to the two animations, opened in `install` and
     /// closed in `dispose`. `Listenable` has no `Drop`-based unsubscribe.
-    relay_subscriptions: Mutex<Vec<flui_foundation::Subscription>>,
+    relay_subscriptions: RefCell<Vec<flui_foundation::Subscription>>,
 
     /// The primary animation proxy.
     ///
@@ -197,7 +200,7 @@ struct ModalInner {
     /// Whether the route has been the top route before. Its first entry is a
     /// provisional focus (an `autofocus` control may replace it); a return to
     /// it restores the focus the user left, which is final.
-    entered: AtomicBool,
+    entered: Cell<bool>,
 }
 
 impl Drop for ModalInner {
@@ -231,6 +234,33 @@ impl Drop for ModalInner {
 }
 
 impl ModalInner {
+    /// The barrier's colour, faded in along the route's primary animation
+    /// through [`BARRIER_CURVE`]: transparent before the route enters, `color`
+    /// once it has, and back out as it leaves (Flutter's `ModalRoute`
+    /// barrier). Only this fill rebuilds on a tick.
+    ///
+    /// Under an opaque route that has entered, the page covers the barrier, so
+    /// it paints nothing: Flutter's overlay skips the barrier entry beneath an
+    /// opaque page entry, and this route keeps both in one entry.
+    fn barrier_fill(&self, color: Color) -> BoxedView {
+        let animation = Rc::clone(&*self.primary);
+        let listenable: Rc<dyn Listenable> = Rc::clone(&*self.primary) as Rc<dyn Listenable>;
+        let transition = self.transition.get().cloned();
+        AnimatedBuilder::new(listenable, move || {
+            let value = animation.value().clamp(0.0, 1.0);
+            let covered =
+                value >= 1.0 && transition.as_ref().is_some_and(TransitionHandle::is_opaque);
+            let progress = BARRIER_CURVE.transform(value);
+            let faded = color.with_opacity(f64::from(color.opacity()) * progress);
+            if covered || faded.is_transparent() {
+                SizedBox::expand().boxed()
+            } else {
+                ColoredBox::new(faded).boxed()
+            }
+        })
+        .boxed()
+    }
+
     /// Build the modal barrier from the primitives FLUI has.
     ///
     /// `!offstage` gates the barrier — an offstage route must not eat pointers.
@@ -243,17 +273,20 @@ impl ModalInner {
     /// contract. (Found by red-check: with `absorbing(false)` and a colour, every
     /// test stayed green.)
     fn build_barrier(&self, ctx: &dyn BuildContext) -> BoxedView {
-        if self.offstage.load(Ordering::Relaxed) {
+        if self.offstage.get() {
             return AbsorbPointer::new().absorbing(false).boxed();
         }
 
         let mut barrier = AbsorbPointer::new().absorbing(true);
-        let color = *self.barrier_color.lock();
-        if let Some(color) = color {
-            barrier = barrier.child(ColoredBox::new(color));
+        if let Some(color) = self
+            .barrier_color
+            .get()
+            .filter(|color| !color.is_transparent())
+        {
+            barrier = barrier.child(self.barrier_fill(color));
         }
 
-        if !self.barrier_dismissible.load(Ordering::Relaxed) {
+        if !self.barrier_dismissible.get() {
             return barrier.boxed();
         }
 
@@ -282,7 +315,9 @@ impl ModalInner {
         let scope = match self.transition.get() {
             Some(transition) => ModalScope {
                 page: super::lifecycle::Terminal::new(Rc::clone(&self.page)),
-                transitions: super::lifecycle::Terminal::new(Rc::clone(&self.transitions.lock())),
+                transitions: super::lifecycle::Terminal::new(Rc::clone(
+                    &self.transitions.borrow_mut(),
+                )),
                 transition: super::lifecycle::Terminal::new(transition.clone()),
                 primary: super::lifecycle::Terminal::new(Rc::clone(&self.primary)),
                 secondary: super::lifecycle::Terminal::new(Rc::clone(&self.secondary)),
@@ -291,18 +326,18 @@ impl ModalInner {
                 heroes: super::lifecycle::Terminal::new(self.heroes.clone()),
                 pop_entries: super::lifecycle::Terminal::new(self.pop_entries.clone()),
                 local_history: super::lifecycle::Terminal::new(self.local_history_handle()),
-                back_gesture_enabled: self.back_gesture_enabled.load(Ordering::Relaxed),
+                back_gesture_enabled: self.back_gesture_enabled.get(),
             }
             .boxed(),
-            // Unreachable in a pushed route: `install()` seeds the `OnceLock`
+            // Unreachable in a pushed route: `install()` seeds the `OnceCell`
             // before the overlay ever builds this entry.
             None => SizedBox::shrink().boxed(),
         };
 
         Offstage::new()
-            .offstage(self.offstage.load(Ordering::Relaxed))
+            .offstage(self.offstage.get())
             .child(RouteKeys {
-                dismissible: self.barrier_dismissible.load(Ordering::Relaxed),
+                dismissible: self.barrier_dismissible.get(),
                 scope: FocusScope::with_external_node(Rc::clone(&self.focus_scope), scope).boxed(),
             })
             .boxed()
@@ -313,7 +348,7 @@ impl ModalInner {
     /// presentation and updates enclosing-scope history; there is no global
     /// active-scope override.
     fn activate_focus_scope(&self, take_focus: bool) {
-        let first_entry = !self.entered.swap(true, Ordering::Relaxed);
+        let first_entry = !self.entered.replace(true);
         if !take_focus {
             return;
         }
@@ -343,7 +378,7 @@ impl ModalInner {
     /// `changed_internal_state` returns early when there is no binding yet. Without
     /// this call the proxies would be seeded from the controller and never swapped.
     fn sync_animation_proxies(&self) {
-        let offstage = self.offstage.load(Ordering::Relaxed);
+        let offstage = self.offstage.get();
         let transition = self.transition.get();
 
         self.primary.set_parent(if offstage {
@@ -373,7 +408,7 @@ impl ModalInner {
             Rc::clone(&self.primary) as RouteAnimation,
             Rc::clone(&self.secondary) as RouteAnimation,
         ];
-        let mut subscriptions = self.relay_subscriptions.lock();
+        let mut subscriptions = self.relay_subscriptions.borrow_mut();
         for animation in animations {
             let relay = Rc::clone(&self.relay);
             let subscription = animation.listen(std::rc::Rc::new(move || relay.notify_listeners()));
@@ -385,7 +420,7 @@ impl ModalInner {
     fn close_relay(&self) {
         drop(
             self.relay_subscriptions
-                .lock()
+                .borrow_mut()
                 .drain(..)
                 .collect::<Vec<_>>(),
         );
@@ -571,9 +606,32 @@ struct ExplicitTransition {
     transitions: bool,
     duration: bool,
     reverse_duration: bool,
+    back_gesture: bool,
+    barrier_color: bool,
+}
+
+/// The page chrome a [`PageTransitionBuilder`] carries beside its transition:
+/// whether the page pops on an edge swipe, and the barrier under it.
+///
+/// [`PageTransitionBuilder`]: super::page_transitions::PageTransitionBuilder
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct PageChrome {
+    pub(crate) back_gesture: bool,
+    pub(crate) barrier_color: Option<Color>,
 }
 
 impl ExplicitTransition {
+    /// Give `inner` the chrome a builder carries, except what the route set
+    /// itself.
+    fn adopt_chrome(self, inner: &ModalInner, chrome: PageChrome) {
+        if !self.back_gesture {
+            inner.back_gesture_enabled.set(chrome.back_gesture);
+        }
+        if !self.barrier_color {
+            inner.barrier_color.set(chrome.barrier_color);
+        }
+    }
+
     /// The durations an adopted hook sets: none for what the route set itself.
     /// An explicit entrance duration also stands for the exit unless the exit
     /// was set too, as it does without a hook.
@@ -604,16 +662,18 @@ impl<T: 'static> ModalRoute<T> {
     /// not dismissible, not opaque.
     pub fn new(duration: Duration, page: RoutePageBuilder) -> Self {
         let inner = Rc::new(ModalInner {
-            offstage: AtomicBool::new(false),
-            maintain_state: AtomicBool::new(true),
-            barrier_dismissible: AtomicBool::new(false),
-            back_gesture_enabled: AtomicBool::new(false),
-            barrier_color: Mutex::new(None),
+            offstage: Cell::new(false),
+            maintain_state: Cell::new(true),
+            barrier_dismissible: Cell::new(false),
+            back_gesture_enabled: Cell::new(false),
+            barrier_color: Cell::new(None),
             page: super::lifecycle::Terminal::new(page),
-            transitions: super::lifecycle::Terminal::new(Mutex::new(default_transitions_builder())),
-            transition: OnceLock::new(),
+            transitions: super::lifecycle::Terminal::new(RefCell::new(
+                default_transitions_builder(),
+            )),
+            transition: OnceCell::new(),
             relay: super::lifecycle::Terminal::new(Rc::new(ChangeNotifier::new())),
-            relay_subscriptions: Mutex::new(Vec::new()),
+            relay_subscriptions: RefCell::new(Vec::new()),
             // Both rest at an fixed normalized start animation until `install()` points
             // them at the controller — an unpushed route has no animation to proxy.
             primary: super::lifecycle::Terminal::new(Rc::new(ProxyAnimation::new(
@@ -626,7 +686,7 @@ impl<T: 'static> ModalRoute<T> {
             heroes: super::lifecycle::Terminal::new(HeroRegistry::new()),
             pop_entries: super::lifecycle::Terminal::new(PopEntryRegistry::new()),
             local_history: super::lifecycle::Terminal::new(LocalHistoryRegistry::new()),
-            entered: AtomicBool::new(false),
+            entered: Cell::new(false),
             focus_scope: super::lifecycle::Terminal::new(FocusScopeNode::with_debug_label(
                 "ModalRoute Focus Scope",
             )),
@@ -660,7 +720,7 @@ impl<T: 'static> ModalRoute<T> {
         let transition = TransitionRoute::new(duration, content);
         transition.set_status_wake(Rc::clone(&inner.relay));
         // The content closure captured `inner` before the route existed, so the
-        // handle can only be wired in afterwards. `OnceLock` makes that a fact of
+        // handle can only be wired in afterwards. `OnceCell` makes that a fact of
         // the type rather than a comment.
         let _ = inner.transition.set(transition.handle());
 
@@ -689,7 +749,7 @@ impl<T: 'static> ModalRoute<T> {
     /// The transitions builder. An explicit builder is never replaced by an
     /// ambient hook.
     pub(crate) fn transitions(mut self, transitions: RouteTransitionsBuilder) -> Self {
-        let _prev = std::mem::replace(&mut *self.inner.transitions.lock(), transitions);
+        let _prev = std::mem::replace(&mut *self.inner.transitions.borrow_mut(), transitions);
         self.explicit.transitions = true;
         self
     }
@@ -712,6 +772,14 @@ impl<T: 'static> ModalRoute<T> {
         self
     }
 
+    /// The chrome a route-level transition builder carries. Unlike the
+    /// explicit setters it marks nothing as set by the route's author, so an
+    /// explicit `back_gesture` or `barrier_color` before or after it wins.
+    pub(crate) fn chrome(self, chrome: PageChrome) -> Self {
+        self.explicit.adopt_chrome(&self.inner, chrome);
+        self
+    }
+
     /// Adopt the navigator's ambient builder of this route's kind, once, before
     /// the controller is built from the durations (ADR-0221 D2). A route given
     /// `.transitions(…)` keeps it; an explicit duration keeps its own value;
@@ -727,7 +795,7 @@ impl<T: 'static> ModalRoute<T> {
         }
         let slot = self.transition.binding_slot()?;
         let group = slot.group().unwrap_or_default();
-        // This runs inside the locked history flush, so it calls no builder
+        // This runs inside the history flush, under its borrow, so it calls no builder
         // method: the navigator read the durations when it took the hook.
         let binding = slot.get()?;
         let adopted = match binding.page_transition(group) {
@@ -736,8 +804,9 @@ impl<T: 'static> ModalRoute<T> {
         };
         let (duration, reverse) = self.explicit.adopted_durations(&adopted);
         self.transition.adopt_durations(duration, reverse);
+        self.explicit.adopt_chrome(&self.inner, adopted.chrome);
         let _prev = std::mem::replace(
-            &mut *self.inner.transitions.lock(),
+            &mut *self.inner.transitions.borrow_mut(),
             transitions_of(adopted.builder),
         );
         None
@@ -763,6 +832,7 @@ impl<T: 'static> ModalRoute<T> {
                 return;
             };
             let (duration, reverse) = explicit.adopted_durations(&adopted);
+            explicit.adopt_chrome(&inner, adopted.chrome);
             if let Some(controller) = inner
                 .transition
                 .get()
@@ -776,7 +846,7 @@ impl<T: 'static> ModalRoute<T> {
                 }
             }
             let _prev = std::mem::replace(
-                &mut *inner.transitions.lock(),
+                &mut *inner.transitions.borrow_mut(),
                 transitions_of(adopted.builder),
             );
         });
@@ -808,34 +878,30 @@ impl<T: 'static> ModalRoute<T> {
     /// Whether a covered route keeps its subtree mounted.
     #[must_use]
     pub fn maintain_state(self, maintain_state: bool) -> Self {
-        self.inner
-            .maintain_state
-            .store(maintain_state, Ordering::Relaxed);
+        self.inner.maintain_state.set(maintain_state);
         self
     }
 
     /// Whether a tap on the barrier pops the route.
     #[must_use]
     pub fn barrier_dismissible(self, dismissible: bool) -> Self {
-        self.inner
-            .barrier_dismissible
-            .store(dismissible, Ordering::Relaxed);
+        self.inner.barrier_dismissible.set(dismissible);
         self
     }
 
     /// Opt into the edge-swipe-back gesture substrate (`back_gesture.rs`).
     /// See `PageRoute::back_gesture`'s doc for the full contract.
-    pub(crate) fn back_gesture(self, enabled: bool) -> Self {
-        self.inner
-            .back_gesture_enabled
-            .store(enabled, Ordering::Relaxed);
+    pub(crate) fn back_gesture(mut self, enabled: bool) -> Self {
+        self.inner.back_gesture_enabled.set(enabled);
+        self.explicit.back_gesture = true;
         self
     }
 
     /// The barrier colour.
     #[must_use]
-    pub fn barrier_color(self, color: Color) -> Self {
-        *self.inner.barrier_color.lock() = Some(color);
+    pub fn barrier_color(mut self, color: Color) -> Self {
+        self.inner.barrier_color.set(Some(color));
+        self.explicit.barrier_color = true;
         self
     }
 
@@ -861,18 +927,15 @@ impl<T: 'static> ModalRoute<T> {
 impl<T> fmt::Debug for ModalRoute<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModalRoute")
-            .field("offstage", &self.inner.offstage.load(Ordering::Relaxed))
-            .field(
-                "maintain_state",
-                &self.inner.maintain_state.load(Ordering::Relaxed),
-            )
+            .field("offstage", &self.inner.offstage.get())
+            .field("maintain_state", &self.inner.maintain_state.get())
             .finish_non_exhaustive()
     }
 }
 
 /// An owned, `'static` capability to drive a pushed [`ModalRoute`]'s internal
 /// state — the same pattern used elsewhere in the navigator: the route itself
-/// lives behind `Box<dyn ErasedRoute>` inside the history's mutex and cannot
+/// lives behind `Box<dyn ErasedRoute>` inside the history's cell and cannot
 /// be reached directly.
 ///
 /// This is how a route is forced offstage. `HeroController` holds
@@ -885,7 +948,7 @@ pub struct ModalHandle {
 impl fmt::Debug for ModalHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModalHandle")
-            .field("offstage", &self.inner.offstage.load(Ordering::Relaxed))
+            .field("offstage", &self.inner.offstage.get())
             .finish_non_exhaustive()
     }
 }
@@ -896,7 +959,7 @@ impl fmt::Debug for ModalHandle {
 impl ModalHandle {
     /// Deliver the pop-invoked callback (`did_pop`, …) to every `PopScope`
     /// registered in this route's page. Called by
-    /// `NavigatorShared::apply` **outside** the history lock — the callbacks
+    /// `NavigatorShared::apply` **outside** the history borrow — the callbacks
     /// are user code and may call back into the navigator.
     pub(crate) fn notify_pop_invoked(&self, did_pop: bool) {
         self.inner.pop_entries.notify_pop_invoked(did_pop);
@@ -904,7 +967,7 @@ impl ModalHandle {
 
     /// Make this route's focus scope the active one and restore the focus it
     /// remembers. Called by the navigator from
-    /// `apply`, **outside** the history lock: this moves the primary focus, and
+    /// `apply`, **outside** the history borrow: this moves the primary focus, and
     /// the listeners that fire are user code.
     pub(crate) fn activate_focus_scope(&self, take_focus: bool) {
         self.inner.activate_focus_scope(take_focus);
@@ -935,7 +998,7 @@ impl ModalHandle {
     /// refused; after the frame it lands. The edge goes first because it is
     /// the flush's own consequence: the rebuild it requests joins the frame
     /// the pop happened in, while the callbacks wait for that frame to end.
-    /// Called by `NavigatorShared::apply` with **no lock held** (ADR-0025);
+    /// Called by `NavigatorShared::apply` with **no borrow held** (ADR-0025);
     /// each step is contained in `recovery` on its own.
     pub(crate) fn drain_local_history(
         &self,
@@ -953,7 +1016,7 @@ impl ModalHandle {
     /// unchanged value, the animation-proxy swap (ADR-0021), and
     /// `changed_internal_state`.
     pub fn set_offstage(&self, offstage: bool) {
-        if self.inner.offstage.swap(offstage, Ordering::Relaxed) == offstage {
+        if self.inner.offstage.replace(offstage) == offstage {
             return; // Unchanged.
         }
         // Offstage points the primary proxy at an fixed normalized end animation and the
@@ -967,7 +1030,7 @@ impl ModalHandle {
     /// Whether the route is forced offstage.
     #[must_use]
     pub fn offstage(&self) -> bool {
-        self.inner.offstage.load(Ordering::Relaxed)
+        self.inner.offstage.get()
     }
 
     /// What the route's builders currently see as the route animation — the
@@ -1002,18 +1065,13 @@ impl ModalHandle {
     /// only a `true` here can skip the offstage measurement dance.
     #[must_use]
     pub fn maintain_state(&self) -> bool {
-        self.inner.maintain_state.load(Ordering::Relaxed)
+        self.inner.maintain_state.get()
     }
 
     /// Set `maintain_state` and republish it through `changed_internal_state`.
     /// The value sits in a cell, which is what lets a test observe the republish.
     pub fn set_maintain_state(&self, maintain_state: bool) {
-        if self
-            .inner
-            .maintain_state
-            .swap(maintain_state, Ordering::Relaxed)
-            == maintain_state
-        {
+        if self.inner.maintain_state.replace(maintain_state) == maintain_state {
             return;
         }
         changed_internal_state(&self.inner);
@@ -1035,7 +1093,7 @@ fn changed_internal_state(inner: &ModalInner) {
     let Some(binding) = inner.transition.get().and_then(TransitionHandle::binding) else {
         return;
     };
-    binding.set_entry_maintain_state(inner.maintain_state.load(Ordering::Relaxed));
+    binding.set_entry_maintain_state(inner.maintain_state.get());
     binding.mark_entry_needs_build();
 }
 
@@ -1087,7 +1145,7 @@ impl<T: 'static> Route for ModalRoute<T> {
         self.inner.sync_animation_proxies();
         self.inner.open_relay();
         if let Some(binding) = self.binding() {
-            binding.set_entry_maintain_state(self.inner.maintain_state.load(Ordering::Relaxed));
+            binding.set_entry_maintain_state(self.inner.maintain_state.get());
             // Registered before the page has ever been built, so the registry
             // knows the route exists; it resolves to `None` until the page mounts.
             binding.publish_subtree(self.inner.subtree.clone());
@@ -1098,9 +1156,9 @@ impl<T: 'static> Route for ModalRoute<T> {
 
     /// A push (like an add) moves the focus into the route's scope.
     /// Focus activation is **not** done here: this runs inside the flush, under
-    /// the history lock, and moving the focus fires user listeners (a `Focus`
+    /// the history borrow, and moving the focus fires user listeners (a `Focus`
     /// widget's `on_focus_change` and its rebuild) that may call back into the
-    /// navigator — a same-thread deadlock on the non-reentrant mutex. The
+    /// navigator — a second borrow of a busy `RefCell`, which panics. The
     /// navigator activates the new top route's scope from `apply`, once the
     /// lock is released.
     fn did_push(&mut self) -> PushCompletion {
@@ -1118,7 +1176,7 @@ impl<T: 'static> Route for ModalRoute<T> {
     /// While local-history entries exist, pop the most recent one and answer `false` — the route stays and
     /// its future stays pending. The entry's `on_remove` (and the emptied-edge
     /// `changed_internal_state`) are **owed**, not fired: this runs under the
-    /// history lock, and `NavigatorShared::apply` delivers them outside it
+    /// history borrow, and `NavigatorShared::apply` delivers them outside it
     /// (ADR-0025).
     fn did_pop(&mut self) -> bool {
         if self.inner.local_history.pop_last_deferred() {
@@ -1152,10 +1210,10 @@ impl<T: 'static> Route for ModalRoute<T> {
     }
 
     /// The route-level hook only. The user-facing `PopScope` fan-out is **not** fired from here: this runs inside
-    /// the flush, under the history lock, where a user callback calling back
-    /// into the navigator deadlocks. The flush owes the fan-out through
+    /// the flush, under the history borrow, where a user callback calling back
+    /// into the navigator panics on a second borrow. The flush owes the fan-out through
     /// `FlushOutcome::pop_invoked`, and `apply` delivers it via
-    /// `ModalHandle::notify_pop_invoked` outside the lock.
+    /// `ModalHandle::notify_pop_invoked` outside the borrow.
     fn on_pop_invoked(&mut self, did_pop: bool) {
         self.transition.on_pop_invoked(did_pop);
     }

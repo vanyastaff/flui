@@ -10,7 +10,7 @@ substring-matching a printed dump.
 
 ```text
 Inspect::inspect (render object, layer)  →  the object's own fields (color, padding, …)
-PipelineOwner / LayerTree (InspectTree)  →  + facts: committed offset / size / geometry
+PipelineOwner / SceneVersion (InspectTree) →  + facts: committed offset / size / geometry
 snapshot(&tree, SnapshotQuery)           →  SnapshotNode tree
 node.get::<T>("field") / get_fact::<T>   →  typed CI assertions
 ```

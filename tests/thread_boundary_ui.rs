@@ -26,6 +26,10 @@ fn thread_boundary_ui() {
     } else {
         cases.compile_fail("tests/ui/unstable_input/*.rs");
     }
+    // `#[flui::main]` leaves a desktop function as it is and refuses, on
+    // every target, an entry Android could not call.
+    cases.pass("tests/ui/entry/pass/*.rs");
+    cases.compile_fail("tests/ui/entry/fail/*.rs");
     // A second window is reachable exactly with `unstable-windows`, until
     // ADR-0091 §3–§5 are built; the entry point is desktop-only.
     if cfg!(feature = "unstable-windows") {

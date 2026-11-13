@@ -990,6 +990,7 @@ fn a_failed_resize_is_held_in_the_record_and_retried_next_turn() {
         match failure {
             Some(SlotFailure::Panicked(_)) => assert!(panicked),
             Some(SlotFailure::Refused(_)) => assert!(!panicked),
+            Some(_) => panic!("the failed resize is a refusal or a panic"),
             None => panic!("the failed resize is held in the record"),
         }
 

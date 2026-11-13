@@ -1,15 +1,17 @@
-//! A layer snapshot reads each layer's own fields.
+//! A layer snapshot reads each layer's own fields, from the retained version that holds it.
 
 use std::sync::Arc;
 
+use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Point, RRect, RSuperellipse, Rect};
 use flui_foundation::inspect::{
-    DiffOptions, Level, Plain, SnapshotQuery, Variant, diff, render, snapshot,
+    DiffOptions, Level, Plain, SnapshotNode, SnapshotQuery, Variant, diff, render, snapshot,
 };
 use flui_layer::{
-    AnnotatedRegionLayer, BackdropFilterLayer, BackdropGroupKey, ClipPathLayer, ClipRRectLayer,
-    ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer,
-    LayerLink, LayerTree, OffsetLayer, OpacityLayer, PictureLayer,
+    AnnotatedRegionLayer, BackdropFilterLayer, BackdropGroupKey, BoundaryContent, Chunk,
+    ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer,
+    FollowerLayer, ImageFilterLayer, Layer, LayerLink, OffsetLayer, OpacityLayer, PictureLayer,
+    SceneOp, SceneOwner, SurfaceKey,
 };
 use flui_painting::paint::{BlendMode, Clip, ColorFilter, ImageFilter, Path};
 use flui_painting::styling::Color;
@@ -44,8 +46,7 @@ fn clip_layers_report_their_clip_behavior() {
             (Clip::HardEdge, "HardEdge"),
             (Clip::AntiAliasWithSaveLayer, "AntiAliasWithSaveLayer"),
         ] {
-            let tree = LayerTree::new(layer(rect, clip));
-            let root = snapshot(&tree, SnapshotQuery::default()).expect("a tree has a root");
+            let root = one(layer(rect, clip));
             assert_eq!(
                 root.get::<Variant<'_>>("clip_behavior"),
                 Ok(Variant { ty: "Clip", name }),
@@ -88,10 +89,13 @@ fn clip_layers_of_one_bounds_and_different_shapes_read_apart() {
         ),
     ];
     for (kind, first, second) in pairs {
-        let first = snapshot(&LayerTree::new(first), SnapshotQuery::default()).expect("a root");
-        let second = snapshot(&LayerTree::new(second), SnapshotQuery::default()).expect("a root");
+        let first = one(first);
+        let second = one(second);
         assert_eq!(first.rect, second.rect, "{kind}: one bounding rectangle");
-        assert_ne!(first, second, "{kind}");
+        assert!(
+            !diff(&first, &second, DiffOptions::default()).is_empty(),
+            "{kind}: {first} and {second} read alike"
+        );
     }
 }
 
@@ -150,10 +154,8 @@ fn layers_that_differ_only_in_their_effect_diff_apart() {
         ),
     ];
     for (kind, before, after) in pairs {
-        let before =
-            snapshot(&LayerTree::new(before), SnapshotQuery::default()).expect("a tree has a root");
-        let after =
-            snapshot(&LayerTree::new(after), SnapshotQuery::default()).expect("a tree has a root");
+        let before = one(before);
+        let after = one(after);
         assert!(
             !diff(&before, &after, DiffOptions::default()).is_empty(),
             "{kind}: {before} and {after} read alike"
@@ -168,12 +170,9 @@ fn layers_that_differ_only_in_their_effect_diff_apart() {
 #[test]
 fn a_deep_layer_chain_snapshots_without_recursion() {
     const DEPTH: usize = 30_000;
-    let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
-    let mut tip = tree.root();
-    for _ in 1..DEPTH {
-        tip = tree.push_child(tip, Layer::from(OffsetLayer::zero()));
-    }
-    let root = snapshot(&tree, SnapshotQuery::default()).expect("a tree has a root");
+    // The boundary's node, and each effect nested in the one before.
+    let chain = (1..DEPTH).map(|_| Layer::from(OffsetLayer::zero()));
+    let root = scene(chain, Nesting::Chain);
     assert_eq!(root.iter().count(), DEPTH);
     let mut lines = Lines(0);
     render(&root, Level::Summary, &Plain, &mut lines).expect("counting never fails");
@@ -215,11 +214,7 @@ fn backdrop_filters_that_stop_sharing_a_group_diff_apart() {
         )
     };
     let panes = |first: BackdropGroupKey, second: BackdropGroupKey| {
-        let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
-        let root = tree.root();
-        tree.push_child(root, pane(first));
-        tree.push_child(root, pane(second));
-        snapshot(&tree, SnapshotQuery::default()).expect("a tree has a root")
+        scene([pane(first), pane(second)], Nesting::Siblings)
     };
     let shared = BackdropGroupKey::new();
     let grouped = panes(shared.clone(), shared.clone());
@@ -237,31 +232,26 @@ fn backdrop_filters_that_stop_sharing_a_group_diff_apart() {
 fn shared_groups_and_payloads_read_by_their_order_in_the_scene() {
     let bounds = Rect::from_xywh(0.0, 0.0, 40.0, 20.0);
     let scene = |groups: [&BackdropGroupKey; 3], payload: &Arc<&'static str>| {
-        let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
-        let root = tree.root();
-        for group in groups {
-            tree.push_child(
-                root,
-                Layer::from(
-                    BackdropFilterLayer::new(ImageFilter::blur(4.0), BlendMode::SrcOver, bounds)
-                        .with_group(Some(group.clone())),
-                ),
-            );
-        }
-        for _ in 0..2 {
-            tree.push_child(
-                root,
-                Layer::from(AnnotatedRegionLayer::new(bounds, Arc::clone(payload))),
-            );
-        }
-        snapshot(&tree, SnapshotQuery::default()).expect("a tree has a root")
+        let panes = groups.into_iter().map(|group| {
+            Layer::from(
+                BackdropFilterLayer::new(ImageFilter::blur(4.0), BlendMode::SrcOver, bounds)
+                    .with_group(Some(group.clone())),
+            )
+        });
+        let regions =
+            (0..2).map(|_| Layer::from(AnnotatedRegionLayer::new(bounds, Arc::clone(payload))));
+        scene(panes.chain(regions), Nesting::Siblings)
     };
     let (first, second) = (BackdropGroupKey::new(), BackdropGroupKey::new());
     let before = scene([&first, &first, &second], &Arc::new("toolbar"));
     let (third, fourth) = (BackdropGroupKey::new(), BackdropGroupKey::new());
     let after = scene([&third, &third, &fourth], &Arc::new("toolbar"));
 
-    assert_eq!(before, after);
+    assert_eq!(
+        diff(&before, &after, DiffOptions::default()),
+        Vec::new(),
+        "{before} and {after}"
+    );
     let text = before.to_string();
     let groups: Vec<_> = before
         .children
@@ -282,3 +272,60 @@ fn shared_groups_and_payloads_read_by_their_order_in_the_scene() {
         .collect();
     assert_eq!(payloads, ["&str#1", "&str#1"], "{text}");
 }
+
+/// How [`scene`] places its effects.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nesting {
+    /// Each closed before the next, so all sit under the boundary.
+    Siblings,
+    /// Each left open, so each sits under the one before.
+    Chain,
+}
+
+/// The snapshot of a scene whose one boundary paints `layers` in order: a picture as a chunk of
+/// its commands, any other layer as an effect.
+fn scene(layers: impl IntoIterator<Item = Layer>, nesting: Nesting) -> SnapshotNode {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let mut content = BoundaryContent::builder();
+    let owner_id = RenderId::new(1);
+    for (ordinal, layer) in (0..).zip(layers) {
+        if let Layer::Picture(picture) = layer {
+            let version = writer
+                .next_content_version()
+                .expect("a fresh owner has content versions");
+            content.chunk(Arc::new(Chunk::new(
+                owner_id,
+                ordinal,
+                version,
+                picture.picture().clone(),
+            )));
+        } else {
+            content.push_effect(layer, owner_id, ordinal);
+            if nesting == Nesting::Siblings {
+                content.pop_effect();
+            }
+        }
+    }
+    writer.push(SceneOp::Publish {
+        node: root,
+        content: Arc::new(content.finish()),
+    });
+    owner.apply(SURFACE).expect("one boundary applies");
+    snapshot(owner.current(), SnapshotQuery::default()).expect("a version has a root")
+}
+
+/// The snapshot of `layer`, painted alone in a scene's boundary.
+fn one(layer: Layer) -> SnapshotNode {
+    let boundary = scene([layer], Nesting::Siblings);
+    let [entry] = boundary.children.as_slice() else {
+        panic!("the boundary paints the one layer: {boundary}");
+    };
+    entry.clone()
+}
+
+const SURFACE: SurfaceKey = SurfaceKey {
+    size: (800, 600),
+    generation: flui_foundation::SurfaceGeneration::ZERO,
+};

@@ -31,8 +31,9 @@
 //! [ADR-0042](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0042-theming-ownership.md);
 //! the app-shell widgets that implement it are tracked in issue #573.
 //!
-//! Applications normally enter through [`run_app`], with an [`AppLaunch`]
-//! naming the configuration and capabilities; the runner constructs and owns
+//! Applications enter through [`run_app`], or an [`Application`] that names
+//! the configuration and capabilities, from a function marked [`main`]; the
+//! runner constructs and owns
 //! the UI ui_runtime.
 
 #![cfg_attr(
@@ -103,8 +104,8 @@ mod table_test;
 
 // Primary exports
 pub use app::{
-    AppCapabilities, AppConfig, AppLaunch, DiagnosticsProfile, LaunchError, MotionOverride,
-    PointerResampling, RootRenderElement, RootRenderView, UnsupportedSystem, run_app,
+    AppConfig, Application, DiagnosticsProfile, LaunchError, MotionOverride, PointerResampling,
+    RootRenderElement, RootRenderView, UnsupportedSystem, run_app,
 };
 pub use flui_engine::{BackendFailure, FrameLatency, GpuBackend};
 // The recording hook (ADR-0215 §1): `AppConfig::input_tap` installs a tap
@@ -166,6 +167,8 @@ pub use app::{
 // `open_secondary_window` additionally needs the desktop GPU renderer path,
 // so it is narrower than the policy enums above: desktop only (matching
 // `run_desktop`'s own cfg gate).
+#[doc(hidden)]
+pub use app::__entry;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -180,13 +183,9 @@ pub use app::open_secondary_window;
 ))]
 #[cfg(feature = "unstable-windows")]
 pub use app::open_window;
-// Android-specific entry points
-/// The crate `android_main` receives its `AndroidApp` from; re-exported so
-/// an application's manifest names only `flui`.
-#[cfg(target_os = "android")]
-pub use android_activity;
-#[cfg(target_os = "android")]
-pub use app::run_app_android;
+/// Marks the function an application starts from, so that one entry runs on
+/// every platform. Re-exported from `flui-macros`; see [`Application::run`].
+pub use flui_macros::main;
 // Bindings re-exports
 pub use bindings::{
     GestureBinding, PipelineCell, PipelineOwner, RenderingBinding, UpdateScheduler, WidgetsBinding,
@@ -219,7 +218,7 @@ pub mod prelude {
 
     #[cfg(not(target_os = "ios"))]
     pub use crate::run_direct;
-    pub use crate::{AppCapabilities, AppConfig, AppLaunch, LaunchError, run_app};
+    pub use crate::{AppConfig, Application, LaunchError, run_app};
     // Bindings
     pub use crate::{
         GestureBinding, PipelineOwner, RenderingBinding, UpdateScheduler, WidgetsBinding,
@@ -231,7 +230,4 @@ pub mod prelude {
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub use app::{
-    AppControlError, AppHandle, AppRunError, AppWindowError, Application, StartupWindow,
-    WindowRequest,
-};
+pub use app::{AppControlError, AppHandle, AppWindowError, WindowRequest};

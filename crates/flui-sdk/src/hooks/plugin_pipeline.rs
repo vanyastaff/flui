@@ -126,7 +126,7 @@ impl PluginPipeline {
     /// The root is laid out tight to the size passed with each frame, so a
     /// resized surface is laid out at its new size on the next one. Every
     /// call repaints from the root into a scene of its own: the host draws
-    /// the frame whole and nothing is retained across the plugin boundary.
+    /// the version whole and nothing is retained across the plugin boundary.
     ///
     /// # Errors
     ///
@@ -152,7 +152,7 @@ impl PluginPipeline {
             // annotation's `Drop` is user code.
             let mut scene = SceneOwner::new();
             let mut released: Option<SceneVersion> = None;
-            let layer_tree = pipeline_owner.with_mut(|guard| {
+            let version = pipeline_owner.with_mut(|guard| {
                 let Some(root_id) = guard.root_id() else {
                     return Err(PluginFrameError::NothingPainted);
                 };
@@ -185,13 +185,11 @@ impl PluginPipeline {
                     .apply(surface)
                     .map_err(|error| PluginFrameError::PatchRefused(error.to_string()))?;
                 released = guard.scene_applied(scene.current());
-                Ok(guard
-                    .scene_frame_node()
-                    .and_then(|node| scene.current().flatten_node(node)))
+                Ok(guard.scene_frame_node().map(|_| scene.current().clone()))
             });
             drop(released);
-            layer_tree?
-                .map(Scene::new)
+            version?
+                .map(Scene::of_version)
                 .ok_or(PluginFrameError::NothingPainted)
         })
     }

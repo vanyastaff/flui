@@ -5,8 +5,8 @@
 # --features flui/material,flui/cupertino,flui/native --test perf`.
 
 [elevated_button_over_text]
-allocations = 177
-bytes = 24734
+allocations = 176
+bytes = 21016
 elements = 11
 reallocations = 9
 render_nodes = 5

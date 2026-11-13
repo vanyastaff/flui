@@ -37,6 +37,7 @@
 //! - **Icon theming** — wrapping `child` in an `IconTheme` sized off
 //!   the resolved text style is not wired here (no icon-bearing V1 consumer).
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -44,7 +45,7 @@ use flui_sdk::animation::Animatable;
 
 use flui_sdk::animation::{
     Animation, AnimationController, AnimationRunFuture, CurvedAnimation, DrivenController, Tween,
-    curves,
+    Vsync, curves,
 };
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Alignment;
@@ -449,19 +450,50 @@ fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRun
     });
 }
 
+/// The press fade's controller, made at the first tap that fades: a button
+/// nobody taps holds no animation and no frame registration. Shared by the
+/// state and the tap.
+#[derive(Default)]
+struct PressFade {
+    controller: RefCell<Option<DrivenController>>,
+    /// The ambient clock, read at each dependency change, that a controller
+    /// made later is driven by.
+    vsync: RefCell<Option<Vsync>>,
+}
+
+impl PressFade {
+    /// The controller, made on the ambient clock if there is none yet. The
+    /// slot's borrow ends before the caller drives it.
+    fn controller(&self) -> AnimationController {
+        let mut slot = self.controller.borrow_mut();
+        let owner = slot.get_or_insert_with(|| {
+            AnimationController::builder(Duration::from_millis(200))
+                .debug_label("CupertinoButton.press")
+                .build_on(self.vsync.borrow().as_ref())
+        });
+        owner.controller().clone()
+    }
+
+    /// The controller's handle, if one was made.
+    fn current(&self) -> Option<AnimationController> {
+        self.controller
+            .borrow()
+            .as_ref()
+            .map(|owner| owner.controller().clone())
+    }
+}
+
 /// Persistent state behind [`CupertinoButton`] — see [`StatefulView`]/
 /// [`ViewState`].
 pub struct CupertinoButtonState {
-    /// Acquired during initialization and withdrawn during disposal. The
-    /// owner follows the ambient registry through dependency changes.
-    controller: Option<DrivenController>,
-    rebuild: Option<RebuildHandle>,
+    fade: Rc<PressFade>,
+    rebuild: RebuildHandle,
 }
 
 impl std::fmt::Debug for CupertinoButtonState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CupertinoButtonState")
-            .field("has_controller", &self.controller.is_some())
+            .field("has_controller", &self.fade.controller.borrow().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -469,34 +501,29 @@ impl std::fmt::Debug for CupertinoButtonState {
 impl StatefulView for CupertinoButton {
     type State = CupertinoButtonState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         CupertinoButtonState {
-            controller: None,
-            rebuild: None,
+            fade: Rc::default(),
+            // ADR-0018: fired later from `start_press_fade` (called from the
+            // `on_tap` handler in `build`, never from `build` itself).
+            rebuild: ctx.rebuild_handle(),
         }
     }
 }
 
 impl ViewState<CupertinoButton> for CupertinoButtonState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // ADR-0018: `rebuild_handle()` acquired here, fired later from
-        // `start_press_fade` (called from the `on_tap` handler in `build`,
-        // never from `build` itself).
-        self.rebuild = Some(ctx.rebuild_handle());
-
-        self.controller = Some(
-            AnimationController::builder(Duration::from_millis(200))
-                .debug_label("CupertinoButton.press")
-                .build_on(VsyncScope::maybe_of(ctx).as_ref()),
-        );
+        *self.fade.vsync.borrow_mut() = VsyncScope::maybe_of(ctx);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        if let Some(controller) = self.controller.as_mut()
-            && let Err(error) = controller.rebind(VsyncScope::maybe_of(ctx).as_ref())
+        let vsync = VsyncScope::maybe_of(ctx);
+        if let Some(controller) = self.fade.controller.borrow_mut().as_mut()
+            && let Err(error) = controller.rebind(vsync.as_ref())
         {
             tracing::error!(%error, "CupertinoButton lost its frame registry");
         }
+        *self.fade.vsync.borrow_mut() = vsync;
     }
 
     fn build(&self, view: &CupertinoButton, ctx: &dyn BuildContext) -> impl IntoView {
@@ -551,11 +578,11 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
 
         let decorated = DecoratedBox::new(decoration).child(Padding::new(padding).child(content));
 
-        let opacity: std::rc::Rc<dyn Animation<f64>> = match &self.controller {
+        let opacity: std::rc::Rc<dyn Animation<f64>> = match self.fade.current() {
             Some(controller) => {
                 let pressed_opacity = view.pressed_opacity.unwrap_or(1.0);
                 let curved = std::rc::Rc::new(CurvedAnimation::new(
-                    Rc::new(controller.controller().clone()) as std::rc::Rc<dyn Animation<f64>>,
+                    Rc::new(controller) as std::rc::Rc<dyn Animation<f64>>,
                     curves::DECELERATE,
                 ));
                 std::rc::Rc::new(
@@ -583,18 +610,17 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         if enabled && (view.on_pressed.is_some() || view.on_long_press.is_some()) {
             let mut tap = ControlTap::new();
             if let Some(on_pressed) = view.on_pressed.clone() {
-                let controller = self
-                    .controller
-                    .as_ref()
-                    .map(|owner| owner.controller().clone());
+                let fade = Rc::clone(&self.fade);
                 let rebuild = self.rebuild.clone();
                 let pressed_opacity = view.pressed_opacity;
                 tap = tap.on_tap(move |ctx| {
-                    if let Some(controller) = &controller
-                        && let Some(future) =
-                            start_press_fade(controller, pressed_opacity, rebuild.as_ref())
-                    {
-                        chain_release_fade(controller, future);
+                    if pressed_opacity.is_some() {
+                        let controller = fade.controller();
+                        if let Some(future) =
+                            start_press_fade(&controller, pressed_opacity, Some(&rebuild))
+                        {
+                            chain_release_fade(&controller, future);
+                        }
                     }
                     on_pressed(ctx);
                 });
@@ -608,6 +634,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
     }
 
     fn dispose(&mut self) {
-        self.controller.take();
+        let controller = self.fade.controller.borrow_mut().take();
+        drop(controller);
     }
 }

@@ -1,10 +1,10 @@
 //! An application's capability registrations are checked before anything
 //! starts (ADR-0152 §1): two plugins for one capability, or two capabilities
 //! sharing a name, fail `Application::run` before the platform is created,
-//! so no window opens; a launch with them fails `run_app` the same way.
+//! so no window opens; the same holds for an application whose root is never built.
 
-use flui_app::app::{AppRunError, Application};
-use flui_app::{AppCapabilities, AppLaunch, LaunchError};
+use flui_app::Application;
+use flui_app::LaunchError;
 use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::ClipboardRead;
 use flui_platform::capability::{
@@ -53,21 +53,19 @@ impl Plugin for ImpostorPlugin {
     }
 }
 
-fn application() -> Application<SizedBox, impl FnMut(&flui_app::app::AppHandle) -> SizedBox> {
-    Application::new(|_: &flui_app::app::AppHandle| -> SizedBox {
-        unreachable!("a conflicting application builds no window")
-    })
+fn application() -> Application {
+    Application::new()
 }
 
 pub(crate) fn conflicting_registrations_fail_run_before_the_platform_starts() {
     let two_plugins = application()
         .plugin(ClipboardPlugin)
         .plugin(ClipboardPlugin)
-        .run();
+        .run(Unbuilt);
     assert!(
         matches!(
             two_plugins,
-            Err(AppRunError::CapabilityConflict(
+            Err(LaunchError::CapabilityConflict(
                 CapabilityConflict::Duplicate {
                     name: "clipboard",
                     tier: ProviderTier::Plugin,
@@ -77,11 +75,11 @@ pub(crate) fn conflicting_registrations_fail_run_before_the_platform_starts() {
         "{two_plugins:?}"
     );
 
-    let shared_name = application().plugin(ImpostorPlugin).run();
+    let shared_name = application().plugin(ImpostorPlugin).run(Unbuilt);
     assert!(
         matches!(
             shared_name,
-            Err(AppRunError::CapabilityConflict(
+            Err(LaunchError::CapabilityConflict(
                 CapabilityConflict::SharedName { name: "clipboard" }
             ))
         ),
@@ -95,11 +93,11 @@ pub(crate) fn conflicting_registrations_fail_run_before_the_platform_starts() {
         .capability::<ClipboardCapability>(|ctx: &ProviderContext<'_>| {
             Ok(ClipboardHandle::new(Inert, ctx))
         })
-        .run();
+        .run(Unbuilt);
     assert!(
         matches!(
             two_overrides,
-            Err(AppRunError::CapabilityConflict(
+            Err(LaunchError::CapabilityConflict(
                 CapabilityConflict::Duplicate {
                     tier: ProviderTier::Override,
                     ..
@@ -121,12 +119,10 @@ impl StatelessView for Unbuilt {
 }
 
 pub(crate) fn a_conflicting_launch_fails_run_app_before_the_platform_starts() {
-    let launch = AppLaunch::new().capabilities(
-        AppCapabilities::new()
-            .plugin(ClipboardPlugin)
-            .plugin(ClipboardPlugin),
-    );
-    let launched = flui_app::run_app(Unbuilt, launch);
+    let launched = Application::new()
+        .plugin(ClipboardPlugin)
+        .plugin(ClipboardPlugin)
+        .run(Unbuilt);
     assert!(
         matches!(
             launched,

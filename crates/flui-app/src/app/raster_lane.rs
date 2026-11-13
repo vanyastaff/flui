@@ -396,6 +396,7 @@ impl<B: RasterBackend> RasterLane<B> {
                 RasterSubmitError::AddressMismatch { .. } => {
                     tracing::error!(%error, "BUG: raster lane: own frame refused on address");
                 }
+                _ => tracing::error!(%error, "raster lane: frame submit refused"),
             }
             self.drain_acks();
             return SubmitVerdict::Failed;

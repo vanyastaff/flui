@@ -39,6 +39,10 @@ use flui_layer::ScenePublication;
 /// assert!(!arms_a_retry(SubmitVerdict::Presented));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a host paces or retries from each verdict, and a `_` arm would lose a frame or a retry"
+)]
 pub enum SubmitVerdict {
     /// The frame rendered and reached `present()`.
     Presented,

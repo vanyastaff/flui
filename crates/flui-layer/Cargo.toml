@@ -20,7 +20,8 @@ autotests = false
 [features]
 default = []
 
-# testing: the `crate::testing::inspect` walkers (structure, clip/transform
+# testing: `SceneVersion::flatten`, the oracle a retained version is compared
+# against, and the `crate::testing::inspect` walkers (structure, clip/transform
 # collectors). Off by default; this crate's unit
 # tests see the module through `cfg(test)`, and downstream crates that want it
 # forward the feature.

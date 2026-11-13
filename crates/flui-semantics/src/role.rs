@@ -23,6 +23,7 @@ pub use flui_protocol::SemanticsRole;
 /// This is typically used to prevent screen readers from focusing
 /// on parts of the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum AccessibilityFocusBlockType {
     /// Accessibility focus is **not blocked**.
     #[default]
@@ -71,6 +72,7 @@ impl AccessibilityFocusBlockType {
 
 /// Order for dumping the semantics tree in debug output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum DebugSemanticsDumpOrder {
     /// Inverse hit test order (visual, bottom-to-top).
     #[default]

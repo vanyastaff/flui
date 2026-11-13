@@ -10,6 +10,8 @@
 //! Application lifecycle state is `flui_scheduler::AppLifecycleState`;
 //! the runner drives the scheduler directly.
 
+#[doc(hidden)]
+pub mod __entry;
 pub(crate) mod agent;
 pub(crate) mod capability;
 pub(crate) mod close_request;
@@ -55,13 +57,12 @@ pub use flui_runtime::frame_failure::{
 };
 pub use hot_reload::DevReload;
 // The recording hook (ADR-0215 §1): the tap and the records it observes.
-pub use capability::AppCapabilities;
 pub use flui_runtime::owner::{InputOutcome, WindowObservation};
 pub use flui_runtime::{
     DecisionRow, HostInput, InputRecord, InputRow, InputTap, InputTapFactory, PreferencesRow,
     RecordingStart, RecordingWindow,
 };
-pub use launch::{AppLaunch, LaunchError, UnsupportedSystem};
+pub use launch::{Application, LaunchError, UnsupportedSystem};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
@@ -84,9 +85,7 @@ pub use runner::open_secondary_window;
 ))]
 #[cfg(feature = "unstable-windows")]
 pub use runner::open_window;
-#[cfg(target_os = "android")]
-pub use runner::run_app_android;
-pub use runner::run_app_impl as run_app;
+pub use runner::run_app;
 pub use runner::{FontRegistrationError, register_font};
 #[cfg(not(target_os = "ios"))]
 pub use runner::{request_presentation_close, window_handle};
@@ -111,19 +110,13 @@ pub use flui_view::{RootRenderElement, RootRenderView};
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-mod application;
+pub(crate) mod application;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
 pub(crate) mod application_control;
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub use application::{AppRunError, Application, StartupWindow};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),

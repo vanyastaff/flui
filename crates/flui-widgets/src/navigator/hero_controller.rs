@@ -43,7 +43,7 @@
 //! | Step | Seam |
 //! |---|---|
 //! | flip the destination offstage | [`ModalHandle::set_offstage`] via the navigator's modal registry |
-//! | a route becomes top | `Notification::TopChanged`, delivered outside the history lock |
+//! | a route becomes top | `Notification::TopChanged`, delivered outside the history borrow |
 //! | offstage ⇒ `animation.value == 1.0` | the `ModalRoute` animation proxies |
 //! | measure after the frame | [`PostFrameHandle`] |
 //! | the callback runs *after* layout commits | `UpdateScheduler::drive_frame` |
@@ -98,7 +98,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_animation::{Animatable, Animation, AnimationStatus, Curve, CurvedAnimation, SharedCurve};
 use flui_foundation::geometry::Size;
@@ -300,15 +299,15 @@ impl HeroController {
     /// accepts one by hand for compatibility and replaces the auto-default if it was
     /// already installed.
     #[must_use]
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
+    pub fn new() -> Rc<Self> {
+        Rc::new(Self::default())
     }
 
     /// A hero controller whose flights use `factory` for any hero that sets no
     /// `create_rect_tween` of its own — e.g. Material's arc-shaped rect tween. A
     /// per-`Hero` factory still overrides this.
     #[must_use]
-    pub fn with_rect_tween<F, A>(factory: F) -> Arc<Self>
+    pub fn with_rect_tween<F, A>(factory: F) -> Rc<Self>
     where
         F: Fn(Rect, Rect) -> A + 'static,
         A: Animatable<Value = Rect> + 'static,
@@ -317,7 +316,7 @@ impl HeroController {
         controller.default_rect_factory = Terminal::new(Some(Rc::new(move |begin, end| {
             Box::new(factory(begin, end)) as Box<dyn Animatable<Value = Rect>>
         })));
-        Arc::new(controller)
+        Rc::new(controller)
     }
 
     /// The navigator this controller observes, or `None` when detached.
@@ -824,7 +823,7 @@ impl NavigatorObserver for HeroController {
     /// they do not fire when a route becomes top by having its cover popped.
     fn did_change_top(&self, top: RouteId, previous_top: Option<RouteId>) {
         // `top` is not asserted current here: notifications are delivered *outside*
-        // the history lock and permit an observer to mutate the stack from a
+        // the history borrow and permit an observer to mutate the stack from a
         // callback, so a re-entrant push can leave `top` transiently not-current by
         // the time this fires. The flight path is guarded downstream anyway
         // (`route_peer`/`route_modal` return `None` for a superseded route), so a
@@ -896,6 +895,7 @@ pub(crate) mod terminal_tests {
     use std::io::Read;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::process::{Command, Stdio};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 

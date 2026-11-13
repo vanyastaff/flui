@@ -760,6 +760,10 @@ mod win32 {
     use crate::app::{AppCall, AppLog};
 
     fn platform() -> Rc<dyn Reach> {
+        #[expect(
+            clippy::arc_with_non_send_sync,
+            reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
+        )]
         let platform: Arc<dyn Platform> =
             Arc::new(WindowsPlatform::try_new().expect("native Windows platform"));
         Rc::new(platform)
@@ -918,6 +922,10 @@ mod win32 {
 
     fn replaced_keyboard_layout_callback() {
         within("Win32 keyboard layout callback", || {
+            #[expect(
+                clippy::arc_with_non_send_sync,
+                reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
+            )]
             let platform: Arc<dyn Platform> =
                 Arc::new(WindowsPlatform::try_new().expect("native Windows platform"));
             a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
