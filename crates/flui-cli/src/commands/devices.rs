@@ -878,22 +878,21 @@ mod tests {
         }
     }
 
-    /// A stand-in `xcrun` in a directory of its own: it hangs on its first
-    /// `hangs` calls and then lists one booted simulator, as `simctl list -j`
-    /// prints it.
+    /// A stand-in `xcrun` in a directory of its own: a call that starts before
+    /// the Unix second `hangs_until` hangs, a later one lists one booted
+    /// simulator, as `simctl list -j` prints it. The decision reads the clock,
+    /// not a count of earlier calls, so a call killed before its first line
+    /// ran changes nothing for the next one.
     #[cfg(unix)]
-    fn stand_in_xcrun(dir: &std::path::Path, hangs: usize) -> std::path::PathBuf {
+    fn stand_in_xcrun(dir: &std::path::Path, hangs_until: u64) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt as _;
         let script = dir.join("xcrun");
-        let calls = dir.join("calls");
         let body = format!(
             "#!/bin/sh\n\
-             echo x >> '{calls}'\n\
-             if [ \"$(wc -l < '{calls}')\" -le {hangs} ]; then exec sleep 30; fi\n\
+             if [ \"$(date +%s)\" -lt {hangs_until} ]; then exec sleep 30; fi\n\
              echo '{{\"devices\":{{\"com.apple.CoreSimulator.SimRuntime.iOS-18-0\":\
              [{{\"name\":\"iPhone Test\",\"udid\":\"UDID-1\",\"state\":\"Booted\",\
              \"isAvailable\":true}}]}}}}'\n",
-            calls = calls.display(),
         );
         std::fs::write(&script, body).expect("write the stand-in xcrun");
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
@@ -903,16 +902,20 @@ mod tests {
 
     /// The probe `flui devices` runs on macOS, against an `xcrun` that hangs:
     /// once (the simulator is listed on the retry) and every time (a
-    /// `Problem` that names both attempts). The stand-in counts the calls that
-    /// reached its first line, so the first budget is long enough for `sh` to
-    /// start on a loaded runner: a call killed before it counts itself would
-    /// make the retry the one that hangs.
+    /// `Problem` that names both attempts). The first case's stand-in hangs
+    /// until two seconds past the whole second the test starts in, and the
+    /// first budget is three seconds: the retry starts after the stand-in
+    /// stopped hanging however late either call reaches its first line.
     #[cfg(unix)]
     #[test]
     fn the_simulator_probe_retries_an_xcrun_that_hangs() {
-        let budgets = [Duration::from_secs(2), Duration::from_secs(20)];
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is past the epoch")
+            .as_secs();
+        let budgets = [Duration::from_secs(3), Duration::from_secs(20)];
         let once = tempfile::tempdir().expect("a directory for the stand-in xcrun");
-        let devices = super::probe_simulators(&stand_in_xcrun(once.path(), 1), &budgets)
+        let devices = super::probe_simulators(&stand_in_xcrun(once.path(), now + 2), &budgets)
             .unwrap_or_else(|problem| panic!("the retry lists the simulator: {}", problem.message));
         let ids = devices
             .iter()
@@ -922,8 +925,9 @@ mod tests {
 
         let short = [Duration::from_millis(200), Duration::from_millis(300)];
         let always = tempfile::tempdir().expect("a directory for the stand-in xcrun");
-        let problem = super::probe_simulators(&stand_in_xcrun(always.path(), 99), &short)
-            .expect_err("an xcrun that always hangs is a problem");
+        let problem =
+            super::probe_simulators(&stand_in_xcrun(always.path(), u64::from(u32::MAX)), &short)
+                .expect_err("an xcrun that always hangs is a problem");
         assert_eq!(
             problem.message,
             "xcrun did not answer within 500ms in 2 attempts"
