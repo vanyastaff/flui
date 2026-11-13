@@ -243,6 +243,10 @@ fn action_component_contracts() {
             chip::a_filter_chip_announces_its_selection_as_pressed,
         ),
         (
+            "chip::a chip is its own node and disabled only when it says so",
+            chip::a_chip_is_its_own_node_and_disabled_only_when_it_says_so,
+        ),
+        (
             "chip::a chip that gains or loses its handler keeps its subtree",
             chip::a_chip_that_gains_or_loses_its_handler_keeps_its_subtree,
         ),

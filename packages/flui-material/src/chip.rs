@@ -125,8 +125,10 @@
 //! - **Custom `delete_icon` widget override** — the delete affordance
 //!   always renders the M3 default glyph (`cancel` for [`Chip`], `clear` for
 //!   [`FilterChip`]).
-//! - **Delete-button tooltip** — no localization
-//!   substrate consumes it yet.
+//! - **Delete-button tooltip and accessible name** — Flutter shows
+//!   `deleteButtonTooltipMessage` as the tooltip and names the delete
+//!   button's node with it; no localization substrate supplies it yet, so
+//!   the delete button is an unnamed button node.
 //! - **RTL** — the content `Row` always lays out left-to-right; no
 //!   `Directionality` ambient in this substrate yet (the same gap
 //!   [`flui_sdk::widgets::Icon`]'s own docs already name).
@@ -150,8 +152,8 @@ use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
-    IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, SemanticsRole,
-    Toggled, WidgetState, WidgetStates,
+    IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, SemanticsRole, Toggled,
+    WidgetState, WidgetStates,
 };
 use flui_sdk::{
     geometry::{EdgeInsets, Point, Size},
@@ -531,18 +533,12 @@ impl StatelessView for Chip {
         });
 
         let delete_view = self.on_deleted.clone().map(|on_deleted| {
-            let mut delete_button = InkWell::new()
-                .child(IconTheme::new(
-                    IconThemeData::default()
-                        .size(CHIP_ICON_SIZE)
-                        .color(delete_icon_color),
-                    Icon::new(cancel_icon_data()),
-                ))
-                .shape(MaterialShape::Stadium);
-            if self.enabled {
-                delete_button = delete_button.on_tap(move |ctx| on_deleted(ctx));
-            }
-            delete_button.boxed()
+            delete_button(
+                cancel_icon_data(),
+                delete_icon_color,
+                self.enabled,
+                on_deleted,
+            )
         });
 
         let content = build_chip_row(
@@ -558,36 +554,30 @@ impl StatelessView for Chip {
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
         );
 
-        let mut ink_well = InkWell::new().child(padded_content).shape(shape);
-        if self.is_pressable() {
-            let on_pressed = self.on_pressed.clone();
-            ink_well = ink_well.on_tap(move |ctx| {
-                if let Some(handler) = &on_pressed {
-                    handler(ctx);
-                }
-            });
+        // Flutter's `RawChip` wraps itself in `Semantics(container: true,
+        // button: tapEnabled, …)`: a chip is a node of its own whether or not
+        // it is a button, so its label, identifier, delete button and state
+        // never fold into the row or toolbar holding it. The well's node is
+        // that node; its switch is the chip's `enabled`, and with no
+        // `on_pressed` it takes no tap, focus or hover. The well stays put
+        // when the handler comes or goes, so the label is never remounted.
+        let role = if self.on_pressed.is_some() {
+            SemanticsRole::Button
+        } else {
+            SemanticsRole::None
+        };
+        let mut ink_well = InkWell::new()
+            .child(padded_content)
+            .shape(shape)
+            .enabled(self.enabled)
+            .description(Description::new(role).identifier(self.identifier.clone()));
+        if let Some(on_pressed) = self.on_pressed.clone() {
+            ink_well = ink_well.on_tap(move |ctx| on_pressed(ctx));
         }
 
-        let container = CustomPaint::new()
+        CustomPaint::new()
             .foreground_painter(ChipBorderPainter { side, shape })
-            .child(Material::new(background_color).shape(shape).child(ink_well));
-
-        // The chip keeps its own node whether it is a button or not: a chip
-        // that gains or loses `on_pressed` keeps the same subtree, its label,
-        // avatar and delete button included. A button description on the
-        // well would leave a chip without `on_pressed` a disabled node, since
-        // the well's switch follows its tap.
-        let mut semantics = Semantics::new()
-            .role(if self.on_pressed.is_some() {
-                SemanticsRole::Button
-            } else {
-                SemanticsRole::None
-            })
-            .enabled(self.enabled);
-        if let Some(identifier) = &self.identifier {
-            semantics = semantics.identifier(std::sync::Arc::clone(identifier));
-        }
-        semantics.child(container)
+            .child(Material::new(background_color).shape(shape).child(ink_well))
     }
 }
 
@@ -827,18 +817,7 @@ impl StatelessView for FilterChip {
         };
 
         let delete_view = self.on_deleted.clone().map(|on_deleted| {
-            let mut delete_button = InkWell::new()
-                .child(IconTheme::new(
-                    IconThemeData::default()
-                        .size(CHIP_ICON_SIZE)
-                        .color(delete_icon_color),
-                    Icon::new(clear_icon_data()),
-                ))
-                .shape(MaterialShape::Stadium);
-            if enabled {
-                delete_button = delete_button.on_tap(move |ctx| on_deleted(ctx));
-            }
-            delete_button.boxed()
+            delete_button(clear_icon_data(), delete_icon_color, enabled, on_deleted)
         });
 
         let content = build_chip_row(
@@ -879,6 +858,33 @@ impl StatelessView for FilterChip {
             .foreground_painter(ChipBorderPainter { side, shape })
             .child(Material::new(background_color).shape(shape).child(ink_well))
     }
+}
+
+/// A chip's delete button: a well of its own over the delete glyph, a button
+/// node whether or not the chip has a handler of its own, so activating the
+/// chip never deletes it and the delete button's node does not come and go
+/// with the chip's `on_pressed`. Flutter wraps it in `Semantics(container:
+/// true, button: true, label: deleteButtonTooltipMessage)`; the label waits on
+/// a localization substrate (see the module docs' deferrals). Off, it is a
+/// disabled button that takes no tap.
+fn delete_button(
+    glyph: IconData,
+    color: Color,
+    enabled: bool,
+    on_deleted: ChipTapCallback,
+) -> BoxedView {
+    let mut button = InkWell::new()
+        .child(IconTheme::new(
+            IconThemeData::default().size(CHIP_ICON_SIZE).color(color),
+            Icon::new(glyph),
+        ))
+        .shape(MaterialShape::Stadium)
+        .enabled(enabled)
+        .description(Description::new(SemanticsRole::Button));
+    if enabled {
+        button = button.on_tap(move |ctx| on_deleted(ctx));
+    }
+    button.boxed()
 }
 
 /// Assembles a chip's `leading? / label / delete?` content row. Shared by
