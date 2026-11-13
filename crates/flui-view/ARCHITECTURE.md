@@ -817,8 +817,10 @@ outside the crate by `tests/runtime_seam.rs`.
 `navigation` holds `RoutePath`, `NavigationIntent` and the `UrlOwner` trait
 (ADR-0330 §5), so the runtime can address a presentation's Router without
 naming a catalog type (ADR-0083). The runtime makes one `UrlOwnerSlot` per
-presentation and installs a `UrlOwnerScope` above every root; both sit in the
-`__runtime` seam. The slot holds owners weakly, oldest first, so it keeps no
+presentation and installs it in the presentation's `PresentationCapabilities`,
+where a lifecycle hook reads it with `LifecycleContext::url_owner`; the slot
+sits in the `__runtime` seam. It is a capability rather than an inherited
+scope so that it adds no provider layer above every root. The slot holds owners weakly, oldest first, so it keeps no
 Router alive, and a registration removes only its own entry when it drops. Its
 `navigate` takes the first live owner out of the slot's borrow before calling
 it, so the owner may register, leave or navigate again.

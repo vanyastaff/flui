@@ -24654,7 +24654,7 @@ impl core::marker::StructuralPartialEq for flui::view::PostFrameScheduleError
 variant flui::view::PostFrameScheduleError::Closed // at 0
 variant flui::view::PostFrameScheduleError::WrongScheduler // at 1
 reexport flui::view::PredictiveBackEvent => flui::prelude::PredictiveBackEvent
-#[non_exhaustive] pub struct flui::view::PresentationCapabilities
+#[non_exhaustive] pub struct flui::view::PresentationCapabilities { .. }
 field flui::view::PresentationCapabilities::announcer: Option<flui::semantics::Announcer> // at 2
 field flui::view::PresentationCapabilities::assistive_focus: flui::semantics::AssistiveFocusSupport // at 3
 field flui::view::PresentationCapabilities::capabilities: Option<alloc::rcs::rc::Rc<dyn flui::view::CapabilitySource>> // at 1

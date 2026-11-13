@@ -3,7 +3,6 @@
 use super::UiRuntime;
 #[cfg(any(test, feature = "testing"))]
 use flui_foundation::PresentationId;
-use flui_view::__runtime::UrlOwnerScope;
 use flui_view::environment::{FocusTreeRoot, GestureArenaScope, PlatformConvention, VsyncScope};
 
 impl UiRuntime {
@@ -62,10 +61,7 @@ impl UiRuntime {
         // wrapper republishes.
         let with_media_query = crate::media_query_root::MediaQueryRoot::new(
             std::rc::Rc::clone(self.media_query()),
-            flui_view::view::ViewExt::boxed(UrlOwnerScope::new(
-                self.presentations.primary().url_owner.clone(),
-                view.clone(),
-            )),
+            flui_view::view::ViewExt::boxed(view.clone()),
         );
         let focused = FocusTreeRoot::new(PlatformConvention::new(
             self.presentations.primary().platform,
@@ -111,10 +107,7 @@ impl UiRuntime {
                 "BUG: attach_root_widget_to_for_test given a presentation id this ui_runtime does \
                  not host",
             );
-            let focused = FocusTreeRoot::new(UrlOwnerScope::new(
-                presentation.url_owner.clone(),
-                view.clone(),
-            ));
+            let focused = FocusTreeRoot::new(view.clone());
             let animated = VsyncScope::new(presentation.vsync(), focused);
             let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated)
                 .settings(presentation.gesture_settings.provider())
@@ -160,10 +153,7 @@ impl UiRuntime {
             );
             let with_media_query = crate::media_query_root::MediaQueryRoot::new(
                 std::rc::Rc::clone(&presentation.media_query),
-                flui_view::view::ViewExt::boxed(UrlOwnerScope::new(
-                    presentation.url_owner.clone(),
-                    view.clone(),
-                )),
+                flui_view::view::ViewExt::boxed(view.clone()),
             );
             let focused = FocusTreeRoot::new(PlatformConvention::new(
                 presentation.platform,
@@ -228,10 +218,7 @@ impl UiRuntime {
         // variant must not present a different ambient environment.
         let with_media_query = crate::media_query_root::MediaQueryRoot::new(
             std::rc::Rc::clone(self.media_query()),
-            flui_view::view::ViewExt::boxed(UrlOwnerScope::new(
-                self.presentations.primary().url_owner.clone(),
-                view.clone(),
-            )),
+            flui_view::view::ViewExt::boxed(view.clone()),
         );
         let focused = FocusTreeRoot::new(PlatformConvention::new(
             self.presentations.primary().platform,

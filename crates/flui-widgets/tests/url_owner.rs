@@ -412,18 +412,10 @@ pub(crate) fn an_intent_during_a_build_is_busy_before_it_is_parsed() {
     let captured = Captured::default();
     let unknown = Rc::new(Cell::new(0));
     let answers = Rc::new(RefCell::new(Vec::new()));
-    // A sibling of the Router, below the runtime's scope: it reaches the slot
-    // the Router owns and navigates while it builds.
+    // A sibling of the Router: it reaches the slot the Router owns and
+    // navigates while it builds.
     let sibling = NavigatesInBuild {
-        on_build: {
-            let answers = Rc::clone(&answers);
-            Rc::new(move |ctx: &dyn BuildContext| {
-                let slot = flui_view::__runtime::UrlOwnerScope::maybe_of(ctx)
-                    .expect("the runtime provides the slot above the root");
-                answers.borrow_mut().push(slot.navigate(push("/missing")));
-                answers.borrow_mut().push(slot.navigate(push("/note/1")));
-            })
-        },
+        answers: Rc::clone(&answers),
     };
     let owner = {
         let unknown = Rc::clone(&unknown);
@@ -531,18 +523,40 @@ pub(crate) fn an_unmounted_router_lets_go_of_its_unknown_hook() {
     );
 }
 
-/// What a [`NavigatesInBuild`] runs when it builds.
-type OnBuild = Rc<dyn Fn(&dyn BuildContext)>;
+/// What each navigation answered.
+type Answers = Rc<RefCell<Vec<Result<(), NavigationRefused>>>>;
 
-/// Runs `on_build` each time it builds.
-#[derive(StatelessView, Clone)]
+/// Navigates through its presentation's URL-owner slot each time it builds,
+/// to a path no route matches and to one a route does, and records the
+/// answers.
+#[derive(Clone, Debug, StatefulView)]
 struct NavigatesInBuild {
-    on_build: OnBuild,
+    answers: Answers,
 }
 
-impl StatelessView for NavigatesInBuild {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        (self.on_build)(ctx);
+#[derive(Debug)]
+struct NavigatesInBuildState {
+    slot: flui_view::__runtime::UrlOwnerSlot,
+}
+
+impl StatefulView for NavigatesInBuild {
+    type State = NavigatesInBuildState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        NavigatesInBuildState {
+            slot: ctx
+                .url_owner()
+                .expect("the runtime installs the presentation's slot"),
+        }
+    }
+}
+
+impl ViewState<NavigatesInBuild> for NavigatesInBuildState {
+    fn build(&self, view: &NavigatesInBuild, _ctx: &dyn BuildContext) -> impl IntoView {
+        for location in ["/missing", "/note/1"] {
+            let answer = self.slot.navigate(push(location));
+            view.answers.borrow_mut().push(answer);
+        }
         SizedBox::new(10.0, 10.0)
     }
 }

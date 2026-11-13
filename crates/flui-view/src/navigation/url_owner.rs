@@ -1,16 +1,15 @@
-//! A presentation's one URL-owner slot and the inherited scope that hands it
-//! to the outermost `Router` (ADR-0330 §5).
+//! A presentation's one URL-owner slot, which its outermost `Router` registers
+//! into (ADR-0330 §5).
 
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::{Rc, Weak};
 
 use super::{NavigationIntent, NavigationRefused, UrlOwner};
-use crate::impl_inherited_view;
-use crate::prelude::*;
 
 /// A presentation's URL-owner slot. The runtime makes one per presentation
-/// and hands it to the tree through a [`UrlOwnerScope`] above the root; the
+/// and installs it among the presentation's capabilities, which a lifecycle
+/// hook reads with `LifecycleContext::url_owner`; the
 /// outermost `Router` registers itself into it, and the runtime's
 /// `navigate` reaches that Router through it.
 ///
@@ -132,71 +131,3 @@ impl fmt::Debug for UrlOwnerRegistration {
             .finish_non_exhaustive()
     }
 }
-
-/// Hands a presentation's [`UrlOwnerSlot`] to the tree below it. The runtime
-/// installs one above every root; a `Router` puts [`none`](Self::none) above
-/// its pages, so a Router nested in another's page finds no slot and owns no
-/// URL.
-#[derive(Clone)]
-pub struct UrlOwnerScope {
-    slot: Option<UrlOwnerSlot>,
-    child: BoxedView,
-}
-
-impl UrlOwnerScope {
-    /// Provide `slot` to `child`.
-    #[must_use]
-    pub fn new(slot: UrlOwnerSlot, child: impl IntoView) -> Self {
-        Self {
-            slot: Some(slot),
-            child: BoxedView::new(child.into_view()),
-        }
-    }
-
-    /// Provide no slot to `child`: the URL above it is owned already.
-    #[must_use]
-    pub fn none(child: impl IntoView) -> Self {
-        Self {
-            slot: None,
-            child: BoxedView::new(child.into_view()),
-        }
-    }
-
-    /// The slot the nearest scope provides, registering a dependency so a
-    /// state hears when it changes. `None` when the nearest scope provides
-    /// none, or there is no scope (a tree mounted outside a runtime).
-    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<UrlOwnerSlot> {
-        ctx.depend_on::<Self, _>(|scope| scope.slot.clone())
-            .flatten()
-    }
-}
-
-impl fmt::Debug for UrlOwnerScope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("UrlOwnerScope")
-            .field("slot", &self.slot)
-            .finish_non_exhaustive()
-    }
-}
-
-impl InheritedView for UrlOwnerScope {
-    type Data = Option<UrlOwnerSlot>;
-
-    fn data(&self) -> &Self::Data {
-        &self.slot
-    }
-
-    fn child(&self) -> &dyn View {
-        &self.child
-    }
-
-    fn update_should_notify(&self, old: &Self) -> bool {
-        match (&self.slot, &old.slot) {
-            (Some(new), Some(old)) => !new.is_same(old),
-            (None, None) => false,
-            _ => true,
-        }
-    }
-}
-
-impl_inherited_view!(UrlOwnerScope);

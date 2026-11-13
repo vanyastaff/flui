@@ -48,6 +48,10 @@ pub struct PresentationCapabilities {
     /// work that must not be lost finishes. One per presentation, so a guard
     /// outlives every remount of the presentation's root.
     pub close_guard: Option<crate::CloseGuard>,
+    /// The presentation's URL-owner slot (ADR-0330 §5), which its outermost
+    /// `Router` registers into. Runtime wiring, not widget surface.
+    #[doc(hidden)]
+    pub url_owner: Option<crate::__runtime::UrlOwnerSlot>,
 }
 
 impl BuildOwner {
@@ -84,6 +88,7 @@ impl std::fmt::Debug for PresentationCapabilities {
             .field("textures", &self.textures.is_some())
             .field("error_view_builder", &self.error_view_builder.is_some())
             .field("close_guard", &self.close_guard.is_some())
+            .field("url_owner", &self.url_owner.is_some())
             .finish()
     }
 }

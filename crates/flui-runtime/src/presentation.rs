@@ -469,7 +469,7 @@ pub struct PresentationState {
     /// thread only.
     pub(crate) agent_waits: RefCell<Vec<crate::ui_runtime::PendingWait>>,
     /// The presentation's URL-owner slot (ADR-0330 §5): the outermost Router of its tree
-    /// registers into it through the `UrlOwnerScope` every root is wrapped in, and
+    /// registers into it through `LifecycleContext::url_owner`, and
     /// `UiRuntime::navigate` reaches that Router through it. Owner thread only.
     pub(crate) url_owner: flui_view::__runtime::UrlOwnerSlot,
     /// Reads of the layer tree parked for the next scene this window shows (owner thread only).
@@ -892,6 +892,7 @@ impl PresentationState {
             &capabilities.close.vetoes,
             capabilities.close.notify.clone(),
         );
+        let url_owner = flui_view::__runtime::UrlOwnerSlot::new();
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         // A window nobody reads through collects no semantics: the pipeline
         // starts with them off, and `reconcile_semantics_enablement` turns
@@ -918,6 +919,7 @@ impl PresentationState {
                     window: Rc::downgrade(&window),
                 }));
             presentation.close_guard = Some(close_guard.guard());
+            presentation.url_owner = Some(url_owner.clone());
             // Paired here, the one place holding both halves: the ui_runtime's
             // dispatch ticket (identity) and THIS presentation's pipeline
             // (the tree). A ui_runtime may host several presentations, each with
@@ -1110,7 +1112,7 @@ impl PresentationState {
             agent_reads: RefCell::default(),
             agent_input: RefCell::default(),
             agent_waits: RefCell::default(),
-            url_owner: flui_view::__runtime::UrlOwnerSlot::new(),
+            url_owner,
             agent_layer_reads: RefCell::default(),
             agent_layer_staged: RefCell::default(),
             agent_events: RefCell::default(),
@@ -1180,12 +1182,16 @@ impl PresentationState {
         ));
 
         let textures = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+        let url_owner = flui_view::__runtime::UrlOwnerSlot::new();
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         // A window nobody reads through collects no semantics: the pipeline
         // starts with them off, and `reconcile_semantics_enablement` turns
         // both on together.
         widgets.set_collects_semantics(false);
         widgets.set_pipeline_owner(pipeline.clone());
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().url_owner = Some(url_owner.clone());
+        });
 
         let renderer = RenderingBinding::new_for_test_with_pipeline(pipeline.clone());
         // This path wires no platform accessibility (see the doc above).
@@ -1250,7 +1256,7 @@ impl PresentationState {
             agent_reads: RefCell::default(),
             agent_input: RefCell::default(),
             agent_waits: RefCell::default(),
-            url_owner: flui_view::__runtime::UrlOwnerSlot::new(),
+            url_owner,
             agent_layer_reads: RefCell::default(),
             agent_layer_staged: RefCell::default(),
             agent_events: RefCell::default(),

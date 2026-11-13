@@ -45,7 +45,7 @@ pub use crate::flush_registry::{
     FlushWriter, SESSION_END_BUDGET,
 };
 pub use crate::lifecycle::{CloseDelivery, LifecycleCloseWindow, LifecycleSource};
-pub use crate::navigation::url_owner::{UrlOwnerRegistration, UrlOwnerScope, UrlOwnerSlot};
+pub use crate::navigation::url_owner::{UrlOwnerRegistration, UrlOwnerSlot};
 pub use crate::owner_notify::{LifecycleEvent, OwnerNotify, Undeliverable};
 pub use crate::window_handle::WindowSource;
 

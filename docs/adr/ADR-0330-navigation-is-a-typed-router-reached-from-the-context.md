@@ -273,10 +273,12 @@ This is Flutter's route information pipeline: the presentation's slot is the
 
 Each presentation has one URL-owner slot, declared in `flui-view` so the runtime names no
 widget-catalog type (ADR-0083) and kept in its runtime seam (`flui_view::__runtime`). The runtime
-hands it to the tree through a `UrlOwnerScope` above every root. A `Router` registers into the
-slot it finds in `create_state`, so its state is born bound, and puts a `UrlOwnerScope` with no
-slot above its pages, so a Router nested in a page finds none: the URL owner is the outermost
-Router. The slot holds its owners weakly; when two Routers that are not nested claim it, the first
+installs it among the presentation's capabilities, beside its close guard, and a lifecycle hook
+reads it with `LifecycleContext::url_owner`. A `Router` registers into it in `create_state`, so
+its state is born bound, unless `PageHandle::of` finds a page around it: a Router nested in a page
+registers nothing, and the URL owner is the outermost Router. The slot is not an inherited scope:
+a scope above every root and another under every Router would each be one more provider layer for
+every element below, which the control-cost budgets (ADR-0322) count. The slot holds its owners weakly; when two Routers that are not nested claim it, the first
 mounted owns the URL with a warning, and the next takes over when it leaves.
 
 An intent for a presentation that is gone is `NoPresentation`, and one for a presentation with no

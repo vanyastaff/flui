@@ -2110,9 +2110,9 @@ hand-written `Routable` round trip: **Unasserted:** no test pins this.
 
 The outermost Router of a presentation owns its URL (ADR-0330 §5). In
 `create_state` it registers a `UrlOwner` into the presentation's slot, which
-the runtime hands down through `flui_view`'s `UrlOwnerScope` above every root,
-and it builds a `UrlOwnerScope` with no slot above its navigator, so a Router
-nested in a page registers nothing. `UiRuntime::navigate` reaches it through
+it reads with `LifecycleContext::url_owner`, unless `PageHandle::of` finds a
+page around it: a Router nested in a page registers nothing, and no scope of
+its own marks the pages. `UiRuntime::navigate` reaches it through
 the slot: `Push` and `Replace` parse with `from_path`, `Go` opens
 `back_stack` as `go` does, and a path that does not parse is reported to the
 `on_unknown` hook, cloned out of its cell and called with nothing borrowed,

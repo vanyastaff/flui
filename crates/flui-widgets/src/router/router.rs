@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use flui_foundation::BuildPhase;
 use flui_foundation::notifier::ChangeNotifier;
-use flui_view::__runtime::{UrlOwnerRegistration, UrlOwnerScope, UrlOwnerSlot};
+use flui_view::__runtime::{UrlOwnerRegistration, UrlOwnerSlot};
 use flui_view::element::ElementKind;
 use flui_view::navigation::{
     NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, RoutePath, UrlOwner,
@@ -22,7 +22,7 @@ use crate::navigator::lifecycle::{RetiredValues, Terminal};
 use super::handle::{RouterError, RouterHandle};
 use super::routable::Routable;
 use crate::navigator::{
-    Navigator, NavigatorHandle, NavigatorObserver, PageRoute, RouteAnimation, RouteId,
+    Navigator, NavigatorHandle, NavigatorObserver, PageHandle, PageRoute, RouteAnimation, RouteId,
     RouteTransitionsBuilder,
 };
 use crate::semantics::Semantics;
@@ -343,8 +343,18 @@ impl<R: Routable> StatefulView for Router<R> {
     /// presentation's outermost router, its place in the presentation's
     /// URL-owner slot.
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
-        RouterState::new(self, ctx.build_phase(), UrlOwnerScope::maybe_of(ctx))
+        RouterState::new(self, ctx.build_phase(), url_slot(ctx))
     }
+}
+
+/// The URL-owner slot a router registers into: its presentation's, unless it
+/// sits in a page of another router, whose URL is owned already. A page is a
+/// route's scope, so the check costs the tree no scope of its own.
+fn url_slot(ctx: &dyn LifecycleContext) -> Option<UrlOwnerSlot> {
+    if PageHandle::of(ctx).is_some() {
+        return None;
+    }
+    ctx.url_owner()
 }
 
 impl<R: Routable> RouterState<R> {
@@ -471,7 +481,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// Follow the presentation's URL-owner slot if the router moved: leave
     /// the old slot, then join the new one.
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        let slot = UrlOwnerScope::maybe_of(ctx);
+        let slot = url_slot(ctx);
         let unchanged = match (&self.url, &slot) {
             (Some(registration), Some(slot)) => registration.is_in(slot),
             (None, None) => true,
@@ -484,14 +494,10 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         self.url = slot.map(|slot| slot.register(&self.url_owner));
     }
 
-    /// The pages sit below a scope with no URL-owner slot: a router inside
-    /// one of them owns no URL.
     fn build(&self, _view: &Router<R>, _ctx: &dyn BuildContext) -> impl IntoView {
         RouterScope {
             shared: Rc::clone(&self.shared),
-            child: Terminal::new(
-                UrlOwnerScope::none(Navigator::new(self.shared.navigator.clone())).boxed(),
-            ),
+            child: Terminal::new(Navigator::new(self.shared.navigator.clone()).boxed()),
         }
     }
 
