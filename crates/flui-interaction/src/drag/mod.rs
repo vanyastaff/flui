@@ -47,6 +47,10 @@ pub use view::{DragFetch, DragIdentity, DragScope, DragView, OwnerWake};
 /// for a long press. The `Draggable` widget turns it into an arena branch
 /// (ADR-0208); the session itself starts when the branch wins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each trigger composes its own arena branch, and a `_` arm would start no drag"
+)]
 pub enum DragTrigger {
     /// The drag begins as soon as the contact moves past the slop.
     #[default]

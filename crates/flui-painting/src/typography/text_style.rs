@@ -6,6 +6,10 @@ use crate::typography::TextDecoration;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// The thickness of glyphs used to draw text, on the standard 100–900 scale.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the standard scale names nine weights, 100 to 900"
+)]
 pub enum FontWeight {
     /// Thin (100)
     W100,
@@ -93,6 +97,7 @@ impl Default for FontWeight {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Whether glyphs are drawn upright or slanted.
+#[non_exhaustive]
 pub enum FontStyle {
     /// Upright (non-italic) font style.
     #[default]

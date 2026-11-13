@@ -34,6 +34,10 @@ use crate::session::{Hello, HelloReply};
     serde(untagged)
 )]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a JSON-RPC 2.0 id is a number or a string"
+)]
 pub enum RequestId {
     /// A number, as most clients count their requests.
     Number(u64),

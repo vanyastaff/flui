@@ -95,6 +95,7 @@ pub enum TabJoinError {
 ///
 /// Corresponds to NSWindowLevel values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MacOSWindowLevel {
     /// Normal window level (NSNormalWindowLevel = 0).
     Normal,

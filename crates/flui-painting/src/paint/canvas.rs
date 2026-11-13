@@ -3,6 +3,10 @@
 /// How a shader (gradient or image) samples beyond its defined bounds.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every backend encodes each tile mode in its shader"
+)]
 pub enum TileMode {
     /// Edge colors are extended (clamped) beyond the bounds.
     ///
@@ -30,6 +34,10 @@ pub enum TileMode {
 /// Styles for blur effects in a mask filter.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a blur is normal, solid, outer or inner"
+)]
 pub enum BlurStyle {
     /// Blur inside and outside the shape.
     ///
@@ -58,6 +66,7 @@ pub enum BlurStyle {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(flui_foundation::inspect::Inspect)]
+#[non_exhaustive]
 pub enum FilterQuality {
     /// Nearest neighbor sampling.
     ///
@@ -84,6 +93,7 @@ pub enum FilterQuality {
 /// Whether to paint a shape's interior, or its outline.
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(clippy::exhaustive_enums, reason = "a shape is filled or stroked")]
 pub enum PaintingStyle {
     /// Fill the interior of the shape with the paint's color.
     #[default]
@@ -96,6 +106,10 @@ pub enum PaintingStyle {
 /// Boolean operations for combining two paths.
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a path combines with another by one of the five boolean operations"
+)]
 pub enum PathOperation {
     /// Subtract the second path from the first path.
     ///
@@ -127,6 +141,10 @@ pub enum PathOperation {
 /// Fill rules that determine which regions of a path are inside it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a path fills by the non-zero or the even-odd rule"
+)]
 pub enum PathFillType {
     /// The non-zero winding rule.
     ///
@@ -144,6 +162,10 @@ pub enum PathFillType {
 /// Styles for the endings of unclosed stroked contours.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a stroke ends butt, round or square"
+)]
 pub enum StrokeCap {
     /// Begin and end contours with a flat edge and no extension.
     #[default]
@@ -159,6 +181,10 @@ pub enum StrokeCap {
 /// Styles for the joints between stroked line segments.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a stroke joins mitred, round or bevelled"
+)]
 pub enum StrokeJoin {
     /// Join line segments with a sharp corner, extended to the miter limit.
     #[default]
@@ -174,6 +200,10 @@ pub enum StrokeJoin {
 /// How a list of vertices is interpreted when drawing a triangle mesh.
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "vertices draw as triangles, a strip or a fan"
+)]
 pub enum VertexMode {
     /// Draw each sequence of three vertices as a separate triangle.
     ///
@@ -239,6 +269,10 @@ impl From<TextureId> for u64 {
 /// How a list of points is interpreted when drawn to a canvas.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "points draw as points, lines or a polygon"
+)]
 pub enum PointMode {
     /// Draw each point as a separate dot.
     #[default]

@@ -116,6 +116,10 @@ use super::route::RouteId;
 /// Derived from the two routes' animation **statuses**, not from which navigator
 /// call happened — a pop and a push both arrive here as a change of top route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a change of top route is a push or a pop"
+)]
 pub enum FlightDirection {
     /// `to` is arriving on top of `from`: the destination is running forward.
     Push,

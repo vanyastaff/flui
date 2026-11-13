@@ -37,6 +37,7 @@ pub(crate) use crate::support::retirement::{
 /// arms and the range predicates depend on the declaration order, and deleting a
 /// variant would silently shift four predicates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum RouteLifecycle {
     /// Will call `install` + `did_add`. Entered from an initial-route seed.
     Add,
