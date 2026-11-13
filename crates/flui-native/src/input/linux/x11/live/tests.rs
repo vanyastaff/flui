@@ -2,8 +2,8 @@
 //! untested where none answers.
 
 use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::{Arc, Weak};
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
 
 use cursor_icon::CursorIcon;
 use flui_platform::DispatchEventResult;
@@ -57,9 +57,9 @@ impl Drop for ResetsTheCursor {
     }
 }
 
-fn target(input: &Arc<X11Input>, window: WindowRef, dropped: &Rc<Cell<bool>>) -> InputTarget {
+fn target(input: &Rc<X11Input>, window: WindowRef, dropped: &Rc<Cell<bool>>) -> InputTarget {
     let handler = Rc::new(ResetsTheCursor {
-        input: Arc::downgrade(input),
+        input: Rc::downgrade(input),
         window,
         dropped: Rc::clone(dropped),
     });

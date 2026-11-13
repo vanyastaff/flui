@@ -1,7 +1,6 @@
 ### Added
 
-- `flui::rendering` re-exports the render-contract types its own items name: the `Protocol`
-  associated types (`BoxLayout`, `SliverLayout`, `ProtocolConstraints`, `ChildState`, …),
-  `LayoutContext`, `HitTestContext`, `PaintAnchor`, `PaintFragment`, `FragmentRecorder`,
-  `GrowthDirection`, `InputRegionSink`, `SemanticsClip`, `PoisonPhase`, `DirtySendError` and the
-  parent-data types a sliver cross axis takes. Each was reachable only by an internal crate path.
+- `flui::semantics`: the vocabulary `SemanticsConfiguration` takes, as Flutter's semantics
+  library exports it: tags, sort keys, hint overrides, relations, collections, states, text
+  content, custom actions and their handlers, announcements. Each was reachable only by an internal
+  crate path. `flui::painting` adds `SemanticsRegionId` beside the region types that name it.
