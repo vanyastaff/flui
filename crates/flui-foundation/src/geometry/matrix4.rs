@@ -648,6 +648,31 @@ impl Matrix4 {
     /// Transforms all four corners and computes the axis-aligned bounding box.
     #[must_use]
     pub fn transform_rect(&self, rect: &Rect<f64>) -> Rect<f64> {
+        // An affine matrix maps every point at w = 1, where the division
+        // `transform_point` makes is exact: skip it, the result is the same.
+        if self.m[3] == 0.0 && self.m[7] == 0.0 && self.m[15] == 1.0 {
+            let m = &self.m;
+            let x = |px: f64, py: f64| m[0] * px + m[4] * py + m[12];
+            let y = |px: f64, py: f64| m[1] * px + m[5] * py + m[13];
+            let (x0, x1, x2, x3) = (
+                x(rect.min.x, rect.min.y),
+                x(rect.max.x, rect.min.y),
+                x(rect.min.x, rect.max.y),
+                x(rect.max.x, rect.max.y),
+            );
+            let (y0, y1, y2, y3) = (
+                y(rect.min.x, rect.min.y),
+                y(rect.max.x, rect.min.y),
+                y(rect.min.x, rect.max.y),
+                y(rect.max.x, rect.max.y),
+            );
+            return Rect::from_ltrb(
+                x0.min(x1).min(x2).min(x3),
+                y0.min(y1).min(y2).min(y3),
+                x0.max(x1).max(x2).max(x3),
+                y0.max(y1).max(y2).max(y3),
+            );
+        }
         // Transform all four corners
         let (x0, y0) = self.transform_point(rect.min.x, rect.min.y); // Top-left
         let (x1, y1) = self.transform_point(rect.max.x, rect.min.y); // Top-right
