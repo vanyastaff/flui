@@ -1461,7 +1461,7 @@ fn control_button(
     label: String,
     content: BoxedView,
     min_target: f64,
-    on_press: impl Fn(&mut EventContext<'_>) + 'static,
+    on_pressed: impl Fn(&mut EventContext<'_>) + 'static,
 ) -> BoxedView {
     let side = if min_target.is_finite() {
         min_target.max(0.0)
@@ -1480,7 +1480,7 @@ fn control_button(
                 .label(label)
                 .child(ExcludeSemantics::new().child(Center::new().child(content))),
         )
-        .on_press(on_press),
+        .on_pressed(on_pressed),
     )
     .boxed()
 }

@@ -63,7 +63,7 @@ use flui_sdk::geometry::Radius;
 use flui_sdk::interaction::GestureEndReason;
 use flui_sdk::painting::{Alignment, Clip};
 use flui_sdk::painting::{BorderRadius, BorderRadiusExt, Color};
-use flui_sdk::pipeline::TranslationFraction;
+use flui_sdk::rendering::objects::TranslationFraction;
 use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;

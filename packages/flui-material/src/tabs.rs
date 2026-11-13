@@ -858,7 +858,8 @@ fn build_tab_cell(
 
     let tap_controller = controller.clone();
     let tap_callback = on_tap.cloned();
-    let ink_well = InkWell::new(cell)
+    let ink_well = InkWell::new()
+        .child(cell)
         .overlay_color(resolved.overlay_color.clone())
         .on_tap(move |ctx| {
             // A panicking position observer must not skip the caller's

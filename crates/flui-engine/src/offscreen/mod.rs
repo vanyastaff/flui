@@ -12,9 +12,9 @@ pub struct OffscreenRenderer {
     device: Arc<wgpu::Device>,
     /// One per surface format: a context's windows can be configured in
     /// different formats, and a pipeline bakes its target's.
-    blit_pipelines: std::collections::HashMap<wgpu::TextureFormat, BlitPipeline>,
+    blit_pipelines: rustc_hash::FxHashMap<wgpu::TextureFormat, BlitPipeline>,
     transform_pipelines:
-        std::collections::HashMap<wgpu::TextureFormat, transform_blit::TransformPipeline>,
+        rustc_hash::FxHashMap<wgpu::TextureFormat, transform_blit::TransformPipeline>,
 }
 struct BlitPipeline {
     pipeline: Arc<wgpu::RenderPipeline>,
@@ -36,8 +36,8 @@ impl OffscreenRenderer {
         Self {
             domain,
             device,
-            blit_pipelines: std::collections::HashMap::new(),
-            transform_pipelines: std::collections::HashMap::new(),
+            blit_pipelines: rustc_hash::FxHashMap::default(),
+            transform_pipelines: rustc_hash::FxHashMap::default(),
         }
     }
 }

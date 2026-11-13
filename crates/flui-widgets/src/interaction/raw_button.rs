@@ -25,7 +25,7 @@ type PressCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 /// ADR-0086, so it writes a signal directly:
 ///
 /// ```rust,ignore
-/// RawButton::new(Text::new("Increment")).on_press(move |ctx| count.update(ctx, |n| *n += 1))
+/// RawButton::new(Text::new("Increment")).on_pressed(move |ctx| count.update(ctx, |n| *n += 1))
 /// ```
 ///
 /// The callback may return `()` or the `Result` of a write; a refused write
@@ -39,7 +39,7 @@ type PressCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 /// [`FocusRing`](super::FocusRing) marks it, in the inherited
 /// [`DefaultFocusRingStyle`](super::focus_ring::DefaultFocusRingStyle).
 ///
-/// Without [`on_press`](Self::on_press) the button is disabled: it takes no
+/// Without [`on_pressed`](Self::on_pressed) the button is disabled: it takes no
 /// focus, its node says so and offers no action, a tap does nothing, and an
 /// activation key reaching it keeps bubbling.
 ///
@@ -47,7 +47,7 @@ type PressCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 /// pressed or hovered look; see `ARCHITECTURE.md` "Mapping decisions".
 #[derive(Clone, StatelessView)]
 pub struct RawButton {
-    on_press: Option<PressCallback>,
+    on_pressed: Option<PressCallback>,
     identifier: Option<std::sync::Arc<str>>,
     states: Option<WidgetStatesController>,
     child: BoxedView,
@@ -56,18 +56,18 @@ pub struct RawButton {
 impl std::fmt::Debug for RawButton {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RawButton")
-            .field("enabled", &self.on_press.is_some())
+            .field("enabled", &self.on_pressed.is_some())
             .finish_non_exhaustive()
     }
 }
 
 impl RawButton {
     /// A button showing `child`, disabled until it has an
-    /// [`on_press`](Self::on_press) callback.
+    /// [`on_pressed`](Self::on_pressed) callback.
     #[must_use]
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            on_press: None,
+            on_pressed: None,
             identifier: None,
             states: None,
             child: child.into_view().boxed(),
@@ -77,12 +77,12 @@ impl RawButton {
     /// Call `callback` when the button is pressed, with the dispatch's
     /// `&mut EventContext<'_>`.
     #[must_use]
-    pub fn on_press<F, R>(mut self, callback: F) -> Self
+    pub fn on_pressed<F, R>(mut self, callback: F) -> Self
     where
         F: Fn(&mut EventContext<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_press = Some(event_callback(callback));
+        self.on_pressed = Some(event_callback(callback));
         self
     }
 
@@ -98,7 +98,7 @@ impl RawButton {
     /// while a pointer is inside it, `Pressed`
     /// while a contact is down on it, `Focused` while it holds focus,
     /// `FocusVisible` while that focus is shown, and `Disabled` without an
-    /// [`on_press`](Self::on_press). A design system draws its pressed and
+    /// [`on_pressed`](Self::on_pressed). A design system draws its pressed and
     /// focused looks from the controller; the button clears what it wrote
     /// when it unmounts or is given another one.
     #[must_use]
@@ -118,8 +118,8 @@ struct Press(Option<PressCallback>);
 impl Press {
     fn run(&self, ctx: &mut EventContext<'_>) -> ActionOutcome {
         match &self.0 {
-            Some(on_press) => {
-                on_press(ctx);
+            Some(on_pressed) => {
+                on_pressed(ctx);
                 ActionOutcome::Performed
             }
             None => ActionOutcome::NotPerformed,
@@ -166,13 +166,11 @@ impl StatelessView for RawButton {
     /// One `InteractiveNode` carries the tap target, the focus node, the
     /// activation bindings, the semantics and the focus ring.
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let enabled = self.on_press.is_some();
-        let press = Rc::new(Press(self.on_press.clone()));
+        let enabled = self.on_pressed.is_some();
+        let press = Rc::new(Press(self.on_pressed.clone()));
         // One node for assistive technology: the button.
-        let description = Description {
-            role: crate::SemanticsRole::Button,
-            identifier: self.identifier.clone(),
-        };
+        let description =
+            Description::new(crate::SemanticsRole::Button).identifier(self.identifier.clone());
         // The bindings are the node's own, so its focus node records them
         // and the root bindings resolve the activation here (ADR-0079).
         let mut node = InteractiveNode::new(self.child.clone())

@@ -13,6 +13,9 @@ struct UnitBezier {
     a: f64,
     b: f64,
     c: f64,
+    /// `p'(1) = 3·(1 − p2)`, from the control point: `3a + 2b + c` rounds a
+    /// zero end tangent (`p2 = 1`) to a residue such as `-1e-16`.
+    end_slope: f64,
 }
 
 impl UnitBezier {
@@ -23,6 +26,7 @@ impl UnitBezier {
             a: 1.0 - c - b,
             b,
             c,
+            end_slope: 3.0 * (1.0 - p2),
         }
     }
 
@@ -31,8 +35,12 @@ impl UnitBezier {
         ((self.a * s + self.b) * s + self.c) * s
     }
 
+    /// `p'(s)`, exact at both ends.
     #[inline]
     fn slope(self, s: f64) -> f64 {
+        if s == 1.0 {
+            return self.end_slope;
+        }
         (3.0 * self.a * s + 2.0 * self.b) * s + self.c
     }
 

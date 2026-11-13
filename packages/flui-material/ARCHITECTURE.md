@@ -146,7 +146,7 @@ amending ADR-0023), so it opens no write scope of its own. Pointer activation fo
 the gesture's context. Both paths retain pressed-state-before-callback
 ordering.
 
-`FloatingActionButton::new(child).on_pressed(callback)` uses the same disabled
+`FloatingActionButton::new().child(child).on_pressed(callback)` uses the same disabled
 default and setter shape as the other buttons. An optional generic callback
 in the constructor obstructed higher-ranked closure inference and forced
 type annotations even for a disabled button. The setter gives the closure
@@ -459,7 +459,7 @@ mask, so the 8 dp gap and the rounded corners sit on the part of the item that s
 is placed again on every scroll from `CarouselItemScope::mask` through its listenable; the mask
 is centred on the item, so it also gives the item's extent, and the content stays laid out at
 that extent behind the card, offset by the mask's start, without reflowing. A card is a button
-(an `InkWell` under a button semantics node) only with `on_tap`. The snap is
+(an `InkWell` whose node describes a button) only with `on_tap`. The snap is
 `KeylineSnap::for_layout` unless the view sets one: one item per swipe for every layout whose
 items rest whole, none for an uncontained one, as Compose's carousels default.
 `carousel_view::cards_cover_the_shown_part_of_each_item`,

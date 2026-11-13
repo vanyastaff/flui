@@ -741,7 +741,7 @@ fn links_between_buttons(
     let (opened, after) = (Rc::clone(opened), Rc::clone(after));
     Column::new(vec![
         RawButton::new(Text::new("before"))
-            .on_press(|_ctx| {})
+            .on_pressed(|_ctx| {})
             .boxed(),
         SizedBox::new(width, 100.0)
             .child(
@@ -755,7 +755,7 @@ fn links_between_buttons(
             )
             .boxed(),
         RawButton::new(Text::new("after"))
-            .on_press(move |_ctx| after.set(after.get() + 1))
+            .on_pressed(move |_ctx| after.set(after.get() + 1))
             .boxed(),
     ])
 }
@@ -1028,7 +1028,7 @@ pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read()
     let mut laid = lay_out(
         Column::new(vec![
             RawButton::new(Text::new("before"))
-                .on_press(|_ctx| {})
+                .on_pressed(|_ctx| {})
                 .boxed(),
             RichText::new(
                 TextSpan::with_children(vec![TextSpan::new("inner").with_link("app://inner")])
@@ -1043,7 +1043,7 @@ pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read()
             .on_link(|_ctx, _link| {})
             .boxed(),
             RawButton::new(Text::new("after"))
-                .on_press(move |_ctx| pressed.set(pressed.get() + 1))
+                .on_pressed(move |_ctx| pressed.set(pressed.get() + 1))
                 .boxed(),
         ]),
         loose(400.0),
@@ -1093,7 +1093,7 @@ pub(crate) fn select_opens_a_link_and_space_activates_nothing_around_it() {
             )
             .on_link(move |_ctx, link| record.borrow_mut().push(link.to_string())),
         )
-        .on_press(move |_ctx| count.set(count.get() + 1)),
+        .on_pressed(move |_ctx| count.set(count.get() + 1)),
         loose(400.0),
     );
     laid.pump();
@@ -1127,7 +1127,7 @@ pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
     let mut laid = lay_out(
         Column::new(vec![
             RawButton::new(Text::new("before"))
-                .on_press(|_ctx| {})
+                .on_pressed(|_ctx| {})
                 .boxed(),
             SizedBox::new(80.0, 100.0)
                 .child(
@@ -1142,7 +1142,7 @@ pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
                 )
                 .boxed(),
             RawButton::new(Text::new("after"))
-                .on_press(move |_ctx| pressed.set(pressed.get() + 1))
+                .on_pressed(move |_ctx| pressed.set(pressed.get() + 1))
                 .boxed(),
         ]),
         loose(400.0),

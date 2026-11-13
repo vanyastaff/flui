@@ -21,7 +21,7 @@ use flui_material::{
     ButtonStyle, ElevatedButton, ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
 };
 use flui_sdk::widgets::{Text, WidgetStateProperty};
-use flui_testing::a11y::Role;
+use flui_testing::a11y::{Action, Role};
 
 /// The highest tier still wins over a configured theme: an explicit
 /// `.style(..)` override on the widget itself must resolve over the theme's
@@ -64,37 +64,21 @@ pub fn widget_level_style_wins_over_the_elevated_button_theme() {
 }
 
 // ===========================================================================
-// Accessibility semantics — `ButtonStyleButtonCore`'s `Semantics` wrapper
+// Accessibility semantics: the button node on the well
 // ===========================================================================
 //
-// Red before `ButtonStyleButtonCore::build` wrapped its composition in
-// `Semantics(container: true, button: true, enabled: ..)`
-// (`packages/flui-material/src/button_style_button.rs`): with no boundary
-// under `ElevatedButton`, `RenderParagraph`'s label (once it started
-// publishing one) had nowhere non-root to merge into and `find_by_label`
-// failed with `A11yQueryError::NotFound`. `ElevatedButton` again stands in
-// for the whole `ButtonStyleButtonCore` family here (see this file's own
-// module doc) — `FilledButton`/`OutlinedButton`/`TextButton`/`IconButton`/
-// `FloatingActionButton` share the identical wrapper.
-//
-// The a11y tap-action round trip `crates/flui-widgets/tests/semantics.rs`
-// covers for a hand-built `Semantics::on_tap` handler is NOT mirrored here:
-// `ButtonStyleButtonCore::on_pressed` is `Rc<dyn Fn()>` (owner-local, per
-// ADR-0027 — see that field's own doc comment), while
-// `flui_sdk::widgets::Semantics::on_tap` requires `Fn() + Send + Sync + 'static`
-// (see that builder's module doc, "The `Send + Sync` bound on action
-// handlers comes from storage, not from threading"). Routing `on_pressed`
-// through the `Semantics` wrapper's own tap action would need a `Send +
-// Sync`-compatible callback shape for the whole button family — a change to
-// `PressCallback` itself, well outside this change's scope (adding the
-// `Semantics` wrapper). A screen-reader "double-tap to activate" therefore
-// still reaches this button only via the platform's synthesized pointer
-// tap, not FLUI's own semantics-action dispatch, until that follow-up lands.
+// Flutter wraps a `ButtonStyleButton` in `Semantics(container: true, button:
+// true, enabled: ..)`. Here the well's interactive node carries that
+// description (`packages/flui-material/src/button_style_button.rs`), so the
+// child `Text`'s label merges into it and the button is one node with the
+// role, the enabled state, the click and the focus a screen reader acts on.
+// `ElevatedButton` stands in for the whole `ButtonStyleButtonCore` family
+// here (see this file's own module doc): `FilledButton`, `OutlinedButton`,
+// `TextButton` and `IconButton` share the composition.
 
 /// One button, one label: the child `Text`'s `RenderParagraph` label merges
-/// into the `Semantics(container: true, button: true)` boundary
-/// `ButtonStyleButtonCore` wraps around the whole composition, rather than
-/// forming a second, separate node.
+/// into the button node `ButtonStyleButtonCore` describes on its well,
+/// rather than forming a second, separate node.
 pub fn elevated_button_with_text_child_announces_one_labelled_button_node() {
     let mut laid = lay_out(
         Theme::new(
@@ -125,6 +109,48 @@ pub fn elevated_button_with_text_child_announces_one_labelled_button_node() {
          separate child node. Tree was:\n{}",
         tree.describe()
     );
+}
+
+/// The button is one node whatever its state: enabled, it offers the click
+/// and the focus a screen reader acts on; disabled, it says so and offers
+/// no click. Either way it covers the button's box and has no child node.
+pub fn style_button_is_one_button_node_enabled_or_disabled() {
+    for enabled in [true, false] {
+        let name = if enabled { "enabled" } else { "disabled" };
+        let mut button = ElevatedButton::new(Text::new("Save"));
+        if enabled {
+            button = button.on_pressed(|_ctx| {});
+        }
+        let mut laid = lay_out(Theme::new(ThemeData::light(), button), tight(120.0, 48.0));
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame");
+        let node = tree
+            .find_by_label("Save")
+            .unwrap_or_else(|error| panic!("{name}: no node labelled \"Save\": {error}"));
+        let shown = tree.describe();
+        assert_eq!(node.role(), Role::Button, "{name}:\n{shown}");
+        assert_eq!(node.is_disabled(), !enabled, "{name}:\n{shown}");
+        assert_eq!(
+            node.supports_action(Action::Click),
+            enabled,
+            "{name}:\n{shown}"
+        );
+        if enabled {
+            assert!(node.supports_action(Action::Focus), "{name}:\n{shown}");
+        }
+        assert!(node.child_ids().is_empty(), "{name}:\n{shown}");
+        let bounds = node
+            .bounds()
+            .unwrap_or_else(|| panic!("{name}: no bounds:\n{shown}"));
+        assert_eq!(
+            (bounds.width(), bounds.height()),
+            (120.0, 48.0),
+            "{name}:\n{shown}"
+        );
+    }
 }
 
 /// Every Material control that builds its own semantics publishes the

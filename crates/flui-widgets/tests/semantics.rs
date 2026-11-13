@@ -2618,7 +2618,7 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
             role: Some(flui_testing::a11y::Role::Button),
             view: || {
                 RawButton::new(Text::new("Send"))
-                    .on_press(|_ctx| {})
+                    .on_pressed(|_ctx| {})
                     .identifier("send")
                     .boxed()
             },
@@ -2869,7 +2869,7 @@ pub(crate) fn semantics_turned_on_later_publish_the_tree_of_semantics_on_from_th
                 ),
                 flui_view::ViewExt::boxed(
                     RawButton::new(Text::new("Press"))
-                        .on_press(move |_ctx| presses.set(presses.get() + 1)),
+                        .on_pressed(move |_ctx| presses.set(presses.get() + 1)),
                 ),
             ])
         }

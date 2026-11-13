@@ -25,23 +25,21 @@
 //! it does not touch fails there, though no counter of its work moves.
 //!
 //! A target of its own, not a module of `tests/main.rs`: it pins the
-//! process-global font system, reads the environment and installs a counting
-//! global allocator. It lives here rather
+//! process-global font system, reads the environment and installs the kit's counting
+//! global allocator (`flui_testing::heap`). It lives here rather
 //! than in `flui-testing`, which owns the frame driver, because the app is a
 //! widget tree: a `flui-testing` → `flui-widgets` dev edge would make every
 //! crate that dev-depends on `flui-testing` a dependent of the widget catalog,
 //! widening every change's CI scope.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use flui_foundation::geometry::Size;
 use flui_painting::styling::Color;
-use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
+use flui_testing::control_cost::control_over_text;
+use flui_testing::heap::{CountingAllocator, HeapCounts};
 use flui_testing::widgets::SharedSignal;
 use flui_testing::{
     FrameReport, HeadlessBinding, HeadlessHost, HeadlessWindow, MountOptions, MountOwners,
@@ -53,111 +51,17 @@ use flui_widgets::{
     SliverList, Text, Viewport, app_root,
 };
 
-// `Cell<u64>` in a const-initialised thread-local has no drop glue and no
-// lazy init, so the allocator reading it cannot itself allocate or run during
-// TLS teardown. Per thread, so libtest's harness thread and any background
-// thread a host starts add nothing to a scenario's count.
-thread_local! {
-    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-    static REALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-    static ALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
-    static LIVE_BYTES: Cell<u64> = const { Cell::new(0) };
-}
-
-/// What this thread has asked of the heap so far; zeros once its TLS is gone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct HeapCounts {
-    /// Allocations, a growth or shrink by `realloc` included.
-    allocations: u64,
-    /// The `realloc`s among them: a buffer that outgrew its capacity.
-    reallocations: u64,
-    /// The bytes those allocations asked for.
-    allocated_bytes: u64,
-}
-
-impl HeapCounts {
-    fn now() -> Self {
-        let read = |counter: &'static std::thread::LocalKey<Cell<u64>>| {
-            counter.try_with(Cell::get).unwrap_or(0)
-        };
-        Self {
-            allocations: read(&ALLOCATIONS),
-            reallocations: read(&REALLOCATIONS),
-            allocated_bytes: read(&ALLOCATED_BYTES),
-        }
-    }
-
-    /// What happened between `earlier` and `self`.
-    fn since(self, earlier: Self) -> Self {
-        Self {
-            allocations: self.allocations - earlier.allocations,
-            reallocations: self.reallocations - earlier.reallocations,
-            allocated_bytes: self.allocated_bytes - earlier.allocated_bytes,
-        }
-    }
-
-    /// The counters a scenario records, under their baseline names.
-    fn counts(self) -> [(&'static str, u64); 3] {
-        [
-            ("allocations", self.allocations),
-            ("reallocations", self.reallocations),
-            ("allocated_bytes", self.allocated_bytes),
-        ]
-    }
-}
-
-/// This thread's live heap bytes: allocated minus freed, wrapping, so only a
-/// difference of two readings means anything.
-fn live_bytes() -> u64 {
-    LIVE_BYTES.try_with(Cell::get).unwrap_or(0)
-}
-
-struct CountingAllocator;
-
-// SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
-// is freed by the allocator that produced it. `realloc` is `GlobalAlloc`'s
-// default spelled out so it can be counted: `self.alloc` + copy +
-// `self.dealloc`, still `System`, and a growth counts as one allocation and
-// one reallocation. `alloc_zeroed` keeps the default, through `self.alloc`.
-#[expect(unsafe_code, reason = "a counting global allocator forwards to System")]
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
-        let size = layout.size() as u64;
-        let _ = ALLOCATED_BYTES.try_with(|bytes| bytes.set(bytes.get().saturating_add(size)));
-        let _ = LIVE_BYTES.try_with(|live| live.set(live.get().wrapping_add(size)));
-        // SAFETY: `layout` is the caller's own, forwarded unchanged.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let _ = LIVE_BYTES.try_with(|live| live.set(live.get().wrapping_sub(layout.size() as u64)));
-        // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = REALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
-        // SAFETY: `realloc`'s contract makes `new_size` with `layout.align()`
-        // a valid layout (non-zero, not overflowing `isize` once rounded).
-        let new_layout = unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) };
-        // SAFETY: `new_layout` is valid, as above.
-        let new_ptr = unsafe { self.alloc(new_layout) };
-        if !new_ptr.is_null() {
-            // SAFETY: both blocks are live and distinct, each at least
-            // `min(old, new)` bytes long; `ptr` was allocated here with
-            // `layout`, as `realloc`'s contract requires.
-            unsafe {
-                std::ptr::copy_nonoverlapping(ptr, new_ptr, layout.size().min(new_size));
-                self.dealloc(ptr, layout);
-            }
-        }
-        new_ptr
-    }
-}
-
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+/// The heap counters a frame scenario records, under their baseline names.
+fn heap_counts(heap: HeapCounts) -> [(&'static str, u64); 3] {
+    [
+        ("allocations", heap.allocations),
+        ("reallocations", heap.reallocations),
+        ("allocated_bytes", heap.allocated_bytes),
+    ]
+}
 
 /// Runs a scenario's measured frames and returns their result with what
 /// they asked of the heap.
@@ -169,7 +73,13 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 fn perf_measured<R>(frames: impl FnOnce() -> R) -> (R, HeapCounts) {
     let before = HeapCounts::now();
     let result = frames();
-    (result, HeapCounts::now().since(before))
+    // A frame scenario compares what its frames ask of the heap; what they
+    // leave live is a mount figure, so it is left out of every comparison.
+    let heap = HeapCounts {
+        live_bytes: 0,
+        ..HeapCounts::now().since(before)
+    };
+    (result, heap)
 }
 
 /// One 60 Hz frame of virtual time.
@@ -293,7 +203,7 @@ fn mount() -> Mounted {
 /// budget still reports its numbers.
 fn record(scenario: &str, report: &FrameReport, heap: HeapCounts) {
     let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
-    counts.extend(heap.counts());
+    counts.extend(heap_counts(heap));
     record_counts(scenario, &counts);
 }
 
@@ -468,7 +378,7 @@ impl StatelessView for ButtonColumn {
         let rows: Vec<_> = (0..self.buttons)
             .map(|row| {
                 RawButton::new(Text::new(format!("Row {row}")))
-                    .on_press(|_ctx| {})
+                    .on_pressed(|_ctx| {})
                     .boxed()
             })
             .collect();
@@ -525,7 +435,7 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
             continue;
         }
         let heap = label_change_heap(buttons);
-        record_counts(&format!("label_change_{name}"), &heap.counts());
+        record_counts(&format!("label_change_{name}"), &heap_counts(heap));
         measured.push((buttons, heap));
     }
     assert!(
@@ -541,104 +451,36 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
     }
 }
 
-/// The rows a mount-cost scenario mounts: enough that the app around them
-/// is noise in a per-row figure.
-const MOUNT_ROWS: usize = 1_000;
-
-/// What `MOUNT_ROWS` rows of one kind cost to mount.
-struct MountCost {
-    elements: usize,
-    render_nodes: usize,
-    heap: HeapCounts,
-    live_bytes: u64,
-}
-
-/// `MOUNT_ROWS` rows in one eager column, each made by `row`.
-#[derive(Clone, StatelessView)]
-struct Rows {
-    row: fn(usize) -> BoxedView,
-}
-
-impl StatelessView for Rows {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        SingleChildScrollView::new().child(Column::new(
-            (0..MOUNT_ROWS).map(self.row).collect::<Vec<BoxedView>>(),
-        ))
-    }
-}
-
-/// Counts what a tree of [`Rows`] holds, then mounts it on a headless host
-/// with semantics off, pumps its first frame, and measures what that
-/// allocated and what stays live.
-fn mount_cost(row: fn(usize) -> BoxedView) -> MountCost {
-    let (elements, render_nodes) = {
-        let mut laid = flui_testing::widgets::lay_out(
-            Rows { row },
-            BoxConstraints::tight(Size::new(WIDTH, HEIGHT)),
-        );
-        (laid.element_node_count(), laid.render_node_count())
-    };
-    let (live_before, heap_before) = (live_bytes(), HeapCounts::now());
-    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
-    host.attach(&Rows { row })
-        .expect("a fresh host takes a root");
-    let _ = host.pump(FRAME);
-    let cost = MountCost {
-        elements,
-        render_nodes,
-        heap: HeapCounts::now().since(heap_before),
-        live_bytes: live_bytes().wrapping_sub(live_before),
-    };
-    drop(host);
-    cost
-}
-
 /// What a `RawButton` adds to the `Text` it holds, per button: the four
 /// numbers `docs/gaps.md` closes "An interactive widget costs eighteen
 /// elements" on (ADR-0322). The `Text` alone is recorded beside them.
 #[test]
 fn perf_raw_button_over_text() {
-    let button_row = |row: usize| {
+    let cost = control_over_text(|row| {
         RawButton::new(Text::new(format!("Row {row}")))
-            .on_press(|_ctx| {})
+            .on_pressed(|_ctx| {})
             .boxed()
-    };
-    // What the process and the thread set up once (the font system, lazy
-    // tables) is paid by a mount that is not measured.
-    let _warm_up = mount_cost(button_row);
-    let text = mount_cost(|row| Text::new(format!("Row {row}")).boxed());
-    let button = mount_cost(button_row);
-    let rows = MOUNT_ROWS as u64;
-    let per_row = |with: u64, without: u64| with.saturating_sub(without).div_ceil(rows);
-    let elements = per_row(button.elements as u64, text.elements as u64);
-    let render_nodes = per_row(button.render_nodes as u64, text.render_nodes as u64);
-    let allocations = per_row(button.heap.allocations, text.heap.allocations);
-    let reallocations = per_row(button.heap.reallocations, text.heap.reallocations);
-    let bytes = per_row(button.live_bytes, text.live_bytes);
-    record_counts(
-        "raw_button_over_text",
-        &[
-            ("elements", elements),
-            ("render_nodes", render_nodes),
-            ("allocations", allocations),
-            ("reallocations", reallocations),
-            ("bytes", bytes),
-            ("text_allocations", text.heap.allocations / rows),
-            ("text_reallocations", text.heap.reallocations / rows),
-            ("text_bytes", text.live_bytes / rows),
-        ],
-    );
+    });
+    let mut counts = cost.counts().to_vec();
+    counts.extend([
+        ("text_allocations", cost.text.allocations),
+        ("text_reallocations", cost.text.reallocations),
+        ("text_bytes", cost.text.live_bytes),
+    ]);
+    record_counts("raw_button_over_text", &counts);
 
     // One element for the button and one for its behaviours; one render
     // object. The allocations and bytes are held by the baseline, which
     // only falls: the entry's numbers for them are 40 and 3 KB.
     assert!(
-        elements <= 2,
-        "a button adds {elements} elements to its child"
+        cost.elements <= 2,
+        "a button adds {} elements to its child",
+        cost.elements
     );
     assert!(
-        render_nodes <= 1,
-        "a button adds {render_nodes} render nodes to its child"
+        cost.render_nodes <= 1,
+        "a button adds {} render nodes to its child",
+        cost.render_nodes
     );
 }
 
@@ -777,37 +619,11 @@ fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
 /// action route (ADR-0322 §8).
 #[test]
 fn perf_semantics_action_over_text() {
-    let annotated_row = |row: usize| {
+    let cost = control_over_text(|row| {
         Semantics::new()
             .on_click(|_ctx| {})
             .child(Text::new(format!("Row {row}")))
             .boxed()
-    };
-    let _warm_up = mount_cost(annotated_row);
-    let text = mount_cost(|row| Text::new(format!("Row {row}")).boxed());
-    let annotated = mount_cost(annotated_row);
-    let rows = MOUNT_ROWS as u64;
-    let per_row = |with: u64, without: u64| with.saturating_sub(without).div_ceil(rows);
-    record_counts(
-        "semantics_action_over_text",
-        &[
-            (
-                "elements",
-                per_row(annotated.elements as u64, text.elements as u64),
-            ),
-            (
-                "render_nodes",
-                per_row(annotated.render_nodes as u64, text.render_nodes as u64),
-            ),
-            (
-                "allocations",
-                per_row(annotated.heap.allocations, text.heap.allocations),
-            ),
-            (
-                "reallocations",
-                per_row(annotated.heap.reallocations, text.heap.reallocations),
-            ),
-            ("bytes", per_row(annotated.live_bytes, text.live_bytes)),
-        ],
-    );
+    });
+    record_counts("semantics_action_over_text", &cost.counts());
 }

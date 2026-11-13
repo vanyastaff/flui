@@ -3,9 +3,9 @@
 //! Elements are stored in a Slab for O(1) access by ElementId; they form the
 //! retained tree.
 
+use rustc_hash::FxHashMap;
 use std::any::TypeId;
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
 
 use std::rc::Rc;
 
@@ -54,7 +54,7 @@ fn append_sparse_sliver_children(
     // A child the walk did not reach is a lazy sliver child when its parent
     // data says so; most parents have none, so membership in the walk's own
     // list is built only once the first such child turns up.
-    let mut desired_membership: Option<HashSet<RenderId>> = None;
+    let mut desired_membership: Option<flui_foundation::SlotSet<RenderId>> = None;
     let mut sparse_children: Vec<(usize, RenderId)> = Vec::new();
     for &child in parent_node.children() {
         let Some(child_node) = render_tree.get(child) else {
@@ -71,12 +71,13 @@ fn append_sparse_sliver_children(
             continue;
         };
         let desired = desired_membership.get_or_insert_with(|| {
-            desired_children
-                .iter()
-                .copied()
-                .collect::<HashSet<RenderId>>()
+            let mut desired = flui_foundation::SlotSet::new();
+            for &child in desired_children.iter() {
+                desired.insert(child);
+            }
+            desired
         });
-        if !desired.contains(&child) {
+        if !desired.contains(child) {
             sparse_children.push((index, child));
         }
     }
@@ -171,7 +172,7 @@ pub struct ElementNode {
     /// read its own scope while its `element` slot is a hole.
     ///
     /// The map is keyed on the published `TypeId` and is a plain
-    /// `Arc<HashMap>` with copy-on-insert-at-providers rather than a persistent
+    /// `Arc<FxHashMap>` with copy-on-insert-at-providers rather than a persistent
     /// HAMT — provider counts in a UI scope are tiny, so the per-provider
     /// O(k) clone is effectively O(1) and avoids a new dependency. A node
     /// outside every provider holds no map ([`InheritedScope::EMPTY`]).
@@ -294,7 +295,7 @@ impl ElementNode {
     /// or `None` for a keyless element.
     ///
     /// The keyed reconciler reads this directly to build its
-    /// `old_keyed: HashMap<u64, ElementId>` index — no view-typed
+    /// `old_keyed: FxHashMap<u64, ElementId>` index — no view-typed
     /// `downcast::<V>()` needed. FR-022.
     pub fn key(&self) -> Option<&dyn ViewKey> {
         self.key.as_deref()
@@ -1419,7 +1420,7 @@ impl ElementTree {
         // child manager left it; only the render parents inside it are
         // synchronized. A row built in a sliver's layout-time build has the
         // same component-deferred attach order as one built anywhere else.
-        let mut target: HashMap<RenderId, Vec<RenderId>> = HashMap::new();
+        let mut target: FxHashMap<RenderId, Vec<RenderId>> = FxHashMap::default();
         // Every render node with its desired render parent, in depth-first
         // pre-order: a parent's own edge is settled before its children
         // move under it, so no step of the sync closes a cycle.
@@ -1476,8 +1477,11 @@ impl ElementTree {
 
         // Tree borrows are dropped; the checkout guards only the render tree.
         pipeline_owner.with_mut(|owner| {
-            let mut dirty_render_parents: HashSet<flui_foundation::RenderId> = HashSet::new();
-            let mut membership_changed_parents: HashSet<flui_foundation::RenderId> = HashSet::new();
+            let mut dirty_render_parents: flui_foundation::SlotSet<flui_foundation::RenderId> =
+                flui_foundation::SlotSet::new();
+            let mut membership_changed_parents: flui_foundation::SlotSet<
+                flui_foundation::RenderId,
+            > = flui_foundation::SlotSet::new();
             {
                 let render_tree = owner.render_tree_mut();
                 for &(render_id, desired) in &desired_parent {
@@ -1532,9 +1536,9 @@ impl ElementTree {
                 }
             }
 
-            for parent in dirty_render_parents {
+            for &parent in dirty_render_parents.as_slice() {
                 if owner.render_tree().contains(parent) {
-                    let impact = if membership_changed_parents.contains(&parent) {
+                    let impact = if membership_changed_parents.contains(parent) {
                         flui_rendering::RenderUpdateImpact::LAYOUT
                             | flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
                             | flui_rendering::RenderUpdateImpact::SEMANTICS
@@ -1589,7 +1593,7 @@ impl ElementTree {
         // is acyclic by construction (`child_ids` come from the reconciler),
         // so this never trips in practice — but it converts a malformed
         // `child_ids` cycle from an unbounded hang into clean termination.
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = flui_foundation::SlotSet::new();
         let mut stack = vec![root_id];
         while let Some(id) = stack.pop() {
             if !visited.insert(id) {
@@ -2525,7 +2529,7 @@ fn preflight_render_relocation(
         let destination_render_parent = destination.element().child_render_id();
         let is_valid = pipeline.with(|owner| {
             let render_tree = owner.render_tree();
-            let mut moved_render_nodes = HashSet::new();
+            let mut moved_render_nodes = flui_foundation::SlotSet::new();
             let mut stack = Vec::new();
             for &(_, render_root) in &frontier {
                 if !render_tree.contains(render_root) {
@@ -2600,7 +2604,7 @@ fn provisional_child_order(
     unclaimed_old_slots: &[Option<ElementId>],
 ) -> Vec<ElementId> {
     let mut order = Vec::with_capacity(reconciled_prefix.len() + unclaimed_old_slots.len() + 1);
-    let mut seen = HashSet::with_capacity(order.capacity());
+    let mut seen = flui_foundation::SlotSet::new();
     for element_id in reconciled_prefix
         .iter()
         .copied()

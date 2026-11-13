@@ -12,6 +12,9 @@ disallowed-types = [
     { path = "parking_lot::RwLock", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },
     { path = "std::sync::Mutex", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },
     { path = "std::sync::RwLock", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },
+    # The root's entries, repeated: hash ids with FxHash.
+    { path = "std::collections::HashMap", reason = "hash ids with rustc_hash::FxHashMap; per-frame sets over tree ids are flui_foundation::SlotSet" },
+    { path = "std::collections::HashSet", reason = "hash ids with rustc_hash::FxHashSet; per-frame sets over tree ids are flui_foundation::SlotSet" },
 ]
 
 # The root's entries, repeated (ADR-0244, ADR-0303 §6).

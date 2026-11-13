@@ -1,7 +1,7 @@
 //! Shared external build queue and its panic-safe frame-wake delivery state.
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
-    collections::{HashMap, HashSet},
     num::NonZeroU64,
     sync::{
         Arc, Weak,
@@ -16,8 +16,8 @@ use parking_lot::Mutex;
 
 #[derive(Default)]
 struct WakeState {
-    active_threads: HashSet<std::thread::ThreadId>,
-    reentrant_threads: HashSet<std::thread::ThreadId>,
+    active_threads: FxHashSet<std::thread::ThreadId>,
+    reentrant_threads: FxHashSet<std::thread::ThreadId>,
 }
 
 /// The frame request a wake answers: the ticket the ledger's mint issued for
@@ -95,7 +95,7 @@ pub struct BuildPremise {
 #[derive(Debug, Default)]
 pub(crate) struct PendingBuilds {
     order: Vec<ElementId>,
-    reasons: HashMap<ElementId, RebuildReasons>,
+    reasons: FxHashMap<ElementId, RebuildReasons>,
 }
 
 impl PendingBuilds {

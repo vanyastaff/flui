@@ -137,7 +137,7 @@ fn scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work() {
     );
     assert!(tree.get(panicking).is_none());
     assert_eq!(owner.pending_rebuild_reasons(panicking), None);
-    assert!(!owner.pending_dependency_changes.contains(&panicking));
+    assert!(!owner.pending_dependency_changes.contains(panicking));
     assert_eq!(owner.pending_rebuild_reasons(replacement), None);
     assert_eq!(
         owner.pending_rebuild_reasons(foreign),

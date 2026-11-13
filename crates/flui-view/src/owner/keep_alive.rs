@@ -47,8 +47,8 @@
 //! render object; a pin taken or released marks every watching sliver for
 //! layout, so the render object hears of it on the next frame.
 
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::ElementId;
@@ -72,17 +72,17 @@ struct Inner {
     /// the row it moved to is evictable despite something asking to keep it.
     /// Resolving the target when eviction asks makes relocation free the same
     /// way keying by element rather than index does.
-    holders: HashMap<ElementId, usize>,
+    holders: FxHashMap<ElementId, usize>,
     /// Live holder -> how many of its leases are pins ([`KeepAliveHandle::pin`]).
     /// Every pin is also counted in `holders`: a pin is a hold that the
     /// sliver additionally lays out.
-    pins: HashMap<ElementId, usize>,
+    pins: FxHashMap<ElementId, usize>,
     /// The lazy slivers that lay out pinned children, by host element: each
     /// is asked to lay out again when a pin is taken or released, so a
     /// released row leaves the semantics tree without waiting for a scroll.
     /// An entry whose render node has detached is dropped the first time it
     /// refuses the mark.
-    pin_watchers: HashMap<ElementId, LocalRenderInvalidationHandle>,
+    pin_watchers: FxHashMap<ElementId, LocalRenderInvalidationHandle>,
 }
 
 impl std::fmt::Debug for Inner {
@@ -354,7 +354,7 @@ impl KeepAliveLease {
 }
 
 /// Take one lease of `holder` out of `counts`.
-fn release_one(counts: &mut HashMap<ElementId, usize>, holder: ElementId) -> bool {
+fn release_one(counts: &mut FxHashMap<ElementId, usize>, holder: ElementId) -> bool {
     let Some(count) = counts.get_mut(&holder) else {
         return false;
     };

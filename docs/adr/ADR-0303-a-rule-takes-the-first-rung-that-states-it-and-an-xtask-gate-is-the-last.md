@@ -244,6 +244,11 @@ of its own.
   A pull request then runs `api-contracts` with `send-positions` only; `api-closure` stays on
   main. What these lines miss is an item that turns public on a line that names no marker, while
   its bound sits on another line. Main's run still catches that.
+- **What Miri interprets whole is read by its path.** The `miri` job runs every unit test of
+  flui-foundation and flui-log and the render-node arena of flui-rendering, beside narrower
+  filters. `plan` sets `miri_required` when a changed file sits under one of those roots, or is
+  the job's plan or its rule (`change_scope::miri_scope`). A change that reaches only a narrower
+  filter is left to main.
 - **The aggregator recomputes the run.** Each such job is a row of `ON_DEMAND`
   (`change_scope/aggregator.rs`), which names the job and the `plan` output that asks for it.
   `ci-verify` reads that output and fails a job that ran without being asked, or skipped when it

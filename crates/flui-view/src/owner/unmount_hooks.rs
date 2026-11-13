@@ -21,7 +21,9 @@
 //!   [`UnmountHook::forget`] keeps the hook registered.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::FxHashMap;
 use std::fmt;
 use std::rc::{Rc, Weak};
 
@@ -32,7 +34,7 @@ type Entry = (u64, Box<dyn FnOnce()>);
 
 #[derive(Default)]
 struct Inner {
-    hooks: HashMap<ElementId, VecDeque<Entry>>,
+    hooks: FxHashMap<ElementId, VecDeque<Entry>>,
     /// The id the next hook takes; ids are never reused, so a stale token
     /// can only name nothing.
     next: u64,

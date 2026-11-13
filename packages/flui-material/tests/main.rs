@@ -26,6 +26,9 @@ mod carousel_view;
 #[path = "checkbox.rs"]
 mod checkbox;
 
+#[path = "child_form.rs"]
+mod child_form;
+
 #[path = "chip.rs"]
 mod chip;
 
@@ -138,6 +141,10 @@ fn action_component_contracts() {
         (
             "elevated_button::material controls publish their identifier",
             elevated_button::material_controls_publish_their_identifier,
+        ),
+        (
+            "elevated_button::style button is one button node enabled or disabled",
+            elevated_button::style_button_is_one_button_node_enabled_or_disabled,
         ),
         (
             "elevated_button::widget level style wins over the elevated button theme",
@@ -728,6 +735,10 @@ fn surface_contracts() {
         (
             "card::card theme slot reaches the mounted materials color and elevation",
             card::card_theme_slot_reaches_the_mounted_materials_color_and_elevation,
+        ),
+        (
+            "child_form::optional child is a builder and may be absent",
+            child_form::optional_child_is_a_builder_and_may_be_absent,
         ),
         (
             "divider::widget color override wins over the divider theme",
