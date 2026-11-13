@@ -19,7 +19,8 @@ One line per path `cargo xtask expectations` lists: the path (or its directory, 
 
 Who read the diff in a fresh context before the merge (AGENTS.md, "Before a merge"), each finding
 and what became of it: fixed, or refuted by a line or a test. "Documentation only" when the `docs`
-lane takes the pull request.
+lane takes the pull request; `Independent read unavailable: <reason>` and the scenarios the author
+tried, when no reviewer could be started.
 
 ## Architecture
 
