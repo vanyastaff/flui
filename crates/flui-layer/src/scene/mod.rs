@@ -14,8 +14,8 @@ mod version;
 pub use content::{BoundaryContent, Bounds, Chunk, ContentBuilder, Entry, EntryIndex};
 pub use id::{ContentVersion, Lineage, SceneNodeId, SceneNodeMarker, SceneVersionId};
 pub use owner::{
-    Applied, Placement, ReleasedContents, SceneError, SceneOp, SceneOwner, ScenePublication,
-    SceneWriter, SurfaceKey,
+    Applied, Placement, Reclaimed, ReleasedContents, SceneError, SceneOp, SceneOwner,
+    ScenePublication, SceneWriter, SurfaceKey,
 };
 pub use version::{EntryAddress, SceneNode, SceneVersion, SubtreeCull};
 

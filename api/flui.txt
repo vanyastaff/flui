@@ -30965,7 +30965,6 @@ pub fn flui_layer::scene::content::BoundaryContent::effect_layer(&self, entry: f
 pub fn flui_layer::scene::content::BoundaryContent::effect_layers(&self) -> impl ExactSizeIterator<Item = (flui_layer::scene::content::EntryIndex, &flui_layer::layer::Layer)> + '_
 pub fn flui_layer::scene::content::BoundaryContent::entries(&self) -> &[flui_layer::scene::content::Entry]
 pub fn flui_layer::scene::content::BoundaryContent::slots(&self) -> impl Iterator<Item = flui_layer::scene::id::SceneNodeId> + '_
-pub fn flui_layer::scene::content::BoundaryContent::with_effects(&self, replaced: impl IntoIterator<Item = (flui_layer::scene::content::EntryIndex, flui_layer::layer::Layer)>) -> Result<Self, flui_layer::scene::content::EntryIndex>
 pub enum flui_layer::scene::content::Bounds
 impl Clone for flui_layer::scene::content::Bounds
 impl Copy for flui_layer::scene::content::Bounds
@@ -31098,6 +31097,7 @@ pub fn flui_layer::scene::owner::SceneWriter::discard(&mut self, content: alloc:
 pub fn flui_layer::scene::owner::SceneWriter::mint_node(&mut self) -> flui_layer::scene::id::SceneNodeId // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::next_content_version(&mut self) -> Result<flui_layer::scene::id::ContentVersion, flui_layer::scene::owner::SceneError> // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::push(&mut self, op: flui_layer::scene::owner::SceneOp) // impl flui_layer::scene::owner::SceneWriter<'_>
+pub fn flui_layer::scene::owner::SceneWriter::with_effects(&mut self, content: &flui_layer::scene::content::BoundaryContent, replaced: impl IntoIterator<Item = (flui_layer::scene::content::EntryIndex, flui_layer::layer::Layer)>) -> Result<alloc::rcs::arc::Arc<flui_layer::scene::content::BoundaryContent>, flui_layer::scene::content::EntryIndex> // impl flui_layer::scene::owner::SceneWriter<'_>
 pub struct flui_layer::scene::version::EntryAddress
 field flui_layer::scene::version::EntryAddress::entry: flui_layer::scene::content::EntryIndex // at 1
 field flui_layer::scene::version::EntryAddress::node: flui_layer::scene::id::SceneNodeId // at 0

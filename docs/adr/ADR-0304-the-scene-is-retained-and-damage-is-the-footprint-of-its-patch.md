@@ -210,6 +210,11 @@ impl SceneWriter<'_> {
     pub fn next_content_version(&mut self) -> Result<ContentVersion, SceneError>;
     pub fn push(&mut self, op: SceneOp);
     pub fn current(&self) -> &SceneVersion;
+    // a composited-layer update: `content`'s stream shared, the named effects replaced;
+    // a refused one leaves its layers with the owner until the next patch opens
+    pub fn with_effects(&mut self, content: &BoundaryContent,
+        replaced: impl IntoIterator<Item = (EntryIndex, Layer)>)
+        -> Result<Arc<BoundaryContent>, EntryIndex>;
 }
 ```
 
@@ -362,6 +367,10 @@ impl SceneOwner {
     pub fn publication(&self) -> ScenePublication;
     pub fn completed(&mut self, rastered: Option<SceneVersionId>) -> ReleasedContents;
     pub fn renew(&mut self, reason: ResyncReason) -> ReleasedContents;
+    pub fn restock(&mut self, reclaimed: Reclaimed);   // what `reclaim` kept, emptied
+}
+impl ReleasedContents {
+    pub fn reclaim(self) -> Reclaimed;                 // runs the destructors, keeps the buffers
 }
 // flui-runtime; `surface_size` is unchanged
 pub trait FrameSink { fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict; }
@@ -406,11 +415,17 @@ clear. `RasterCompletion::rastered` reports the held version through the reliabl
 `completed` moves `acked` forward only, ignores an id of another lineage, drops the log entries at
 or below `acked`, and hands back the contents they replaced as `ReleasedContents`, which a caller
 holding the owner borrowed passes to an `Outbox` (ADR-0287), so their destructors (an annotation's
-value is user code) run once the owner is free; `apply` and `renew` hand back the version they replace the same
-way. A buffer the owner holds alone goes
-back to the recorder's pool (`Arc::try_unwrap`), any other is dropped. Buffers come back with the
-completion while only the `Copy` id crosses up (ADR-0045 §1). A refused submit changes nothing: the
-next publication's damage still starts at `acked`.
+value is user code) run once the owner is free. `apply` keeps the version it replaces among the
+two it retires and hands each back the same way once no other holder (the raster side, a
+pipeline, a probe) reads it, or when a newer one pushes it out; `renew` hands back its version and
+every retiring one. The caller frees what it is handed with `ReleasedContents::reclaim`, which runs
+those destructors and keeps, emptied, the version records, table nodes and contents the owner held
+alone; `SceneOwner::restock` takes them back, the next apply copies a shared table node into an
+emptied one, and a composited-layer update (`SceneWriter::with_effects`) writes into an emptied
+content, so a frame that moves a layer allocates nothing in the scene. A recording buffer the
+owner holds alone goes back to the recorder's pool (`Arc::try_unwrap`), any other is dropped.
+Buffers come back with the completion while only the `Copy` id crosses up (ADR-0045 §1). A refused
+submit changes nothing: the next publication's damage still starts at `acked`.
 
 A frame that was not shown (`PresentDisposition::NotShown`, ADR-0068) is retried by publishing the
 version the owner already holds: `acked` did not move, so the publication's damage is still every

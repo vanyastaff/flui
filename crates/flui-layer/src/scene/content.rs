@@ -322,27 +322,36 @@ struct LayerIndexes {
 
 impl LayerIndexes {
     fn of(effects: &[EntryIndex], layers: &[Layer]) -> Self {
-        let mut links = Vec::new();
-        let mut textures = Vec::new();
-        let mut closures = Vec::new();
+        let mut indexes = Self::default();
+        indexes.refill(effects, layers);
+        indexes
+    }
+
+    /// Rebuilds the indexes for `layers` in the vectors already held.
+    fn refill(&mut self, effects: &[EntryIndex], layers: &[Layer]) {
+        self.clear();
         for (&index, layer) in effects.iter().zip(layers) {
             match layer {
-                Layer::Leader(leader) => links.push((leader.link(), LinkRole::Leader, index)),
-                Layer::Follower(follower) => {
-                    links.push((follower.link(), LinkRole::Follower, index));
+                Layer::Leader(leader) => {
+                    self.links.push((leader.link(), LinkRole::Leader, index));
                 }
-                Layer::Texture(texture) => textures.push((texture.texture_id(), index)),
+                Layer::Follower(follower) => {
+                    self.links
+                        .push((follower.link(), LinkRole::Follower, index));
+                }
+                Layer::Texture(texture) => self.textures.push((texture.texture_id(), index)),
                 _ => {}
             }
             if layer_has_closure(layer) {
-                closures.push(index);
+                self.closures.push(index);
             }
         }
-        Self {
-            links,
-            textures,
-            closures,
-        }
+    }
+
+    fn clear(&mut self) {
+        self.links.clear();
+        self.textures.clear();
+        self.closures.clear();
     }
 }
 
@@ -352,7 +361,8 @@ impl LayerIndexes {
 ///
 /// The stream and everything that depends only on it are shared; each
 /// effect's layer is held beside it, so a composited-layer update
-/// ([`Self::with_effects`]) copies the layers and shares the stream.
+/// ([`SceneWriter::with_effects`](super::SceneWriter::with_effects)) copies
+/// the layers and shares the stream.
 #[derive(Debug)]
 pub struct BoundaryContent {
     stream: Arc<Stream>,
@@ -483,24 +493,85 @@ impl BoundaryContent {
         !self.stream.chunk_closures.is_empty() || !self.indexes.closures.is_empty()
     }
 
-    /// The same stream with the effects at the given entries replaced by
-    /// new layers, the stream shared: how a composited-layer update
-    /// republishes a boundary without repainting it. It costs the content's
-    /// effects, not its chunks.
+    /// Writes into `target` the same stream with the effects at the given
+    /// entries replaced by new layers, the stream shared: how a
+    /// composited-layer update republishes a boundary without repainting it
+    /// ([`SceneWriter::with_effects`](super::SceneWriter::with_effects)). It
+    /// costs the content's effects, not its chunks, and reuses the vectors
+    /// `target` holds.
     ///
     /// # Errors
     ///
-    /// The first index that names no effect; nothing is built.
-    pub fn with_effects(
+    /// The first index that names no effect, or names one a second time;
+    /// `target` then holds every layer it was handed, placed or not,
+    /// for the caller to drop where no borrow is held.
+    pub(crate) fn effects_into(
         &self,
+        target: &mut Self,
         replaced: impl IntoIterator<Item = (EntryIndex, Layer)>,
-    ) -> Result<Self, EntryIndex> {
-        let mut layers = self.layers.clone();
+    ) -> Result<(), EntryIndex> {
+        target.stream = Arc::clone(&self.stream);
+        target.layers.clone_from(&self.layers);
+        // Which positions this update wrote, so a repeated index is refused
+        // instead of dropping the layer it would replace.
+        let mut written: SmallVec<[u64; 4]> = SmallVec::new();
+        written.resize(self.layers.len().div_ceil(64), 0);
+        let mut refused = None;
         for (index, layer) in replaced {
-            let at = self.effect_position(index).ok_or(index)?;
-            layers[at] = layer;
+            let position = self.effect_position(index).filter(|&at| {
+                let (word, bit) = (at / 64, 1_u64 << (at % 64));
+                let fresh = written[word] & bit == 0;
+                written[word] |= bit;
+                fresh
+            });
+            match (refused, position) {
+                // The layer it replaces is a clone of one `self` still holds,
+                // so its drop runs no annotation's destructor.
+                (None, Some(at)) => target.layers[at] = layer,
+                // A refused update keeps every layer it was handed, so their
+                // destructors run where the caller drops `target`.
+                (None, None) => {
+                    refused = Some(index);
+                    target.layers.push(layer);
+                }
+                (Some(_), _) => target.layers.push(layer),
+            }
         }
-        Ok(Self::of(Arc::clone(&self.stream), layers))
+        if let Some(index) = refused {
+            return Err(index);
+        }
+        target.indexes.refill(&self.stream.effects, &target.layers);
+        Ok(())
+    }
+
+    /// Layers held, one per effect.
+    pub(crate) fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
+
+    /// Layers the content's vector holds room for without allocating.
+    pub(crate) fn layer_room(&self) -> usize {
+        self.layers.capacity()
+    }
+
+    /// A content to write [`Self::effects_into`] into when no reclaimed one
+    /// is held: `self`'s stream, room for its layers, none written yet.
+    pub(crate) fn blank(&self) -> Self {
+        Self {
+            stream: Arc::clone(&self.stream),
+            layers: Vec::with_capacity(self.layers.len()),
+            indexes: LayerIndexes::default(),
+        }
+    }
+
+    /// Lets go of everything the content holds, keeping its vectors' room
+    /// and taking `empty`'s stream: what is left holds no value of the scene.
+    /// The layers and stream it held drop here, an annotation's value among
+    /// them, so a caller runs this with no borrow held.
+    pub(crate) fn scrub(&mut self, empty: &Self) {
+        self.stream = Arc::clone(&empty.stream);
+        self.layers.clear();
+        self.indexes.clear();
     }
 
     /// Whether `other` puts the same entries into the three indexes.

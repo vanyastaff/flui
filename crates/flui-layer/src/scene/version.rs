@@ -11,7 +11,7 @@ use super::content::{BoundaryContent, Bounds, EntryIndex, LinkRole};
 use super::geometry::{Folded, Geometry, Links, Reach};
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
-use super::table::{Table, TableCost};
+use super::table::{Spares, Table, TableCost};
 use crate::link::LayerLink;
 use crate::scene_snapshot::DamageRegion;
 
@@ -192,7 +192,90 @@ pub(crate) struct VersionInner {
     pub(crate) filtered: Table<NodeKey>,
 }
 
+/// The most emptied version records a [`VersionSpares`] keeps: an apply
+/// takes one.
+const SPARE_VERSIONS: usize = 2;
+
+/// What versions nobody reads any more held alone, emptied, for the next
+/// applies to write into before allocating (ADR-0304 §7).
+///
+/// Nothing it holds owns a value of the scene, so dropping it frees memory
+/// and runs no other code.
+#[derive(Debug, Default)]
+pub(crate) struct VersionSpares {
+    nodes: Spares<NodeRecord>,
+    links: Spares<LinkUsers>,
+    textures: Spares<TextureUsers>,
+    filtered: Spares<NodeKey>,
+    /// Version records whose tables were taken out.
+    versions: SmallVec<[Arc<VersionInner>; SPARE_VERSIONS]>,
+}
+
+impl VersionSpares {
+    /// Moves `other`'s spares in, up to each cap; the rest are freed.
+    pub(crate) fn absorb(&mut self, other: &mut Self) {
+        self.nodes.absorb(&mut other.nodes);
+        self.links.absorb(&mut other.links);
+        self.textures.absorb(&mut other.textures);
+        self.filtered.absorb(&mut other.filtered);
+        while self.versions.len() < SPARE_VERSIONS {
+            let Some(record) = other.versions.pop() else {
+                return;
+            };
+            self.versions.push(record);
+        }
+        other.versions.clear();
+    }
+
+    /// `inner` as a version, in a spare record when one is held.
+    pub(crate) fn version(&mut self, inner: VersionInner) -> SceneVersion {
+        match self.versions.pop() {
+            Some(mut record) => {
+                // The spare's tables were taken out: replacing it drops
+                // nothing of the scene.
+                *Arc::get_mut(&mut record)
+                    .expect("BUG: a spare version is held by its pool alone") = inner;
+                SceneVersion(record)
+            }
+            None => SceneVersion::from_inner(inner),
+        }
+    }
+
+    /// Spares held, of every kind.
+    #[cfg(feature = "testing")]
+    pub(crate) fn len(&self) -> usize {
+        self.nodes.len()
+            + self.links.len()
+            + self.textures.len()
+            + self.filtered.len()
+            + self.versions.len()
+    }
+}
 impl SceneVersion {
+    /// Whether no other holder (the raster side, a pipeline, a probe) reads
+    /// this version any more.
+    pub(crate) fn held_alone(&self) -> bool {
+        Arc::strong_count(&self.0) == 1
+    }
+
+    /// Takes apart a version nobody else holds into `spares`: its record and
+    /// every table node no newer version shares. What it alone held drops
+    /// here, an annotation's value among them, so a caller runs this with no
+    /// borrow held. A version someone else still holds is let go.
+    pub(crate) fn harvest(self, spares: &mut VersionSpares) {
+        let mut record = self.0;
+        let Some(inner) = Arc::get_mut(&mut record) else {
+            return;
+        };
+        std::mem::take(&mut inner.nodes).harvest(&mut spares.nodes);
+        std::mem::take(&mut inner.links).harvest(&mut spares.links);
+        std::mem::take(&mut inner.textures).harvest(&mut spares.textures);
+        std::mem::take(&mut inner.filtered).harvest(&mut spares.filtered);
+        if spares.versions.len() < SPARE_VERSIONS {
+            spares.versions.push(record);
+        }
+    }
+
     pub(crate) fn from_inner(inner: VersionInner) -> Self {
         Self(Arc::new(inner))
     }
@@ -501,6 +584,22 @@ impl<'v> SubtreeCull<'v> {
 }
 
 impl VersionInner {
+    /// Lends the tables the spares their writes take before allocating.
+    pub(crate) fn lend_spares(&mut self, spares: &mut VersionSpares) {
+        self.nodes.lend_spares(&mut spares.nodes);
+        self.links.lend_spares(&mut spares.links);
+        self.textures.lend_spares(&mut spares.textures);
+        self.filtered.lend_spares(&mut spares.filtered);
+    }
+
+    /// Hands back the spares the tables' writes left.
+    pub(crate) fn return_spares(&mut self, spares: &mut VersionSpares) {
+        self.nodes.return_spares(&mut spares.nodes);
+        self.links.return_spares(&mut spares.links);
+        self.textures.return_spares(&mut spares.textures);
+        self.filtered.return_spares(&mut spares.filtered);
+    }
+
     /// The record `key` names, `None` for an empty slot or another
     /// generation.
     pub(crate) fn record(&self, key: NodeKey) -> Option<&NodeRecord> {
