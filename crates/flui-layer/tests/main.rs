@@ -176,6 +176,10 @@ fn texture_registry() {
                 "a_panicking_listener_drop_still_wakes_the_retirement",
                 t::a_panicking_listener_drop_still_wakes_the_retirement,
             ),
+            (
+                "merged_updates_keep_the_newest_frame_and_every_retirement",
+                t::merged_updates_keep_the_newest_frame_and_every_retirement,
+            ),
         ],
     );
 }

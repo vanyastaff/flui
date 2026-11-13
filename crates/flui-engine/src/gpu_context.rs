@@ -18,13 +18,15 @@
 use std::{cell::Cell, marker::PhantomData, sync::Arc};
 
 use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel, panic::FirstPanic};
-use flui_layer::{DamageRegion, Scene};
+use flui_layer::{DamageRegion, Scene, TextureUpdates};
 use flui_platform::{DisplayColor, DisplayConnection, SurfaceTarget};
+use rustc_hash::FxHashMap;
 
 use crate::{
     FrameLatency,
     device_domain::DeviceDomain,
     error::{EngineError, EngineResult},
+    external_texture_registry::{ExternalTextureRegistry, KeptTextures},
     gpu_backend::{Attempt, GpuBackend},
     layer_dispatcher::LayerDispatcher,
     offscreen::OffscreenRenderer,
@@ -289,11 +291,23 @@ pub struct GpuContext {
     /// window frame.
     blit: Option<OffscreenRenderer>,
     slots: SlotTable,
+    /// Each slot's external textures: a presentation mints its texture ids
+    /// alone, so two slots' ids collide in the shared painter, which is lent
+    /// a slot's textures for the length of its frame. Kept from a slot's
+    /// first update until it detaches, across device rebuilds.
+    textures: FxHashMap<SlotId, KeptTextures>,
     #[cfg(test)]
     builds: ContextBuilds,
+    /// Flush submissions of texture writes a frame did not submit.
+    #[cfg(test)]
+    texture_flushes: Cell<usize>,
     /// How many of the next offscreen frames panic after their recording.
     #[cfg(test)]
     panics_ahead: u32,
+    /// When set, the next frame's painter setup panics, as a tracing
+    /// subscriber can.
+    #[cfg(test)]
+    panic_in_next_setup: bool,
     /// When set, the next torn painter's drop panics.
     #[cfg(test)]
     panic_in_next_cleanup: bool,
@@ -523,6 +537,9 @@ impl GpuContext {
             pipelines: None,
             blit: None,
             slots: SlotTable::default(),
+            textures: FxHashMap::default(),
+            #[cfg(test)]
+            texture_flushes: Cell::new(0),
             #[cfg(test)]
             builds: ContextBuilds {
                 devices: 1,
@@ -533,6 +550,8 @@ impl GpuContext {
             panics_ahead: 0,
             #[cfg(test)]
             panic_in_next_cleanup: false,
+            #[cfg(test)]
+            panic_in_next_setup: false,
             #[cfg(test)]
             rebuilds_failing: 0,
             _one_mutator: PhantomData,
@@ -570,6 +589,9 @@ impl GpuContext {
         self.painter = None;
         self.pipelines = None;
         self.blit = None;
+        for kept in self.textures.values_mut() {
+            kept.leave_device();
+        }
         self.adapter = adapter;
         self.domain = DeviceDomain::new(Arc::new(device), Arc::new(queue));
         install_device_diagnostics(&self.domain);
@@ -722,7 +744,121 @@ impl GpuContext {
 
     /// Detach `slot`; `false` for a stale id or one already detached.
     pub(crate) fn detach(&mut self, slot: SlotId) -> bool {
+        self.textures.remove(&slot);
         self.slots.remove(slot).is_some()
+    }
+
+    /// Apply `updates` to `slot`'s external textures.
+    ///
+    /// # Errors
+    /// [`EngineError::InvalidRenderTarget`] for a slot that is not attached;
+    /// the first frame no texture of the device can hold, the others still
+    /// applied.
+    pub(crate) fn apply_slot_textures(
+        &mut self,
+        slot: SlotId,
+        updates: TextureUpdates,
+    ) -> EngineResult<()> {
+        if self.slots.get(slot).is_none() {
+            return Err(not_attached());
+        }
+        // A slot that never drew a texture keeps nothing for a retirement.
+        if updates.frames.is_empty() && !self.textures.contains_key(&slot) {
+            return Ok(());
+        }
+        self.textures
+            .entry(slot)
+            .or_default()
+            .apply(&self.domain, updates)
+    }
+
+    /// Put `slot`'s external textures on the current device before its
+    /// frame takes the painter, so the lend itself uploads nothing and a
+    /// panic here (a tracing subscriber is not ours) costs neither the
+    /// painter nor the blit. Answers whether it wrote to the queue: a frame
+    /// that then submits nothing flushes the writes
+    /// ([`Self::flush_texture_writes`]).
+    fn prepare_textures(&mut self, slot: SlotId) -> bool {
+        let Some(kept) = self.textures.get_mut(&slot) else {
+            return false;
+        };
+        let domain = &self.domain;
+        let mut caught = FirstPanic::new();
+        let wrote = caught.contain(|| kept.prepare(domain));
+        if wrote.is_none() {
+            // Whatever the upload wrote before it unwound is flushed, so a
+            // panic that repeats each frame cannot pile up staging memory.
+            let _flushed = caught.contain(|| self.flush_texture_writes());
+            caught.resume();
+        }
+        wrote.unwrap_or(true)
+    }
+
+    /// Run the frame setup that follows [`Self::prepare_textures`] (taking
+    /// the painter, building the blit): a panic there (a tracing subscriber
+    /// is not ours) flushes the texture writes the frame made, as a panic of
+    /// the draw does, before it is resumed.
+    fn after_uploads<T>(&mut self, wrote: bool, setup: impl FnOnce(&mut Self) -> T) -> T {
+        let mut caught = FirstPanic::new();
+        let made = caught.contain(|| setup(&mut *self));
+        if let Some(made) = made {
+            return made;
+        }
+        if wrote {
+            let _flushed = caught.contain(|| self.flush_texture_writes());
+        }
+        caught.resume();
+        unreachable!("BUG: a contained call that did not return holds its panic")
+    }
+
+    /// Submit the texture writes a frame made and did not submit:
+    /// `write_texture` holds staging memory until a queue submission, and a
+    /// frame can end without one (no damage, a surface not acquired, an
+    /// error, a panic). Bounded by the domain's submission ledger as a frame
+    /// is; a refused flush leaves the writes to the next submission, which a
+    /// frame admitted by the same ledger makes.
+    fn flush_texture_writes(&self) {
+        let flushed = self
+            .domain
+            .prepare(Vec::new(), Vec::new())
+            .and_then(|prepared| self.domain.submit(prepared));
+        #[cfg(test)]
+        self.texture_flushes.set(self.texture_flushes.get() + 1);
+        drop(flushed);
+    }
+
+    /// Lend `slot`'s external textures to `painter` for the slot's frame,
+    /// handing back the painter's own registry, which
+    /// [`Self::take_back_textures`] returns to it.
+    ///
+    /// While lent, the slot keeps no allocations: a frame that unwinds before
+    /// they come back leaves the slot to upload its kept images again on its
+    /// next frame, never to draw from the painter's empty registry.
+    fn lend_textures(
+        &mut self,
+        slot: SlotId,
+        painter: &mut WgpuPainter,
+    ) -> Option<ExternalTextureRegistry> {
+        let mut lent = self.textures.get_mut(&slot)?.lend(&self.domain);
+        painter.swap_external_textures(&mut lent);
+        Some(lent)
+    }
+
+    /// Take `slot`'s external textures back from `painter`, giving the
+    /// painter the registry [`Self::lend_textures`] handed out.
+    fn take_back_textures(
+        &mut self,
+        slot: SlotId,
+        painter: &mut WgpuPainter,
+        own: Option<ExternalTextureRegistry>,
+    ) {
+        let Some(mut registry) = own else {
+            return;
+        };
+        painter.swap_external_textures(&mut registry);
+        if let Some(kept) = self.textures.get_mut(&slot) {
+            kept.take_back(registry);
+        }
     }
 
     /// Clear offscreen `slot` to the frame background and draw `tree` over it.
@@ -744,8 +880,10 @@ impl GpuContext {
             let entry = self.offscreen_slot(slot)?;
             (entry.target()?.clone(), entry.format, entry.size)
         };
-        let _submission_scope = self.domain.begin_frame_scope()?;
-        let mut painter = self.take_painter(format, size);
+        let submission_scope = self.domain.begin_frame_scope()?;
+        let wrote = self.prepare_textures(slot);
+        let mut painter = self.after_uploads(wrote, |this| this.take_painter(format, size));
+        let own_textures = self.lend_textures(slot, &mut painter);
         #[cfg(test)]
         let panics = self.injected_panic();
         let domain = &self.domain;
@@ -777,12 +915,21 @@ impl GpuContext {
             painter.finish_frame();
             drawn
         });
+        self.take_back_textures(slot, &mut painter, own_textures);
+        drop(submission_scope);
         let Some(drawn) = drawn else {
             self.keep_pipelines(painter, &mut caught);
+            if wrote {
+                let _flushed = caught.contain(|| self.flush_texture_writes());
+            }
             caught.resume();
             unreachable!("BUG: a contained call that did not return holds its panic")
         };
         self.painter = Some(painter);
+        // A submitted frame carried the texture writes made before it.
+        if wrote && drawn.is_err() {
+            self.flush_texture_writes();
+        }
         drawn
     }
 
@@ -813,14 +960,21 @@ impl GpuContext {
             // Released, or not sized yet: nothing to present into.
             return Ok(PresentDisposition::NotShown);
         };
-        let mut painter = self.take_painter(format, size);
-        painter.resize(size.0, size.1);
-        // The blit's pipelines, like the library's, are inserted only once
-        // built, so an unwound frame leaves them whole.
-        let mut blit = self
-            .blit
-            .take()
-            .unwrap_or_else(|| OffscreenRenderer::with_domain(Arc::clone(&self.domain)));
+        // Uploads run before the painter and the blit are taken, and the
+        // painter is taken only once it is built and retargeted, so a panic
+        // in either step (a tracing subscriber is not ours) costs neither.
+        let wrote = self.prepare_textures(slot);
+        let (mut painter, mut blit) = self.after_uploads(wrote, |this| {
+            let painter = this.take_painter(format, size);
+            // The blit's pipelines, like the library's, are inserted only
+            // once built, so an unwound frame leaves them whole.
+            let blit = this
+                .blit
+                .take()
+                .unwrap_or_else(|| OffscreenRenderer::with_domain(Arc::clone(&this.domain)));
+            (painter, blit)
+        });
+        let own_textures = self.lend_textures(slot, &mut painter);
         let Self {
             adapter,
             domain,
@@ -832,6 +986,7 @@ impl GpuContext {
         };
         let mut caught = FirstPanic::new();
         let rendered = caught.contain(|| {
+            painter.resize(size.0, size.1);
             window.render(
                 &gpu_of(adapter, domain),
                 &mut painter,
@@ -841,8 +996,12 @@ impl GpuContext {
             )
         });
         self.blit = Some(blit);
+        self.take_back_textures(slot, &mut painter, own_textures);
         let Some(rendered) = rendered else {
             self.keep_pipelines(painter, &mut caught);
+            if wrote {
+                let _flushed = caught.contain(|| self.flush_texture_writes());
+            }
             caught.resume();
             unreachable!("BUG: a contained call that did not return holds its panic")
         };
@@ -850,6 +1009,10 @@ impl GpuContext {
         // acquire errors come before it records, and a recording error is
         // closed by the frame protocol's cleanup.
         self.painter = Some(painter);
+        // A presented frame submitted the texture writes made before it.
+        if wrote && !matches!(rendered, Ok(PresentDisposition::Presented)) {
+            self.flush_texture_writes();
+        }
         rendered
     }
 
@@ -902,6 +1065,13 @@ impl GpuContext {
         self.panics_ahead = frames;
     }
 
+    /// Make the next frame's painter setup panic, after its texture
+    /// uploads, as a tracing subscriber can.
+    #[cfg(test)]
+    pub(crate) fn panic_in_next_setup(&mut self) {
+        self.panic_in_next_setup = true;
+    }
+
     /// Make the drop of the next torn painter panic, as a cached value's
     /// destructor can.
     #[cfg(test)]
@@ -929,16 +1099,43 @@ impl GpuContext {
         panics
     }
 
-    /// The shared painter, retargeted to `format` and sized for `size`; built
-    /// first when no complete frame left one, over the pipelines an unwound
+    /// The shared painter, retargeted to `format`; built first, sized for
+    /// `size`, when no complete frame left one, over the pipelines an unwound
     /// frame's painter left.
+    ///
+    /// Everything that can fail runs while the painter and the library are
+    /// still fields, and the painter is taken last: a panic here (a tracing
+    /// subscriber, wgpu's error handler) leaves both for the next frame, as
+    /// [`Self::keep_pipelines`] does for a panic of the draw.
     fn take_painter(&mut self, format: wgpu::TextureFormat, size: (u32, u32)) -> WgpuPainter {
-        let taken = self.painter.take();
-        let mut painter = if let Some(painter) = taken {
-            painter
-        } else {
-            self.built_painter(format, size)
-        };
+        if self.painter.is_none() {
+            #[cfg(test)]
+            {
+                self.builds.glyph_atlases += 1;
+            }
+            if self.pipelines.is_none() {
+                #[cfg(test)]
+                {
+                    self.builds.pipeline_sets += 1;
+                }
+                self.pipelines = Some(PipelineLibrary::new(self.domain.device(), format));
+            }
+            self.painter = Some(WgpuPainter::with_pipelines(
+                Arc::clone(&self.domain),
+                &mut self.pipelines,
+                size,
+                crate::frame_protocol::FontSource::Ordinary,
+            ));
+        }
+        let painter = self
+            .painter
+            .as_mut()
+            .expect("BUG: the painter was put in place above");
+        #[cfg(test)]
+        assert!(
+            !std::mem::take(&mut self.panic_in_next_setup),
+            "injected panic in a frame's painter setup"
+        );
         #[cfg(test)]
         let sets_before = painter.pipeline_sets_built();
         painter.retarget(format);
@@ -946,29 +1143,9 @@ impl GpuContext {
         {
             self.builds.pipeline_sets += painter.pipeline_sets_built() - sets_before;
         }
-        painter
-    }
-
-    /// A painter with empty caches, over the pipelines an unwound frame's
-    /// painter left, or over a library built for `format`.
-    fn built_painter(&mut self, format: wgpu::TextureFormat, size: (u32, u32)) -> WgpuPainter {
-        #[cfg(test)]
-        {
-            self.builds.glyph_atlases += 1;
-        }
-        let pipelines = self.pipelines.take().unwrap_or_else(|| {
-            #[cfg(test)]
-            {
-                self.builds.pipeline_sets += 1;
-            }
-            PipelineLibrary::new(self.domain.device(), format)
-        });
-        WgpuPainter::with_pipelines(
-            Arc::clone(&self.domain),
-            pipelines,
-            size,
-            crate::frame_protocol::FontSource::Ordinary,
-        )
+        self.painter
+            .take()
+            .expect("BUG: the painter was put in place above")
     }
 
     fn gpu(&self) -> Gpu<'_> {
@@ -1122,6 +1299,10 @@ impl SlotBackend for GpuContext {
         if let Some((window, gpu)) = self.window_slot(slot) {
             window.set_latency(&gpu, latency);
         }
+    }
+
+    fn apply_textures(&mut self, slot: SlotId, updates: TextureUpdates) -> EngineResult<()> {
+        self.apply_slot_textures(slot, updates)
     }
 
     fn render(
@@ -1648,6 +1829,431 @@ mod tests {
                 "the slot keeps its size and draws the same frame"
             );
         }
+    }
+
+    /// Two presentations each mint texture id 1 and draw it through slots
+    /// that share the context's painter: each slot draws its own image, after
+    /// a device rebuild too, and a detach drops a slot's textures.
+    ///
+    /// Red-check: skip lending the slot's textures to the shared painter in
+    /// `lend_textures` and no frame can draw its texture; skip the
+    /// re-upload in `KeptTextures::prepare` and the frames after the rebuild fail.
+    #[test]
+    fn each_slot_draws_its_own_textures_under_the_same_id_across_a_rebuild() {
+        use flui_foundation::ManualClock;
+        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_painting::paint::Image;
+
+        const SIDE: u32 = 8;
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let clock = ManualClock::new();
+        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let colors = [[255, 0, 0, 255], [0, 0, 255, 255]];
+        let presentations = colors.map(|rgba| {
+            let slot = sender.mint_slot().expect("a slot id is left");
+            let address = PresentationAddress {
+                ui_runtime_id: UiRuntimeId::new(1),
+                presentation_id: PresentationId::new(slot.index() as usize + 1),
+            };
+            let _receipt = sender
+                .send(RasterCommand::Attach {
+                    slot,
+                    address,
+                    target: SlotTarget::Offscreen {
+                        size: DeviceSize::new(8, 8),
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    },
+                    config: SlotConfig::new(),
+                })
+                .expect("the attach is accepted");
+            let registry = TextureRegistry::new(std::sync::Arc::new(|| {}));
+            let texture = registry.register().expect("an id is left");
+            texture.submit_frame(Image::from_rgba8(2, 2, rgba.repeat(4)));
+            (slot, address, registry, texture)
+        });
+        assert_eq!(
+            presentations[0].3.id(),
+            presentations[1].3.id(),
+            "each presentation mints its own ids"
+        );
+        let draw = |executor: &mut RasterExecutor<GpuContext>| {
+            for (slot, address, registry, texture) in &presentations {
+                let generation = sender
+                    .record(*slot)
+                    .expect("the owner holds the slot")
+                    .required_generation;
+                let tree = LayerTree::new(Layer::from(TextureLayer::new(
+                    texture.id(),
+                    Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+                )));
+                let RasterCommand::Frame { slot, snapshot } =
+                    frame(*slot, *address, generation, tree)
+                else {
+                    unreachable!("BUG: `frame` makes a frame command");
+                };
+                sender
+                    .send(RasterCommand::Frame {
+                        slot,
+                        snapshot: snapshot.textures(registry.take_updates()),
+                    })
+                    .expect("the frame is accepted");
+            }
+            let _ = executor.turn();
+            presentations.each_ref().map(|(slot, ..)| {
+                let mut settled = Vec::new();
+                sender.drain_settlements(*slot, &mut settled);
+                assert_eq!(settled.len(), 1, "each frame settles once");
+                let pixels = executor
+                    .backend()
+                    .read_slot(*slot)
+                    .expect("the slot reads back");
+                (
+                    settled[0].verdict,
+                    [pixels[0], pixels[1], pixels[2], pixels[3]],
+                )
+            })
+        };
+
+        let expected = colors.map(|rgba| (RasterVerdict::Presented, rgba));
+        assert_eq!(
+            draw(&mut executor),
+            expected,
+            "each slot draws its own image"
+        );
+
+        executor.backend().lose_device();
+        let _ = draw(&mut executor);
+        // The rebuild ran in that turn; frames stamped before it are stale.
+        let _ = draw(&mut executor);
+        assert_eq!(
+            executor.backend().builds().devices,
+            2,
+            "the device was rebuilt"
+        );
+        assert_eq!(
+            draw(&mut executor),
+            expected,
+            "the new device has each slot's image back"
+        );
+
+        let detached = presentations[0].0;
+        let _receipt = sender
+            .send(RasterCommand::Detach { slot: detached })
+            .expect("the detach is accepted");
+        let _ = executor.turn();
+        assert!(
+            !executor.backend().textures.contains_key(&detached),
+            "a detach drops the slot's textures"
+        );
+    }
+
+    /// A frame that unwinds while it holds a slot's lent textures, outside
+    /// the contained draw (building the window blit, say), drops them with
+    /// the painter: the slot's next frame uploads its kept images again
+    /// instead of drawing from the painter's empty registry.
+    ///
+    /// Red-check: lend by swapping the slot's registry with the painter's,
+    /// leaving the painter's empty one in the slot, and the next frame
+    /// cannot find the texture.
+    #[test]
+    fn a_frame_unwound_with_lent_textures_leaves_the_slot_its_images() {
+        use flui_foundation::ManualClock;
+        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_painting::paint::Image;
+
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let clock = ManualClock::new();
+        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let slot = sender.mint_slot().expect("a slot id is left");
+        let address = PresentationAddress {
+            ui_runtime_id: UiRuntimeId::new(1),
+            presentation_id: PresentationId::new(1),
+        };
+        let _receipt = sender
+            .send(RasterCommand::Attach {
+                slot,
+                address,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(8, 8),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let registry = TextureRegistry::new(std::sync::Arc::new(|| {}));
+        let texture = registry.register().expect("an id is left");
+        texture.submit_frame(Image::from_rgba8(2, 2, RED.repeat(4)));
+        let draw = |executor: &mut RasterExecutor<GpuContext>| {
+            let generation = sender
+                .record(slot)
+                .expect("the owner holds the slot")
+                .required_generation;
+            let tree = LayerTree::new(Layer::from(TextureLayer::new(
+                texture.id(),
+                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            )));
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            else {
+                unreachable!("BUG: `frame` makes a frame command");
+            };
+            sender
+                .send(RasterCommand::Frame {
+                    slot,
+                    snapshot: snapshot.textures(registry.take_updates()),
+                })
+                .expect("the frame is accepted");
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            sender.drain_settlements(slot, &mut settled);
+            let pixels = executor
+                .backend()
+                .read_slot(slot)
+                .expect("the slot reads back");
+            (
+                settled[0].verdict,
+                [pixels[0], pixels[1], pixels[2], pixels[3]],
+            )
+        };
+        assert_eq!(draw(&mut executor), (RasterVerdict::Presented, RED));
+
+        // What an unwind between the lend and the take-back leaves.
+        let context = executor.backend_mut();
+        context.prepare_textures(slot);
+        let mut painter = context.take_painter(wgpu::TextureFormat::Rgba8Unorm, (8, 8));
+        let own = context.lend_textures(slot, &mut painter);
+        assert!(own.is_some(), "the slot has textures to lend");
+        drop(painter);
+        drop(own);
+
+        assert_eq!(
+            draw(&mut executor),
+            (RasterVerdict::Presented, RED),
+            "the slot draws its kept image after the unwound frame"
+        );
+    }
+
+    /// A hidden slot whose producer keeps sending frames writes none of them
+    /// to the queue, which holds staging memory until a submission and gets
+    /// none from a hidden slot: it keeps the newest image of each texture,
+    /// and shown again, it uploads and draws that one.
+    ///
+    /// Red-check: upload each frame as it is applied and the hidden slot's
+    /// frames reach the queue: nothing is left to upload while it is hidden.
+    #[test]
+    fn a_hidden_slot_keeps_its_newest_images_off_the_queue() {
+        use crate::raster_executor::{SlotChange, SlotVisibility};
+        use flui_foundation::ManualClock;
+        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_painting::paint::Image;
+
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let clock = ManualClock::new();
+        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let slot = sender.mint_slot().expect("a slot id is left");
+        let address = PresentationAddress {
+            ui_runtime_id: UiRuntimeId::new(1),
+            presentation_id: PresentationId::new(1),
+        };
+        let _receipt = sender
+            .send(RasterCommand::Attach {
+                slot,
+                address,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(8, 8),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let registry = TextureRegistry::new(std::sync::Arc::new(|| {}));
+        let texture = registry.register().expect("an id is left");
+        let draw = |executor: &mut RasterExecutor<GpuContext>, shade: u8| {
+            texture.submit_frame(Image::from_rgba8(2, 2, [shade, 0, 0, 255].repeat(4)));
+            let generation = sender
+                .record(slot)
+                .expect("the owner holds the slot")
+                .required_generation;
+            let tree = LayerTree::new(Layer::from(TextureLayer::new(
+                texture.id(),
+                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            )));
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            else {
+                unreachable!("BUG: `frame` makes a frame command");
+            };
+            sender
+                .send(RasterCommand::Frame {
+                    slot,
+                    snapshot: snapshot.textures(registry.take_updates()),
+                })
+                .expect("the frame is accepted");
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            sender.drain_settlements(slot, &mut settled);
+            settled[0].verdict
+        };
+        let show = |executor: &mut RasterExecutor<GpuContext>, visibility| {
+            let _receipt = sender
+                .send(RasterCommand::Configure {
+                    slot,
+                    change: SlotChange::Shown(visibility),
+                })
+                .expect("the change is accepted");
+            let _ = executor.turn();
+        };
+
+        assert_eq!(draw(&mut executor, 10), RasterVerdict::Presented);
+        show(&mut executor, SlotVisibility::Hidden);
+        for shade in 20..=23 {
+            assert_eq!(draw(&mut executor, shade), RasterVerdict::NotShown);
+            assert_eq!(
+                executor.backend().textures[&slot].waiting(),
+                1,
+                "the hidden slot keeps one image per texture off the queue"
+            );
+        }
+        show(&mut executor, SlotVisibility::Shown);
+        assert_eq!(draw(&mut executor, 30), RasterVerdict::Presented);
+        assert_eq!(executor.backend().textures[&slot].waiting(), 0);
+        let pixels = executor
+            .backend()
+            .read_slot(slot)
+            .expect("the slot reads back");
+        assert_eq!(
+            [pixels[0], pixels[1], pixels[2], pixels[3]],
+            [30, 0, 0, 255],
+            "shown again, the slot draws its newest image"
+        );
+    }
+
+    /// A frame that uploads a texture image and then ends without its own
+    /// submission (here it panics; on a window, no damage and a surface not
+    /// acquired end the same way) flushes the writes, since `write_texture`
+    /// holds staging memory until a submission; a frame that submits flushes
+    /// nothing more, and the next frame draws the newest image. The
+    /// offscreen frame cleared its target, a submission of its own, before
+    /// the injected panic, so the count pins the flush on the unwound exit,
+    /// not memory a missing flush would have held; the window exits run the
+    /// same call on wgpu's no-op backend only.
+    ///
+    /// Red-check: drop the flush from the unwound exit of `render_slot` and
+    /// no flush is counted.
+    #[test]
+    fn a_frame_that_submits_nothing_flushes_its_texture_writes() {
+        use flui_foundation::ManualClock;
+        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_painting::paint::Image;
+
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let clock = ManualClock::new();
+        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let slot = sender.mint_slot().expect("a slot id is left");
+        let address = PresentationAddress {
+            ui_runtime_id: UiRuntimeId::new(1),
+            presentation_id: PresentationId::new(1),
+        };
+        let _receipt = sender
+            .send(RasterCommand::Attach {
+                slot,
+                address,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(8, 8),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let registry = TextureRegistry::new(std::sync::Arc::new(|| {}));
+        let texture = registry.register().expect("an id is left");
+        let draw = |executor: &mut RasterExecutor<GpuContext>, shade: Option<u8>| {
+            if let Some(shade) = shade {
+                texture.submit_frame(Image::from_rgba8(2, 2, [shade, 0, 0, 255].repeat(4)));
+            }
+            let generation = sender
+                .record(slot)
+                .expect("the owner holds the slot")
+                .required_generation;
+            let tree = LayerTree::new(Layer::from(TextureLayer::new(
+                texture.id(),
+                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            )));
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            else {
+                unreachable!("BUG: `frame` makes a frame command");
+            };
+            sender
+                .send(RasterCommand::Frame {
+                    slot,
+                    snapshot: snapshot.textures(registry.take_updates()),
+                })
+                .expect("the frame is accepted");
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            sender.drain_settlements(slot, &mut settled);
+            settled[0].verdict
+        };
+        let flushes =
+            |executor: &RasterExecutor<GpuContext>| executor.backend().texture_flushes.get();
+
+        assert_eq!(draw(&mut executor, Some(10)), RasterVerdict::Presented);
+        assert_eq!(
+            flushes(&executor),
+            0,
+            "a submitted frame carries its writes"
+        );
+
+        executor.backend_mut().panic_in_next_frame();
+        let _ = draw(&mut executor, Some(20));
+        let _ = sender.take_failure(slot);
+        assert_eq!(
+            flushes(&executor),
+            1,
+            "the unwound frame flushed its writes"
+        );
+
+        assert_eq!(draw(&mut executor, None), RasterVerdict::Presented);
+        let pixels = executor
+            .backend()
+            .read_slot(slot)
+            .expect("the slot reads back");
+        assert_eq!(pixels[0], 20, "the next frame draws the newest image");
+        assert_eq!(flushes(&executor), 1);
+
+        // A panic after the uploads but before the draw (retargeting the
+        // painter) flushes too, and keeps the painter and its pipelines.
+        let builds = executor.backend().builds();
+        executor.backend_mut().panic_in_next_setup();
+        let _ = draw(&mut executor, Some(30));
+        let _ = sender.take_failure(slot);
+        assert_eq!(
+            flushes(&executor),
+            2,
+            "a frame unwound in its painter setup flushed its writes"
+        );
+        assert_eq!(draw(&mut executor, None), RasterVerdict::Presented);
+        let pixels = executor
+            .backend()
+            .read_slot(slot)
+            .expect("the slot reads back");
+        assert_eq!(
+            pixels[0], 30,
+            "the next frame draws the image the unwound one uploaded"
+        );
+        let after = executor.backend().builds();
+        assert_eq!(
+            (after.glyph_atlases, after.pipeline_sets),
+            (builds.glyph_atlases, builds.pipeline_sets),
+            "the unwound setup left the painter and its pipelines for the next frame"
+        );
     }
 
     /// Dropping the painter a frame unwound with runs destructors that are not

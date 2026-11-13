@@ -4,7 +4,8 @@
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use flui_foundation::{ManualClock, geometry::DeviceSize, memory::MemoryPressureLevel};
-use flui_layer::{DamageRegion, Scene};
+use flui_layer::{DamageRegion, Scene, TextureUpdates};
+use flui_painting::paint::TextureId;
 use flui_platform::DisplayColor;
 
 use crate::{
@@ -52,6 +53,8 @@ pub enum SlotCall {
     DisplayColor(SlotId, DisplayColor),
     /// `set_latency`.
     Latency(SlotId, FrameLatency),
+    /// `apply_textures`; [`ScriptedSlots::textures`] holds what it applied.
+    Textures(SlotId),
     /// `render`, with the damage it was asked to repaint.
     Render(SlotId, DamageRegion),
     /// `detach`.
@@ -62,6 +65,19 @@ pub enum SlotCall {
     RebuildDevice,
 }
 
+/// The texture ids one `apply_textures` call on a [`ScriptedSlots`] backend
+/// was given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AppliedTextures {
+    /// The slot the updates were for.
+    pub slot: SlotId,
+    /// The textures that received a frame, in the order given.
+    pub frames: Vec<TextureId>,
+    /// The textures retired, in the order given.
+    pub retired: Vec<TextureId>,
+}
+
 #[derive(Default)]
 struct Script {
     calls: Vec<SlotCall>,
@@ -69,6 +85,8 @@ struct Script {
     resizes: VecDeque<ScriptedAnswer>,
     restores: VecDeque<ScriptedAnswer>,
     renders: VecDeque<ScriptedAnswer>,
+    texture_answers: VecDeque<ScriptedAnswer>,
+    textures: Vec<AppliedTextures>,
     rebuilds: VecDeque<ScriptedAnswer>,
     /// The slots the next successful rebuild cannot present to.
     rebuild_refusals: Vec<(SlotId, EngineError)>,
@@ -122,6 +140,17 @@ impl ScriptedSlots {
     /// Answer the next unanswered restore with `answer`.
     pub fn script_restore(&self, answer: ScriptedAnswer) {
         self.script.borrow_mut().restores.push_back(answer);
+    }
+
+    /// Answer the next unanswered `apply_textures` with `answer`.
+    pub fn script_textures(&self, answer: ScriptedAnswer) {
+        self.script.borrow_mut().texture_answers.push_back(answer);
+    }
+
+    /// The texture updates applied so far, oldest first.
+    #[must_use]
+    pub fn textures(&self) -> Vec<AppliedTextures> {
+        self.script.borrow().textures.clone()
     }
 
     /// Lose the device: every render fails
@@ -192,6 +221,7 @@ impl ScriptedSlots {
         match call {
             SlotCall::Attach(..) => script.attaches.pop_front(),
             SlotCall::Render(..) => script.renders.pop_front(),
+            SlotCall::Textures(_) => script.texture_answers.pop_front(),
             SlotCall::Resize(..) => script.resizes.pop_front(),
             SlotCall::Restore(_) => script.restores.pop_front(),
             SlotCall::Release(_)
@@ -250,6 +280,17 @@ impl SlotBackend for ScriptedSlots {
 
     fn set_latency(&mut self, slot: SlotId, latency: FrameLatency) {
         let _none = self.answer(SlotCall::Latency(slot, latency));
+    }
+
+    fn apply_textures(&mut self, slot: SlotId, updates: TextureUpdates) -> EngineResult<()> {
+        let applied = AppliedTextures {
+            slot,
+            frames: updates.frames.iter().map(|(id, _)| *id).collect(),
+            retired: updates.retired.clone(),
+        };
+        self.script.borrow_mut().textures.push(applied);
+        // The images drop here, after the script is released.
+        self.succeed(SlotCall::Textures(slot), "textures")
     }
 
     fn render(

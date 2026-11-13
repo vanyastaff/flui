@@ -398,7 +398,7 @@ executor runs each command under its own catch, in both placements.
   record asks the owner for a new surface, which the owner makes with the factory and sends in a
   `Restore`. A slot over the new device's size limit keeps its surface unconfigured and holds
   `InvalidTargetSize` until a resize fits, as an offscreen slot does. Each slot redraws in full
-  and re-uploads its external textures from its registry
+  and re-uploads its external textures from the newest image of each that it keeps
   (ADR-0233).
 - On the web the rebuild is a future the owner spawns; frames settle `DeviceLost` until it ends.
 

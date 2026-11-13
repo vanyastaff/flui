@@ -1,7 +1,7 @@
 //! The executor's GPU-free seam (ADR-0305 §11).
 
 use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel};
-use flui_layer::{DamageRegion, Scene};
+use flui_layer::{DamageRegion, Scene, TextureUpdates};
 use flui_platform::DisplayColor;
 
 use super::{
@@ -58,6 +58,18 @@ pub trait SlotBackend {
 
     /// Window slot `slot`'s swapchain holds `latency` frames from now on.
     fn set_latency(&mut self, slot: SlotId, latency: FrameLatency);
+
+    /// Apply `updates` to `slot`'s external textures before its next frame:
+    /// keep each frame as its texture's newest image, uploaded when the
+    /// slot next draws, and release each retired texture. The textures are
+    /// the slot's own, since a presentation mints its texture ids alone, and
+    /// outlive a device rebuild; a detach drops them.
+    ///
+    /// # Errors
+    /// The first frame refused (an empty image, one past the device's
+    /// texture limit); the texture keeps its previous image, and every
+    /// other frame and retirement is still applied.
+    fn apply_textures(&mut self, slot: SlotId, updates: TextureUpdates) -> EngineResult<()>;
 
     /// Render `scene` into `slot`, repainting at least `damage`.
     ///
