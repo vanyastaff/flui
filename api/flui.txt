@@ -2966,7 +2966,7 @@ impl Eq for flui::devtools::gesture_inspector::MemberReport
 impl PartialEq for flui::devtools::gesture_inspector::MemberReport
 impl core::fmt::Debug for flui::devtools::gesture_inspector::MemberReport
 impl core::marker::StructuralPartialEq for flui::devtools::gesture_inspector::MemberReport
-pub enum flui::devtools::gesture_inspector::Verdict
+#[non_exhaustive] pub enum flui::devtools::gesture_inspector::Verdict
 impl Clone for flui::devtools::gesture_inspector::Verdict
 impl Copy for flui::devtools::gesture_inspector::Verdict
 impl Eq for flui::devtools::gesture_inspector::Verdict
@@ -3106,7 +3106,7 @@ pub fn flui::devtools::profiler::PhaseInfo::start_offset_ms(&self) -> f64
 reexport flui::devtools::profiler::Profiler => flui::devtools::Profiler
 reexport flui::devtools::profiler::ProfilerConfig => flui::devtools::ProfilerConfig
 pub mod flui::devtools::timeline
-pub enum flui::devtools::timeline::EventCategory
+#[non_exhaustive] pub enum flui::devtools::timeline::EventCategory
 impl Clone for flui::devtools::timeline::EventCategory
 impl Copy for flui::devtools::timeline::EventCategory
 impl Eq for flui::devtools::timeline::EventCategory

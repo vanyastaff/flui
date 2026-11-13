@@ -660,6 +660,11 @@ unnecessary_unwrap = "warn"
 # `PresentDisposition` and the raster seam's outcome enums are, for ADR-0068
 # §2's reason), so its match needs no `_`. A foreign enum's site takes
 # `#[expect(..., reason = "...")]`.
+# A public enum is `#[non_exhaustive]` unless its closure is a decision, which
+# `#[expect(clippy::exhaustive_enums, reason = "...")]` on it states (ADR-0329).
+# A crate whose enums are not decided yet carries the `expect` at its root, and
+# `docs/gaps.md` lists those crates.
+exhaustive_enums = "warn"
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
 too_many_lines = "allow"
