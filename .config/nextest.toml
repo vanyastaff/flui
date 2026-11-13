@@ -89,6 +89,26 @@ slow-timeout = { period = "600s", terminate-after = 3 }
 filter = 'binary_id(flui-cli::cli_it) & test(=cli_live_agent::an_agent_presses_the_counter_on_a_live_device)'
 slow-timeout = { period = "600s", terminate-after = 6 }
 
+# The acceptance application's desktop scenario is two tests, run one at a
+# time in the `live-acceptance-app` group, the build first (`priority`).
+# `the_acceptance_app_builds_and_answers_on_the_desktop` builds the generated
+# application cold, into a target directory kept under the test binary's
+# (`CARGO_TARGET_TMPDIR`), and waits for its home page: it gets a build's
+# budget. The cold build with the Material catalog ran past the default
+# 600 s on a 4-core Windows runner (nightly run 43410936624). Then
+# `an_agent_drives_the_acceptance_app_on_the_desktop` compiles only the
+# generated crate and keeps the default budget for driving the app, so a
+# slow app fails as itself and not as a slow build.
+[[profile.default.overrides]]
+filter = 'binary_id(flui-cli::cli_it) & test(=cli_live_agent::the_acceptance_app_builds_and_answers_on_the_desktop)'
+slow-timeout = { period = "600s", terminate-after = 6 }
+priority = 80
+test-group = 'live-acceptance-app'
+
+[[profile.default.overrides]]
+filter = 'binary_id(flui-cli::cli_it) & test(=cli_live_agent::an_agent_drives_the_acceptance_app_on_the_desktop)'
+test-group = 'live-acceptance-app'
+
 [[profile.default.overrides]]
 filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-interaction::compile_fail) | binary_id(flui-platform::compile_fail) | binary_id(flui-widgets::routable_ui) | binary_id(flui-widgets::nested_scroll_ui) | binary_id(flui::thread_boundary_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
 slow-timeout = { period = "300s", terminate-after = 4 }
@@ -138,6 +158,9 @@ xtask-binary = { max-threads = 1 }
 x11-server = { max-threads = 1 }
 # One XDND source at a time owns `XdndSelection` (see `xdnd-selection` below).
 xdnd-selection = { max-threads = 1 }
+# The acceptance application's build, then its scenario on the same target
+# directory (see the overrides at the top).
+live-acceptance-app = { max-threads = 1 }
 # Named, not limited: see the trybuild and nested-cargo overrides at the top.
 nested-cargo = { max-threads = "num-cpus" }
 trybuild = { max-threads = "num-cpus" }
