@@ -106,8 +106,10 @@ impl Icon {
 
     /// Set the accessibility label announced for this icon.
     ///
-    /// A labelled icon contributes image semantics, including when no glyph is
-    /// set. An unlabelled icon is decorative and contributes no glyph label.
+    /// A labelled icon contributes its label, and no role of its own, including
+    /// when no glyph is set: inside a control the label names the control's
+    /// node, as Flutter's `Icon` does. An unlabelled icon is decorative and
+    /// contributes no glyph label.
     #[must_use]
     pub fn semantic_label(mut self, semantic_label: impl Into<String>) -> Self {
         self.semantic_label = Some(semantic_label.into());
@@ -195,9 +197,7 @@ impl StatelessView for Icon {
         };
         let mut semantics = Semantics::new();
         if let Some(label) = self.semantic_label.as_ref() {
-            semantics = semantics
-                .label(label.clone())
-                .role(crate::SemanticsRole::Image);
+            semantics = semantics.label(label.clone());
         }
         let built = semantics.child(icon).boxed();
         match self.effect.as_ref().or(theme.symbol_effect.as_ref()) {

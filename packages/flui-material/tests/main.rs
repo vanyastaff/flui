@@ -155,6 +155,10 @@ fn action_component_contracts() {
             icon_button::icon_button_theme_slot_reaches_the_icons_icon_theme,
         ),
         (
+            "icon_button::a labelled icon names the button it sits in",
+            icon_button::a_labelled_icon_names_the_button_it_sits_in,
+        ),
+        (
             "icon_button::a toggle icon button announces its selection",
             icon_button::a_toggle_icon_button_announces_its_selection,
         ),
