@@ -124,23 +124,31 @@ anchor over the child for `Focus`, the render object itself for the node. Recogn
 one `RecognizerHost` (`interaction/raw_gesture_detector.rs`) in the same way, owned by
 `RawGestureDetector` and by the node. One implementation, two hosts.
 
-### §2 Enablement has one source
+### §2 Enablement has one switch, and operating needs a press
 
-The node's `enabled` is the only switch. While it is `false`:
+The node has two inputs: its `enabled` switch, and whether it is given a press. The switch alone
+says whether the control is disabled; the control can be operated while it is on and the node has
+a press. A control that is enabled and given no press (a `ListTile` without `on_tap`, Flutter's
+`InkWell` without callbacks) is not disabled, and nothing operates it.
 
-| Part | Effect |
-|---|---|
-| semantics | the configuration says disabled and offers no action |
-| pointer | no recognizer joins an arena; the hit-test behaviour is unchanged, so a disabled control still covers what is beneath it |
-| hover | `on_enter`/`on_hover` are not called, the cursor is not applied |
-| focus | the node cannot request focus and gives up the focus it holds, as `can_request_focus(false)` does today |
-| actions | every bound mapping answers `is_enabled` `false` and stays declared, so the intent stops at the control and does not activate an enclosing one |
-| states | `WidgetState::Disabled` is set; `Hovered` and `Pressed` are cleared |
+| Part | While the switch is off | While the control cannot be operated |
+|---|---|---|
+| semantics | says disabled and offers no action | offers no action |
+| pointer | no recognizer joins an arena; the hit-test behaviour is unchanged, so the control still covers what is beneath it | the same |
+| hover | `on_enter`/`on_hover` are not called, the cursor is not applied | the same |
+| focus | the node cannot request focus and gives up the focus it holds, as `can_request_focus(false)` does | the same |
+| actions | every bound mapping answers `is_enabled` `false` and stays declared, so the intent stops at the control and does not activate an enclosing one | the same |
+| states | `WidgetState::Disabled` is set; `Hovered` and `Pressed` are cleared | `Hovered` and `Pressed` are cleared |
+
+A control whose switch is not "has a handler" sets it on the node itself; the catalogs' `InkWell`
+takes it through a crate-private `enabled`, from `ListTile::enabled` and from the switch each
+control around it seeds `Disabled` from (§3).
 
 The semantics part has no `enabled` of its own, and the focus part's `can_request_focus` and
-`Action::is_enabled` are conjoined with the node's switch, never a second source: a control is
-enabled for an intent when the node is enabled and the action is. The node's own description
-reads no bound action (its click is its tap's, its focus its focus node's), so it listens to no
+`Action::is_enabled` are conjoined with whether the node can be operated (its switch and its
+press), never a second source: a control is enabled for an intent when it can be operated and the
+action is. The node's own description reads no bound action (its click is its tap's, its focus its
+focus node's), so it listens to no
 `Action::enablement_changes`. A description that does offer a command through a bound action names
 that action's notifier as a refresh source, as `Semantics::refresh_on` and the gesture alternatives
 do today, and is described again on the signal without a rebuild.
@@ -162,7 +170,8 @@ which reads the focus node.
   activation the control runs holds it. The controller counts the sources: the node's contact and
   the holds a control takes with `WidgetStatesController::hold_pressed`, a `PressHold` token
   (`#[doc(hidden)]`, for the catalogs) that releases its hold when dropped. `Pressed` is set while
-  any source is live and the control is enabled, so a contact inside a hold, or a hold inside a
+  any source is live and the control can be operated (§2), so a contact inside a hold, or a hold
+  inside a
   contact, is one press. Flutter's `InkWell` keeps `pressed` for `_activationDuration` after an
   activation; `InkWell` here holds a `PressHold` for that time;
 - `Focused`: the node or a descendant of it holds the primary focus, as `Focus::on_focus_change`
@@ -187,10 +196,15 @@ control that is gone. A controller given later starts at what the node is: the f
 node's, so one that arrives holding any of them keeps only what is true of this control, and a
 press or a hover under way follows its contact or its pointers to it. A control that hands its node
 another controller under a hold takes a hold on the new one before it drops the old, and a control
-that becomes disabled drops its holds. Before it subscribes to a controller, a control may set
-`Disabled` on it to the value the node will write in the next build (Flutter's
-`initStatesController`), so the node's write notifies nobody while the control builds; it writes no
-other state.
+that can no longer be operated (switched off, or left without a handler) drops its holds.
+
+The node owns `Disabled` as it owns the other four, and a control whose build reads the controller
+above the node (a button's style, a checkbox's colors) also sets `Disabled` to the value the node
+will write before that build: when it creates the controller, takes another, or its switch changes,
+as Flutter's `initStatesController` and `didUpdateWidget` do. Unseeded, that build resolves from
+the old value and the node's write during the build notifies the control to build again in the
+same frame. The seed and the node's switch are one function of the control (`is_interactive`, or
+`InkWell::is_enabled`), never two expressions; the control writes no other state.
 
 The two focus edges are delivered each on its own: a handler of one that panics does not cost the
 other, and the first failure is the one resumed (ADR-0281).
@@ -419,6 +433,17 @@ render object or already owns the element the value comes from.
   disable during a contact. The pointer and
   action rows of a control that keeps its callback while disabled are the node's `switch_tests`
   (`crates/flui-widgets/src/interaction/node.rs`).
+- `list_tile::a_tile_is_disabled_only_when_it_says_so_and_operable_with_a_handler`: the switch
+  apart from the press, on a `ListTile` over every combination; the in-crate
+  `ink_well::tests::the_switch_writes_disabled_whatever_the_handler`,
+  `an_enabled_well_without_a_handler_tracks_no_pointer` and
+  `a_well_that_loses_its_handler_keeps_no_hover` hold the states rows of "cannot be operated" on
+  the well's controller, and the node's
+  `switch_tests::an_enabled_node_without_a_press_binds_nothing_live`
+  its focus and actions rows.
+- `ink_well::a_control_turned_off_or_on_builds_each_element_once`: a control that reads its
+  controller above the node seeds `Disabled` before that build (§3);
+  `a_replaced_controller_keeps_no_disabled`: the replaced controller is cleared.
 - `hover_repaints_without_rebuilding`: a hover over a control whose child reads the controller at
   paint (a `CustomPainter` that returns it from `repaint`) builds no element, lays out no node and
   paints the reader's repaint boundary alone.
