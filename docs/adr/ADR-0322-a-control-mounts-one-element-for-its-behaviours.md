@@ -147,7 +147,8 @@ control around it seeds `Disabled` from (§3).
 The semantics part has no `enabled` of its own, and the focus part's `can_request_focus` and
 `Action::is_enabled` are conjoined with whether the node can be operated (its switch and its
 press), never a second source: a control is enabled for an intent when it can be operated and the
-action is. The node's own description reads no bound action (its click is its tap's, its focus its focus node's), so it listens to no
+action is. The node's own description reads no bound action (its click is its tap's, its focus its
+focus node's), so it listens to no
 `Action::enablement_changes`. A description that does offer a command through a bound action names
 that action's notifier as a refresh source, as `Semantics::refresh_on` and the gesture alternatives
 do today, and is described again on the signal without a rebuild.
@@ -169,7 +170,8 @@ which reads the focus node.
   activation the control runs holds it. The controller counts the sources: the node's contact and
   the holds a control takes with `WidgetStatesController::hold_pressed`, a `PressHold` token
   (`#[doc(hidden)]`, for the catalogs) that releases its hold when dropped. `Pressed` is set while
-  any source is live and the control can be operated (§2), so a contact inside a hold, or a hold inside a
+  any source is live and the control can be operated (§2), so a contact inside a hold, or a hold
+  inside a
   contact, is one press. Flutter's `InkWell` keeps `pressed` for `_activationDuration` after an
   activation; `InkWell` here holds a `PressHold` for that time;
 - `Focused`: the node or a descendant of it holds the primary focus, as `Focus::on_focus_change`
@@ -436,7 +438,8 @@ render object or already owns the element the value comes from.
   `ink_well::tests::the_switch_writes_disabled_whatever_the_handler`,
   `an_enabled_well_without_a_handler_tracks_no_pointer` and
   `a_well_that_loses_its_handler_keeps_no_hover` hold the states rows of "cannot be operated" on
-  the well's controller, and the node's `switch_tests::an_enabled_node_without_a_press_binds_nothing_live`
+  the well's controller, and the node's
+  `switch_tests::an_enabled_node_without_a_press_binds_nothing_live`
   its focus and actions rows.
 - `ink_well::a_control_turned_off_or_on_builds_each_element_once`: a control that reads its
   controller above the node seeds `Disabled` before that build (§3);
