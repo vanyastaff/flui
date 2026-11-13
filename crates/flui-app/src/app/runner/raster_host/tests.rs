@@ -852,30 +852,3 @@ pub(in crate::app::runner) fn attach_a_window(
 fn owed_surface(host: &RasterHost) -> Option<web_time::Instant> {
     host.wake_deadline(|_| true)
 }
-
-/// A loop whose deadline wake runs no frame (UIKit) asks a frame of each
-/// window whose raster work is due and whose frames run, and of no other:
-/// that frame is what serves the work and moves the deadline on.
-///
-/// Red-check: drop either filter of `RasterHost::due_windows` and a window
-/// is named before its deadline or while its frames are off.
-#[test]
-fn a_window_is_asked_for_a_frame_once_its_raster_work_is_due() {
-    let (mut host, slots) = self::host();
-    let mut scene = TestScene::new(AT);
-    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
-    let _ = host.set_surface(address(), false);
-    slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
-    assert!(!host.set_surface(address(), true));
-    let due = owed_surface(&host).expect("a refused surface is owed on its pace");
-    let before = due
-        .checked_sub(std::time::Duration::from_millis(1))
-        .expect("the clock reaches a moment before the deadline");
-
-    assert!(host.due_windows(before, |_| true).is_empty(), "not due yet");
-    assert_eq!(host.due_windows(due, |_| true), vec![address()]);
-    assert!(
-        host.due_windows(due, |_| false).is_empty(),
-        "a window whose frames are off has no frame to ask for"
-    );
-}

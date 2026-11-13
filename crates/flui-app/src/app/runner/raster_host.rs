@@ -306,11 +306,6 @@ struct HostSlot {
     /// The first panic of the slot's frames since the window last reported
     /// one to its UI runtime ([`RasterSlot::report_frame_panic`]).
     panic: flui_foundation::panic::FirstPanic,
-    /// Asks the window for a frame: a UIKit owner wake runs no frame, so a
-    /// raster deadline that comes due there asks the scene's display link
-    /// for the frame that serves it ([`RasterHost::due_frames`]).
-    #[cfg(target_os = "ios")]
-    redraw: Option<Arc<dyn flui_platform::RedrawRequester>>,
 }
 
 impl HostSlot {
@@ -427,16 +422,7 @@ impl RasterHost {
         display: Option<DisplayColor>,
     ) -> Result<(), EngineError> {
         let surface_target = self.surface_target(window);
-        self.attach_target(surface_target, address, config, textures, display)?;
-        #[cfg(target_os = "ios")]
-        if let Some(slot) = self
-            .placed
-            .as_mut()
-            .and_then(|placed| placed.slots.get_mut(&address))
-        {
-            slot.redraw = Some(window.redraw_requester());
-        }
-        Ok(())
+        self.attach_target(surface_target, address, config, textures, display)
     }
 
     /// Give the window whose surfaces are made over `surface_target` a slot,
@@ -522,8 +508,6 @@ impl RasterHost {
                 available: true,
                 restore: RestorePace::default(),
                 panic: caught,
-                #[cfg(target_os = "ios")]
-                redraw: None,
             },
         );
         Ok(())
@@ -1130,48 +1114,6 @@ impl RasterHost {
             .filter(|&address| frames_run(address))
             .filter_map(|address| self.window_deadline(address))
             .min()
-    }
-
-    /// The windows whose frames run (`frames_run`) and whose raster work
-    /// ([`window_deadline`](Self::window_deadline)) is due at `now`: the
-    /// frames a loop whose deadline wake runs no frame asks for.
-    #[cfg_attr(
-        not(any(target_os = "ios", all(test, feature = "testing"))),
-        expect(dead_code, reason = "only a UIKit owner wake runs no frame")
-    )]
-    fn due_windows(
-        &self,
-        now: Instant,
-        frames_run: impl Fn(PresentationAddress) -> bool,
-    ) -> Vec<PresentationAddress> {
-        let Some(placed) = self.placed.as_ref() else {
-            return Vec::new();
-        };
-        placed
-            .slots
-            .keys()
-            .copied()
-            .filter(|&address| frames_run(address))
-            .filter(|&address| self.window_deadline(address).is_some_and(|due| due <= now))
-            .collect()
-    }
-
-    /// Who to ask for the frame of each window [`due_windows`](Self::due_windows)
-    /// names, asked by the caller once the host is no longer borrowed: the
-    /// platform's requester is not the host's code.
-    #[cfg(target_os = "ios")]
-    pub(crate) fn due_frames(
-        &self,
-        now: Instant,
-        frames_run: impl Fn(PresentationAddress) -> bool,
-    ) -> Vec<Arc<dyn flui_platform::RedrawRequester>> {
-        let Some(placed) = self.placed.as_ref() else {
-            return Vec::new();
-        };
-        self.due_windows(now, frames_run)
-            .into_iter()
-            .filter_map(|address| placed.slots.get(&address)?.redraw.clone())
-            .collect()
     }
 
     /// When `address`'s own window may try for the surface it is owed: the

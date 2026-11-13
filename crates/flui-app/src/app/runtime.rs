@@ -1055,7 +1055,7 @@ impl AppRuntime {
     /// presentation deadlines and the raster work of each window whose frames
     /// run (`RasterHost::wake_deadline`). Logical runtime checkout must have
     /// returned; desktop pacing metadata remains readable while a native frame
-    /// driver is leased. Every platform's wake hook asks it.
+    /// driver is leased. The wake hook of every native loop asks it.
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
@@ -1120,20 +1120,6 @@ impl AppRuntime {
             .logical()
             .runtime_status(address.ui_runtime_id)
             .is_ok_and(|status| status.frames_enabled)
-    }
-
-    /// Who to ask for a frame for each scene whose raster work is due at
-    /// `now`: a UIKit owner wake, which the loop's deadline is, runs no
-    /// frame, so a scene whose display link is paused asks for the frame
-    /// that serves it. Asked by the caller, with nothing borrowed.
-    #[cfg(target_os = "ios")]
-    pub(super) fn due_raster_frames(
-        &self,
-        now: web_time::Instant,
-    ) -> Vec<std::sync::Arc<dyn flui_platform::RedrawRequester>> {
-        self.raster_host
-            .try_read(|host| host.due_frames(now, |address| self.frames_run(address)))
-            .unwrap_or_default()
     }
 
     pub(super) fn close_requests(&self) -> Rc<super::close_request::CloseRequestRouter> {
