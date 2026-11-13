@@ -381,12 +381,13 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             view.default_style.clone(),
         );
 
-        let mut ink_well = InkWell::new(
-            Padding::new(padding).child(DefaultTextStyle::new(text_style, view.child.clone())),
-        )
-        .shape(shape)
-        .overlay_color(overlay_color)
-        .states_controller(self.states.clone());
+        let mut ink_well = InkWell::new()
+            .child(
+                Padding::new(padding).child(DefaultTextStyle::new(text_style, view.child.clone())),
+            )
+            .shape(shape)
+            .overlay_color(overlay_color)
+            .states_controller(self.states.clone());
         if let Some(on_pressed) = view.on_pressed.clone() {
             ink_well = ink_well.on_tap(move |ctx| on_pressed(ctx));
         }

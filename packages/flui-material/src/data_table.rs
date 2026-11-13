@@ -747,7 +747,7 @@ fn wrap_selectable(
     on_tap: impl Fn(&mut flui_sdk::view::EventContext<'_>) + 'static,
     overlay: Option<RowColorProperty>,
 ) -> BoxedView {
-    let mut ink_well = InkWell::new(content).on_tap(on_tap);
+    let mut ink_well = InkWell::new().child(content).on_tap(on_tap);
     if let Some(overlay) = overlay {
         ink_well = ink_well.overlay_color(overlay);
     }

@@ -31,7 +31,8 @@ pub fn press_highlight_lasts_its_delay_under_reduced_motion() {
     use std::time::Duration;
     let states = WidgetStatesController::default();
     let mut laid = lay_out(
-        InkWell::new(SizedBox::new(80.0, 40.0))
+        InkWell::new()
+            .child(SizedBox::new(80.0, 40.0))
             .states_controller(states.clone())
             .on_tap(|_| {}),
         tight(80.0, 40.0),
@@ -58,7 +59,8 @@ pub fn pointer_and_keyboard_activation_write_the_owning_signal() {
     let node = FocusNode::with_debug_label("writer-activation");
     let child_node = Rc::clone(&node);
     let probe = common::SignalProbe::new(move |signals| {
-        InkWell::new(SizedBox::new(80.0, 40.0))
+        InkWell::new()
+            .child(SizedBox::new(80.0, 40.0))
             .focus_node(Rc::clone(&child_node))
             .on_tap(move |ctx| signals.count.update(ctx, |count| *count += 1))
     });
@@ -85,7 +87,9 @@ pub fn disabled_ink_well_does_not_fire_a_tap_callback() {
     // flag (see `ink_well.rs`'s module doc).
     let states = WidgetStatesController::default();
     let laid = lay_out(
-        InkWell::new(SizedBox::new(60.0, 40.0)).states_controller(states.clone()),
+        InkWell::new()
+            .child(SizedBox::new(60.0, 40.0))
+            .states_controller(states.clone()),
         tight(60.0, 40.0),
     );
 
@@ -221,7 +225,8 @@ pub fn a_well_shows_focus_only_when_the_keyboard_is_in_use() {
     let states = WidgetStatesController::default();
     let mut laid = lay_out(
         themed(
-            InkWell::new(SizedBox::new(80.0, 40.0))
+            InkWell::new()
+                .child(SizedBox::new(80.0, 40.0))
                 .focus_node(Rc::clone(&node))
                 .states_controller(states.clone())
                 .on_tap(|_| {}),
@@ -333,7 +338,7 @@ impl StatelessView for WrapperWell {
 fn well(made: Made, on_tap: Option<OnTap>, child: impl IntoView) -> BoxedView {
     match made {
         Made::Well => {
-            let mut well = InkWell::new(child);
+            let mut well = InkWell::new().child(child);
             if let Some(on_tap) = on_tap {
                 well = well.on_tap(move |ctx| on_tap(ctx));
             }
@@ -546,7 +551,8 @@ pub fn a_disabled_ink_well_is_disabled_in_every_part() {
             GestureDetector::new()
                 .on_tap(move |ctx| beneath(ctx))
                 .child(SizedBox::new(80.0, 40.0)),
-            InkWell::new(Focus::new(SizedBox::new(80.0, 40.0)).focus_node(Rc::clone(&inner)))
+            InkWell::new()
+                .child(Focus::new(SizedBox::new(80.0, 40.0)).focus_node(Rc::clone(&inner)))
                 .states_controller(states.clone()),
         )))
         .action::<ActivateIntent>(Outer(Rc::clone(&log))),
@@ -652,7 +658,9 @@ impl ViewState<ToggledWell> for ToggledWellState {
         let generation = self.generation.get(ctx);
         let [first, second] = &view.states;
         let states = if self.first.get(ctx) { first } else { second };
-        let well = InkWell::new(SizedBox::new(80.0, 40.0)).states_controller(states.clone());
+        let well = InkWell::new()
+            .child(SizedBox::new(80.0, 40.0))
+            .states_controller(states.clone());
         if self.enabled.get(ctx) {
             well.on_tap(move |_ctx| {
                 let _ = generation;

@@ -72,7 +72,7 @@ const DEFAULT_MARGIN: f64 = 4.0;
 /// use flui_material::Card;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _card = Card::new(Text::new("A related panel of content"));
+/// let _card = Card::new().child(Text::new("A related panel of content"));
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct Card {
@@ -81,7 +81,7 @@ pub struct Card {
     shape: Option<MaterialShape>,
     clip_behavior: Option<Clip>,
     margin: Option<EdgeInsets>,
-    child: BoxedView,
+    child: Option<BoxedView>,
 }
 
 impl std::fmt::Debug for Card {
@@ -96,18 +96,33 @@ impl std::fmt::Debug for Card {
     }
 }
 
+impl Default for Card {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Card {
-    /// A `Card` around `child`, with every visual property falling through
-    /// to `_CardDefaultsM3` (see the module docs' token table).
-    pub fn new(child: impl IntoView) -> Self {
+    /// A `Card` with no child, with every visual property falling through
+    /// to `_CardDefaultsM3` (see the module docs' token table). Flutter's
+    /// `Card.child` is nullable: an empty card is its margin around an
+    /// empty surface.
+    pub fn new() -> Self {
         Self {
             color: None,
             elevation: None,
             shape: None,
             clip_behavior: None,
             margin: None,
-            child: BoxedView::new(child.into_view()),
+            child: None,
         }
+    }
+
+    /// Sets the content the card's surface holds.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Some(BoxedView::new(child.into_view()));
+        self
     }
 
     /// Overrides the card's [`Material`] fill color.
@@ -205,12 +220,13 @@ impl StatelessView for Card {
             margin,
         } = resolve_style(&theme, self.color, self.elevation, self.shape, self.margin);
 
-        Padding::new(margin).child(
-            Material::new(color)
-                .elevation(elevation)
-                .shape(shape)
-                .clip_behavior(self.clip_behavior.unwrap_or(Clip::None))
-                .child(self.child.clone()),
-        )
+        let mut material = Material::new(color)
+            .elevation(elevation)
+            .shape(shape)
+            .clip_behavior(self.clip_behavior.unwrap_or(Clip::None));
+        if let Some(child) = &self.child {
+            material = material.child(child.clone());
+        }
+        Padding::new(margin).child(material)
     }
 }

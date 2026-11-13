@@ -315,15 +315,16 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         let interactive = view.is_interactive();
         let next_value = view.value.clone();
         let on_changed = view.on_changed.clone();
-        let mut ink_well = InkWell::new(
-            CustomPaint::new()
-                .size(Size::new(RADIO_TAP_TARGET_SIZE, RADIO_TAP_TARGET_SIZE))
-                .painter(painter),
-        )
-        .shape(MaterialShape::Stadium)
-        .overlay_color(overlay_color)
-        .states_controller(self.states.clone())
-        .focus_indicator(FocusIndicator::Halo);
+        let mut ink_well = InkWell::new()
+            .child(
+                CustomPaint::new()
+                    .size(Size::new(RADIO_TAP_TARGET_SIZE, RADIO_TAP_TARGET_SIZE))
+                    .painter(painter),
+            )
+            .shape(MaterialShape::Stadium)
+            .overlay_color(overlay_color)
+            .states_controller(self.states.clone())
+            .focus_indicator(FocusIndicator::Halo);
         if interactive {
             ink_well = ink_well.on_tap(move |ctx| {
                 if selected {
