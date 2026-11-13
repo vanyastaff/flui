@@ -1,0 +1,7 @@
+# Written by `cargo xtask perf --bless`; counts, not timings.
+# One scenario of crates/flui-widgets/tests/perf.rs.
+
+[idle_frame_retained_scene]
+allocated_bytes = 3328
+allocations = 24
+reallocations = 0

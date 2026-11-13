@@ -3,30 +3,37 @@
 use core::fmt;
 use core::num::NonZeroU64;
 
+use crate::generation::Generation;
 use crate::geometry::Rect;
-use crate::id::{ElementId, LayerId, RenderId, SemanticsId};
+use crate::id::{ElementId, RenderId, SemanticsId};
 
 use super::fields::{Fields, Inspect};
 
-/// A layer of one painted scene.
+/// A boundary of one retained scene, or one entry of what it paints.
 ///
-/// A [`LayerId`] is minted per frame from the first slot, so the same id names an unrelated
-/// layer in the next scene. The scene number tells the two apart, as a generation does for a
-/// reused slot of a generational id.
+/// A boundary keeps its node across frames while it stays in the scene, so a repaint elsewhere
+/// leaves its id alone; a retired node's slot is reissued under the next generation, and an owner
+/// that starts over takes a new lineage, so a kept id never names an unrelated node. An entry is
+/// counted within the boundary's current content, so an id kept from content the boundary has
+/// since repainted names what now sits at that position, or nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SceneLayer {
-    /// The scene the layer belongs to, counted from 1 by the tree's producer.
+    /// The lineage of the scene owner the node belongs to.
     pub scene: NonZeroU64,
-    /// The layer within that scene.
-    pub id: LayerId,
+    /// The node's slot in its scene, counted from 0.
+    pub slot: u32,
+    /// The generation of that slot the node holds.
+    pub generation: Generation,
+    /// The entry of the node's content, counted from 0 in paint order; `None` for the node.
+    pub entry: Option<u32>,
 }
 
 /// A typed reference to a node of one of the trees.
 ///
 /// Its text form is the tree's prefix and the id's slot: `v3` (element), `r12` (render), `l4`
 /// (layer), `s7` (semantics). A generational id whose generation is past the first adds it
-/// (`r12.2`), so a reused slot never reads as the node it replaced; a layer adds its scene the same
-/// way (`l4.37`).
+/// (`r12.2`), so a reused slot never reads as the node it replaced. A layer adds its entry after a
+/// colon and its scene after an at sign: `l4.2:3@7` is entry 3 of node `l4.2@7`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Link {
@@ -58,12 +65,18 @@ impl fmt::Display for Link {
         let (slot, generation) = match *self {
             Self::Element(id) => (u64::from(id.index()), u64::from(id.generation().as_u32())),
             Self::Render(id) => (u64::from(id.index()), u64::from(id.generation().as_u32())),
-            Self::Layer(layer) => (layer.id.get() as u64, layer.scene.get()),
+            Self::Layer(layer) => (u64::from(layer.slot), u64::from(layer.generation.as_u32())),
             Self::Semantics(id) => (id.get() as u64, 1),
         };
         write!(f, "{}{slot}", self.prefix())?;
         if generation > 1 {
             write!(f, ".{generation}")?;
+        }
+        if let Self::Layer(layer) = self {
+            if let Some(entry) = layer.entry {
+                write!(f, ":{entry}")?;
+            }
+            write!(f, "@{}", layer.scene)?;
         }
         Ok(())
     }

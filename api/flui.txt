@@ -4413,8 +4413,10 @@ variant flui::foundation::inspect::Role::Id // at 1
 variant flui::foundation::inspect::Role::Kind // at 0
 variant flui::foundation::inspect::Role::Value // at 3
 pub struct flui::foundation::inspect::SceneLayer
-field flui::foundation::inspect::SceneLayer::id: flui::foundation::LayerId // at 1
+field flui::foundation::inspect::SceneLayer::entry: Option<u32> // at 3
+field flui::foundation::inspect::SceneLayer::generation: flui::foundation::generation::Generation // at 2
 field flui::foundation::inspect::SceneLayer::scene: core::num::nonzero::NonZeroU64 // at 0
+field flui::foundation::inspect::SceneLayer::slot: u32 // at 1
 impl Clone for flui::foundation::inspect::SceneLayer
 impl Copy for flui::foundation::inspect::SceneLayer
 impl Eq for flui::foundation::inspect::SceneLayer
@@ -30840,6 +30842,7 @@ variant flui_layer::scene::content::Bounds::Unbounded // at 1
 pub struct flui_layer::scene::content::Chunk { .. }
 impl Clone for flui_layer::scene::content::Chunk
 impl core::fmt::Debug for flui_layer::scene::content::Chunk
+impl flui::Inspect for flui_layer::scene::content::Chunk
 pub fn flui_layer::scene::content::Chunk::bounds(&self) -> flui_layer::scene::content::Bounds
 pub fn flui_layer::scene::content::Chunk::commands(&self) -> &flui::painting::DisplayList
 pub fn flui_layer::scene::content::Chunk::new(owner: flui::foundation::RenderId, ordinal: u32, version: flui_layer::scene::id::ContentVersion, commands: flui::painting::DisplayList) -> Self
@@ -30984,6 +30987,7 @@ pub fn flui_layer::scene::version::SceneNode::placement(self) -> flui_layer::sce
 pub struct flui_layer::scene::version::SceneVersion(_)
 impl Clone for flui_layer::scene::version::SceneVersion
 impl core::fmt::Debug for flui_layer::scene::version::SceneVersion
+impl flui::foundation::inspect::InspectTree for flui_layer::scene::version::SceneVersion { type Node = dyn flui::Inspect; }
 pub fn flui_layer::scene::version::SceneVersion::close_damage(&self, region: flui_layer::scene_snapshot::DamageRegion, surface: (u32, u32)) -> flui_layer::scene_snapshot::DamageRegion
 pub fn flui_layer::scene::version::SceneVersion::filtered_nodes(&self) -> impl Iterator<Item = flui_layer::scene::id::SceneNodeId> + '_
 pub fn flui_layer::scene::version::SceneVersion::find_annotation<T: core::any::Any + Send + Sync>(&self, point: flui::geometry::Point<f64>) -> Option<alloc::rcs::arc::Arc<T>>
@@ -31127,7 +31131,6 @@ pub fn flui_layer::tree::layer_tree::LayerNode::with_render(self, render_id: flu
 pub struct flui_layer::tree::layer_tree::LayerTree { .. }
 impl Default for flui_layer::tree::layer_tree::LayerTree
 impl core::fmt::Debug for flui_layer::tree::layer_tree::LayerTree
-impl flui::foundation::inspect::InspectTree for flui_layer::tree::layer_tree::LayerTree { type Node = flui_layer::layer::Layer; }
 pub fn flui_layer::tree::layer_tree::LayerTree::children(&self, id: flui::foundation::LayerId) -> Option<&[flui::foundation::LayerId]>
 pub fn flui_layer::tree::layer_tree::LayerTree::contains(&self, id: flui::foundation::LayerId) -> bool
 pub fn flui_layer::tree::layer_tree::LayerTree::find_annotation<T: core::any::Any + Send + Sync>(&self, point: flui::geometry::Point<f64>) -> Option<alloc::rcs::arc::Arc<T>>
