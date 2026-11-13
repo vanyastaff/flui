@@ -23,6 +23,7 @@ use flui_painting::{paint::Clip, styling::Color};
 
 /// Coarse category of a drawing command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DrawKind {
     /// Rectangle (filled or stroked).
     Rect,

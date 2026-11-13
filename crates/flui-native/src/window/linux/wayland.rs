@@ -1215,6 +1215,7 @@ mod toplevel {
     use std::ffi::c_void;
     use std::ptr::NonNull;
     use std::rc::Rc;
+    use std::rc::Weak as RcWeak;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Weak};
 
@@ -1539,7 +1540,7 @@ mod toplevel {
         queue: QueueHandle<WaylandState>,
         displays: Arc<dyn WaylandDisplays>,
         portal: PortalSlot,
-        table: Weak<WindowTable>,
+        table: RcWeak<WindowTable>,
         waker: Weak<LoopWaker>,
         viewported: bool,
         /// The compositor offers to draw the window's frame.

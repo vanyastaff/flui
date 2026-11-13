@@ -181,6 +181,7 @@ pub struct AnchorCorrection {
 /// extent need not be re-derived, an estimated one is provisional.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[must_use]
+#[expect(clippy::exhaustive_enums, reason = "a total is final or provisional")]
 pub enum Extent {
     /// Every item is measured; this total is final.
     Exact(f64),
@@ -203,6 +204,7 @@ impl Extent {
 /// value. Type-level so "estimated vs. measured" is a variant, never a side
 /// boolean — illegal states (e.g. "measured but no value") are unrepresentable.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(clippy::exhaustive_enums, reason = "an item is measured or it is not")]
 pub enum ItemExtent {
     /// Not yet laid out; `hint` is the estimate used for windowing until a real
     /// measurement arrives.

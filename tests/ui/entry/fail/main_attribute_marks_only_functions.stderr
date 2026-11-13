@@ -1,0 +1,5 @@
+error: `#[flui::main]` marks a function: `pub fn run() -> Result<(), flui::LaunchError>`
+ --> tests/ui/entry/fail/main_attribute_marks_only_functions.rs:3:5
+  |
+3 | pub struct Run;
+  |     ^^^^^^

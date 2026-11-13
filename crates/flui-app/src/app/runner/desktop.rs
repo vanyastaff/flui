@@ -21,7 +21,7 @@ use super::owner_dispatch::{
     PresentationDispatcher, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
     install_input_wiring, prepare_ui_runtime_alongside,
 };
-use crate::app::{AppConfig, AppRunError, LaunchError, UnsupportedSystem};
+use crate::app::AppConfig;
 
 pub(super) struct RenderedMain {
     pub(super) window: Rc<dyn PlatformWindow>,
@@ -384,38 +384,6 @@ where
         address: owner_dispatch.address,
         installation,
     })
-}
-
-pub(super) fn run_desktop<V>(root: V, launch: crate::app::AppLaunch) -> Result<(), LaunchError>
-where
-    V: View + Clone + 'static,
-{
-    let crate::app::AppLaunch {
-        config,
-        capabilities,
-    } = launch;
-    let mut application = crate::app::Application::new(move |_| root.clone()).config(config);
-    application.capabilities = capabilities;
-    match application.run() {
-        Ok(()) => Ok(()),
-        Err(AppRunError::CapabilityConflict(conflict)) => {
-            Err(LaunchError::CapabilityConflict(conflict))
-        }
-        Err(AppRunError::UnsupportedSystem(unsupported)) => {
-            tracing::error!(%unsupported, "FLUI cannot run on this system");
-            Err(LaunchError::UnsupportedSystem(unsupported))
-        }
-        Err(AppRunError::Platform { source }) => Err(LaunchError::Platform { source }),
-        // No GPU backend gave the first window a device: below the floor,
-        // which needs one (ADR-0244 §1).
-        Err(AppRunError::InitialWindow(crate::app::AppWindowError::Renderer { source }))
-            if let Some(unsupported) = UnsupportedSystem::from_renderer(source.as_ref()) =>
-        {
-            tracing::error!(%unsupported, "FLUI cannot run on this system");
-            Err(LaunchError::UnsupportedSystem(unsupported))
-        }
-        Err(error) => panic!("desktop bootstrap failed: {error}"),
-    }
 }
 
 pub(super) struct DesktopFrameDriver {

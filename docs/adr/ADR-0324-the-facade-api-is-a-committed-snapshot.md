@@ -113,8 +113,8 @@ it ever outgrows `test`, it moves to an `ON_DEMAND` row of the change-scope aggr
 - Bad, because a rustdoc JSON format change can rewrite many lines at once; the renderer reads
   the JSON untyped and writes `?` for a shape it does not know, so such a change is visible, not
   silent.
-- Neutral, because only the host's build is recorded: an item another target builds (Android's
-  `run_app_android`, the Windows host's extensions) is not in the file.
+- Neutral, because only the host's build is recorded: an item another target builds (the Windows
+  host's extensions) is not in the file.
 
 ### Confirmation
 

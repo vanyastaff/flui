@@ -87,6 +87,10 @@ pub trait OwnerEffects {
 
 /// Whether accepted work ran in this call or joined an existing owner turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "accepted work runs in this call or joins the current owner turn"
+)]
 pub enum Delivery {
     /// This call acquired the owner turn and started delivery.
     Driven,
