@@ -385,8 +385,9 @@ pub struct SceneSnapshot {
     /// reports once shown, or a scene built by hand.
     pub scene: Scene,
     /// The presentation's external-texture frames and retirements since its
-    /// previous snapshot. The raster executor applies them to the slot's own
-    /// textures before this frame renders, whether or not it is shown, and a
+    /// previous snapshot. The raster executor hands them to the slot's own
+    /// textures before this frame renders, whether or not it is shown (the
+    /// slot keeps the frames and uploads them when it draws), and a
     /// frame that supersedes another unshown one carries the other's too
     /// ([`TextureUpdates::merge`]). The deprecated raster owner reads none of
     /// them: its lane takes the registry's updates itself.

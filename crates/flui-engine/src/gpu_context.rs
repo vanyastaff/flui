@@ -773,16 +773,27 @@ impl GpuContext {
     /// that then submits nothing flushes the writes
     /// ([`Self::flush_texture_writes`]).
     fn prepare_textures(&mut self, slot: SlotId) -> bool {
-        self.textures
-            .get_mut(&slot)
-            .is_some_and(|kept| kept.prepare(&self.domain))
+        let Some(kept) = self.textures.get_mut(&slot) else {
+            return false;
+        };
+        let domain = &self.domain;
+        let mut caught = FirstPanic::new();
+        let wrote = caught.contain(|| kept.prepare(domain));
+        if wrote.is_none() {
+            // Whatever the upload wrote before it unwound is flushed, so a
+            // panic that repeats each frame cannot pile up staging memory.
+            let _flushed = caught.contain(|| self.flush_texture_writes());
+            caught.resume();
+        }
+        wrote.unwrap_or(true)
     }
 
     /// Submit the texture writes a frame made and did not submit:
     /// `write_texture` holds staging memory until a queue submission, and a
     /// frame can end without one (no damage, a surface not acquired, an
     /// error, a panic). Bounded by the domain's submission ledger as a frame
-    /// is; a refused flush leaves the writes to the next submission.
+    /// is; a refused flush leaves the writes to the next submission, which a
+    /// frame admitted by the same ledger makes.
     fn flush_texture_writes(&self) {
         let flushed = self
             .domain
@@ -790,9 +801,7 @@ impl GpuContext {
             .and_then(|prepared| self.domain.submit(prepared));
         #[cfg(test)]
         self.texture_flushes.set(self.texture_flushes.get() + 1);
-        if let Err(error) = flushed {
-            tracing::debug!(target: "flui.gpu", %error, "texture writes wait for the next submission");
-        }
+        drop(flushed);
     }
 
     /// Lend `slot`'s external textures to `painter` for the slot's frame,
@@ -928,6 +937,11 @@ impl GpuContext {
             // Released, or not sized yet: nothing to present into.
             return Ok(PresentDisposition::NotShown);
         };
+        // A frame the ledger would refuse writes no texture: it would fail at
+        // its frame scope, and a refused flush would leave the writes in
+        // staging memory frame after frame. The scope is the frame protocol's
+        // to open, so this one only asks.
+        drop(self.domain.begin_frame_scope()?);
         // Uploads run before the painter and the blit are taken, so a
         // panic there (a tracing subscriber is not ours) costs neither.
         let wrote = self.prepare_textures(slot);
@@ -2083,11 +2097,15 @@ mod tests {
         );
     }
 
-    /// A frame that uploads a texture image and then submits nothing (here it
-    /// panics; no damage and a surface not acquired end the same way)
-    /// flushes the writes, since `write_texture` holds staging memory until
-    /// a submission; a frame that submits flushes nothing more. The newest
-    /// image is drawn by the next frame.
+    /// A frame that uploads a texture image and then ends without its own
+    /// submission (here it panics; on a window, no damage and a surface not
+    /// acquired end the same way) flushes the writes, since `write_texture`
+    /// holds staging memory until a submission; a frame that submits flushes
+    /// nothing more, and the next frame draws the newest image. The
+    /// offscreen frame cleared its target, a submission of its own, before
+    /// the injected panic, so the count pins the flush on the unwound exit,
+    /// not memory a missing flush would have held; the window exits run the
+    /// same call on wgpu's no-op backend only.
     ///
     /// Red-check: drop the flush from the unwound exit of `render_slot` and
     /// no flush is counted.
