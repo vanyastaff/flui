@@ -16,6 +16,10 @@
 //! them that outgrew their capacity) and `allocated_bytes`. Like the frame
 //! counters they are a function of the tree and the change, not of the host;
 //! they only have to stay at or under the baseline, which `--bless` ratchets.
+//! Nothing else may move them, neither a seed drawn per run nor what an
+//! earlier test left in the process. `measured_frames_ask_the_heap_the_same_on_every_run`
+//! checks that over the list scrolls, the frames that build and drop the most;
+//! the other scenarios rely on the same code paths but are not repeated.
 //!
 //! A `perf_scaling_` scenario runs the same change on a small and a large tree
 //! and asserts that the two cost the same: equal allocations here, and equal
@@ -23,6 +27,10 @@
 //! which runs each size alone under callgrind (`FLUI_PERF_SIZE`) and counts
 //! only what runs inside [`perf_measured`]. A frame whose cost grows with nodes
 //! it does not touch fails there, though no counter of its work moves.
+//!
+//! The plateau tests at the end hold the heap level instead of a frame's cost: an
+//! application mounted, driven and dropped again and again leaves no more bytes live each
+//! time (`flui_testing::heap::assert_rounds_plateau`).
 //!
 //! A target of its own, not a module of `tests/main.rs`: it pins the
 //! process-global font system, reads the environment and installs the kit's counting
@@ -39,7 +47,7 @@ use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
 use flui_testing::control_cost::control_over_text;
-use flui_testing::heap::{CountingAllocator, HeapCounts};
+use flui_testing::heap::{CountingAllocator, HeapCounts, assert_rounds_plateau};
 use flui_testing::widgets::SharedSignal;
 use flui_testing::widgets::{LaidOut, lay_out, tight};
 use flui_testing::{FrameReport, HeadlessHost, HeadlessWindow};
@@ -364,6 +372,45 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
             && first.reallocations.abs_diff(next.reallocations) <= STEADY_SLACK,
         "a warm scroll is still warming up: one asked {first:?} of the heap, the next {next:?}"
     );
+}
+
+/// What each frame of `ROUNDS` scrolls down a screen and back asks of the
+/// heap, from a fresh mount.
+fn scroll_round_trips() -> Vec<HeapCounts> {
+    const ROUNDS: u32 = 100;
+    let mut app = mount();
+    app.laid.pump_for(FRAME);
+    (0..ROUNDS)
+        .flat_map(|_| [1, 0])
+        .map(|screen: u32| {
+            app.writer
+                .set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
+            perf_measured(|| app.pump_many(2)).1
+        })
+        .collect()
+}
+
+/// The same frames ask the heap the same on every run, whatever ran before
+/// them in the process: the gate compares exact figures from one process per
+/// scenario, `cargo test` runs every scenario in one. The first run here is
+/// the first in its process under nextest, so state a measured frame fills
+/// lazily (a `static`, a cache, a `thread_local!`) shows as a difference from
+/// the later runs; and every map built with a random seed draws a fresh one,
+/// so a figure that depends on where its keys land differs somewhere among
+/// these frames.
+#[test]
+fn measured_frames_ask_the_heap_the_same_on_every_run() {
+    let first = scroll_round_trips();
+    for run in 1..3 {
+        let again = scroll_round_trips();
+        let differs = first.iter().zip(&again).position(|(was, now)| was != now);
+        assert!(
+            differs.is_none(),
+            "run {run} differs from the first at frame {differs:?}: {:?} against {:?}",
+            differs.map(|frame| again[frame]),
+            differs.map(|frame| first[frame]),
+        );
+    }
 }
 
 /// Rows under the sliding panel: enough painted content that a subtree
@@ -744,4 +791,238 @@ fn perf_semantics_action_over_text() {
             .boxed()
     });
     record_counts("semantics_action_over_text", &cost.counts());
+}
+
+/// A press counter, driven the way an application's test drives it.
+#[derive(Clone, StatefulView)]
+struct PressCounter;
+
+struct PressCounterState {
+    presses: Signal<u32>,
+}
+
+impl StatefulView for PressCounter {
+    type State = PressCounterState;
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        PressCounterState {
+            presses: ctx.signal(0),
+        }
+    }
+}
+
+impl ViewState<PressCounter> for PressCounterState {
+    fn build(&self, _view: &PressCounter, ctx: &dyn BuildContext) -> impl IntoView {
+        let presses = self.presses;
+        Column::new(vec![
+            Text::new(format!("{} presses", self.presses.get(ctx))).boxed(),
+            RawButton::new(Text::new("Press"))
+                .on_pressed(move |ctx| presses.update(ctx, |count| *count += 1))
+                .boxed(),
+        ])
+    }
+}
+
+/// Eager rows under signals, with semantics on: every row's element, render object, layer and
+/// semantics node is made and dropped each round.
+fn round_of_eager_rows() {
+    let label = SharedSignal::new(String::from("label 0"));
+    let shown = SharedSignal::new(true);
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.enable_semantics();
+    host.attach(&Column::new(vec![
+        Expanded::new(ButtonColumn {
+            label: label.clone(),
+            buttons: 40,
+        })
+        .boxed(),
+        Expanded::new(CaretOverRows {
+            shown: shown.clone(),
+            rows: 40,
+        })
+        .boxed(),
+    ]))
+    .expect("a fresh host takes a root");
+    for frame in 0..4 {
+        label.set(format!("label {frame}"));
+        shown.set(frame % 2 == 0);
+        let _ = host.pump(FRAME);
+    }
+}
+
+/// A lazy list scrolled three screens: rows are built, retained and evicted while it runs.
+fn round_of_a_scrolled_lazy_list() {
+    let label = SharedSignal::new(String::from("label"));
+    let (position, writer) = ScrollPosition::with_writer(0.0);
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.enable_semantics();
+    host.attach(&PerfApp { label, position })
+        .expect("a fresh host takes a root");
+    for screen in 1..=3 {
+        writer.set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
+        for _ in 0..2 {
+            let _ = host.pump(FRAME);
+        }
+    }
+}
+
+/// Presses through the window's agent: the gesture arena, the recognizers, a state's signal
+/// and the semantics tree the locators read.
+fn round_of_presses() {
+    use flui_testing::{Tester, find};
+
+    let mut tester = Tester::mount(PressCounter);
+    for presses in 1..=3 {
+        tester.tap(&find::button("Press"));
+        tester
+            .expect(find::text(format!("{presses} presses")))
+            .to_exist();
+    }
+}
+
+/// A transition whose controller the round steps by hand: each value repaints the
+/// transition's layer. No frame drives this controller: the fade rounds below run a motion on
+/// the host's frames, and flui-material's plateau test runs a route transition, which is an
+/// `AnimationController` on the presentation's vsync.
+fn round_of_a_transition_stepped_by_hand() {
+    use flui_animation::Animatable;
+    use flui_animation::{Animation, AnimationController, Tween};
+    use flui_objects::TranslationFraction;
+    use flui_widgets::{Align, SlideTransition};
+
+    let controller = AnimationController::builder(Duration::from_millis(300)).build();
+    let position: std::rc::Rc<dyn Animation<TranslationFraction>> = std::rc::Rc::new(
+        Tween::new(
+            TranslationFraction::new(-1.0, 0.0),
+            TranslationFraction::ZERO,
+        )
+        .animate(std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>),
+    );
+    let panel =
+        SizedBox::new(WIDTH / 2.0, ROW_HEIGHT).child(ColoredBox::new(Color::rgb(40, 80, 120)));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(
+        &Align::new(flui_painting::Alignment::TOP_LEFT)
+            .child(RepaintBoundary::new().child(SlideTransition::new(position).child(panel))),
+    )
+    .expect("a fresh host takes a root");
+    for step in 1..=4 {
+        controller
+            .set_value(f64::from(step) / 4.0)
+            .expect("no build is running");
+        let _ = host.pump(FRAME);
+    }
+}
+
+/// A panel that fades out when `shown` turns false. `AnimatedOpacity` owns an implicit motion
+/// bound to the presentation's vsync, so the host's frames run the fade.
+#[derive(Clone, StatefulView)]
+struct Fade {
+    shown: SharedSignal<bool>,
+}
+
+struct FadeState {
+    shown: SharedSignal<bool>,
+}
+
+impl StatefulView for Fade {
+    type State = FadeState;
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        FadeState {
+            shown: self.shown.clone(),
+        }
+    }
+}
+
+impl ViewState<Fade> for FadeState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.shown.bind(ctx);
+    }
+    fn build(&self, _view: &Fade, ctx: &dyn BuildContext) -> impl IntoView {
+        let opacity = if self.shown.get(ctx) { 1.0 } else { 0.0 };
+        flui_widgets::AnimatedOpacity::new(opacity).child(
+            SizedBox::new(WIDTH / 2.0, ROW_HEIGHT).child(ColoredBox::new(Color::rgb(40, 80, 120))),
+        )
+    }
+}
+
+/// Mounts [`Fade`] and starts its fade: the host that comes back has the run in flight.
+fn host_with_a_fade_started() -> HeadlessHost {
+    let shown = SharedSignal::new(true);
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(&Fade {
+        shown: shown.clone(),
+    })
+    .expect("a fresh host takes a root");
+    let _ = host.pump(FRAME);
+    shown.set(false);
+    for _ in 0..2 {
+        let _ = host.pump(FRAME);
+    }
+    assert!(
+        host.pump_until_settled(FRAME, 0).is_err(),
+        "two frames into a fade the host still has its run to drive"
+    );
+    host
+}
+
+/// An animation the host's frames run to its end: the motion registers with the vsync,
+/// is ticked frame after frame and settles before the application is dropped.
+fn round_of_an_animation_run_to_its_end() {
+    let mut host = host_with_a_fade_started();
+    host.pump_until_settled(FRAME, 60)
+        .expect("a fade ends within a second");
+}
+
+/// The same animation dropped in flight: the vsync registration and the frame the run asked
+/// for are still held when the application goes.
+fn round_of_an_animation_dropped_in_flight() {
+    drop(host_with_a_fade_started());
+}
+
+/// An application mounted, driven and dropped leaves the heap where the round before left it
+/// (`flui_testing::heap::assert_rounds_plateau`): an `Rc` cycle through an element, a state, a
+/// listener or a signal would leave one more tree behind each round, and nothing else reports
+/// it. A round that drops its application with work in flight holds the retirement path to
+/// the same level.
+#[test]
+fn an_app_mounted_driven_and_dropped_again_and_again_holds_no_more_heap() {
+    let rounds: [(&str, fn()); 6] = [
+        ("eager rows under signals", round_of_eager_rows),
+        ("a scrolled lazy list", round_of_a_scrolled_lazy_list),
+        ("presses through the agent", round_of_presses),
+        (
+            "a transition stepped by hand",
+            round_of_a_transition_stepped_by_hand,
+        ),
+        (
+            "an animation run to its end",
+            round_of_an_animation_run_to_its_end,
+        ),
+        (
+            "an animation dropped in flight",
+            round_of_an_animation_dropped_in_flight,
+        ),
+    ];
+    for (name, round) in rounds {
+        eprintln!("round: {name}");
+        assert_rounds_plateau(round);
+    }
+}
+
+/// The plateau assertion sees a round that keeps 100 bytes: without this, a target that
+/// counts nothing, or an assertion that compares nothing, would pass every scenario above.
+#[test]
+#[should_panic(expected = "more bytes live")]
+fn a_round_that_keeps_its_allocation_breaks_the_plateau() {
+    assert_rounds_plateau(|| {
+        std::hint::black_box(Box::leak(std::hint::black_box(Box::new([0_u8; 100]))));
+    });
+}
+
+/// A round that allocates nothing on this thread is refused: its flat readings would pass
+/// for a plateau while measuring nothing.
+#[test]
+#[should_panic(expected = "no round allocated on this thread")]
+fn a_round_that_allocates_nothing_is_refused() {
+    assert_rounds_plateau(|| {});
 }

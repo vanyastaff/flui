@@ -1931,6 +1931,12 @@ impl SemanticsOwner {
     /// tree. A clash that only a change of clipping brings into or out of view
     /// is found by the next such publication; an agent read
     /// ([`Self::read_wire`]) always reports the tree it reads.
+    ///
+    /// Siblings can only clash on an identifier two nodes carry, so a tree
+    /// whose identifiers are all distinct is cleared without building the
+    /// consumer's tree. That tree keys its maps with a per-map random seed,
+    /// so how often they grow varies from run to run: a frame that built it
+    /// would ask the heap for a different amount on each run.
     #[cfg(debug_assertions)]
     fn check_identifier_clashes(&mut self) {
         let Some(state) = self.published.as_ref() else {
@@ -1941,6 +1947,16 @@ impl SemanticsOwner {
             .values()
             .filter(|node| node.author_id().is_some());
         if identified.take(2).count() < 2 {
+            self.reported_clashes.clear();
+            return;
+        }
+        let mut identifiers: Vec<&str> = state
+            .nodes
+            .values()
+            .filter_map(accesskit::Node::author_id)
+            .collect();
+        identifiers.sort_unstable();
+        if !identifiers.windows(2).any(|pair| pair[0] == pair[1]) {
             self.reported_clashes.clear();
             return;
         }
