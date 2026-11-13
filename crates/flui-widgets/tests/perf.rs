@@ -302,22 +302,22 @@ const WARM_SCROLLS: u32 = 8;
 /// way as [`WARM_SCROLLS`].
 const WARM_REASSEMBLES: usize = 2;
 
-/// How many allocations or reallocations two steady frames may differ by: the
+/// How many allocations or reallocations two steady scrolls may differ by: the
 /// rows a band rebuilds are not the same rows from one screen to the next.
 const STEADY_SLACK: u64 = 2;
 
 /// Fails unless `next` asked as much of the heap as `first`, within
-/// [`STEADY_SLACK`] allocations and reallocations: a run whose buffers are
+/// `slack` allocations and reallocations: a run whose buffers are
 /// still growing allocates or reallocates more in the earlier frame.
-fn assert_steady(what: &str, first: HeapCounts, next: HeapCounts) {
+fn assert_steady(what: &str, slack: u64, first: HeapCounts, next: HeapCounts) {
     assert!(
-        first.allocations.abs_diff(next.allocations) <= STEADY_SLACK
-            && first.reallocations.abs_diff(next.reallocations) <= STEADY_SLACK,
+        first.allocations.abs_diff(next.allocations) <= slack
+            && first.reallocations.abs_diff(next.reallocations) <= slack,
         "{what} is still warming up: one asked {first:?} of the heap, the next {next:?}"
     );
 }
 
-/// A one-screen scroll once the app has scrolled eight screens: what every
+/// A one-screen scroll after [`WARM_SCROLLS`] others: what every
 /// scroll after the first few costs. The first-scroll row above includes the
 /// leading cache rows and what the first frames add to the buffers the app
 /// keeps; this row holds the cost of a scroll that only reuses them, and the
@@ -340,7 +340,7 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     let (_, next) = scroll_to(WARM_SCROLLS + 2);
     record("list_10k_scroll_warm", &report, allocations);
 
-    assert_steady("a warm scroll", allocations, next);
+    assert_steady("a warm scroll", STEADY_SLACK, allocations, next);
     let visible_rows = ((HEIGHT - LABEL_HEIGHT) / ROW_HEIGHT) as u64;
     let laid_out = counter(&report, "nodes_laid_out");
     assert!(
@@ -351,7 +351,7 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
 }
 
-/// A full reassemble after two others: what a hot-reload loop costs once the
+/// A full reassemble after [`WARM_REASSEMBLES`] others: what a hot-reload loop costs once the
 /// semantics tree and the buffers the app keeps between frames exist. The
 /// first reassemble above also builds the semantics tree the mount enabled,
 /// so the two rows differ by more than the buffers they reuse.
@@ -370,7 +370,8 @@ fn perf_a_repeated_full_reassemble_reuses_what_the_last_one_kept() {
     let (_, next) = reassemble();
     record("full_reassemble_repeated", &report, allocations);
 
-    assert_steady("a repeated reassemble", allocations, next);
+    // A reassemble rebuilds the same tree each time, so it is held exactly.
+    assert_steady("a repeated reassemble", 0, allocations, next);
     assert!(counter(&report, "nodes_laid_out") > 0, "{report:#?}");
     assert!(counter(&report, "nodes_painted") > 0, "{report:#?}");
     assert_eq!(report.pipeline.frames_produced, 1, "{report:#?}");

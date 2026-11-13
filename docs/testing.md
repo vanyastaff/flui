@@ -539,8 +539,8 @@ run) for the last pump.
 
 `crates/flui-widgets/tests/perf.rs` drives a fixed app — a label over a lazy
 10 000-row list — through a one-screen scroll and a full reassemble, each
-measured once as the first after mount and once in a steady run (after eight
-scrolls, after two reassembles), a
+measured once as the first after mount and once in a steady run, where two
+consecutive frames must cost the same, a
 `SlideTransition` tick over a painted panel, and a label change over an eager
 column of 500 and of 5 000 buttons, and asserts budgets on those reports. Each
 record also carries what the measured frames asked of the heap on the test
