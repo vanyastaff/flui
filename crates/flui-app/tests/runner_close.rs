@@ -1094,18 +1094,23 @@ pub(crate) fn a_rebuilt_device_tries_the_refused_size_again() {
 
 /// A panic of the renderer while it resizes a window is reported, and the
 /// window still reaches its new size: the frame that met the panic is
-/// retried, and the retry applies the size.
+/// retried, and the retry applies the size. An earlier frame's panic of
+/// another kind does not take that retry away.
 pub(crate) fn a_panicking_resize_is_reported_and_the_window_reaches_its_size() {
     let observed = Observed::default();
     let started = start(&observed);
+    // A render that panicked: its frame fails, unretried.
+    started.renderer.panic_in_next_frames(1);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
     let presented = started.renderer.frames_presented();
     started.renderer.panic_in_next_resizes(1);
     started.window.simulate_resize(700.0, 500.0);
     started.run.run_owner_turn();
     assert_eq!(
         observed.frame_panics.load(Ordering::SeqCst),
-        1,
-        "the resize's panic was reported to the frame-failure handler"
+        2,
+        "the render's and the resize's panics were reported to the frame-failure handler"
     );
     for _ in 0..8 {
         if started.renderer.frames_presented() > presented {

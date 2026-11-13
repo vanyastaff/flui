@@ -207,7 +207,8 @@ impl SlotBackend for StandInBackend {
         if shared.device.panic_resizes > 0 {
             shared.device.panic_resizes -= 1;
             drop(shared);
-            panic!("injected panic in a stand-in resize");
+            // A fault the test asked for, not a broken invariant.
+            std::panic::panic_any("injected panic in a stand-in resize");
         }
         let max = shared.device.max_side;
         drop(shared);
@@ -249,7 +250,8 @@ impl SlotBackend for StandInBackend {
         if shared.device.panics_ahead > 0 {
             shared.device.panics_ahead -= 1;
             drop(shared);
-            panic!("injected panic in a stand-in frame");
+            // A fault the test asked for, not a broken invariant.
+            std::panic::panic_any("injected panic in a stand-in frame");
         }
         let window = shared
             .slot(slot)
