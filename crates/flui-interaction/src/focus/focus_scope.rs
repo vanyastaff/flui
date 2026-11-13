@@ -73,6 +73,10 @@ pub type FocusNodeChangeCallback = Rc<dyn Fn()>;
 /// or stop without consuming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the propagation algebra is continue, consume, or stop without consuming"
+)]
 pub enum KeyEventResult {
     /// Stop propagation and consume the event.
     Handled,
@@ -2532,6 +2536,10 @@ impl std::fmt::Debug for FocusScopeNode {
 
 /// The direction through the scope's ordered traversal candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an ordered list is walked forward or backward"
+)]
 pub enum TraversalDirection {
     /// Move toward the following candidate.
     Forward,
@@ -2541,6 +2549,7 @@ pub enum TraversalDirection {
 
 /// What traversal does when it runs off a scope edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum TraversalEdgeBehavior {
     /// Wrap to the other end.
     #[default]
@@ -2555,6 +2564,10 @@ pub enum TraversalEdgeBehavior {
 
 /// A typed traversal intent.
 #[derive(Clone, Default)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "traversal carries out each step, and a `_` arm would drop the move"
+)]
 pub enum ResolvedStep {
     /// Move primary focus to this node.
     Focus(Rc<FocusNode>),

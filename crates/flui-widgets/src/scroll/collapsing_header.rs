@@ -124,6 +124,10 @@ impl HeaderExtents {
 /// Exhaustive: the header either goes first or takes what the content
 /// leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the header goes first or takes what the content leaves"
+)]
 pub enum HeaderOrder {
     /// Before the content moves: the content waits until the header is
     /// fully collapsed (or expanded).

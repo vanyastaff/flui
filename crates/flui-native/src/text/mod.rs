@@ -135,6 +135,10 @@ pub trait TextInput: Send + Sync + 'static {
 }
 
 /// How a window's text input reaches the focused field.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the window drives each input model, and a `_` arm would leave a field without text input"
+)]
 pub enum WindowTextInput {
     /// The field tells the input method whether it may compose and where its
     /// caret is: the headless host.

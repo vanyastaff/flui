@@ -46,6 +46,10 @@ pub struct PlacedGlyph {
 
 /// How a [`GlyphImage`]'s texels are to be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a glyph is a coverage mask or a colour image, and each rasterizer draws each differently"
+)]
 pub enum GlyphContent {
     /// One byte per texel: coverage, to be tinted by the glyph's colour.
     Mask,
@@ -119,6 +123,7 @@ pub struct GlyphImage {
 
 /// Why a rasterized glyph's dimensions, format and bytes cannot form an image.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum GlyphImageError {
     /// The expected byte count cannot be represented in `usize`.
     #[error("glyph image byte count overflows usize")]

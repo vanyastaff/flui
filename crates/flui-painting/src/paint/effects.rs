@@ -13,6 +13,7 @@ use super::canvas::{StrokeCap, StrokeJoin};
 /// Higher quality produces smoother blur but requires more computation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum BlurQuality {
     /// Fast box blur approximation (single pass)
     Low,
@@ -30,6 +31,7 @@ pub enum BlurQuality {
 /// Similar to CSS filter vs backdrop-filter distinction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum BlurMode {
     /// Blur the content itself (like CSS filter: blur())
     #[default]
@@ -47,6 +49,7 @@ pub enum BlurMode {
 /// Skia-style color filter with blend modes.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum ColorAdjustment {
     /// Adjust brightness (-1.0 to 1.0, 0.0 = no change)
     Brightness(f32),
@@ -521,6 +524,7 @@ impl StrokeOptions {
 /// Determines how a path is rendered (filled, stroked, or both).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum PathPaintMode {
     /// Fill the path interior
     Fill,
@@ -559,6 +563,10 @@ pub enum PathPaintMode {
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every backend lowers each filter, and a `_` arm would draw a new one unfiltered"
+)]
 pub enum ImageFilter {
     /// Gaussian blur with horizontal and vertical sigma.
     ///

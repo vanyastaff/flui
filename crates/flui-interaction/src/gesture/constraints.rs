@@ -1,6 +1,10 @@
 //! Motion constraints shared by gesture recognizers.
 
 /// Drag axis constraint.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "free motion or one of the two axes of a plane"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DragAxis {
     /// Vertical drag only (up/down).

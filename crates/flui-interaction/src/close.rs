@@ -18,6 +18,10 @@ use std::{
 /// Either way outgoing ownership is destroyed; after a failure each
 /// destructor runs under the close's containment (ADR-0281 §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a close runs ordinary or preserving a failure, and a `_` arm would skip its cleanup"
+)]
 pub enum CloseMode {
     /// Deliver final notifications and destroy outgoing ownership.
     Ordinary,

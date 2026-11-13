@@ -337,6 +337,7 @@ impl Default for Paint {
 /// Paint style: fill or stroke.
 #[derive(Clone, Debug, Default, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(clippy::exhaustive_enums, reason = "a paint fills or strokes")]
 pub enum PaintStyle {
     /// Fill the interior.
     #[default]

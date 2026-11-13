@@ -53,6 +53,7 @@ const TRACK_PAGE_DURATION: Duration = Duration::from_millis(100);
 
 /// The edge of its scroll view a [`Scrollbar`] sits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums, reason = "the four edges of a scroll view")]
 pub enum ScrollbarOrientation {
     /// The left edge of a vertical scroll view.
     Left,
