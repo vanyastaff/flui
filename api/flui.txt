@@ -9817,33 +9817,38 @@ fn flui::painting::CustomPainter::semantics_regions(&self, _size: flui::geometry
 fn flui::painting::CustomPainter::should_rebuild_semantics(&self, _old_delegate: &dyn flui::painting::CustomPainter) -> bool { .. }
 fn flui::painting::CustomPainter::should_repaint(&self, old_delegate: &dyn flui::painting::CustomPainter) -> bool
 pub struct flui::painting::DisplayList { .. }
-impl AsRef<[flui::painting::DrawCommand]> for flui::painting::DisplayList
 impl AsRef<flui::painting::DisplayList> for flui::painting::Canvas
 impl Clone for flui::painting::DisplayList
 impl Default for flui::painting::DisplayList
 impl core::fmt::Debug for flui::painting::DisplayList
-impl core::ops::index::Index<usize> for flui::painting::DisplayList { type Output = flui::painting::DrawCommand; }
 impl flui::Inspect for flui::painting::DisplayList
-impl<'a> IntoIterator for &'a flui::painting::DisplayList { type IntoIter = core::slice::iter::Iter<'a, flui::painting::DrawCommand>; type Item = &'a flui::painting::DrawCommand; }
+impl<'a> IntoIterator for &'a flui::painting::DisplayList { type IntoIter = flui::painting::DrawCommands<'a>; type Item = flui::painting::DrawCommand<'a>; }
 pub fn flui::painting::DisplayList::append(&mut self, other: flui::painting::DisplayList)
 pub fn flui::painting::DisplayList::append_isolated(&mut self, other: flui::painting::DisplayList)
 pub fn flui::painting::DisplayList::bounds(&self) -> Option<flui::geometry::Rect<f64>>
 pub fn flui::painting::DisplayList::clear(&mut self)
-pub fn flui::painting::DisplayList::commands(&self) -> &[flui::painting::DrawCommand]
 pub fn flui::painting::DisplayList::damage_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
+pub fn flui::painting::DisplayList::get(&self, index: usize) -> Option<flui::painting::DrawCommand<'_>>
 pub fn flui::painting::DisplayList::is_empty(&self) -> bool
-pub fn flui::painting::DisplayList::iter(&self) -> core::slice::iter::Iter<'_, flui::painting::DrawCommand>
+pub fn flui::painting::DisplayList::iter(&self) -> flui::painting::DrawCommands<'_>
 pub fn flui::painting::DisplayList::len(&self) -> usize
 pub fn flui::painting::DisplayList::new() -> Self
 pub fn flui::painting::DisplayList::non_finite(&self) -> flui_painting::display_list::finite::NonFiniteOps
 pub fn flui::painting::DisplayList::room(&self) -> usize
 pub fn flui::painting::DisplayList::volatile_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
-pub struct flui::painting::DrawCommand
-field flui::painting::DrawCommand::op: flui::painting::DrawOp // at 1
-field flui::painting::DrawCommand::transform: flui::geometry::Matrix4 // at 0
-impl Clone for flui::painting::DrawCommand
-impl core::fmt::Debug for flui::painting::DrawCommand
-pub const fn flui::painting::DrawCommand::untransformed(op: flui::painting::DrawOp) -> Self
+#[non_exhaustive] pub struct flui::painting::DrawCommand<'a>
+field flui::painting::DrawCommand::op: &'a flui::painting::DrawOp // at 1
+field flui::painting::DrawCommand::transform: &'a flui::geometry::Matrix4 // at 0
+impl<'a> Clone for flui::painting::DrawCommand<'a>
+impl<'a> Copy for flui::painting::DrawCommand<'a>
+impl<'a> core::fmt::Debug for flui::painting::DrawCommand<'a>
+pub struct flui::painting::DrawCommands<'a> { .. }
+impl DoubleEndedIterator for flui::painting::DrawCommands<'_>
+impl ExactSizeIterator for flui::painting::DrawCommands<'_>
+impl core::iter::traits::marker::FusedIterator for flui::painting::DrawCommands<'_>
+impl<'a> Clone for flui::painting::DrawCommands<'a>
+impl<'a> Iterator for flui::painting::DrawCommands<'a> { type Item = flui::painting::DrawCommand<'a>; }
+impl<'a> core::fmt::Debug for flui::painting::DrawCommands<'a>
 pub enum flui::painting::DrawOp
 impl Clone for flui::painting::DrawOp
 impl core::fmt::Debug for flui::painting::DrawOp
@@ -23500,6 +23505,11 @@ pub struct flui::testing::harness::storage::WriteHold { .. }
 impl Drop for flui::testing::harness::storage::WriteHold
 impl core::fmt::Debug for flui::testing::harness::storage::WriteHold
 pub mod flui::testing::harness::widgets
+#[non_exhaustive] pub struct flui::testing::harness::widgets::DrawnOp
+field flui::testing::harness::widgets::DrawnOp::op: flui::painting::DrawOp // at 1
+field flui::testing::harness::widgets::DrawnOp::transform: flui::geometry::Matrix4 // at 0
+impl Clone for flui::testing::harness::widgets::DrawnOp
+impl core::fmt::Debug for flui::testing::harness::widgets::DrawnOp
 pub struct flui::testing::harness::widgets::LaidOut { .. }
 impl core::fmt::Debug for flui::testing::harness::widgets::LaidOut
 pub fn flui::testing::harness::widgets::LaidOut::a11y_nodes_named_by(&self, anchor: &flui::prelude::SemanticsAnchor) -> Vec<accesskit::NodeId>
@@ -23536,7 +23546,7 @@ pub fn flui::testing::harness::widgets::LaidOut::dispatch_scroll_with_modifiers(
 pub fn flui::testing::harness::widgets::LaidOut::dispatch_secondary_down(&self, x: f64, y: f64)
 pub fn flui::testing::harness::widgets::LaidOut::dispatch_secondary_up(&self, x: f64, y: f64)
 pub fn flui::testing::harness::widgets::LaidOut::dispatch_window_hover_left(&self)
-pub fn flui::testing::harness::widgets::LaidOut::draw_ops(&self) -> Vec<flui::painting::DrawCommand>
+pub fn flui::testing::harness::widgets::LaidOut::draw_ops(&self) -> Vec<flui::testing::harness::widgets::DrawnOp>
 pub fn flui::testing::harness::widgets::LaidOut::element_node_count(&mut self) -> usize
 pub fn flui::testing::harness::widgets::LaidOut::enable_semantics(&mut self)
 pub fn flui::testing::harness::widgets::LaidOut::end_session(&self)

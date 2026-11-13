@@ -66,6 +66,12 @@ use crate::traits::{PaintClip, PaintOpacity};
 /// output in tests. Under default/production features this type is intentionally
 /// absent from the external re-export paths.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a run is the step the pass records for nearly every node, into a buffer it keeps \
+              between passes; boxing it costs an allocation per run, inline it costs bytes in \
+              that kept buffer"
+)]
 #[cfg_attr(
     any(test, feature = "testing"),
     expect(
