@@ -23178,6 +23178,19 @@ pub fn flui::testing::Locator::role(role: flui::testing::Role) -> Self
 pub fn flui::testing::Locator::state(self, state: flui::testing::StateFilter) -> Self
 pub fn flui::testing::Locator::value(self, value: flui::testing::TextMatch) -> Self
 pub fn flui::testing::Locator::within(self, ancestor: flui::testing::Locator) -> Self
+pub struct flui::testing::LogicalPoint
+field flui::testing::LogicalPoint::x: f64 // at 0
+field flui::testing::LogicalPoint::y: f64 // at 1
+impl Clone for flui::testing::LogicalPoint
+impl Copy for flui::testing::LogicalPoint
+impl Default for flui::testing::LogicalPoint
+impl PartialEq for flui::testing::LogicalPoint
+impl core::fmt::Debug for flui::testing::LogicalPoint
+impl core::marker::StructuralPartialEq for flui::testing::LogicalPoint
+impl schemars::JsonSchema for flui::testing::LogicalPoint
+impl serde_core::ser::Serialize for flui::testing::LogicalPoint
+impl<'de> serde_core::de::Deserialize<'de> for flui::testing::LogicalPoint
+pub const fn flui::testing::LogicalPoint::new(x: f64, y: f64) -> Self
 pub struct flui::testing::LogicalRect
 field flui::testing::LogicalRect::height: f64 // at 3
 field flui::testing::LogicalRect::width: f64 // at 2
@@ -23193,7 +23206,7 @@ impl schemars::JsonSchema for flui::testing::LogicalRect
 impl serde_core::ser::Serialize for flui::testing::LogicalRect
 impl<'de> serde_core::de::Deserialize<'de> for flui::testing::LogicalRect
 pub const fn flui::testing::LogicalRect::new(x: f64, y: f64, width: f64, height: f64) -> Self
-pub fn flui::testing::LogicalRect::center(&self) -> flui_protocol::geometry::LogicalPoint
+pub fn flui::testing::LogicalRect::center(&self) -> flui::testing::LogicalPoint
 #[non_exhaustive] pub struct flui::testing::Match
 field flui::testing::Match::element: flui_protocol::tree::ElementRef // at 0
 field flui::testing::Match::node: flui::testing::Node // at 2
@@ -23357,6 +23370,7 @@ pub struct flui::testing::Tester { .. }
 impl core::fmt::Debug for flui::testing::Tester
 pub fn flui::testing::Tester::clock(&self) -> &flui::foundation::ManualClock
 pub fn flui::testing::Tester::drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration)
+pub fn flui::testing::Tester::drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration)
 pub fn flui::testing::Tester::enter_text(&mut self, locator: &flui::testing::Locator, text: &str)
 pub fn flui::testing::Tester::expect(&mut self, locator: flui::testing::Locator) -> flui::testing::Expectation<'_>
 pub fn flui::testing::Tester::find_all(&mut self, locator: &flui::testing::Locator) -> Vec<flui::testing::Match>
@@ -23373,6 +23387,7 @@ pub fn flui::testing::Tester::rect(&mut self, locator: &flui::testing::Locator) 
 pub fn flui::testing::Tester::semantics(&mut self) -> flui::testing::Tree
 pub fn flui::testing::Tester::tap(&mut self, locator: &flui::testing::Locator)
 pub fn flui::testing::Tester::try_drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_enter_text(&mut self, locator: &flui::testing::Locator, text: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_find_all(&mut self, locator: &flui::testing::Locator) -> Result<Vec<flui::testing::Match>, flui::testing::TestError>
 pub fn flui::testing::Tester::try_long_press(&mut self, locator: &flui::testing::Locator, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
@@ -31993,7 +32008,7 @@ pub fn flui_protocol::act::ActionRequest::set_value(element: flui_protocol::tree
 field flui_protocol::act::Actionability::attached: bool // at 0
 field flui_protocol::act::Actionability::covered_by: Option<String> // at 7
 field flui_protocol::act::Actionability::enabled: bool // at 4
-field flui_protocol::act::Actionability::point: Option<flui_protocol::geometry::LogicalPoint> // at 6
+field flui_protocol::act::Actionability::point: Option<flui::testing::LogicalPoint> // at 6
 field flui_protocol::act::Actionability::receives: bool // at 5
 field flui_protocol::act::Actionability::rect: Option<flui::testing::LogicalRect> // at 1
 field flui_protocol::act::Actionability::revision: flui_protocol::tree::TreeRevision // at 8
@@ -32360,19 +32375,6 @@ impl schemars::JsonSchema for flui_protocol::events::WindowEvent
 impl serde_core::ser::Serialize for flui_protocol::events::WindowEvent
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::events::WindowEvent
 pub const fn flui_protocol::events::WindowEvent::new(window: flui_protocol::tree::WindowId, opened: bool) -> Self
-pub struct flui_protocol::geometry::LogicalPoint
-field flui_protocol::geometry::LogicalPoint::x: f64 // at 0
-field flui_protocol::geometry::LogicalPoint::y: f64 // at 1
-impl Clone for flui_protocol::geometry::LogicalPoint
-impl Copy for flui_protocol::geometry::LogicalPoint
-impl Default for flui_protocol::geometry::LogicalPoint
-impl PartialEq for flui_protocol::geometry::LogicalPoint
-impl core::fmt::Debug for flui_protocol::geometry::LogicalPoint
-impl core::marker::StructuralPartialEq for flui_protocol::geometry::LogicalPoint
-impl schemars::JsonSchema for flui_protocol::geometry::LogicalPoint
-impl serde_core::ser::Serialize for flui_protocol::geometry::LogicalPoint
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::geometry::LogicalPoint
-pub const fn flui_protocol::geometry::LogicalPoint::new(x: f64, y: f64) -> Self
 #[non_exhaustive] pub enum flui_protocol::input::DeviceClass
 impl Clone for flui_protocol::input::DeviceClass
 impl Copy for flui_protocol::input::DeviceClass
@@ -32417,7 +32419,7 @@ variant flui_protocol::input::InputKind::PointerUp // at 2
 variant flui_protocol::input::InputKind::Scroll // at 4
 variant flui_protocol::input::InputKind::Text // at 8
 #[non_exhaustive] pub struct flui_protocol::input::JournalEntry
-field flui_protocol::input::JournalEntry::at: Option<flui_protocol::geometry::LogicalPoint> // at 3
+field flui_protocol::input::JournalEntry::at: Option<flui::testing::LogicalPoint> // at 3
 field flui_protocol::input::JournalEntry::device: flui_protocol::input::DeviceClass // at 1
 field flui_protocol::input::JournalEntry::injected: bool // at 5
 field flui_protocol::input::JournalEntry::kind: flui_protocol::input::InputKind // at 2
@@ -32432,7 +32434,7 @@ impl serde_core::ser::Serialize for flui_protocol::input::JournalEntry
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input::JournalEntry
 pub const fn flui_protocol::input::JournalEntry::new(seq: u64, device: flui_protocol::input::DeviceClass, kind: flui_protocol::input::InputKind, time_us: u64) -> Self
 pub const fn flui_protocol::input::JournalEntry::with_injected(self, injected: bool) -> Self
-pub const fn flui_protocol::input::JournalEntry::with_position(self, at: flui_protocol::geometry::LogicalPoint) -> Self
+pub const fn flui_protocol::input::JournalEntry::with_position(self, at: flui::testing::LogicalPoint) -> Self
 pub enum flui_protocol::input_recording::ActionData
 impl Clone for flui_protocol::input_recording::ActionData
 impl PartialEq for flui_protocol::input_recording::ActionData
@@ -33292,7 +33294,7 @@ impl serde_core::ser::Serialize for flui_protocol::locator::Target
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::locator::Target
 variant flui_protocol::locator::Target::Element(flui_protocol::tree::ElementRef) // at 0
 variant flui_protocol::locator::Target::Locator(flui::testing::Locator) // at 1
-variant flui_protocol::locator::Target::Point { window: flui_protocol::tree::WindowId, at: flui_protocol::geometry::LogicalPoint } // at 2
+variant flui_protocol::locator::Target::Point { window: flui_protocol::tree::WindowId, at: flui::testing::LogicalPoint } // at 2
 pub trait flui_protocol::method::Addressed
 fn flui_protocol::method::Addressed::holds_for(&self) -> core::time::Duration { .. }
 fn flui_protocol::method::Addressed::window(&self) -> Option<flui_protocol::tree::WindowId>
@@ -36726,8 +36728,8 @@ variant flui_semantics::owner::SemanticsDiagnostic::TextRunsWithheld(flui_semant
 pub struct flui_semantics::owner::SemanticsOwner { .. }
 impl Default for flui_semantics::owner::SemanticsOwner
 impl core::fmt::Debug for flui_semantics::owner::SemanticsOwner
-pub fn flui_semantics::owner::SemanticsOwner::actionability_point(&self, element: flui_protocol::tree::ElementRef, point: Option<flui_protocol::geometry::LogicalPoint>, placement: flui_semantics::agent::Placement) -> Result<Option<flui_protocol::geometry::LogicalPoint>, flui_semantics::agent::WireReadError>
-pub fn flui_semantics::owner::SemanticsOwner::actionability_wire(&self, element: flui_protocol::tree::ElementRef, point: Option<flui_protocol::geometry::LogicalPoint>, previous: Option<flui::testing::LogicalRect>, hit: &[flui::foundation::RenderId], placement: flui_semantics::agent::Placement) -> Result<flui_protocol::act::Actionability, flui_semantics::agent::WireReadError>
+pub fn flui_semantics::owner::SemanticsOwner::actionability_point(&self, element: flui_protocol::tree::ElementRef, point: Option<flui::testing::LogicalPoint>, placement: flui_semantics::agent::Placement) -> Result<Option<flui::testing::LogicalPoint>, flui_semantics::agent::WireReadError>
+pub fn flui_semantics::owner::SemanticsOwner::actionability_wire(&self, element: flui_protocol::tree::ElementRef, point: Option<flui::testing::LogicalPoint>, previous: Option<flui::testing::LogicalRect>, hit: &[flui::foundation::RenderId], placement: flui_semantics::agent::Placement) -> Result<flui_protocol::act::Actionability, flui_semantics::agent::WireReadError>
 pub fn flui_semantics::owner::SemanticsOwner::add_child(&mut self, parent_id: flui::foundation::SemanticsId, child_id: flui::foundation::SemanticsId)
 pub fn flui_semantics::owner::SemanticsOwner::announce(&mut self, message: &str, urgency: flui::prelude::Urgency) -> Result<(), flui::semantics::AnnounceError>
 pub fn flui_semantics::owner::SemanticsOwner::announcement_journal(&self, params: &flui_protocol::events::AnnouncementsParams) -> flui_protocol::events::AnnouncementJournal
