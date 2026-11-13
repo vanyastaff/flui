@@ -5,8 +5,8 @@
 # --features flui/material,flui/cupertino,flui/native --test perf`.
 
 [ink_well_over_text]
-allocations = 69
-bytes = 8169
+allocations = 66
+bytes = 8025
 elements = 3
 reallocations = 2
 render_nodes = 2

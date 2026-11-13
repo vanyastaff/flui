@@ -119,6 +119,7 @@
 //!   `on_long_press`, `states_controller` (external) — no override surface
 //!   yet, matching every other V1 button in this crate.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::view::prelude::*;
@@ -153,7 +154,7 @@ pub const ICON_BUTTON_ICON_SIZE: f64 = 24.0;
 #[derive(Clone, StatelessView)]
 pub struct IconButton {
     on_pressed: Option<PressCallback>,
-    style: Option<ButtonStyle>,
+    style: Option<Rc<ButtonStyle>>,
     identifier: Option<Arc<str>>,
     selected: Option<bool>,
     icon: BoxedView,
@@ -200,7 +201,7 @@ impl IconButton {
     /// `crate::button_style_button`'s resolve-then-coalesce docs.
     #[must_use]
     pub fn style(mut self, style: ButtonStyle) -> Self {
-        self.style = Some(style);
+        self.style = Some(Rc::new(style));
         self
     }
 
@@ -310,10 +311,10 @@ impl StatelessView for IconButton {
         let themed_icon = IconTheme::new(icon_theme, icon);
 
         let mut core = ButtonStyleButtonCore::new(default, themed_icon.boxed())
-            .style(self.style.clone().unwrap_or_default())
+            .style(self.style.clone())
             .selected(self.selected);
         if let Some(theme_style) = theme_style {
-            core = core.theme_style(theme_style);
+            core = core.theme_style(Rc::new(theme_style));
         }
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
