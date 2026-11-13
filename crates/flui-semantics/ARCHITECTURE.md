@@ -169,7 +169,8 @@ checkable control, menu item, tab, option, tree item) and is content that carrie
 (image, heading, text-level role): the control's node takes it and its name, through any
 configuration between them that forms no node and has no role or such a role
 ([ADR-0332](../../docs/adr/ADR-0332-a-control-takes-the-content-roles-beneath-it.md),
-`names_a_control`, `can_absorb`, `can_join`, `can_stay_beside`). A meter or a progress bar keeps its node: a
+`names_a_control`, `can_absorb`, `can_join`, `can_stay_beside`). A meter or a progress bar
+keeps its node: a
 control cannot publish its range. A state declared `false` counts, so a node's shape does not depend on
 its current values. A forced merge (`MergeSemantics`) cannot separate them and takes the role
 by `more_specific_role`: an authored structural role (tab, list item, dialog, …) over any

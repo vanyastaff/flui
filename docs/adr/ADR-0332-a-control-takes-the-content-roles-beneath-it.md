@@ -138,15 +138,18 @@ its own node with `Semantics::container(true)`.
 - Bad, because a heading inside a tab or a list option loses its place in heading navigation.
   An author who needs both wraps the heading in `Semantics::container(true)`, which forms a
   node no rule absorbs.
-- Bad, because under a configuration without a role nothing is refused, so there an icon
-  beside a check box still competes with it on role and both form nodes: a hint over the two
+- Bad, because a configuration without a role absorbs a check box instead of refusing it, so
+  beneath it an icon
+  beside the check box still competes with it on role and both form nodes: a hint over the two
   inside a button leaves the button without a name, as before this decision.
 - Bad, because a configuration between a control and its content that repeats the control's
   action (a tap target inside a button) still cannot join the control: it forms a node, takes
   the content with it, and the control stays without a name, as before this decision. The
   scope is decided on the way down, before conflicts are known, so such a
   configuration that absorbs an image and a heading forms a node with the first one's
-  role and both names.
+  role and both names. For the same reason a configuration that took content it would not
+  have taken outside the scope can be refused further up where it was absorbed before: content
+  that repeats the control's action carries the wrapper's value into its own node.
 - Neutral, because Flutter treats two images beneath one button as a conflict (the same flag
   twice) and forms two nodes; here they are one name. A typed role has no "same flag" case to
   preserve, and two icons in one button are one button.

@@ -3039,6 +3039,59 @@ fn a_control_takes_the_content_roles_beneath_it_as_its_name() {
         "a button over an image beside a check box"
     );
 
+    // The same in the other order.
+    let beside_reversed = published(node(SemanticsRole::Button).child(flui_widgets::Column::new(
+        (content(SemanticsRole::CheckBox, "Pin"), image()),
+    )));
+    assert_eq!(
+        beside_reversed, "  Window\n  Button label=\"Add\"\n  CheckBox label=\"Pin\"",
+        "a button over a check box beside an image"
+    );
+
+    // Beside a control that is a node, a sibling that repeats its action
+    // is a node too: only a naming role stops competing, not a handler.
+    let tap = |child: Semantics| {
+        flui_widgets::GestureDetector::new()
+            .on_tap(|_| {})
+            .child(child)
+    };
+    for (order, column) in [
+        (
+            "after",
+            flui_widgets::Column::new((
+                tap(content(SemanticsRole::CheckBox, "Pin")),
+                tap(Semantics::new()
+                    .label("Go")
+                    .child(SizedBox::new(10.0, 10.0))),
+            )),
+        ),
+        (
+            "before",
+            flui_widgets::Column::new((
+                tap(Semantics::new()
+                    .label("Go")
+                    .child(SizedBox::new(10.0, 10.0))),
+                tap(content(SemanticsRole::CheckBox, "Pin")),
+            )),
+        ),
+    ] {
+        let repeated = published(node(SemanticsRole::Button).child(column));
+        let (check_box, go) = (
+            "  CheckBox label=\"Pin\"",
+            "  Label label=\"Go\" value=\"Go\"",
+        );
+        let nodes = if order == "after" {
+            [check_box, go]
+        } else {
+            [go, check_box]
+        };
+        assert_eq!(
+            repeated,
+            format!("  Window\n  Button\n{}\n{}", nodes[0], nodes[1]),
+            "a tap target {order} a tappable check box"
+        );
+    }
+
     // A progress bar keeps its node: a button cannot publish its range.
     let progress = published(
         node(SemanticsRole::Button).child(content(SemanticsRole::ProgressBar, "Loading")),
