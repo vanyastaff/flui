@@ -51,7 +51,7 @@ use super::listener::{ContactCallbacks, pointer_callback, release_targets};
 use super::raw_gesture_detector::RecognizerHost;
 use crate::support::{event_callback, value_callback};
 use crate::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
-use crate::{Listener, MouseRegion, Semantics, SemanticsRole};
+use crate::{Listener, MouseRegion, Semantics, SemanticsRole, Toggled};
 
 /// The behaviours of a control around its child, in one element.
 ///
@@ -80,17 +80,47 @@ pub struct InteractiveNode {
 /// which the node builds only while its window collects semantics
 /// (ADR-0322 §8), so the view stays small in every copy the tree keeps.
 #[derive(Clone, Debug)]
-pub(crate) struct Description {
-    pub(crate) role: SemanticsRole,
-    pub(crate) identifier: Option<Arc<str>>,
+pub struct Description {
+    role: SemanticsRole,
+    identifier: Option<Arc<str>>,
+    toggled: Option<Toggled>,
 }
 
 impl Description {
+    /// One container node of `role`, which says nothing more.
+    #[must_use]
+    pub fn new(role: SemanticsRole) -> Self {
+        Self {
+            role,
+            identifier: None,
+            toggled: None,
+        }
+    }
+
+    /// Name the node by the identifier its author gave the control
+    /// (ADR-0240); `None` leaves it unnamed.
+    #[must_use]
+    pub fn identifier(mut self, identifier: Option<Arc<str>>) -> Self {
+        self.identifier = identifier;
+        self
+    }
+
+    /// Report the control's toggle state, as [`Semantics::toggled`] does.
+    #[must_use]
+    pub fn toggled(mut self, state: Toggled) -> Self {
+        self.toggled = Some(state);
+        self
+    }
+
     fn build(&self) -> Semantics {
-        Semantics::new()
+        let semantics = Semantics::new()
             .container(true)
             .role(self.role)
-            .identifier_if(self.identifier.as_ref())
+            .identifier_if(self.identifier.as_ref());
+        match self.toggled {
+            Some(state) => semantics.toggled(state),
+            None => semantics,
+        }
     }
 }
 
@@ -406,7 +436,7 @@ impl InteractiveNode {
     /// Describe the node to assistive technology as `description` says, as
     /// a [`Semantics`] around the control does.
     #[must_use]
-    pub(crate) fn semantics(mut self, semantics: Description) -> Self {
+    pub fn semantics(mut self, semantics: Description) -> Self {
         self.semantics = Some(semantics);
         self
     }
