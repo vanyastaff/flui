@@ -16,3 +16,7 @@
 
 - `FloatingActionButton` is a button to assistive technology, as Flutter's is: one node of the
   button role that offers the click while `on_pressed` is set and says it is disabled without one.
+- A labelled `Icon` or `AnimatedIcon` names the button or other control it sits in, as Flutter's
+  does: it declares no image role of its own, so an `IconButton`, a floating action button or an
+  `ElevatedButton` over a labelled icon is one button node with that name instead of a nameless
+  button over an image.
