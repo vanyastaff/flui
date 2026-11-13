@@ -17,8 +17,9 @@
 //! counters they are a function of the tree and the change, not of the host;
 //! they only have to stay at or under the baseline, which `--bless` ratchets.
 //! Nothing else may move them, neither a seed drawn per run nor what an
-//! earlier test left in the process: `measured_frames_ask_the_heap_the_same_on_every_run`
-//! holds the measured frames to that.
+//! earlier test left in the process. `measured_frames_ask_the_heap_the_same_on_every_run`
+//! checks that over the list scrolls, the frames that build and drop the most;
+//! the other scenarios rely on the same code paths but are not repeated.
 //!
 //! A `perf_scaling_` scenario runs the same change on a small and a large tree
 //! and asserts that the two cost the same: equal allocations here, and equal
