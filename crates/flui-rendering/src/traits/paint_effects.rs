@@ -188,14 +188,10 @@ impl PaintOpacity {
 
 /// A node's own clip scope, expressed as a paint effect.
 ///
-/// No `PartialEq`: [`Path`]'s derived equality includes its memoised
-/// bounds cache, so two clips built from an equal path compare unequal
-/// once either has had its bounds computed — a trap for any production
-/// code that compared descriptors instead of the layers they produce.
-/// Nothing in production needs to compare two `PaintClip` values; test
-/// oracles compare the layers this value produces (kind, plus rect/rrect
-/// fields, or an explicit accessor that ignores memoised bounds for a
-/// path).
+/// No `PartialEq`: nothing in production compares two `PaintClip` values,
+/// and comparing a path clip would compare its curves. Test oracles compare
+/// the layers this value produces (kind, plus rect/rrect fields, or the
+/// path's own equality).
 ///
 /// # Construction
 ///

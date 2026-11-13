@@ -10,9 +10,11 @@
 //! variant table and its round-trip test in `flui-testing` catch it before
 //! that.
 //!
-//! [`InputRecord::to_wire`] and [`InputRecord::from_wire`] convert a row; the
-//! header's pieces have their own functions ([`profiles_to_wire`],
-//! [`device_to_wire`], [`PreferencesRow::to_wire`] and their inverses).
+//! [`record_to_wire`] and `record_from_wire` convert a row; the header's
+//! pieces have their own functions ([`start_to_wire`], [`profiles_to_wire`],
+//! [`device_to_wire`], [`preferences_row_to_wire`] and their inverses). They are
+//! the runtime's seam with `flui-testing`'s recording format, reached through
+//! the hidden `__runtime` module, not part of an application's API.
 
 use std::num::{NonZeroU8, NonZeroU32};
 use std::sync::Arc;
@@ -130,54 +132,50 @@ const fn unmirrored(what: &'static str) -> WireError {
     WireError::Unmirrored(what)
 }
 
-impl InputRecord {
-    /// This row in the recording's wire form. Under [`Privacy::Redact`] the
-    /// row's text is replaced and the row marked redacted.
-    ///
-    /// # Errors
-    ///
-    /// [`WireError::Unmirrored`] when the vocabulary grew a variant the wire
-    /// form does not mirror, and [`WireError::Invalid`] for a value the form
-    /// cannot hold.
-    pub fn to_wire(&self, privacy: Privacy) -> Result<rec::Row> {
-        let mut row = rec::Row::try_convert(self)?;
-        if privacy == Privacy::Redact {
-            row.redact();
-        }
-        Ok(row)
+/// `record` in the recording's wire form. Under [`Privacy::Redact`] the row's
+/// text is replaced and the row marked redacted.
+///
+/// # Errors
+///
+/// [`WireError::Unmirrored`] when the vocabulary grew a variant the wire
+/// form does not mirror, and [`WireError::Invalid`] for a value the form
+/// cannot hold.
+pub fn record_to_wire(record: &InputRecord, privacy: Privacy) -> Result<rec::Row> {
+    let mut row = rec::Row::try_convert(record)?;
+    if privacy == Privacy::Redact {
+        row.redact();
     }
-
-    /// The row `row` records.
-    ///
-    /// # Errors
-    ///
-    /// [`WireError::UnknownSpelling`] for a spelling this build does not know
-    /// and [`WireError::Invalid`] for a value the vocabulary refuses.
-    #[cfg(feature = "testing")]
-    pub fn from_wire(row: rec::Row) -> Result<Self> {
-        Self::try_convert(row)
-    }
+    Ok(row)
 }
 
-impl PreferencesRow {
-    /// This revision in the recording's wire form.
-    ///
-    /// # Errors
-    ///
-    /// [`WireError::Unmirrored`] when the preferences hold a variant the wire
-    /// form does not mirror.
-    pub fn to_wire(&self) -> Result<rec::Preferences> {
-        rec::Preferences::try_convert(self)
-    }
+/// The row `row` records.
+///
+/// # Errors
+///
+/// [`WireError::UnknownSpelling`] for a spelling this build does not know
+/// and [`WireError::Invalid`] for a value the vocabulary refuses.
+#[cfg(feature = "testing")]
+pub fn record_from_wire(row: rec::Row) -> Result<InputRecord> {
+    InputRecord::try_convert(row)
+}
 
-    /// The revision `preferences` records.
-    ///
-    /// # Errors
-    ///
-    /// [`WireError::Invalid`] for a value the preferences refuse.
-    pub fn from_wire(preferences: rec::Preferences) -> Result<Self> {
-        Self::try_convert(preferences)
-    }
+/// The preference revision `preferences` in the recording's wire form.
+///
+/// # Errors
+///
+/// [`WireError::Unmirrored`] when the preferences hold a variant the wire
+/// form does not mirror.
+pub fn preferences_row_to_wire(preferences: &PreferencesRow) -> Result<rec::Preferences> {
+    rec::Preferences::try_convert(preferences)
+}
+
+/// The revision `preferences` records.
+///
+/// # Errors
+///
+/// [`WireError::Invalid`] for a value the preferences refuse.
+pub fn preferences_row_from_wire(preferences: rec::Preferences) -> Result<PreferencesRow> {
+    PreferencesRow::try_convert(preferences)
 }
 
 // ============================================================================
@@ -1882,40 +1880,42 @@ impl TryConvert<rec::Preferences> for PreferencesRow {
 // Header pieces
 // ============================================================================
 
-impl RecordingStart {
-    /// The first line of a recording on `clock` that starts from here, keeping text under
-    /// `privacy`: each window with its scale and gesture values, untitled, and the preference
-    /// revision in effect. It names no device: the rows carry the devices they saw.
-    ///
-    /// # Errors
-    ///
-    /// [`WireError::Unmirrored`] when a window's gesture values or the preferences hold a
-    /// variant the wire form does not mirror.
-    pub fn to_wire(&self, clock: rec::Clock, privacy: Privacy) -> Result<rec::Header> {
-        Ok(rec::Header {
-            flui_recording: rec::FORMAT_VERSION,
-            clock,
-            windows: self
-                .windows
-                .iter()
-                .map(|window| {
-                    Ok(rec::Window {
-                        window: window.window.get().get(),
-                        scale_factor: window.scale_factor,
-                        title: None,
-                        gestures: Some(profiles_to_wire(&window.gesture_profiles)?),
-                    })
+/// The first line of a recording on `clock` that starts from `start`, keeping text under
+/// `privacy`: each window with its scale and gesture values, untitled, and the preference
+/// revision in effect. It names no device: the rows carry the devices they saw.
+///
+/// # Errors
+///
+/// [`WireError::Unmirrored`] when a window's gesture values or the preferences hold a
+/// variant the wire form does not mirror.
+pub fn start_to_wire(
+    start: &RecordingStart,
+    clock: rec::Clock,
+    privacy: Privacy,
+) -> Result<rec::Header> {
+    Ok(rec::Header {
+        flui_recording: rec::FORMAT_VERSION,
+        clock,
+        windows: start
+            .windows
+            .iter()
+            .map(|window| {
+                Ok(rec::Window {
+                    window: window.window.get().get(),
+                    scale_factor: window.scale_factor,
+                    title: None,
+                    gestures: Some(profiles_to_wire(&window.gesture_profiles)?),
                 })
-                .collect::<Result<Vec<rec::Window>>>()?,
-            devices: Vec::new(),
-            preferences: self
-                .preferences
-                .as_ref()
-                .map(PreferencesRow::to_wire)
-                .transpose()?,
-            keep_text: privacy == Privacy::KeepText,
-        })
-    }
+            })
+            .collect::<Result<Vec<rec::Window>>>()?,
+        devices: Vec::new(),
+        preferences: start
+            .preferences
+            .as_ref()
+            .map(preferences_row_to_wire)
+            .transpose()?,
+        keep_text: privacy == Privacy::KeepText,
+    })
 }
 
 /// A header's entry for `device`, a pointer device of `kind` named `name`.

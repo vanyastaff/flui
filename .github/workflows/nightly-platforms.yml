@@ -25,7 +25,9 @@ name: Nightly platforms
 # The acceptance scenario, `an_agent_drives_the_acceptance_app_on_the_desktop` in the same
 # file, runs on the desktop legs: it builds tests/fixtures/acceptance_app/ as a project of
 # its own and, through `flui mcp` alone, goes from its home page to Settings and back, waiting
-# for each page with `flui_wait` instead of reading in a loop.
+# for each page with `flui_wait` instead of reading in a loop. Its build is a test of its own,
+# `the_acceptance_app_builds_and_answers_on_the_desktop`, which nextest runs first with a
+# build's budget (.config/nextest.toml), so the scenario's budget covers only driving the app.
 #
 # Each leg runs the local command, so a run here and one on a developer's
 # machine cannot drift. A row of crates/flui-native/platform-parity.toml that
@@ -69,7 +71,7 @@ env:
   RUSTUP_HOME: ${{ github.workspace }}/../flui-nightly-rustup
   SCENARIO: cli_live_agent::an_agent_presses_the_counter_on_a_live_device
   # The desktop legs also drive the acceptance application through `flui mcp`.
-  DESKTOP_SCENARIOS: "test(=cli_live_agent::an_agent_presses_the_counter_on_a_live_device) | test(=cli_live_agent::an_agent_drives_the_acceptance_app_on_the_desktop)"
+  DESKTOP_SCENARIOS: "test(=cli_live_agent::an_agent_presses_the_counter_on_a_live_device) | test(=cli_live_agent::the_acceptance_app_builds_and_answers_on_the_desktop) | test(=cli_live_agent::an_agent_drives_the_acceptance_app_on_the_desktop)"
 
 jobs:
   desktop:
