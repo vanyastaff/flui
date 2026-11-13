@@ -1352,8 +1352,8 @@ impl BuildOwner {
     }
 
     /// Start a fresh telemetry report, for a test kit that reports one frame:
-    /// cleared before the frame, the report afterwards holds only what that
-    /// frame built, and nothing when the frame did not run the widget pass.
+    /// cleared before the frame, the report afterwards holds nothing the
+    /// frames before it built.
     #[cfg(any(test, feature = "testing"))]
     pub fn clear_frame_build_report_for_test(&mut self) {
         self.clear_frame_build_report();

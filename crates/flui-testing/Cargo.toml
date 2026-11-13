@@ -51,7 +51,8 @@ raw-window-handle = { workspace = true }
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
 # `testing` for `clear_frame_build_report_for_test`, which `LaidOut::pump_report`
-# runs before its frame so a frame that builds nothing reports nothing.
+# runs before its frame so a frame that builds nothing reports nothing, and for
+# `register_layout_builder_for_test`, which the layout-builder seam test plants.
 flui-view = { workspace = true, features = ["testing"] }
 # The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
 # `testing` for `inspect`, the committed-geometry and layer accessors the
@@ -119,11 +120,6 @@ static_assertions.workspace = true
 flui-foundation = { workspace = true, features = ["testing"] }
 # The headless backend whose windows the conformance checks run against.
 flui-native = { workspace = true }
-# Enable flui-view's `testing` feature in test builds so the layout-builder
-# seam test can plant a registry entry (`register_layout_builder_for_test`).
-# Same dev-only feature-unification pattern used by flui-app; the hook stays out
-# of release builds.
-flui-view = { workspace = true, features = ["testing"] }
 # The long-press deadline recognizer + settings exercised by the pump_frame test,
 # plus the geometry/offset types for the synthetic pointer-down. The `testing`
 # feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release

@@ -1057,8 +1057,10 @@ impl LaidOut {
             .pipeline_owner
             .with(flui_rendering::pipeline::PipelineOwner::counters);
         let scene_before = self.scene_totals();
-        // Cleared before the frame, the build owner's report holds what this
-        // frame built: nothing when the window's clock granted no produce.
+        // Cleared before the frame, the build owner's report holds only what
+        // this pump built: nothing when the window's clock granted no produce
+        // or no draw frame ran. A frame whose focus move rebuilds within it
+        // reports that second pass (`WidgetsBinding::rebuild_within_frame`).
         self.with_build_owner_mut(flui_view::BuildOwner::clear_frame_build_report_for_test);
         self.pump_for(dt);
         let pipeline_after = self
