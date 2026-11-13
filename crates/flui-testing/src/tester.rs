@@ -27,10 +27,12 @@
 //! for and what the window showed instead; its `try_` twin returns the same
 //! account as a [`TestError`].
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::ManualClock;
+use flui_platform::SessionEndPhase;
 use flui_protocol::method::{
     ElementActionability, InputInject, InspectRender, InspectWidgets, SemanticsLocate,
     SemanticsRead,
@@ -41,10 +43,12 @@ use flui_protocol::{
     Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
     ReadParams, Tree, outline,
 };
-use flui_view::View;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
+use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
 
+use crate::host::KitStorage;
+use crate::storage::MemoryStorage;
 use crate::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 
 /// One frame at 60 Hz: what [`Tester::pump`] advances and what an action or
@@ -65,31 +69,63 @@ const SHOWN_LINES: usize = 15;
 /// woken completion, the rebuild it schedules and the semantics it commits.
 const DUE_NOW_FRAMES: u32 = 8;
 
-/// The window a [`Tester`] mounts its view in: its logical size, and the
-/// platform whose conventions the application follows.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// The window a [`Tester`] mounts its view in: its logical size, the
+/// platform whose conventions the application follows, and the storage its
+/// documents are kept in.
+#[derive(Debug, Clone)]
 pub struct TestWindow {
     width: u32,
     height: u32,
     platform: Option<flui_platform::TargetPlatform>,
+    storage: WindowStorage,
+}
+
+/// Where a [`TestWindow`]'s application keeps its documents.
+#[derive(Debug, Clone)]
+enum WindowStorage {
+    /// A fresh, empty [`MemoryStorage`] for each mount.
+    Fresh,
+    /// This storage, as left by an earlier run.
+    Given(MemoryStorage),
+    /// None at all, as on a platform without files.
+    Absent,
 }
 
 impl TestWindow {
-    /// A window of `width` by `height` logical pixels.
+    /// A window of `width` by `height` logical pixels, its application
+    /// keeping its documents in a fresh, empty [`MemoryStorage`].
     #[must_use]
     pub const fn new(width: u32, height: u32) -> Self {
         Self {
             width,
             height,
             platform: None,
+            storage: WindowStorage::Fresh,
         }
     }
 
     /// Follow `platform`'s conventions (chords, handles, menus, transitions)
     /// instead of the platform-neutral ones a headless window follows.
     #[must_use]
-    pub const fn platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
+    pub fn platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
         self.platform = Some(platform);
+        self
+    }
+
+    /// Keep the application's documents in `storage`: a launch over what an
+    /// earlier run left there, or over contents the test put there.
+    #[must_use]
+    pub fn storage(mut self, storage: MemoryStorage) -> Self {
+        self.storage = WindowStorage::Given(storage);
+        self
+    }
+
+    /// Give the application no storage at all, as a platform without files
+    /// runs it: a document it opens is read-only and starts from its initial
+    /// value.
+    #[must_use]
+    pub fn without_storage(mut self) -> Self {
+        self.storage = WindowStorage::Absent;
         self
     }
 }
@@ -231,6 +267,10 @@ pub struct Tester {
     lease: InputLease,
     /// Kept alive so the window keeps its agent: dropping it detaches.
     _agent: HeadlessDevAgent,
+    /// The window this run mounted in, its storage the one the run keeps.
+    config: TestWindow,
+    /// Mounts the same view again in a window: what [`Tester::restart`] runs.
+    relaunch: Rc<dyn Fn(TestWindow) -> Tester>,
 }
 
 impl std::fmt::Debug for Tester {
@@ -269,13 +309,30 @@ impl Tester {
     where
         V: View + Clone + 'static,
     {
-        let mut headless = HeadlessWindow::new(window.width, window.height).with_text_input();
-        if let Some(platform) = window.platform {
+        let mut config = window;
+        let mut headless = HeadlessWindow::new(config.width, config.height).with_text_input();
+        if let Some(platform) = config.platform {
             headless = headless.with_platform(platform);
+        }
+        let storage = match &config.storage {
+            WindowStorage::Fresh => Some(MemoryStorage::new()),
+            WindowStorage::Given(storage) => Some(storage.clone()),
+            WindowStorage::Absent => None,
+        };
+        if let Some(storage) = &storage {
+            // A restart launches over what this run leaves.
+            config.storage = WindowStorage::Given(storage.clone());
         }
         let windows = Arc::new(Mutex::new(Vec::new()));
         let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
-        let mut host = HeadlessHost::new(headless).with_dev_agent(&mut agent);
+        let mut host = HeadlessHost::with_storage(
+            headless,
+            storage.map(|storage| KitStorage {
+                host: Arc::new(storage),
+                provided: None,
+            }),
+        )
+        .with_dev_agent(&mut agent);
         host.attach(&view)
             .expect("BUG: a fresh host has no root attached");
         let _ = host.pump(FRAME);
@@ -291,6 +348,8 @@ impl Tester {
             window,
             lease,
             _agent: agent,
+            config,
+            relaunch: Rc::new(move |window| Self::mount_in(view.clone(), window)),
         };
         // The window collects semantics from the frame after its agent took
         // it; run that frame so the first locate reads a tree.
@@ -820,6 +879,69 @@ impl Tester {
     pub fn cancel_composition(&mut self) {
         self.try_cancel_composition()
             .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    // --- The application's window and storage -----------------------------
+
+    /// The storage the application keeps its documents in, or `None` for a
+    /// window [`without_storage`](TestWindow::without_storage). A
+    /// [`restart`](Self::restart) launches over it.
+    #[must_use]
+    pub fn storage(&self) -> Option<&MemoryStorage> {
+        match &self.config.storage {
+            WindowStorage::Given(storage) => Some(storage),
+            WindowStorage::Fresh | WindowStorage::Absent => None,
+        }
+    }
+
+    /// Stop this run and launch the same view in the same window over the
+    /// same storage, as across a process restart: the old tree, its states
+    /// and its runtime are gone before the new one mounts.
+    ///
+    /// # Panics
+    ///
+    /// When the new run's first frame fails.
+    #[must_use]
+    pub fn restart(self) -> Self {
+        let relaunch = Rc::clone(&self.relaunch);
+        let config = self.config.clone();
+        drop(self);
+        relaunch(config)
+    }
+
+    /// The user closes the window. The window's close guard is asked first:
+    /// a close it refuses is recorded, nothing is torn down, and the frame
+    /// after its last hold is released carries the close out. `true` when the
+    /// window closed now.
+    pub fn request_close(&mut self) -> bool {
+        let window = self.host.primary_window();
+        let closed = self.host.request_close(window, CloseReason::User);
+        self.run_due_now();
+        closed
+    }
+
+    /// Whether the window has closed: at once, once what held its close was
+    /// released or decided, or because the session ended. A close refused
+    /// and still recorded is not one.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.host.is_closed(self.host.primary_window())
+    }
+
+    /// The operating system ends the user's session: what the application's
+    /// documents published is written, then the window closes past every
+    /// hold, as a session that is ending no longer asks.
+    pub fn end_session(&mut self) {
+        let _answer = self.host.end_session(SessionEndPhase::Ending);
+        self.host.close_every_window();
+    }
+
+    /// The window loses (`false`) or regains (`true`) the operating system's
+    /// focus, as when the user switches to another application and back;
+    /// then the frame that reports it runs.
+    pub fn set_window_focused(&mut self, focused: bool) {
+        self.host.set_window_focused(focused);
+        self.run_due_now();
     }
 
     // --- Expecting --------------------------------------------------------

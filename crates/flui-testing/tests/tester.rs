@@ -527,3 +527,187 @@ fn a_cancelled_composition_leaves_the_text_as_it_was() {
         .expect_err("a caret past the composition is refused");
     assert!(matches!(error, TestError::Agent(_)), "{error:?}");
 }
+
+/// One line of text, kept in the window's storage.
+#[derive(Debug, PartialEq)]
+struct Note(String);
+
+impl flui_view::persist::Document for Note {
+    const NAME: flui_platform::StorageName = flui_platform::StorageName::from_static("note");
+    const VERSION: u32 = 1;
+    const MAX_BYTES: u64 = 64;
+
+    fn initial() -> Self {
+        Self(String::new())
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        self.0.clone().into_bytes()
+    }
+
+    fn decode(_version: u32, body: &[u8]) -> Result<Self, flui_view::persist::DecodeError> {
+        String::from_utf8(body.to_vec())
+            .map(Self)
+            .map_err(|error| flui_view::persist::DecodeError::new(error.to_string()))
+    }
+}
+
+/// What a [`Notebook`] took in `init_state`: its document, its window's close
+/// guard and a hold over the close when it was asked to take one.
+#[derive(Default)]
+struct Opened {
+    note: Option<flui_view::persist::Persisted<Note>>,
+    hold: Option<flui_view::CloseHold>,
+    lifecycle: Vec<flui_view::AppLifecycleState>,
+    _observation: Option<flui_view::LifecycleSubscription>,
+}
+
+/// Opens [`Note`] and the window's close guard, and records the window's
+/// lifecycle; each mount, a restart's included, refills `opened`.
+#[derive(Clone, StatefulView)]
+struct Notebook {
+    hold_close: bool,
+    opened: Rc<std::cell::RefCell<Opened>>,
+}
+
+struct NotebookState(Notebook);
+
+impl StatefulView for Notebook {
+    type State = NotebookState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        NotebookState(self.clone())
+    }
+}
+
+impl ViewState<Notebook> for NotebookState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let guard = ctx
+            .close_guard()
+            .expect("a hosted window has a close guard");
+        let lifecycle = Rc::clone(&self.0.opened);
+        let (_, observation) = ctx
+            .lifecycle_handle()
+            .expect("a hosted window has a lifecycle")
+            .subscribe(move |state| lifecycle.borrow_mut().lifecycle.push(state))
+            .expect("the window is open");
+        *self.0.opened.borrow_mut() = Opened {
+            note: Some(flui_view::persist::Persisted::open(ctx)),
+            hold: self.0.hold_close.then(|| guard.hold()),
+            lifecycle: Vec::new(),
+            _observation: Some(observation),
+        };
+    }
+
+    fn build(&self, _view: &Notebook, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(40.0, 40.0)
+    }
+}
+
+fn notebook(hold_close: bool) -> (Notebook, Rc<std::cell::RefCell<Opened>>) {
+    let opened = Rc::new(std::cell::RefCell::new(Opened::default()));
+    let view = Notebook {
+        hold_close,
+        opened: Rc::clone(&opened),
+    };
+    (view, opened)
+}
+
+/// The note the current run opened.
+fn note(opened: &Rc<std::cell::RefCell<Opened>>) -> flui_view::persist::Persisted<Note> {
+    opened
+        .borrow()
+        .note
+        .clone()
+        .expect("init_state opened the note")
+}
+
+/// Poll `future` between frames until it completes.
+fn settle<F: std::future::Future>(t: &mut Tester, future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
+    for _ in 0..20 {
+        if let std::task::Poll::Ready(output) = future.as_mut().poll(&mut ctx) {
+            return output;
+        }
+        t.pump();
+    }
+    panic!("the future did not complete within 20 frames");
+}
+
+#[test]
+fn a_restart_launches_the_same_view_over_the_storage_the_run_left() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let loaded = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    assert_eq!(*loaded, Note(String::new()));
+    note(&opened)
+        .set(Note("groceries".to_owned()))
+        .expect("a loaded note takes a value");
+    t.pump_and_settle();
+    let storage = t.storage().expect("a window keeps a storage").clone();
+
+    let mut t = t.restart();
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(
+        *loaded,
+        Note("groceries".to_owned()),
+        "the restart read what the run wrote"
+    );
+    assert!(
+        storage
+            .contents(&flui_platform::StorageName::from_static("note"))
+            .is_some(),
+        "the run wrote into the storage the test kept"
+    );
+
+    let mut t = Tester::mount_in(notebook(false).0, TestWindow::default().storage(storage));
+    assert!(t.storage().is_some());
+    t.pump();
+}
+
+#[test]
+fn a_window_without_storage_refuses_a_write() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(view, TestWindow::default().without_storage());
+    assert!(t.storage().is_none());
+    let _ = settle(&mut t, note(&opened).load());
+    assert!(
+        note(&opened).set(Note("lost".to_owned())).is_err(),
+        "a document with nowhere to go is read-only"
+    );
+}
+
+#[test]
+fn a_held_close_waits_for_its_hold_and_a_session_end_does_not() {
+    let (view, opened) = notebook(true);
+    let mut t = Tester::mount(view);
+    assert!(!t.request_close(), "the hold refuses the close");
+    assert!(!t.is_closed());
+    drop(opened.borrow_mut().hold.take());
+    t.pump();
+    assert!(
+        t.is_closed(),
+        "the frame after the release carries the close out"
+    );
+
+    let (view, _opened) = notebook(true);
+    let mut t = Tester::mount(view);
+    t.end_session();
+    assert!(
+        t.is_closed(),
+        "a session that is ending closes past the hold"
+    );
+}
+
+#[test]
+fn the_window_losing_focus_makes_the_application_inactive() {
+    use flui_view::AppLifecycleState::{Inactive, Resumed};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    opened.borrow_mut().lifecycle.clear();
+    t.set_window_focused(false);
+    t.set_window_focused(true);
+    assert_eq!(opened.borrow().lifecycle, [Inactive, Resumed]);
+}

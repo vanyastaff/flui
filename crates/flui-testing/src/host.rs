@@ -1497,6 +1497,26 @@ impl HeadlessHost {
         self.close_presentation(window.0)
     }
 
+    /// Whether `window` has closed: at once by [`request_close`](Self::request_close),
+    /// by a pump after its close's last hold was released or a decision
+    /// closed it, or because it is gone. A close refused and still recorded
+    /// is not one.
+    #[must_use]
+    pub fn is_closed(&self, window: HeadlessWindowId) -> bool {
+        self.ui_runtime
+            .presentation_closing_for_test(window.0)
+            .unwrap_or(true)
+    }
+
+    /// Close every window now, past every hold, as the operating system
+    /// takes the windows of a session that is ending.
+    pub(crate) fn close_every_window(&mut self) {
+        for id in self.presentation_ids() {
+            self.ui_runtime.commit_composition_for_close(id);
+            let _closed = self.close_presentation(id);
+        }
+    }
+
     /// One phase of the user's session ending, as the operating system reports
     /// it (ADR-0260). `Query` asks every window's guard for the session's
     /// end and answers [`Block`](SessionEndAnswer::Block) when one refuses;

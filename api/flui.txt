@@ -23190,6 +23190,22 @@ impl schemars::JsonSchema for flui::testing::Match
 impl serde_core::ser::Serialize for flui::testing::Match
 impl<'de> serde_core::de::Deserialize<'de> for flui::testing::Match
 pub fn flui::testing::Match::new(element: flui_protocol::tree::ElementRef, revision: flui_protocol::tree::TreeRevision, node: flui::testing::Node) -> Self
+pub struct flui::testing::MemoryStorage { .. }
+impl Clone for flui::testing::MemoryStorage
+impl Default for flui::testing::MemoryStorage
+impl core::fmt::Debug for flui::testing::MemoryStorage
+impl flui::platform::Storage for flui::testing::MemoryStorage
+pub fn flui::testing::MemoryStorage::contents(&self, name: &flui::platform::StorageName) -> Option<Vec<u8>>
+pub fn flui::testing::MemoryStorage::fail_copies(&self, error: Option<flui::platform::StorageError>)
+pub fn flui::testing::MemoryStorage::fail_next(&self, error: flui::platform::StorageError)
+pub fn flui::testing::MemoryStorage::fail_reads(&self, error: Option<flui::platform::StorageError>)
+pub fn flui::testing::MemoryStorage::hold_commits(&self) -> flui::testing::harness::storage::CommitBarrier
+pub fn flui::testing::MemoryStorage::hold_copies(&self) -> flui::testing::harness::storage::CopyHold
+pub fn flui::testing::MemoryStorage::hold_writes(&self) -> flui::testing::harness::storage::WriteHold
+pub fn flui::testing::MemoryStorage::kept_aside(&self, name: &flui::platform::StorageName) -> Vec<Vec<u8>>
+pub fn flui::testing::MemoryStorage::live_requests(&self) -> usize
+pub fn flui::testing::MemoryStorage::new() -> Self
+pub fn flui::testing::MemoryStorage::put(&self, name: &flui::platform::StorageName, bytes: impl Into<Vec<u8>>)
 #[non_exhaustive] pub struct flui::testing::Node
 field flui::testing::Node::actions: Vec<flui_protocol::wire::ActionName> // at 17
 field flui::testing::Node::automation_id: Option<String> // at 6
@@ -23329,13 +23345,12 @@ variant flui::testing::TestError::Timeout { expected: String, locator: Box<flui:
 variant flui::testing::TestError::Unanswered { frames: u32 } // at 6
 pub struct flui::testing::TestWindow { .. }
 impl Clone for flui::testing::TestWindow
-impl Copy for flui::testing::TestWindow
 impl Default for flui::testing::TestWindow
-impl PartialEq for flui::testing::TestWindow
 impl core::fmt::Debug for flui::testing::TestWindow
-impl core::marker::StructuralPartialEq for flui::testing::TestWindow
 pub const fn flui::testing::TestWindow::new(width: u32, height: u32) -> Self
-pub const fn flui::testing::TestWindow::platform(self, platform: flui::platform::TargetPlatform) -> Self
+pub fn flui::testing::TestWindow::platform(self, platform: flui::platform::TargetPlatform) -> Self
+pub fn flui::testing::TestWindow::storage(self, storage: flui::testing::MemoryStorage) -> Self
+pub fn flui::testing::TestWindow::without_storage(self) -> Self
 pub struct flui::testing::Tester { .. }
 impl core::fmt::Debug for flui::testing::Tester
 pub fn flui::testing::Tester::cancel_composition(&mut self)
@@ -23344,11 +23359,13 @@ pub fn flui::testing::Tester::commit_composition(&mut self, text: &str)
 pub fn flui::testing::Tester::compose(&mut self, text: &str, caret: Option<u32>)
 pub fn flui::testing::Tester::drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration)
 pub fn flui::testing::Tester::drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration)
+pub fn flui::testing::Tester::end_session(&mut self)
 pub fn flui::testing::Tester::enter_text(&mut self, locator: &flui::testing::Locator, text: &str)
 pub fn flui::testing::Tester::expect(&mut self, locator: flui::testing::Locator) -> flui::testing::Expectation<'_>
 pub fn flui::testing::Tester::find_all(&mut self, locator: &flui::testing::Locator) -> Vec<flui::testing::Match>
 pub fn flui::testing::Tester::inspect_render(&mut self) -> flui::testing::InspectReading
 pub fn flui::testing::Tester::inspect_widgets(&mut self) -> flui::testing::InspectReading
+pub fn flui::testing::Tester::is_closed(&self) -> bool
 pub fn flui::testing::Tester::key_down(&mut self, key: &str)
 pub fn flui::testing::Tester::key_up(&mut self, key: &str)
 pub fn flui::testing::Tester::long_press(&mut self, locator: &flui::testing::Locator, duration: core::time::Duration)
@@ -23360,7 +23377,11 @@ pub fn flui::testing::Tester::pump_and_settle(&mut self) -> usize
 pub fn flui::testing::Tester::pump_for(&mut self, duration: core::time::Duration)
 pub fn flui::testing::Tester::read(&mut self, locator: &flui::testing::Locator) -> flui::testing::Node
 pub fn flui::testing::Tester::rect(&mut self, locator: &flui::testing::Locator) -> flui::testing::LogicalRect
+pub fn flui::testing::Tester::request_close(&mut self) -> bool
+pub fn flui::testing::Tester::restart(self) -> Self
 pub fn flui::testing::Tester::semantics(&mut self) -> flui::testing::Tree
+pub fn flui::testing::Tester::set_window_focused(&mut self, focused: bool)
+pub fn flui::testing::Tester::storage(&self) -> Option<&flui::testing::MemoryStorage>
 pub fn flui::testing::Tester::tap(&mut self, locator: &flui::testing::Locator)
 pub fn flui::testing::Tester::try_cancel_composition(&mut self) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_commit_composition(&mut self, text: &str) -> Result<(), flui::testing::TestError>
@@ -23823,22 +23844,7 @@ pub fn flui::testing::harness::storage::CommitBarrier::commit(self)
 pub struct flui::testing::harness::storage::CopyHold { .. }
 impl Drop for flui::testing::harness::storage::CopyHold
 impl core::fmt::Debug for flui::testing::harness::storage::CopyHold
-pub struct flui::testing::harness::storage::MemoryStorage { .. }
-impl Clone for flui::testing::harness::storage::MemoryStorage
-impl Default for flui::testing::harness::storage::MemoryStorage
-impl core::fmt::Debug for flui::testing::harness::storage::MemoryStorage
-impl flui::platform::Storage for flui::testing::harness::storage::MemoryStorage
-pub fn flui::testing::harness::storage::MemoryStorage::contents(&self, name: &flui::platform::StorageName) -> Option<Vec<u8>>
-pub fn flui::testing::harness::storage::MemoryStorage::fail_copies(&self, error: Option<flui::platform::StorageError>)
-pub fn flui::testing::harness::storage::MemoryStorage::fail_next(&self, error: flui::platform::StorageError)
-pub fn flui::testing::harness::storage::MemoryStorage::fail_reads(&self, error: Option<flui::platform::StorageError>)
-pub fn flui::testing::harness::storage::MemoryStorage::hold_commits(&self) -> flui::testing::harness::storage::CommitBarrier
-pub fn flui::testing::harness::storage::MemoryStorage::hold_copies(&self) -> flui::testing::harness::storage::CopyHold
-pub fn flui::testing::harness::storage::MemoryStorage::hold_writes(&self) -> flui::testing::harness::storage::WriteHold
-pub fn flui::testing::harness::storage::MemoryStorage::kept_aside(&self, name: &flui::platform::StorageName) -> Vec<Vec<u8>>
-pub fn flui::testing::harness::storage::MemoryStorage::live_requests(&self) -> usize
-pub fn flui::testing::harness::storage::MemoryStorage::new() -> Self
-pub fn flui::testing::harness::storage::MemoryStorage::put(&self, name: &flui::platform::StorageName, bytes: impl Into<Vec<u8>>)
+reexport flui::testing::harness::storage::MemoryStorage => flui::testing::MemoryStorage
 pub struct flui::testing::harness::storage::WriteHold { .. }
 impl Drop for flui::testing::harness::storage::WriteHold
 impl core::fmt::Debug for flui::testing::harness::storage::WriteHold
