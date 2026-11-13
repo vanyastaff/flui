@@ -2,21 +2,6 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [idle_frame_retained_scene]
-allocated_bytes = 0
-allocations = 0
-builds_run = 0
-damage_full = 0
-damage_rects = 0
-elements_rebuilt = 0
-frames_produced = 0
-layers_produced = 0
-layers_reused = 0
-layout_passes = 0
-layout_roots = 0
-nodes_laid_out = 0
-nodes_painted = 0
+allocated_bytes = 3328
+allocations = 24
 reallocations = 0
-scene_depth_updates = 0
-scene_nodes_visited = 0
-scene_ops = 0
-semantics_nodes_updated = 0

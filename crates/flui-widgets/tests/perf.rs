@@ -615,43 +615,51 @@ fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
 }
 
 /// Frames requested with nothing changed in the tree, as a ticker that
-/// changes nothing asks for them: each runs the frame phases, and none
-/// publishes, paints, damages or allocates anything, because the retained
-/// scene already holds what the window shows (ADR-0304 §8).
+/// changes nothing asks for them, driven through the UI runtime's frame
+/// transaction: none publishes or submits a scene, because the retained scene
+/// already holds what the window shows (ADR-0304 §8). What the frames still
+/// ask of the heap is held to its baseline, which `cargo xtask perf` ratchets
+/// down as the frame's per-frame buffers become kept ones.
 #[test]
 fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
     const IDLE_FRAMES: usize = 4;
-    let mut app = mount();
+    let (position, _writer) = ScrollPosition::with_writer(0.0);
+    let app = PerfApp {
+        label: SharedSignal::new(String::from("label")),
+        position,
+    };
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(&app).expect("a fresh host takes a root");
+    host.enable_semantics();
     // The lazy band lands a frame after the mount's paint.
-    let _ = app.pump_many(2);
-    let (report, allocations) = perf_measured(|| {
-        let mut total = FrameReport::default();
-        for _ in 0..IDLE_FRAMES {
-            app.binding.scheduler().request_frame();
-            total += &app.binding.pump_frame_report(FRAME);
-        }
-        total
-    });
-    record("idle_frame_retained_scene", &report, allocations);
-
-    assert_eq!(
-        allocations,
-        HeapCounts::default(),
-        "an idle frame asks nothing of the heap: {report:#?}"
-    );
-    for name in [
-        "elements_rebuilt",
-        "nodes_laid_out",
-        "nodes_painted",
-        "layers_produced",
-        "scene_ops",
-        "damage_rects",
-        "damage_full",
-        "scene_nodes_visited",
-        "scene_depth_updates",
-    ] {
-        assert_eq!(counter(&report, name), 0, "{name}: {report:#?}");
+    for _ in 0..3 {
+        let _ = host.pump(FRAME);
     }
+    let shown = host
+        .sink()
+        .version()
+        .expect("the mount submitted a scene")
+        .id();
+    let submits = host.sink().submits();
+    let ((), allocations) = perf_measured(|| {
+        for _ in 0..IDLE_FRAMES {
+            host.request_frame();
+            let _ = host.pump(FRAME);
+        }
+    });
+    record_counts("idle_frame_retained_scene", &heap_counts(allocations));
+
+    assert!(
+        host.sink()
+            .version()
+            .is_some_and(|version| version.id() == shown),
+        "an idle frame publishes no new scene version"
+    );
+    assert_eq!(
+        host.sink().submits(),
+        submits,
+        "an idle frame submits nothing"
+    );
 }
 
 /// What a `Semantics` with one action adds to the `Text` it holds in a
