@@ -9,11 +9,13 @@
 //! ([`THE_JOB`]); a rise from anywhere else is left to main (ADR-0303 §9).
 //! The callgrind half of the job stays on main.
 
-/// The source roots whose code runs for every node of a frame: the element
+/// The source roots whose code runs for every element or render node of a
+/// frame: the element tree's storage, the element
 /// owners' build walk, the render tree's storage, the pipeline owner's
 /// layout, paint and semantics passes, and the
 /// semantics model those passes merge.
-pub(super) const PER_NODE: [&str; 4] = [
+pub(super) const PER_NODE: [&str; 5] = [
+    "crates/flui-view/src/tree/",
     "crates/flui-view/src/owner/",
     "crates/flui-rendering/src/storage/",
     "crates/flui-rendering/src/pipeline/",
@@ -21,8 +23,10 @@ pub(super) const PER_NODE: [&str; 4] = [
 ];
 
 /// What the comparison reads besides the code: the baseline, the scenarios,
-/// the allocator and the report that count for them,
-/// the task that compares them and this rule.
+/// the allocator that counts for them and their mount-cost helper,
+/// the task that compares them and this rule. The frame report's counter
+/// names live in flui-testing's root module, which most of its changes
+/// touch: a renamed counter is left to main.
 const THE_JOB: [&str; 6] = [
     "crates/flui-testing/src/heap.rs",
     "crates/flui-testing/src/control_cost.rs",
@@ -54,6 +58,7 @@ mod tests {
 
     fn a_per_node_source_or_an_input_asks_for_the_job() {
         for f in [
+            "crates/flui-view/src/tree/mod.rs",
             "crates/flui-view/src/owner/build_owner.rs",
             "crates/flui-rendering/src/storage/tree.rs",
             "crates/flui-rendering/src/pipeline/owner/semantics.rs",
@@ -72,6 +77,9 @@ mod tests {
             input(&[
                 "crates/flui-rendering/src/traits/render_object.rs",
                 "crates/flui-view/src/element/mod.rs",
+                "crates/flui-view/src/owner_notify.rs",
+                "crates/flui-layer/src/scene/mod.rs",
+                "crates/flui-testing/src/lib.rs",
                 "crates/flui-testing/src/host.rs",
                 "crates/flui-rendering/tests/semantics_assembly.rs",
                 "crates/flui-semantics/tests/identifier.rs",
