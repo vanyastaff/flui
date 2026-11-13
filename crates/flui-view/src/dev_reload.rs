@@ -49,6 +49,10 @@ use flui_rendering::layer::Scene;
 /// Deliberately exhaustive: a host maps every event to the reload it
 /// performs, and a new event must not compile until each host gives it one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a host maps every event to the reload it performs, so a new event must not compile until each host gives it one"
+)]
 pub enum ReloadEvent {
     /// Nothing to apply.
     Unchanged,

@@ -74,6 +74,10 @@ impl<T: Inspect + ?Sized> Inspect for Box<T> {
 
 /// How much detail a field is: a summary shows only [`Level::Summary`] fields.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the inspect wire carries each level, and a mapping with a `_` arm would show a new one at the wrong detail"
+)]
 pub enum Level {
     /// Shown everywhere.
     #[default]
@@ -203,6 +207,10 @@ pub trait Sink {
 
 /// What a field holds: one value, or a sequence of them.
 #[derive(Clone, Copy)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a field holds one value or a sequence of them"
+)]
 pub enum Payload<'a> {
     /// One value.
     One(Value<'a>),

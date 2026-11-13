@@ -32,3 +32,9 @@
   `SceneError`, `FullReason` and `ResyncReason`; flui-log's `EventOrigin`, `SubscriberPolicy`,
   `InstallPolicy` and `LogBridgePolicy`; and flui-hot-reload's `ReloadStrategy`, `HotReloadTier`,
   `HotReloadOutcome`, `PluginKind` and `WorkerPollOutcome`.
+- Also `#[non_exhaustive]` (ADR-0329): `MainAxisAlignment`, `CrossAxisAlignment`, `StackFit`,
+  `OverflowBoxFit`, `TableColumnWidth`, `WrapAlignment`, `WrapCrossAlignment`, `MinTarget`,
+  `ViewFocusDirection`, `KeyLookup`, `GeometryError`, the inspect `Change`, `FieldError`,
+  `MatchError`, `Link` and `Role`, and the testing kit's `BuildCapabilities`, `PointerPhase`,
+  `A11yQuery`, `A11yQueryError`, `InvokeActionError`, `RowOutcome`, `StoreHostCall` and
+  `HandlerCall`.

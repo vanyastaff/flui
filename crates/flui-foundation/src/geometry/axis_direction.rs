@@ -6,6 +6,10 @@ use crate::geometry::Axis;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Default, flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an axis runs one of two ways along each of two axes"
+)]
 pub enum AxisDirection {
     /// From left to right.
     #[default]

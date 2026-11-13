@@ -7,6 +7,7 @@ use super::snapshot::SnapshotNode;
 
 /// What a piece of rendered text is, so a [`Style`] can colour it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Role {
     /// A node's kind.
     Kind,

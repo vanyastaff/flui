@@ -6,6 +6,7 @@
 /// Applies to each run (line) independently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, flui_foundation::inspect::Inspect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum WrapAlignment {
     /// Place children at the start of each run (the default).
     #[default]
@@ -63,6 +64,7 @@ impl WrapAlignment {
 /// in the cross axis of a `Wrap` layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, flui_foundation::inspect::Inspect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum WrapCrossAlignment {
     /// Place runs at the start of the cross axis (the default).
     #[default]
