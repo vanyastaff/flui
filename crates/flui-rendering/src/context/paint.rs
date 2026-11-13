@@ -260,7 +260,13 @@ pub struct FragmentRecorder {
     /// Where this recorder's operations begin in `ops`: 0 unless it appends
     /// to a buffer the pass shares between nodes.
     start: usize,
-    open: Option<Canvas>,
+    /// The canvas every run of this recorder records into, in turn: a
+    /// sealed run takes its recording and leaves it empty, keeping the
+    /// paints it interned, so a pass that hands one canvas from node to node
+    /// allocates each paint it repeats once.
+    canvas: Canvas,
+    /// Whether `canvas` holds an open run, translated to `origin`.
+    open: bool,
     origin: Offset,
     anchor: Option<PaintAnchor>,
     /// Currently open `Push` scopes; must be 0 at `finish` (the
@@ -278,7 +284,8 @@ impl FragmentRecorder {
         Self {
             ops: Vec::new(),
             start: 0,
-            open: None,
+            canvas: Canvas::new(),
+            open: false,
             origin,
             anchor: None,
             open_scopes: 0,
@@ -286,34 +293,55 @@ impl FragmentRecorder {
         }
     }
 
-    /// A recorder that appends to `ops`, the pass's shared buffer, after
-    /// the operations already in it: a node's fragment then costs no
-    /// buffer of its own, and the pass hands `ops` from node to node.
-    pub(crate) fn appending(ops: Vec<FragmentOp>, origin: Offset, dpr: f64) -> Self {
-        Self {
-            start: ops.len(),
-            ops,
-            ..Self::new(origin, dpr)
-        }
+    /// Starts the next node's recording in a recorder a pass reuses from
+    /// node to node: its operations go after the ones already in the buffer,
+    /// and its runs record into the canvas the nodes before it left empty,
+    /// so a node's fragment costs no buffer and no canvas of its own.
+    pub(crate) fn begin(&mut self, origin: Offset, dpr: f64, anchor: Option<PaintAnchor>) {
+        debug_assert!(
+            !self.open && self.canvas.is_empty() && self.open_scopes == 0,
+            "BUG: a node's recording begins after the last one ended"
+        );
+        self.start = self.ops.len();
+        self.origin = origin;
+        self.dpr = dpr;
+        self.anchor = anchor;
     }
 
-    /// Finishes an [`Self::appending`] recorder: the buffer back, with this
-    /// node's operations from the returned index on.
-    pub(crate) fn finish_appended(mut self) -> (Vec<FragmentOp>, usize) {
+    /// Ends the recording [`Self::begin`] started, sealing its open run:
+    /// the node's operations are the buffer's from the returned index on.
+    pub(crate) fn end(&mut self) -> usize {
         self.seal();
         debug_assert_eq!(
             self.open_scopes, 0,
             "FragmentRecorder finished with unbalanced clip scopes — \
              a with_clip_* closure must have leaked its scope",
         );
-        (self.ops, self.start)
+        self.start
     }
 
-    /// Gives up an [`Self::appending`] recorder whose paint panicked: the
-    /// buffer back without anything this node recorded.
-    pub(crate) fn abandon(mut self) -> Vec<FragmentOp> {
-        self.ops.truncate(self.start);
-        self.ops
+    /// Gives up the recording [`Self::begin`] started, after the node's
+    /// paint panicked: the buffer without anything the node recorded, and a
+    /// fresh canvas for the next node. The recorder's state is reset before
+    /// the node's operations drop, since dropping one can run user code.
+    pub(crate) fn abandon(&mut self) {
+        self.open_scopes = 0;
+        let canvas = std::mem::take(&mut self.open).then(|| std::mem::take(&mut self.canvas));
+        let start = self.start;
+        self.ops.truncate(start);
+        drop(canvas);
+    }
+
+    /// Empties the recorder for the next pass, whatever a failed one left
+    /// in it.
+    pub(crate) fn reset(&mut self) {
+        self.start = 0;
+        self.abandon();
+    }
+
+    /// The pass's buffer: every node's operations, each after its parent's.
+    pub(crate) fn ops_mut(&mut self) -> &mut Vec<FragmentOp> {
+        &mut self.ops
     }
 
     /// Records under `anchor`: what [`PaintContext::paint_anchor`] reports to
@@ -332,19 +360,25 @@ impl FragmentRecorder {
 
     /// The open recording canvas, pre-translated to the node origin.
     fn canvas(&mut self) -> &mut Canvas {
-        self.open.get_or_insert_with(|| {
-            let mut canvas = Canvas::new();
+        if !self.open {
+            self.open = true;
+            // A sealed run left the canvas at the identity, so the translation
+            // is the whole transform: set, not multiplied in.
             if self.origin != Offset::ZERO {
-                canvas.translate(self.origin.dx, self.origin.dy);
+                self.canvas.set_transform(Matrix4::translation(
+                    self.origin.dx,
+                    self.origin.dy,
+                    0.0,
+                ));
             }
-            canvas
-        })
+        }
+        &mut self.canvas
     }
 
     /// Seals the open canvas into a `Run` op (dropped when empty).
     fn seal(&mut self) {
-        if let Some(canvas) = self.open.take() {
-            let list = canvas.finish();
+        if std::mem::take(&mut self.open) {
+            let list = self.canvas.take_recording();
             if !list.is_empty() {
                 self.ops.push(FragmentOp::Run(list));
             }

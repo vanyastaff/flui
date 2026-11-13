@@ -318,8 +318,7 @@ impl HeadlessOpenWindows {
     pub fn all(&self) -> Vec<HeadlessHostWindow> {
         self.windows
             .upgrade()
-            .map(|windows| windows.tracked.borrow_mut().windows.clone())
-            .unwrap_or_default()
+            .map_or_default(|windows| windows.tracked.borrow_mut().windows.clone())
     }
 
     /// The open window `id`, `None` once it closed.

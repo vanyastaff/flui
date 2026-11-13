@@ -25,10 +25,6 @@ thiserror = { workspace = true }
 # `flui-log` edge share it from there.
 flui-foundation = { workspace = true }
 
-# Hierarchical desktop output. Optional because a hierarchical tree is a
-# development affordance, not something a shipped application should pay for.
-tracing-forest = { workspace = true, optional = true }
-
 # Android: logcat via the NDK's `__android_log_write`.
 [target.'cfg(target_os = "android")'.dependencies]
 android_log-sys = { workspace = true }
@@ -45,6 +41,12 @@ tracing-oslog = { workspace = true }
 # a macOS type-check from requiring an Apple SDK.
 [target.'cfg(target_os = "macos")'.dependencies]
 tracing-oslog = { workspace = true, optional = true }
+
+# Hierarchical desktop output, only where the desktop sinks exist. Optional
+# because a hierarchical tree is a development affordance, not something a
+# shipped application should pay for.
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))'.dependencies]
+tracing-forest = { workspace = true, optional = true }
 
 # WASM: browser console + performance timeline.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

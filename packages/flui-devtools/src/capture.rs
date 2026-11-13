@@ -449,14 +449,13 @@ impl Capture {
             .rings
             .lock()
             .get(&partition.runtime)
-            .map(|ring| {
+            .map_or_default(|ring| {
                 ring.spans
                     .iter()
                     .filter(|span| partition.covers(&span.partition))
                     .cloned()
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         spans.sort_by_key(CapturedSpan::start);
         spans
     }
@@ -482,8 +481,7 @@ impl Capture {
             .rings
             .lock()
             .get(&runtime)
-            .map(|ring| ring.frames.iter().cloned().collect())
-            .unwrap_or_default()
+            .map_or_default(|ring| ring.frames.iter().cloned().collect())
     }
 
     /// Forget everything captured so far. Sinks stay registered.

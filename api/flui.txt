@@ -10512,6 +10512,7 @@ pub fn flui::painting::Canvas::save_layer_opacity(&mut self, bounds: Option<flui
 pub fn flui::painting::Canvas::scale(&mut self, sx: f64, sy: f64)
 pub fn flui::painting::Canvas::set_transform<T: Into<flui::geometry::Matrix4>>(&mut self, transform: T)
 pub fn flui::painting::Canvas::skew(&mut self, sx: f64, sy: f64)
+pub fn flui::painting::Canvas::take_recording(&mut self) -> flui::painting::DisplayList
 pub fn flui::painting::Canvas::transform<T: Into<flui::geometry::Matrix4>>(&mut self, transform: T)
 pub fn flui::painting::Canvas::transform_matrix(&self) -> flui::geometry::Matrix4
 pub fn flui::painting::Canvas::translate(&mut self, dx: f64, dy: f64)
