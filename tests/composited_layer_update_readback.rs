@@ -506,7 +506,7 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     use flui_objects::TranslationFraction;
     use flui_painting::{Alignment, styling::Color};
     use flui_testing::widgets::{LaidOut, lay_out_animated, tight};
-    use flui_widgets::{Align, ColoredBox, SizedBox, SlideTransition, app_root};
+    use flui_widgets::{Align, ColoredBox, SizedBox, SlideTransition};
 
     let vsync = flui_animation::Vsync::new();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
@@ -519,11 +519,9 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
         .animate(scalar),
     );
     let mut laid = lay_out_animated(
-        app_root(
-            Align::new(Alignment::TOP_LEFT)
-                .child(SlideTransition::new(position).child(
-                    SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
-                )),
+        Align::new(Alignment::TOP_LEFT).child(
+            SlideTransition::new(position)
+                .child(SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0)))),
         ),
         tight(200.0, 200.0),
         vsync,
@@ -594,7 +592,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     use flui_foundation::{Listenable, geometry::Rect};
     use flui_painting::styling::Color;
     use flui_testing::widgets::{lay_out_animated, tight};
-    use flui_widgets::{CustomPaint, app_root};
+    use flui_widgets::CustomPaint;
 
     #[derive(Debug)]
     struct FadePainter(Rc<dyn Animation<Color>>, Rc<std::cell::Cell<Option<Color>>>);
@@ -631,11 +629,9 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     let color = Rc::new(Tween::new(Color::rgba(255, 255, 255, 0), Color::WHITE).animate(scalar));
     let painted = Rc::new(std::cell::Cell::new(None));
     let mut laid = lay_out_animated(
-        app_root(
-            CustomPaint::new()
-                .size(Size::new(16.0, 16.0))
-                .painter(FadePainter(color.clone(), painted.clone())),
-        ),
+        CustomPaint::new()
+            .size(Size::new(16.0, 16.0))
+            .painter(FadePainter(color.clone(), painted.clone())),
         tight(16.0, 16.0),
         vsync,
     );

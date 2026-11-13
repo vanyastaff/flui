@@ -33,7 +33,7 @@ use flui_view::{FrameBuildReport, RebuildReason};
 use flui_widgets::{
     Align, AlignTransition, ColoredBox, Column, DecoratedBoxTransition, GestureDetector,
     PositionedTransition, RotationTransition, ScaleTransition, SizeTransition, SizedBox,
-    SlideTransition, Stack, app_root,
+    SlideTransition, Stack,
 };
 
 /// The child's side: every transition here wraps a 40×40 box.
@@ -76,7 +76,7 @@ struct Headless {
 impl Headless {
     fn mount<V: View + Clone + 'static>(view: V) -> Self {
         let mut laid = lay_out(
-            app_root(Align::new(Alignment::TOP_LEFT).child(view)),
+            Align::new(Alignment::TOP_LEFT).child(view),
             tight(200.0, 200.0),
         );
         laid.pump_for(FRAME);
@@ -589,10 +589,7 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
             .child(listener)
             .text_direction(direction);
         let mut laid = lay_out_animated(
-            app_root(VsyncScope::new(
-                vsync.clone(),
-                Align::new(Alignment::CENTER).child(slide),
-            )),
+            VsyncScope::new(vsync.clone(), Align::new(Alignment::CENTER).child(slide)),
             tight(200.0, 200.0),
             vsync,
         );
