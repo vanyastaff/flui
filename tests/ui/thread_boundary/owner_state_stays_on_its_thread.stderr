@@ -6,8 +6,8 @@ error[E0277]: `Rc<flui_scheduler::scheduler::SchedulerInner>` cannot be sent bet
    |     |
    |     required by a bound introduced by this call
    |
-   = help: within `UpdateScheduler`, the trait `Send` is not implemented for `Rc<flui_scheduler::scheduler::SchedulerInner>`
-note: required because it appears within the type `UpdateScheduler`
+   = help: within `flui_scheduler::scheduler::UpdateScheduler`, the trait `Send` is not implemented for `Rc<flui_scheduler::scheduler::SchedulerInner>`
+note: required because it appears within the type `flui_scheduler::scheduler::UpdateScheduler`
   --> crates/flui-scheduler/src/scheduler.rs
    |
    | pub struct UpdateScheduler {
