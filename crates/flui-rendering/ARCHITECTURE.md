@@ -1622,7 +1622,7 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 
 **Files:** [`src/pipeline/owner/counters.rs`](src/pipeline/owner/counters.rs) (`PipelineCounters`), `PipelineOwner::counters` in [`src/pipeline/owner/accessors.rs`](src/pipeline/owner/accessors.rs).
 
-`PipelineOwner::counters()` returns work totals since the owner was constructed. They are monotonic because a frame is not one call on the owner: the layout↔build fixpoint runs `run_layout` several times before the frame's `run_frame`, and the owner has no frame-begin hook. A frame driver reads the counters before and after its frame and takes `after.since(before)`, the same way `layout_roots_total` has always been used. `flui-testing`'s `HeadlessBinding::last_frame_report` is that driver headlessly.
+`PipelineOwner::counters()` returns work totals since the owner was constructed. They are monotonic because a frame is not one call on the owner: the layout↔build fixpoint runs `run_layout` several times before the frame's `run_frame`, and the owner has no frame-begin hook. A frame driver reads the counters before and after its frame and takes `after.since(before)`, the same way `layout_roots_total` has always been used. `flui-testing`'s `LaidOut::pump_report` is that driver headlessly, over a frame of the UI runtime.
 
 | Counter | Counted where | What it counts |
 |---|---|---|

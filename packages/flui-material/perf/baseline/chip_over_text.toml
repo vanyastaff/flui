@@ -6,7 +6,7 @@
 
 [chip_over_text]
 allocations = 216
-bytes = 31473
+bytes = 31465
 elements = 15
 reallocations = 10
 render_nodes = 10

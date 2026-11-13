@@ -533,9 +533,9 @@ pipeline did per phase — layout passes and roots, nodes laid out and painted,
 layers produced and grafted from retained boundaries, semantics nodes
 published, frames produced — as monotonic totals (a frame's work is the
 difference across it; see `crates/flui-rendering/ARCHITECTURE.md`, "Phase
-counters"). `HeadlessBinding::last_frame_report()` pairs that difference with
-`BuildOwner::last_frame_build_report()` (distinct elements rebuilt and builds
-run) for the last pump.
+counters"). `LaidOut::pump_report(dt)` drives one frame of the UI runtime and
+pairs that difference with `BuildOwner::last_frame_build_report()` (distinct
+elements rebuilt and builds run) and the cost of the frame's scene patch.
 
 `crates/flui-widgets/tests/perf.rs` drives a fixed app — a label over a lazy
 10 000-row list — through a one-screen scroll (measured once as the first after
