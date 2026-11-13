@@ -156,7 +156,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | **ID offset** — plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize` (`slab_index + 1`); generational keys (`ElementId`, `RenderId`, `UiRuntimeId`) are minted with `new_gen(slab_index, generation)` and read with `.index()` | ID newtypes |
 | Logical and device geometry don't mix (ADR-0098) | trybuild `crates/flui-painting/tests/compile_fail/` |
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
-| A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it ([gaps](docs/gaps.md#public-enums-whose-closure-is-not-decided)) | clippy `exhaustive_enums` (ADR-0329) |
+| A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
 | Dependencies point down the tiers; an exception names the ADR that removes it | `xtask workspace`, `xtask reach` (ADR-0081) |
 | A Stable crate's public API names upstream types only as ADR-0089 §2 allows | `xtask api-closure` (CI `api-contracts` job, nightly rustdoc JSON) |
@@ -271,6 +271,12 @@ the change reads it to break it:
 
 The implementer does not review and the reviewer does not implement. A pull request the `docs`
 lane takes (documentation only) skips the step; its body says so under `## Review`.
+
+The step never holds a green pull request. When no reviewer can be started (the runtime refuses
+a subagent and no second session is at hand), the author writes
+`Independent read unavailable: <reason>` under `## Review`, reads the diff once more from the
+diff alone, item by item through "Before each push", writes there the scenarios tried and what
+each showed, takes the automated review of the pull request as the second reader, and merges.
 
 ## Where to read next
 

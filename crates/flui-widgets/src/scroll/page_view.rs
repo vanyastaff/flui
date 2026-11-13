@@ -299,6 +299,10 @@ const TURN: Duration = Duration::from_millis(300);
 /// once under reduced motion. At the first or the last page the turn past it
 /// is not performed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a turn goes to the next or the previous page"
+)]
 pub enum PageIntent {
     /// Show the page after the current one.
     Next,

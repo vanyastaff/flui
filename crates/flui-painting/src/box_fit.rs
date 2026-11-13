@@ -20,6 +20,10 @@ const EPSILON: f64 = 1e-6;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a fitted box computes its size from each fit, and a `_` arm would size a new one wrongly"
+)]
 pub enum BoxFit {
     /// Fill the target box by distorting the source's aspect ratio.
     ///
@@ -339,6 +343,10 @@ impl BoxFit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each shape paints and clips its own way, and a `_` arm would draw a new one as a rectangle"
+)]
 pub enum BoxShape {
     /// A rectangle, possibly with rounded corners.
     ///

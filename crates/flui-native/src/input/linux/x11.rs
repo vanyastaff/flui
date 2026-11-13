@@ -130,6 +130,10 @@ pub mod decode {
 
     /// What an XInput 2 event says happened.
     #[derive(Debug, Clone, Copy, PartialEq)]
+    #[expect(
+        clippy::exhaustive_enums,
+        reason = "a mirror of the protocol's events, decoded arm by arm, and a `_` arm would drop input"
+    )]
     pub enum XiAction {
         /// `XI_Motion`.
         Motion,
@@ -212,6 +216,7 @@ pub mod decode {
 
     /// What a valuator measures, as its label atom names it.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[expect(clippy::exhaustive_enums, reason = "the open end is Other")]
     pub enum AxisLabel {
         /// `Abs Pressure`.
         Pressure,
@@ -269,6 +274,10 @@ pub mod decode {
 
     /// What a slave pointer is to FLUI.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[expect(
+        clippy::exhaustive_enums,
+        reason = "assembly handles each role, and a `_` arm would drop the device's input"
+    )]
     pub enum DeviceRole {
         /// It moves its master's cursor: a mouse, a touchpad, XTest.
         Cursor,

@@ -354,6 +354,20 @@ impl UiRuntime {
         })
     }
 
+    /// The retained-scene totals of `id`, for a test kit that reports what a
+    /// frame's patch cost. `None` if `id` is not resident, or while a frame
+    /// holds its scene.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn presentation_scene_totals_for_test(
+        &self,
+        id: PresentationId,
+    ) -> Option<crate::testing::SceneTotals> {
+        self.presentations
+            .get(id)
+            .and_then(|presentation| presentation.scene.totals().ok())
+    }
+
     /// Whether `id`'s pipeline holds a semantics tree: something (assistive
     /// technology, or an agent) asked for one and a frame has run since. `None`
     /// if `id` is not resident.
@@ -365,16 +379,6 @@ impl UiRuntime {
                 .pipeline()
                 .with(|pipeline| pipeline.semantics_owner().is_some())
         })
-    }
-
-    /// The primary presentation's own `FrameClock::produced_count` — for
-    /// tests in a sibling module (`runner.rs`) that need to observe the
-    /// clock's produce count without reaching into the private
-    /// `presentations` field directly.
-    #[cfg(any(test, feature = "testing"))]
-    #[must_use]
-    pub fn primary_produced_count_for_test(&self) -> u64 {
-        self.presentations.primary().clock().produced_count()
     }
 
     /// This UI runtime's own scheduler — the strong root. `runner.rs`'s

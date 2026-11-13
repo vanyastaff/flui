@@ -7,6 +7,10 @@
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each baseline has its own measurement and cache"
+)]
 pub enum TextBaseline {
     /// The alphabetic baseline — the canonical, single definition for the whole
     /// workspace (`flui-rendering` and `flui-painting` re-export this;

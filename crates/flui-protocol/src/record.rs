@@ -167,6 +167,10 @@ impl RecordSummary {
     clippy::large_enum_variant,
     reason = "input rows are most of a recording and are queued by value, as before the native layer: boxing them would allocate per row"
 )]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a new layer is a new event, which a server sends only once it handles it"
+)]
 pub enum RecordRow {
     /// A row of the input layer, as the input recording holds it after its header: its `gap`
     /// rows count the input rows lost, and its `end` row ends the whole recording.

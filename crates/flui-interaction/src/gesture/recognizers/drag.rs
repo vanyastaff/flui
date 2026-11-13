@@ -127,6 +127,10 @@ impl DragUpdateDetails {
 }
 /// Why an accepted drag ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an accepted drag ends on release or on cancel"
+)]
 pub enum GestureEndReason {
     /// Pointer release completed the drag.
     Completed,

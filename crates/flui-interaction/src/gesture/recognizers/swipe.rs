@@ -33,6 +33,7 @@ use crate::{
 /// An edge of the screen or of a region in physical terms: left is left in
 /// every reading direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(clippy::exhaustive_enums, reason = "the four edges of a rectangle")]
 pub enum PhysicalEdge {
     /// The left edge.
     Left,

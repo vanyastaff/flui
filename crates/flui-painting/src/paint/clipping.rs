@@ -5,6 +5,10 @@ use flui_foundation::geometry::{Offset, Rect, Size};
 /// How a new clip region combines with the current clip.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a clip intersects or takes the difference"
+)]
 pub enum ClipOp {
     /// The new region is intersected with the current clip.
     /// Only pixels inside both regions remain visible.
@@ -21,6 +25,10 @@ pub enum ClipOp {
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every backend clips by each behavior, and a `_` arm would draw a new one unclipped"
+)]
 pub enum Clip {
     /// No clipping whatsoever.
     ///
@@ -83,6 +91,7 @@ impl Clip {
 /// Widget-level clipping behavior, convertible to a low-level [`Clip`] mode.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum ClipBehavior {
     /// No clipping.
     None,

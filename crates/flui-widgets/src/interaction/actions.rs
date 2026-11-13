@@ -796,6 +796,10 @@ impl Action<DirectionalFocusIntent> for DirectionalFocusAction {
 /// on its own focus node, and a [`Draggable`](crate::Draggable) by holding its
 /// items for a paste.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a copy keeps the selection and a cut deletes it"
+)]
 pub enum CopySelectionTextIntent {
     /// Write the selection to the clipboard and keep it.
     Copy,
