@@ -171,6 +171,8 @@ mod damage_extent;
 mod decoration_unit;
 #[path = "font_registration.rs"]
 mod font_registration;
+#[path = "support/foreign_image.rs"]
+mod foreign_image;
 #[path = "host_faces_oracle.rs"]
 mod host_faces_oracle;
 #[path = "image_decode.rs"]
@@ -951,8 +953,8 @@ fn image_decode_contract() {
         "image_decode",
         &[
             (
-                "a_png_decodes_to_its_pixels",
-                image_decode::a_png_decodes_to_its_pixels,
+                "each_format_decodes_to_its_pixels",
+                image_decode::each_format_decodes_to_its_pixels,
             ),
             (
                 "a_header_past_the_limit_is_refused_before_decoding",

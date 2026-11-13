@@ -5,6 +5,8 @@
 use flui_painting::paint::{Image, ImageDecodeError, MAX_DECODED_IMAGE_BYTES};
 use proptest::prelude::*;
 
+use crate::foreign_image::decodes_within_the_limit_or_fails_typed;
+
 /// A 4x2 PNG.
 const TINY_PNG: &[u8] = include_bytes!("fixtures/tiny.png");
 
@@ -36,11 +38,19 @@ fn png_declaring(width: u32, height: u32) -> Vec<u8> {
     png
 }
 
-/// A well-formed image decodes to its own size, every pixel present.
-pub(crate) fn a_png_decodes_to_its_pixels() {
-    let image = Image::decode(TINY_PNG).expect("the fixture decodes");
-    assert_eq!((image.width(), image.height()), (4, 2));
-    assert_eq!(image.data().len(), 4 * 2 * 4);
+/// A well-formed image of each format this build decodes comes out at its own
+/// size, every pixel present. The same three files seed the fuzz target.
+pub(crate) fn each_format_decodes_to_its_pixels() {
+    let fixtures: [(&str, &[u8]); 3] = [
+        ("PNG", TINY_PNG),
+        ("JPEG", include_bytes!("fixtures/tiny.jpg")),
+        ("GIF", include_bytes!("fixtures/tiny.gif")),
+    ];
+    for (format, bytes) in fixtures {
+        let image = Image::decode(bytes).expect("the fixture decodes");
+        assert_eq!((image.width(), image.height()), (4, 2), "{format}");
+        assert_eq!(image.data().len(), 4 * 2 * 4, "{format}");
+    }
 }
 
 /// A 75-byte PNG whose header declares 60000x60000 (14.4 GB of RGBA8) is
@@ -65,23 +75,11 @@ pub(crate) fn a_header_past_the_limit_is_refused_before_decoding() {
 }
 
 /// Arbitrary bytes, and the fixture with arbitrary bytes overwritten, decode
-/// to an image within the limit or to a typed error; nothing panics. The
-/// nightly run raises `PROPTEST_CASES`.
+/// to an image within the limit or to a typed error; nothing panics. The fuzz
+/// target `fuzz/image_decode.rs` holds the same property under libFuzzer.
 pub(crate) fn arbitrary_bytes_decode_or_fail_typed() {
-    let within = |result: Result<Image, ImageDecodeError>| match result {
-        Ok(image) => {
-            let bytes = u64::try_from(image.data().len()).expect("BUG: a length fits u64");
-            prop_assert!(bytes <= MAX_DECODED_IMAGE_BYTES);
-            Ok(())
-        }
-        Err(ImageDecodeError::TooLarge { requested, limit }) => {
-            prop_assert!(requested > limit);
-            Ok(())
-        }
-        Err(_) => Ok(()),
-    };
     proptest!(|(bytes in proptest::collection::vec(any::<u8>(), 0..512))| {
-        within(Image::decode(&bytes))?;
+        decodes_within_the_limit_or_fails_typed(&bytes);
     });
     proptest!(|(
         edits in proptest::collection::vec((0..TINY_PNG.len(), any::<u8>()), 1..8),
@@ -92,6 +90,6 @@ pub(crate) fn arbitrary_bytes_decode_or_fail_typed() {
             png[at] = byte;
         }
         png.truncate(cut);
-        within(Image::decode(&png))?;
+        decodes_within_the_limit_or_fails_typed(&png);
     });
 }

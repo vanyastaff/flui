@@ -481,6 +481,47 @@ the change. `const fn` bodies are not mutated.
 
 These runs are not a CI gate.
 
+## Fuzzing
+
+Code that parses bytes nobody vouches for has two tests of the same
+property. A property test draws the bytes at random on every pull request. A
+fuzz target hands the same bytes to libFuzzer, which keeps each input that
+reached new code and mutates it, so it gets past a header check or a method
+name that random bytes almost never satisfy. The property is one function
+under the crate's `tests/support/`, which both call.
+
+| Target | Entry | Property |
+|--------|-------|----------|
+| `image_decode` | `Image::decode` (flui-painting) | an image within `MAX_DECODED_IMAGE_BYTES` or a typed error |
+| `agent_wire` | a development agent's `Session::receive` (flui-runtime) | whole JSON lines, at most one answer per line, nothing before a hello |
+
+A target is an example of the crate it tests, `crates/<crate>/fuzz/<name>.rs`,
+so it builds from the workspace's lockfile and decodes with the versions an
+application ships. `cargo xtask fuzz` builds it under `--cfg fuzzing` with
+coverage counters and AddressSanitizer and runs it; the manifest names
+`libfuzzer-sys` under `cfg(fuzzing)`, so no other build compiles it.
+
+```bash
+cargo xtask fuzz                          # every target, 60 seconds each
+cargo xtask fuzz image_decode --seconds 600
+cargo xtask fuzz agent_wire --replay target/fuzz/agent_wire/crash-<hash>
+cargo run -p flui-runtime --example fuzz_agent_wire -- <file>   # the same input, no sanitizer, pinned toolchain
+```
+
+It needs the nightly toolchain on x86_64 Linux. The inputs libFuzzer keeps
+are in `target/fuzz/<name>/corpus/`; the input that ended a run is beside it
+as `crash-<hash>`, `timeout-<hash>` or `oom-<hash>`. `fuzz.yml` runs every
+target for ten minutes each night against main, carries the corpus from one
+night to the next, uploads a failing input as the `fuzz-findings` artifact
+and keeps the "Fuzzing found a failing input on main" issue open while a run
+is red. A pull request that edits a target, the task or the workflow runs
+each target for a minute.
+
+A finding is fixed with a named case in the owning crate's tests that holds
+the input (as `a_header_past_the_limit_is_refused_before_decoding` holds its
+header), not with the raw file. A new parser of foreign bytes adds its target
+as a row of `TARGETS` in `tools/xtask/src/tasks/fuzz.rs`.
+
 ## Benchmarks
 
 `criterion` is used for regression detection. Per-crate benchmark commands:
@@ -1235,7 +1276,8 @@ A scheduled `weekly.yml` workflow (Mondays, or manually via
 warning for upstream semver breakage. It is not a merge gate. New RustSec
 advisories have a daily workflow of their own, `advisories.yml`: it runs the
 `deps` job's advisories step against main and keeps the "RustSec advisory on
-main" issue open while a finding stands.
+main" issue open while a finding stands. `fuzz.yml` runs the fuzz targets every
+night ([Fuzzing](#fuzzing)).
 
 A change cannot be merged if any of these fail. If you encounter a flaky test, file a fix issue rather than retrying CI.
 
