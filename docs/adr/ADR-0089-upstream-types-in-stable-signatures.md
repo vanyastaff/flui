@@ -49,8 +49,9 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   `pub use keyboard_types::*;`), so the closure of those paths is keyboard-types' whole surface.
 - **Accessibility.** `flui-testing` re-exports `accesskit::{Action, ActionData, ActionRequest,
   NodeId, Point, Rect, Role, Toggled, TreeId}` (`crates/flui-testing/src/a11y.rs:36-39`), and the
-  facade re-exports that module as `flui::testing::a11y` behind its `testing` feature
-  (`src/lib.rs:123-124`, `src/testing.rs:9`).
+  facade re-exports that module as the deprecated `flui::testing::harness::a11y` behind its
+  `testing` feature (`src/testing.rs`); its `Tester` reads the semantics tree as `flui-protocol`'s
+  wire types instead.
   `PlatformAccessibility::publish` takes an `accesskit::TreeUpdate`
   (`crates/flui-semantics/src/platform.rs:79`, moved from `flui-native` by ADR-0082 §2). FLUI's own vocabulary already exists:
   `SemanticsRole` has 33 variants including `None` (`crates/flui-semantics/src/role.rs:32`),

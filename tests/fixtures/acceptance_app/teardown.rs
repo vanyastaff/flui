@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use flui::platform::StorageError;
-use flui::testing::DropLedger;
+use flui::testing::harness::DropLedger;
 use flui::view::ErrorView;
 
 use crate::app::{AcceptanceApp, Fault, Faults, Kept, Planter};

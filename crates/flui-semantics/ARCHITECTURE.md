@@ -310,7 +310,7 @@ they are.
 take a label node's name from the value alone, so a text published only as a label had an
 empty name for Narrator and Orca. The AppKit adapter falls back to the label, which is why
 VoiceOver read it and the macOS check passed. Keeping the label as well leaves queries by
-label (`flui::testing::a11y`, the harnesses) unchanged.
+label (`flui_testing::a11y`, the harnesses) unchanged.
 
 AccessKit's `Label` has one text slot on UIA and AT-SPI, so the label and the value are
 joined with a newline, the same separator used when merged labels are concatenated.

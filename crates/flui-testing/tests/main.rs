@@ -82,6 +82,8 @@ mod runtime_input_lifecycle;
 mod scripts;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
+#[path = "tester.rs"]
+mod tester;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
 #[path = "timer.rs"]
