@@ -539,14 +539,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The likely shape is a public listener that installs the observer scope and reads the attached position, so a scroll frame costs one listener call and nothing bubbles through the tree.
 - The entry closes when a public listener reports a scroll start, update, end and a change of extents for the scroll view at depth zero below it, with headless tests over a nested list.
 
-### A Router page carries no route chrome
-
-> **Environments:** all · **Who it hurts:** iOS-style apps, whose pages have no edge-swipe back and no dim under the sliding page · **Parity:** none yet (navigation has no row)
-
-- A page a `Router` places is a `PageRoute` built from its route value (`crates/flui-widgets/src/router/router.rs`, `page_route`). It adopts the ambient `PageTransitions` page builder (ADR-0221 D2), which carries a transition and its durations only; the route options `back_gesture` and `barrier_color` have no ambient source and no per-route knob on the Router.
-- So under `CupertinoApp` and under Material on Apple platforms a Router page slides in but has no edge-swipe back and no transition-only barrier dim, which Flutter's `CupertinoPage` has; `CupertinoPageRoute`'s `title`, `previousTitle` and `fullscreenDialog` are not modelled either (`packages/flui-cupertino/src/app.rs`).
-- The entry closes when a Router page gets its route chrome from the design system (an ambient hook beside the transition, or a per-route page description), with a headless test of the swipe and the dim under `CupertinoApp::router`.
-
 ### Hash tables outside the view, painting and engine crates still use SipHash
 
 > **Environments:** all · **Who it hurts:** Every frame that looks up an id in a std `HashMap` · **Parity:** none (performance)

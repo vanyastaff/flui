@@ -27483,6 +27483,8 @@ impl core::marker::StructuralPartialEq for flui::widgets::PageSnap
 impl flui::widgets::SnapPolicy for flui::widgets::PageSnap
 pub fn flui::widgets::PageSnap::new(viewport_fraction: flui::widgets::ViewportFraction) -> Self
 pub trait flui::widgets::PageTransitionBuilder
+fn flui::widgets::PageTransitionBuilder::back_gesture(&self) -> bool { .. }
+fn flui::widgets::PageTransitionBuilder::barrier_color(&self) -> Option<flui::prelude::Color> { .. }
 fn flui::widgets::PageTransitionBuilder::build(&self, ctx: &dyn flui::app::BuildContext, primary: &flui::widgets::RouteAnimation, secondary: &flui::widgets::RouteAnimation, child: flui::prelude::BoxedView) -> flui::prelude::BoxedView
 fn flui::widgets::PageTransitionBuilder::duration(&self) -> core::time::Duration
 fn flui::widgets::PageTransitionBuilder::reverse_duration(&self) -> core::time::Duration { .. }
@@ -27526,12 +27528,15 @@ variant flui::widgets::PanIntent::Left // at 0
 variant flui::widgets::PanIntent::Right // at 1
 variant flui::widgets::PanIntent::Up // at 2
 reexport flui::widgets::PanZoomEvent => flui::interaction::PanZoomEvent
-pub struct flui::widgets::ParallaxPageTransition;
+pub struct flui::widgets::ParallaxPageTransition { .. }
 impl Clone for flui::widgets::ParallaxPageTransition
 impl Copy for flui::widgets::ParallaxPageTransition
 impl Default for flui::widgets::ParallaxPageTransition
+impl PartialEq for flui::widgets::ParallaxPageTransition
 impl core::fmt::Debug for flui::widgets::ParallaxPageTransition
+impl core::marker::StructuralPartialEq for flui::widgets::ParallaxPageTransition
 impl flui::widgets::PageTransitionBuilder for flui::widgets::ParallaxPageTransition
+pub const fn flui::widgets::ParallaxPageTransition::barrier(self, color: flui::prelude::Color) -> Self
 pub const fn flui::widgets::ParallaxPageTransition::new() -> Self
 pub struct flui::widgets::ParticleController { .. }
 impl Clone for flui::widgets::ParticleController

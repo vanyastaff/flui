@@ -26,6 +26,9 @@ use std::time::Duration;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt, impl_inherited_view};
 
+use flui_painting::styling::Color;
+
+use super::modal_route::PageChrome;
 use super::overlay_route::{RouteAnimation, RouteTransitionsBuilder};
 
 /// Wraps a route's page in its entrance and exit transition, with the durations
@@ -49,6 +52,26 @@ pub trait PageTransitionBuilder {
         self.duration()
     }
 
+    /// Whether a page this builder animates pops on a drag from its leading
+    /// edge, as an iOS page does; defaults to `false`.
+    ///
+    /// A route that adopts the builder from [`PageTransitions`] adopts this with
+    /// it, unless the route set
+    /// [`PageRoute::back_gesture`](super::PageRoute::back_gesture) itself.
+    fn back_gesture(&self) -> bool {
+        false
+    }
+
+    /// The colour of the barrier under a page this builder animates, faded in
+    /// with the page's entrance and out with its exit; defaults to none.
+    ///
+    /// A route that adopts the builder from [`PageTransitions`] adopts this with
+    /// it, unless the route set
+    /// [`PageRoute::barrier_color`](super::PageRoute::barrier_color) itself.
+    fn barrier_color(&self) -> Option<Color> {
+        None
+    }
+
     /// Wrap `child`, the route's page. `primary` runs 0 → 1 as the route
     /// enters and 1 → 0 as it leaves; `secondary` is the primary animation of
     /// the route covering this one, when the two coordinate.
@@ -66,6 +89,15 @@ pub(crate) fn transitions_of(builder: Rc<dyn PageTransitionBuilder>) -> RouteTra
     Rc::new(move |ctx, primary, secondary, child| builder.build(ctx, primary, secondary, child))
 }
 
+/// Read the page chrome `builder` carries. Runs user code: call it with no
+/// navigator borrow held.
+pub(crate) fn chrome_of(builder: &dyn PageTransitionBuilder) -> PageChrome {
+    PageChrome {
+        back_gesture: builder.back_gesture(),
+        barrier_color: builder.barrier_color(),
+    }
+}
+
 /// An ambient builder with its durations already read.
 ///
 /// A route adopts its ambient builder at install, inside the navigator's
@@ -78,6 +110,7 @@ pub(crate) struct AdoptedTransition {
     pub(crate) builder: Rc<dyn PageTransitionBuilder>,
     pub(crate) duration: Duration,
     pub(crate) reverse_duration: Duration,
+    pub(crate) chrome: PageChrome,
 }
 
 impl AdoptedTransition {
@@ -85,6 +118,7 @@ impl AdoptedTransition {
         Self {
             duration: builder.duration(),
             reverse_duration: builder.reverse_duration(),
+            chrome: chrome_of(&*builder),
             builder,
         }
     }

@@ -52,8 +52,6 @@
 //!   The barrier publishes no dismiss action
 //!   and no label, and there is no semantics sort key; it absorbs *pointers*
 //!   only.
-//! * **No animated modal barrier.** `barrier_color` is a flat colour, not driven
-//!   through a barrier curve by the route's animation.
 //! * **The barrier is not pointer-ignoring while the route pops.** It absorbs
 //!   pointers for the whole life of the route, including while it pops.
 //! * **No `filter` / `BackdropFilter`, and no cached modal scope.**
@@ -70,7 +68,7 @@ use std::time::Duration;
 
 use std::cell::OnceCell;
 
-use flui_animation::{Animation, ProxyAnimation};
+use flui_animation::{Animation, Curve, ProxyAnimation, curves};
 use flui_foundation::{ChangeNotifier, Listenable};
 use flui_painting::styling::Color;
 use flui_view::prelude::*;
@@ -97,8 +95,13 @@ use super::transition_route::{
 use flui_interaction::focus::FocusScopeNode;
 
 use crate::{
-    AbsorbPointer, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox, Stack, StackFit,
+    AbsorbPointer, AnimatedBuilder, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox,
+    Stack, StackFit,
 };
+
+/// The curve the barrier's colour fades in along (Flutter's
+/// `ModalRoute.barrierCurve` default, `Curves.ease`).
+const BARRIER_CURVE: flui_animation::Cubic = curves::EASE;
 
 /// The default transitions builder: a jump cut.
 pub(crate) fn default_transitions_builder() -> RouteTransitionsBuilder {
@@ -129,7 +132,7 @@ struct ModalInner {
     back_gesture_enabled: Cell<bool>,
     /// The barrier colour. `None` means an invisible barrier that still absorbs
     /// pointers.
-    barrier_color: RefCell<Option<Color>>,
+    barrier_color: Cell<Option<Color>>,
 
     /// Builds the page.
     page: super::lifecycle::Terminal<RoutePageBuilder>,
@@ -231,6 +234,33 @@ impl Drop for ModalInner {
 }
 
 impl ModalInner {
+    /// The barrier's colour, faded in along the route's primary animation
+    /// through [`BARRIER_CURVE`]: transparent before the route enters, `color`
+    /// once it has, and back out as it leaves (Flutter's `ModalRoute`
+    /// barrier). Only this fill rebuilds on a tick.
+    ///
+    /// Under an opaque route that has entered, the page covers the barrier, so
+    /// it paints nothing: Flutter's overlay skips the barrier entry beneath an
+    /// opaque page entry, and this route keeps both in one entry.
+    fn barrier_fill(&self, color: Color) -> BoxedView {
+        let animation = Rc::clone(&*self.primary);
+        let listenable: Rc<dyn Listenable> = Rc::clone(&*self.primary) as Rc<dyn Listenable>;
+        let transition = self.transition.get().cloned();
+        AnimatedBuilder::new(listenable, move || {
+            let value = animation.value().clamp(0.0, 1.0);
+            let covered =
+                value >= 1.0 && transition.as_ref().is_some_and(TransitionHandle::is_opaque);
+            let progress = BARRIER_CURVE.transform(value);
+            let faded = color.with_opacity(f64::from(color.opacity()) * progress);
+            if covered || faded.is_transparent() {
+                SizedBox::expand().boxed()
+            } else {
+                ColoredBox::new(faded).boxed()
+            }
+        })
+        .boxed()
+    }
+
     /// Build the modal barrier from the primitives FLUI has.
     ///
     /// `!offstage` gates the barrier — an offstage route must not eat pointers.
@@ -248,9 +278,12 @@ impl ModalInner {
         }
 
         let mut barrier = AbsorbPointer::new().absorbing(true);
-        let color = *self.barrier_color.borrow_mut();
-        if let Some(color) = color {
-            barrier = barrier.child(ColoredBox::new(color));
+        if let Some(color) = self
+            .barrier_color
+            .get()
+            .filter(|color| !color.is_transparent())
+        {
+            barrier = barrier.child(self.barrier_fill(color));
         }
 
         if !self.barrier_dismissible.get() {
@@ -573,9 +606,32 @@ struct ExplicitTransition {
     transitions: bool,
     duration: bool,
     reverse_duration: bool,
+    back_gesture: bool,
+    barrier_color: bool,
+}
+
+/// The page chrome a [`PageTransitionBuilder`] carries beside its transition:
+/// whether the page pops on an edge swipe, and the barrier under it.
+///
+/// [`PageTransitionBuilder`]: super::page_transitions::PageTransitionBuilder
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct PageChrome {
+    pub(crate) back_gesture: bool,
+    pub(crate) barrier_color: Option<Color>,
 }
 
 impl ExplicitTransition {
+    /// Give `inner` the chrome a builder carries, except what the route set
+    /// itself.
+    fn adopt_chrome(self, inner: &ModalInner, chrome: PageChrome) {
+        if !self.back_gesture {
+            inner.back_gesture_enabled.set(chrome.back_gesture);
+        }
+        if !self.barrier_color {
+            inner.barrier_color.set(chrome.barrier_color);
+        }
+    }
+
     /// The durations an adopted hook sets: none for what the route set itself.
     /// An explicit entrance duration also stands for the exit unless the exit
     /// was set too, as it does without a hook.
@@ -610,7 +666,7 @@ impl<T: 'static> ModalRoute<T> {
             maintain_state: Cell::new(true),
             barrier_dismissible: Cell::new(false),
             back_gesture_enabled: Cell::new(false),
-            barrier_color: RefCell::new(None),
+            barrier_color: Cell::new(None),
             page: super::lifecycle::Terminal::new(page),
             transitions: super::lifecycle::Terminal::new(RefCell::new(
                 default_transitions_builder(),
@@ -716,6 +772,14 @@ impl<T: 'static> ModalRoute<T> {
         self
     }
 
+    /// The chrome a route-level transition builder carries. Unlike the
+    /// explicit setters it marks nothing as set by the route's author, so an
+    /// explicit `back_gesture` or `barrier_color` before or after it wins.
+    pub(crate) fn chrome(self, chrome: PageChrome) -> Self {
+        self.explicit.adopt_chrome(&self.inner, chrome);
+        self
+    }
+
     /// Adopt the navigator's ambient builder of this route's kind, once, before
     /// the controller is built from the durations (ADR-0221 D2). A route given
     /// `.transitions(…)` keeps it; an explicit duration keeps its own value;
@@ -740,6 +804,7 @@ impl<T: 'static> ModalRoute<T> {
         };
         let (duration, reverse) = self.explicit.adopted_durations(&adopted);
         self.transition.adopt_durations(duration, reverse);
+        self.explicit.adopt_chrome(&self.inner, adopted.chrome);
         let _prev = std::mem::replace(
             &mut *self.inner.transitions.borrow_mut(),
             transitions_of(adopted.builder),
@@ -767,6 +832,7 @@ impl<T: 'static> ModalRoute<T> {
                 return;
             };
             let (duration, reverse) = explicit.adopted_durations(&adopted);
+            explicit.adopt_chrome(&inner, adopted.chrome);
             if let Some(controller) = inner
                 .transition
                 .get()
@@ -825,15 +891,17 @@ impl<T: 'static> ModalRoute<T> {
 
     /// Opt into the edge-swipe-back gesture substrate (`back_gesture.rs`).
     /// See `PageRoute::back_gesture`'s doc for the full contract.
-    pub(crate) fn back_gesture(self, enabled: bool) -> Self {
+    pub(crate) fn back_gesture(mut self, enabled: bool) -> Self {
         self.inner.back_gesture_enabled.set(enabled);
+        self.explicit.back_gesture = true;
         self
     }
 
     /// The barrier colour.
     #[must_use]
-    pub fn barrier_color(self, color: Color) -> Self {
-        *self.inner.barrier_color.borrow_mut() = Some(color);
+    pub fn barrier_color(mut self, color: Color) -> Self {
+        self.inner.barrier_color.set(Some(color));
+        self.explicit.barrier_color = true;
         self
     }
 

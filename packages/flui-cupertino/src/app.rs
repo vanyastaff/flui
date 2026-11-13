@@ -7,7 +7,9 @@
 //! **above** the `WidgetsApp` (unlike `MaterialApp`,
 //! which resolves inside the `WidgetsApp` builder), and installs the iOS
 //! parallax slide, [`ParallaxPageTransition`], as the ambient page transition
-//! (ADR-0221), so a [`Router`]'s pages slide in as `CupertinoPage`s do.
+//! (ADR-0221), so a [`Router`]'s pages slide in as `CupertinoPage`s do: they
+//! pop on a swipe from the leading edge, and the page below dims under the
+//! incoming one while it slides.
 //!
 //! ## Brightness — Apple's model, no `ThemeMode` (ADR-0042 §2)
 //!
@@ -32,10 +34,6 @@
 //!   behavior lands with its scrollbar and overscroll indicator.
 //! - **`HeroControllerScope`** — FLUI's `Navigator` auto-installs a default
 //!   hero controller, so no explicit scope is needed here.
-//! - **`CupertinoPageRoute`'s route chrome** — the transition-only barrier
-//!   dim and the edge-swipe back gesture are options of a route, which the
-//!   ambient page transition does not carry, so a Router's pages here slide
-//!   but have neither ([gaps](../../../docs/gaps.md#a-router-page-carries-no-route-chrome)).
 //! - **`CupertinoLocalizations`** — FLUI ships no Cupertino resource set
 //!   yet; when one lands its delegate is appended here.
 //! - **`Title`/`color`, restoration, debug overlays**
@@ -44,6 +42,7 @@
 use std::fmt;
 use std::rc::Rc;
 
+use flui_sdk::painting::Color;
 use flui_sdk::platform::Locale;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
@@ -53,6 +52,10 @@ use flui_sdk::widgets::{
 };
 
 use crate::theme::{CupertinoTheme, CupertinoThemeData};
+
+/// The dim under a page while the next one slides over it
+/// (`_kCupertinoPageTransitionBarrierColor`, `route.dart`, oracle tag `3.44.0`).
+const PAGE_BARRIER: Color = Color::from_argb(0x1800_0000);
 
 /// An iOS-style application shell: [`WidgetsApp`] under a published,
 /// brightness-resolved [`CupertinoTheme`].
@@ -242,7 +245,8 @@ impl StatelessView for CupertinoApp {
 
         // The published theme and the page transition sit ABOVE the
         // WidgetsApp, so its navigator and a Router's read them.
-        let app = PageTransitions::new(app).page(Rc::new(ParallaxPageTransition::new()));
+        let app = PageTransitions::new(app)
+            .page(Rc::new(ParallaxPageTransition::new().barrier(PAGE_BARRIER)));
         CupertinoTheme::new(effective, app)
     }
 }

@@ -510,9 +510,13 @@ and withdrawal through a mounted navigator.
 
 The same two hooks read the ambient `PageTransitions` slots into the navigator's
 registry (ADR-0221). A modal route adopts the slot of its kind in `install`,
-before its controller is built from the durations, and only for what its
+before its controller is built from the durations, with the builder's page chrome
+(`back_gesture`, `barrier_color`), and only for what its
 author left unset: an explicit `.transitions(…)` keeps the route out entirely,
-an explicit duration keeps its value. The adoption happens once, so a replaced
+an explicit duration, back gesture or barrier colour keeps its value. A
+barrier colour fades in along the route's entrance and out along its exit, and
+under an opaque page that has entered it paints nothing, as Flutter's overlay
+skips a barrier entry beneath an opaque page. The adoption happens once, so a replaced
 hook reaches routes installed later and never a running transition
 (`a_replaced_hook_does_not_swap_a_running_transition`). `PageTransitions`
 publishes its own slots merged over the enclosing scope's, so each kind

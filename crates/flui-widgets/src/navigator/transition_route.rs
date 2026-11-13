@@ -568,6 +568,12 @@ impl TransitionHandle {
         }
     }
 
+    /// Whether the route covers the routes beneath it once its entrance
+    /// completes.
+    pub(crate) fn is_opaque(&self) -> bool {
+        self.inner.opaque.get()
+    }
+
     /// This route's navigator capability, once it is pushed.
     pub(crate) fn binding(&self) -> Option<super::binding::RouteBinding> {
         self.inner.binding.get()
