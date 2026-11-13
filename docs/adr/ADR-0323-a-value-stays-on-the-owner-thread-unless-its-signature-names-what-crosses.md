@@ -70,8 +70,8 @@ keeps a runtime's values on that runtime's thread, so option 2 buys nothing for 
 A value that is created, read, called and dropped on the owner thread carries no `Send` or `Sync`:
 not as a bound, a supertrait, a `dyn … + Send` or a `where` clause. This covers `View`,
 `BuildContext`, `ViewState`, the element and render traits, `ParentData`, notifications, every
-listener, animation-status, post-frame, gesture and event callback, a controller, a key, a route's
-arguments, a localization resource and a delegate.
+listener, animation-status, post-frame, gesture and event callback, a controller, a key, a route
+value, a localization resource and a delegate.
 
 Its shapes are fixed:
 
@@ -159,7 +159,7 @@ positions keeps all of them unless a marker is named.
 |---|---|
 | `flui_widgets::localization::localizations::Localizations::{of, maybe_of}` | `of<R: 'static>(ctx) -> Rc<R>`, `maybe_of<R: 'static>(ctx) -> Option<Rc<R>>` |
 | `LocalizationsDelegate::Resources`, `BoxedLocalizationsDelegate::{new, From}`, `WidgetsLocalizations` | `type Resources: 'static`; a delegate is held as `Rc<dyn …>`; no thread supertrait. A delegate that loads off the owner thread returns its resources through a `job`, whose output is the `worker-result` |
-| `flui_widgets::navigator::route::{RouteArguments, RouteSettings::{argument, with_arguments}}`, `named_route::{RouteKey::with_arguments, RouteRequest::argument}` | `RouteArguments = Rc<dyn Any>`, `with_arguments<T: Any>`, `argument<T: Any>() -> Option<&T>` |
+| `flui_widgets::navigator::route::{RouteArguments, RouteSettings::{argument, arguments}}`, `named_route::{RouteKey::with_arguments, RouteRequest::argument}` | removed with the named routes (ADR-0330 §4): a value a page needs travels in its route value |
 | `flui_view::element::stream_builder::{BoxedResultStream, StreamBuilder, StreamBuilderState}` and their trait impls | the bounds of `FutureBuilder` (ADR-0136 §2): `K: Clone + PartialEq + Debug + 'static`, `T, E: 'static`, a stream without `Send`, polled by the owner-local driver; the state's slot is a `RefCell`. A source that produces off the owner thread (a socket, a file watcher, a worker) stays a `job`: it runs through `Background::io` or a service and its items reach the owner as `worker-result`s, which the stream handed to `StreamBuilder` yields on the owner thread. The bound that goes is the builder's, not the source's |
 | `flui_widgets::scroll::animated_list::{sliver::{SliverAnimatedList, SliverAnimatedListState}, views::{AnimatedList, AnimatedGrid}}` and their trait impls | `K: Clone + Eq + Hash + Debug + 'static` |
 | `flui_view::key::object_key::ObjectKey::new` | `new<T: 'static>(object: &Rc<T>)`; the key holds the `Rc`, so the address it compares cannot be reused |
@@ -197,7 +197,7 @@ are owed this, `build_owner.rs` last, since two other lines of work edit it.
   removal with its replacement written down.
 - Good, because a re-entry into owner state is a typed outcome or a `RefCell` panic at the site,
   not a deadlock.
-- Bad, because `Localizations::of`, `RouteSettings::arguments`, `ObjectKey::new` and the
+- Bad, because `Localizations::of`, `ObjectKey::new` and the
   platform capability traits change their signatures, and every caller with them.
 - Bad, because an application that kept one value for both a widget and a worker now holds two:
   the `Rc` the widget reads and the owned copy the job takes.

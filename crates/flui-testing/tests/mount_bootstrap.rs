@@ -8,9 +8,9 @@
 //! unbuilt — and nothing failed, because no test asserted the bootstrap ran
 //! the fixpoint at all.
 //!
-//! `layout_builder_seam.rs` pins the same seam for `pump_frame`; this pins it
-//! for the bootstrap. Both plant a registry entry by hand rather than mounting
-//! a real `LayoutBuilder`, so they stay pure wiring tests of the frame path.
+//! The UI runtime's own frames service the same seam; this pins it for the
+//! bootstrap. It plants a registry entry by hand rather than mounting a real
+//! `LayoutBuilder`, so it stays a pure wiring test of the frame path.
 
 use std::time::Duration;
 

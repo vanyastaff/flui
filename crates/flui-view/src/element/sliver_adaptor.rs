@@ -1362,6 +1362,10 @@ fn regrown_item_count(
 /// builder can answer — a paged feed, a generator. It is resolved once, by
 /// probing the builder, rather than discovered a band at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the caller knows the length or only the builder does"
+)]
 pub enum ItemCount {
     /// The caller knows the length. Always prefer this: it costs nothing,
     /// where [`Unknown`](Self::Unknown) costs `2·log₂(n)` builder calls once.

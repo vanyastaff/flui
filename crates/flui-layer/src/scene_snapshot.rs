@@ -22,6 +22,10 @@ use crate::scene::{Scene, SceneVersion, SceneVersionId};
 /// Exhaustive, as `PresentDisposition` is: a consumer matches every variant
 /// with no wildcard, so a new one is a compile error wherever damage is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every reader of damage matches each variant, so a new one is a compile error wherever damage is read"
+)]
 pub enum DamageRegion {
     /// Nothing changed; a backend with no older debt may skip the frame.
     Unchanged,
@@ -54,6 +58,7 @@ impl DamageRegion {
 
 /// Why a frame repaints in full.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FullReason {
     /// Nothing was presented before this frame to repaint over.
     FirstFrame,
@@ -74,6 +79,7 @@ pub enum FullReason {
 
 /// Why a frame's damage could not be computed against the frame before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ResyncReason {
     /// The frame names a base the raster side does not hold.
     BaseMismatch,

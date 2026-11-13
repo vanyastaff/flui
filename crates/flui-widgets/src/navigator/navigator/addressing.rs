@@ -1,4 +1,4 @@
-//! Admission under a `Router` (ADR-0093 §4), and the `Router`'s own doors.
+//! Admission under a `Router` (ADR-0330 §4), and the `Router`'s own doors.
 //!
 //! A navigator made by [`NavigatorHandle::addressed`] belongs to a `Router`:
 //! every page on it is a route value with a path, and only the `Router` places
@@ -6,12 +6,12 @@
 //! keeps two things:
 //!
 //! - **A plain push of a pageless popup** (`PopupRoute`, so `show_dialog`
-//!   keeps working until dialogs move to overlay entries). `push` and
-//!   `push_named` refuse every other route: `PageRoute`, `SimpleRoute`, and
-//!   any third-party `NavigatorRoute`. The doors that replace, sweep or seed
-//!   (`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`, and
-//!   their named forms) refuse every route, a popup included, because what
-//!   they would remove or place beneath is the Router's.
+//!   keeps working). `push` refuses every other route: `PageRoute`,
+//!   `SimpleRoute`, and any third-party `NavigatorRoute`. The doors that
+//!   replace, sweep or seed (`push_replacement[_with]`,
+//!   `push_and_remove_until`, `seed_initial`) refuse every route, a popup
+//!   included, because what they would remove or place beneath is the
+//!   Router's.
 //! - **Pops and removals that leave a page.** `pop`, `pop_with`, `maybe_pop`,
 //!   `remove_route` and `pop_until` never take the Router's last page, whether
 //!   it is on top or under a popup: a Router always has a location.
@@ -19,8 +19,8 @@
 //! A refused typed push cannot answer with a `Result` without changing a
 //! public signature, so it returns a [`RouteResult`] already completed with
 //! `Ok(None)`, logs the refusal with `tracing::error!`, and fails a debug
-//! assertion. A named door answers `NamedRouteError::NotAddressable`. Either
-//! way the stack is untouched and the refused route is disposed unpushed.
+//! assertion. The stack is untouched and the refused route is disposed
+//! unpushed.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -29,10 +29,9 @@ use parking_lot::Mutex;
 
 use crate::navigator::binding::is_pageless_popup;
 use crate::navigator::history::{ReplaceTarget, RouteHistory};
-use crate::navigator::named_route::{GeneratedRoute, NamedRouteError, requested_name};
 use crate::navigator::overlay_route::NavigatorRoute;
 use crate::navigator::result::{Completer, RouteResult};
-use crate::navigator::route::{Route, RouteId, RouteSettings};
+use crate::navigator::route::{Route, RouteId};
 
 use super::{NavigatorHandle, RouteReservation, report_undelivered};
 
@@ -104,14 +103,17 @@ impl fmt::Display for RefusalReport {
 
 impl NavigatorHandle {
     /// An empty, unmounted navigator that a `Router<R>` drives; `route_type`
-    /// names `R` in refusals.
-    pub(crate) fn addressed(route_type: &'static str) -> Self {
-        Self::with_addressing(Some(Addressing::new(route_type)))
+    /// names `R` in refusals, and `build_phase` is its UI runtime's.
+    pub(crate) fn addressed(
+        route_type: &'static str,
+        build_phase: flui_foundation::BuildPhase,
+    ) -> Self {
+        Self::with_addressing(Some(Addressing::new(route_type)), build_phase)
     }
 
     /// Whether [`push`](Self::push) admits a page route here. `false` for a
     /// navigator a [`Router`](crate::Router) drives: the Router owns its pages,
-    /// so a push there places only a pageless popup (ADR-0093 §4).
+    /// so a push there places only a pageless popup (ADR-0330 §4).
     ///
     /// A widget that pushes its own transient page (a container transform)
     /// asks this to choose the route it builds instead of being refused.
@@ -120,8 +122,7 @@ impl NavigatorHandle {
         self.shared.addressing.is_none()
     }
 
-    /// Why a plain push (`push`, `push_named`) may not place `route`, if it
-    /// may not.
+    /// Why a plain push may not place `route`, if it may not.
     pub(super) fn push_refusal<P: NavigatorRoute>(&self, route: &P) -> Option<Refusal> {
         (self.shared.addressing.is_some() && !is_pageless_popup(route.binding_slot()))
             .then_some(Refusal::NoPath)
@@ -137,26 +138,6 @@ impl NavigatorHandle {
         } else {
             Some(Refusal::NoPath)
         }
-    }
-
-    /// [`push_refusal`](Self::push_refusal) for a route a named door
-    /// generated.
-    pub(super) fn admits_generated(&self, route: &GeneratedRoute) -> bool {
-        self.shared.addressing.is_none() || route.is_pageless_popup()
-    }
-
-    /// Refuse a named door that replaces or sweeps, before it resolves
-    /// anything: under a Router it may not run at all.
-    pub(super) fn refuse_named_placement(
-        &self,
-        settings: &RouteSettings,
-    ) -> Result<(), NamedRouteError> {
-        if self.shared.addressing.is_some() {
-            return Err(NamedRouteError::NotAddressable {
-                name: requested_name(settings),
-            });
-        }
-        Ok(())
     }
 
     /// Whether removing `id` would take a Router's last page.

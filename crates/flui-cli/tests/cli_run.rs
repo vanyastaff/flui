@@ -183,6 +183,13 @@ fn json_mode_streams_the_app_lifecycle_as_ndjson() {
         "app",
         "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
     );
+    // The app names the facade it depends on: cargo's `unused_dependencies`
+    // lint would otherwise warn, and CI denies cargo's warnings.
+    std::fs::write(
+        app.join("src/main.rs"),
+        "use flui as _;\n\nfn main() { println!(\"FLUI_ADMISSION_MARKER\"); eprintln!(\"FLUI_STDERR_MARKER\"); }\n",
+    )
+    .expect("main naming the facade");
     let output = run(&app).arg("--json").output().expect("CLI");
     assert!(
         output.status.success(),

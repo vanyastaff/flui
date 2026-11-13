@@ -337,7 +337,7 @@ pub(crate) fn claimed_contact_cancels_every_other_listener_once() {
         let winner = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
             .on_start(move |_| started.borrow_mut().push("winner"))
             .build();
-        let loser = DragGestureRecognizer::builder(arena.clone(), DragAxis::Vertical).build();
+        let loser = DragGestureRecognizer::builder(arena, DragAxis::Vertical).build();
         let (inner, outer, observer) = (Events::default(), Events::default(), Events::default());
         let route = lane.enter(|| {
             let handle = lane.dispatch_handle();
@@ -407,7 +407,7 @@ pub(crate) fn unclaimed_wins_cancel_no_listener() {
         let branch = Rc::new(arena.sequenced().expect("sequenced composition"));
         let hold = LongPressGestureRecognizer::builder(branch.hold()).build();
         let successor = DragGestureRecognizer::builder(branch.successor(), DragAxis::Free).build();
-        let rival = TapGestureRecognizer::builder(arena.clone()).build();
+        let rival = TapGestureRecognizer::builder(arena).build();
         let (lone, held, observer) = (Events::default(), Events::default(), Events::default());
         let routes = lane.enter(|| {
             let handle = lane.dispatch_handle();

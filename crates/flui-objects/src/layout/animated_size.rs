@@ -412,6 +412,10 @@ impl std::fmt::Debug for SizeMotionHandle {
 /// size-change detection. See the module docs for the precise per-transition
 /// rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the size animation's transitions match each of its four states"
+)]
 pub enum AnimatedSizeState {
     /// No committed size yet; the very first layout snaps with no animation.
     Start,

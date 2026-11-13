@@ -1,7 +1,7 @@
 //! Integration tests for `GridView::builder` (RenderSliverGrid → the
 //! lazy-sliver element-wiring backend).
 //!
-//! Mirrors `lazy_list.rs`'s frame-sequence model: `pump_frame` calls
+//! Mirrors `lazy_list.rs`'s frame-sequence model: a frame calls
 //! `service_child_requests` after `run_frame`, so two `tick` calls settle a
 //! visible window — the first dispatches the child-build requests emitted by
 //! `RenderSliverGrid::perform_layout`, the second lays out the now-built

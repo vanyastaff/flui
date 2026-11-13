@@ -297,27 +297,23 @@ impl View for HandlesView {
 
 impl StatelessView for HandlesView {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let handles: Vec<BoxedView> = self
-            .model
-            .upgrade()
-            .map(|model| {
-                let heights = model.end_line_heights();
-                [HandleSide::Start, HandleSide::End]
-                    .into_iter()
-                    .zip(heights)
-                    .filter_map(|(side, height)| handle(&model, side, height?, ctx))
-                    .chain(drag_magnifier(&model, ctx))
-                    .chain(
-                        model
-                            .handles
-                            .menu
-                            .toolbar_shown()
-                            .then(|| super::menu::toolbar(&model))
-                            .flatten(),
-                    )
-                    .collect()
-            })
-            .unwrap_or_default();
+        let handles: Vec<BoxedView> = self.model.upgrade().map_or_default(|model| {
+            let heights = model.end_line_heights();
+            [HandleSide::Start, HandleSide::End]
+                .into_iter()
+                .zip(heights)
+                .filter_map(|(side, height)| handle(&model, side, height?, ctx))
+                .chain(drag_magnifier(&model, ctx))
+                .chain(
+                    model
+                        .handles
+                        .menu
+                        .toolbar_shown()
+                        .then(|| super::menu::toolbar(&model))
+                        .flatten(),
+                )
+                .collect()
+        });
         Stack::new(handles)
     }
 }

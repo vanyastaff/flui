@@ -1497,10 +1497,7 @@ mod live {
                 monotonic(),
                 None,
             );
-            let layout = keyboard
-                .as_ref()
-                .map(CoreKeyboard::layout_name)
-                .unwrap_or_default();
+            let layout = keyboard.as_ref().map_or_default(CoreKeyboard::layout_name);
             let state = State {
                 pointers: X11Pointers::new(clock),
                 windows: HashMap::new(),
@@ -1701,8 +1698,7 @@ mod live {
                 state
                     .keyboard
                     .as_ref()
-                    .map(CoreKeyboard::layout_name)
-                    .unwrap_or_default()
+                    .map_or_default(CoreKeyboard::layout_name)
             });
             let mut layout = self.layout.borrow_mut();
             let changed = *layout != name;
@@ -1941,8 +1937,7 @@ mod live {
                 xcb.get_atom_name(atom)
                     .ok()
                     .and_then(|cookie| cookie.reply().ok())
-                    .map(|reply| String::from_utf8_lossy(&reply.name).into_owned())
-                    .unwrap_or_default()
+                    .map_or_default(|reply| String::from_utf8_lossy(&reply.name).into_owned())
             })
             .collect()
     }

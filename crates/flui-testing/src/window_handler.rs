@@ -31,6 +31,7 @@ use flui_platform::{
 
 /// One call a [`RecordingWindowHandler`] received.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum HandlerCall {
     /// [`WindowHandler::input`], with the event.
     Input(PlatformInput),

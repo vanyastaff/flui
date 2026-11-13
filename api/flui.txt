@@ -179,7 +179,7 @@ impl core::fmt::Display for flui::LaunchError
 variant flui::LaunchError::CapabilityConflict(flui_runtime::capability::CapabilityConflict) // at 0
 variant flui::LaunchError::Platform { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 2
 variant flui::LaunchError::UnsupportedSystem(flui::UnsupportedSystem) // at 1
-pub enum flui::StartupWindow
+#[non_exhaustive] pub enum flui::StartupWindow
 impl Clone for flui::StartupWindow
 impl Copy for flui::StartupWindow
 impl Default for flui::StartupWindow
@@ -933,7 +933,7 @@ variant flui::animation::SimulationParameter::SpeedLimit // at 10
 variant flui::animation::SimulationParameter::Stiffness // at 1
 variant flui::animation::SimulationParameter::UnitDistance // at 12
 variant flui::animation::SimulationParameter::Velocity // at 9
-pub enum flui::animation::SpeedLimit
+#[non_exhaustive] pub enum flui::animation::SpeedLimit
 impl Clone for flui::animation::SpeedLimit
 impl Copy for flui::animation::SpeedLimit
 impl PartialEq for flui::animation::SpeedLimit
@@ -1465,7 +1465,7 @@ pub fn flui::app::DeviceRecovery::is_abandoned(self) -> bool
 variant flui::app::DeviceRecovery::Abandoned { attempts: u32 } // at 2
 variant flui::app::DeviceRecovery::Failed { attempts: u32 } // at 1
 variant flui::app::DeviceRecovery::Pending // at 0
-pub enum flui::app::DiagnosticsProfile
+#[non_exhaustive] pub enum flui::app::DiagnosticsProfile
 impl Clone for flui::app::DiagnosticsProfile
 impl Copy for flui::app::DiagnosticsProfile
 impl Default for flui::app::DiagnosticsProfile
@@ -2483,9 +2483,8 @@ impl flui::app::View for flui::cupertino::CupertinoApp where Self: flui::app::St
 pub fn flui::cupertino::CupertinoApp::builder(self, builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self
 pub fn flui::cupertino::CupertinoApp::locale(self, locale: flui::platform::Locale) -> Self
 pub fn flui::cupertino::CupertinoApp::localizations_delegates(self, delegates: Vec<flui::prelude::BoxedLocalizationsDelegate>) -> Self
-pub fn flui::cupertino::CupertinoApp::navigator(self, handle: flui::prelude::NavigatorHandle) -> Self
 pub fn flui::cupertino::CupertinoApp::new(home: impl flui::prelude::IntoView) -> Self
-pub fn flui::cupertino::CupertinoApp::observer(self, observer: alloc::rcs::arc::Arc<dyn flui::widgets::NavigatorObserver>) -> Self
+pub fn flui::cupertino::CupertinoApp::router<R: flui::prelude::Routable>(router: flui::prelude::Router<R>) -> Self
 pub fn flui::cupertino::CupertinoApp::supported_locales(self, locales: Vec<flui::platform::Locale>) -> Self
 pub fn flui::cupertino::CupertinoApp::theme(self, theme: flui::cupertino::CupertinoThemeData) -> Self
 pub fn flui::cupertino::CupertinoApp::with_builder(builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self
@@ -2511,7 +2510,7 @@ pub fn flui::cupertino::CupertinoButton::padding(self, padding: flui::geometry::
 pub fn flui::cupertino::CupertinoButton::pressed_opacity(self, pressed_opacity: Option<f64>) -> Self
 pub fn flui::cupertino::CupertinoButton::size_style(self, size_style: flui::cupertino::CupertinoButtonSize) -> Self
 pub fn flui::cupertino::CupertinoButton::tinted(child: impl flui::prelude::IntoView) -> Self
-pub enum flui::cupertino::CupertinoButtonSize
+#[non_exhaustive] pub enum flui::cupertino::CupertinoButtonSize
 impl Clone for flui::cupertino::CupertinoButtonSize
 impl Copy for flui::cupertino::CupertinoButtonSize
 impl Default for flui::cupertino::CupertinoButtonSize
@@ -2731,7 +2730,6 @@ pub mod flui::cupertino::colors
 reexport flui::cupertino::colors::CupertinoColor => flui::cupertino::CupertinoColor
 reexport flui::cupertino::colors::CupertinoColors => flui::cupertino::CupertinoColors
 reexport flui::cupertino::colors::CupertinoDynamicColor => flui::cupertino::CupertinoDynamicColor
-pub fn flui::cupertino::cupertino_page_route<T, F>(builder: F) -> flui::prelude::PageRoute<T> where T: 'static, F: Fn(&dyn flui::app::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation) -> flui::prelude::BoxedView + 'static
 pub mod flui::cupertino::nav_bar
 reexport flui::cupertino::nav_bar::CupertinoNavigationBar => flui::cupertino::CupertinoNavigationBar
 pub const flui::cupertino::nav_bar::HAIRLINE_BORDER_WIDTH: f64 = 1.0
@@ -2740,8 +2738,6 @@ pub mod flui::cupertino::page_control
 reexport flui::cupertino::page_control::CupertinoPageControl => flui::cupertino::CupertinoPageControl
 pub mod flui::cupertino::page_scaffold
 reexport flui::cupertino::page_scaffold::CupertinoPageScaffold => flui::cupertino::CupertinoPageScaffold
-pub mod flui::cupertino::route
-reexport flui::cupertino::route::cupertino_page_route => flui::cupertino::cupertino_page_route
 pub mod flui::cupertino::tab_scaffold
 reexport flui::cupertino::tab_scaffold::CupertinoTabController => flui::cupertino::CupertinoTabController
 reexport flui::cupertino::tab_scaffold::CupertinoTabScaffold => flui::cupertino::CupertinoTabScaffold
@@ -2966,7 +2962,7 @@ impl Eq for flui::devtools::gesture_inspector::MemberReport
 impl PartialEq for flui::devtools::gesture_inspector::MemberReport
 impl core::fmt::Debug for flui::devtools::gesture_inspector::MemberReport
 impl core::marker::StructuralPartialEq for flui::devtools::gesture_inspector::MemberReport
-pub enum flui::devtools::gesture_inspector::Verdict
+#[non_exhaustive] pub enum flui::devtools::gesture_inspector::Verdict
 impl Clone for flui::devtools::gesture_inspector::Verdict
 impl Copy for flui::devtools::gesture_inspector::Verdict
 impl Eq for flui::devtools::gesture_inspector::Verdict
@@ -3106,7 +3102,7 @@ pub fn flui::devtools::profiler::PhaseInfo::start_offset_ms(&self) -> f64
 reexport flui::devtools::profiler::Profiler => flui::devtools::Profiler
 reexport flui::devtools::profiler::ProfilerConfig => flui::devtools::ProfilerConfig
 pub mod flui::devtools::timeline
-pub enum flui::devtools::timeline::EventCategory
+#[non_exhaustive] pub enum flui::devtools::timeline::EventCategory
 impl Clone for flui::devtools::timeline::EventCategory
 impl Copy for flui::devtools::timeline::EventCategory
 impl Eq for flui::devtools::timeline::EventCategory
@@ -4130,7 +4126,7 @@ impl Copy for flui::foundation::inspect::Ansi
 impl Default for flui::foundation::inspect::Ansi
 impl core::fmt::Debug for flui::foundation::inspect::Ansi
 impl flui::foundation::inspect::Style for flui::foundation::inspect::Ansi
-pub enum flui::foundation::inspect::Change
+#[non_exhaustive] pub enum flui::foundation::inspect::Change
 impl Clone for flui::foundation::inspect::Change
 impl PartialEq for flui::foundation::inspect::Change
 impl core::fmt::Debug for flui::foundation::inspect::Change
@@ -4164,7 +4160,7 @@ impl<'a> Copy for flui::foundation::inspect::Field<'a>
 impl<'a> PartialEq for flui::foundation::inspect::Field<'a>
 impl<'a> core::fmt::Debug for flui::foundation::inspect::Field<'a>
 impl<'a> core::marker::StructuralPartialEq for flui::foundation::inspect::Field<'a>
-pub enum flui::foundation::inspect::FieldError
+#[non_exhaustive] pub enum flui::foundation::inspect::FieldError
 impl Clone for flui::foundation::inspect::FieldError
 impl Eq for flui::foundation::inspect::FieldError
 impl PartialEq for flui::foundation::inspect::FieldError
@@ -4241,7 +4237,7 @@ pub const fn flui::foundation::inspect::Level::as_str(self) -> &'static str
 variant flui::foundation::inspect::Level::Debug // at 2
 variant flui::foundation::inspect::Level::Detail // at 1
 variant flui::foundation::inspect::Level::Summary // at 0
-pub enum flui::foundation::inspect::Link
+#[non_exhaustive] pub enum flui::foundation::inspect::Link
 impl Clone for flui::foundation::inspect::Link
 impl Copy for flui::foundation::inspect::Link
 impl Eq for flui::foundation::inspect::Link
@@ -4274,7 +4270,7 @@ impl core::hash::Hash for flui::foundation::inspect::Links
 impl core::marker::StructuralPartialEq for flui::foundation::inspect::Links
 pub fn flui::foundation::inspect::Links::contains(&self, link: flui::foundation::inspect::Link) -> bool
 pub fn flui::foundation::inspect::Links::iter(&self) -> impl Iterator<Item = flui::foundation::inspect::Link>
-pub enum flui::foundation::inspect::MatchError
+#[non_exhaustive] pub enum flui::foundation::inspect::MatchError
 impl Clone for flui::foundation::inspect::MatchError
 impl Eq for flui::foundation::inspect::MatchError
 impl PartialEq for flui::foundation::inspect::MatchError
@@ -4403,7 +4399,7 @@ impl flui::foundation::inspect::ToValue for flui::foundation::inspect::Rgba
 impl<'a> flui::foundation::inspect::FromField<'a> for flui::foundation::inspect::Rgba
 pub const fn flui::foundation::inspect::Rgba::new(red: f32, green: f32, blue: f32, alpha: f32) -> Self
 pub fn flui::foundation::inspect::Rgba::to_rgba8(self) -> [u8; 4]
-pub enum flui::foundation::inspect::Role
+#[non_exhaustive] pub enum flui::foundation::inspect::Role
 impl Clone for flui::foundation::inspect::Role
 impl Copy for flui::foundation::inspect::Role
 impl Eq for flui::foundation::inspect::Role
@@ -5092,7 +5088,7 @@ fn flui::geometry::FloatUnit::from_f64(value: f64) -> Self
 fn flui::geometry::FloatUnit::midpoint(self, other: Self) -> Self { .. }
 impl flui::geometry::FloatUnit for f32
 impl flui::geometry::FloatUnit for f64
-pub enum flui::geometry::GeometryError
+#[non_exhaustive] pub enum flui::geometry::GeometryError
 impl Clone for flui::geometry::GeometryError
 impl core::error::Error for flui::geometry::GeometryError
 impl core::fmt::Debug for flui::geometry::GeometryError
@@ -9435,9 +9431,8 @@ pub fn flui::material::MaterialApp::high_contrast_dark_theme(self, theme: flui::
 pub fn flui::material::MaterialApp::high_contrast_theme(self, theme: flui::material::ThemeData) -> Self
 pub fn flui::material::MaterialApp::locale(self, locale: flui::platform::Locale) -> Self
 pub fn flui::material::MaterialApp::localizations_delegates(self, delegates: Vec<flui::prelude::BoxedLocalizationsDelegate>) -> Self
-pub fn flui::material::MaterialApp::navigator(self, handle: flui::prelude::NavigatorHandle) -> Self
 pub fn flui::material::MaterialApp::new(home: impl flui::prelude::IntoView) -> Self
-pub fn flui::material::MaterialApp::observer(self, observer: alloc::rcs::arc::Arc<dyn flui::widgets::NavigatorObserver>) -> Self
+pub fn flui::material::MaterialApp::router<R: flui::prelude::Routable>(router: flui::prelude::Router<R>) -> Self
 pub fn flui::material::MaterialApp::supported_locales(self, locales: Vec<flui::platform::Locale>) -> Self
 pub fn flui::material::MaterialApp::theme(self, theme: flui::material::ThemeData) -> Self
 pub fn flui::material::MaterialApp::theme_mode(self, mode: flui::material::ThemeMode) -> Self
@@ -9710,7 +9705,7 @@ pub struct flui::material::SnackBarActionState { .. }
 impl Default for flui::material::SnackBarActionState
 impl core::fmt::Debug for flui::material::SnackBarActionState
 impl flui::prelude::ViewState<flui::material::SnackBarAction> for flui::material::SnackBarActionState
-pub enum flui::material::SnackBarClosedReason
+#[non_exhaustive] pub enum flui::material::SnackBarClosedReason
 impl Clone for flui::material::SnackBarClosedReason
 impl Copy for flui::material::SnackBarClosedReason
 impl Eq for flui::material::SnackBarClosedReason
@@ -9833,7 +9828,7 @@ pub fn flui::material::TabController::previous_index(&self) -> usize
 pub fn flui::material::TabController::set_index(&self, index: usize) -> Result<(), flui::foundation::MutatedDuringBuild>
 pub fn flui::material::TabController::step_alternatives(&self) -> flui::widgets::GestureAlternatives
 pub fn flui::material::TabController::with_motion(self, motion: flui::animation::MotionSpec) -> Self
-pub enum flui::material::TabIndicatorAnimation
+#[non_exhaustive] pub enum flui::material::TabIndicatorAnimation
 impl Clone for flui::material::TabIndicatorAnimation
 impl Copy for flui::material::TabIndicatorAnimation
 impl Default for flui::material::TabIndicatorAnimation
@@ -10200,7 +10195,7 @@ reexport flui::material::scaffold_messenger::SnackBarClosedReason => flui::mater
 reexport flui::material::scaffold_messenger::SnackBarController => flui::material::SnackBarController
 pub mod flui::material::shape
 reexport flui::material::shape::MaterialShape => flui::material::MaterialShape
-pub fn flui::material::show_dialog<T, F, W>(navigator: &flui::prelude::NavigatorHandle, builder: F) -> flui::widgets::RouteResult<T> where T: 'static, F: Fn(&dyn flui::app::BuildContext) -> W + 'static, W: flui::prelude::IntoView
+pub fn flui::material::show_dialog<T, F, W>(page: &flui::prelude::PageHandle, builder: F) -> Result<flui::widgets::RouteResult<T>, flui::widgets::PageError> where T: 'static, F: Fn(&dyn flui::app::BuildContext) -> W + 'static, W: flui::prelude::IntoView
 pub mod flui::material::sliver_app_bar
 reexport flui::material::sliver_app_bar::SliverAppBar => flui::material::SliverAppBar
 pub mod flui::material::snack_bar
@@ -10512,6 +10507,7 @@ pub fn flui::painting::Canvas::save_layer_opacity(&mut self, bounds: Option<flui
 pub fn flui::painting::Canvas::scale(&mut self, sx: f64, sy: f64)
 pub fn flui::painting::Canvas::set_transform<T: Into<flui::geometry::Matrix4>>(&mut self, transform: T)
 pub fn flui::painting::Canvas::skew(&mut self, sx: f64, sy: f64)
+pub fn flui::painting::Canvas::take_recording(&mut self) -> flui::painting::DisplayList
 pub fn flui::painting::Canvas::transform<T: Into<flui::geometry::Matrix4>>(&mut self, transform: T)
 pub fn flui::painting::Canvas::transform_matrix(&self) -> flui::geometry::Matrix4
 pub fn flui::painting::Canvas::translate(&mut self, dx: f64, dy: f64)
@@ -16415,7 +16411,7 @@ impl flui::prelude::Intent for flui::prelude::CopySelectionTextIntent
 variant flui::prelude::CopySelectionTextIntent::Copy // at 0
 variant flui::prelude::CopySelectionTextIntent::Cut // at 1
 reexport flui::prelude::CreationSite => flui::foundation::CreationSite
-pub enum flui::prelude::CrossAxisAlignment
+#[non_exhaustive] pub enum flui::prelude::CrossAxisAlignment
 impl Clone for flui::prelude::CrossAxisAlignment
 impl Copy for flui::prelude::CrossAxisAlignment
 impl Default for flui::prelude::CrossAxisAlignment
@@ -17118,7 +17114,7 @@ pub struct flui::prelude::HeroController { .. }
 impl Default for flui::prelude::HeroController
 impl Drop for flui::prelude::HeroController
 impl core::fmt::Debug for flui::prelude::HeroController
-impl flui::widgets::NavigatorObserver for flui::prelude::HeroController
+impl flui_widgets::navigator::observer::NavigatorObserver for flui::prelude::HeroController
 pub fn flui::prelude::HeroController::new() -> alloc::rcs::arc::Arc<Self>
 pub fn flui::prelude::HeroController::with_rect_tween<F, A>(factory: F) -> alloc::rcs::arc::Arc<Self> where F: Fn(flui::geometry::Rect, flui::geometry::Rect) -> A + 'static, A: flui::animation::Animatable<Value = flui::geometry::Rect> + 'static
 pub struct flui::prelude::HeroMode { .. }
@@ -17499,7 +17495,7 @@ pub trait flui::prelude::LocalizationsDelegate: core::fmt::Debug
 fn flui::prelude::LocalizationsDelegate::is_supported(&self, locale: &flui::platform::Locale) -> bool
 fn flui::prelude::LocalizationsDelegate::load(&self, locale: &flui::platform::Locale) -> <Self as flui::prelude::LocalizationsDelegate>::Resources
 type flui::prelude::LocalizationsDelegate::Resources: 'static
-pub enum flui::prelude::MainAxisAlignment
+#[non_exhaustive] pub enum flui::prelude::MainAxisAlignment
 impl Clone for flui::prelude::MainAxisAlignment
 impl Copy for flui::prelude::MainAxisAlignment
 impl Default for flui::prelude::MainAxisAlignment
@@ -17638,55 +17634,6 @@ fn flui::prelude::MultiChildLayoutDelegate::perform_layout(&self, context: &mut 
 fn flui::prelude::MultiChildLayoutDelegate::should_relayout(&self, old_delegate: &dyn flui::prelude::MultiChildLayoutDelegate) -> bool
 reexport flui::prelude::NavigationBar => flui::material::NavigationBar
 reexport flui::prelude::NavigationDestination => flui::material::NavigationDestination
-pub struct flui::prelude::Navigator { .. }
-impl Clone for flui::prelude::Navigator
-impl core::fmt::Debug for flui::prelude::Navigator
-impl flui::app::StatefulView for flui::prelude::Navigator { type State = flui::widgets::NavigatorState; }
-impl flui::app::View for flui::prelude::Navigator
-impl flui::prelude::ViewState<flui::prelude::Navigator> for flui::widgets::NavigatorState
-pub fn flui::prelude::Navigator::new(handle: flui::prelude::NavigatorHandle) -> Self
-pub struct flui::prelude::NavigatorHandle { .. }
-impl Clone for flui::prelude::NavigatorHandle
-impl Default for flui::prelude::NavigatorHandle
-impl core::fmt::Debug for flui::prelude::NavigatorHandle
-pub fn flui::prelude::NavigatorHandle::add_observer(&self, observer: alloc::rcs::arc::Arc<dyn flui::widgets::NavigatorObserver>)
-pub fn flui::prelude::NavigatorHandle::admits_pages(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::can_pop(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::clear_routes(&self)
-pub fn flui::prelude::NavigatorHandle::current(&self) -> Option<flui::widgets::RouteId>
-pub fn flui::prelude::NavigatorHandle::did_start_user_gesture(&self)
-pub fn flui::prelude::NavigatorHandle::did_stop_user_gesture(&self)
-pub fn flui::prelude::NavigatorHandle::is_mounted(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::is_same(&self, other: &Self) -> bool
-pub fn flui::prelude::NavigatorHandle::maybe_of(ctx: &dyn flui::app::BuildContext) -> Option<Self>
-pub fn flui::prelude::NavigatorHandle::maybe_of_root(ctx: &dyn flui::app::BuildContext) -> Option<Self>
-pub fn flui::prelude::NavigatorHandle::maybe_pop(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::maybe_pop_with<T: 'static>(&self, result: T) -> bool
-pub fn flui::prelude::NavigatorHandle::new() -> Self
-pub fn flui::prelude::NavigatorHandle::on_generate_route(&self, factory: impl Fn(&flui::widgets::RouteRequest<'_>) -> Option<flui::widgets::GeneratedRoute> + 'static)
-pub fn flui::prelude::NavigatorHandle::on_unknown_route(&self, factory: impl Fn(&flui::widgets::RouteRequest<'_>) -> Option<flui::widgets::GeneratedRoute> + 'static)
-pub fn flui::prelude::NavigatorHandle::pop(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::pop_and_push_named(&self, request: impl Into<flui::widgets::RouteSettings>) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::pop_and_push_named_with<TO: 'static>(&self, request: impl Into<flui::widgets::RouteSettings>, result: TO) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::pop_until(&self, keep: impl FnMut(flui::widgets::RouteId) -> bool)
-pub fn flui::prelude::NavigatorHandle::pop_with<T: 'static>(&self, result: T) -> bool
-pub fn flui::prelude::NavigatorHandle::push<R: flui::widgets::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::push_and_remove_until<R: flui::widgets::NavigatorRoute>(&self, route: R, keep: impl FnMut(flui::widgets::RouteId) -> bool) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::push_keyed<T: 'static>(&self, request: impl Into<flui::widgets::KeyedSettings<T>>) -> Result<flui::widgets::RouteResult<T>, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_named(&self, request: impl Into<flui::widgets::RouteSettings>) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_named_and_remove_until(&self, request: impl Into<flui::widgets::RouteSettings>, keep: impl FnMut(flui::widgets::RouteId) -> bool) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_named_typed<T: 'static>(&self, request: impl Into<flui::widgets::RouteSettings>) -> Result<flui::widgets::RouteResult<T>, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_replacement<R: flui::widgets::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::push_replacement_named(&self, request: impl Into<flui::widgets::RouteSettings>) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_replacement_named_with<TO: 'static>(&self, request: impl Into<flui::widgets::RouteSettings>, result: TO) -> Result<flui::widgets::RouteId, flui::widgets::NamedRouteError>
-pub fn flui::prelude::NavigatorHandle::push_replacement_with<R: flui::widgets::NavigatorRoute, T: 'static>(&self, route: R, result: T) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::remove_route(&self, id: flui::widgets::RouteId) -> bool
-pub fn flui::prelude::NavigatorHandle::remove_route_with<T: 'static>(&self, id: flui::widgets::RouteId, result: T) -> bool
-pub fn flui::prelude::NavigatorHandle::route<R, F>(&self, name: impl Into<String>, factory: F) where R: flui::widgets::NavigatorRoute, F: Fn(&flui::widgets::RouteRequest<'_>) -> Option<R> + 'static
-pub fn flui::prelude::NavigatorHandle::route_ids(&self) -> Vec<flui::widgets::RouteId>
-pub fn flui::prelude::NavigatorHandle::route_keyed<T, R, F>(&self, key: flui::widgets::RouteKey<T>, factory: F) where R: flui::widgets::NavigatorRoute + flui::widgets::Route<Output = T>, F: Fn(&flui::widgets::RouteRequest<'_>) -> Option<R> + 'static
-pub fn flui::prelude::NavigatorHandle::seed_initial<R: flui::widgets::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::user_gesture_in_progress(&self) -> bool
 pub struct flui::prelude::NextFocusAction { .. }
 impl Clone for flui::prelude::NextFocusAction
 impl core::fmt::Debug for flui::prelude::NextFocusAction
@@ -17770,7 +17717,7 @@ pub fn flui::prelude::OverflowBox::max_width(self, max_width: f64) -> Self
 pub fn flui::prelude::OverflowBox::min_height(self, min_height: f64) -> Self
 pub fn flui::prelude::OverflowBox::min_width(self, min_width: f64) -> Self
 pub fn flui::prelude::OverflowBox::new() -> Self
-pub enum flui::prelude::OverflowBoxFit
+#[non_exhaustive] pub enum flui::prelude::OverflowBoxFit
 impl Clone for flui::prelude::OverflowBoxFit
 impl Copy for flui::prelude::OverflowBoxFit
 impl Default for flui::prelude::OverflowBoxFit
@@ -17844,10 +17791,22 @@ pub fn flui::prelude::PageController::previous_page(&self, duration: core::time:
 pub fn flui::prelude::PageController::scroll_controller(&self) -> flui::prelude::ScrollController
 pub fn flui::prelude::PageController::viewport_fraction(&self) -> f64
 pub fn flui::prelude::PageController::with_params(initial_page: usize, viewport_fraction: flui::widgets::ViewportFraction) -> Self
+pub struct flui::prelude::PageHandle { .. }
+impl Clone for flui::prelude::PageHandle
+impl Eq for flui::prelude::PageHandle
+impl PartialEq for flui::prelude::PageHandle
+impl core::fmt::Debug for flui::prelude::PageHandle
+pub fn flui::prelude::PageHandle::can_pop(&self) -> bool
+pub fn flui::prelude::PageHandle::is_current(&self) -> bool
+pub fn flui::prelude::PageHandle::maybe_pop(&self) -> bool
+pub fn flui::prelude::PageHandle::of(ctx: &dyn flui::app::BuildContext) -> Option<Self>
+pub fn flui::prelude::PageHandle::pop(&self) -> Result<bool, flui::widgets::PageError>
+pub fn flui::prelude::PageHandle::pop_with<T: 'static>(&self, value: T) -> Result<bool, flui::widgets::PageError>
+pub fn flui::prelude::PageHandle::push_popup<T: 'static>(&self, popup: flui::prelude::PopupRoute<T>) -> Result<flui::widgets::RouteResult<T>, flui::widgets::PageError>
 pub struct flui::prelude::PageRoute<T> { .. }
 impl<T: 'static> core::fmt::Debug for flui::prelude::PageRoute<T>
-impl<T: 'static> flui::widgets::NavigatorRoute for flui::prelude::PageRoute<T>
 impl<T: 'static> flui::widgets::Route for flui::prelude::PageRoute<T> { type Output = T; }
+impl<T: 'static> flui_widgets::navigator::overlay_route::NavigatorRoute for flui::prelude::PageRoute<T>
 pub fn flui::prelude::PageRoute::animates_route_below(self, animates: bool) -> Self // impl<T: 'static> flui::prelude::PageRoute<T>
 pub fn flui::prelude::PageRoute::back_gesture(self, enabled: bool) -> Self // impl<T: 'static> flui::prelude::PageRoute<T>
 pub fn flui::prelude::PageRoute::barrier_color(self, color: flui::prelude::Color) -> Self // impl<T: 'static> flui::prelude::PageRoute<T>
@@ -17937,8 +17896,8 @@ pub fn flui::prelude::PopScope::new(child: impl flui::prelude::IntoView) -> Self
 pub fn flui::prelude::PopScope::on_pop_invoked<R: flui::prelude::EventOutcome>(self, callback: impl Fn(&mut flui::prelude::EventContext<'_>, bool) -> R + 'static) -> Self
 pub struct flui::prelude::PopupRoute<T> { .. }
 impl<T: 'static> core::fmt::Debug for flui::prelude::PopupRoute<T>
-impl<T: 'static> flui::widgets::NavigatorRoute for flui::prelude::PopupRoute<T>
 impl<T: 'static> flui::widgets::Route for flui::prelude::PopupRoute<T> { type Output = T; }
+impl<T: 'static> flui_widgets::navigator::overlay_route::NavigatorRoute for flui::prelude::PopupRoute<T>
 pub fn flui::prelude::PopupRoute::barrier_color(self, color: flui::prelude::Color) -> Self // impl<T: 'static> flui::prelude::PopupRoute<T>
 pub fn flui::prelude::PopupRoute::barrier_dismissible(self, dismissible: bool) -> Self // impl<T: 'static> flui::prelude::PopupRoute<T>
 pub fn flui::prelude::PopupRoute::maintain_state(self, maintain_state: bool) -> Self // impl<T: 'static> flui::prelude::PopupRoute<T>
@@ -18207,8 +18166,8 @@ impl<R: flui::prelude::Routable> flui::app::View for flui::prelude::Router<R>
 impl<R: flui::prelude::Routable> flui::prelude::ViewState<flui::prelude::Router<R>> for flui::widgets::RouterState<R>
 pub fn flui::prelude::Router::from_location(location: &str, page: impl Fn(&R, &dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Result<Self, flui::widgets::RouteParseError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::from_stack(stack: Vec<R>, page: impl Fn(&R, &dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Result<Self, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
-pub fn flui::prelude::Router::handle(ctx: &dyn flui::prelude::LifecycleContext) -> Result<flui::prelude::RouterHandle<R>, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::new(initial: R, page: impl Fn(&R, &dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
+pub fn flui::prelude::Router::of(ctx: &dyn flui::app::BuildContext) -> Result<flui::prelude::RouterHandle<R>, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::transition_duration(self, duration: core::time::Duration) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub fn flui::prelude::Router::transitions(self, transitions: impl Fn(&dyn flui::app::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation, flui::prelude::BoxedView) -> flui::prelude::BoxedView + 'static) -> Self // impl<R: flui::prelude::Routable> flui::prelude::Router<R>
 pub struct flui::prelude::RouterHandle<R: flui::prelude::Routable> { .. }
@@ -18816,14 +18775,6 @@ fn flui::prelude::SignalWriteExt::set<W: flui::view::WriteTarget + ?Sized>(self,
 fn flui::prelude::SignalWriteExt::set_if_changed<W: flui::view::WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<bool, flui::view::SignalError> where T: PartialEq
 fn flui::prelude::SignalWriteExt::update<W: flui::view::WriteTarget + ?Sized, R>(self, w: &W, f: impl FnMut(&mut T) -> R) -> Result<R, flui::view::SignalError>
 impl<T: 'static> flui::prelude::SignalWriteExt<T> for flui::prelude::Signal<T>
-pub struct flui::prelude::SimpleRoute<T> { .. }
-impl<T: 'static> flui::widgets::NavigatorRoute for flui::prelude::SimpleRoute<T>
-impl<T: 'static> flui::widgets::Route for flui::prelude::SimpleRoute<T> { type Output = T; }
-impl<T> Drop for flui::prelude::SimpleRoute<T>
-impl<T> core::fmt::Debug for flui::prelude::SimpleRoute<T>
-pub fn flui::prelude::SimpleRoute::named(self, name: impl Into<String>) -> Self // impl<T> flui::prelude::SimpleRoute<T>
-pub fn flui::prelude::SimpleRoute::new(builder: impl Fn(&dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Self // impl<T> flui::prelude::SimpleRoute<T>
-pub fn flui::prelude::SimpleRoute::with_current_result(self, result: T) -> Self // impl<T> flui::prelude::SimpleRoute<T>
 pub struct flui::prelude::SingleActivator { .. }
 impl Clone for flui::prelude::SingleActivator
 impl Eq for flui::prelude::SingleActivator
@@ -19057,7 +19008,7 @@ impl<C> flui::prelude::RenderView for flui::prelude::Stack<C> where C: flui::vie
 pub fn flui::prelude::Stack::alignment(self, alignment: impl Into<flui::painting::AlignmentGeometry>) -> Self // impl<C> flui::prelude::Stack<C>
 pub fn flui::prelude::Stack::fit(self, fit: flui::prelude::StackFit) -> Self // impl<C> flui::prelude::Stack<C>
 pub fn flui::prelude::Stack::new(children: C) -> Self // impl<C> flui::prelude::Stack<C>
-pub enum flui::prelude::StackFit
+#[non_exhaustive] pub enum flui::prelude::StackFit
 impl Clone for flui::prelude::StackFit
 impl Copy for flui::prelude::StackFit
 impl Default for flui::prelude::StackFit
@@ -19150,7 +19101,7 @@ variant flui::prelude::TableCellVerticalAlignment::Fill // at 3
 variant flui::prelude::TableCellVerticalAlignment::IntrinsicHeight // at 5
 variant flui::prelude::TableCellVerticalAlignment::Middle // at 1
 variant flui::prelude::TableCellVerticalAlignment::Top // at 0
-pub enum flui::prelude::TableColumnWidth
+#[non_exhaustive] pub enum flui::prelude::TableColumnWidth
 impl Clone for flui::prelude::TableColumnWidth
 impl Default for flui::prelude::TableColumnWidth
 impl PartialEq for flui::prelude::TableColumnWidth
@@ -19315,7 +19266,7 @@ reexport flui::prelude::View => flui::app::View
 pub trait flui::prelude::ViewExt: flui::app::View + Sized
 fn flui::prelude::ViewExt::boxed(self) -> flui::prelude::BoxedView { .. }
 impl<V: flui::app::View> flui::prelude::ViewExt for V
-pub enum flui::prelude::ViewFocusDirection
+#[non_exhaustive] pub enum flui::prelude::ViewFocusDirection
 impl Clone for flui::prelude::ViewFocusDirection
 impl Copy for flui::prelude::ViewFocusDirection
 impl Eq for flui::prelude::ViewFocusDirection
@@ -19515,22 +19466,20 @@ pub fn flui::prelude::WidgetStatesController::is_same(&self, other: &Self) -> bo
 pub fn flui::prelude::WidgetStatesController::new(initial: flui::prelude::WidgetStates) -> Self
 pub fn flui::prelude::WidgetStatesController::update(&self, state: flui::prelude::WidgetState, add: bool)
 pub fn flui::prelude::WidgetStatesController::value(&self) -> flui::prelude::WidgetStates
-pub struct flui::prelude::WidgetsApp<F: flui::widgets::AppForm = flui::widgets::NavigatorForm> { .. }
-impl<F: Clone + flui::widgets::AppForm> Clone for flui::prelude::WidgetsApp<F>
-impl<F: flui::widgets::AppForm> core::fmt::Debug for flui::prelude::WidgetsApp<F>
-impl<F: flui::widgets::AppForm> flui::app::StatefulView for flui::prelude::WidgetsApp<F> { type State = flui::widgets::WidgetsAppState; }
-impl<F: flui::widgets::AppForm> flui::app::View for flui::prelude::WidgetsApp<F> where Self: flui::app::StatefulView
-impl<F: flui::widgets::AppForm> flui::prelude::ViewState<flui::prelude::WidgetsApp<F>> for flui::widgets::WidgetsAppState
-pub fn flui::prelude::WidgetsApp::builder(self, builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::locale(self, locale: flui::platform::Locale) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::localizations_delegates(self, delegates: Vec<flui::prelude::BoxedLocalizationsDelegate>) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::navigator(self, handle: flui::prelude::NavigatorHandle) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::NavigatorForm>
-pub fn flui::prelude::WidgetsApp::new(home: impl flui::prelude::IntoView) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::NavigatorForm>
-pub fn flui::prelude::WidgetsApp::observer(self, observer: alloc::rcs::arc::Arc<dyn flui::widgets::NavigatorObserver>) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::NavigatorForm>
-pub fn flui::prelude::WidgetsApp::router<R: flui::prelude::Routable>(router: flui::prelude::Router<R>) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::RouterForm>
-pub fn flui::prelude::WidgetsApp::supported_locales(self, locales: Vec<flui::platform::Locale>) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::text_style(self, style: flui::painting::typography::TextStyle) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::with_builder(builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::NavigatorForm>
+pub struct flui::prelude::WidgetsApp { .. }
+impl Clone for flui::prelude::WidgetsApp
+impl core::fmt::Debug for flui::prelude::WidgetsApp
+impl flui::app::StatefulView for flui::prelude::WidgetsApp { type State = flui::widgets::WidgetsAppState; }
+impl flui::app::View for flui::prelude::WidgetsApp where Self: flui::app::StatefulView
+impl flui::prelude::ViewState<flui::prelude::WidgetsApp> for flui::widgets::WidgetsAppState
+pub fn flui::prelude::WidgetsApp::builder(self, builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self
+pub fn flui::prelude::WidgetsApp::locale(self, locale: flui::platform::Locale) -> Self
+pub fn flui::prelude::WidgetsApp::localizations_delegates(self, delegates: Vec<flui::prelude::BoxedLocalizationsDelegate>) -> Self
+pub fn flui::prelude::WidgetsApp::new(home: impl flui::prelude::IntoView) -> Self
+pub fn flui::prelude::WidgetsApp::router<R: flui::prelude::Routable>(router: flui::prelude::Router<R>) -> Self
+pub fn flui::prelude::WidgetsApp::supported_locales(self, locales: Vec<flui::platform::Locale>) -> Self
+pub fn flui::prelude::WidgetsApp::text_style(self, style: flui::painting::typography::TextStyle) -> Self
+pub fn flui::prelude::WidgetsApp::with_builder(builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self
 reexport flui::prelude::WidgetsBinding => flui::app::WidgetsBinding
 pub trait flui::prelude::WidgetsBindingObserver
 fn flui::prelude::WidgetsBindingObserver::did_change_app_lifecycle_state(&self, _state: flui::prelude::AppLifecycleState) { .. }
@@ -19586,7 +19535,7 @@ pub fn flui::prelude::Wrap::new(children: C) -> Self // impl<C> flui::prelude::W
 pub fn flui::prelude::Wrap::run_alignment(self, run_alignment: flui::prelude::WrapAlignment) -> Self // impl<C> flui::prelude::Wrap<C>
 pub fn flui::prelude::Wrap::run_spacing(self, run_spacing: f64) -> Self // impl<C> flui::prelude::Wrap<C>
 pub fn flui::prelude::Wrap::spacing(self, spacing: f64) -> Self // impl<C> flui::prelude::Wrap<C>
-pub enum flui::prelude::WrapAlignment
+#[non_exhaustive] pub enum flui::prelude::WrapAlignment
 impl Clone for flui::prelude::WrapAlignment
 impl Copy for flui::prelude::WrapAlignment
 impl Default for flui::prelude::WrapAlignment
@@ -19608,7 +19557,7 @@ variant flui::prelude::WrapAlignment::SpaceAround // at 4
 variant flui::prelude::WrapAlignment::SpaceBetween // at 3
 variant flui::prelude::WrapAlignment::SpaceEvenly // at 5
 variant flui::prelude::WrapAlignment::Start // at 0
-pub enum flui::prelude::WrapCrossAlignment
+#[non_exhaustive] pub enum flui::prelude::WrapCrossAlignment
 impl Clone for flui::prelude::WrapCrossAlignment
 impl Copy for flui::prelude::WrapCrossAlignment
 impl Default for flui::prelude::WrapCrossAlignment
@@ -20933,7 +20882,7 @@ variant flui::rendering::objects::LeaderClip::Hide // at 1
 reexport flui::rendering::objects::MAX_ITEM_EXTENT => flui::widgets::MAX_ITEM_EXTENT
 reexport flui::rendering::objects::MainAxisAlignment => flui::prelude::MainAxisAlignment
 reexport flui::rendering::objects::MainAxisSize => flui::prelude::MainAxisSize
-pub enum flui::rendering::objects::MinTarget
+#[non_exhaustive] pub enum flui::rendering::objects::MinTarget
 impl Clone for flui::rendering::objects::MinTarget
 impl From<f64> for flui::rendering::objects::MinTarget
 impl From<flui::interaction::GestureSettingsProvider> for flui::rendering::objects::MinTarget
@@ -23473,7 +23422,7 @@ pub fn flui::testing::find::text(text: impl Into<String>) -> flui::testing::Loca
 pub fn flui::testing::find::text_containing(text: impl Into<String>) -> flui::testing::Locator
 pub fn flui::testing::find::with_state(state: flui::testing::StateFilter) -> flui::testing::Locator
 pub mod flui::testing::harness
-pub enum flui::testing::harness::BuildCapabilities
+#[non_exhaustive] pub enum flui::testing::harness::BuildCapabilities
 impl Clone for flui::testing::harness::BuildCapabilities
 impl Copy for flui::testing::harness::BuildCapabilities
 impl Default for flui::testing::harness::BuildCapabilities
@@ -23606,7 +23555,7 @@ pub fn flui::testing::harness::a11y::A11yNode::supports_action(&self, action: ac
 pub fn flui::testing::harness::a11y::A11yNode::toggled(&self) -> Option<accesskit::Toggled> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
 pub fn flui::testing::harness::a11y::A11yNode::value(&self) -> Option<&'a str> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
 reexport flui::testing::harness::a11y::A11yPoint => accesskit::geometry::Point
-pub enum flui::testing::harness::a11y::A11yQuery
+#[non_exhaustive] pub enum flui::testing::harness::a11y::A11yQuery
 impl Clone for flui::testing::harness::a11y::A11yQuery
 impl Eq for flui::testing::harness::a11y::A11yQuery
 impl PartialEq for flui::testing::harness::a11y::A11yQuery
@@ -23616,7 +23565,7 @@ impl core::marker::StructuralPartialEq for flui::testing::harness::a11y::A11yQue
 variant flui::testing::harness::a11y::A11yQuery::Label(String) // at 1
 variant flui::testing::harness::a11y::A11yQuery::Role(accesskit::Role) // at 0
 variant flui::testing::harness::a11y::A11yQuery::RoleAndLabel(accesskit::Role, String) // at 2
-pub enum flui::testing::harness::a11y::A11yQueryError
+#[non_exhaustive] pub enum flui::testing::harness::a11y::A11yQueryError
 impl Clone for flui::testing::harness::a11y::A11yQueryError
 impl Eq for flui::testing::harness::a11y::A11yQueryError
 impl PartialEq for flui::testing::harness::a11y::A11yQueryError
@@ -23649,7 +23598,7 @@ pub fn flui::testing::harness::a11y::A11yTree::window_bounds(&self, node: &flui:
 reexport flui::testing::harness::a11y::Action => accesskit::Action
 reexport flui::testing::harness::a11y::ActionData => accesskit::ActionData
 reexport flui::testing::harness::a11y::ActionRequest => accesskit::ActionRequest
-pub enum flui::testing::harness::a11y::InvokeActionError
+#[non_exhaustive] pub enum flui::testing::harness::a11y::InvokeActionError
 impl From<flui_semantics::action::ActionDecodeError> for flui::testing::harness::a11y::InvokeActionError
 impl From<flui_semantics::owner::SemanticsActionError> for flui::testing::harness::a11y::InvokeActionError
 impl core::error::Error for flui::testing::harness::a11y::InvokeActionError
@@ -23710,7 +23659,7 @@ impl core::marker::StructuralPartialEq for flui::testing::harness::replay::Pinch
 variant flui::testing::harness::replay::PinchPhase::End // at 2
 variant flui::testing::harness::replay::PinchPhase::Start // at 0
 variant flui::testing::harness::replay::PinchPhase::Update { scale: f64, rotation: f64 } // at 1
-pub enum flui::testing::harness::replay::PointerPhase
+#[non_exhaustive] pub enum flui::testing::harness::replay::PointerPhase
 impl Clone for flui::testing::harness::replay::PointerPhase
 impl Copy for flui::testing::harness::replay::PointerPhase
 impl Eq for flui::testing::harness::replay::PointerPhase
@@ -24479,7 +24428,7 @@ pub const flui::view::FrameId::FIRST: Self = _
 pub const fn flui::view::FrameId::from_count(count: u64) -> Option<Self>
 pub const fn flui::view::FrameId::get(self) -> u64
 pub const fn flui::view::FrameId::next(self) -> Option<Self>
-#[repr(u8)] pub enum flui::view::FramePhase
+#[non_exhaustive] #[repr(u8)] pub enum flui::view::FramePhase
 impl Clone for flui::view::FramePhase
 impl Copy for flui::view::FramePhase
 impl Default for flui::view::FramePhase
@@ -24577,7 +24526,7 @@ field flui::view::KeepAliveNotification::keep_alive: bool // at 0
 impl Clone for flui::view::KeepAliveNotification
 impl core::fmt::Debug for flui::view::KeepAliveNotification
 impl flui::prelude::Notification for flui::view::KeepAliveNotification
-pub enum flui::view::KeyLookup
+#[non_exhaustive] pub enum flui::view::KeyLookup
 impl Clone for flui::view::KeyLookup
 impl Copy for flui::view::KeyLookup
 impl Eq for flui::view::KeyLookup
@@ -26267,7 +26216,6 @@ pub fn flui::widgets::AnnotatedRegion::new(value: T, child: impl flui::prelude::
 reexport flui::widgets::AnnounceError => flui::semantics::AnnounceError
 reexport flui::widgets::Announcer => flui::semantics::Announcer
 pub type flui::widgets::AppBuilder = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView>
-pub trait flui::widgets::AppForm: flui_widgets::app::widgets_app::sealed::Sealed + Clone + core::fmt::Debug + 'static
 reexport flui::widgets::AspectRatio => flui::prelude::AspectRatio
 reexport flui::widgets::AspectRatioDelegate => flui::prelude::AspectRatioDelegate
 pub struct flui::widgets::AssetImage { .. }
@@ -26944,10 +26892,6 @@ reexport flui::widgets::FractionalTranslation => flui::prelude::FractionalTransl
 reexport flui::widgets::FractionallySizedBox => flui::prelude::FractionallySizedBox
 reexport flui::widgets::FutureBuilder => flui::prelude::FutureBuilder
 pub type flui::widgets::FutureFactory<T, E> = alloc::rcs::rc::Rc<dyn Fn() -> flui::widgets::BoxedResultFuture<T, E>>
-pub struct flui::widgets::GeneratedRoute { .. }
-impl Drop for flui::widgets::GeneratedRoute
-impl core::fmt::Debug for flui::widgets::GeneratedRoute
-pub fn flui::widgets::GeneratedRoute::new<R: flui::widgets::NavigatorRoute>(route: R) -> Self
 pub struct flui::widgets::GestureAlternatives { .. }
 impl Clone for flui::widgets::GestureAlternatives
 impl core::fmt::Debug for flui::widgets::GestureAlternatives
@@ -27270,11 +27214,6 @@ impl core::fmt::Display for flui::widgets::InvalidWheelScrollDistance
 impl core::marker::StructuralPartialEq for flui::widgets::InvalidWheelScrollDistance
 variant flui::widgets::InvalidWheelScrollDistance::Character // at 1
 variant flui::widgets::InvalidWheelScrollDistance::Line // at 0
-pub struct flui::widgets::KeyedSettings<T> { .. }
-impl<T> From<flui::widgets::RouteKey<T>> for flui::widgets::KeyedSettings<T>
-impl<T> core::fmt::Debug for flui::widgets::KeyedSettings<T>
-pub fn flui::widgets::KeyedSettings::settings(&self) -> &flui::widgets::RouteSettings // impl<T> flui::widgets::KeyedSettings<T>
-pub fn flui::widgets::KeyedSettings::untyped(self) -> flui::widgets::RouteSettings // impl<T> flui::widgets::KeyedSettings<T>
 #[non_exhaustive] pub enum flui::widgets::KeylineSnap
 impl Clone for flui::widgets::KeylineSnap
 impl Copy for flui::widgets::KeylineSnap
@@ -27406,47 +27345,6 @@ reexport flui::widgets::MultiChildLayoutContext => flui::prelude::MultiChildLayo
 reexport flui::widgets::MultiChildLayoutDelegate => flui::prelude::MultiChildLayoutDelegate
 reexport flui::widgets::MultiTapCount => flui::interaction::MultiTapCount
 reexport flui::widgets::MultiTapCountError => flui::interaction::MultiTapCountError
-#[non_exhaustive] pub enum flui::widgets::NamedRouteError
-impl Clone for flui::widgets::NamedRouteError
-impl Eq for flui::widgets::NamedRouteError
-impl PartialEq for flui::widgets::NamedRouteError
-impl core::error::Error for flui::widgets::NamedRouteError
-impl core::fmt::Debug for flui::widgets::NamedRouteError
-impl core::fmt::Display for flui::widgets::NamedRouteError
-impl core::marker::StructuralPartialEq for flui::widgets::NamedRouteError
-variant flui::widgets::NamedRouteError::NotAddressable { name: String } // at 2
-variant flui::widgets::NamedRouteError::ResultType { name: String, expected: &'static str, actual: &'static str } // at 1
-variant flui::widgets::NamedRouteError::Unresolved { name: String } // at 0
-reexport flui::widgets::Navigator => flui::prelude::Navigator
-pub struct flui::widgets::NavigatorForm;
-impl Clone for flui::widgets::NavigatorForm
-impl Copy for flui::widgets::NavigatorForm
-impl Default for flui::widgets::NavigatorForm
-impl Eq for flui::widgets::NavigatorForm
-impl PartialEq for flui::widgets::NavigatorForm
-impl core::fmt::Debug for flui::widgets::NavigatorForm
-impl core::marker::StructuralPartialEq for flui::widgets::NavigatorForm
-impl flui::widgets::AppForm for flui::widgets::NavigatorForm
-impl flui_widgets::app::widgets_app::sealed::Sealed for flui::widgets::NavigatorForm
-reexport flui::widgets::NavigatorHandle => flui::prelude::NavigatorHandle
-pub trait flui::widgets::NavigatorObserver
-fn flui::widgets::NavigatorObserver::did_attach(&self, navigator: flui::prelude::NavigatorHandle) { .. }
-fn flui::widgets::NavigatorObserver::did_change_top(&self, top: flui::widgets::RouteId, previous_top: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_detach(&self) { .. }
-fn flui::widgets::NavigatorObserver::did_pop(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_push(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_remove(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_replace(&self, new_route: Option<flui::widgets::RouteId>, old_route: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_start_user_gesture(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_stop_user_gesture(&self) { .. }
-fn flui::widgets::NavigatorObserver::observes_hero_flights(&self) -> bool { .. }
-pub trait flui::widgets::NavigatorRoute: flui::widgets::Route
-fn flui::widgets::NavigatorRoute::binding_slot(&self) -> Option<&flui::widgets::RouteBindingSlot> { .. }
-fn flui::widgets::NavigatorRoute::content_builder(&self) -> flui::widgets::RouteContentBuilder
-fn flui::widgets::NavigatorRoute::is_modal(&self) -> bool { .. }
-pub struct flui::widgets::NavigatorState { .. }
-impl core::fmt::Debug for flui::widgets::NavigatorState
-impl flui::prelude::ViewState<flui::prelude::Navigator> for flui::widgets::NavigatorState
 pub struct flui::widgets::NestedScroll { .. }
 impl Clone for flui::widgets::NestedScroll
 impl core::fmt::Debug for flui::widgets::NestedScroll
@@ -27516,6 +27414,18 @@ variant flui::widgets::OverscrollBehavior::Auto // at 0
 variant flui::widgets::OverscrollBehavior::Contain // at 1
 reexport flui::widgets::Padding => flui::prelude::Padding
 reexport flui::widgets::PageController => flui::prelude::PageController
+#[non_exhaustive] pub enum flui::widgets::PageError
+impl Clone for flui::widgets::PageError
+impl Copy for flui::widgets::PageError
+impl Eq for flui::widgets::PageError
+impl PartialEq for flui::widgets::PageError
+impl core::error::Error for flui::widgets::PageError
+impl core::fmt::Debug for flui::widgets::PageError
+impl core::fmt::Display for flui::widgets::PageError
+impl core::marker::StructuralPartialEq for flui::widgets::PageError
+variant flui::widgets::PageError::DuringBuild // at 1
+variant flui::widgets::PageError::Gone // at 0
+reexport flui::widgets::PageHandle => flui::prelude::PageHandle
 pub struct flui::widgets::PageIndicator { .. }
 impl Clone for flui::widgets::PageIndicator
 impl core::fmt::Debug for flui::widgets::PageIndicator
@@ -27947,7 +27857,6 @@ fn flui::widgets::Route::vetoes_pop(&self) -> bool { .. }
 fn flui::widgets::Route::will_handle_pop_internally(&self) -> bool { .. }
 type flui::widgets::Route::Output: 'static
 pub type flui::widgets::RouteAnimation = alloc::rcs::rc::Rc<dyn flui::animation::Animation<f64>>
-pub type flui::widgets::RouteArguments = alloc::rcs::arc::Arc<dyn core::any::Any + Send + Sync>
 pub struct flui::widgets::RouteBindingSlot { .. }
 impl Clone for flui::widgets::RouteBindingSlot
 impl Default for flui::widgets::RouteBindingSlot
@@ -27966,18 +27875,6 @@ impl core::fmt::Debug for flui::widgets::RouteId
 impl core::hash::Hash for flui::widgets::RouteId
 impl core::marker::StructuralPartialEq for flui::widgets::RouteId
 pub fn flui::widgets::RouteId::get(self) -> u64
-pub struct flui::widgets::RouteKey<T> { .. }
-impl<T> Clone for flui::widgets::RouteKey<T>
-impl<T> Copy for flui::widgets::RouteKey<T>
-impl<T> Eq for flui::widgets::RouteKey<T>
-impl<T> From<flui::widgets::RouteKey<T>> for flui::widgets::KeyedSettings<T>
-impl<T> PartialEq for flui::widgets::RouteKey<T>
-impl<T> core::fmt::Debug for flui::widgets::RouteKey<T>
-impl<T> core::hash::Hash for flui::widgets::RouteKey<T>
-pub const fn flui::widgets::RouteKey::name(&self) -> &'static str // impl<T> flui::widgets::RouteKey<T>
-pub const fn flui::widgets::RouteKey::new(name: &'static str) -> Self // impl<T> flui::widgets::RouteKey<T>
-pub fn flui::widgets::RouteKey::with_arguments<A: core::any::Any + Send + Sync + 'static>(self, arguments: A) -> flui::widgets::KeyedSettings<T> // impl<T> flui::widgets::RouteKey<T>
-pub fn flui::widgets::RouteKey::with_arguments_shared(self, arguments: flui::widgets::RouteArguments) -> flui::widgets::KeyedSettings<T> // impl<T> flui::widgets::RouteKey<T>
 pub type flui::widgets::RoutePageBuilder = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::app::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation) -> flui::prelude::BoxedView>
 #[non_exhaustive] pub enum flui::widgets::RouteParseError
 impl Clone for flui::widgets::RouteParseError
@@ -27992,13 +27889,6 @@ variant flui::widgets::RouteParseError::Malformed { location: String, reason: &'
 variant flui::widgets::RouteParseError::NoMatch { path: flui::prelude::RoutePath } // at 1
 variant flui::widgets::RouteParseError::Param { path: flui::prelude::RoutePath, field: &'static str, segment: String } // at 2
 reexport flui::widgets::RoutePath => flui::prelude::RoutePath
-pub struct flui::widgets::RouteRequest<'a> { .. }
-impl<'a> Clone for flui::widgets::RouteRequest<'a>
-impl<'a> Copy for flui::widgets::RouteRequest<'a>
-impl<'a> core::fmt::Debug for flui::widgets::RouteRequest<'a>
-pub fn flui::widgets::RouteRequest::argument<T: core::any::Any + Send + Sync + 'static>(&self) -> Option<&'a T> // impl<'a> flui::widgets::RouteRequest<'a>
-pub fn flui::widgets::RouteRequest::name(&self) -> Option<&'a str> // impl<'a> flui::widgets::RouteRequest<'a>
-pub fn flui::widgets::RouteRequest::settings(&self) -> &'a flui::widgets::RouteSettings // impl<'a> flui::widgets::RouteRequest<'a>
 pub struct flui::widgets::RouteResult<T> { .. }
 impl<T: 'static> core::future::future::Future for flui::widgets::RouteResult<T> { type Output = Result<Option<T>, flui::widgets::RouteResultError>; }
 impl<T> core::fmt::Debug for flui::widgets::RouteResult<T>
@@ -28015,18 +27905,13 @@ impl core::fmt::Display for flui::widgets::RouteResultError
 impl core::marker::StructuralPartialEq for flui::widgets::RouteResultError
 variant flui::widgets::RouteResultError::TypeMismatch { expected: &'static str } // at 0
 #[non_exhaustive] pub struct flui::widgets::RouteSettings
-field flui::widgets::RouteSettings::arguments: Option<flui::widgets::RouteArguments> // at 1
 field flui::widgets::RouteSettings::name: Option<String> // at 0
 impl Clone for flui::widgets::RouteSettings
 impl Default for flui::widgets::RouteSettings
 impl Eq for flui::widgets::RouteSettings
-impl From<&str> for flui::widgets::RouteSettings
-impl From<String> for flui::widgets::RouteSettings
 impl PartialEq for flui::widgets::RouteSettings
 impl core::fmt::Debug for flui::widgets::RouteSettings
-pub fn flui::widgets::RouteSettings::argument<T: core::any::Any + Send + Sync + 'static>(&self) -> Option<&T>
-pub fn flui::widgets::RouteSettings::arguments<T: core::any::Any + Send + Sync + 'static>(self, value: T) -> Self
-pub fn flui::widgets::RouteSettings::arguments_shared(self, arguments: flui::widgets::RouteArguments) -> Self
+impl core::marker::StructuralPartialEq for flui::widgets::RouteSettings
 pub fn flui::widgets::RouteSettings::named(name: impl Into<String>) -> Self
 pub type flui::widgets::RouteTransitionsBuilder = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::app::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation, flui::prelude::BoxedView) -> flui::prelude::BoxedView>
 reexport flui::widgets::Router => flui::prelude::Router
@@ -28040,19 +27925,10 @@ impl core::fmt::Debug for flui::widgets::RouterError
 impl core::fmt::Display for flui::widgets::RouterError
 impl core::marker::StructuralPartialEq for flui::widgets::RouterError
 variant flui::widgets::RouterError::Disposed // at 1
+variant flui::widgets::RouterError::DuringBuild // at 4
 variant flui::widgets::RouterError::EmptyStack // at 3
 variant flui::widgets::RouterError::NoRouter { route_type: &'static str } // at 0
 variant flui::widgets::RouterError::Parse(flui::widgets::RouteParseError) // at 2
-pub struct flui::widgets::RouterForm;
-impl Clone for flui::widgets::RouterForm
-impl Copy for flui::widgets::RouterForm
-impl Default for flui::widgets::RouterForm
-impl Eq for flui::widgets::RouterForm
-impl PartialEq for flui::widgets::RouterForm
-impl core::fmt::Debug for flui::widgets::RouterForm
-impl core::marker::StructuralPartialEq for flui::widgets::RouterForm
-impl flui::widgets::AppForm for flui::widgets::RouterForm
-impl flui_widgets::app::widgets_app::sealed::Sealed for flui::widgets::RouterForm
 reexport flui::widgets::RouterHandle => flui::prelude::RouterHandle
 pub struct flui::widgets::RouterState<R: flui::prelude::Routable> { .. }
 impl<R: flui::prelude::Routable> Drop for flui::widgets::RouterState<R>
@@ -28354,7 +28230,6 @@ impl flui::prelude::Action<flui::widgets::ShowContextMenuIntent> for flui_widget
 impl flui::prelude::Intent for flui::widgets::ShowContextMenuIntent
 pub fn flui::widgets::ShowContextMenuIntent::default_keys(platform: flui::platform::TargetPlatform) -> Vec<flui::prelude::SingleActivator>
 reexport flui::widgets::ShrinkWrappingViewport => flui::prelude::ShrinkWrappingViewport
-reexport flui::widgets::SimpleRoute => flui::prelude::SimpleRoute
 reexport flui::widgets::SingleActivator => flui::prelude::SingleActivator
 reexport flui::widgets::SingleChildLayoutDelegate => flui::prelude::SingleChildLayoutDelegate
 reexport flui::widgets::SingleChildScrollView => flui::prelude::SingleChildScrollView
@@ -28749,7 +28624,7 @@ reexport flui::widgets::WidgetStatesController => flui::prelude::WidgetStatesCon
 reexport flui::widgets::WidgetsApp => flui::prelude::WidgetsApp
 pub struct flui::widgets::WidgetsAppState { .. }
 impl core::fmt::Debug for flui::widgets::WidgetsAppState
-impl<F: flui::widgets::AppForm> flui::prelude::ViewState<flui::prelude::WidgetsApp<F>> for flui::widgets::WidgetsAppState
+impl flui::prelude::ViewState<flui::prelude::WidgetsApp> for flui::widgets::WidgetsAppState
 reexport flui::widgets::WidgetsLocalizations => flui::prelude::WidgetsLocalizations
 pub struct flui::widgets::WindowCaptionButton { .. }
 impl Clone for flui::widgets::WindowCaptionButton
@@ -28836,10 +28711,7 @@ reexport flui::widgets::animated::TickerMode => flui::prelude::TickerMode
 reexport flui::widgets::animated::TickerModeState => flui::widgets::TickerModeState
 pub mod flui::widgets::app
 reexport flui::widgets::app::AppBuilder => flui::widgets::AppBuilder
-reexport flui::widgets::app::AppForm => flui::widgets::AppForm
 reexport flui::widgets::app::InheritedTheme => flui::prelude::InheritedTheme
-reexport flui::widgets::app::NavigatorForm => flui::widgets::NavigatorForm
-reexport flui::widgets::app::RouterForm => flui::widgets::RouterForm
 reexport flui::widgets::app::SafeArea => flui::prelude::SafeArea
 reexport flui::widgets::app::WidgetsApp => flui::prelude::WidgetsApp
 reexport flui::widgets::app::WidgetsAppState => flui::widgets::WidgetsAppState
@@ -29200,18 +29072,12 @@ variant flui::widgets::motion::particles::Sprite::Star // at 2
 pub mod flui::widgets::navigator
 reexport flui::widgets::navigator::AnimationRunFuture => flui::animation::AnimationRunFuture
 reexport flui::widgets::navigator::FlightDirection => flui::prelude::FlightDirection
-reexport flui::widgets::navigator::GeneratedRoute => flui::widgets::GeneratedRoute
 reexport flui::widgets::navigator::Hero => flui::prelude::Hero
 reexport flui::widgets::navigator::HeroController => flui::prelude::HeroController
 reexport flui::widgets::navigator::HeroControllerScope => flui::widgets::HeroControllerScope
 reexport flui::widgets::navigator::HeroMode => flui::prelude::HeroMode
-reexport flui::widgets::navigator::KeyedSettings => flui::widgets::KeyedSettings
-reexport flui::widgets::navigator::NamedRouteError => flui::widgets::NamedRouteError
-reexport flui::widgets::navigator::Navigator => flui::prelude::Navigator
-reexport flui::widgets::navigator::NavigatorHandle => flui::prelude::NavigatorHandle
-reexport flui::widgets::navigator::NavigatorObserver => flui::widgets::NavigatorObserver
-reexport flui::widgets::navigator::NavigatorRoute => flui::widgets::NavigatorRoute
-reexport flui::widgets::navigator::NavigatorState => flui::widgets::NavigatorState
+reexport flui::widgets::navigator::PageError => flui::widgets::PageError
+reexport flui::widgets::navigator::PageHandle => flui::prelude::PageHandle
 reexport flui::widgets::navigator::PageRoute => flui::prelude::PageRoute
 reexport flui::widgets::navigator::PageTransitionBuilder => flui::widgets::PageTransitionBuilder
 reexport flui::widgets::navigator::PageTransitions => flui::widgets::PageTransitions
@@ -29222,19 +29088,15 @@ reexport flui::widgets::navigator::PopupRoute => flui::prelude::PopupRoute
 reexport flui::widgets::navigator::PushCompletion => flui::widgets::PushCompletion
 reexport flui::widgets::navigator::Route => flui::widgets::Route
 reexport flui::widgets::navigator::RouteAnimation => flui::widgets::RouteAnimation
-reexport flui::widgets::navigator::RouteArguments => flui::widgets::RouteArguments
 reexport flui::widgets::navigator::RouteBindingSlot => flui::widgets::RouteBindingSlot
 reexport flui::widgets::navigator::RouteContentBuilder => flui::widgets::RouteContentBuilder
 reexport flui::widgets::navigator::RouteId => flui::widgets::RouteId
-reexport flui::widgets::navigator::RouteKey => flui::widgets::RouteKey
 reexport flui::widgets::navigator::RoutePageBuilder => flui::widgets::RoutePageBuilder
-reexport flui::widgets::navigator::RouteRequest => flui::widgets::RouteRequest
 reexport flui::widgets::navigator::RouteResult => flui::widgets::RouteResult
 reexport flui::widgets::navigator::RouteResultError => flui::widgets::RouteResultError
 reexport flui::widgets::navigator::RouteSettings => flui::widgets::RouteSettings
 reexport flui::widgets::navigator::RouteTransitionsBuilder => flui::widgets::RouteTransitionsBuilder
 reexport flui::widgets::navigator::RunCanceled => flui::animation::RunCanceled
-reexport flui::widgets::navigator::SimpleRoute => flui::prelude::SimpleRoute
 pub mod flui::widgets::paint
 reexport flui::widgets::paint::AnnotatedRegion => flui::widgets::AnnotatedRegion
 reexport flui::widgets::paint::BackdropFilter => flui::prelude::BackdropFilter
@@ -29424,8 +29286,6 @@ reexport flui::widgets::prelude::MotionBuilder => flui::prelude::MotionBuilder
 reexport flui::widgets::prelude::MouseRegion => flui::prelude::MouseRegion
 reexport flui::widgets::prelude::MultiChildLayoutContext => flui::prelude::MultiChildLayoutContext
 reexport flui::widgets::prelude::MultiChildLayoutDelegate => flui::prelude::MultiChildLayoutDelegate
-reexport flui::widgets::prelude::Navigator => flui::prelude::Navigator
-reexport flui::widgets::prelude::NavigatorHandle => flui::prelude::NavigatorHandle
 reexport flui::widgets::prelude::NextFocusAction => flui::prelude::NextFocusAction
 reexport flui::widgets::prelude::NextFocusIntent => flui::prelude::NextFocusIntent
 reexport flui::widgets::prelude::NotifiableElement => flui::prelude::NotifiableElement
@@ -29443,6 +29303,7 @@ reexport flui::widgets::prelude::OverlayEntryId => flui::prelude::OverlayEntryId
 reexport flui::widgets::prelude::OverlayHandle => flui::prelude::OverlayHandle
 reexport flui::widgets::prelude::Padding => flui::prelude::Padding
 reexport flui::widgets::prelude::PageController => flui::prelude::PageController
+reexport flui::widgets::prelude::PageHandle => flui::prelude::PageHandle
 reexport flui::widgets::prelude::PageRoute => flui::prelude::PageRoute
 reexport flui::widgets::prelude::PageView => flui::prelude::PageView
 reexport flui::widgets::prelude::PanClaimRegion => flui::prelude::PanClaimRegion
@@ -29506,7 +29367,6 @@ reexport flui::widgets::prelude::Shortcuts => flui::prelude::Shortcuts
 reexport flui::widgets::prelude::ShrinkWrappingViewport => flui::prelude::ShrinkWrappingViewport
 reexport flui::widgets::prelude::Signal => flui::prelude::Signal
 reexport flui::widgets::prelude::SignalWriteExt => flui::prelude::SignalWriteExt
-reexport flui::widgets::prelude::SimpleRoute => flui::prelude::SimpleRoute
 reexport flui::widgets::prelude::SingleActivator => flui::prelude::SingleActivator
 reexport flui::widgets::prelude::SingleChildLayoutDelegate => flui::prelude::SingleChildLayoutDelegate
 reexport flui::widgets::prelude::SingleChildScrollView => flui::prelude::SingleChildScrollView
@@ -29864,7 +29724,7 @@ pub fn flui_assets::core::metadata::AssetMetadata::new() -> Self
 pub fn flui_assets::core::metadata::AssetMetadata::video(width: u32, height: u32, duration: core::time::Duration, frame_rate: f32, format: impl Into<String>) -> Self
 pub fn flui_assets::core::metadata::AssetMetadata::with_custom(self, key: impl Into<String>, value: impl Into<String>) -> Self
 pub fn flui_assets::core::metadata::AssetMetadata::with_size(size_bytes: usize) -> Self
-pub enum flui_assets::error::AssetError
+#[non_exhaustive] pub enum flui_assets::error::AssetError
 impl Clone for flui_assets::error::AssetError
 impl From<core::io::error::Error> for flui_assets::error::AssetError
 impl core::error::Error for flui_assets::error::AssetError
@@ -30853,7 +30713,7 @@ pub fn flui_layer::layer::picture::PictureLayer::from_shared(picture: alloc::rcs
 pub fn flui_layer::layer::picture::PictureLayer::is_empty(&self) -> bool
 pub fn flui_layer::layer::picture::PictureLayer::new(picture: flui::painting::DisplayList) -> Self
 pub fn flui_layer::layer::picture::PictureLayer::picture(&self) -> &flui::painting::DisplayList
-pub enum flui_layer::layer::platform_view::PlatformViewHitTestBehavior
+#[non_exhaustive] pub enum flui_layer::layer::platform_view::PlatformViewHitTestBehavior
 impl Clone for flui_layer::layer::platform_view::PlatformViewHitTestBehavior
 impl Copy for flui_layer::layer::platform_view::PlatformViewHitTestBehavior
 impl Default for flui_layer::layer::platform_view::PlatformViewHitTestBehavior
@@ -30964,7 +30824,6 @@ pub fn flui_layer::scene::content::BoundaryContent::effect_layer(&self, entry: f
 pub fn flui_layer::scene::content::BoundaryContent::effect_layers(&self) -> impl ExactSizeIterator<Item = (flui_layer::scene::content::EntryIndex, &flui_layer::layer::Layer)> + '_
 pub fn flui_layer::scene::content::BoundaryContent::entries(&self) -> &[flui_layer::scene::content::Entry]
 pub fn flui_layer::scene::content::BoundaryContent::slots(&self) -> impl Iterator<Item = flui_layer::scene::id::SceneNodeId> + '_
-pub fn flui_layer::scene::content::BoundaryContent::with_effects(&self, replaced: impl IntoIterator<Item = (flui_layer::scene::content::EntryIndex, flui_layer::layer::Layer)>) -> Result<Self, flui_layer::scene::content::EntryIndex>
 pub enum flui_layer::scene::content::Bounds
 impl Clone for flui_layer::scene::content::Bounds
 impl Copy for flui_layer::scene::content::Bounds
@@ -31061,7 +30920,7 @@ impl core::marker::StructuralPartialEq for flui_layer::scene::owner::Placement
 pub const flui_layer::scene::owner::Placement::ZERO: Self = _
 pub fn flui_layer::scene::owner::Placement::offset(self) -> flui::geometry::Offset<f64>
 pub fn flui_layer::scene::owner::Placement::try_new(offset: flui::geometry::Offset<f64>) -> Result<Self, flui_layer::scene_snapshot::NonFinite>
-pub enum flui_layer::scene::owner::SceneError
+#[non_exhaustive] pub enum flui_layer::scene::owner::SceneError
 impl Clone for flui_layer::scene::owner::SceneError
 impl Copy for flui_layer::scene::owner::SceneError
 impl Eq for flui_layer::scene::owner::SceneError
@@ -31097,6 +30956,7 @@ pub fn flui_layer::scene::owner::SceneWriter::discard(&mut self, content: alloc:
 pub fn flui_layer::scene::owner::SceneWriter::mint_node(&mut self) -> flui_layer::scene::id::SceneNodeId // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::next_content_version(&mut self) -> Result<flui_layer::scene::id::ContentVersion, flui_layer::scene::owner::SceneError> // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::push(&mut self, op: flui_layer::scene::owner::SceneOp) // impl flui_layer::scene::owner::SceneWriter<'_>
+pub fn flui_layer::scene::owner::SceneWriter::with_effects(&mut self, content: &flui_layer::scene::content::BoundaryContent, replaced: impl IntoIterator<Item = (flui_layer::scene::content::EntryIndex, flui_layer::layer::Layer)>) -> Result<alloc::rcs::arc::Arc<flui_layer::scene::content::BoundaryContent>, flui_layer::scene::content::EntryIndex> // impl flui_layer::scene::owner::SceneWriter<'_>
 pub struct flui_layer::scene::version::EntryAddress
 field flui_layer::scene::version::EntryAddress::entry: flui_layer::scene::content::EntryIndex // at 1
 field flui_layer::scene::version::EntryAddress::node: flui_layer::scene::id::SceneNodeId // at 0
@@ -31169,7 +31029,7 @@ pub fn flui_layer::scene_snapshot::DamageRegion::union(self, other: Self) -> Sel
 variant flui_layer::scene_snapshot::DamageRegion::Full(flui_layer::scene_snapshot::FullReason) // at 2
 variant flui_layer::scene_snapshot::DamageRegion::Region(flui_layer::scene_snapshot::Region) // at 1
 variant flui_layer::scene_snapshot::DamageRegion::Unchanged // at 0
-pub enum flui_layer::scene_snapshot::FullReason
+#[non_exhaustive] pub enum flui_layer::scene_snapshot::FullReason
 impl Clone for flui_layer::scene_snapshot::FullReason
 impl Copy for flui_layer::scene_snapshot::FullReason
 impl Eq for flui_layer::scene_snapshot::FullReason
@@ -31205,7 +31065,7 @@ pub fn flui_layer::scene_snapshot::Region::bounds(&self) -> flui_layer::scene_sn
 pub fn flui_layer::scene_snapshot::Region::insert(&mut self, rect: flui_layer::scene_snapshot::DamageRect)
 pub fn flui_layer::scene_snapshot::Region::new(rect: flui_layer::scene_snapshot::DamageRect) -> Self
 pub fn flui_layer::scene_snapshot::Region::rects(&self) -> &[flui_layer::scene_snapshot::DamageRect]
-pub enum flui_layer::scene_snapshot::ResyncReason
+#[non_exhaustive] pub enum flui_layer::scene_snapshot::ResyncReason
 impl Clone for flui_layer::scene_snapshot::ResyncReason
 impl Copy for flui_layer::scene_snapshot::ResyncReason
 impl Eq for flui_layer::scene_snapshot::ResyncReason
@@ -36269,7 +36129,7 @@ impl serde_core::ser::Serialize for flui_scheduler::budget::AllPhaseStats
 impl<'de> serde_core::de::Deserialize<'de> for flui_scheduler::budget::AllPhaseStats
 pub fn flui_scheduler::budget::AllPhaseStats::total_budget_percent(&self) -> flui::view::BudgetPercentage
 pub fn flui_scheduler::budget::AllPhaseStats::total_duration(&self) -> flui::view::Milliseconds
-#[repr(u8)] pub enum flui_scheduler::budget::BudgetPolicy
+#[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::budget::BudgetPolicy
 impl Clone for flui_scheduler::budget::BudgetPolicy
 impl Copy for flui_scheduler::budget::BudgetPolicy
 impl Default for flui_scheduler::budget::BudgetPolicy
@@ -36346,7 +36206,7 @@ pub type flui_scheduler::frame::LifecycleStateCallback = alloc::rcs::rc::Rc<dyn 
 pub type flui_scheduler::frame::OneShotFrameCallback = Box<dyn FnOnce(std::time::Instant)>
 pub type flui_scheduler::frame::PostFrameCallback = Box<dyn FnOnce(&flui::view::FrameTiming)>
 pub type flui_scheduler::frame::RecurringFrameCallback = alloc::rcs::rc::Rc<dyn Fn(&flui::view::FrameTiming)>
-#[repr(u8)] pub enum flui_scheduler::frame::SchedulerPhase
+#[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::frame::SchedulerPhase
 impl Clone for flui_scheduler::frame::SchedulerPhase
 impl Copy for flui_scheduler::frame::SchedulerPhase
 impl Default for flui_scheduler::frame::SchedulerPhase
@@ -36579,7 +36439,7 @@ impl core::marker::StructuralPartialEq for flui_scheduler::scheduler::execution:
 variant flui_scheduler::scheduler::execution::ExecutionError::AlreadyExecuting // at 0
 variant flui_scheduler::scheduler::execution::ExecutionError::Retired // at 1
 variant flui_scheduler::scheduler::execution::ExecutionError::SchedulerClosed // at 2
-#[repr(u8)] pub enum flui_scheduler::task::Priority
+#[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::task::Priority
 impl Clone for flui_scheduler::task::Priority
 impl Copy for flui_scheduler::task::Priority
 impl Default for flui_scheduler::task::Priority
@@ -37089,7 +36949,7 @@ variant flui_testing::recording::format::RecordingError::NonReplayable { line: u
 variant flui_testing::recording::format::RecordingError::UnknownVariant { line: u64, tag: String } // at 3
 variant flui_testing::recording::format::RecordingError::Unmirrored { line: u64, what: &'static str } // at 6
 variant flui_testing::recording::format::RecordingError::Version { found: u32, supported: u32 } // at 2
-pub enum flui_testing::text_store_host::StoreHostCall
+#[non_exhaustive] pub enum flui_testing::text_store_host::StoreHostCall
 impl Clone for flui_testing::text_store_host::StoreHostCall
 impl Copy for flui_testing::text_store_host::StoreHostCall
 impl Eq for flui_testing::text_store_host::StoreHostCall
@@ -37150,7 +37010,6 @@ impl flui_view::reactive::writer::sealed::Sealed for ()
 impl<T> flui_view::reactive::writer::sealed::Sealed for Result<T, flui::prelude::EventContextError>
 impl<T> flui_view::reactive::writer::sealed::Sealed for Result<T, flui::prelude::EventError>
 impl<T> flui_view::reactive::writer::sealed::Sealed for Result<T, flui::view::SignalError>
-pub trait flui_widgets::app::widgets_app::sealed::Sealed
 pub struct flui_widgets::interaction::pan_claim_region::PanClaimRegionState { .. }
 impl core::fmt::Debug for flui_widgets::interaction::pan_claim_region::PanClaimRegionState
 impl flui::prelude::ViewState<flui::prelude::PanClaimRegion> for flui_widgets::interaction::pan_claim_region::PanClaimRegionState
@@ -37158,6 +37017,49 @@ pub struct flui_widgets::navigator::hero::HeroState { .. }
 impl Drop for flui_widgets::navigator::hero::HeroState
 impl core::fmt::Debug for flui_widgets::navigator::hero::HeroState
 impl flui::prelude::ViewState<flui::prelude::Hero> for flui_widgets::navigator::hero::HeroState
+pub struct flui_widgets::navigator::navigator::NavigatorHandle { .. }
+impl Clone for flui_widgets::navigator::navigator::NavigatorHandle
+impl core::fmt::Debug for flui_widgets::navigator::navigator::NavigatorHandle
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::add_observer(&self, observer: alloc::rcs::arc::Arc<dyn flui_widgets::navigator::observer::NavigatorObserver>)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::admits_pages(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::can_pop(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::current(&self) -> Option<flui::widgets::RouteId>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::did_start_user_gesture(&self)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::did_stop_user_gesture(&self)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::is_mounted(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::is_same(&self, other: &Self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_of(ctx: &dyn flui::app::BuildContext) -> Option<Self>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_of_root(ctx: &dyn flui::app::BuildContext) -> Option<Self>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_pop(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_pop_with<T: 'static>(&self, result: T) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::new(build_phase: flui::foundation::BuildPhase) -> Self
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::pop(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::pop_until(&self, keep: impl FnMut(flui::widgets::RouteId) -> bool)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::pop_with<T: 'static>(&self, result: T) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::push<R: flui_widgets::navigator::overlay_route::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::push_and_remove_until<R: flui_widgets::navigator::overlay_route::NavigatorRoute>(&self, route: R, keep: impl FnMut(flui::widgets::RouteId) -> bool) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::push_replacement<R: flui_widgets::navigator::overlay_route::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::push_replacement_with<R: flui_widgets::navigator::overlay_route::NavigatorRoute, T: 'static>(&self, route: R, result: T) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::remove_route(&self, id: flui::widgets::RouteId) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::remove_route_with<T: 'static>(&self, id: flui::widgets::RouteId, result: T) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::route_ids(&self) -> Vec<flui::widgets::RouteId>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::seed_initial<R: flui_widgets::navigator::overlay_route::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::user_gesture_in_progress(&self) -> bool
+pub trait flui_widgets::navigator::observer::NavigatorObserver
+fn flui_widgets::navigator::observer::NavigatorObserver::did_attach(&self, navigator: flui_widgets::navigator::navigator::NavigatorHandle) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_change_top(&self, top: flui::widgets::RouteId, previous_top: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_detach(&self) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_pop(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_push(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_remove(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_replace(&self, new_route: Option<flui::widgets::RouteId>, old_route: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_start_user_gesture(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_stop_user_gesture(&self) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::observes_hero_flights(&self) -> bool { .. }
+pub trait flui_widgets::navigator::overlay_route::NavigatorRoute: flui::widgets::Route
+fn flui_widgets::navigator::overlay_route::NavigatorRoute::binding_slot(&self) -> Option<&flui::widgets::RouteBindingSlot> { .. }
+fn flui_widgets::navigator::overlay_route::NavigatorRoute::content_builder(&self) -> flui::widgets::RouteContentBuilder
+fn flui_widgets::navigator::overlay_route::NavigatorRoute::is_modal(&self) -> bool { .. }
 pub struct flui_widgets::navigator::pop_scope::PopScopeState { .. }
 impl Drop for flui_widgets::navigator::pop_scope::PopScopeState
 impl core::fmt::Debug for flui_widgets::navigator::pop_scope::PopScopeState

@@ -621,18 +621,24 @@ impl PipelineOwner<PaintPhase> {
             }
             // A panic here poisons once rather than falling back to a repaint,
             // which would call the same `paint_effects` and panic again; the
-            // `?` returns before `consumed` reaches the caller, so the request
+            // return comes before `consumed` reaches the caller, so the request
             // stays queued for the retry.
+            let mut fresh = SmallVec::<[Layer; 3]>::new();
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: paint_effects runs contained; a panic poisons without a retry loop"
             )]
-            let fresh = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                own_effect_layers(node.paint_effects(), slots.origin)
-            }))
-            .map_err(|_| {
-                crate::error::RenderError::poisoned(node.debug_name(), PoisonPhase::LayerUpdate)
-            })?;
+            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                own_effect_layers(node.paint_effects(), slots.origin, &mut fresh);
+            }));
+            if let Err(payload) = built {
+                drop(fresh);
+                flui_foundation::panic::discard_payload(payload);
+                return Err(crate::error::RenderError::poisoned(
+                    node.debug_name(),
+                    PoisonPhase::LayerUpdate,
+                ));
+            }
             if fresh.len() != slots.indices.len() {
                 return Ok(None);
             }
@@ -809,33 +815,41 @@ impl PipelineOwner<PaintPhase> {
         };
         let debug_name = render_node.debug_name();
         // The node records after its ancestors' unreplayed operations in the
-        // pass's one buffer, and its children record after its own, so a
-        // node that paints only its child allocates nothing.
-        let mut recorder = FragmentRecorder::appending(
-            std::mem::take(&mut composer.work.fragment_ops),
+        // pass's one recorder, and its children record after its own, so a
+        // node that paints only its child allocates nothing. Its runs record
+        // into the recorder's one canvas, which keeps the paints the nodes
+        // before it interned.
+        let recorder = &mut composer.work.recorder.0;
+        recorder.begin(
             origin,
             self.device_pixel_ratio,
-        )
-        .with_paint_anchor(anchor.map(|frame| frame.at(origin)));
+            anchor.map(|frame| frame.at(origin)),
+        );
+        let own_effects = &mut composer.work.own_effects;
+        debug_assert!(
+            own_effects.is_empty(),
+            "BUG: the last node took its effects"
+        );
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: a render object's paint runs contained; a panic poisons the node"
         )]
         let painted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_node.paint_raw(&mut recorder, child_ids.len());
-            own_effect_layers(render_node.paint_effects(), origin)
+            render_node.paint_raw(recorder, child_ids.len());
+            own_effect_layers(render_node.paint_effects(), origin, own_effects);
         }));
-        let Ok(own_effects) = painted else {
-            composer.work.fragment_ops = recorder.abandon();
+        if let Err(payload) = painted {
+            composer.work.own_effects.clear();
+            composer.work.recorder.0.abandon();
+            flui_foundation::panic::discard_payload(payload);
             return Err(crate::error::RenderError::poisoned(
                 debug_name,
                 PoisonPhase::Paint,
             ));
-        };
+        }
+        let start = composer.work.recorder.0.end();
+        let end = composer.work.recorder.0.ops_mut().len();
         composer.note_painted();
-        let (ops, start) = recorder.finish_appended();
-        let end = ops.len();
-        composer.work.fragment_ops = ops;
 
         debug_assert!(
             !render_node.needs_paint(),
@@ -849,13 +863,18 @@ impl PipelineOwner<PaintPhase> {
         // `paint_effects()` implementors draw nothing themselves, so the
         // visible result is identical (an opacity wraps its child's whole
         // paint).
+        // Taken out while they are pushed, and put back empty: the next
+        // node collects into the same buffer. A node without effects moves
+        // no layer.
+        let mut own_effects = std::mem::take(&mut composer.work.own_effects);
         let effect_layers = own_effects.len();
-        for layer in own_effects {
+        for layer in own_effects.drain(..) {
             let layer_id = composer.push_layer(node_id, layer);
             // Record where this node's own effect layers landed, so a later
             // frame can rebuild just these and replay everything else.
             composer.record_effect_layer(node_id, layer_id, origin);
         }
+        composer.work.own_effects = own_effects;
 
         let mut painted_children = ChildPaintOrder::new();
         // The group opacity of each scope the fragment has open, so a child painted inside
@@ -864,7 +883,7 @@ impl PipelineOwner<PaintPhase> {
         for at in start..end {
             // Taken out one at a time: a child painted below appends after
             // `end` and leaves the buffer as long as it found it.
-            let Some(slot) = composer.work.fragment_ops.get_mut(at) else {
+            let Some(slot) = composer.work.recorder.0.ops_mut().get_mut(at) else {
                 debug_assert!(false, "BUG: a child shortened its parent's fragment");
                 break;
             };
@@ -969,7 +988,7 @@ impl PipelineOwner<PaintPhase> {
         // Every child returned to `end`; what is left is this node's
         // replayed operations. A pass that fails above leaves the rest for
         // the next pass's `clear`.
-        let ops = &mut composer.work.fragment_ops;
+        let ops = composer.work.recorder.0.ops_mut();
         ops.truncate(start);
         if start == 0 && ops.capacity() > KEPT_FRAGMENT_OPS {
             *ops = Vec::new();
@@ -1145,15 +1164,15 @@ impl PipelineOwner<PaintPhase> {
                     "paint: composited-layer update, content republished"
                 );
                 let rebuilt = patches.len() as u64;
-                let content = record
-                    .content
-                    .with_effects(patches.drain(..))
+                let content = composer
+                    .writer
+                    .with_effects(&record.content, patches.drain(..))
                     .expect("BUG: a layer patch names effects of the content it patches");
                 composer.counts.layers_produced += rebuilt;
                 composer.counts.layers_reused +=
                     (content.entries().len() as u64).saturating_sub(rebuilt);
                 let fresh = BoundaryRecord {
-                    content: Arc::new(content),
+                    content,
                     ..record.clone()
                 };
                 // The patched content keeps every slot of the one it replaces.
@@ -1452,7 +1471,7 @@ struct EffectSlots {
     origin: Offset,
 }
 
-/// The layers a node pushes for its OWN effects, in push order (outermost
+/// Adds to `layers` the layers a node pushes for its OWN effects, in push order (outermost
 /// first: opacity, clip, transform), built from the single
 /// [`PaintEffects`] value the paint walk reads off the node.
 ///
@@ -1468,25 +1487,23 @@ struct EffectSlots {
 /// clip, [`conjugate`] for the transform). The opacity layer is
 /// origin-independent (always `Offset::ZERO`), which is why an alpha-only
 /// update is correct no matter where the node sits.
-fn own_effect_layers(effects: PaintEffects, origin: Offset) -> SmallVec<[Layer; 3]> {
-    let mut layers = SmallVec::new();
+fn own_effect_layers(effects: PaintEffects, origin: Offset, layers: &mut impl Extend<Layer>) {
     if let Some(opacity) = effects.opacity {
-        layers.push(Layer::Opacity(OpacityLayer::with_offset(
+        layers.extend(Some(Layer::Opacity(OpacityLayer::with_offset(
             opacity.alpha(),
             Offset::ZERO,
-        )));
+        ))));
     }
     if let Some(clip) = effects.clip {
-        layers.push(clip_layer(clip, origin));
+        layers.extend(Some(clip_layer(clip, origin)));
     }
     if let Some(matrix) = effects.transform {
         // Same math and same reason as the per-child `PushTransform` fragment
         // op (RenderFlow and friends).
-        layers.push(Layer::Transform(TransformLayer::new(conjugate(
+        layers.extend(Some(Layer::Transform(TransformLayer::new(conjugate(
             matrix, origin,
-        ))));
+        )))));
     }
-    layers
 }
 
 /// The nearest paint anchor as the walk carries it down: where the current
@@ -1636,6 +1653,8 @@ impl PaintScratch {
         recycle_map(&mut composer.placed);
         recycle_vec(&mut composer.stale);
         recycle_vec(&mut composer.orphans);
+        recycle_vec(&mut composer.own_effects);
+        recycle_vec(composer.recorder.0.ops_mut());
     }
 
     /// Hands back the maps a staged patch held, for the next pass to stage
@@ -1718,9 +1737,27 @@ struct ComposerScratch {
     /// The orphan list the owner held before the last applied patch
     /// replaced it, emptied, for the next pass to collect into.
     orphans: Vec<SceneNodeId>,
-    /// The fragments of the nodes on the path being painted, each after
-    /// its parent's: one buffer for the pass instead of one per node.
-    fragment_ops: Vec<FragmentOp>,
+    /// The recorder every node of the pass records into, in turn: its
+    /// buffer holds the fragments of the nodes on the path being painted,
+    /// each after its parent's, and its canvas keeps the last shader-free
+    /// paints it interned, from node to node and pass to pass. A node whose
+    /// paint panics leaves it a fresh canvas.
+    recorder: PassRecorder,
+    /// The layers of the node being painted for its own effects, collected
+    /// inside its paint's containment and pushed before its children paint:
+    /// empty between nodes.
+    own_effects: Vec<Layer>,
+}
+
+/// The recorder a pass reuses from node to node, in place: moving it per node
+/// would copy its canvas each time.
+#[derive(Debug)]
+struct PassRecorder(FragmentRecorder);
+
+impl Default for PassRecorder {
+    fn default() -> Self {
+        Self(FragmentRecorder::new(Offset::ZERO, 1.0))
+    }
 }
 
 impl ComposerScratch {
@@ -1745,7 +1782,8 @@ impl ComposerScratch {
         self.records.clear();
         self.placed.clear();
         self.stale.clear();
-        self.fragment_ops.clear();
+        self.recorder.0.reset();
+        self.own_effects.clear();
     }
 }
 
@@ -2093,8 +2131,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
                 None => owner
                     .boundary_records
                     .get(&id)
-                    .map(|record| record.children.clone())
-                    .unwrap_or_default(),
+                    .map_or_default(|record| record.children.clone()),
             };
             self.staged.records.insert(id, None);
             for (child, node) in below {

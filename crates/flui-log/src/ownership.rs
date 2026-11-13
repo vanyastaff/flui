@@ -16,6 +16,7 @@ use crate::filter::FilterError;
 
 /// What a caller wants done about the process-global subscriber.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum SubscriberPolicy {
     /// Install nothing and read nothing; leave the host's observability alone.
     ///
@@ -67,6 +68,7 @@ impl SubscriberPolicy {
 /// setup must return before construction rather than build a value merely to
 /// drop it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum InstallPolicy {
     /// Install only when the process-global slot is empty.
     Auto,
@@ -82,6 +84,7 @@ pub enum InstallPolicy {
 /// host can own either one independently, so permission to install the former
 /// must not silently imply permission to claim the latter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum LogBridgePolicy {
     /// Install `LogTracer` when the logger slot is empty and preserve an
     /// existing logger when it is already occupied.
@@ -100,6 +103,10 @@ pub enum LogBridgePolicy {
 /// Returned rather than discarded so the outcome is observable — a caller can
 /// log it, assert on it in a test, or surface it in a diagnostic screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "FLUI installed the subscriber or left the slot as it was"
+)]
 pub enum SubscriberOwnership {
     /// FLUI installed the subscriber; FLUI owns it.
     Installed,
