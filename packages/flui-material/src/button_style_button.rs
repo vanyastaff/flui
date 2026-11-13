@@ -81,6 +81,8 @@
 //! which fires independently of this type's rebuild — see `ink_well.rs`)
 //! keep resolving it fresh.
 
+use std::rc::Rc;
+
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::painting::Color;
 use flui_sdk::painting::TextStyle;
@@ -140,9 +142,9 @@ macro_rules! resolve_field {
 #[derive(Clone, StatefulView)]
 pub(crate) struct ButtonStyleButtonCore {
     on_pressed: Option<PressCallback>,
-    style: Option<ButtonStyle>,
-    theme_style: Option<ButtonStyle>,
-    default_style: ButtonStyle,
+    style: Option<Rc<ButtonStyle>>,
+    theme_style: Option<Rc<ButtonStyle>>,
+    default_style: Rc<ButtonStyle>,
     identifier: Option<std::sync::Arc<str>>,
     selected: Option<bool>,
     child: BoxedView,
@@ -158,7 +160,7 @@ impl ButtonStyleButtonCore {
             on_pressed: None,
             style: None,
             theme_style: None,
-            default_style,
+            default_style: Rc::new(default_style),
             identifier: None,
             selected: None,
             child,
@@ -177,8 +179,8 @@ impl ButtonStyleButtonCore {
     /// Sets the widget-level style override — the highest-precedence tier
     /// in the resolve cascade.
     #[must_use]
-    pub(crate) fn style(mut self, style: ButtonStyle) -> Self {
-        self.style = Some(style);
+    pub(crate) fn style(mut self, style: Option<Rc<ButtonStyle>>) -> Self {
+        self.style = style;
         self
     }
 
@@ -190,7 +192,7 @@ impl ButtonStyleButtonCore {
     /// `style` to `default_style`, exactly as it did before this tier
     /// existed.
     #[must_use]
-    pub(crate) fn theme_style(mut self, style: ButtonStyle) -> Self {
+    pub(crate) fn theme_style(mut self, style: Rc<ButtonStyle>) -> Self {
         self.theme_style = Some(style);
         self
     }
@@ -295,11 +297,11 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
 
     fn build(&self, view: &ButtonStyleButtonCore, _ctx: &dyn BuildContext) -> impl IntoView {
         let states = self.states.value();
-        let widget_style = view.style.as_ref();
-        let default_style = Some(&view.default_style);
+        let widget_style = view.style.as_deref();
+        let default_style = Some(&*view.default_style);
         // Set by the caller via `theme_style` when its `ThemeData`
         // component-theme slot is configured — see the module docs.
-        let theme_style = view.theme_style.as_ref();
+        let theme_style = view.theme_style.as_deref();
 
         let background_color = resolve_field!(
             &states,
@@ -365,11 +367,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
 
         let constraints = effective_constraints(minimum_size, maximum_size, fixed_size);
 
-        let overlay_color = overlay_color_property(
-            view.style.clone(),
-            view.theme_style.clone(),
-            view.default_style.clone(),
-        );
+        let overlay_color = overlay_color_property(widget_style, theme_style, &view.default_style);
 
         // Flutter's `Semantics(container: true, button: true, enabled: …)`
         // around the button is the well's own node here: one element and one
@@ -456,24 +454,30 @@ fn effective_constraints(
 
 /// Builds the live [`WidgetStateProperty`] handed to the inner `InkWell` —
 /// see the module docs on why `overlay_color` is not baked to a single
-/// value like every other property. Closes over all three cascade tiers
-/// (widget/theme/default), same as [`ButtonStyleButtonCoreState::build`]'s
-/// own per-property resolution, so a theme-configured `overlay_color`
-/// reaches the live property too.
+/// value like every other property. It resolves through all three cascade
+/// tiers (widget/theme/default), as [`ButtonStyleButtonCoreState::build`]'s
+/// own per-property resolution does, so a theme-configured `overlay_color`
+/// reaches the live property too. It holds only the tiers' overlay
+/// properties, and a single tier's is handed on as it is.
 fn overlay_color_property(
-    widget_style: Option<ButtonStyle>,
-    theme_style: Option<ButtonStyle>,
-    default_style: ButtonStyle,
+    widget_style: Option<&ButtonStyle>,
+    theme_style: Option<&ButtonStyle>,
+    default_style: &ButtonStyle,
 ) -> WidgetStateProperty<Option<Color>> {
-    WidgetStateProperty::resolve_with(move |states: &WidgetStates| {
-        resolve_field!(
-            states,
-            widget_style.as_ref(),
-            theme_style.as_ref(),
-            Some(&default_style),
-            overlay_color
-        )
-    })
+    let overlay = |style: Option<&ButtonStyle>| style.and_then(|style| style.overlay_color.clone());
+    match (
+        overlay(widget_style),
+        overlay(theme_style),
+        default_style.overlay_color.clone(),
+    ) {
+        (Some(only), None, None) | (None, Some(only), None) | (None, None, Some(only)) => only,
+        (None, None, None) => WidgetStateProperty::all(None),
+        (widget, theme, default) => {
+            WidgetStateProperty::resolve_with(move |states: &WidgetStates| {
+                resolve_property(states, widget.as_ref(), theme.as_ref(), default.as_ref())
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -492,6 +496,37 @@ mod tests {
         let default = all_property(3_u32);
         let resolved = resolve_property(&WidgetStates::NONE, Some(&widget), None, Some(&default));
         assert_eq!(resolved, Some(1));
+    }
+
+    /// The live overlay resolves tier by tier for each state, whether one
+    /// tier or several set it.
+    #[test]
+    fn the_overlay_property_resolves_through_the_tiers_that_set_it() {
+        let hovered = WidgetStates::NONE.with_state(WidgetState::Hovered);
+        let red = Color::rgb(255, 0, 0);
+        let blue = Color::rgb(0, 0, 255);
+        let only_hovered = WidgetStateProperty::resolve_with(move |states: &WidgetStates| {
+            states.contains_state(WidgetState::Hovered).then_some(red)
+        });
+        let default = ButtonStyle {
+            overlay_color: Some(all_property(blue)),
+            ..ButtonStyle::default()
+        };
+        let widget = ButtonStyle {
+            overlay_color: Some(only_hovered),
+            ..ButtonStyle::default()
+        };
+
+        let alone = overlay_color_property(None, None, &default);
+        assert_eq!(alone.resolve(&WidgetStates::NONE), Some(blue));
+
+        let layered = overlay_color_property(Some(&widget), None, &default);
+        assert_eq!(layered.resolve(&hovered), Some(red));
+        assert_eq!(layered.resolve(&WidgetStates::NONE), Some(blue));
+
+        let themed = overlay_color_property(None, Some(&widget), &ButtonStyle::default());
+        assert_eq!(themed.resolve(&hovered), Some(red));
+        assert_eq!(themed.resolve(&WidgetStates::NONE), None);
     }
 
     // ------------------------------------------------------------------
