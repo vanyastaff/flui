@@ -1349,9 +1349,9 @@ impl From<PathRepr> for Path {
             }
         }
         // A hint may select a different renderer, so only retain it when its constructor,
-        // moved as the serialized path was, reproduces the submitted elements up to the
-        // rounding of a move: a path read before it was moved, or moved twice, carries curves
-        // moved in other steps than the replayed hint's, a few ulps apart.
+        // moved by the offset the serialized path still had pending, reproduces the
+        // submitted elements exactly. A path whose move was already applied to built curves
+        // carries them rounded in other steps, and its hint is dropped: the geometry is kept.
         let hinted = match repr.hint {
             ShapeHint::None => None,
             ShapeHint::Rect(rect) => Some(Self::rectangle(rect)),
@@ -1360,70 +1360,11 @@ impl From<PathRepr> for Path {
         };
         let hinted = hinted.map(|hinted| hinted.translate(repr.offset));
         if let Some(hinted) = hinted
-            && same_up_to_rounding(path.geometry(), hinted.geometry())
+            && path.geometry() == hinted.geometry()
         {
             path.hint = hinted.shape();
         }
         path
-    }
-}
-
-/// Whether `a` and `b` trace the same elements with every coordinate within the rounding
-/// two orders of moving the same curves leave. That rounding scales with the coordinates
-/// the curves had before the moves, which a path moved back towards the origin no longer
-/// shows, so the allowance has an absolute floor: a millionth of a pixel covers rounding
-/// at every coordinate a deferred shape may hold (up to 1e9, a few ulps of 1.2e-7) and is
-/// far below what the GPU's `f32` coordinates resolve, so a kept hint draws what the
-/// elements draw. A line to where the pen already is, within that allowance, is skipped on
-/// both sides: the arc builder adds such a join only when the pen and the arc's start
-/// differ in their last bits.
-#[cfg(feature = "serde")]
-fn same_up_to_rounding(a: &kurbo::BezPath, b: &kurbo::BezPath) -> bool {
-    use kurbo::PathEl;
-    /// The absolute floor, in logical pixels.
-    const FLOOR: f64 = 1e-6;
-    /// Relative to a coordinate's magnitude, for coordinates beyond the deferred range.
-    const RELATIVE: f64 = 1e-12;
-    fn near(p: kurbo::Point, q: kurbo::Point) -> bool {
-        let close = |x: f64, y: f64| (x - y).abs() <= FLOOR.max(RELATIVE * x.abs().max(y.abs()));
-        close(p.x, q.x) && close(p.y, q.y)
-    }
-    /// The elements with degenerate joins left out.
-    fn traced(path: &kurbo::BezPath) -> impl Iterator<Item = PathEl> + '_ {
-        let mut pen = kurbo::Point::ZERO;
-        let mut start = kurbo::Point::ZERO;
-        path.elements().iter().filter_map(move |element| {
-            let element = *element;
-            match element {
-                PathEl::MoveTo(p) => {
-                    pen = p;
-                    start = p;
-                }
-                PathEl::LineTo(p) if near(p, pen) => return None,
-                PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => pen = p,
-                PathEl::ClosePath => pen = start,
-            }
-            Some(element)
-        })
-    }
-    let (mut a, mut b) = (traced(a), traced(b));
-    loop {
-        let same = match (a.next(), b.next()) {
-            (None, None) => return true,
-            (Some(PathEl::MoveTo(p)), Some(PathEl::MoveTo(q)))
-            | (Some(PathEl::LineTo(p)), Some(PathEl::LineTo(q))) => near(p, q),
-            (Some(PathEl::QuadTo(p1, p2)), Some(PathEl::QuadTo(q1, q2))) => {
-                near(p1, q1) && near(p2, q2)
-            }
-            (Some(PathEl::CurveTo(p1, p2, p3)), Some(PathEl::CurveTo(q1, q2, q3))) => {
-                near(p1, q1) && near(p2, q2) && near(p3, q3)
-            }
-            (Some(PathEl::ClosePath), Some(PathEl::ClosePath)) => true,
-            _ => false,
-        };
-        if !same {
-            return false;
-        }
     }
 }
 

@@ -1101,22 +1101,21 @@ rules through map and sequence deserializers, including NaN and infinity, and
 through a transform nested in `ImageFilter`. Affine and reflected transforms round
 trip without changing their coefficients.
 
-`Path` deserialization replays commands through its builders; submitted geometry remains
-authoritative. The wire carries the constructor's hint and the offset the shape was moved
-by before its curves were built. A hint is retained only when its canonical constructor,
-moved by that offset, traces the submitted commands to within a move's rounding:
-coordinates within max(1e-6 px, 1e-12 of their magnitude), and a line to where the pen
-already is skipped on both sides. That admits a shape read before it was moved, moved
-twice, or made far out and moved back, whose curves differ from the replayed hint's in
-their last bits, and nothing a renderer could tell apart: 1e-6 px is far below what the
-GPU's `f32` coordinates resolve. The engine uses rounded-rectangle hints to choose an
-analytic fill and shadow, so an unrelated hint must not replace a polygon's silhouette:
-`deserialized_paths_keep_geometry_authoritative` checks a triangle carrying another
-shape's hint, and `serialized_factory_paths_preserve_their_shapes` checks hints, equality
-and commands of factory shapes and of moved rounded rectangles through a lossless value
-round trip, and geometry and containment after a JSON string round trip (both rows of
-`value_contract`, enabled with `serde`). A format that moves coordinates by more than the
-allowance discards the hint; the submitted geometry is kept.
+`Path` deserialization replays commands through its builders. The wire carries the
+constructor's hint and the offset the shape was moved by before its curves were built. A
+shape hint is retained only when the corresponding canonical constructor, moved by that
+offset, reproduces those commands exactly; submitted geometry remains authoritative. The
+engine uses rounded-rectangle hints to choose an analytic fill and shadow, so an unrelated
+hint must not replace a polygon's silhouette. `deserialized_paths_keep_geometry_authoritative`
+checks a triangle carrying another shape's hint, and
+`serialized_factory_paths_preserve_their_shapes` checks exact commands and hints of factory
+shapes and of a rounded rectangle moved before it was read through a lossless value round
+trip, and geometry and containment after a JSON string round trip (both rows of
+`value_contract`, enabled with `serde`). A path whose move was applied to built curves, or
+a format that changes floating-point coordinates, may discard the hint even when the
+geometric difference is tiny: no tolerance keeps a hint safe under any later transform, so
+retaining the submitted geometry takes priority over keeping an analytic rendering
+shortcut; no approximate hint admission is used.
 
 ---
 
