@@ -824,3 +824,36 @@ fn a_rebuild_that_takes_the_size_drops_the_old_devices_refusal() {
         "the second device took the size"
     );
 }
+
+/// A device that comes back from a rebuild that panicked with it in place
+/// has answered no slot anew: a size refusal the owner has not taken stays
+/// held for it, since nothing answers that size again.
+#[test]
+fn a_rebuild_that_panics_in_place_keeps_a_refusal_it_does_not_answer() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    rig.backend.lose_device();
+    rig.backend.refuse_on_rebuild(
+        slot,
+        EngineError::InvalidTargetSize {
+            width: 32,
+            height: 16,
+        },
+    );
+    let _ = rig.executor.turn();
+    rig.backend.lose_device();
+    rig.backend.script_rebuild(ScriptedAnswer::Panic);
+    let mut caught = flui_foundation::panic::FirstPanic::new();
+    let turn = caught.contain(|| rig.executor.turn());
+    assert!(
+        turn.is_none() && caught.into_payload().is_some(),
+        "the rebuild's panic is resumed"
+    );
+    assert!(
+        matches!(
+            rig.sender.take_failure(slot),
+            Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
+        ),
+        "the refusal waits for the owner"
+    );
+}
