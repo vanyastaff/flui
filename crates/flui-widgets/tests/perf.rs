@@ -46,7 +46,7 @@ use flui_testing::{FrameReport, HeadlessHost, HeadlessWindow};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, Column, Expanded, RawButton, RepaintBoundary, SingleChildScrollView, SizedBox,
-    SliverList, Text, Viewport, app_root,
+    SliverList, Text, Viewport,
 };
 
 #[global_allocator]
@@ -184,7 +184,7 @@ fn mount() -> Mounted {
     let label = SharedSignal::new(String::from("label"));
     let (position, writer) = ScrollPosition::with_writer(0.0);
     let app = PerfApp { label, position };
-    let mut laid = lay_out(app_root(app), tight(WIDTH, HEIGHT));
+    let mut laid = lay_out(app, tight(WIDTH, HEIGHT));
     laid.enable_semantics();
     Mounted { laid, writer }
 }
@@ -319,7 +319,7 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
     );
     let app = Align::new(flui_painting::Alignment::TOP_LEFT)
         .child(RepaintBoundary::new().child(SlideTransition::new(position).child(panel)));
-    let mut laid = lay_out(app_root(app), tight(WIDTH, HEIGHT));
+    let mut laid = lay_out(app, tight(WIDTH, HEIGHT));
     laid.enable_semantics();
     controller.set_value(0.25).expect("no build is running");
     laid.pump_for(FRAME);
@@ -542,10 +542,10 @@ impl StatelessView for CaretOverRows {
 fn caret_blinks(rows: usize) -> (FrameReport, HeapCounts) {
     let shown = SharedSignal::new(true);
     let mut laid = lay_out(
-        app_root(CaretOverRows {
+        CaretOverRows {
             shown: shown.clone(),
             rows,
-        }),
+        },
         tight(WIDTH, HEIGHT),
     );
     for _ in 0..2 {
