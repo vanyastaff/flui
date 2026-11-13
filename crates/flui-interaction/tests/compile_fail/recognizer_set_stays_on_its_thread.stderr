@@ -18,16 +18,15 @@ note: required because it appears within the type `RecognizerSet`
   |
   | pub struct RecognizerSet {
   |            ^^^^^^^^^^^^^
-note: required because it's used within this closure
- --> tests/compile_fail/recognizer_set_stays_on_its_thread.rs:5:24
+note: required because `recognizers` is used within this closure
+ --> tests/compile_fail/recognizer_set_stays_on_its_thread.rs:5:37
   |
 5 |     std::thread::spawn(move || drop(recognizers));
-  |                        ^^^^^^^
+  |                                     ^^^^^^^^^^^
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
   |
   | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
-  |        ----- required by a bound in this function
 ...
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
@@ -57,16 +56,15 @@ note: required because it appears within the type `RecognizerSet`
   |
   | pub struct RecognizerSet {
   |            ^^^^^^^^^^^^^
-note: required because it's used within this closure
- --> tests/compile_fail/recognizer_set_stays_on_its_thread.rs:5:24
+note: required because `recognizers` is used within this closure
+ --> tests/compile_fail/recognizer_set_stays_on_its_thread.rs:5:37
   |
 5 |     std::thread::spawn(move || drop(recognizers));
-  |                        ^^^^^^^
+  |                                     ^^^^^^^^^^^
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
   |
   | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
-  |        ----- required by a bound in this function
 ...
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`

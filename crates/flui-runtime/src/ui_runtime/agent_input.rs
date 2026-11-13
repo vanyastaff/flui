@@ -961,8 +961,7 @@ impl AgentInput {
         let batch = self
             .leases
             .remove(&lease)
-            .map(|held| held.let_go(time).0)
-            .unwrap_or_default();
+            .map_or_default(|held| held.let_go(time).0);
         (batch, dropped.into_iter().map(Abandoned::from).collect())
     }
 }
@@ -1181,8 +1180,7 @@ impl UiRuntime {
                 .dev_agent
                 .borrow()
                 .as_ref()
-                .map(|slot| slot.take_released(count))
-                .unwrap_or_default();
+                .map_or_default(|slot| slot.take_released(count));
             first.contain(|| self.release_agent_leases(state, leases));
         }
         first

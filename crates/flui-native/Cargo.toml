@@ -386,8 +386,9 @@ console_error_panic_hook = "0.1"
 # D-Bus on Linux: the Settings portal (`preferences::linux`), logind
 # (`lifecycle::linux`) and AT-SPI, the accessibility bridge
 # (`accessibility::linux`, through `accesskit_unix`). Every Linux host reads
-# them, so they are unconditional Linux dependencies and every Linux window is
-# accessible with no feature of its own (ADR-0151 §15).
+# them, so both host features (`wayland`, `x11`) enable them and every Linux
+# window is accessible with no feature of its own (ADR-0151 §15); a build with
+# neither host has no session to read and names neither.
 [target.'cfg(target_os = "linux")'.dependencies]
 # The X server's client, behind the `x11` feature: the native X11 host's
 # connection on libxcb (`allow-unsafe-code` and `dl-libxcb`, so a surface can be
@@ -424,9 +425,9 @@ rustix = { workspace = true, optional = true, features = ["time", "fs", "pipe"] 
 # The cursor theme the Wayland host draws a cursor from where the compositor
 # has no `cursor-shape`.
 wayland-cursor = { version = "0.31", optional = true }
-accesskit_unix = { version = "0.24" }
-zbus = { workspace = true }
-futures-util = { workspace = true }
+accesskit_unix = { version = "0.24", optional = true }
+zbus = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 # `net`: the readiness of the XIM client's X connection (`AsyncFd`).
 tokio = { workspace = true, features = ["macros", "net"] }
 
@@ -597,9 +598,20 @@ wayland = [
     "dep:rustix",
     "dep:xkbcommon-dl",
     "dep:wayland-cursor",
+    "dep:accesskit_unix",
+    "dep:zbus",
+    "dep:futures-util",
 ]
 
-x11 = ["dep:x11rb", "dep:rustix", "dep:xkbcommon-dl", "dep:xim-ctext"]
+x11 = [
+    "dep:x11rb",
+    "dep:rustix",
+    "dep:xkbcommon-dl",
+    "dep:xim-ctext",
+    "dep:accesskit_unix",
+    "dep:zbus",
+    "dep:futures-util",
+]
 
 # The built-in HTTP client of the native hosts without a system stack (Linux
 # and the BSDs): ureq over rustls with the platform's verifier, each request

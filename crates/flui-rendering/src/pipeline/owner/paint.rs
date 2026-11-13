@@ -2131,8 +2131,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
                 None => owner
                     .boundary_records
                     .get(&id)
-                    .map(|record| record.children.clone())
-                    .unwrap_or_default(),
+                    .map_or_default(|record| record.children.clone()),
             };
             self.staged.records.insert(id, None);
             for (child, node) in below {

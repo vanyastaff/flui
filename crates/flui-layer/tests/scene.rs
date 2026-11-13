@@ -635,7 +635,7 @@ pub(crate) fn a_republished_parent_costs_its_change_not_its_slots() {
         let unchanged = copies_of(&mut owner, vec![publish(root, slots(&leaves))]);
         let mut writer = owner.writer();
         let added = writer.mint_node();
-        let mut named = leaves.clone();
+        let mut named = leaves;
         named.push(added);
         writer.push(publish(added, empty()));
         writer.push(publish(root, slots(&named)));
