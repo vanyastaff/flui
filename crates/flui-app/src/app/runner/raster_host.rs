@@ -293,6 +293,10 @@ struct HostSlot {
     textures: Option<flui_layer::TextureRegistry>,
     display: Option<DisplayColor>,
     visibility: SlotVisibility,
+    /// The size the window's frames last asked for: a surface owed at a
+    /// size the device refused waits for the window's next size, not its
+    /// pace.
+    wanted: Option<DeviceSize>,
     /// Whether the slot's next frame is the retry of a frame whose resize
     /// or upload panicked: a stale surface it meets again is not retried.
     retrying_panic: bool,
@@ -314,12 +318,20 @@ impl HostSlot {
     }
 
     /// Whether the window's pace, rather than its next frame, brings its
-    /// next surface attempt: it is owed one and its size is not one the
-    /// device refused. A window at a refused size waits for its next
-    /// change, whose frame asks for a surface again; a timer would meet the
-    /// same refusal on every attempt.
+    /// next surface attempt: it is owed one, it is shown, and the size its
+    /// frames last asked for is not one the device refused.
+    ///
+    /// A window at a refused size waits for its next change, whose frame
+    /// asks for a surface again; a timer would meet the same refusal on
+    /// every attempt. A hidden window runs no frame whose wake would make
+    /// the attempt, so a deadline for it would be reported and never
+    /// served; it is asked for when the window is shown again.
     fn surface_on_pace(&self, surface: &flui_engine::SlotSurface) -> bool {
-        self.needs_surface(surface.hold) && !matches!(surface.size, SlotSize::Refused(_))
+        let at_refused_size =
+            matches!(surface.size, SlotSize::Refused(refused) if Some(refused) == self.wanted);
+        self.needs_surface(surface.hold)
+            && self.visibility == SlotVisibility::Shown
+            && !at_refused_size
     }
 }
 
@@ -488,6 +500,7 @@ impl RasterHost {
                 textures,
                 display,
                 visibility: SlotVisibility::Shown,
+                wanted: None,
                 retrying_panic: false,
                 available: true,
                 restore: RestorePace::default(),
@@ -651,6 +664,26 @@ impl RasterHost {
         }
     }
 
+    /// Send `command` for `address`'s window; one the full lifecycle queue
+    /// refused is sent again once a turn has made room, since a change the
+    /// owner made (a release before the native window goes, a visibility, a
+    /// device retry) is not asked for again. A panic of that turn is held in
+    /// `caught`.
+    fn send_with_room(
+        placed: &mut Placed,
+        address: PresentationAddress,
+        command: RasterCommand,
+        caught: &mut FirstPanic,
+    ) -> Result<SendReceipt, RasterSendError> {
+        match placed.sender.send(command) {
+            Err(RasterSendError::Full(command)) => {
+                let _turned = caught.contain(|| Self::turn_for(placed, address));
+                placed.sender.send(*command)
+            }
+            sent => sent,
+        }
+    }
+
     /// Turn the executor on `address`'s behalf and settle what the turn left
     /// for its slot: a refusal is logged, and a panic of the slot's commands
     /// or of the turn itself is held for the window's report after its
@@ -773,12 +806,16 @@ impl RasterHost {
         }
         // Recorded whether or not it is taken, as a colour change is.
         slot.visibility = visibility;
-        if let Err(error) = placed.sender.send(RasterCommand::Configure {
+        let command = RasterCommand::Configure {
             slot: slot.slot,
             change: SlotChange::Shown(visibility),
-        }) {
+        };
+        let mut caught = FirstPanic::new();
+        if let Err(error) = Self::send_with_room(placed, address, command, &mut caught) {
             tracing::warn!(%error, "raster host: a visibility change was refused");
         }
+        // Reached from a frame driver, which may run during an unwind.
+        resume_unless_unwinding(caught);
     }
 
     /// Bring `address`'s slot to `size`, and a surface if the executor
@@ -801,6 +838,12 @@ impl RasterHost {
             return None;
         };
         let size = DeviceSize::new(width, height);
+        placed
+            .slots
+            .get_mut(&address)
+            .expect("BUG: the slot was found above")
+            .wanted = Some(size);
+        let slot = placed.slots.get(&address)?;
         // Nothing is drawn at a size the device refused, and asking again
         // is refused the same way: the window waits for another size, or
         // for a rebuilt device, which the record shows pending again.
@@ -925,7 +968,7 @@ impl RasterHost {
             // restore configured on the given-up device would be refused, and
             // the rebuild sets up again only the surfaces already held.
             if matches!(placed.sender.device_health(), DeviceHealth::GivenUp { .. }) {
-                match placed.sender.send(RasterCommand::RetryDevice) {
+                match Self::send_with_room(placed, address, RasterCommand::RetryDevice, caught) {
                     Ok(_) => {
                         let _turned = caught.contain(|| Self::turn_for(placed, address));
                     }
@@ -937,15 +980,10 @@ impl RasterHost {
             Self::restore_surface(placed, address, Instant::now())
         } else {
             // The native window behind the surface goes when the platform's
-            // callback returns: a release the full queue refused is sent
-            // again once a turn has made room. An executor that stopped
-            // draws nothing more, and a slot it no longer holds has no
-            // surface to release.
-            let mut sent = placed.sender.send(RasterCommand::Release { slot: id });
-            if matches!(sent, Err(RasterSendError::Full(_))) {
-                let _turned = caught.contain(|| Self::turn_for(placed, address));
-                sent = placed.sender.send(RasterCommand::Release { slot: id });
-            }
+            // callback returns. An executor that stopped draws nothing more,
+            // and a slot it no longer holds has no surface to release.
+            let sent =
+                Self::send_with_room(placed, address, RasterCommand::Release { slot: id }, caught);
             if let Err(error) = sent {
                 tracing::warn!(%error, "raster host: a window's surface release was refused");
             }
@@ -1007,7 +1045,7 @@ impl RasterHost {
     /// wake it schedules, and the attempt moves it on, so a window the
     /// backend keeps refusing does not hand the loop the same past instant
     /// again. Answers whether the window holds a surface again.
-    pub(crate) fn restore_due(&mut self, address: PresentationAddress, now: Instant) -> bool {
+    fn restore_due(&mut self, address: PresentationAddress, now: Instant) -> bool {
         let Some(placed) = self.placed.as_mut() else {
             return false;
         };
@@ -1027,6 +1065,28 @@ impl RasterHost {
             .sender
             .record(id)
             .is_some_and(|record| record.surface.hold == SurfaceHold::Held)
+    }
+
+    /// What `address`'s window does before its frame at `now`, with no
+    /// frame of its own: a rebuild of a given-up device the application
+    /// asked for (`retry`), a surface it is owed whose pace is due, the
+    /// colour of the display it is on, and a turn of the executor, which
+    /// rebuilds a lost device that is due. Answers whether the window's
+    /// surface came back or its display changed, which repaints it in full.
+    fn before_frame(
+        &mut self,
+        address: PresentationAddress,
+        now: Instant,
+        display: Option<DisplayColor>,
+        retry: bool,
+    ) -> bool {
+        if retry {
+            self.retry_device();
+        }
+        let restored = self.restore_due(address, now);
+        let changed = self.follow_display(address, display);
+        self.service(address);
+        changed | restored
     }
 
     /// The earliest moment a window owed a surface may try for one again.
@@ -1412,15 +1472,7 @@ impl RasterSlot {
         // device stays given up and the runtime's request stands.
         let display_changed = self
             .host
-            .try_with(|host| {
-                if retry {
-                    host.retry_device();
-                }
-                let restored = host.restore_due(address, now);
-                let changed = host.follow_display(address, display);
-                host.service(address);
-                changed | restored
-            })
+            .try_with(|host| host.before_frame(address, now, display, retry))
             .unwrap_or(false);
         if display_changed | self.settle_device(ui_runtime) {
             ui_runtime.mark_primary_needs_full_repaint();

@@ -516,8 +516,8 @@ fn a_window_given_back_rebuilds_its_device_before_its_surface() {
 /// the deadline on, so a refusing backend never hands the loop a deadline
 /// already past.
 ///
-/// Red-check: let `restore_due` answer without an attempt (the wake path
-/// before this change) and the deadline stays in the past.
+/// Red-check: drop `restore_due` from `RasterHost::before_frame`, the step
+/// `RasterSlot::pump` runs before each frame, and the deadline stays past.
 #[test]
 fn a_due_surface_is_made_by_its_wake_without_a_frame() {
     let (mut host, slots) = host();
@@ -531,14 +531,14 @@ fn a_due_surface_is_made_by_its_wake_without_a_frame() {
 
     // The wake at the deadline: refused again, the deadline moves on.
     let wake = first + std::time::Duration::from_millis(1);
-    assert!(!host.restore_due(address(), wake));
+    assert!(!host.before_frame(address(), wake, None, false));
     assert_eq!(restores(&slots), 2);
     let second = host.surface_retry_at().expect("a later deadline");
     assert!(second > wake, "the deadline is never left in the past");
 
     // The next wake: the backend makes it.
     let wake = second + std::time::Duration::from_millis(1);
-    assert!(host.restore_due(address(), wake));
+    assert!(host.before_frame(address(), wake, None, false));
     assert_eq!(restores(&slots), 3);
     assert_eq!(hold(&host), SurfaceHold::Held);
     assert_eq!(host.surface_retry_at(), None);
@@ -603,4 +603,65 @@ impl CountingNoSurface {
     fn asked(&self) -> usize {
         self.0.load(std::sync::atomic::Ordering::Relaxed)
     }
+}
+
+/// A window at the size the device refused waits for its next size, not a
+/// timer; one whose frames have since asked for another size is owed a
+/// surface on its pace again, and a hidden window on none until it is
+/// shown, since no frame of its would serve the deadline.
+///
+/// Red-check: let `surface_on_pace` exclude any refused size (not only
+/// the one the window wants) and the window at its new size gets no
+/// deadline; drop its visibility check and the hidden window reports one.
+#[test]
+fn a_surface_is_paced_only_for_a_shown_window_at_a_size_the_device_takes() {
+    let (mut host, slots) = host();
+    let mut scene = TestScene::new(AT);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    // A size past the device's limit.
+    let over = (800_u32, 600_u32);
+    slots.script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+        width: over.0,
+        height: over.1,
+    }));
+    scene.republish_child(AT, 11);
+    let _ = host.submit(address(), over, scene.publication());
+    let _ = host.set_surface(address(), false);
+    slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+    assert!(!host.set_surface(address(), true));
+    assert_eq!(hold(&host), SurfaceHold::Refused);
+    assert_eq!(
+        host.surface_retry_at(),
+        None,
+        "the window's own size is refused: it waits for another"
+    );
+
+    // The window's frames ask for a size the device takes.
+    scene.republish_child(AT, 12);
+    let _ = host.submit(address(), SIZE, scene.publication());
+    assert!(
+        host.surface_retry_at().is_some(),
+        "a surface at the new size is owed on the window's pace"
+    );
+
+    host.set_visibility(address(), flui_engine::SlotVisibility::Hidden);
+    assert_eq!(host.surface_retry_at(), None, "no frame would serve it");
+    host.set_visibility(address(), flui_engine::SlotVisibility::Shown);
+    assert!(host.surface_retry_at().is_some());
+}
+
+/// A release refused by a full lifecycle queue is sent again once a turn
+/// has made room: the native window behind the surface goes when the
+/// platform's callback returns.
+///
+/// Red-check: send the release once and the slot keeps its surface.
+#[test]
+fn a_release_the_full_queue_refused_is_sent_again() {
+    let (mut host, _slots) = host();
+    let mut scene = TestScene::new(AT);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    let sender = &host.placed.as_ref().expect("placed").sender;
+    while sender.send(flui_engine::RasterCommand::RetryDevice).is_ok() {}
+    assert!(!host.set_surface(address(), false));
+    assert_eq!(hold(&host), SurfaceHold::Released);
 }
