@@ -445,6 +445,26 @@ fn a_held_key_repeats_when_pressed_again_and_modifies_chords_meanwhile() {
 }
 
 #[test]
+fn a_chord_naming_a_held_key_leaves_it_held() {
+    let (mut t, log) = key_log();
+    t.key_down("Shift");
+    t.press_keys(&["Shift+Tab", "Tab"]);
+    t.key_up("Shift");
+    assert_eq!(
+        *log.borrow(),
+        [
+            "down Shift^",
+            "down Tab^",
+            "up Tab^",
+            "down Tab^",
+            "up Tab^",
+            "up Shift",
+        ],
+        "the chord neither repeats nor releases the held Shift, so it modifies both Tabs"
+    );
+}
+
+#[test]
 fn a_chord_with_an_unnamed_key_presses_nothing() {
     let (mut t, log) = key_log();
     let error = t
@@ -771,6 +791,25 @@ fn a_restart_writes_what_the_run_accepted_before_it_stops() {
     let mut t = t.restart();
     let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
     assert_eq!(*loaded, Note("unsaved".to_owned()));
+}
+
+/// A value set twice before the restart is written as its latest: the first
+/// write finishes as the run stops and the second, queued behind it, runs too.
+#[test]
+fn a_restart_writes_the_latest_of_two_values_set_before_it() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    note(&opened)
+        .set(Note("first".to_owned()))
+        .expect("a loaded note takes a value");
+    note(&opened)
+        .set(Note("second".to_owned()))
+        .expect("a loaded note takes a value");
+
+    let mut t = t.restart();
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("second".to_owned()));
 }
 
 /// At a session's end the window detaches before the documents are written,

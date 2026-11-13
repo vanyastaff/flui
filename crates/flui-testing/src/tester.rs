@@ -268,6 +268,9 @@ pub struct Tester {
     _agent: HeadlessDevAgent,
     /// The window this run mounted in, its storage the one the run keeps.
     config: TestWindow,
+    /// The keys [`Tester::key_down`] holds, which a chord neither presses
+    /// nor releases.
+    held_keys: Vec<String>,
     /// Mounts the same view again in a window: what [`Tester::restart`] runs.
     relaunch: Rc<dyn Fn(TestWindow) -> Tester>,
 }
@@ -348,6 +351,7 @@ impl Tester {
             lease,
             _agent: agent,
             config,
+            held_keys: Vec::new(),
             relaunch: Rc::new(move |window| Self::mount_in(view.clone(), window)),
         };
         // The window collects semantics from the frame after its agent took
@@ -727,7 +731,7 @@ impl Tester {
     /// `"Control+a"`, `"Shift+Tab"`, `"Shift++"`. A chord presses its keys left
     /// to right and releases them right to left. A key held with
     /// [`Self::key_down`] stays held, so it modifies every chord pressed
-    /// meanwhile.
+    /// meanwhile; a chord that names it neither presses nor releases it.
     ///
     /// # Errors
     ///
@@ -736,7 +740,8 @@ impl Tester {
     pub fn try_press_keys(&mut self, chords: &[&str]) -> Result<(), TestError> {
         let mut actions = Vec::new();
         for chord in chords {
-            let keys = chord_keys(chord);
+            let mut keys = chord_keys(chord);
+            keys.retain(|key| !self.held_keys.iter().any(|held| held == key));
             actions.extend(keys.iter().map(|key| KeyAction::Down {
                 key: (*key).to_owned(),
             }));
@@ -770,7 +775,11 @@ impl Tester {
     pub fn try_key_down(&mut self, key: &str) -> Result<(), TestError> {
         self.inject(vec![keyboard(vec![KeyAction::Down {
             key: key.to_owned(),
-        }])])
+        }])])?;
+        if !self.held_keys.iter().any(|held| held == key) {
+            self.held_keys.push(key.to_owned());
+        }
+        Ok(())
     }
 
     /// Press `key` and hold it until [`Self::key_up`]; pressing it again
@@ -794,7 +803,9 @@ impl Tester {
     pub fn try_key_up(&mut self, key: &str) -> Result<(), TestError> {
         self.inject(vec![keyboard(vec![KeyAction::Up {
             key: key.to_owned(),
-        }])])
+        }])])?;
+        self.held_keys.retain(|held| held != key);
+        Ok(())
     }
 
     /// Release `key`, held since [`Self::key_down`].
@@ -898,7 +909,7 @@ impl Tester {
     /// window commits its composition and closes past every hold, what the
     /// documents published is written (a write the storage holds is not
     /// waited for: the storage decides it when its hold ends, and what a
-    /// document published after it is lost with the run), and the old
+    /// document still owes then is lost with the run), and the old
     /// tree, its states and its runtime are gone before the new one mounts.
     ///
     /// # Panics
@@ -938,7 +949,7 @@ impl Tester {
     /// past every hold, as a session that is ending no longer asks, and then
     /// what the application's documents published is written, as in
     /// [`Self::restart`]: a write the storage holds is not waited for, and
-    /// what a document published after it is lost.
+    /// what any document still owes then is lost.
     pub fn end_session(&mut self) {
         self.host.end_session_now();
     }
@@ -1093,6 +1104,7 @@ impl Tester {
             {
                 let _released = self.answered_within(release, budget);
             }
+            self.held_keys.clear();
         }
         outcome.map(|_outcome| ())
     }

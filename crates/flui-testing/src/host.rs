@@ -1531,7 +1531,7 @@ impl HeadlessHost {
     /// keep, and then what the documents published is written. A write a
     /// storage holds is not waited for, since nothing on this thread can
     /// finish it: it stays with the storage, which decides it when its hold
-    /// is released or dropped, and what a document published after it is
+    /// is released or dropped, and what any document still owes then is
     /// lost, as at an exit the write outlasts.
     ///
     /// Each step runs whatever an earlier one's user code did: the first
@@ -1549,23 +1549,28 @@ impl HeadlessHost {
             first.contain(|| self.ui_runtime.commit_composition_for_close(id));
             first.contain(|| self.close_presentation(id));
         }
-        first.contain(|| self.write_published(Duration::ZERO));
+        first.contain(|| self.write_published());
     }
 
-    /// Run the queued registry writes, then write what every document still
-    /// owes, waiting at most `budget` for a write in progress.
-    fn write_published(&self, budget: Duration) {
+    /// Run the queued registry writes until none finishes, then write what
+    /// every document still owes and run what that queued. A write the
+    /// storage holds is not waited for: nothing on this thread can finish it,
+    /// and while it is in flight the registry starts no other write, so what
+    /// any document still owes then is not written.
+    fn write_published(&self) {
         self.run_flush_writes();
         if let Some(flush) = &self.flush {
-            let _report = flush.flush_within(std::time::Instant::now() + budget);
+            let _report = flush.flush_within(std::time::Instant::now());
         }
+        self.run_flush_writes();
     }
 
     /// One phase of the user's session ending, as the operating system reports
     /// it (ADR-0260). `Query` asks every window's guard for the session's
     /// end and answers [`Block`](SessionEndAnswer::Block) when one refuses;
     /// `Cancelled` withdraws only those session-end records; `Ending` writes
-    /// what the documents published, within [`SESSION_END_BUDGET`].
+    /// what the documents published, not waiting for a write the storage
+    /// holds.
     pub fn end_session(&self, phase: SessionEndPhase) -> SessionEndAnswer {
         let windows = self.presentation_ids();
         match phase {
@@ -1585,7 +1590,7 @@ impl HeadlessHost {
                 SessionEndAnswer::Proceed
             }
             SessionEndPhase::Ending => {
-                self.write_published(SESSION_END_BUDGET);
+                self.write_published();
                 SessionEndAnswer::Proceed
             }
             // A phase added later asks this host nothing.
@@ -2317,16 +2322,25 @@ impl HeadlessHost {
         }
     }
 
-    /// Poll every queued registry write once, keeping those still waiting
-    /// for their storage. The queue's lock is not held while a write runs.
+    /// Poll the queued registry writes, keeping those still waiting for their
+    /// storage, until a pass finishes none: a finished write may queue the
+    /// revision published behind it, which the next pass runs. The queue's
+    /// lock is not held while a write runs.
     fn run_flush_writes(&self) {
-        let writes = std::mem::take(&mut *self.flush_writes.lock());
         let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
-        let waiting: Vec<FlushWrite> = writes
-            .into_iter()
-            .filter_map(|mut write| write.as_mut().poll(&mut ctx).is_pending().then_some(write))
-            .collect();
-        self.flush_writes.lock().extend(waiting);
+        loop {
+            let writes = std::mem::take(&mut *self.flush_writes.lock());
+            let queued = writes.len();
+            let waiting: Vec<FlushWrite> = writes
+                .into_iter()
+                .filter_map(|mut write| write.as_mut().poll(&mut ctx).is_pending().then_some(write))
+                .collect();
+            let finished_any = waiting.len() < queued;
+            self.flush_writes.lock().extend(waiting);
+            if !finished_any {
+                return;
+            }
+        }
     }
 
     /// Close presentation `id`: a secondary window's presentation is closed
