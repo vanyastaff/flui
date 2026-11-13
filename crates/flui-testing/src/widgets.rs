@@ -1047,6 +1047,53 @@ impl LaidOut {
         self.host.pump(dt);
     }
 
+    /// Advance `dt` and drive a frame, as [`Self::pump_for`] does, and report
+    /// what it did: the build owner's report of the frame, the pipeline's
+    /// counters across it and what its scene patch cost (see
+    /// [`crate::FrameReport`]). Counts, not timings, so `cargo xtask perf`
+    /// compares them exactly against a checked-in baseline.
+    pub fn pump_report(&mut self, dt: Duration) -> crate::FrameReport {
+        let pipeline_before = self
+            .pipeline_owner
+            .with(flui_rendering::pipeline::PipelineOwner::counters);
+        let scene_before = self.scene_totals();
+        let produced_before = self.produced_count();
+        self.pump_for(dt);
+        let pipeline_after = self
+            .pipeline_owner
+            .with(flui_rendering::pipeline::PipelineOwner::counters);
+        let scene_after = self.scene_totals();
+        // The build owner keeps the report of the last frame that ran the
+        // window's pipeline; a pump the window's clock did not grant a
+        // produce built nothing.
+        let build = if self.produced_count() == produced_before {
+            flui_view::FrameBuildReport::default()
+        } else {
+            self.with_build_owner_mut(|owner| owner.last_frame_build_report())
+        };
+        crate::FrameReport {
+            build,
+            pipeline: pipeline_after.since(pipeline_before),
+            scene: crate::SceneReport::between(&scene_before, &scene_after),
+        }
+    }
+
+    /// How many times the window's clock has granted a produce: a pipeline run.
+    fn produced_count(&self) -> u64 {
+        self.host
+            .ui_runtime()
+            .ui_runtime()
+            .primary_produced_count_for_test()
+    }
+
+    /// The window's retained-scene totals between frames.
+    fn scene_totals(&self) -> flui_runtime::testing::SceneTotals {
+        let host = self.host.ui_runtime();
+        host.ui_runtime()
+            .presentation_scene_totals_for_test(host.ui_runtime().presentation_id())
+            .expect("BUG: between frames the window's scene is in its slot")
+    }
+
     /// Every node the last frame drew, with the geometry and opacity the window shows it at
     /// (ADR-0321 §1): what [`crate::motion::MotionRun`] samples each frame.
     pub(crate) fn presented_nodes(&self) -> Vec<flui_rendering::pipeline::PresentedNode> {

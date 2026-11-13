@@ -354,6 +354,20 @@ impl UiRuntime {
         })
     }
 
+    /// The retained-scene totals of `id`, for a test kit that reports what a
+    /// frame's patch cost. `None` if `id` is not resident, or while a frame
+    /// holds its scene.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn presentation_scene_totals_for_test(
+        &self,
+        id: PresentationId,
+    ) -> Option<crate::testing::SceneTotals> {
+        self.presentations
+            .get(id)
+            .and_then(|presentation| presentation.scene.totals().ok())
+    }
+
     /// Whether `id`'s pipeline holds a semantics tree: something (assistive
     /// technology, or an agent) asked for one and a frame has run since. `None`
     /// if `id` is not resident.

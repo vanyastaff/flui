@@ -1367,8 +1367,8 @@ impl HeadlessBinding {
     }
 }
 
-/// What one [`HeadlessBinding::pump_frame`] did, phase by phase — see
-/// [`HeadlessBinding::last_frame_report`].
+/// What one frame did, phase by phase: what [`LaidOut::pump_report`](crate::widgets::LaidOut::pump_report)
+/// returns for a frame of the UI runtime.
 ///
 /// Counts, not timings: every figure is a deterministic function of the tree
 /// and the change applied, which is what lets `cargo xtask perf` compare them
@@ -1525,6 +1525,32 @@ impl SceneReport {
             damage_full,
             scene_nodes_visited: now.scene_nodes_visited - before.scene_nodes_visited,
             scene_depth_updates: now.scene_depth_updates - before.scene_depth_updates,
+        }
+    }
+
+    /// The work a frame did between two readings of a runtime window's
+    /// scene: the damage of its patch when it applied one, and the nodes and
+    /// depths the apply touched.
+    pub(crate) fn between(
+        before: &flui_runtime::testing::SceneTotals,
+        after: &flui_runtime::testing::SceneTotals,
+    ) -> Self {
+        let (damage_rects, damage_full) = if after.version == before.version {
+            (0, 0)
+        } else {
+            match &after.patch_damage {
+                flui_rendering::layer::DamageRegion::Unchanged => (0, 0),
+                flui_rendering::layer::DamageRegion::Region(region) => {
+                    (region.rects().len() as u64, 0)
+                }
+                flui_rendering::layer::DamageRegion::Full(_) => (0, 1),
+            }
+        };
+        Self {
+            damage_rects,
+            damage_full,
+            scene_nodes_visited: after.nodes_visited - before.nodes_visited,
+            scene_depth_updates: after.depth_updates - before.depth_updates,
         }
     }
 }

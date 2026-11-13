@@ -23908,6 +23908,7 @@ pub fn flui::testing::harness::widgets::LaidOut::post_frame_handle(&mut self) ->
 pub fn flui::testing::harness::widgets::LaidOut::primary_selection(&self) -> flui_testing::primary_selection::ScriptedPrimarySelection
 pub fn flui::testing::harness::widgets::LaidOut::pump(&mut self)
 pub fn flui::testing::harness::widgets::LaidOut::pump_for(&mut self, dt: core::time::Duration)
+pub fn flui::testing::harness::widgets::LaidOut::pump_report(&mut self, dt: core::time::Duration) -> flui_testing::FrameReport
 pub fn flui::testing::harness::widgets::LaidOut::pump_widget(&mut self, new_root: impl flui::app::View)
 pub fn flui::testing::harness::widgets::LaidOut::reassemble_render_tree(&self)
 pub fn flui::testing::harness::widgets::LaidOut::release_background(&mut self)
@@ -35907,6 +35908,15 @@ variant flui_runtime::sink::SubmitVerdict::NotShown // at 2
 variant flui_runtime::sink::SubmitVerdict::Presented // at 0
 variant flui_runtime::sink::SubmitVerdict::Retry // at 3
 variant flui_runtime::sink::SubmitVerdict::SurfaceStale // at 4
+#[non_exhaustive] pub struct flui_runtime::testing::SceneTotals
+field flui_runtime::testing::SceneTotals::depth_updates: u64 // at 2
+field flui_runtime::testing::SceneTotals::nodes_visited: u64 // at 1
+field flui_runtime::testing::SceneTotals::patch_damage: flui_layer::scene_snapshot::DamageRegion // at 3
+field flui_runtime::testing::SceneTotals::version: flui_layer::scene::id::SceneVersionId // at 0
+impl Clone for flui_runtime::testing::SceneTotals
+impl PartialEq for flui_runtime::testing::SceneTotals
+impl core::fmt::Debug for flui_runtime::testing::SceneTotals
+impl core::marker::StructuralPartialEq for flui_runtime::testing::SceneTotals
 pub struct flui_runtime::ui_runtime::UiRuntime { .. }
 impl Drop for flui_runtime::ui_runtime::UiRuntime
 impl core::fmt::Debug for flui_runtime::ui_runtime::UiRuntime
@@ -35966,6 +35976,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::presentation_factory(&self) -> flui_
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_gestures_for_test(&self, id: flui::foundation::PresentationId) -> &flui::app::GestureBinding
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_hidden_for_test(&self, id: flui::foundation::PresentationId) -> Option<bool>
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_id(&self) -> flui::foundation::PresentationId
+pub fn flui_runtime::ui_runtime::UiRuntime::presentation_scene_totals_for_test(&self, id: flui::foundation::PresentationId) -> Option<flui_runtime::testing::SceneTotals>
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_widgets_for_test(&self, id: flui::foundation::PresentationId) -> &flui::app::WidgetsBinding
 pub fn flui_runtime::ui_runtime::UiRuntime::primary_device_recovery(&self) -> Option<flui::app::DeviceRecovery>
 pub fn flui_runtime::ui_runtime::UiRuntime::primary_id_excluding(&self, id: flui::foundation::PresentationId) -> Option<flui::foundation::PresentationId>
