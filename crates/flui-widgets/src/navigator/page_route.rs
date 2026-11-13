@@ -46,7 +46,7 @@ use flui_view::{BoxedView, BuildContext};
 use super::binding::{RouteBindingSlot, TransitionGroup};
 use super::modal_route::ModalRoute;
 use super::overlay_route::{NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder};
-use super::page_transitions::{PageTransitionBuilder, transitions_of};
+use super::page_transitions::{PageTransitionBuilder, chrome_of, transitions_of};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 
 /// The default transition duration for both route shapes.
@@ -61,17 +61,19 @@ where
 }
 
 /// Configure `modal` from `builder`: its transition and both durations, all
-/// explicit, so no ambient hook replaces them.
+/// explicit, so no ambient hook replaces them, and the page chrome it carries.
 fn with_builder<T: 'static>(
     modal: ModalRoute<T>,
     builder: Rc<dyn PageTransitionBuilder>,
 ) -> ModalRoute<T> {
     let duration = builder.duration();
     let reverse = builder.reverse_duration();
+    let chrome = chrome_of(&*builder);
     modal
         .transitions(transitions_of(builder))
         .duration(duration)
         .reverse_duration(reverse)
+        .chrome(chrome)
 }
 
 /// Generate `Route` + `NavigatorRoute` for a newtype that wraps a [`ModalRoute`].
@@ -288,15 +290,14 @@ impl<T: 'static> PageRoute<T> {
         self
     }
 
-    /// The barrier colour. Absent (the default), the
-    /// barrier is invisible — but still absorbs pointers once this route's entry
-    /// transition has covered the routes below (the route is `opaque`).
+    /// The barrier colour. Absent, the barrier is invisible — but still
+    /// absorbs pointers once this route's entry transition has covered the
+    /// routes below (the route is `opaque`). Set here, it wins over the colour
+    /// the route's transition builder carries
+    /// ([`PageTransitionBuilder::barrier_color`]), as Cupertino's page dim does.
     ///
-    /// The Cupertino page route needs its own transition-only dim, so this
-    /// mirrors `PopupRoute::barrier_color`.
-    ///
-    /// The colour is painted flat for the barrier's entire visible lifetime, not
-    /// faded in with the transition.
+    /// The colour fades in along the route's entrance and back out along its
+    /// exit, so it dims the page below only while this one slides over it.
     #[must_use]
     pub fn barrier_color(mut self, color: Color) -> Self {
         self.modal = self.modal.barrier_color(color);
@@ -323,11 +324,11 @@ impl<T: 'static> PageRoute<T> {
         self
     }
 
-    /// Opt into an iOS-style edge-swipe-back gesture. Default `false`.
-    ///
-    /// There is no platform-theme selection yet, so the gesture is an explicit
-    /// opt-in per route rather than something a Cupertino theme turns on. There is
-    /// no fullscreen-dialog flag either, so this opt-in itself is the gate.
+    /// Whether the page pops on a drag from its leading edge, as an iOS page
+    /// does. Set here, it wins over what the route's transition builder carries
+    /// ([`PageTransitionBuilder::back_gesture`]); otherwise the route takes the
+    /// builder's, `false` without one. The shared
+    /// [`ParallaxPageTransition`](super::ParallaxPageTransition) carries it.
     ///
     /// **Not a mid-life toggle.** Set it once, before pushing the route:
     /// `ModalScopeState::build` reads the flag on every build to decide
@@ -466,7 +467,7 @@ impl<T: 'static> PopupRoute<T> {
     /// The barrier colour. Absent, the barrier is invisible —
     /// but it still absorbs pointers.
     ///
-    /// The colour is painted flat, not faded with the transition.
+    /// The colour fades in along the route's entrance and out along its exit.
     #[must_use]
     pub fn barrier_color(mut self, color: Color) -> Self {
         self.modal = self.modal.barrier_color(color);

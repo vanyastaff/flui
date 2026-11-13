@@ -4413,8 +4413,10 @@ variant flui::foundation::inspect::Role::Id // at 1
 variant flui::foundation::inspect::Role::Kind // at 0
 variant flui::foundation::inspect::Role::Value // at 3
 pub struct flui::foundation::inspect::SceneLayer
-field flui::foundation::inspect::SceneLayer::id: flui::foundation::LayerId // at 1
+field flui::foundation::inspect::SceneLayer::entry: Option<u32> // at 3
+field flui::foundation::inspect::SceneLayer::generation: flui::foundation::generation::Generation // at 2
 field flui::foundation::inspect::SceneLayer::scene: core::num::nonzero::NonZeroU64 // at 0
+field flui::foundation::inspect::SceneLayer::slot: u32 // at 1
 impl Clone for flui::foundation::inspect::SceneLayer
 impl Copy for flui::foundation::inspect::SceneLayer
 impl Eq for flui::foundation::inspect::SceneLayer
@@ -17118,8 +17120,8 @@ impl Default for flui::prelude::HeroController
 impl Drop for flui::prelude::HeroController
 impl core::fmt::Debug for flui::prelude::HeroController
 impl flui_widgets::navigator::observer::NavigatorObserver for flui::prelude::HeroController
-pub fn flui::prelude::HeroController::new() -> alloc::rcs::arc::Arc<Self>
-pub fn flui::prelude::HeroController::with_rect_tween<F, A>(factory: F) -> alloc::rcs::arc::Arc<Self> where F: Fn(flui::geometry::Rect, flui::geometry::Rect) -> A + 'static, A: flui::animation::Animatable<Value = flui::geometry::Rect> + 'static
+pub fn flui::prelude::HeroController::new() -> alloc::rcs::rc::Rc<Self>
+pub fn flui::prelude::HeroController::with_rect_tween<F, A>(factory: F) -> alloc::rcs::rc::Rc<Self> where F: Fn(flui::geometry::Rect, flui::geometry::Rect) -> A + 'static, A: flui::animation::Animatable<Value = flui::geometry::Rect> + 'static
 pub struct flui::prelude::HeroMode { .. }
 impl Clone for flui::prelude::HeroMode
 impl core::fmt::Debug for flui::prelude::HeroMode
@@ -26998,8 +27000,8 @@ pub struct flui::widgets::HeroControllerScope { .. }
 impl Clone for flui::widgets::HeroControllerScope
 impl core::fmt::Debug for flui::widgets::HeroControllerScope
 impl flui::app::View for flui::widgets::HeroControllerScope
-impl flui::prelude::InheritedView for flui::widgets::HeroControllerScope { type Data = Option<alloc::rcs::arc::Arc<flui::prelude::HeroController>>; }
-pub fn flui::widgets::HeroControllerScope::new(controller: alloc::rcs::arc::Arc<flui::prelude::HeroController>, child: impl flui::prelude::IntoView) -> Self
+impl flui::prelude::InheritedView for flui::widgets::HeroControllerScope { type Data = Option<alloc::rcs::rc::Rc<flui::prelude::HeroController>>; }
+pub fn flui::widgets::HeroControllerScope::new(controller: alloc::rcs::rc::Rc<flui::prelude::HeroController>, child: impl flui::prelude::IntoView) -> Self
 pub fn flui::widgets::HeroControllerScope::none(child: impl flui::prelude::IntoView) -> Self
 reexport flui::widgets::HeroMode => flui::prelude::HeroMode
 reexport flui::widgets::HitShape => flui::prelude::HitShape
@@ -27486,6 +27488,8 @@ impl core::marker::StructuralPartialEq for flui::widgets::PageSnap
 impl flui::widgets::SnapPolicy for flui::widgets::PageSnap
 pub fn flui::widgets::PageSnap::new(viewport_fraction: flui::widgets::ViewportFraction) -> Self
 pub trait flui::widgets::PageTransitionBuilder
+fn flui::widgets::PageTransitionBuilder::back_gesture(&self) -> bool { .. }
+fn flui::widgets::PageTransitionBuilder::barrier_color(&self) -> Option<flui::prelude::Color> { .. }
 fn flui::widgets::PageTransitionBuilder::build(&self, ctx: &dyn flui::app::BuildContext, primary: &flui::widgets::RouteAnimation, secondary: &flui::widgets::RouteAnimation, child: flui::prelude::BoxedView) -> flui::prelude::BoxedView
 fn flui::widgets::PageTransitionBuilder::duration(&self) -> core::time::Duration
 fn flui::widgets::PageTransitionBuilder::reverse_duration(&self) -> core::time::Duration { .. }
@@ -27529,12 +27533,15 @@ variant flui::widgets::PanIntent::Left // at 0
 variant flui::widgets::PanIntent::Right // at 1
 variant flui::widgets::PanIntent::Up // at 2
 reexport flui::widgets::PanZoomEvent => flui::interaction::PanZoomEvent
-pub struct flui::widgets::ParallaxPageTransition;
+pub struct flui::widgets::ParallaxPageTransition { .. }
 impl Clone for flui::widgets::ParallaxPageTransition
 impl Copy for flui::widgets::ParallaxPageTransition
 impl Default for flui::widgets::ParallaxPageTransition
+impl PartialEq for flui::widgets::ParallaxPageTransition
 impl core::fmt::Debug for flui::widgets::ParallaxPageTransition
+impl core::marker::StructuralPartialEq for flui::widgets::ParallaxPageTransition
 impl flui::widgets::PageTransitionBuilder for flui::widgets::ParallaxPageTransition
+pub const fn flui::widgets::ParallaxPageTransition::barrier(self, color: flui::prelude::Color) -> Self
 pub const fn flui::widgets::ParallaxPageTransition::new() -> Self
 pub struct flui::widgets::ParticleController { .. }
 impl Clone for flui::widgets::ParticleController
@@ -30838,6 +30845,7 @@ variant flui_layer::scene::content::Bounds::Unbounded // at 1
 pub struct flui_layer::scene::content::Chunk { .. }
 impl Clone for flui_layer::scene::content::Chunk
 impl core::fmt::Debug for flui_layer::scene::content::Chunk
+impl flui::Inspect for flui_layer::scene::content::Chunk
 pub fn flui_layer::scene::content::Chunk::bounds(&self) -> flui_layer::scene::content::Bounds
 pub fn flui_layer::scene::content::Chunk::commands(&self) -> &flui::painting::DisplayList
 pub fn flui_layer::scene::content::Chunk::new(owner: flui::foundation::RenderId, ordinal: u32, version: flui_layer::scene::id::ContentVersion, commands: flui::painting::DisplayList) -> Self
@@ -30983,6 +30991,7 @@ pub fn flui_layer::scene::version::SceneNode::placement(self) -> flui_layer::sce
 pub struct flui_layer::scene::version::SceneVersion(_)
 impl Clone for flui_layer::scene::version::SceneVersion
 impl core::fmt::Debug for flui_layer::scene::version::SceneVersion
+impl flui::foundation::inspect::InspectTree for flui_layer::scene::version::SceneVersion { type Node = dyn flui::Inspect; }
 pub fn flui_layer::scene::version::SceneVersion::close_damage(&self, region: flui_layer::scene_snapshot::DamageRegion, surface: (u32, u32)) -> flui_layer::scene_snapshot::DamageRegion
 pub fn flui_layer::scene::version::SceneVersion::filtered_nodes(&self) -> impl Iterator<Item = flui_layer::scene::id::SceneNodeId> + '_
 pub fn flui_layer::scene::version::SceneVersion::find_annotation<T: core::any::Any + Send + Sync>(&self, point: flui::geometry::Point<f64>) -> Option<alloc::rcs::arc::Arc<T>>
@@ -31126,7 +31135,6 @@ pub fn flui_layer::tree::layer_tree::LayerNode::with_render(self, render_id: flu
 pub struct flui_layer::tree::layer_tree::LayerTree { .. }
 impl Default for flui_layer::tree::layer_tree::LayerTree
 impl core::fmt::Debug for flui_layer::tree::layer_tree::LayerTree
-impl flui::foundation::inspect::InspectTree for flui_layer::tree::layer_tree::LayerTree { type Node = flui_layer::layer::Layer; }
 pub fn flui_layer::tree::layer_tree::LayerTree::children(&self, id: flui::foundation::LayerId) -> Option<&[flui::foundation::LayerId]>
 pub fn flui_layer::tree::layer_tree::LayerTree::contains(&self, id: flui::foundation::LayerId) -> bool
 pub fn flui_layer::tree::layer_tree::LayerTree::find_annotation<T: core::any::Any + Send + Sync>(&self, point: flui::geometry::Point<f64>) -> Option<alloc::rcs::arc::Arc<T>>
@@ -37024,7 +37032,7 @@ impl flui::prelude::ViewState<flui::prelude::Hero> for flui_widgets::navigator::
 pub struct flui_widgets::navigator::navigator::NavigatorHandle { .. }
 impl Clone for flui_widgets::navigator::navigator::NavigatorHandle
 impl core::fmt::Debug for flui_widgets::navigator::navigator::NavigatorHandle
-pub fn flui_widgets::navigator::navigator::NavigatorHandle::add_observer(&self, observer: alloc::rcs::arc::Arc<dyn flui_widgets::navigator::observer::NavigatorObserver>)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::add_observer(&self, observer: alloc::rcs::rc::Rc<dyn flui_widgets::navigator::observer::NavigatorObserver>)
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::admits_pages(&self) -> bool
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::can_pop(&self) -> bool
 pub fn flui_widgets::navigator::navigator::NavigatorHandle::current(&self) -> Option<flui::widgets::RouteId>

@@ -544,9 +544,9 @@ consecutive versions. The patch damage must cover the diff damage.
   cache costs memory under a budget still to measure.
 - Good, because a retry after an unshown frame republishes the held version and re-records
   nothing (§7), where ADR-0068 §3 repainted the whole tree.
-- Neutral, because the inspector's layer link (`Link::Layer`,
-  `crates/flui-layer/src/inspect.rs:144-152`) compares scene numbers today and names a node by
-  its `SceneNodeId` instead, whose lineage makes a link into an old lineage resolve to nothing.
+- Neutral, because the inspector's layer link (`Link::Layer`, `crates/flui-layer/src/scene/inspect.rs`)
+  names a node by its slot, generation and lineage, so a boundary keeps its link across frames
+  and a link into an old lineage resolves to nothing.
 
 ### Confirmation
 

@@ -340,8 +340,8 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 }
 
-/// How the AppKit and Wayland hosts read their window tables.
-#[cfg(any(target_os = "macos", wayland_host))]
+/// How the AppKit host reads its window table.
+#[cfg(target_os = "macos")]
 impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
     /// A snapshot of the values.
     pub(crate) fn values(&self) -> Vec<V> {
@@ -351,7 +351,6 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 
     /// A snapshot of the keys.
-    #[cfg(target_os = "macos")]
     pub(crate) fn keys(&self) -> Vec<K> {
         self.cell
             .with(|map| map.keys().copied().collect())

@@ -33,33 +33,33 @@ future pending, as in Flutter. A `PopScope` veto is checked before entries; a pr
 
 A private `LocalHistoryScope` provides the registry to the page;
 `LocalHistoryHandle::maybe_of(ctx).add(entry) -> LocalHistoryEntryHandle` and
-`entry_handle.remove()` are the surface. Entry identity is the `Arc`: a handle can remove only
+`entry_handle.remove()` are the surface. Entry identity is the `Rc`: a handle can remove only
 the entry it was minted for, replacing Flutter's `_owner` asserts with a shape where removing
 another route's entry cannot be written.
 
 `add` triggers a rebuild of the route, so the handle is acquired in a lifecycle hook and
 fired from event or animation callbacks, never from `build`/layout/paint (ADR-0078).
 
-### 3. Delivery and lock discipline
+### 3. Delivery and borrow discipline
 
 - **User-visible effects are deferred.** `did_pop` runs inside the navigator flush under the
-  non-reentrant history lock; an inline `on_remove` calling any `NavigatorHandle` method would
-  deadlock. Entries popped by `did_pop` are recorded, and `on_remove` plus the emptied-edge
-  `changed_internal_state` drain through `FlushOutcome::apply` after the lock is released —
-  still synchronous within the caller's `pop()`, so Flutter's observable ordering holds.
-- **The registry mutex is a leaf**: mutate under the lock, release, then fire. An atomic
-  `removed` flag on the entry is the linearization point, so a `remove()` racing `did_pop`
-  fires `on_remove` exactly once.
-- **`maybe_pop` is one critical section.** Disposition and arming the pop happen inside one
-  `mutate` closure; two acquisitions let a racing `remove()` turn an entry pop into a route
-  pop.
-- **No `Arc` cycles.** `on_remove` is consumed (`Option::take`) when it fires or at dispose,
+  history's `RefCell` borrow; an inline `on_remove` calling any navigator method would find the
+  history busy. Entries popped by `did_pop` are recorded, and `on_remove` plus the
+  emptied-edge `changed_internal_state` drain through `FlushOutcome::apply` after the borrow is
+  released.
+- **The registry cell is a leaf**: mutate under its borrow, release, then fire. The entry's
+  `removed` cell is the linearization point, so a `remove()` racing `did_pop` fires
+  `on_remove` exactly once.
+- **`maybe_pop` is one decision.** Disposition and arming the pop happen inside one `mutate`
+  closure, under one borrow of the history; two separate borrows would let a `remove()` between
+  them turn an entry pop into a route pop.
+- **No `Rc` cycles.** `on_remove` is consumed (`Option::take`) when it fires or at dispose,
   and the entry handle holds a `Weak` to the registry.
 
 ## Flutter divergences
 
 - **`remove()` after the route is disposed is a no-op.** Flutter still fires `onRemove`
-  because GC keeps the list alive; keeping callbacks past dispose is exactly the `Arc`-cycle
+  because GC keeps the list alive; keeping callbacks past dispose is exactly the `Rc`-cycle
   leak above, so dispose severs them. Route dispose with live entries fires no `on_remove`,
   matching Flutter.
 - **`add` on a popping or disposed route** is dropped with a `tracing::warn!`.

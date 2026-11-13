@@ -491,6 +491,31 @@ impl BoundaryContent {
         self.stream.scopes[position]
     }
 
+    /// The positions of the entries directly under `parent`, or of the
+    /// top-level entries for `None`, in paint order. Each effect's scope is
+    /// stepped over, so a walk of every entry's children visits each entry
+    /// once.
+    pub(crate) fn children_of(
+        &self,
+        parent: Option<EntryIndex>,
+    ) -> impl Iterator<Item = usize> + '_ {
+        let (start, end) = match parent.and_then(|entry| {
+            self.effect_position(entry)
+                .map(|at| (entry.get() + 1, self.stream.scopes[at].end))
+        }) {
+            Some(range) => range,
+            // An index that names no effect holds nothing.
+            None if parent.is_some() => (0, 0),
+            None => (0, self.stream.entries.len()),
+        };
+        std::iter::successors((start < end).then_some(start), move |&position| {
+            let next = self
+                .effect_position(EntryIndex::at(position))
+                .map_or(position + 1, |at| self.stream.scopes[at].end);
+            (next < end).then_some(next)
+        })
+    }
+
     /// Each effect and slot entry, ascending.
     pub(crate) fn structural(&self) -> &[EntryIndex] {
         &self.stream.structural

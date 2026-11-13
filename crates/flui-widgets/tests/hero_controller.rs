@@ -7,7 +7,7 @@
 //!
 //! They do not prove the flight overlay itself; `hero_flight.rs` owns that layer.
 
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_view::ViewExt;
@@ -68,9 +68,9 @@ fn mount_navigator(navigator: &NavigatorHandle) -> Harness {
     })
 }
 
-fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
+fn install(navigator: &NavigatorHandle) -> Rc<HeroController> {
     let controller = HeroController::new();
-    navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+    navigator.add_observer(Rc::clone(&controller) as Rc<dyn NavigatorObserver>);
     controller
 }
 
@@ -96,7 +96,7 @@ fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
 /// `post_frame_handle` from inside `did_change_top` — must not deadlock.
 ///
 /// Red-check: in `NavigatorShared::mutate`, call `apply(outcome)` inside the
-/// `history.lock()` scope; this test hangs.
+/// `history.borrow_mut()` scope; this test hangs.
 pub(crate) fn a_hero_controller_does_not_deadlock_the_observer_callback() {
     let navigator = seeded_navigator();
     let controller = install(&navigator);
@@ -141,7 +141,7 @@ pub(crate) fn replacing_a_hero_navigator_retires_routes_after_attachment() {
     let final_attachment = seeded_navigator();
     let observed = std::rc::Rc::new(std::cell::Cell::new(false));
     let callback_observed = std::rc::Rc::clone(&observed);
-    let callback_controller = Arc::downgrade(&controller);
+    let callback_controller = Rc::downgrade(&controller);
     let callback_replacement = replacement.clone();
     let callback_final = final_attachment.clone();
     let capture = OnDrop(Box::new(move || {

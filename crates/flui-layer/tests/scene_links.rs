@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
+use flui_foundation::inspect::SnapshotQuery;
+use flui_layer::testing::inspect::structure;
 use flui_layer::{
     AnnotatedRegionLayer, BoundaryContent, Chunk, ClipRectLayer, ContentVersion, FollowerLayer,
     Layer, LayerLink, LeaderClip, LeaderLayer, OffsetLayer, Placement, SceneNodeId, SceneOp,
@@ -200,6 +202,16 @@ fn first_disagreement(cases: u64) -> Option<String> {
         let version = owner.current();
         let tree = version.flatten();
 
+        let read = flui_foundation::inspect::snapshot(version, SnapshotQuery::default())
+            .expect("a version has a root");
+        let kinds: Vec<&str> = read.iter().map(|node| node.kind).collect();
+        if kinds != structure(&tree) {
+            return Some(format!(
+                "case {case}: the version reads {kinds:?}, its tree {:?}",
+                structure(&tree)
+            ));
+        }
+
         for &link in &links {
             let from_tree = leader_origin(&tree, link);
             let from_version = version.leader_origin(link);
@@ -278,7 +290,8 @@ fn points_agree(a: Option<Point<f64>>, b: Option<Point<f64>>) -> bool {
 /// and followers
 /// under either leader clip: every follower's transform, every leader's
 /// origin and the topmost annotation at random points read off the version
-/// equal what the flattened tree resolves.
+/// equal what the flattened tree resolves, and the version's layer snapshot
+/// reads the tree's kinds in pre-order.
 pub(crate) fn a_version_resolves_links_and_annotations_as_its_flattened_tree_does() {
     if let Some(disagreement) = first_disagreement(5_000) {
         panic!("{disagreement}");

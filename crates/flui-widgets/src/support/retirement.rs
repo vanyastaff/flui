@@ -95,7 +95,7 @@ pub(crate) use flui_foundation::panic::drop_contained;
 /// A shared map empties itself only at its physical last release, preserving
 /// independently owned aliases until then.
 #[derive(Debug)]
-pub(crate) struct TerminalMap<K, V>(parking_lot::Mutex<std::collections::HashMap<K, V>>);
+pub(crate) struct TerminalMap<K, V>(std::cell::RefCell<std::collections::HashMap<K, V>>);
 
 impl<K, V> Default for TerminalMap<K, V> {
     fn default() -> Self {
@@ -105,12 +105,12 @@ impl<K, V> Default for TerminalMap<K, V> {
 
 impl<K, V> TerminalMap<K, V> {
     pub(crate) fn new(values: std::collections::HashMap<K, V>) -> Self {
-        Self(parking_lot::Mutex::new(values))
+        Self(std::cell::RefCell::new(values))
     }
 }
 
 impl<K, V> std::ops::Deref for TerminalMap<K, V> {
-    type Target = parking_lot::Mutex<std::collections::HashMap<K, V>>;
+    type Target = std::cell::RefCell<std::collections::HashMap<K, V>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -123,16 +123,16 @@ impl<K, V> Drop for TerminalMap<K, V> {
 }
 
 #[derive(Debug)]
-pub(crate) struct TerminalVec<T>(parking_lot::Mutex<Vec<T>>);
+pub(crate) struct TerminalVec<T>(std::cell::RefCell<Vec<T>>);
 
 impl<T> Default for TerminalVec<T> {
     fn default() -> Self {
-        Self(parking_lot::Mutex::new(Vec::new()))
+        Self(std::cell::RefCell::new(Vec::new()))
     }
 }
 
 impl<T> std::ops::Deref for TerminalVec<T> {
-    type Target = parking_lot::Mutex<Vec<T>>;
+    type Target = std::cell::RefCell<Vec<T>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
