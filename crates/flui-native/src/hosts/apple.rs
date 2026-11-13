@@ -154,6 +154,10 @@ impl Host for Apple {
 /// ```
 #[cfg(target_os = "macos")]
 pub type MacOSPlatform = HostPlatform<Apple>;
+// Owner-local (ADR-0327 §5): the platform belongs to the main thread that
+// built it; another thread reaches it through its proxy.
+#[cfg(target_os = "macos")]
+static_assertions::assert_not_impl_any!(MacOSPlatform: Send, Sync);
 
 /// The iOS platform: UIKit scenes and `UIApplicationMain`.
 ///

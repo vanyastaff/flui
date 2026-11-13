@@ -246,19 +246,9 @@ pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
     }
 }
 
-// SAFETY: the application and the screen observer are `NativeOwner`s, which
-// only a main-thread marker reads and which release their value there wherever
-// the loop is dropped; the preference source and the notice sources are read
-// and started on the main thread only, and what they hold of AppKit is
-// notification-centre tokens, which any thread may remove; the window map is
-// reached by the owner thread alone; every other field is `Arc`/`Mutex`-
-// protected. The host still shares the loop through `Arc` until its owner-local
-// step (ADR-0327 §5), which deletes these impls.
-unsafe impl Send for MacOSLoop {}
-// SAFETY: see `Send` above: interior mutability is Mutex-guarded, and the
-// application and the screen observer are reached only through a main-thread
-// marker.
-unsafe impl Sync for MacOSLoop {}
+// Owner-local (ADR-0327 §5): the loop belongs to the main thread, which
+// alone reaches the application, its windows and its observers.
+static_assertions::assert_not_impl_any!(MacOSLoop: Send, Sync);
 
 impl std::fmt::Debug for MacOSLoop {
     // Hand-written: the remaining fields are raw platform handles and callback
