@@ -2100,9 +2100,9 @@ mod event_loop {
         }
 
         /// Stop what the loop started: admission first, so a source that
-        /// still reports wakes nobody, then the sources. The one application
-        /// code it runs, the drop of the wake callback, is contained, so an
-        /// unwinding run calls it too.
+        /// still reports wakes nobody, then the sources. The application code it
+        /// runs (the wake callback and queued window requests dropped, their
+        /// requesters answered) is contained, so an unwinding run calls it too.
         fn stop_sources(&self) {
             self.signal.close_in(&self.turn);
             let watch = self.display_watch.borrow_mut().take();

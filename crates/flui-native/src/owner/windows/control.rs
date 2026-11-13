@@ -656,8 +656,11 @@ impl OwnerHooks for WindowsOwnerHooks {
                 Ok(())
             }
             Err(reason) => {
-                tracing::debug!(?reason, "owner-turn registration refused");
-                drop(callback);
+                // A subscriber and the callback's captures are user code (ADR-0287).
+                contain_owner_callback(|| {
+                    tracing::debug!(?reason, "owner-turn registration refused");
+                });
+                contain_owner_callback(|| drop(callback));
                 Err(WakeRegistrationError::OwnerGone)
             }
         }

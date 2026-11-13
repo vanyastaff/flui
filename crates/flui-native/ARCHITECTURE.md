@@ -2339,7 +2339,7 @@ one for Win32 makes that safe without changing a signature.
   keyboard-layout handler goes through `owner::call_point::call`: it is taken
   out of its slot, run with no borrow held, and put back only if the slot is
   still empty. A handler registered while it ran — including by itself — wins,
-  the rule `OwnerSignal::drive` already follows.
+  the rule `OwnerSignal::drive_in` already follows.
 - **Quit order.** The run's teardown destroys the owner window, tells the
   application's handler it quits (once, its panic contained), then releases
   the handler: it drops contained, or stays alive when the teardown runs
@@ -3119,12 +3119,13 @@ The signal holds admission and scheduling state; the callback waits between
 turns in the `OwnerTurnSlot` (`!Send`) the host's loop keeps and passes to
 `register_in` and `drive_in`, so `OwnerPlatform::on_wake` takes a callback that
 is not `Send` and closing or dropping the last `Arc<OwnerSignal>` on another
-thread never drops it there. Each host clears the slot as it quits
-(`close_in`): Win32 keeps it in its owner control context, which
-`WM_NCDESTROY` frees, and a platform dropped off its owner leaks it with the
-context; AppKit keeps it main-thread-bound in its loop control, made on main
-the first time the owner needs it. Test:
+thread never drops it there. Each host clears the slot on the owner as it
+quits. Win32 keeps it in its owner control context, which `WM_NCDESTROY`
+frees, and a platform dropped off its owner leaks it with the context; AppKit
+keeps it main-thread-bound in its loop control, made on main the first time
+the owner needs it. Test, headless only:
 `an_owner_turn_callback_keeps_owner_local_state_until_the_quit`.
+**Unasserted:** no test pins the Win32 and AppKit paths.
 
 A posted turn is acknowledged when it begins (`OwnerSignal::begin_turn`), not
 when the application's turn runs. A loop that reads what wakes asked of it
@@ -3165,8 +3166,8 @@ window or UI runtime frame. It is not a generic closure executor.
 A live macOS run needs a GUI session. External counters assert owner affinity, nonrecursive delivery, shutdown capture
 release and rejected work after quit. On Windows, a turn through the real
 message loop runs on the owner and is released there. **Unasserted:** no test
-pins this. Pull-request CI only type-checks Win32. Mobile/web registration remains explicitly
-unsupported; proxy window creation support is separate from wake/quit support.
+pins this. Pull-request CI only type-checks Win32. UIKit, Android and the web register
+the same way over their loop's slot; proxy window creation support is separate from wake/quit support.
 
 ### Reveal without changing window mode
 
