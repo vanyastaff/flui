@@ -60,3 +60,10 @@
 - `flui-native` decides each public enum (ADR-0329), so every crate of the workspace now states
   each public enum's closure at its declaration; `MacOSWindowLevel`, `AxisSource`, `ClockChoice`,
   `CodecError`, `ReplayError` and `AppCall` are `#[non_exhaustive]`.
+- `flui::app` is a curated module instead of the whole `flui-app` crate: the entry, its
+  configuration (`FrameLatency` included), background work, close requests, frame failures, window
+  control and the input tap. `WidgetsBinding`, `RenderingBinding`, the root render view,
+  `embedder`, `native`, `testing`, `prelude` and the view re-exports are no longer under
+  `flui::app`. The types public signatures name moved: `PipelineOwner` and `PipelineCell` to
+  `flui::rendering`, `UpdateScheduler` to `flui::view`, `GestureBinding` to
+  the deprecated `flui::testing::harness` (feature `testing`).

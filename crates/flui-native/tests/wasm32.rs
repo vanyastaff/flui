@@ -483,3 +483,29 @@ fn a_concealed_write_is_an_ordinary_one_on_the_web() {
         a_concealed_write_stays_out_of_history(&*clipboard, read_at_once),
     );
 }
+
+/// A loop that runs after another loop's quit was posted, and before it was
+/// delivered, leaves that quit reaching the first loop: each loop's wake finds
+/// its own loop on the page.
+#[wasm_bindgen_test]
+async fn a_quit_posted_before_a_second_loop_runs_reaches_the_first() {
+    install_probe();
+    let _probe = Probe;
+    let (first, _) = counter_owner();
+    first.proxy().request_quit().expect("first quit");
+    let (second, second_wakes) = counter_owner();
+    assert_eq!(listener_count(), 2 * LISTENERS, "both loops observe");
+    next_task().await.expect("first quit task");
+    assert!(first.preferences().is_err(), "the first loop quit");
+    assert_eq!(listener_count(), LISTENERS, "the first loop let go");
+    set_reduced(true);
+    next_task().await.expect("second wake task");
+    assert_eq!(
+        second_wakes.load(Ordering::SeqCst),
+        1,
+        "the second loop runs"
+    );
+    second.proxy().request_quit().expect("second quit");
+    next_task().await.expect("second quit task");
+    assert_eq!(listener_count(), 0, "both loops let go");
+}

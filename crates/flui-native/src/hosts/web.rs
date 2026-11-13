@@ -81,6 +81,9 @@ impl WebHost for Web {
 /// WebAssembly with `wasm-bindgen` and `web-sys`.
 pub type WebPlatform = HostPlatform<Web>;
 
+// Owner-local (ADR-0327 §5): the platform lives on the page's one thread.
+static_assertions::assert_not_impl_any!(WebPlatform: Send, Sync);
+
 impl HostPlatform<Web> {
     /// Create a new Web platform instance
     ///
