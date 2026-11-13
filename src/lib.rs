@@ -361,7 +361,7 @@ pub use flui_app::app::WindowPolicy;
 /// Call on the owner thread while its event loop is live. Success can mean
 /// creation was admitted for a later owner turn; this API does not provide a
 /// completion receiver or a renderer. Use [`open_window`] for widget content.
-/// See [`app::app::open_secondary_window`] for policy, deferred-failure, and
+/// See [`app::open_secondary_window`] for policy, deferred-failure, and
 /// ownership details. Re-exported from [`app`] (`flui-app`).
 #[cfg(all(
     not(target_os = "android"),
@@ -381,7 +381,7 @@ pub use flui_app::app::open_secondary_window;
 /// [`WindowPolicy::Isolated`]. `WindowPolicy::Shared` is refused with
 /// [`AppWindowError::UnsupportedPolicy`]. As with [`open_secondary_window`],
 /// success can mean admission for deferred creation rather than completed
-/// installation; see [`app::app::open_window`] for the error contract.
+/// installation; see [`app::open_window`] for the error contract.
 /// Re-exported from [`app`] (`flui-app`).
 #[cfg(all(
     not(target_os = "android"),
