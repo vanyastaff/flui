@@ -961,11 +961,13 @@ button in an explicit `flui::prelude::Semantics` — which meant the app `flui
 create` scaffolds was not screen-reader accessible out of the box.
 `RenderParagraph` now publishes its plain text as a semantics label with its
 text direction (an empty paragraph publishes nothing — a recorded mapping
-decision in `crates/flui-objects/ARCHITECTURE.md`), and `ButtonStyleButtonCore`
-wraps every button it composes in `Semantics(container, button, enabled)`.
+decision in `crates/flui-objects/ARCHITECTURE.md`), and every button
+`ButtonStyleButtonCore` composes is one container node of the button role,
+enabled when it has `on_pressed`, which its `InkWell`'s interactive node
+carries (ADR-0322 §1).
 The test mounts that Material tree and queries `"Increment"` from the
 framework's own node; the template itself now uses `RawButton`, which
-publishes the same `Semantics(container, button, enabled)` node.
+describes the same node on its own interactive node.
 
 The acceptance criterion's "actionable command failures" half is the error
 `A11yTree::find_by_label` already produces, needing no new helper: a label that
