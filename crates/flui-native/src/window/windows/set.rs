@@ -154,13 +154,22 @@ impl WindowSet {
 
 impl std::fmt::Debug for WindowSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut out = f.debug_struct("WindowSet");
+        // The formatter's writer is code the set does not own, and it may
+        // open or close a window: every borrow is released before it runs.
         // A set being changed is not there to count.
-        match self.by_handle.try_borrow() {
-            Ok(windows) => out.field("windows", &windows.len()),
-            Err(_) => out.field("windows", &format_args!("<borrowed>")),
+        let windows = self.by_handle.try_borrow().map(|windows| windows.len()).ok();
+        let ids = self.ids.try_borrow().map(|ids| format!("{:?}", *ids)).ok();
+        let borrowed = format_args!("<borrowed>");
+        let mut out = f.debug_struct("WindowSet");
+        match &windows {
+            Some(count) => out.field("windows", count),
+            None => out.field("windows", &borrowed),
         };
-        out.field("ids", &self.ids)
+        match &ids {
+            Some(ids) => out.field("ids", &format_args!("{ids}")),
+            None => out.field("ids", &borrowed),
+        };
+        out
             .field("config", &self.config)
             .field("positions", &self.positions)
             .field("material", &self.material)
