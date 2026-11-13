@@ -568,6 +568,15 @@ pub trait LifecycleContext: BuildContext {
         None
     }
 
+    /// The URL-owner slot of the presentation this element is mounted in
+    /// (ADR-0330 §5), which the outermost `Router` registers into from
+    /// `create_state`. `None` on a bare owner. Runtime wiring for the
+    /// router, not widget surface.
+    #[doc(hidden)]
+    fn url_owner(&self) -> Option<crate::__runtime::UrlOwnerSlot> {
+        None
+    }
+
     /// The host's flush registry, which a
     /// [`Persisted`](crate::persist::Persisted) document publishes into.
     /// Uncallable outside `flui-view`: it takes a crate-private token, so
