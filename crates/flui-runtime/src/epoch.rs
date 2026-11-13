@@ -33,6 +33,10 @@ impl TreeRevision {
 /// Whether the presentation's current tree revision has been acknowledged
 /// by a successful submit classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a presentation's tree revisions are acknowledged or not"
+)]
 pub enum FrameCommitState {
     /// Every terminal tree revision has been acknowledged.
     Committed,

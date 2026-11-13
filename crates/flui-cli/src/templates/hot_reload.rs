@@ -548,7 +548,7 @@ const HOST_MAIN: &str = r#"//! Host binary for the hot-reload app.
 use std::sync::{Arc, atomic::AtomicI32};
 
 use __TYPES_CRATE__::{CounterApp, CounterBuild, CounterShell};
-use flui::app::{AppConfig, AppLaunch, LaunchError, run_app};
+use flui::{AppConfig, Application, LaunchError};
 
 #[cfg(not(any(feature = "reload", feature = "linked")))]
 compile_error!("build the host with its `linked` feature (the default) or with `reload` (`flui run`)");
@@ -565,7 +565,7 @@ fn main() -> Result<(), LaunchError> {
         },
     };
 
-    run_app(root, AppLaunch::new().config(config))?;
+    Application::new().config(config).run(root)?;
 
     tracing::info!(
         final_count = count.load(std::sync::atomic::Ordering::Relaxed),

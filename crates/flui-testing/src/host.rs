@@ -1161,8 +1161,11 @@ impl HeadlessHost {
         // settles in this pump.
         self.scripted.background.drain_unless_held();
         // A frame or mode a widget set reaches the UI runtime before the frame, as a
-        // window system's state notice does.
-        for presentation in self.presentation_ids() {
+        // window system's state notice does. Walked by position rather than
+        // over a collected list, so an idle pump asks nothing of the heap.
+        let mut position = 0;
+        while let Some(presentation) = self.presentation_at(position) {
+            position += 1;
             if self
                 .window_of(HeadlessWindowId(presentation))
                 .take_unobserved()
@@ -1178,7 +1181,10 @@ impl HeadlessHost {
         if let Some(presented) = self.presented.take() {
             request = request.presented(presented);
         }
-        for presentation in self.presentation_ids() {
+        let primary = self.ui_runtime.presentation_id();
+        for presentation in
+            std::iter::once(primary).chain(self.secondary.iter().map(|secondary| secondary.id))
+        {
             self.ui_runtime.note_frame_request(presentation, request);
         }
         let mut frame_clock = self.clock.clone();
@@ -2285,6 +2291,14 @@ impl HeadlessHost {
         std::iter::once(self.ui_runtime.presentation_id())
             .chain(self.secondary.iter().map(|secondary| secondary.id))
             .collect()
+    }
+
+    /// The presentation at `position` of [`presentation_ids`](Self::presentation_ids)'s order.
+    fn presentation_at(&self, position: usize) -> Option<PresentationId> {
+        match position.checked_sub(1) {
+            None => Some(self.ui_runtime.presentation_id()),
+            Some(secondary) => self.secondary.get(secondary).map(|secondary| secondary.id),
+        }
     }
 
     /// The window `window` names: the primary one or one the host

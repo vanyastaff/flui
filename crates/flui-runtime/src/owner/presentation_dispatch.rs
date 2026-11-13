@@ -337,6 +337,10 @@ use super::{Delivery, DispatchError, OwnerCore, OwnerEffects, OwnerHost, Runtime
 
 /// Input disposition. Only `Unhandled` permits native default handling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "only `Unhandled` permits native default handling, so a host decides on each outcome"
+)]
 pub enum InputOutcome {
     /// The framework handled the input.
     Handled,

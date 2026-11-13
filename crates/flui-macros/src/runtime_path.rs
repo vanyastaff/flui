@@ -10,6 +10,7 @@ pub(crate) enum Runtime {
     Foundation,
     Animation,
     Widgets,
+    App,
 }
 
 impl Runtime {
@@ -29,8 +30,13 @@ impl Runtime {
             Self::Foundation => ("flui-foundation", "foundation"),
             Self::Animation => ("flui-animation", "animation"),
             Self::Widgets => ("flui-widgets", "widgets"),
+            Self::App => ("flui-app", "app"),
         };
-        if let Ok(found) = crate_name("flui-sdk") {
+        // A package builds on `flui-sdk` and has no entry function, so the
+        // application runtime is never looked up there.
+        if !matches!(self, Self::App)
+            && let Ok(found) = crate_name("flui-sdk")
+        {
             return module_path(found, "flui-sdk", module, span);
         }
         if let Ok(found) = crate_name(package) {

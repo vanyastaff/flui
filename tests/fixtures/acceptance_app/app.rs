@@ -218,11 +218,10 @@ pub const DATA_DIR: &str = "dev.flui.acceptance-app";
 
 /// How the native launchers open the application: with its own storage
 /// directory, so the notes document loads on every desktop host.
-#[must_use]
-pub fn launch() -> flui::AppLaunch {
+pub fn launch() -> flui::Application {
     let dir = flui::platform::AppDataDir::try_new(DATA_DIR)
         .expect("BUG: the acceptance application's data directory name is valid");
-    flui::AppLaunch::new().config(flui::AppConfig::new().storage_dir(dir))
+    flui::Application::new().config(flui::AppConfig::new().storage_dir(dir))
 }
 
 /// The acceptance application's root view.

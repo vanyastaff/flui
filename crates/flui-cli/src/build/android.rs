@@ -264,7 +264,7 @@ impl AndroidBuilder {
             crate::ui::debug(format!("Building for Android target: {target}"));
 
             // The project's own package: its `[lib]` is a `cdylib` with
-            // `android_main` (what `flui create` writes), which `cargo ndk`
+            // the `android_main` its `#[flui::main]` function writes, which `cargo ndk`
             // drops into `jniLibs/<abi>/lib<name>.so`.
             let mut args = vec![
                 "ndk",

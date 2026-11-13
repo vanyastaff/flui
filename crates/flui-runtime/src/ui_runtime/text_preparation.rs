@@ -56,6 +56,10 @@ impl TextSizingWork {
 
 /// Host disposition after servicing a detached frontier.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a host acts on each settlement, and a `_` arm would leave a source waiting"
+)]
 pub enum TextSizingSettlement {
     /// Numeric answers are already admitted into the exact source.
     Ready,

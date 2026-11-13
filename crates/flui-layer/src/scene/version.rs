@@ -61,6 +61,10 @@ impl NodeRecord {
         }
     }
 
+    pub(crate) fn key(&self) -> NodeKey {
+        self.key
+    }
+
     pub(crate) fn parent(&self) -> Option<NodeKey> {
         self.parent
     }
@@ -664,6 +668,7 @@ impl VersionInner {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 mod flatten {
     use std::sync::Arc;
 
@@ -682,9 +687,9 @@ mod flatten {
         /// numbered as the version's scene, so a layer id kept from an earlier
         /// version is told apart.
         ///
-        /// What the raster lane hands the engine until the engine walks the
-        /// version itself, and the oracle a retained frame is compared against
-        /// (ADR-0304 §11).
+        /// The oracle the engine's walk of a retained version, and the
+        /// version's own reads, are compared against (ADR-0304 §11); test
+        /// support, behind the `testing` feature.
         #[must_use]
         pub fn flatten(&self) -> LayerTree {
             let root = self
