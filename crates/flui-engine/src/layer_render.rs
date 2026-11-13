@@ -328,7 +328,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ImageFilt
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ShaderMaskLayer {
     fn render(&self, _renderer: &mut R) {
-        // The shared record_layer_tree visitor owns mask group entry and terminal shader draw.
+        // The shared record_scene visitor owns mask group entry and terminal shader draw.
     }
     fn cleanup(&self, _renderer: &mut R) {}
 }

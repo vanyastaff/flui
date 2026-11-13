@@ -43,7 +43,7 @@ fn both_ownership_paths_destroy_the_payload_once_and_null_is_a_noop() {
     // SAFETY: the scene was moved out once and this live allocation is uniquely owned.
     unsafe { flui_scene_free(allocation) };
     assert_eq!(DROPS.load(Ordering::SeqCst), 1);
-    assert_eq!(moved.tree().len(), 1);
+    assert_eq!(moved.tree().map(LayerTree::len), Some(1));
     drop(moved);
     assert_eq!(DROPS.load(Ordering::SeqCst), 2);
 

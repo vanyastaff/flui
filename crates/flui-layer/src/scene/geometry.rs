@@ -1158,3 +1158,127 @@ fn extent_link<'v>(extent: Option<DamageExtent>) -> Link<'v> {
         Some(_) => Link::Everywhere,
     }
 }
+
+/// A step of a chain that reads a space other than the innermost, already
+/// mapped to the surface: what [`map_out_spread`] applies on its way out.
+#[derive(Debug, Clone, Copy)]
+enum Outer<'v> {
+    /// Cut by this rect; consecutive clips are held as their intersection,
+    /// which cuts as they do one after another.
+    Clip(Reach),
+    /// Spread or moved by the filter, under the map of its space.
+    Filter(&'v ImageFilter, Matrix4),
+    /// Joined with this rect.
+    Extent(Reach),
+    /// Grown to every pixel the clips outside allow.
+    Everywhere,
+    /// Nothing inside is drawn.
+    Hidden,
+}
+
+/// The chain from the surface into one node's content space, folded: the
+/// map into it and the steps outside it that cut, spread or grow what it
+/// draws, outermost first.
+#[derive(Debug, Clone)]
+pub(crate) struct Folded<'v> {
+    pub(crate) key: NodeKey,
+    ctm: Matrix4,
+    outer: SmallVec<[Outer<'v>; 4]>,
+}
+
+/// Two clips that cut `out` one after another, as one.
+fn meet(outer: Reach, inner: Reach) -> Reach {
+    match (outer, inner) {
+        (Reach::Rect(a), Reach::Rect(b)) => a.intersect(&b).map_or(Reach::Nothing, Reach::rect),
+        (Reach::Nothing, _) | (_, Reach::Nothing) => Reach::Nothing,
+        (Reach::Unbounded | Reach::NonFinite, clip)
+        | (clip, Reach::Unbounded | Reach::NonFinite) => clip,
+    }
+}
+
+impl<'v> Folded<'v> {
+    /// The root's: its placement offsets the whole scene.
+    pub(crate) fn root(geometry: Geometry<'v>) -> Self {
+        let mut links = Links::new();
+        let root = geometry.version.root;
+        links.push(Link::Translate(geometry.record(root).placement().offset()));
+        let mut folded = Self {
+            key: root,
+            ctm: Matrix4::IDENTITY,
+            outer: SmallVec::new(),
+        };
+        folded.extend(&links);
+        folded
+    }
+
+    /// `child`'s, from its parent's (`self`): the effects above its slot,
+    /// then its placement. `None` when `child` does not stand in a slot of
+    /// this node. `scratch` is a buffer the caller keeps between calls.
+    pub(crate) fn child(
+        &self,
+        geometry: Geometry<'v>,
+        child: NodeKey,
+        scratch: &mut Links<'v>,
+    ) -> Option<Self> {
+        let slot = geometry.record(self.key).content().slot_entry(child)?;
+        scratch.steps.clear();
+        scratch.resolved.clear();
+        geometry.content_links(self.key, slot, scratch, 0);
+        scratch.push(Link::Translate(geometry.record(child).placement().offset()));
+        let mut folded = Self {
+            key: child,
+            ctm: self.ctm,
+            outer: self.outer.clone(),
+        };
+        folded.extend(scratch);
+        Some(folded)
+    }
+
+    /// Appends `links`, outermost first, inside the chain folded so far, in
+    /// the order and arithmetic [`map_out_spread`] uses.
+    fn extend(&mut self, links: &Links<'v>) {
+        for link in &links.steps {
+            let step = match *link {
+                Link::Translate(_) | Link::Matrix(_) | Link::Resolved(_) => {
+                    if let Some(map) = links.map(link) {
+                        map.after(&mut self.ctm);
+                    }
+                    continue;
+                }
+                Link::Clip(clip) => {
+                    let clip = mapped(&self.ctm, clip);
+                    if let Some(Outer::Clip(outer)) = self.outer.last_mut() {
+                        *outer = meet(*outer, clip);
+                        continue;
+                    }
+                    Outer::Clip(clip)
+                }
+                Link::Filter(filter) => Outer::Filter(filter, self.ctm),
+                Link::Extent(rect) => Outer::Extent(mapped(&self.ctm, rect)),
+                Link::Everywhere => Outer::Everywhere,
+                Link::Hidden => Outer::Hidden,
+            };
+            self.outer.push(step);
+        }
+    }
+
+    /// Where this node's subtree lands on the surface, from its stored
+    /// bounds: what [`Geometry::subtree_reach`] answers for it.
+    pub(crate) fn subtree_reach(&self, geometry: Geometry<'v>) -> Reach {
+        let record = geometry.record(self.key);
+        let mut out = match Reach::of(record.subtree()) {
+            Reach::Rect(rect) => mapped(&self.ctm, rect).spread(record.kernel()),
+            other => other,
+        };
+        for step in self.outer.iter().rev() {
+            out = match *step {
+                Outer::Clip(clip) => clipped(out, clip),
+                Outer::Filter(filter, ctm) => filtered(filter, out, &ctm, Spread::Reach),
+                Outer::Extent(extent) => out.union(extent),
+                Outer::Everywhere => Reach::Unbounded,
+                Outer::Hidden => Reach::Nothing,
+            };
+        }
+        out
+    }
+}

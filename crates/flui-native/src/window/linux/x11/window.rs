@@ -69,11 +69,11 @@ use flui_platform::{
     WindowIdMint, WindowMode, WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
-use parking_lot::Mutex;
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle, XcbDisplayHandle, XcbWindowHandle,
 };
+use rustc_hash::FxHashMap;
 use x11rb::connection::Connection as _;
 use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
 use x11rb::protocol::Event;
@@ -103,7 +103,7 @@ use crate::owner::linux::x11::{
     Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, WindowRef,
     WindowScale, X11Connection, X11Loop,
 };
-use crate::owner::slot::{OwnerCell, OwnerMap, OwnerWeak};
+use crate::owner::slot::OwnerWeak;
 use crate::owner::wake_deadline::FrameCount;
 use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
@@ -368,7 +368,7 @@ pub struct X11Window {
     displays: Arc<dyn HostDisplays>,
     /// The windows' input, which delivers this window's pointers and keys
     /// and shows its cursor.
-    input: Arc<dyn LoopInput>,
+    input: Rc<dyn LoopInput>,
     /// The windows' drag and drop, which offers this window the drags over
     /// it.
     drag: Arc<dyn LoopDrag>,
@@ -420,7 +420,7 @@ impl X11Window {
     /// once the platform is gone.
     fn support(&self) -> WindowManagerSupport {
         match self.windows.upgrade() {
-            Some(windows) => *windows.support.lock(),
+            Some(windows) => windows.support.get(),
             None => self.record.borrow().support,
         }
     }
@@ -429,9 +429,7 @@ impl X11Window {
     fn appearance(&self) -> WindowAppearance {
         self.windows
             .upgrade()
-            .map_or(WindowAppearance::Light, |windows| {
-                *windows.appearance.lock()
-            })
+            .map_or(WindowAppearance::Light, |windows| windows.appearance.get())
     }
 
     /// The display snapshot, or none when it cannot be read.
@@ -1643,28 +1641,36 @@ impl HostWindow for X11Window {
     }
 }
 
+/// The X11 windows' table: each open window by its identity, the window each
+/// X id names now, and the identities issued.
+#[derive(Default)]
+struct WindowTable {
+    windows: FxHashMap<WindowId, Rc<X11Window>>,
+    by_xid: FxHashMap<xproto::Window, WindowId>,
+    /// Issues the id of every window, never one twice.
+    ids: WindowIdMint,
+}
+
 /// The platform's X11 windows: what they open with and share, and the table
 /// the loop reaches them through.
 ///
-/// Built on the thread that builds the platform, which owns the windows: the
-/// table answers there alone. Public where it is defined, as the host's table
+/// Built on the thread that builds the platform, which owns the windows and
+/// alone reaches them (ADR-0327 §5). Public where it is defined, as the host's table
 /// names it, and nameable only inside the crate.
 pub struct X11Windows {
     positions: WindowPositions<WindowRef>,
     connection: Arc<X11Connection>,
     atoms: WindowAtoms,
-    windows: OwnerMap<WindowId, Rc<X11Window>>,
-    /// The window each X id names now.
-    by_xid: OwnerMap<xproto::Window, WindowId>,
-    /// Issues the id of every window, on the owner thread, never one twice.
-    ids: OwnerCell<WindowIdMint>,
+    table: RefCell<WindowTable>,
     /// A window closed since the loop last asked.
-    closed: AtomicBool,
+    closed: Cell<bool>,
     frames: FrameCount,
     frame_inset: Arc<FrameInset>,
-    support: Mutex<WindowManagerSupport>,
-    appearance: Mutex<WindowAppearance>,
+    support: Cell<WindowManagerSupport>,
+    appearance: Cell<WindowAppearance>,
 }
+// Owner-local (ADR-0327 §5): the table is the owner thread's alone.
+static_assertions::assert_not_impl_any!(X11Windows: Send, Sync);
 
 impl std::fmt::Debug for X11Windows {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1698,14 +1704,12 @@ impl X11Windows {
         let windows = Self {
             positions,
             atoms,
-            windows: OwnerMap::new(),
-            by_xid: OwnerMap::new(),
-            ids: OwnerCell::new(),
-            closed: AtomicBool::new(false),
+            table: RefCell::default(),
+            closed: Cell::new(false),
             frames: FrameCount::default(),
             frame_inset: Arc::new(FrameInset::default()),
-            support: Mutex::new(WindowManagerSupport::default()),
-            appearance: Mutex::new(WindowAppearance::Light),
+            support: Cell::new(WindowManagerSupport::default()),
+            appearance: Cell::new(WindowAppearance::Light),
             connection,
         };
         windows.read_support();
@@ -1741,36 +1745,46 @@ impl X11Windows {
             .and_then(|cookie| cookie.reply().ok())
             .and_then(|reply| Some(reply.value32()?.collect()))
             .unwrap_or_default();
-        *self.support.lock() = WindowManagerSupport::read(managed, &supported, &atoms.support());
+        self.support.set(WindowManagerSupport::read(
+            managed,
+            &supported,
+            &atoms.support(),
+        ));
     }
 
     /// The next identity, never one given before.
     fn mint_id(&self) -> Result<WindowId, OpenWindowError> {
-        let issued = self
-            .ids
-            .with(|ids| ids.next())
-            .ok_or_else(|| OpenWindowError::Backend {
-                message: "an X11 window opens on the thread that built its platform".into(),
-            })?;
-        Ok(issued?)
+        Ok(self.table.borrow_mut().ids.next()?)
     }
 
     /// The window an X id names now.
     fn window_of(&self, xid: xproto::Window) -> Option<Rc<X11Window>> {
-        let id = self.by_xid.get(&xid)?;
-        self.windows.get(&id)
+        let table = self.table.borrow();
+        let id = table.by_xid.get(&xid)?;
+        table.windows.get(id).cloned()
+    }
+
+    /// The open windows as they are now: the caller reaches each with no
+    /// borrow of the table held, since a window's handler may open or close
+    /// windows.
+    fn open_windows(&self) -> Vec<Rc<X11Window>> {
+        self.table.borrow().windows.values().cloned().collect()
     }
 
     /// Take a closing window out of the table.
     fn forget(&self, id: WindowId, xid: xproto::Window) {
-        if self.by_xid.get(&xid) == Some(id) {
-            self.by_xid.remove(&xid);
-        }
-        if let Some(window) = self.windows.remove(&id) {
+        let window = {
+            let mut table = self.table.borrow_mut();
+            if table.by_xid.get(&xid) == Some(&id) {
+                table.by_xid.remove(&xid);
+            }
+            table.windows.remove(&id)
+        };
+        if let Some(window) = window {
             // The table's handle goes outside its borrow: the caller holds
             // another.
             drop(window);
-            self.closed.store(true, Ordering::Release);
+            self.closed.set(true);
         }
     }
 
@@ -1790,7 +1804,7 @@ impl X11Windows {
             });
         }
         let id = self.mint_id()?;
-        let support = *self.support.lock();
+        let support = self.support.get();
         // A title bar of the application's opens with the window manager's frame
         // where the window manager cannot move one, so the plan takes that
         // frame's inset.
@@ -1862,7 +1876,7 @@ impl X11Windows {
             WindowMode::Fullscreen if support.fullscreen => WindowMode::Fullscreen,
             _ => WindowMode::Normal,
         };
-        let input = Arc::clone(owner.input());
+        let input = Rc::clone(owner.input());
         let delivery = Arc::new(WindowDelivery::counting_frames(
             handler,
             input.capabilities(),
@@ -1919,13 +1933,10 @@ impl X11Windows {
         if opens_in != WindowMode::Normal {
             window.seed_mode(opens_in);
         }
-        if self.windows.insert(id, Rc::clone(&window)).is_err()
-            || self.by_xid.insert(xid, id).is_err()
         {
-            window.release();
-            return Err(OpenWindowError::Unavailable {
-                message: "the X11 window table answers on its owner thread alone".into(),
-            });
+            let mut table = self.table.borrow_mut();
+            table.windows.insert(id, Rc::clone(&window));
+            table.by_xid.insert(xid, id);
         }
         let target = InputTarget {
             window: window.window_ref(),
@@ -1987,7 +1998,7 @@ impl X11Windows {
 
     /// Every window reads itself again.
     fn refresh_all(&self) {
-        for window in self.windows.values() {
+        for window in self.open_windows() {
             window.refresh_state();
         }
     }
@@ -2056,7 +2067,7 @@ impl X11Window {
 
 impl OpenWindows for X11Windows {
     fn is_empty(&self) -> bool {
-        self.windows.is_empty()
+        self.table.borrow().windows.is_empty()
     }
 }
 
@@ -2077,7 +2088,7 @@ impl LoopWindows for X11Windows {
     }
 
     fn deliver_frames(&self) {
-        for window in self.windows.values() {
+        for window in self.open_windows() {
             if window.take_redraw() && !window.closed.get() {
                 window.delivery.dispatch_request_frame();
             }
@@ -2085,20 +2096,21 @@ impl LoopWindows for X11Windows {
     }
 
     fn wants_frame(&self) -> bool {
-        self.windows
+        self.table
+            .borrow()
+            .windows
             .values()
-            .iter()
             .any(|window| window.redraw.load(Ordering::Acquire))
     }
 
     fn redraw_for_deadline(&self) {
-        for window in self.windows.values() {
+        for window in self.open_windows() {
             window.mark_redraw();
         }
     }
 
     fn take_closed(&self) -> bool {
-        self.closed.swap(false, Ordering::AcqRel)
+        self.closed.replace(false)
     }
 
     fn refresh(&self) {
@@ -2106,7 +2118,7 @@ impl LoopWindows for X11Windows {
     }
 
     fn observe_appearance(&self, appearance: WindowAppearance) {
-        let changed = std::mem::replace(&mut *self.appearance.lock(), appearance) != appearance;
+        let changed = self.appearance.replace(appearance) != appearance;
         if changed {
             self.refresh_all();
         }
@@ -2117,10 +2129,14 @@ impl LoopWindows for X11Windows {
     }
 
     fn release(&self) {
-        let windows: Vec<_> = self.windows.entries();
-        for (id, window) in windows {
-            self.by_xid.remove(&window.xid);
-            self.windows.remove(&id);
+        // Each window is let go of with no borrow of the table held: its
+        // handler drops with it.
+        let windows: Vec<_> = {
+            let mut table = self.table.borrow_mut();
+            table.by_xid.clear();
+            table.windows.drain().map(|(_, window)| window).collect()
+        };
+        for window in windows {
             window.release();
         }
     }
@@ -2143,15 +2159,14 @@ impl host::Window<X11Loop> for X11Window {
     /// The window that has the input focus.
     fn active(_: &X11Loop, shared: &X11Windows) -> Option<WindowId> {
         shared
-            .windows
-            .values()
+            .open_windows()
             .into_iter()
             .find(|window| PlatformWindow::state(&**window).focused)
             .map(|window| window.id)
     }
 
     fn capabilities(_: &X11Loop, shared: &X11Windows) -> WindowCapabilities {
-        capabilities(*shared.support.lock())
+        capabilities(shared.support.get())
     }
 
     fn frame_inset(_: &X11Loop, shared: &X11Windows, scale_factor: f64) -> Size<f64> {

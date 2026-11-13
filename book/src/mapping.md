@@ -14,9 +14,22 @@ struct in `crates/`.
 | `Router` | `Router<R: Routable>` + `RouterHandle<R>`, with `#[derive(Routable)]` on a route enum | `crates/flui-widgets/src/router/` |
 | `WidgetsApp` | `WidgetsApp` (`WidgetsApp::new(home)` or `WidgetsApp::router(router)`) | `crates/flui-widgets/src/app/widgets_app.rs` |
 | `MaterialApp` / `CupertinoApp` | `MaterialApp` / `CupertinoApp` | `packages/flui-material/src/app.rs`, `packages/flui-cupertino/src/app.rs` |
+| `WidgetTester` (`testWidgets`, `pumpWidget`, `pump`, `pumpAndSettle`, `tap`, `enterText`) | `Tester` (`Tester::mount`, `pump`, `pump_for`, `pump_and_settle`, `tap`, `enter_text`), synchronous | `crates/flui-testing/src/tester.rs` |
+| `find.text`, `find.byKey`, `find.bySemanticsLabel` | `find::text`, `find::id`, `find::button`, `find::role`: each a `Locator` over the semantics tree | `crates/flui-testing/src/find.rs`, `crates/flui-protocol/src/locator.rs` |
+| `expect(finder, findsOneWidget)` | `t.expect(locator).to_exist()` (`to_be_gone`, `to_have_count`, `to_have_name`, `to_be_checked`, …) | `crates/flui-testing/src/tester.rs` |
 
 ## Notes
 
+- **A test finds what a user perceives.** `flui::testing::find` builds the same `Locator` the
+  driver and an agent use, resolved over the window's semantics tree, so a test written against a
+  headless `Tester` runs unchanged on a device. `find.byType` and `find.byWidget` have no
+  counterpart: the semantics tree carries no widget types, and a type finder ties a test to how a
+  screen is composed rather than to what it shows. A widget that publishes no semantics is found
+  by the identifier its author gives it (`Semantics::identifier`) and `find::id`. Actions wait for
+  their input to land and their frame to run, and an expectation waits while the application has
+  a frame or work due now, then fails at once with the window's outline; nothing waits on a clock
+  the test did not move with `pump_for`. An ambiguous locator fails with its candidates instead
+  of tapping the first.
 - **`Router` is the primary navigation API.** Routes are values: a `#[derive(Routable)]` enum
   with one `#[route("…")]` pattern per variant, and a `Router<R>` that keeps the stack of route
   values, which a page pushes and pops through the `RouterHandle<R>` it takes in `init_state`

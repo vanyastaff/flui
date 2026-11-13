@@ -911,7 +911,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // Correlated as a follower this frame but resolved to hidden
             // (unlinked and not shown, or its leader clipped out) — mirrors the
             // render path's `resolve_follower_transform -> None -> don't
-            // descend` (flui-engine's `render_layer_recursive`).
+            // descend` (flui-engine's `layer_walk`).
             // No HitTestEntry, no descent.
             return false;
         } else {

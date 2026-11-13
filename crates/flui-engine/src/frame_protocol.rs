@@ -231,8 +231,18 @@ impl FrameProtocol {
                 return;
             }
         };
-        let tree = scene.tree();
-        let mut stack = vec![(scene.root(), Matrix4::IDENTITY)];
+        let tree = match scene.content() {
+            flui_layer::SceneContent::Tree(tree) => tree,
+            // A retained version closes the damage over its own filters and
+            // destination-reading chunks, reading only those (ADR-0304 §6):
+            // each publication's damage was closed under its version, and the
+            // damage owed here may join several.
+            flui_layer::SceneContent::Version(version) => {
+                self.apply_closed(region, version.close_damage(region, size));
+                return;
+            }
+        };
+        let mut stack = vec![(tree.root(), Matrix4::IDENTITY)];
         let mut closures = Vec::new();
         while let Some((id, parent)) = stack.pop() {
             let Some(node) = tree.get(id) else {
@@ -262,9 +272,16 @@ impl FrameProtocol {
         // Growing one read region can expose a second filter: the fixed point
         // is reached before the partial clear and any recording, not next
         // frame (ADR-0304 §6).
-        // The damage keeps its own rect when no closure joined it: the
-        // covering rect's outward rounding is not damage.
-        match flui_layer::close_over(region, closures, size) {
+        let closed = flui_layer::close_over(region, closures, size);
+        self.apply_closed(region, closed);
+    }
+
+    /// Marks what closing `region` added: the damage keeps its own rect when
+    /// no closure joined it, because the covering rect's outward rounding is
+    /// not damage.
+    fn apply_closed(&mut self, region: flui_layer::DamageRegion, closed: flui_layer::DamageRegion) {
+        use flui_layer::DamageRegion;
+        match closed {
             DamageRegion::Region(closed) if DamageRegion::Region(closed) != region => {
                 self.damage.mark_dirty(closed.bounds().to_rect());
             }

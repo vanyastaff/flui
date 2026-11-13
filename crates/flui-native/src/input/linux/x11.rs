@@ -1176,7 +1176,7 @@ mod live {
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::keyboard::KeyState;
     use flui_platform::{CursorError, EventTime, PlatformInput, Unsupported, UnsupportedReason};
-    use parking_lot::Mutex;
+
     use x11rb::connection::Connection as _;
     use x11rb::protocol::Event;
     use x11rb::protocol::xinput::{
@@ -1199,7 +1199,7 @@ mod live {
         InputTarget, LoopInput, LoopText, WindowRef, X11Connection, X11Key,
     };
     use crate::owner::panic_boundary::contain_owner_callback;
-    use crate::owner::slot::OwnerSlot;
+
     use crate::owner::window_delivery::WindowDelivery;
 
     /// The XInput 2 version the input asks for: 2.4 brought touchpad
@@ -1268,10 +1268,10 @@ mod live {
         /// XInput 2 answers at 2.4: touchpad gestures.
         gestures: bool,
         labels: LabelAtoms,
-        state: OwnerSlot<Rc<RefCell<State>>>,
+        state: Rc<RefCell<State>>,
         /// The name of the layout the keyboard is in.
-        layout: Mutex<String>,
-        layout_listeners: Mutex<Vec<Box<dyn FnMut() + Send>>>,
+        layout: RefCell<String>,
+        layout_listeners: RefCell<Vec<Box<dyn FnMut() + Send>>>,
         /// The windows' text input, which every key goes through: the
         /// input method of the focused field takes it or lets it through.
         text: Arc<dyn LoopText>,
@@ -1457,7 +1457,7 @@ mod live {
         /// The input of `connection`'s windows: XInput 2 set up on it, the
         /// devices listed, the keyboard read, and the device hierarchy and
         /// the keyboard's changes heard from here on.
-        pub(crate) fn new(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Arc<Self> {
+        pub(crate) fn new(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Rc<Self> {
             let xcb = connection.xcb();
             let version = xcb
                 .xinput_xi_query_version(XI_ASKED.0, XI_ASKED.1)
@@ -1497,17 +1497,10 @@ mod live {
                 monotonic(),
                 None,
             );
-            let layout = keyboard.as_ref().map_or_default(CoreKeyboard::layout_name);
-            let input = Arc::new(Self {
-                connection: Arc::clone(connection),
-                xinput,
-                gestures,
-                labels,
-                state: OwnerSlot::new(),
-                layout: Mutex::new(layout),
-                layout_listeners: Mutex::new(Vec::new()),
-                text,
-            });
+            let layout = keyboard
+                .as_ref()
+                .map(CoreKeyboard::layout_name)
+                .unwrap_or_default();
             let state = State {
                 pointers: X11Pointers::new(clock),
                 windows: HashMap::new(),
@@ -1515,9 +1508,16 @@ mod live {
                 cursors,
                 loaded: HashMap::new(),
             };
-            if input.state.replace(Rc::new(RefCell::new(state))).is_err() {
-                tracing::error!("the X11 input keeps no state: owner slots are exhausted");
-            }
+            let input = Rc::new(Self {
+                connection: Arc::clone(connection),
+                xinput,
+                gestures,
+                labels,
+                state: Rc::new(RefCell::new(state)),
+                layout: RefCell::new(layout),
+                layout_listeners: RefCell::new(Vec::new()),
+                text,
+            });
             if xinput {
                 let watched = xcb.xinput_xi_select_events(
                     connection.root(),
@@ -1564,10 +1564,8 @@ mod live {
             })
         }
 
-        fn with_state<R>(&self, f: impl FnOnce(&mut State) -> R) -> Option<R> {
-            let state = self.state.cloned()?;
-            let mut state = state.borrow_mut();
-            Some(f(&mut state))
+        fn with_state<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+            f(&mut self.state.borrow_mut())
         }
 
         /// The devices the server lists for `device` (one id, or
@@ -1689,7 +1687,6 @@ mod live {
                 }
                 out
             })
-            .unwrap_or_default()
         }
 
         /// What a window opening now can be given: the table of what this
@@ -1700,15 +1697,14 @@ mod live {
 
         /// The layout's name now, kept; whether it changed.
         fn read_layout(&self) -> bool {
-            let name = self
-                .with_state(|state| {
-                    state
-                        .keyboard
-                        .as_ref()
-                        .map_or_default(CoreKeyboard::layout_name)
-                })
-                .unwrap_or_default();
-            let mut layout = self.layout.lock();
+            let name = self.with_state(|state| {
+                state
+                    .keyboard
+                    .as_ref()
+                    .map(CoreKeyboard::layout_name)
+                    .unwrap_or_default()
+            });
+            let mut layout = self.layout.borrow_mut();
             let changed = *layout != name;
             *layout = name;
             changed
@@ -1717,11 +1713,11 @@ mod live {
         /// Tell every listener the layout changed, with none of the input's
         /// locks held: a listener may register another.
         fn layout_changed(&self) {
-            let mut listeners = std::mem::take(&mut *self.layout_listeners.lock());
+            let mut listeners = std::mem::take(&mut *self.layout_listeners.borrow_mut());
             for listener in &mut listeners {
                 contain_owner_callback(listener);
             }
-            let mut kept = self.layout_listeners.lock();
+            let mut kept = self.layout_listeners.borrow_mut();
             listeners.append(&mut kept);
             *kept = listeners;
         }
@@ -1758,14 +1754,13 @@ mod live {
                 }
                 out
             })
-            .unwrap_or_default()
         }
 
         /// What a key event delivers.
         fn key_event(&self, event: &xinput::KeyPressEvent, state: KeyState) -> Option<X11Key> {
             let repeat = u32::from(event.flags) & u32::from(xinput::KeyEventFlags::KEY_REPEAT) != 0;
             let time = EventTime::from_nanos(event_timestamp_ns());
-            let shared = Rc::downgrade(&self.state.cloned()?);
+            let shared = Rc::downgrade(&self.state);
             self.with_state(|input| {
                 let target = input.windows.get(&event.event)?;
                 let window = target.window;
@@ -1800,7 +1795,6 @@ mod live {
                     }),
                 })
             })
-            .flatten()
         }
 
         /// The server's keyboard state changed: whether its layout did.
@@ -1820,7 +1814,6 @@ mod live {
                     ],
                 )
             })
-            .unwrap_or(false)
         }
 
         /// Read the keymap again and tell the listeners if the layout's name
@@ -1877,7 +1870,6 @@ mod live {
                     .map(|input| (Arc::clone(&delivery), Delivery::Input(input)))
                     .collect()
             })
-            .unwrap_or_default()
         }
 
         /// Select a window's XInput 2 events: every master device's pointer,
@@ -1949,7 +1941,8 @@ mod live {
                 xcb.get_atom_name(atom)
                     .ok()
                     .and_then(|cookie| cookie.reply().ok())
-                    .map_or_default(|reply| String::from_utf8_lossy(&reply.name).into_owned())
+                    .map(|reply| String::from_utf8_lossy(&reply.name).into_owned())
+                    .unwrap_or_default()
             })
             .collect()
     }
@@ -2049,9 +2042,7 @@ mod live {
 
     impl LoopInput for X11Input {
         fn capabilities(&self) -> InputCapabilities {
-            let present = self
-                .with_state(|state| state.pointers.present())
-                .unwrap_or_default();
+            let present = self.with_state(|state| state.pointers.present());
             self.capabilities_now().with_present(present)
         }
 
@@ -2090,20 +2081,18 @@ mod live {
 
         fn pointer_taken(&self, window: xproto::Window) {
             let time = EventTime::from_nanos(event_timestamp_ns());
-            let deliveries = self
-                .with_state(|state| {
-                    let Some(target) = state.windows.get(&window) else {
-                        return Vec::new();
-                    };
-                    let delivery = Arc::clone(&target.delivery);
-                    state
-                        .pointers
-                        .cancel_surface(surface_of(target.window), NativeCancel::CaptureLost, time)
-                        .into_iter()
-                        .map(|input| (Arc::clone(&delivery), Delivery::Input(input)))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let deliveries = self.with_state(|state| {
+                let Some(target) = state.windows.get(&window) else {
+                    return Vec::new();
+                };
+                let delivery = Arc::clone(&target.delivery);
+                state
+                    .pointers
+                    .cancel_surface(surface_of(target.window), NativeCancel::CaptureLost, time)
+                    .into_iter()
+                    .map(|input| (Arc::clone(&delivery), Delivery::Input(input)))
+                    .collect()
+            });
             deliver(deliveries);
         }
 
@@ -2191,48 +2180,46 @@ mod live {
 
         fn set_cursor(&self, window: WindowRef, cursor: CursorIcon) -> Result<(), CursorError> {
             let xcb = self.connection.xcb();
-            let loaded = self
-                .with_state(|state| {
-                    if !state
-                        .windows
-                        .get(&window.xid)
-                        .is_some_and(|target| target.window.id == window.id)
-                    {
-                        return Err(CursorError::from(Unsupported::new(
-                            UnsupportedReason::NoWindow,
-                        )));
-                    }
-                    if let Some(loaded) = state.loaded.get(&cursor) {
-                        return Ok(*loaded);
-                    }
-                    let Some(handle) = state.cursors.as_ref() else {
-                        return Err(CursorError::Backend(
-                            "the X server's cursors cannot be loaded".into(),
-                        ));
-                    };
-                    let names = std::iter::once(cursor.name())
-                        .chain(cursor.alt_names().iter().copied())
-                        .chain(std::iter::once(core_name(cursor)));
-                    let mut loaded = x11rb::NONE;
-                    for name in names {
-                        match handle.load_cursor(xcb, name) {
-                            Ok(found) if found != x11rb::NONE => {
-                                loaded = found;
-                                break;
-                            }
-                            Ok(_) => {}
-                            Err(error) => return Err(CursorError::Backend(error.to_string())),
+            let loaded = self.with_state(|state| {
+                if !state
+                    .windows
+                    .get(&window.xid)
+                    .is_some_and(|target| target.window.id == window.id)
+                {
+                    return Err(CursorError::from(Unsupported::new(
+                        UnsupportedReason::NoWindow,
+                    )));
+                }
+                if let Some(loaded) = state.loaded.get(&cursor) {
+                    return Ok(*loaded);
+                }
+                let Some(handle) = state.cursors.as_ref() else {
+                    return Err(CursorError::Backend(
+                        "the X server's cursors cannot be loaded".into(),
+                    ));
+                };
+                let names = std::iter::once(cursor.name())
+                    .chain(cursor.alt_names().iter().copied())
+                    .chain(std::iter::once(core_name(cursor)));
+                let mut loaded = x11rb::NONE;
+                for name in names {
+                    match handle.load_cursor(xcb, name) {
+                        Ok(found) if found != x11rb::NONE => {
+                            loaded = found;
+                            break;
                         }
+                        Ok(_) => {}
+                        Err(error) => return Err(CursorError::Backend(error.to_string())),
                     }
-                    if loaded == x11rb::NONE {
-                        return Err(CursorError::Backend(format!(
-                            "the cursor theme has no {cursor:?} cursor"
-                        )));
-                    }
-                    state.loaded.insert(cursor, loaded);
-                    Ok(loaded)
-                })
-                .unwrap_or_else(|| Err(Unsupported::new(UnsupportedReason::Unavailable).into()))?;
+                }
+                if loaded == x11rb::NONE {
+                    return Err(CursorError::Backend(format!(
+                        "the cursor theme has no {cursor:?} cursor"
+                    )));
+                }
+                state.loaded.insert(cursor, loaded);
+                Ok(loaded)
+            })?;
             xcb.change_window_attributes(
                 window.xid,
                 &ChangeWindowAttributesAux::new().cursor(loaded),
@@ -2243,11 +2230,11 @@ mod live {
         }
 
         fn keyboard_layout(&self) -> String {
-            self.layout.lock().clone()
+            self.layout.borrow().clone()
         }
 
         fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
-            self.layout_listeners.lock().push(callback);
+            self.layout_listeners.borrow_mut().push(callback);
         }
     }
 
@@ -2271,15 +2258,6 @@ mod live {
             | CursorIcon::RowResize => "sb_v_double_arrow",
             CursorIcon::NotAllowed | CursorIcon::NoDrop => "circle",
             _ => "left_ptr",
-        }
-    }
-
-    impl Drop for X11Input {
-        fn drop(&mut self) {
-            // The windows' entries hold their deliveries: they go with the
-            // input, outside any borrow.
-            let state = self.state.take();
-            drop(state);
         }
     }
 
