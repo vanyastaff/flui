@@ -353,7 +353,7 @@ fn write_file(
         }
         for doc in &variant.doc {
             for line in doc.lines() {
-                doc_line(out, "    ", line.strip_prefix(' ').unwrap_or(line))?;
+                doc_line(out, "    ", line.trim_prefix(' '))?;
             }
         }
         for alias in &variant.aliases {
