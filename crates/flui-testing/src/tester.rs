@@ -897,7 +897,8 @@ impl Tester {
     /// same storage, as when the application quits and is opened again: the
     /// window commits its composition and closes past every hold, what the
     /// documents published is written (a write the storage holds is not
-    /// waited for: the storage decides it when its hold ends), and the old
+    /// waited for: the storage decides it when its hold ends, and what a
+    /// document published after it is lost with the run), and the old
     /// tree, its states and its runtime are gone before the new one mounts.
     ///
     /// # Panics
@@ -935,7 +936,9 @@ impl Tester {
     /// The operating system ends the user's session: the session-ended notice
     /// reaches the application, the window commits its composition and closes
     /// past every hold, as a session that is ending no longer asks, and then
-    /// what the application's documents published is written.
+    /// what the application's documents published is written, as in
+    /// [`Self::restart`]: a write the storage holds is not waited for, and
+    /// what a document published after it is lost.
     pub fn end_session(&mut self) {
         self.host.end_session_now();
     }

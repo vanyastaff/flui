@@ -1512,7 +1512,7 @@ impl HeadlessHost {
     /// The session ends now, in the order a runner carries it out: the
     /// session-ended notice reaches every subscriber, then every window
     /// closes and what the documents published is written, as in
-    /// [`quit_now`](Self::quit_now), within [`SESSION_END_BUDGET`].
+    /// [`quit_now`](Self::quit_now).
     ///
     /// Each step runs whatever an earlier one's user code did: the first
     /// panic resumes once the write is done.
@@ -1522,32 +1522,34 @@ impl HeadlessHost {
             self.ui_runtime
                 .deliver_host_notice(&flui_platform::HostNotice::SessionEnded);
         });
-        self.quit_into(SESSION_END_BUDGET, &mut first);
+        self.quit_into(&mut first);
         first.resume();
     }
 
     /// The application quits now: each window commits its composition and
     /// closes past every hold, so its Detached observers publish what they
     /// keep, and then what the documents published is written. A write a
-    /// storage holds is not waited for: it stays with the storage, which
-    /// decides it when its hold is released or dropped.
+    /// storage holds is not waited for, since nothing on this thread can
+    /// finish it: it stays with the storage, which decides it when its hold
+    /// is released or dropped, and what a document published after it is
+    /// lost, as at an exit the write outlasts.
     ///
     /// Each step runs whatever an earlier one's user code did: the first
     /// panic resumes once the write is done.
     pub(crate) fn quit_now(&mut self) {
         let mut first = FirstPanic::new();
-        self.quit_into(Duration::ZERO, &mut first);
+        self.quit_into(&mut first);
         first.resume();
     }
 
-    /// Close every window, then write what the documents published, waiting
-    /// at most `budget` for a write in progress; a panic goes to `first`.
-    fn quit_into(&mut self, budget: Duration, first: &mut FirstPanic) {
+    /// Close every window, then write what the documents published without
+    /// waiting for a held write; a panic goes to `first`.
+    fn quit_into(&mut self, first: &mut FirstPanic) {
         for id in self.presentation_ids() {
             first.contain(|| self.ui_runtime.commit_composition_for_close(id));
             first.contain(|| self.close_presentation(id));
         }
-        first.contain(|| self.write_published(budget));
+        first.contain(|| self.write_published(Duration::ZERO));
     }
 
     /// Run the queued registry writes, then write what every document still

@@ -815,3 +815,46 @@ fn a_session_end_writes_even_when_a_subscriber_panics() {
     let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
     assert_eq!(*loaded, Note("draft".to_owned()));
 }
+
+/// A listener that panics as the window's composition is committed at the
+/// session's end does not cost the session its close or its write.
+#[test]
+fn a_session_end_writes_even_when_committing_the_composition_panics() {
+    use flui_foundation::Listenable as _;
+
+    let (book, opened) = notebook_saving(false, Some("draft"), false);
+    let controller = flui_widgets::TextEditingController::with_text("Trip ");
+    let field = flui_widgets::EditableText::new(
+        controller.clone(),
+        flui_interaction::FocusNode::with_debug_label("title"),
+    );
+    let mut t = Tester::mount(Column::new((book, SizedBox::new(300.0, 40.0).child(field))));
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    t.tap(&find::role(flui_testing::Role::TextInput));
+    t.compose("とう", Some(1));
+    let _listening = controller.listen(Rc::new({
+        let controller = controller.clone();
+        move || {
+            assert!(
+                controller.is_composing(),
+                "a listener fails as the composition is committed"
+            );
+        }
+    }));
+    let storage = t.storage().expect("a window keeps a storage").clone();
+    let ended = catch_unwind(AssertUnwindSafe(|| t.end_session()));
+    assert!(ended.is_err(), "the listener's panic reaches the test");
+    assert!(
+        opened
+            .borrow()
+            .lifecycle
+            .contains(&flui_view::AppLifecycleState::Detached),
+        "the window detached past the panic"
+    );
+    drop(t);
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("draft".to_owned()));
+}
