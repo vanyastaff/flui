@@ -19,14 +19,9 @@
 //! `DrawerHandle::open_drawer`/`close_drawer` drive them directly.
 //!
 //! `DrawerHandle` is deliberately **`Rc`-based and `!Send`**, not
-//! `Arc`/`Send + Sync`. `GlobalKey::with_current_state` resolves against the
-//! owner-thread element-tree registry, and this workspace already carries a
-//! documented tension between `Send + Sync` data-plane primitives (gesture
-//! recognizers, render objects — ADR-0027) and owner-affine widget-layer
-//! capability handles (an in-flight `Send`-bound-drop migration found this
-//! exact knot at `flui_sdk::widgets::NavigatorHandle`, which is `Cloneable, Send +
-//! Sync` in name only — see that type's own module doc). `DrawerHandle`
-//! sidesteps the knot entirely by never claiming `Send` in the first place.
+//! `Arc`/`Send + Sync`: `GlobalKey::with_current_state` resolves against the
+//! owner-thread element-tree registry, and state only the owner thread touches
+//! carries no `Send` (ADR-0323).
 //!
 //! ## Drag extent follows the constrained declared panel width
 //!

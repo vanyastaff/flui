@@ -206,14 +206,13 @@ mod measured {
         IconThemeData as _, InheritedTheme as _, IntrinsicWidth as _, InvalidViewportFraction as _,
         LayoutId as _, MainAxisAlignment as _, MainAxisSize as _, MergeSemantics as _,
         MouseRegion as _, MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
-        NavigatorHandle as _, NavigatorObserver as _, NumericRange as _, NumericRangeError as _,
-        Offstage as _, Opacity as _, Padding as _, PageRoute as _, PageSnap as _,
-        PanClaimRegion as _, PopupRoute as _, Positioned as _, PreferredSizeView as _,
-        RawGestureDetector as _, RecognizerContext as _, RefreshController as _,
-        RefreshIndicator as _, RefreshIntent as _, RouteAnimation as _, RouteResult as _, Row as _,
-        SafeArea as _, SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _,
-        SemanticsRole as _, SharedSnapPolicy as _, SizedBox as _, SlideTransition as _,
-        Slider as _, SliderState as _, SliverPersistentHeader as _,
+        NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
+        PageRoute as _, PageSnap as _, PanClaimRegion as _, PopupRoute as _, Positioned as _,
+        PreferredSizeView as _, RawGestureDetector as _, RecognizerContext as _,
+        RefreshController as _, RefreshIndicator as _, RefreshIntent as _, RouteAnimation as _,
+        RouteResult as _, Row as _, SafeArea as _, SelectAllTextIntent as _, Semantics as _,
+        SemanticsAnchor as _, SemanticsRole as _, SharedSnapPolicy as _, SizedBox as _,
+        SlideTransition as _, Slider as _, SliderState as _, SliverPersistentHeader as _,
         SliverPersistentHeaderDelegate as _, SnapPolicy as _, Stack as _, StackFit as _,
         SubmitCallback as _, Table as _, TableCell as _, TableCellVerticalAlignment as _,
         TableColumnWidth as _, TableRow as _, Text as _, TextEditingController as _,
@@ -239,11 +238,10 @@ mod measured {
         Invalid as _, KeylineSnap as _, LayoutBuilder as _, LayoutId as _, Listener as _,
         MainAxisAlignment as _, MainAxisSize as _, MergeSemantics as _, MotionBuilder as _,
         MouseRegion as _, MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
-        NavigatorHandle as _, NavigatorObserver as _, NumericRange as _, NumericRangeError as _,
-        Offstage as _, Opacity as _, Padding as _, PageController as _, PageRoute as _,
-        PageTransitionBuilder as _, PageTransitions as _, PageView as _,
-        ParallaxPageTransition as _, PointerDispatch as _, PointerEvent as _, PopupRoute as _,
-        Positioned as _, PreferredSizeView as _, RefreshIndicatorPhase as _,
+        NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
+        PageController as _, PageRoute as _, PageTransitionBuilder as _, PageTransitions as _,
+        PageView as _, ParallaxPageTransition as _, PointerDispatch as _, PointerEvent as _,
+        PopupRoute as _, Positioned as _, PreferredSizeView as _, RefreshIndicatorPhase as _,
         RefreshIndicatorStyle as _, RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _,
         ScaleTransition as _, SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _,
         SemanticsRole as _, SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
@@ -300,16 +298,6 @@ mod measured {
         },
         painting::{Alignment as _, Color as _},
     };
-
-    /// A method a package calls on a framework type that has no import of
-    /// its own: `OpenContainer` keeps the page below still with it.
-    const _: fn(flui_sdk::widgets::PageRoute<()>, bool) -> flui_sdk::widgets::PageRoute<()> =
-        flui_sdk::widgets::PageRoute::animates_route_below;
-
-    /// `OpenContainer` asks it whether to push a page or, under a `Router`
-    /// whose navigator refuses pages pushed through its handle, a popup.
-    const _: fn(&flui_sdk::widgets::NavigatorHandle) -> bool =
-        flui_sdk::widgets::NavigatorHandle::admits_pages;
 }
 
 /// Each curated item, and one type per whole-module re-export, is the facade's

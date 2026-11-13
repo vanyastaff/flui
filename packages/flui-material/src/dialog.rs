@@ -101,17 +101,12 @@
 //! defaults (not a generic route's `0x80000000` barrier): `barrierDismissible:
 //! true`, `barrierColor: Colors.black54` (`0x8A000000`).
 //!
-//! **Takes a [`NavigatorHandle`] directly, not a `BuildContext`.** The
-//! oracle resolves one itself — `Navigator.of(context, rootNavigator:
-//! useRootNavigator)`, defaulting to the *root* navigator — and panics if
-//! none exists. FLUI's [`NavigatorHandle`] lookup
-//! ([`NavigatorHandle::maybe_of_root`]) returns `Option`, not a value a
-//! [`PANIC-POLICY`](../../../../docs/PANIC-POLICY.md)-abiding library
-//! function may unwrap on a caller's behalf; taking the handle as a
-//! parameter instead pushes that choice (and the `Option` it entails) onto
-//! the caller, who already has it in hand in every realistic call site. A
-//! caller that wants the oracle's exact `rootNavigator: true` resolution
-//! calls `NavigatorHandle::maybe_of_root(ctx)` itself before this function.
+//! **Takes the opening page's [`PageHandle`], not a `BuildContext`.** The
+//! oracle takes `context` and resolves `Navigator.of(context)` inside. A FLUI
+//! event callback runs after `build` with no position in the tree, so the
+//! caller resolves [`PageHandle::of`] in `build` and moves the handle into the
+//! callback that opens the dialog (ADR-0330 §3). The dialog is pushed on the
+//! navigator of that page, and belongs to it.
 //!
 //! **The transition** is the popup builder of the
 //! [`PageTransitions`](flui_sdk::widgets::PageTransitions) hook in scope where
@@ -120,17 +115,20 @@
 //! `EASE_OUT` (`crate::page_transitions`). A navigator with no hook above it
 //! cuts, as any `PopupRoute` does.
 //!
-//! Return value: `navigator.push` already returns a [`RouteResult<T>`], a
-//! future of `Result<Option<T>, RouteResultError>`: `Ok(Some(value))` for the
-//! value the dialog was popped with, `Ok(None)` when it closed without one, and
-//! `RouteResultError::TypeMismatch` for a value of another type. `show_dialog`
-//! returns it unchanged rather than wrapping or narrowing it. `T` stays on the
-//! owner thread and needs no `Send`.
+//! Return value: a [`RouteResult<T>`], a future of
+//! `Result<Option<T>, RouteResultError>`: `Ok(Some(value))` for the value the
+//! dialog was popped with, `Ok(None)` when it closed without one, and
+//! `RouteResultError::TypeMismatch` for a value of another type. `T` stays on
+//! the owner thread and needs no `Send`. A call made while the UI runtime
+//! builds, or from a page that has left its navigator, pushes nothing and
+//! answers [`PageError`].
 //!
 //! **Not ported**, and named:
 //!
 //! - `useSafeArea`, `routeSettings`, `traversalEdgeBehavior`, `anchorPoint`,
 //!   `fullscreenDialog`, `requestFocus`, `animationStyle`.
+//! - `useRootNavigator`: the dialog covers the navigator of the page that opens
+//!   it, which under a nested `Router` is that Router's area.
 //! - **No `barrierDismissible`/`barrierColor`/`barrierLabel` knobs.** These
 //!   are `showDialog` *parameters* in the oracle, not internal constants;
 //!   `show_dialog` hardcodes them (see above), so a non-dismissible dialog,
@@ -156,7 +154,7 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
-    MainAxisAlignment, MainAxisSize, MergeSemantics, NavigatorHandle, Padding, PopupRoute,
+    MainAxisAlignment, MainAxisSize, MergeSemantics, Padding, PageError, PageHandle, PopupRoute,
     RouteResult, Row, Semantics, SemanticsAnchor, SemanticsRole, SizedBox,
 };
 use flui_sdk::{
@@ -549,20 +547,25 @@ impl StatelessView for AlertDialog {
 /// `Colors.black54` — the Material dialog's default barrier color.
 const BARRIER_COLOR: Color = Color::from_argb(0x8A00_0000);
 
-/// Pushes `builder`'s content as a modal dialog: a dismissible
+/// Pushes `builder`'s content as a modal dialog over `page`: a dismissible
 /// `Colors.black54` barrier over the current screen, with the dialog
 /// centered above it.
 ///
 /// See the module docs for the full `showDialog` parity table, including why
-/// this takes a [`NavigatorHandle`] rather than resolving one from a
-/// `BuildContext`, and what the returned [`RouteResult<T>`] is.
-pub fn show_dialog<T, F, W>(navigator: &NavigatorHandle, builder: F) -> RouteResult<T>
+/// this takes the opening page's [`PageHandle`] rather than a `BuildContext`,
+/// and what the returned [`RouteResult<T>`] is.
+///
+/// # Errors
+///
+/// [`PageError`] when the call is made while the UI runtime builds, or once
+/// `page` has left its navigator; no dialog is pushed.
+pub fn show_dialog<T, F, W>(page: &PageHandle, builder: F) -> Result<RouteResult<T>, PageError>
 where
     T: 'static,
     F: Fn(&dyn BuildContext) -> W + 'static,
     W: IntoView,
 {
-    navigator.push(
+    page.push_popup(
         PopupRoute::<T>::new(move |ctx, _animation, _secondary| builder(ctx).into_view().boxed())
             .barrier_dismissible(true)
             .barrier_color(BARRIER_COLOR),

@@ -2,9 +2,9 @@
 
 - **Status:** Superseded (2026-11-04)
 - **Date:** 2026-07-10
-- **Superseded-by:** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) for every
+- **Superseded-by:** [ADR-0330](ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md) for every
   section: routes are a typed `Routable` enum under a `Router`, named routes and `RouteKey<T>` are
-  removed, and a typed result is `RouterHandle::push_for_result` (its §3 and §4)
+  removed, and a typed result is `RouterHandle::push_for_result` (its §1, §3 and §4)
 
 ## Context
 

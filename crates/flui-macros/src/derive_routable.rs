@@ -1,4 +1,4 @@
-//! Codegen for `#[derive(Routable)]` (ADR-0093 §1).
+//! Codegen for `#[derive(Routable)]` (ADR-0330 §1).
 //!
 //! ```rust,ignore
 //! #[derive(Routable, Clone, PartialEq)]
@@ -168,7 +168,7 @@ fn route(variant: &Variant) -> syn::Result<Route<'_>> {
                 format!(
                     "derive(Routable) takes unit and named-field variants; name the fields of \
                      `{}`. A tuple variant that nests a child route type (`#[nest]`) is not \
-                     supported yet, see ADR-0093's implementation series",
+                     supported yet, see ADR-0330's implementation series",
                     variant.ident
                 ),
             ));

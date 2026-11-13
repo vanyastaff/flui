@@ -14,13 +14,12 @@
 use flui_animation::{Animation, AnimationStatus};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, SimpleRoute};
 use flui_widgets::__test_access::{
     NavigatorProbe as _, OverlayEntryProbe as _, RouteProbe as _, TransitionHandle,
 };
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, PageRoute, RouteAnimation, RouteId, SimpleRoute,
-};
+use flui_widgets::navigator::{PageRoute, RouteAnimation, RouteId};
 
 use crate::common::harness::{Harness, mount};
 
@@ -34,7 +33,7 @@ fn plain_page() -> SimpleRoute<i32> {
 
 /// A navigator with one non-animated route seeded, mounted and settled.
 fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     handle.seed_initial(plain_page());
     let harness = mount(Navigator::new(handle.clone()));
     let bottom = handle.route_ids()[0];
@@ -122,7 +121,7 @@ pub(crate) fn page_route_paints_its_separate_entrance_and_exit_durations() {
 
     for (entrance, exit) in [(1000, 2000), (2000, 1000)] {
         let registry = Vsync::new();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         navigator.seed_initial(plain_page());
         let mut app = crate::common::lay_out_animated(
             VsyncScope::new(registry.clone(), Navigator::new(navigator.clone())),
