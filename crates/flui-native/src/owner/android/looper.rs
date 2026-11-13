@@ -264,12 +264,15 @@ pub struct AndroidLoop {
     library: Arc<dyn SymbolSource>,
     /// The identities of the windows it opens.
     pub(crate) window_ids: ActivityWindowIds,
+    /// Keeps the loop off other threads where every field would allow it
+    /// (ADR-0327 §5).
+    _owner_local: std::marker::PhantomData<Rc<()>>,
 }
 
 // Owner-local (ADR-0327 §5): the loop's window slot and stop flag are its
-// thread's cells, so the loop is not `Sync`; it stays `Send` while the
-// Activity's window is (`ActivityWindow: Send + Sync`, for its delivery).
-static_assertions::assert_not_impl_any!(AndroidLoop: Sync);
+// thread's cells and the loop never leaves the thread that runs it, so it is
+// neither `Send` nor `Sync`.
+static_assertions::assert_not_impl_any!(AndroidLoop: Send, Sync);
 
 // Opaque on purpose, matching `HeadlessLoop`. A
 // derived `Debug` here would format the clipboard, whose contents are the
@@ -337,6 +340,7 @@ impl AndroidLoop {
             api,
             library,
             window_ids: ActivityWindowIds::default(),
+            _owner_local: std::marker::PhantomData,
         }
     }
 
@@ -810,7 +814,7 @@ impl host::Loop for AndroidLoop {
                             if let Some(signal) = reaction.signal.take() {
                                 signal.deliver(&*self);
                             }
-                            // The window is cloned out of its lock: the surface
+                            // The window is cloned out of its cell: the surface
                             // observer runs embedder code that may call back
                             // into the platform.
                             let window = self.window.borrow().clone();
@@ -925,7 +929,7 @@ impl host::Loop for AndroidLoop {
                         }
                         MainEvent::WindowResized { .. } => {
                             tracing::info!("Android: Window resized");
-                            // Cloned out of its lock: the resize observer runs
+                            // Cloned out of its cell: the resize observer runs
                             // embedder code that may call back into the platform.
                             let window = self.window.borrow().clone();
                             if let Some(w) = window {
@@ -1022,7 +1026,7 @@ impl host::Loop for AndroidLoop {
             // Consume the redraw only after polling confirms this turn can
             // deliver it. A queued Pause therefore preserves the request for
             // Resume rather than stranding an acknowledged continuation. The
-            // window is cloned out of its lock: the frame runs embedder code
+            // window is cloned out of its cell: the frame runs embedder code
             // that may call back into the platform.
             // Where the choreographer paces the frames, only the turn whose
             // poll ran its callback delivers one, stamped with its vsync; a

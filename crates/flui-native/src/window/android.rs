@@ -696,7 +696,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
     fn active(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> Option<WindowId> {
         owner
             .window
-            .borrow_mut()
+            .borrow()
             .as_ref()
             .map(|window| window.activity_id().window())
     }
