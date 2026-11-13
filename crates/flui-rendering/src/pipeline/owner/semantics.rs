@@ -2206,17 +2206,17 @@ fn check_placement_against_rebuild(
     identities: &mut RegionIdentities,
 ) -> AssemblyCallbacks {
     let mut regions = AssemblyRegions::default();
-    let announcers: Vec<accesskit::NodeId> = identities
-        .existing_announcements()
-        .map(|announcements| {
-            [
-                flui_semantics::Urgency::Polite,
-                flui_semantics::Urgency::Assertive,
-            ]
-            .map(|urgency| accesskit::NodeId(announcements.node_id(urgency).as_u64()))
-            .to_vec()
-        })
-        .unwrap_or_default();
+    let announcers: Vec<accesskit::NodeId> =
+        identities
+            .existing_announcements()
+            .map_or_default(|announcements| {
+                [
+                    flui_semantics::Urgency::Polite,
+                    flui_semantics::Urgency::Assertive,
+                ]
+                .map(|urgency| accesskit::NodeId(announcements.node_id(urgency).as_u64()))
+                .to_vec()
+            });
     let Ok(built) = assemble_semantics_root(tree, root, &mut regions) else {
         return std::mem::take(&mut regions.callbacks);
     };
@@ -2238,7 +2238,7 @@ fn check_placement_against_rebuild(
     let placed = owner.to_accesskit_tree_update(None);
     let expected = rebuilt.to_accesskit_tree_update(None);
     let nodes = |update: Option<accesskit::TreeUpdate>| {
-        let mut nodes = update.map(|update| update.nodes).unwrap_or_default();
+        let mut nodes = update.map_or_default(|update| update.nodes);
         nodes.retain(|(id, _)| !announcers.contains(id));
         for (_, node) in &mut nodes {
             if node
