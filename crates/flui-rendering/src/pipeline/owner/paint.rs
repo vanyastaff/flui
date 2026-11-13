@@ -2471,7 +2471,9 @@ pub(super) struct PaintedChild {
 
 #[cfg(test)]
 mod tests {
-    use super::{FRAGMENT_PASSES, FragmentRoom, KEPT_CAPACITY};
+    use super::{
+        FRAGMENT_PASSES, FragmentOp, FragmentRoom, KEPT_CAPACITY, KEPT_FRAGMENT_OPS, keep_room,
+    };
 
     fn room_after(peaks: &[usize]) -> usize {
         let mut room = FragmentRoom::default();
@@ -2480,6 +2482,28 @@ mod tests {
             .map(|&peak| room.after_pass(peak))
             .last()
             .unwrap_or(0)
+    }
+
+    /// Passes over one fragment buffer, each pushing as many operations as
+    /// its peak one at a time, as a paint pass records them: the times each
+    /// pass grew the buffer, and the room each left behind.
+    fn passes(peaks: &[usize]) -> Vec<(usize, usize)> {
+        let mut room = FragmentRoom::default();
+        let mut ops: Vec<FragmentOp> = Vec::new();
+        peaks
+            .iter()
+            .map(|&peak| {
+                let mut grown = 0;
+                for _ in 0..peak {
+                    let before = ops.capacity();
+                    ops.push(FragmentOp::Pop);
+                    grown += usize::from(ops.capacity() != before);
+                }
+                ops.clear();
+                keep_room(&mut ops, room.after_pass(peak));
+                (grown, ops.capacity())
+            })
+            .collect()
     }
 
     #[test]
@@ -2507,42 +2531,20 @@ mod tests {
     fn fragment_room_never_passes_the_cap() {
         assert_eq!(room_after(&[1500, 1500]), KEPT_CAPACITY);
     }
-}
-
-/// Passes that hold `peaks` operations at most, each through the buffer the
-/// last left: whether each grew it, and the room each left behind.
-#[cfg(test)]
-fn passes(peaks: &[usize]) -> Vec<(bool, usize)> {
-    let mut room = FragmentRoom::default();
-    let mut ops: Vec<u8> = Vec::new();
-    peaks
-        .iter()
-        .map(|&peak| {
-            let before = ops.capacity();
-            ops.extend(std::iter::repeat_n(0, peak));
-            let grew = ops.capacity() != before;
-            ops.clear();
-            keep_room(&mut ops, room.after_pass(peak));
-            (grew, ops.capacity())
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod room_tests {
-    use super::{KEPT_CAPACITY, KEPT_FRAGMENT_OPS, passes};
 
     #[test]
     fn a_repeating_pass_grows_its_buffer_only_while_it_warms() {
         for peaks in [
             vec![300; 6],
             [300, 40].repeat(4),
+            // A pass a little larger than the one it repeats finds room.
+            vec![300, 300, 320, 300, 320, 300],
             vec![1500; 6],
             [2000, 1000].repeat(4),
         ] {
-            let grown: Vec<bool> = passes(&peaks).iter().map(|&(grew, _)| grew).collect();
+            let grown: Vec<usize> = passes(&peaks).iter().map(|&(grown, _)| grown).collect();
             assert!(
-                grown[3..].iter().all(|&grew| !grew),
+                grown[3..].iter().all(|&grown| grown == 0),
                 "passes {peaks:?} keep growing their buffer: {grown:?}"
             );
         }
@@ -2555,7 +2557,8 @@ mod room_tests {
             left[1].1 <= KEPT_FRAGMENT_OPS,
             "a mount's room stays: {left:?}"
         );
-        let left = passes(&[5000, 5000]);
+        // Grown by doubling past twice the cap, the buffer keeps no more.
+        let left = passes(&[2 * KEPT_CAPACITY + 1, 2 * KEPT_CAPACITY + 1]);
         assert!(
             left[1].1 <= 2 * KEPT_CAPACITY,
             "room past twice the cap: {left:?}"
