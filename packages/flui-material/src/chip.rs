@@ -531,18 +531,12 @@ impl StatelessView for Chip {
         });
 
         let delete_view = self.on_deleted.clone().map(|on_deleted| {
-            let mut delete_button = InkWell::new()
-                .child(IconTheme::new(
-                    IconThemeData::default()
-                        .size(CHIP_ICON_SIZE)
-                        .color(delete_icon_color),
-                    Icon::new(cancel_icon_data()),
-                ))
-                .shape(MaterialShape::Stadium);
-            if self.enabled {
-                delete_button = delete_button.on_tap(move |ctx| on_deleted(ctx));
-            }
-            delete_button.boxed()
+            delete_button(
+                cancel_icon_data(),
+                delete_icon_color,
+                self.enabled,
+                on_deleted,
+            )
         });
 
         let content = build_chip_row(
@@ -821,18 +815,7 @@ impl StatelessView for FilterChip {
         };
 
         let delete_view = self.on_deleted.clone().map(|on_deleted| {
-            let mut delete_button = InkWell::new()
-                .child(IconTheme::new(
-                    IconThemeData::default()
-                        .size(CHIP_ICON_SIZE)
-                        .color(delete_icon_color),
-                    Icon::new(clear_icon_data()),
-                ))
-                .shape(MaterialShape::Stadium);
-            if enabled {
-                delete_button = delete_button.on_tap(move |ctx| on_deleted(ctx));
-            }
-            delete_button.boxed()
+            delete_button(clear_icon_data(), delete_icon_color, enabled, on_deleted)
         });
 
         let content = build_chip_row(
@@ -873,6 +856,33 @@ impl StatelessView for FilterChip {
             .foreground_painter(ChipBorderPainter { side, shape })
             .child(Material::new(background_color).shape(shape).child(ink_well))
     }
+}
+
+/// A chip's delete button: a well of its own over the delete glyph, a button
+/// node whether or not the chip has a handler of its own, so activating the
+/// chip never deletes it and the delete button's node does not come and go
+/// with the chip's `on_pressed`. Flutter wraps it in `Semantics(container:
+/// true, button: true, label: deleteButtonTooltipMessage)`; the label waits on
+/// a localization substrate (see the module docs' deferrals). Off, it is a
+/// disabled button that takes no tap.
+fn delete_button(
+    glyph: IconData,
+    color: Color,
+    enabled: bool,
+    on_deleted: ChipTapCallback,
+) -> BoxedView {
+    let mut button = InkWell::new()
+        .child(IconTheme::new(
+            IconThemeData::default().size(CHIP_ICON_SIZE).color(color),
+            Icon::new(glyph),
+        ))
+        .shape(MaterialShape::Stadium)
+        .enabled(enabled)
+        .description(Description::new(SemanticsRole::Button));
+    if enabled {
+        button = button.on_tap(move |ctx| on_deleted(ctx));
+    }
+    button.boxed()
 }
 
 /// Assembles a chip's `leading? / label / delete?` content row. Shared by

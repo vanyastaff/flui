@@ -263,89 +263,147 @@ pub fn a_chip_that_gains_or_loses_its_handler_keeps_its_subtree() {
 /// `RawChip` is (`Semantics(container: true, …)`): its label, its identifier
 /// and its switch stay on it and never describe the toolbar or row holding
 /// it. It is a button only with `on_pressed`, disabled only when it says so,
-/// and takes a click and focus only when both hold.
+/// and takes a click and focus only when both hold. Its delete button is a
+/// button node of its own in every case, so a click on the chip never
+/// deletes it.
 ///
 /// Red-check: on `main` before the chip described itself on its well, a chip
 /// without `on_pressed` folded into the toolbar, which then carried its
 /// label and, when the chip was off, its `disabled`, and lost its
-/// identifier.
+/// identifier. With the delete button's well left without a description, an
+/// enabled chip with `on_deleted` and no `on_pressed` offers a click and
+/// focus, and the click deletes it.
 pub fn a_chip_is_its_own_node_and_disabled_only_when_it_says_so() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_sdk::widgets::{Semantics, SemanticsRole};
-    use flui_testing::a11y::{Action, Role};
+    use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
 
-    for (enabled, handler) in [(true, true), (true, false), (false, true), (false, false)] {
-        let taps = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&taps);
-        let mut chip = Chip::new(Text::new("Tag"))
-            .enabled(enabled)
-            .identifier("tag-chip");
-        if handler {
-            chip = chip.on_pressed(move |_ctx| {
-                counted.fetch_add(1, Ordering::SeqCst);
-            });
+    for enabled in [true, false] {
+        for handler in [true, false] {
+            for deletable in [false, true] {
+                let taps = Arc::new(AtomicUsize::new(0));
+                let deletions = Arc::new(AtomicUsize::new(0));
+                let mut chip = Chip::new(Text::new("Tag"))
+                    .enabled(enabled)
+                    .identifier("tag-chip");
+                if handler {
+                    let counted = Arc::clone(&taps);
+                    chip = chip.on_pressed(move |_ctx| {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    });
+                }
+                if deletable {
+                    let counted = Arc::clone(&deletions);
+                    chip = chip.on_deleted(move |_ctx| {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    });
+                }
+                let mut laid = lay_out(
+                    themed(
+                        Semantics::new()
+                            .container(true)
+                            .role(SemanticsRole::Toolbar)
+                            .child(chip),
+                    ),
+                    loose(300.0),
+                );
+                laid.enable_semantics();
+                laid.pump();
+                let case =
+                    format!("enabled: {enabled}, handler: {handler}, deletable: {deletable}");
+                let operable = enabled && handler;
+                let chip_node = {
+                    let tree = laid
+                        .a11y_tree()
+                        .expect("semantics enabled before the frame");
+                    let shown = tree.describe();
+                    let node = tree
+                        .find_by_label("Tag")
+                        .unwrap_or_else(|error| panic!("{case}: {error}\n{shown}"));
+                    assert_ne!(
+                        node.role(),
+                        Role::Toolbar,
+                        "{case}: the chip is its own node\n{shown}"
+                    );
+                    assert_eq!(
+                        node.raw().author_id(),
+                        Some("tag-chip"),
+                        "{case}: the identifier names the chip\n{shown}"
+                    );
+                    assert_eq!(
+                        node.role() == Role::Button,
+                        handler,
+                        "{case}: a button only with a handler\n{shown}"
+                    );
+                    assert_eq!(node.is_disabled(), !enabled, "{case}: disabled\n{shown}");
+                    assert_eq!(
+                        node.supports_action(Action::Click),
+                        operable,
+                        "{case}: click\n{shown}"
+                    );
+                    assert_eq!(
+                        node.supports_action(Action::Focus),
+                        operable,
+                        "{case}: focus\n{shown}"
+                    );
+                    let delete_buttons: Vec<_> = tree
+                        .nodes()
+                        .filter(|other| other.role() == Role::Button && other.id() != node.id())
+                        .collect();
+                    assert_eq!(
+                        delete_buttons.len(),
+                        usize::from(deletable),
+                        "{case}: the delete button is a button of its own\n{shown}"
+                    );
+                    for delete in &delete_buttons {
+                        assert_eq!(
+                            delete.is_disabled(),
+                            !enabled,
+                            "{case}: the delete button follows the chip's switch\n{shown}"
+                        );
+                        assert_eq!(
+                            delete.supports_action(Action::Click),
+                            enabled,
+                            "{case}: the delete button's click\n{shown}"
+                        );
+                    }
+                    let toolbar = tree.find(Role::Toolbar).expect("the toolbar");
+                    assert!(
+                        !toolbar.is_disabled(),
+                        "{case}: the toolbar is never disabled\n{shown}"
+                    );
+                    assert_eq!(
+                        toolbar.label(),
+                        None,
+                        "{case}: the toolbar takes no label\n{shown}"
+                    );
+                    node.id()
+                };
+                if operable {
+                    laid.invoke_semantics_action(ActionRequest {
+                        action: Action::Click,
+                        target_tree: TreeId::ROOT,
+                        target_node: chip_node,
+                        data: None,
+                    })
+                    .unwrap_or_else(|error| panic!("{case}: the chip takes a click: {error}"));
+                    laid.pump();
+                }
+                laid.dispatch_pointer_down(4.0, 4.0);
+                laid.dispatch_pointer_up(4.0, 4.0);
+                assert_eq!(
+                    taps.load(Ordering::SeqCst),
+                    2 * usize::from(operable),
+                    "{case}: taps"
+                );
+                assert_eq!(
+                    deletions.load(Ordering::SeqCst),
+                    0,
+                    "{case}: activating the chip never deletes it"
+                );
+            }
         }
-        let mut laid = lay_out(
-            themed(
-                Semantics::new()
-                    .container(true)
-                    .role(SemanticsRole::Toolbar)
-                    .child(chip),
-            ),
-            loose(300.0),
-        );
-        laid.enable_semantics();
-        laid.pump();
-        let case = format!("enabled: {enabled}, handler: {handler}");
-        {
-            let tree = laid
-                .a11y_tree()
-                .expect("semantics enabled before the frame");
-            let node = tree
-                .find_by_label("Tag")
-                .unwrap_or_else(|error| panic!("{case}: {error}"));
-            assert_ne!(
-                node.role(),
-                Role::Toolbar,
-                "{case}: the chip is its own node"
-            );
-            assert_eq!(
-                node.raw().author_id(),
-                Some("tag-chip"),
-                "{case}: the identifier names the chip"
-            );
-            assert_eq!(
-                node.role() == Role::Button,
-                handler,
-                "{case}: a button only with a handler"
-            );
-            assert_eq!(node.is_disabled(), !enabled, "{case}: disabled");
-            let operable = enabled && handler;
-            assert_eq!(
-                node.supports_action(Action::Click),
-                operable,
-                "{case}: click"
-            );
-            assert_eq!(
-                node.supports_action(Action::Focus),
-                operable,
-                "{case}: focus"
-            );
-            let toolbar = tree.find(Role::Toolbar).expect("the toolbar");
-            assert!(
-                !toolbar.is_disabled(),
-                "{case}: the toolbar is never disabled"
-            );
-            assert_eq!(toolbar.label(), None, "{case}: the toolbar takes no label");
-        }
-        laid.dispatch_pointer_down(4.0, 4.0);
-        laid.dispatch_pointer_up(4.0, 4.0);
-        assert_eq!(
-            taps.load(Ordering::SeqCst),
-            usize::from(enabled && handler),
-            "{case}: taps"
-        );
     }
 }
