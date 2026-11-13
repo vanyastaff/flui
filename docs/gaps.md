@@ -591,3 +591,10 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `flui-engine` hands WGSL text to `create_shader_module`, so the first frame pays naga's parse and validation: 6.6 ms and 0.8 ms for the engine's 20 standalone modules (release, best of 20). Lowering them to `naga::Module` at build time would cut module creation from about 0.7–1.0 ms to 0.1 ms each on lavapipe, but buys no size: wgpu 30 enables `wgpu-core/wgsl` on every native target, because `wgpu-core` parses its own indirect-validation and timestamp shaders, so the front end stays linked (4,149,240 B with text, 4,191,296 B with `naga-ir` alone), and a serialized module adds 1.7 MiB of decoder.
 - Driver pipeline compilation (6–10 ms a pipeline) dwarfs the parse, so the first-frame cost is taken by creating the first frame's modules and pipelines off the owner thread while the window opens, with `wgpu::PipelineCache` on Vulkan.
 - The entry closes when wgpu lets a native build drop the WGSL front end and the engine's shaders reach it as IR generated at build time, with the binary size and first-frame time measured before and after.
+
+### The native hosts' parsers of foreign bytes have no fuzz target
+
+> **Environments:** Linux, Windows · **Who it hurts:** Applications whose process reads what another process sends: an input method's replies, clipboard and drag payloads, a compositor's arrays · **Parity:** none (robustness)
+
+- `cargo xtask fuzz` runs two targets, `image_decode` and `agent_wire` ([testing.md](testing.md#fuzzing)). The parsers inside `flui-native` (the XIM codec, clipboard text, drag offer kinds, the Windows drag crossing, Wayland configure arrays) have property tests that draw their bytes at random and no coverage-guided run: they are `pub(crate)`, and a fuzz target is an example, which sees only its crate's public API.
+- The entry closes when each has a target, reached through an item the crate's `testing` feature exports.

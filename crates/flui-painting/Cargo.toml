@@ -13,7 +13,7 @@ categories = ["graphics", "gui", "rendering"]
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
-exclude = ["/ARCHITECTURE.md", "/benches/"]
+exclude = ["/ARCHITECTURE.md", "/benches/", "/fuzz/"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 12
 # separate binaries). See the `[[test]] name = "painting_it"` target below.
@@ -67,6 +67,11 @@ serde_json = { workspace = true }
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-painting = { path = ".", features = ["testing", "decode"] }
 
+# libFuzzer's runtime, for the fuzz target below. Named under `cfg(fuzzing)`,
+# which only `cargo xtask fuzz` sets, so no other build compiles it.
+[target.'cfg(fuzzing)'.dev-dependencies]
+libfuzzer-sys = { workspace = true }
+
 [features]
 default = ["bundled-fonts"]
 # Serialize the style values (colours, borders, decorations, text styles) and the geometry
@@ -94,6 +99,13 @@ testing = ["dep:icu_properties"]
 [[test]]
 name = "painting_it"
 path = "tests/main.rs"
+
+# The fuzz target of `Image::decode` (`cargo xtask fuzz image_decode`): an
+# example, so it shares this manifest's lock and dev-dependencies and builds on
+# stable as a replayer of crash inputs.
+[[example]]
+name = "fuzz_image_decode"
+path = "fuzz/image_decode.rs"
 
 [lints]
 workspace = true

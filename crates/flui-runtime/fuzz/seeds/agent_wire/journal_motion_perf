@@ -1,0 +1,4 @@
+1{"id":1,"method":"input.journal","params":{"window":"$window"}}
+{"id":2,"method":"motion.set","params":{"window":"$window","reduce":true}}
+{"id":3,"method":"perf.start","params":{"window":"$window"}}
+{"id":4,"method":"perf.stop","params":{"window":"$window"}}
