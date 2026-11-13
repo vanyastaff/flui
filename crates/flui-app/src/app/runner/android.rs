@@ -470,17 +470,24 @@ impl AndroidFrameDriver {
             // (not a ui_runtime-produced one) is lent to the window's slot
             // for one render. Always `false` without an installed
             // development reload hook.
+            // A presentation whose frames are off cannot be seen, and its
+            // slot draws nothing; one that can is shown before the scene is
+            // lent, so a window back from the background draws the plugin's
+            // scene first.
             let (address, size) = (raster.address, raster.size);
-            let plugin_rendered = hot_reload.try_render_frame(
-                f64::from(size.0),
-                f64::from(size.1),
-                |scene, reset_fonts| {
-                    raster
-                        .host
-                        .try_with(|host| host.render_lent(address, size, scene, reset_fonts))
-                        .unwrap_or(false)
-                },
-            );
+            let frames_enabled = ui_runtime.scheduler().frames_enabled();
+            let plugin_rendered = frames_enabled
+                && hot_reload.try_render_frame(
+                    f64::from(size.0),
+                    f64::from(size.1),
+                    |scene, reset_fonts| {
+                        raster.show(true);
+                        raster
+                            .host
+                            .try_with(|host| host.render_lent(address, size, scene, reset_fonts))
+                            .unwrap_or(false)
+                    },
+                );
             if plugin_rendered {
                 return (WakeAction::Skip, now, None);
             }

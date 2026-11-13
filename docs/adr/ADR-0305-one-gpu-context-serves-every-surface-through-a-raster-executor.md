@@ -58,10 +58,10 @@ has neither. Evidence is at `e5ba8fe8f`.
 | The instance takes its display from the first window's target; wgpu keeps it "for keepalive and validation", queries it with `expect` at every `create_surface`, and refuses a surface from another display | `renderer.rs:1550-1558`; `crates/flui-engine/src/window_target.rs:50-55`; `wgpu-core/src/instance.rs:56-62`, `:205-215` |
 | A retired window's target answers `Unavailable` from then on, so an instance holding it panics at the next surface it creates | `crates/flui-platform/src/surface_target.rs:28-56`; `crates/flui-native/src/window/linux/wayland.rs:2547-2575`; `crates/flui-native/src/window/linux/x11/window.rs:1180-1230` |
 | A surface is made only on the main thread (Apple) or the looper thread (Android) | `surface_target.rs:18-25` |
-| The lane sits behind `Arc<Mutex<_>>`, justified by callbacks that "require `Send` closures"; the registrations take none, and the frame driver beside it already holds a `std::rc::Weak` | `desktop.rs:245-252`, `:419-425`; `crates/flui-app/src/app/raster_lane.rs:72-81`; `crates/flui-app/src/app/runner/window_routes.rs:185-237`; `crates/flui-app/src/app/runner/window_install.rs:269` |
+| The lane sits behind `Arc<Mutex<_>>`, justified by callbacks that "require `Send` closures"; the registrations take none, and the frame driver beside it already holds a `std::rc::Weak` | `desktop.rs:245-252`, `:419-425`; the former `raster_lane.rs:72-81`; `crates/flui-app/src/app/runner/window_routes.rs:185-237`; `crates/flui-app/src/app/runner/window_install.rs:269` |
 | Eight production calls reach past the raster protocol into the backend | `crates/flui-engine/src/raster_owner.rs:1258` and the table in §12 |
 | The GPU-resource axis of a frame stamp is `ZERO` on both sides, and its rejection is unreachable | `raster_lane.rs:344-348`, `:398-407` |
-| A presented `Fifo` frame on the Vulkan and Wayland path blocks its thread until vsync (Windows is unmeasured), and a device rebuild blocks on `pollster` — today on the one owner thread every runtime shares | `renderer.rs:1751-1760`; `crates/flui-app/src/app/runner/device_recovery.rs:33`; ADR-0266 |
+| A presented `Fifo` frame on the Vulkan and Wayland path blocks its thread until vsync (Windows is unmeasured), and a device rebuild blocks on `pollster` — today on the one owner thread every runtime shares | `renderer.rs:1751-1760`; the former `runner/device_recovery.rs:33`; ADR-0266 |
 | wgpu's acquire timeout is a fixed second, and Metal ignores it | `wgpu-core/src/present.rs:32`, `:178`; `wgpu-hal/src/metal/surface.rs:349` |
 | CI rasterises on Mesa's lavapipe (Vulkan) and llvmpipe (GL) | `.github/workflows/ci.yml:388-394`, `:430-436`; `tools/xtask/src/tasks.rs:598-626` |
 
@@ -496,7 +496,7 @@ the facade. Every production use of `with_backend` becomes:
 
 | Call site | What it does | Becomes |
 |---|---|---|
-| `crates/flui-app/src/app/runner/surface_lifecycle.rs:144` | follows the display's colour | `Configure { change: Color(..) }` |
+| the former `runner/surface_lifecycle.rs:144` | follows the display's colour | `Configure { change: Color(..) }` |
 | `surface_lifecycle.rs:576` | releases or rebuilds the surface on Android and iOS | `Release`, then `Restore` with a surface the factory made |
 | `surface_lifecycle.rs:657` | retries a failed surface recreation | `Restore` once the owner's retry makes a surface |
 | `android.rs:608` | renders the hot-reload plugin's lent scene | `RasterExecutor::render_lent`, inline only |

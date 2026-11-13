@@ -764,7 +764,7 @@ impl NoticeDelivery {
 }
 
 /// Ask the host's shared memory to give back for `level`: the application's
-/// receivers and every raster lane's pools.
+/// receivers and the raster host's pools.
 fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
     use flui_foundation::memory::ReclaimMemory as _;
     // Cloned out of the cell: a receiver's destructors may touch the host.

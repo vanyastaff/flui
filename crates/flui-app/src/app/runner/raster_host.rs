@@ -312,6 +312,15 @@ impl HostSlot {
                 SurfaceHold::Wanted | SurfaceHold::Refused | SurfaceHold::Released
             )
     }
+
+    /// Whether the window's pace, rather than its next frame, brings its
+    /// next surface attempt: it is owed one and its size is not one the
+    /// device refused. A window at a refused size waits for its next
+    /// change, whose frame asks for a surface again; a timer would meet the
+    /// same refusal on every attempt.
+    fn surface_on_pace(&self, surface: &flui_engine::SlotSurface) -> bool {
+        self.needs_surface(surface.hold) && !matches!(surface.size, SlotSize::Refused(_))
+    }
 }
 
 /// The pace of a window's attempts at a new surface: the first at once, and
@@ -912,14 +921,32 @@ impl RasterHost {
         slot.restore = RestorePace::default();
         let id = slot.slot;
         let restoring = if available {
-            if matches!(placed.sender.device_health(), DeviceHealth::GivenUp { .. })
-                && let Err(error) = placed.sender.send(RasterCommand::RetryDevice)
-            {
-                tracing::warn!(%error, "raster host: a device retry was refused");
+            // The device is rebuilt before the surface is made over it: a
+            // restore configured on the given-up device would be refused, and
+            // the rebuild sets up again only the surfaces already held.
+            if matches!(placed.sender.device_health(), DeviceHealth::GivenUp { .. }) {
+                match placed.sender.send(RasterCommand::RetryDevice) {
+                    Ok(_) => {
+                        let _turned = caught.contain(|| Self::turn_for(placed, address));
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "raster host: a device retry was refused");
+                    }
+                }
             }
             Self::restore_surface(placed, address, Instant::now())
         } else {
-            if let Err(error) = placed.sender.send(RasterCommand::Release { slot: id }) {
+            // The native window behind the surface goes when the platform's
+            // callback returns: a release the full queue refused is sent
+            // again once a turn has made room. An executor that stopped
+            // draws nothing more, and a slot it no longer holds has no
+            // surface to release.
+            let mut sent = placed.sender.send(RasterCommand::Release { slot: id });
+            if matches!(sent, Err(RasterSendError::Full(_))) {
+                let _turned = caught.contain(|| Self::turn_for(placed, address));
+                sent = placed.sender.send(RasterCommand::Release { slot: id });
+            }
+            if let Err(error) = sent {
                 tracing::warn!(%error, "raster host: a window's surface release was refused");
             }
             false
@@ -974,6 +1001,34 @@ impl RasterHost {
         }
     }
 
+    /// Make `address`'s window the surface it is owed once its pace is due at
+    /// `now`, with no frame of its own: the deadline
+    /// [`surface_retry_at`](Self::surface_retry_at) reports is served by the
+    /// wake it schedules, and the attempt moves it on, so a window the
+    /// backend keeps refusing does not hand the loop the same past instant
+    /// again. Answers whether the window holds a surface again.
+    pub(crate) fn restore_due(&mut self, address: PresentationAddress, now: Instant) -> bool {
+        let Some(placed) = self.placed.as_mut() else {
+            return false;
+        };
+        let Some(slot) = placed.slots.get(&address) else {
+            return false;
+        };
+        let id = slot.slot;
+        let owed = placed
+            .sender
+            .record(id)
+            .is_some_and(|record| slot.surface_on_pace(&record.surface));
+        if !owed || !Self::restore_surface(placed, address, now) {
+            return false;
+        }
+        let _settled = Self::turn_for(placed, address);
+        placed
+            .sender
+            .record(id)
+            .is_some_and(|record| record.surface.hold == SurfaceHold::Held)
+    }
+
     /// The earliest moment a window owed a surface may try for one again.
     fn surface_retry_at(&self) -> Option<Instant> {
         let placed = self.placed.as_ref()?;
@@ -984,7 +1039,7 @@ impl RasterHost {
                 placed
                     .sender
                     .record(slot.slot)
-                    .is_some_and(|record| slot.needs_surface(record.surface.hold))
+                    .is_some_and(|record| slot.surface_on_pace(&record.surface))
             })
             .filter_map(|slot| slot.restore.next)
             .min()
@@ -1335,11 +1390,13 @@ impl RasterSlot {
     /// presented.
     ///
     /// Before the frame: a rebuild of a given-up device the application
-    /// asked for, the colour of the display the window is on (`display`; a
-    /// changed profile sets the surface up again, ADR-0256 §6), and a turn of
-    /// the executor, which rebuilds a lost device that is due even when the
-    /// frame has nothing new to draw. A device that came back or a display
-    /// that changed repaints the window in full. After it: the frame's GPU
+    /// asked for, a surface the window is owed whose pace is due
+    /// ([`RasterHost::restore_due`]), the colour of the display the window is
+    /// on (`display`; a changed profile sets the surface up again, ADR-0256
+    /// §6), and a turn of the executor, which rebuilds a lost device that is
+    /// due even when the frame has nothing new to draw. A device or a surface
+    /// that came back, or a display that changed, repaints the window in
+    /// full. After it: the frame's GPU
     /// panic goes to the application's frame-failure handler, and a device
     /// the frame lost is reported with the frames it drops; its rebuild is
     /// due at the executor's deadline, which [`raster_wake_at`] reads.
@@ -1359,9 +1416,10 @@ impl RasterSlot {
                 if retry {
                     host.retry_device();
                 }
+                let restored = host.restore_due(address, now);
                 let changed = host.follow_display(address, display);
                 host.service(address);
-                changed
+                changed | restored
             })
             .unwrap_or(false);
         if display_changed | self.settle_device(ui_runtime) {

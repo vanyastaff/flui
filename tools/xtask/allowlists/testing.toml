@@ -16,24 +16,14 @@ kind = "double"
 names = ["Scripted"]
 
 [[allow]]
-path = "crates/flui-app/src/app/raster_lane.rs"
+path = "crates/flui-app/src/app/direct_sink.rs"
 kind = "double"
 names = ["ScriptedBackend"]
-
-[[allow]]
-path = "crates/flui-app/src/app/runner/device_recovery.rs"
-kind = "double"
-names = ["ScriptedDeviceBackend"]
 
 [[allow]]
 path = "crates/flui-app/src/app/runner/session_controller.rs"
 kind = "double"
 names = ["Probe"]
-
-[[allow]]
-path = "crates/flui-app/src/app/runner/surface_lifecycle.rs"
-kind = "double"
-names = ["ScriptedSurfaceBackend"]
 
 [[allow]]
 path = "crates/flui-app/src/app/window_control_tests.rs"

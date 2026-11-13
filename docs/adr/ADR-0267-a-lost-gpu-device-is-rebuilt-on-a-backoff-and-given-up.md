@@ -92,7 +92,7 @@ and every dropped frame carries the last value.
 
 The raster executor's `DeviceRebuilds` (every native window's device, ADR-0305) wraps the shared
 `RetryBackoff` with a streak. A failed rebuild whose next attempt is a full ceiling away counts against
-`DEVICE_RECOVERY_ATTEMPTS_AT_CAP = 10`. The backoff reaches its ceiling after seven failures, about
+`REBUILD_ATTEMPTS_AT_CAP = 10`. The backoff reaches its ceiling after seven failures, about
 two seconds after the loss, so the driver has about twelve seconds in all: longer than a Windows
 driver reset (TDR, two seconds by default) or a GPU switch takes. A rebuild still failing then is
 given up:
@@ -185,6 +185,6 @@ window's return asks a given-up device to rebuild (`RasterHost::set_surface` sen
 
 ## More information
 
-The give-up count lives in `crates/flui-app/src/app/runner/device_recovery.rs`
-(`DEVICE_RECOVERY_ATTEMPTS_AT_CAP`). Web's recovery (`bootstrap_web`) is async and is not covered by
+The give-up count lives in `crates/flui-engine/src/raster_executor/device_health.rs`
+(`REBUILD_ATTEMPTS_AT_CAP`). Web's recovery (`bootstrap_web`) is async and is not covered by
 this decision.

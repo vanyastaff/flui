@@ -175,6 +175,13 @@ impl ScriptedSlots {
         self.script.borrow_mut().no_inline_rebuild = true;
     }
 
+    /// Undo [`cannot_rebuild_inline`](Self::cannot_rebuild_inline): device
+    /// rebuilds can succeed where the executor runs again, as a driver that
+    /// came back does.
+    pub fn can_rebuild_inline(&self) {
+        self.script.borrow_mut().no_inline_rebuild = false;
+    }
+
     /// Every device rebuild from now on advances `clock` by `took`, as a
     /// driver that blocks the attempt does.
     pub fn rebuilds_take(&self, clock: &ManualClock, took: Duration) {

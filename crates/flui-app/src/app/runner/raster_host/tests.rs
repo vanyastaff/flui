@@ -475,6 +475,75 @@ fn a_window_given_back_retries_a_given_up_device() {
     );
 }
 
+/// A window given back over a given-up device the driver can rebuild again
+/// rebuilds the device before its surface is made over it: a restore
+/// configured on the lost device would be refused, and the rebuild sets up
+/// again only the surfaces already held.
+///
+/// Red-check: send the restore before the turn that serves `RetryDevice`
+/// and the backend sees the restore first.
+#[test]
+fn a_window_given_back_rebuilds_its_device_before_its_surface() {
+    let (mut host, slots) = host();
+    let mut scene = TestScene::new(AT);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    slots.cannot_rebuild_inline();
+    slots.lose_device();
+    host.service(address());
+    let _ = host.set_surface(address(), false);
+    slots.can_rebuild_inline();
+
+    assert!(host.set_surface(address(), true));
+    let calls = slots.calls();
+    let rebuilt = calls
+        .iter()
+        .rposition(|call| matches!(call, SlotCall::RebuildDevice))
+        .expect("the window's return rebuilt the device");
+    let restored = calls
+        .iter()
+        .rposition(|call| matches!(call, SlotCall::Restore(_)))
+        .expect("the window's return made its surface");
+    assert!(rebuilt < restored, "{calls:?}");
+    assert_eq!(hold(&host), SurfaceHold::Held);
+    assert_eq!(
+        host.placed.as_ref().expect("placed").sender.device_health(),
+        DeviceHealth::Healthy
+    );
+}
+
+/// A surface owed to a window whose pace has run out is made by the wake
+/// the pace's deadline schedules, with no frame to draw: the attempt moves
+/// the deadline on, so a refusing backend never hands the loop a deadline
+/// already past.
+///
+/// Red-check: let `restore_due` answer without an attempt (the wake path
+/// before this change) and the deadline stays in the past.
+#[test]
+fn a_due_surface_is_made_by_its_wake_without_a_frame() {
+    let (mut host, slots) = host();
+    let mut scene = TestScene::new(AT);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    let _ = host.set_surface(address(), false);
+    slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+    slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+    assert!(!host.set_surface(address(), true));
+    let first = host.surface_retry_at().expect("a paced deadline");
+
+    // The wake at the deadline: refused again, the deadline moves on.
+    let wake = first + std::time::Duration::from_millis(1);
+    assert!(!host.restore_due(address(), wake));
+    assert_eq!(restores(&slots), 2);
+    let second = host.surface_retry_at().expect("a later deadline");
+    assert!(second > wake, "the deadline is never left in the past");
+
+    // The next wake: the backend makes it.
+    let wake = second + std::time::Duration::from_millis(1);
+    assert!(host.restore_due(address(), wake));
+    assert_eq!(restores(&slots), 3);
+    assert_eq!(hold(&host), SurfaceHold::Held);
+    assert_eq!(host.surface_retry_at(), None);
+}
+
 /// A lent scene draws at the window's size outside its frames, and the
 /// window's next frame draws in full: the screen shows a scene no
 /// publication described.

@@ -505,7 +505,7 @@ attachment lifetime, panic containment and platform limits.
 ### Android scene rendering discharges the plugin payload lifetime obligation
 
 The Android host calls unsafe `DevReloadHook::scene_frame` with only its
-synchronous `Renderer::render_plugin_scene` callback (ADR-0108). The engine walks
+synchronous callback that lends the scene to the window's slot (`RasterHost::render_lent`, ADR-0108, ADR-0305 §10). The engine walks
 borrowed layers and ignores annotated-region payloads. Cached image bytes
 are concrete `Arc<Vec<u8>>`; glyph face admission copies source bytes into the
 host registry's concrete `Arc<[u8]>`. The callback therefore retains no

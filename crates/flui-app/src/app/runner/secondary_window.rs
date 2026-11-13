@@ -189,8 +189,8 @@ pub fn open_secondary_window(
 ///
 /// `WindowPolicy::Isolated` is the only policy that admits content:
 /// each such window owns its own `UiRuntime`, its own widget tree, its own
-/// raster lane. `WindowPolicy::Shared` currently refuses content at
-/// admission with an `Err` — the UI runtime's single-raster-lane contract would
+/// raster slot. `WindowPolicy::Shared` currently refuses content at
+/// admission with an `Err` — the UI runtime's single-presentation raster contract would
 /// have to be relaxed before a presentation inside one shared UI runtime could
 /// own its own renderer, and that relaxation is deliberately not smuggled
 /// in through this API.
@@ -872,12 +872,12 @@ pub(super) fn open_secondary_window_impl(
 /// identical admission and reservation protocol, but the resolved window
 /// is routed to a full `install_desktop_window`-style mount instead of
 /// the bare-shell `finish_open_secondary_window` — the UI runtime owns a widget
-/// tree, a GPU raster lane, and a frame pump.
+/// tree, a GPU raster slot, and a frame pump.
 ///
 /// `WindowPolicy::Shared` is refused at admission, before any window creation
-/// work runs: the UI runtime's raster lane and content renderer are per-UI runtime,
+/// work runs: the UI runtime's raster sink and content renderer are per-UI runtime,
 /// not per-presentation today, so a shared UI runtime presenting N windows
-/// with content would need a lane-per-presentation redesign before this
+/// with content would need a sink-per-presentation redesign before this
 /// arm could be honoured.
 #[cfg(all(
     not(target_os = "android"),
