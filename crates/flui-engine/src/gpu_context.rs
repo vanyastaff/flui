@@ -296,6 +296,10 @@ pub struct GpuContext {
     /// a slot's textures for the length of its frame. Kept from a slot's
     /// first update until it detaches, across device rebuilds.
     textures: FxHashMap<SlotId, KeptTextures>,
+    /// Whether texture uploads were written to the queue since its last
+    /// submission: until one, a slot uploads no newer image (see
+    /// [`KeptTextures::prepare`]).
+    writes_unsubmitted: bool,
     #[cfg(test)]
     builds: ContextBuilds,
     /// How many of the next offscreen frames panic after their recording.
@@ -531,6 +535,7 @@ impl GpuContext {
             blit: None,
             slots: SlotTable::default(),
             textures: FxHashMap::default(),
+            writes_unsubmitted: false,
             #[cfg(test)]
             builds: ContextBuilds {
                 devices: 1,
@@ -578,6 +583,7 @@ impl GpuContext {
         self.painter = None;
         self.pipelines = None;
         self.blit = None;
+        self.writes_unsubmitted = false;
         for kept in self.textures.values_mut() {
             kept.leave_device();
         }
@@ -741,7 +747,8 @@ impl GpuContext {
     ///
     /// # Errors
     /// [`EngineError::InvalidRenderTarget`] for a slot that is not attached;
-    /// the first frame the device refused, the others still applied.
+    /// the first frame no texture of the device can hold, the others still
+    /// applied.
     pub(crate) fn apply_slot_textures(
         &mut self,
         slot: SlotId,
@@ -760,13 +767,13 @@ impl GpuContext {
             .apply(&self.domain, updates)
     }
 
-    /// Put `slot`'s external textures on the current device, uploading its
-    /// kept images again when they are on no device (after a rebuild, or a
-    /// frame that unwound with them lent), so the lend itself uploads
-    /// nothing.
+    /// Put `slot`'s external textures on the current device before its
+    /// frame takes the painter, so the lend itself uploads nothing and a
+    /// panic here (a tracing subscriber is not ours) costs neither the
+    /// painter nor the blit.
     fn prepare_textures(&mut self, slot: SlotId) {
         if let Some(kept) = self.textures.get_mut(&slot) {
-            kept.on(&self.domain);
+            self.writes_unsubmitted |= kept.prepare(&self.domain, self.writes_unsubmitted);
         }
     }
 
@@ -865,6 +872,10 @@ impl GpuContext {
             unreachable!("BUG: a contained call that did not return holds its panic")
         };
         self.painter = Some(painter);
+        // The frame's submission carried the texture writes before it.
+        if drawn.is_ok() {
+            self.writes_unsubmitted = false;
+        }
         drawn
     }
 
@@ -937,6 +948,9 @@ impl GpuContext {
         // acquire errors come before it records, and a recording error is
         // closed by the frame protocol's cleanup.
         self.painter = Some(painter);
+        if matches!(rendered, Ok(PresentDisposition::Presented)) {
+            self.writes_unsubmitted = false;
+        }
         rendered
     }
 
@@ -1747,7 +1761,7 @@ mod tests {
     ///
     /// Red-check: skip lending the slot's textures to the shared painter in
     /// `lend_textures` and no frame can draw its texture; skip the
-    /// re-upload in `KeptTextures::on` and the frames after the rebuild fail.
+    /// re-upload in `KeptTextures::prepare` and the frames after the rebuild fail.
     #[test]
     fn each_slot_draws_its_own_textures_under_the_same_id_across_a_rebuild() {
         use flui_foundation::ManualClock;
@@ -2040,6 +2054,91 @@ mod tests {
             [pixels[0], pixels[1], pixels[2], pixels[3]],
             [30, 0, 0, 255],
             "shown again, the slot draws its newest image"
+        );
+    }
+
+    /// A shown frame that ends without a submission (no damage, a surface
+    /// not acquired) leaves its texture writes waiting in the queue's
+    /// staging memory: until a submission carries them, the next frame
+    /// uploads no newer image and draws the one already on the device, and
+    /// the frame after that draws the newest.
+    ///
+    /// Red-check: upload while the queue holds unsubmitted writes and the
+    /// first frame draws the newer image, each such frame adding a batch.
+    #[test]
+    fn texture_writes_wait_for_a_submission_before_more_are_written() {
+        use flui_foundation::ManualClock;
+        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_painting::paint::Image;
+
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let clock = ManualClock::new();
+        let (mut executor, sender) = RasterExecutor::new(context, std::rc::Rc::new(clock), || {});
+        let slot = sender.mint_slot().expect("a slot id is left");
+        let address = PresentationAddress {
+            ui_runtime_id: UiRuntimeId::new(1),
+            presentation_id: PresentationId::new(1),
+        };
+        let _receipt = sender
+            .send(RasterCommand::Attach {
+                slot,
+                address,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(8, 8),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let registry = TextureRegistry::new(std::sync::Arc::new(|| {}));
+        let texture = registry.register().expect("an id is left");
+        let draw = |executor: &mut RasterExecutor<GpuContext>, shade: Option<u8>| {
+            if let Some(shade) = shade {
+                texture.submit_frame(Image::from_rgba8(2, 2, [shade, 0, 0, 255].repeat(4)));
+            }
+            let generation = sender
+                .record(slot)
+                .expect("the owner holds the slot")
+                .required_generation;
+            let tree = LayerTree::new(Layer::from(TextureLayer::new(
+                texture.id(),
+                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            )));
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            else {
+                unreachable!("BUG: `frame` makes a frame command");
+            };
+            sender
+                .send(RasterCommand::Frame {
+                    slot,
+                    snapshot: snapshot.textures(registry.take_updates()),
+                })
+                .expect("the frame is accepted");
+            let _ = executor.turn();
+            let mut settled = Vec::new();
+            sender.drain_settlements(slot, &mut settled);
+            assert_eq!(settled[0].verdict, RasterVerdict::Presented);
+            let pixels = executor
+                .backend()
+                .read_slot(slot)
+                .expect("the slot reads back");
+            pixels[0]
+        };
+
+        assert_eq!(draw(&mut executor, Some(10)), 10);
+        // What a shown frame that ended before its submission leaves.
+        executor.backend_mut().writes_unsubmitted = true;
+        assert_eq!(
+            draw(&mut executor, Some(20)),
+            10,
+            "the newer image waits while the queue holds unsubmitted writes"
+        );
+        assert_eq!(
+            draw(&mut executor, None),
+            20,
+            "the frame after a submission draws the newest image"
         );
     }
 

@@ -60,10 +60,10 @@ pub trait SlotBackend {
     fn set_latency(&mut self, slot: SlotId, latency: FrameLatency);
 
     /// Apply `updates` to `slot`'s external textures before its next frame:
-    /// upload each frame as its texture's current image, release each
-    /// retired texture. The textures are the slot's own, since a
-    /// presentation mints its texture ids alone, and outlive a device
-    /// rebuild; a detach drops them.
+    /// keep each frame as its texture's newest image, uploaded when the
+    /// slot next draws, and release each retired texture. The textures are
+    /// the slot's own, since a presentation mints its texture ids alone, and
+    /// outlive a device rebuild; a detach drops them.
     ///
     /// # Errors
     /// The first frame refused (an empty image, one past the device's

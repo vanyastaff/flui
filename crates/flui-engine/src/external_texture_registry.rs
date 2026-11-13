@@ -458,7 +458,7 @@ fn check_frame_size(max_dimension: u32, frame: &flui_painting::paint::Image) -> 
 /// and their allocations on the current device.
 ///
 /// An image reaches the device only when the slot is about to draw
-/// ([`Self::on`]): `write_texture` holds staging memory until a submission
+/// ([`Self::prepare`]): `write_texture` holds staging memory until a submission
 /// completes, and a hidden slot submits nothing, so a producer streaming into
 /// it replaces one image per texture instead of piling up uploads. A new
 /// device gets every image back the same way.
@@ -512,54 +512,70 @@ impl KeptTextures {
         first_error.map_or(Ok(()), Err)
     }
 
-    /// The allocations on `domain`'s device, each holding its texture's
-    /// newest image: the images not uploaded yet are uploaded first, every
-    /// one of them when the allocations are on no device or another one.
-    pub(crate) fn on(&mut self, domain: &Arc<DeviceDomain>) -> &mut ExternalTextureRegistry {
-        if !self
+    /// Put the textures on `domain`'s device for a draw, and answer whether
+    /// it wrote to the queue.
+    ///
+    /// Allocations on no device or another one are made again from every
+    /// kept image. Otherwise the images not uploaded yet are uploaded, unless
+    /// `queue_holds_writes`: `write_texture` holds staging memory until a
+    /// submission, and a shown frame can end without one (no damage, a
+    /// surface that is not acquired), so one batch at most waits for a
+    /// submission and the newer images wait in memory, drawn from the next
+    /// frame after it.
+    ///
+    /// A frame the device refuses (one past a new device's texture limit)
+    /// drops its texture, so the kept images match what is drawn, and is
+    /// reported as a warning.
+    pub(crate) fn prepare(&mut self, domain: &Arc<DeviceDomain>, queue_holds_writes: bool) -> bool {
+        let fresh = !self
             .registry
             .as_ref()
-            .is_some_and(|registry| registry.is_on(domain))
-        {
+            .is_some_and(|registry| registry.is_on(domain));
+        if fresh {
             self.registry = Some(ExternalTextureRegistry::new(domain));
             self.unuploaded.extend(self.frames.keys().copied());
+        }
+        if self.unuploaded.is_empty() || (queue_holds_writes && !fresh) {
+            return false;
         }
         let registry = self
             .registry
             .as_mut()
             .expect("BUG: the registry is on this device, made above if it was not");
-        if !self.unuploaded.is_empty() {
-            let unuploaded: Vec<TextureId> = self.unuploaded.iter().copied().collect();
-            for id in unuploaded {
+        let unuploaded: Vec<TextureId> = self.unuploaded.iter().copied().collect();
+        let mut refused = Vec::new();
+        for id in unuploaded {
+            let Some(frame) = self.frames.get(&id) else {
                 self.unuploaded.remove(&id);
-                let Some(frame) = self.frames.get(&id) else {
-                    continue;
-                };
-                if let Err(error) = registry.upload(domain, id, frame) {
-                    tracing::warn!(target: "flui.gpu", %error, "external texture upload refused a frame");
-                }
+                continue;
+            };
+            if let Err(error) = registry.upload(domain, id, frame) {
+                self.frames.remove(&id);
+                registry.unregister(id);
+                refused.push(error);
             }
+            self.unuploaded.remove(&id);
         }
-        registry
+        for error in refused {
+            tracing::warn!(target: "flui.gpu", %error, "external texture upload refused a frame; its texture is dropped");
+        }
+        true
     }
 
-    /// The allocations on `domain`'s device, taken out for one frame: until
-    /// [`Self::take_back`] returns them, [`Self::on`] uploads the kept images
-    /// again, so a frame that never returns them costs a re-upload, not the
-    /// textures.
+    /// The allocations on `domain`'s device, taken out for one frame after
+    /// [`Self::prepare`]: until [`Self::take_back`] returns them, the next
+    /// prepare makes them again from the kept images, so a frame that never
+    /// returns them costs a re-upload, not the textures.
     pub(crate) fn lend(&mut self, domain: &Arc<DeviceDomain>) -> ExternalTextureRegistry {
-        debug_assert!(
-            self.unuploaded.is_empty()
-                && self
-                    .registry
-                    .as_ref()
-                    .is_some_and(|registry| registry.is_on(domain)),
-            "BUG: textures are put on the device before they are lent, outside the frame"
-        );
-        self.on(domain);
-        self.registry
+        let registry = self
+            .registry
             .take()
-            .expect("BUG: `on` left a registry on this device")
+            .expect("BUG: textures are prepared on the device before they are lent");
+        debug_assert!(
+            registry.is_on(domain),
+            "BUG: textures are prepared on this device before they are lent"
+        );
+        registry
     }
 
     /// Return the allocations [`Self::lend`] took out.
