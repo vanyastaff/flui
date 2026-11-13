@@ -818,6 +818,11 @@ impl RasterHost {
             .iter()
             .find(|settlement| settlement.epoch == epoch)
             .map(|settlement| settlement.verdict);
+        if settled == Some(RasterVerdict::Presented) {
+            // Drawn: whatever refusal of the size the turn held is stale (a
+            // device rebuilt again since, which takes it).
+            slot.refused_size = None;
+        }
         if turned == SlotTurn::Panicked {
             let verdict = match settled {
                 // The render itself panicked, which the executor settles as
