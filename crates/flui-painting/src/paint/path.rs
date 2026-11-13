@@ -1368,18 +1368,24 @@ impl From<PathRepr> for Path {
     }
 }
 
-/// Whether `a` and `b` trace the same elements with every coordinate within a few ulps of
-/// its counterpart: the difference two orders of moving the same curves leave, far below
-/// the curve tolerance at every coordinate a deferred shape may hold. A line to where the
-/// pen already is, within that rounding, is skipped on both sides: the arc builder adds
-/// such a join only when the pen and the arc's start differ in their last bits.
+/// Whether `a` and `b` trace the same elements with every coordinate within the rounding
+/// two orders of moving the same curves leave. That rounding scales with the coordinates
+/// the curves had before the moves, which a path moved back towards the origin no longer
+/// shows, so the allowance has an absolute floor: a millionth of a pixel covers rounding
+/// at every coordinate a deferred shape may hold (up to 1e9, a few ulps of 1.2e-7) and is
+/// far below what the GPU's `f32` coordinates resolve, so a kept hint draws what the
+/// elements draw. A line to where the pen already is, within that allowance, is skipped on
+/// both sides: the arc builder adds such a join only when the pen and the arc's start
+/// differ in their last bits.
 #[cfg(feature = "serde")]
 fn same_up_to_rounding(a: &kurbo::BezPath, b: &kurbo::BezPath) -> bool {
     use kurbo::PathEl;
-    /// Relative to the coordinate's magnitude: about 4 500 ulps, under 1e-3 up to 1e9.
-    const ROUNDING: f64 = 1e-12;
+    /// The absolute floor, in logical pixels.
+    const FLOOR: f64 = 1e-6;
+    /// Relative to a coordinate's magnitude, for coordinates beyond the deferred range.
+    const RELATIVE: f64 = 1e-12;
     fn near(p: kurbo::Point, q: kurbo::Point) -> bool {
-        let close = |x: f64, y: f64| (x - y).abs() <= ROUNDING * (1.0 + x.abs().max(y.abs()));
+        let close = |x: f64, y: f64| (x - y).abs() <= FLOOR.max(RELATIVE * x.abs().max(y.abs()));
         close(p.x, q.x) && close(p.y, q.y)
     }
     /// The elements with degenerate joins left out.

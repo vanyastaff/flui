@@ -1308,6 +1308,22 @@ pub(crate) fn serialized_factory_paths_preserve_their_shapes() {
         Path::from_rrect(RRect::from_rect_circular(rect, 4.0))
             .translate(Offset::new(0.1, 0.2))
             .translate(Offset::new(-0.3, 0.7)),
+        // Made far out and moved back near the origin, read first and moved twice: the
+        // rounding is that of the far coordinates.
+        {
+            let far = Path::from_rrect(RRect::from_rect_circular(
+                Rect::from_ltrb(100_000.3, 3.1, 100_040.7, 23.9),
+                4.0,
+            ));
+            let _ = far.commands().count();
+            far.translate(Offset::new(-99_998.0, 0.0))
+        },
+        Path::from_rrect(RRect::from_rect_circular(
+            Rect::from_ltrb(123_456.789, 3.1, 123_496.7, 23.9),
+            4.0,
+        ))
+        .translate(Offset::new(1.7, 0.0))
+        .translate(Offset::new(-123_456.5, 0.0)),
     ] {
         let lossless_wire = serde_json::to_value(&original).expect("a factory path serializes");
         let lossless: Path =
