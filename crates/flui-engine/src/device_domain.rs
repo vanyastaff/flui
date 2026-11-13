@@ -213,6 +213,15 @@ impl Ledger {
         Ok(RetirementPermit(Arc::clone(self)))
     }
 
+    /// Whether a frame scope opened now would be admitted, with nothing
+    /// reserved: a caller that is about to write to the queue asks first.
+    fn admits_frame(&self) -> bool {
+        let state = self.state();
+        state.lifecycle == Lifecycle::Open
+            && state.frame.is_none()
+            && state.submissions < self.limits.submissions
+    }
+
     fn begin_frame(self: &Arc<Self>) -> Result<FrameSubmissionScope, DomainError> {
         let mut state = self.state();
         if state.lifecycle != Lifecycle::Open {
@@ -468,6 +477,12 @@ impl DeviceDomain {
 
     pub(crate) fn queue(&self) -> &Arc<wgpu::Queue> {
         &self.queue
+    }
+
+    /// Whether a frame scope opened now would be admitted, reserving and
+    /// polling nothing.
+    pub(crate) fn admits_frame(&self) -> bool {
+        self.ledger.admits_frame()
     }
 
     pub(crate) fn begin_frame_scope(&self) -> Result<FrameSubmissionScope, DomainError> {

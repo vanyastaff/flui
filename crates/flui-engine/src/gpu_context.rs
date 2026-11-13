@@ -772,11 +772,20 @@ impl GpuContext {
     /// painter nor the blit. Answers whether it wrote to the queue: a frame
     /// that then submits nothing flushes the writes
     /// ([`Self::flush_texture_writes`]).
-    fn prepare_textures(&mut self, slot: SlotId) -> bool {
+    ///
+    /// Unless `admitted`, a frame scope opened already, the writes wait for
+    /// one the submission ledger would admit: a refused frame would leave
+    /// them, and a refused flush with them, in staging memory frame after
+    /// frame. The newest images wait in memory, and the frame draws none of
+    /// the slot's textures if none are on the device.
+    fn prepare_textures(&mut self, slot: SlotId, admitted: bool) -> bool {
         let Some(kept) = self.textures.get_mut(&slot) else {
             return false;
         };
         let domain = &self.domain;
+        if !admitted && kept.needs_writes(domain) && !domain.admits_frame() {
+            return false;
+        }
         let mut caught = FirstPanic::new();
         let wrote = caught.contain(|| kept.prepare(domain));
         if wrote.is_none() {
@@ -816,7 +825,7 @@ impl GpuContext {
         slot: SlotId,
         painter: &mut WgpuPainter,
     ) -> Option<ExternalTextureRegistry> {
-        let mut lent = self.textures.get_mut(&slot)?.lend(&self.domain);
+        let mut lent = self.textures.get_mut(&slot)?.lend(&self.domain)?;
         painter.swap_external_textures(&mut lent);
         Some(lent)
     }
@@ -858,7 +867,7 @@ impl GpuContext {
             (entry.target()?.clone(), entry.format, entry.size)
         };
         let submission_scope = self.domain.begin_frame_scope()?;
-        let wrote = self.prepare_textures(slot);
+        let wrote = self.prepare_textures(slot, true);
         let mut painter = self.take_painter(format, size);
         let own_textures = self.lend_textures(slot, &mut painter);
         #[cfg(test)]
@@ -937,14 +946,9 @@ impl GpuContext {
             // Released, or not sized yet: nothing to present into.
             return Ok(PresentDisposition::NotShown);
         };
-        // A frame the ledger would refuse writes no texture: it would fail at
-        // its frame scope, and a refused flush would leave the writes in
-        // staging memory frame after frame. The scope is the frame protocol's
-        // to open, so this one only asks.
-        drop(self.domain.begin_frame_scope()?);
         // Uploads run before the painter and the blit are taken, so a
         // panic there (a tracing subscriber is not ours) costs neither.
-        let wrote = self.prepare_textures(slot);
+        let wrote = self.prepare_textures(slot, false);
         let mut painter = self.take_painter(format, size);
         painter.resize(size.0, size.1);
         // The blit's pipelines, like the library's, are inserted only once
@@ -1987,7 +1991,7 @@ mod tests {
 
         // What an unwind between the lend and the take-back leaves.
         let context = executor.backend_mut();
-        context.prepare_textures(slot);
+        context.prepare_textures(slot, false);
         let mut painter = context.take_painter(wgpu::TextureFormat::Rgba8Unorm, (8, 8));
         let own = context.lend_textures(slot, &mut painter);
         assert!(own.is_some(), "the slot has textures to lend");
@@ -2191,6 +2195,47 @@ mod tests {
             .expect("the slot reads back");
         assert_eq!(pixels[0], 20, "the next frame draws the newest image");
         assert_eq!(flushes(&executor), 1);
+    }
+
+    /// A window frame writes no texture while the submission ledger would
+    /// refuse it a frame (here another frame holds the ledger's scope; a
+    /// full backlog refuses the same way): the image waits in memory, and
+    /// once the ledger admits a frame it is uploaded.
+    ///
+    /// Red-check: upload without asking the ledger and the image is written
+    /// while no frame could carry it.
+    #[test]
+    fn texture_writes_wait_for_a_frame_the_ledger_admits() {
+        use flui_layer::TextureRegistry;
+        use flui_painting::paint::Image;
+
+        let Some(mut context) = context_or_skip() else {
+            return;
+        };
+        let slot = SlotId::new_gen(0, flui_foundation::generation::Generation::FIRST);
+        context
+            .attach_offscreen(slot, (8, 8), wgpu::TextureFormat::Rgba8Unorm)
+            .expect("the slot attaches");
+        let registry = TextureRegistry::new(std::sync::Arc::new(|| {}));
+        let texture = registry.register().expect("an id is left");
+        texture.submit_frame(Image::from_rgba8(2, 2, [9, 0, 0, 255].repeat(4)));
+        context
+            .apply_slot_textures(slot, registry.take_updates())
+            .expect("the frame fits");
+
+        let held = context
+            .domain
+            .begin_frame_scope()
+            .expect("the ledger admits a frame");
+        assert!(!context.prepare_textures(slot, false), "nothing is written");
+        assert_eq!(context.textures[&slot].waiting(), 1);
+        drop(held);
+
+        assert!(
+            context.prepare_textures(slot, false),
+            "the image is written"
+        );
+        assert_eq!(context.textures[&slot].waiting(), 0);
     }
 
     /// Dropping the painter a frame unwound with runs destructors that are not
