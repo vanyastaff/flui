@@ -505,13 +505,11 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     use flui_animation::{Animatable, Animation, AnimationController, Tween};
     use flui_objects::TranslationFraction;
     use flui_painting::{Alignment, styling::Color};
-    use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
-    use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+    use flui_testing::widgets::{LaidOut, lay_out_animated, tight};
     use flui_widgets::{Align, ColoredBox, SizedBox, SlideTransition, app_root};
 
-    let mut binding = HeadlessBinding::new();
-    let owner =
-        AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
+    let vsync = flui_animation::Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
     let position = Rc::new(
         Tween::new(
@@ -520,25 +518,21 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
         )
         .animate(scalar),
     );
-    let root = GestureArenaScope::new(
-        binding.arena().clone(),
-        FocusTreeRoot::new(app_root(
+    let mut laid = lay_out_animated(
+        app_root(
             Align::new(Alignment::TOP_LEFT)
                 .child(SlideTransition::new(position).child(
                     SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
                 )),
-        )),
+        ),
+        tight(200.0, 200.0),
+        vsync,
     );
-    let _mounted = binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(200.0, 200.0),
-    );
-    binding.pump_frame(Duration::ZERO);
+    laid.pump_for(Duration::ZERO);
     let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");
-    let rasterize = |binding: &HeadlessBinding| {
+    let rasterize = |laid: &LaidOut| {
         renderer
-            .render_layer_tree(binding.layer_tree().expect("mounted slide scene"), SURFACE)
+            .render_layer_tree(laid.layer_tree().expect("mounted slide scene"), SURFACE)
             .expect("rasterizing the moving slide")
     };
     let pixel = |pixels: &[u8], x: usize| {
@@ -550,19 +544,19 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
             pixels[index + 3],
         ]
     };
-    let initial = rasterize(&binding);
+    let initial = rasterize(&laid);
     assert_eq!(pixel(&initial, 20), [255, 0, 0, 255]);
     assert_eq!(pixel(&initial, 60), [255, 255, 255, 255]);
 
     owner.controller().forward().expect("fresh slide run");
-    binding.pump_frame(Duration::ZERO);
+    laid.pump_for(Duration::ZERO);
     for (elapsed, old_pixel, new_pixel) in [
         (0.25, [255, 0, 0, 255], [255, 255, 255, 255]),
         (0.5, [255, 255, 255, 255], [255, 0, 0, 255]),
     ] {
-        binding.pump_frame(Duration::from_millis(250));
+        laid.pump_for(Duration::from_millis(250));
         assert!((owner.controller().value() - elapsed).abs() < 1e-9);
-        let pixels = rasterize(&binding);
+        let pixels = rasterize(&laid);
         assert_eq!(
             pixel(&pixels, 10),
             [255, 255, 255, 255],
@@ -583,7 +577,10 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
             new_pixel,
             "incoming interior at {elapsed}"
         );
-        assert_eq!(binding.last_frame_report().build.elements_built, 0);
+        assert_eq!(
+            laid.with_build_owner_mut(|owner| owner.last_frame_build_report().elements_built),
+            0
+        );
     }
 }
 
@@ -596,8 +593,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     use flui_animation::{Animatable, Animation, AnimationController, Tween};
     use flui_foundation::{Listenable, geometry::Rect};
     use flui_painting::styling::Color;
-    use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
-    use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+    use flui_testing::widgets::{lay_out_animated, tight};
     use flui_widgets::{CustomPaint, app_root};
 
     #[derive(Debug)]
@@ -629,25 +625,24 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
         }
     }
 
-    let mut binding = HeadlessBinding::new();
-    let owner =
-        AnimationController::builder(Duration::from_secs(1)).build_on(Some(binding.vsync()));
+    let vsync = flui_animation::Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
     let color = Rc::new(Tween::new(Color::rgba(255, 255, 255, 0), Color::WHITE).animate(scalar));
     let painted = Rc::new(std::cell::Cell::new(None));
-    let root = GestureArenaScope::new(
-        binding.arena().clone(),
-        FocusTreeRoot::new(app_root(
+    let mut laid = lay_out_animated(
+        app_root(
             CustomPaint::new()
                 .size(Size::new(16.0, 16.0))
                 .painter(FadePainter(color.clone(), painted.clone())),
-        )),
+        ),
+        tight(16.0, 16.0),
+        vsync,
     );
-    let _mounted = binding.mount_root(&root, MountOwners::fresh(), MountOptions::tight(16.0, 16.0));
-    binding.pump_frame(Duration::ZERO);
+    laid.pump_for(Duration::ZERO);
     let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");
     owner.controller().forward().expect("fresh color run");
-    binding.pump_frame(Duration::ZERO);
+    laid.pump_for(Duration::ZERO);
 
     let mut edges = Vec::new();
     let mut interiors = Vec::new();
@@ -656,7 +651,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
         (Duration::from_micros(2500), 0.0025),
         (Duration::from_micros(2500), 0.005),
     ] {
-        binding.pump_frame(delta);
+        laid.pump_for(delta);
         assert!((owner.controller().value() - elapsed).abs() < 1e-9);
         let [r, g, b, alpha] = color.value().to_rgba_f32_array();
         assert!(
@@ -671,7 +666,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
             "paint accepted latest color"
         );
         let pixels = renderer
-            .render_layer_tree(binding.layer_tree().expect("mounted color scene"), (16, 16))
+            .render_layer_tree(laid.layer_tree().expect("mounted color scene"), (16, 16))
             .expect("rasterizing the color tween");
         let pixel = |x: usize| {
             let index = (8 * 16 + x) * 4;
@@ -679,7 +674,10 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
         };
         assert_eq!(pixel(0), [0, 0, 0, 255], "black backdrop at {elapsed}");
         interiors.push(pixel(8));
-        assert_eq!(binding.last_frame_report().build.elements_built, 0);
+        assert_eq!(
+            laid.with_build_owner_mut(|owner| owner.last_frame_build_report().elements_built),
+            0
+        );
         edges.push(pixel(1));
     }
     // The pixel center lies exactly on the straight edge: coverage is 1/2.
