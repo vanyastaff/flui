@@ -21,25 +21,26 @@ use crate::error::CliResult;
 use crate::types::ProjectName;
 use std::path::Path;
 
-/// `src/main.rs` of a single-crate template: the desktop entry point,
-/// mounting the root view the library exports. Everything else, including
-/// the Android entry, lives in `src/lib.rs`, which `cargo ndk` builds as a
-/// `cdylib` and the binary and the tests link as an rlib.
+/// `src/main.rs` of a single-crate template: the entry of the desktop, iOS
+/// and the web, calling the library's `#[flui::main]` function. Everything
+/// else lives in `src/lib.rs`, which `cargo ndk` builds as a `cdylib` (where
+/// that attribute writes the Android entry) and the binary and the tests link
+/// as an rlib.
 ///
 /// A debug build also serves the app to an AI agent (`flui mcp`) when
 /// `flui run --agent` launched it; that takes no code here (ADR-0239).
-pub(super) fn main_rs(lib_name: &str, root: &str) -> String {
+pub(super) fn main_rs(lib_name: &str) -> String {
     format!(
         "fn main() -> Result<(), flui::LaunchError> {{\n\
-         \x20   flui::run_app({lib_name}::{root}, flui::AppLaunch::new())\n\
+         \x20   {lib_name}::run()\n\
          }}\n"
     )
 }
 
 /// The `[lib]` table every single-crate template writes.
 pub(super) const LIB_TABLE: &str = r#"# The rlib feeds the binary and the tests; the cdylib is what `cargo ndk`
-# builds for Android (`flui build android`), entered through `android_main`
-# in src/lib.rs.
+# builds for Android (`flui build android`), entered through the
+# `#[flui::main]` function in src/lib.rs.
 [lib]
 crate-type = ["rlib", "cdylib"]
 "#;

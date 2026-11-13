@@ -325,6 +325,12 @@ pub(crate) struct AppRuntime {
     /// operating system may reuse.
     #[cfg(feature = "native")]
     pub(super) native_windows: std::cell::RefCell<Vec<std::rc::Weak<dyn flui_native::HostWindow>>>,
+    /// The `AndroidApp` the `android_main` that `#[flui::main]` writes was
+    /// handed, kept until `Application::run` on the same thread takes it: the
+    /// system starts an Android application with it, and nothing between that
+    /// entry and the run carries it.
+    #[cfg(target_os = "android")]
+    pub(crate) android_entry: Option<android_activity::AndroidApp>,
     /// The session end the host is answering: every presentation's subscribers
     /// hold their blocks on this one request, so the answer to the operating
     /// system is the aggregate. Kept from the query until the session end is
@@ -614,6 +620,8 @@ impl AppRuntime {
             window_commands: Rc::default(),
             #[cfg(feature = "native")]
             native_windows: std::cell::RefCell::default(),
+            #[cfg(target_os = "android")]
+            android_entry: None,
             session_end: None,
             session_end_current: None,
             session_end_refusals: Vec::new(),

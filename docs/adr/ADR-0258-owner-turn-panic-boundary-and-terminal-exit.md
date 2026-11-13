@@ -145,7 +145,7 @@ terminal failure):
 5. the execution pools join against what is left of `exit.end()`;
 6. the clipboard and the redraw window are released;
 7. the code: a terminal payload in the slot resumes (`std::panic::resume_unwind`), so the process
-   exits with 101 and the standard hook's text; an `AppRunError` returns `Err`; otherwise `Ok`.
+   exits with 101 and the standard hook's text; a `LaunchError` returns `Err`; otherwise `Ok`.
 
 `resume_unwind` does not call the panic hook again, so the text is printed once, where the panic
 first happened. `Application::run` and `run_app` document this under `# Panics`.

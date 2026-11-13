@@ -13,7 +13,7 @@ consumed by path (not published to crates.io).
 ## How it fits the pipeline
 
 ```text
-run_app(view, launch)               — bootstrap: window, GPU surface, frame loop
+run_app(view) / Application::run   — bootstrap: window, GPU surface, frame loop
     │
     ▼
 UiRuntime (owner-affine, !Send + !Sync)
@@ -36,9 +36,11 @@ AppRuntime (loop-scoped composition root)
         └── NativeBindings          — windows, frame drivers and close handlers
 ```
 
-- **Entry points** — `run_app` (`run_app_android` on Android), with an
-  `AppLaunch` carrying the `AppConfig` and `AppCapabilities`, bootstrap a platform
-  window and hand the root `View` to the runner-owned `UiRuntime`, which
+- **Entry points** — `run_app(root)`, or an `Application` carrying the
+  `AppConfig` and the capability registrations and ended by `run(root)` (on the
+  desktop also `run_resident(factory)`), the same on every platform; on Android
+  the `android_main` that `#[flui::main]` writes hands the run the system's
+  `AndroidApp`. They bootstrap a platform window and hand the root `View` to the runner-owned `UiRuntime`, which
   auto-wraps it in an outer `GestureArenaScope` plus `VsyncScope`, so competing
   detectors share the UI runtime arena and implicit-animation widgets tick with
   zero boilerplate.
