@@ -221,6 +221,7 @@ fn before_start(time: f64) -> bool {
 /// # Ok::<(), flui_animation::simulation::SimulationError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum SpeedLimit {
     /// Derived from the motion's own time scale: `distance * ω` for a
     /// spring, and for friction the speed at which the remaining glide is

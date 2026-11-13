@@ -246,11 +246,6 @@ kind = "pump"
 names = ["pump"]
 
 [[allow]]
-path = "crates/flui-widgets/tests/widgets_app.rs"
-kind = "double"
-names = ["RecordingObserver"]
-
-[[allow]]
 path = "crates/flui-widgets/tests/widgets_app_router.rs"
 kind = "double"
 names = ["Probe"]

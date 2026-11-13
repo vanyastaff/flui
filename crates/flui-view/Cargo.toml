@@ -146,21 +146,6 @@ serde = ["dep:serde"]
 # `ElementCore::update_view` is gone — `dispatch_view_update`
 # (TypeId-keyed `Box::downcast::<V>`) is the only path now.
 
-# Files cargo-shear reports as unlinked although the build uses them:
-# - `tests/ui/*.rs`: trybuild compile-fail inputs driven by `trybuild_ui.rs`,
-#   never `mod`-ed.
-# - the element-tree test modules: rustc resolves a `#[path]` inside the inline
-#   `mod tests` of `src/tree/element_tree.rs` under `src/tree/element_tree/tests/`
-#   (the rule for a non-mod.rs file); shear resolves it elsewhere.
-# - `tests/support/build_owner_lifecycle_recovery.rs`: `include!`d by a test
-#   module of `src/owner/build_owner.rs`, which shear does not follow.
-[package.metadata.cargo-shear]
-ignored-paths = [
-    "tests/ui/*.rs",
-    "src/tree/element_tree/tests/activation_recovery_tests.rs",
-    "tests/support/build_owner_lifecycle_recovery.rs",
-]
-
 [[bench]]
 name = "key_storage_shape"
 harness = false

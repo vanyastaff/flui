@@ -1,7 +1,7 @@
 //! Public-API tests for [`LayoutBuilder`].
 //!
 //! These drive the widget through the real `flui-widgets` surface and a real
-//! `HeadlessBinding` frame — the same path `UiRuntime::draw_frame` takes. The
+//! frame of a UI runtime (`lay_out`). The
 //! `flui-view` unit tests cover the seam's internals; this file covers what an
 //! app author can actually observe.
 //!

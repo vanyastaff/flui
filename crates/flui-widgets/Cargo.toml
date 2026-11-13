@@ -220,11 +220,6 @@ harness = false
 name = "mounted_motion_allocations"
 harness = false
 
-# cargo-shear reports the trybuild inputs as unlinked: `tests/routable_ui.rs`
-# hands them to rustc, never `mod`s them.
-[package.metadata.cargo-shear]
-ignored-paths = ["tests/routable_ui/**/*.rs", "tests/nested_scroll_ui/**/*.rs"]
-
 [package.metadata.flui]
 tier = "K"
 tier-kind = "internal"

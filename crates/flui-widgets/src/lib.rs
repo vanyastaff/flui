@@ -50,6 +50,10 @@
 //! [`StatelessView`]: flui_view::prelude::StatelessView
 //! [`ParentDataView`]: flui_view::prelude::ParentDataView
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(
@@ -129,7 +133,7 @@ pub mod navigator;
 mod overlay;
 pub mod paint;
 pub mod physical_model;
-// The typed `Router` (ADR-0093); its items are re-exported from the crate root.
+// The typed `Router` (ADR-0330); its items are re-exported from the crate root.
 mod reorderable;
 pub mod router;
 pub mod scroll;
@@ -150,10 +154,7 @@ pub mod wrap;
 // `InheritedTheme` trait a theme widget (e.g. `flui_material::Theme`)
 // implements. The Material `Theme`/`ThemeData` widget itself lives in
 // `flui-material` — see `app` module docs.
-pub use app::{
-    AppBuilder, AppForm, InheritedTheme, NavigatorForm, RouterForm, SafeArea, WidgetsApp,
-    WidgetsAppState, app_root,
-};
+pub use app::{AppBuilder, InheritedTheme, SafeArea, WidgetsApp, WidgetsAppState, app_root};
 pub use magnifier::{
     InvalidMagnifierScale, MagnifierDecoration, MagnifierScale, MagnifierShape, RawMagnifier,
 };
@@ -259,13 +260,11 @@ pub use form::{
     FormState, RawTextFormField, RawTextFormFieldState,
 };
 pub use navigator::{
-    AnimationRunFuture, FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope,
-    HeroMode, KeyedSettings, NamedRouteError, Navigator, NavigatorHandle, NavigatorObserver,
-    NavigatorRoute, NavigatorState, PageRoute, PageTransitionBuilder, PageTransitions,
+    AnimationRunFuture, FlightDirection, Hero, HeroController, HeroControllerScope, HeroMode,
+    PageError, PageHandle, PageRoute, PageTransitionBuilder, PageTransitions,
     ParallaxPageTransition, PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route,
-    RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder, RouteId, RouteKey,
-    RoutePageBuilder, RouteRequest, RouteResult, RouteResultError, RouteSettings,
-    RouteTransitionsBuilder, RunCanceled, SimpleRoute,
+    RouteAnimation, RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult,
+    RouteResultError, RouteSettings, RouteTransitionsBuilder, RunCanceled,
 };
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
@@ -436,23 +435,23 @@ pub mod prelude {
         Image, ImagePlacement, ImageProvider, ImageRepeat, IndexedSemantics, IndexedStack,
         InheritedTheme, Intent, IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId,
         LimitedBox, ListBody, ListView, Listener, Localizations, LocalizationsDelegate,
-        MergeSemantics, MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent,
-        Offstage, Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId,
-        OverlayHandle, Padding, PageController, PageRoute, PageView, PanClaimRegion,
-        PasteTextIntent, PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned,
-        PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton,
-        RawTextField, RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox,
-        Routable, RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, ScrollView,
-        Scrollable, Scrollbar, SelectAllTextIntent, SelectionArea, SelectionContainer,
-        SelectionController, SelectionHandles, SelectionStyle, Semantics, Shortcuts,
-        ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
-        SizedOverflowBox, Slider, SliderState, SliverChildBuilderDelegate, SliverFadeTransition,
-        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
-        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
-        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
-        StreamBuilder, SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController,
-        TickerMode, Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility,
-        VisibilityGate, WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
+        MergeSemantics, MouseRegion, NextFocusAction, NextFocusIntent, Offstage, Opacity,
+        OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle, Padding,
+        PageController, PageHandle, PageRoute, PageView, PanClaimRegion, PasteTextIntent,
+        PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize,
+        PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton, RawTextField,
+        RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox, Routable,
+        RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, ScrollView, Scrollable,
+        Scrollbar, SelectAllTextIntent, SelectionArea, SelectionContainer, SelectionController,
+        SelectionHandles, SelectionStyle, Semantics, Shortcuts, ShrinkWrappingViewport,
+        SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox, Slider, SliderState,
+        SliverChildBuilderDelegate, SliverFadeTransition, SliverFillRemaining,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder,
+        SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController, TickerMode,
+        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
+        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
         WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
     };
 

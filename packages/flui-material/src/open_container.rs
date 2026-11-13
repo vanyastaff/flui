@@ -44,12 +44,13 @@
 //! the source freely. A page the navigator accepted reports its result even if
 //! the container unmounted meanwhile.
 //!
-//! # Under a `Router`
+//! # A popup over the page that opens it
 //!
-//! A navigator a [`Router`](flui_sdk::widgets::Router) drives owns its pages
-//! and admits only popups, so there the open page is a [`PopupRoute`] instead
-//! of a [`PageRoute`]. The morph is the same; the page below stays in the tree
-//! while the open page covers it, as under any popup.
+//! The open page is a [`PopupRoute`] the container pushes through its page's
+//! [`PageHandle`], as a dialog is (ADR-0330 §2):
+//! it has no path, so a [`Router`](flui_sdk::widgets::Router) keeps it out of
+//! its stack and location. The page below stays in the tree while the open
+//! page covers it, as under any popup.
 //!
 //! # Focus and hit testing
 //!
@@ -87,9 +88,9 @@ use flui_sdk::view::{AsyncDriver, BoxedView, RebuildHandle, RebuildReason, ViewE
 use flui_sdk::widgets::__private::{AnchoredBox, FlightSeat, SeatClaim, SeatHold};
 use flui_sdk::widgets::prelude::BoxFit;
 use flui_sdk::widgets::{
-    ExcludeSemantics, FittedBox, IgnorePointer, LayoutBuilder, NavigatorHandle, Offstage, Opacity,
-    PageRoute, PageTransitionBuilder, PopupRoute, Positioned, RouteAnimation, RouteResultError,
-    Semantics, SemanticsRole, SizedBox, Stack,
+    ExcludeSemantics, FittedBox, IgnorePointer, LayoutBuilder, Offstage, Opacity, PageHandle,
+    PageTransitionBuilder, PopupRoute, Positioned, RouteAnimation, RouteResultError, Semantics,
+    SemanticsRole, SizedBox, Stack,
 };
 
 use crate::ink_well::InkWell;
@@ -157,7 +158,7 @@ pub struct OpenAction {
 
 impl OpenAction {
     /// Open the page. Does nothing while it is already open, or when the
-    /// container has no navigator above it or has not been laid out.
+    /// container is on no route or has not been laid out.
     pub fn open(&self) {
         (self.open)();
     }
@@ -179,17 +180,17 @@ impl fmt::Debug for OpenAction {
 
 /// Closes the open page of an [`OpenContainer`], optionally with a result.
 ///
-/// It pops the navigator the page lives in, so it closes the container when
-/// the page is that navigator's current route.
+/// It pops the open page's own route, so it closes the container only while
+/// that page is on top.
 pub struct CloseAction<T> {
-    navigator: Option<NavigatorHandle>,
+    page: Option<PageHandle>,
     result: PhantomData<fn(T)>,
 }
 
 impl<T> Clone for CloseAction<T> {
     fn clone(&self) -> Self {
         Self {
-            navigator: self.navigator.clone(),
+            page: self.page.clone(),
             result: PhantomData,
         }
     }
@@ -198,7 +199,7 @@ impl<T> Clone for CloseAction<T> {
 impl<T> fmt::Debug for CloseAction<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CloseAction")
-            .field("navigator", &self.navigator.is_some())
+            .field("page", &self.page)
             .finish()
     }
 }
@@ -207,22 +208,24 @@ impl<T: 'static> CloseAction<T> {
     /// The action for the page built at `ctx`.
     fn of(ctx: &dyn BuildContext) -> Self {
         Self {
-            navigator: NavigatorHandle::maybe_of(ctx),
+            page: PageHandle::of(ctx),
             result: PhantomData,
         }
     }
 
     /// Close the page without a value: [`OpenContainer::on_closed`] receives
-    /// `Ok(None)`. Returns whether a route was popped.
+    /// `Ok(None)`. Returns whether the page was popped.
     pub fn close(&self) -> bool {
-        self.navigator.as_ref().is_some_and(NavigatorHandle::pop)
+        self.page
+            .as_ref()
+            .is_some_and(|page| page.pop() == Ok(true))
     }
 
-    /// Close the page with `result`. Returns whether a route was popped.
+    /// Close the page with `result`. Returns whether the page was popped.
     pub fn close_with(&self, result: T) -> bool {
-        self.navigator
+        self.page
             .as_ref()
-            .is_some_and(|navigator| navigator.pop_with(result))
+            .is_some_and(|page| page.pop_with(result) == Ok(true))
     }
 }
 
@@ -578,7 +581,7 @@ impl<T: 'static> Shared<T> {
     /// Push the page; the source freezes once the morph has measured its
     /// frame. Does nothing while a page is already in the air, or when the
     /// source has no committed layout to fly from.
-    fn open(&self, navigator: &NavigatorHandle, look: &Look) {
+    fn open(&self, page_handle: &PageHandle, look: &Look) {
         let in_flight = self
             .flight
             .borrow()
@@ -618,18 +621,18 @@ impl<T: 'static> Shared<T> {
         let transform = Rc::new(ContainerTransform {
             flight: Rc::clone(&flight),
         });
-        let result = if navigator.admits_pages() {
-            // The page below stays still: the source is measured on it, and a
-            // covered transition (a zoom, a slide) would move it under the morph.
-            navigator.push(
-                PageRoute::<T>::new(page)
-                    .transition_builder(transform)
-                    .animates_route_below(false),
-            )
-        } else {
-            // A Router owns this navigator's pages and admits only popups. A
-            // popup does not coordinate with the page below, so it stays still.
-            navigator.push(PopupRoute::<T>::new(page).transition_builder(transform))
+        // The open page is a popup: it has no path, so it never enters a
+        // Router's stack, and it does not coordinate with the page below,
+        // which stays still under the morph (ADR-0330 §2).
+        let popup = PopupRoute::<T>::new(page).transition_builder(transform);
+        let result = match page_handle.push_popup(popup) {
+            Ok(result) => result,
+            Err(refused) => {
+                tracing::warn!(%refused, "OpenContainer: the page was not opened");
+                // Nothing will mount or complete: the source lands at once.
+                flight.settle();
+                return;
+            }
         };
 
         let driver = self.driver.borrow().clone();
@@ -731,13 +734,13 @@ impl<T: 'static> ViewState<OpenContainer<T>> for OpenContainerState<T> {
             curve: view.curve.clone(),
         };
 
-        let navigator = NavigatorHandle::maybe_of(ctx);
+        let page_handle = PageHandle::of(ctx);
         let shared = Rc::clone(&self.shared);
         let open_look = look.clone();
         let action = OpenAction {
             open: Rc::new(move || {
-                if let Some(navigator) = &navigator {
-                    shared.open(navigator, &open_look);
+                if let Some(page_handle) = &page_handle {
+                    shared.open(page_handle, &open_look);
                 }
             }),
         };

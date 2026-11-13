@@ -13,8 +13,8 @@ use std::sync::Arc;
 use flui_foundation::SurfaceGeneration;
 use flui_foundation::TreeError;
 use flui_layer::{
-    BoundaryContent, LayerTree, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SceneWriter,
-    SurfaceKey,
+    BoundaryContent, LayerTree, ReleasedContents, SceneNodeId, SceneOp, SceneOwner, SceneVersion,
+    SceneWriter, SurfaceKey,
 };
 
 use crate::error::RenderError;
@@ -166,10 +166,9 @@ impl SceneHost {
         if !pipeline.scene_staged() {
             return (answer, false);
         }
-        if let Err(error) = self.owner.apply(self.surface) {
-            panic!("BUG: the pipeline's patch was refused: {error}");
-        }
+        let released = self.apply_patch();
         drop(pipeline.scene_applied(self.owner.current()));
+        self.restock(released);
         (answer, true)
     }
 
@@ -217,10 +216,9 @@ impl SceneHost {
         if !staged() {
             return (answer, false);
         }
-        if let Err(error) = self.owner.apply(self.surface) {
-            panic!("BUG: the pipeline's patch was refused: {error}");
-        }
+        let released = self.apply_patch();
         cell.scene_applied(self.owner.current());
+        self.restock(released);
         (answer, true)
     }
 
@@ -246,12 +244,40 @@ impl SceneHost {
         if !pipeline.scene_staged() {
             return (answer, None);
         }
-        if let Err(error) = self.owner.apply(self.surface) {
-            panic!("BUG: the pipeline's patch was refused: {error}");
-        }
+        let released = self.apply_patch();
         drop(pipeline.scene_applied(self.owner.current()));
+        self.restock(released);
         let tree = self.frame_tree(pipeline);
         (answer, tree)
+    }
+
+    /// The raster side shows the last applied version, as a window that
+    /// presents every frame does: the log before it is let go, and what no
+    /// one else holds goes back to the owner for the next frames to write
+    /// into ([`SceneOwner::restock`]).
+    pub fn shown(&mut self) {
+        let shown = self.owner.current().id();
+        let released = self.owner.completed(Some(shown));
+        self.restock(released);
+    }
+
+    /// Applies the patch the frame buffered.
+    ///
+    /// # Panics
+    ///
+    /// When the patch is refused: a defect in the producer.
+    fn apply_patch(&mut self) -> ReleasedContents {
+        match self.owner.apply(self.surface) {
+            Ok(applied) => applied.released,
+            Err(error) => panic!("BUG: the pipeline's patch was refused: {error}"),
+        }
+    }
+
+    /// Runs the destructors of what the owner released, with no borrow
+    /// held, and hands it back what nobody else holds.
+    fn restock(&mut self, released: ReleasedContents) {
+        let reclaimed = released.reclaim();
+        self.owner.restock(reclaimed);
     }
 
     /// The content the repaint boundary `id` is published with in the last

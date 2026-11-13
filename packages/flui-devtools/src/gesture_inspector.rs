@@ -224,6 +224,7 @@ pub struct CompositionStep {
 
 /// A member's verdict in a contest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Verdict {
     /// It won.
     Won {

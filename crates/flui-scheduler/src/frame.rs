@@ -75,6 +75,7 @@ impl fmt::Display for FrameId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum SchedulerPhase {
     /// No frame is being processed. Between frames.
     #[default]
@@ -240,6 +241,10 @@ impl fmt::Display for SchedulerPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each state decides what may run in it, and a `_` arm would run a new state as some other"
+)]
 pub enum AppLifecycleState {
     /// The application is visible and responding to user input.
     ///
@@ -435,6 +440,7 @@ pub type LifecycleStateCallback = Rc<dyn Fn(AppLifecycleState)>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum FramePhase {
     /// Waiting for frame to start
     #[default]

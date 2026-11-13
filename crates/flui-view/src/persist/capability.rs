@@ -16,7 +16,7 @@ use flui_platform::{
 /// an application replaces it, an encrypted store say, with
 /// `Application::capability::<StorageCapability>(provider)`.
 #[derive(Debug)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a capability marker has no values; it is only ever named"
 )]

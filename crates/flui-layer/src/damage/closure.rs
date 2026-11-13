@@ -22,6 +22,10 @@ pub const MAX_CLOSURE_ROUNDS: usize = 64;
 
 /// What an effect reads and what it changes, in surface pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an effect reaches its own pixels, a bound, or the whole surface, and the damage planner handles each"
+)]
 pub enum Closure {
     /// It changes only the pixels its content draws, from those pixels.
     None,

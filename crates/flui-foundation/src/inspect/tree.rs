@@ -35,6 +35,7 @@ pub struct SceneLayer {
 /// (`r12.2`), so a reused slot never reads as the node it replaced. A layer adds its entry after a
 /// colon and its scene after an at sign: `l4.2:3@7` is entry 3 of node `l4.2@7`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Link {
     /// An element (the widget tree).
     Element(ElementId),

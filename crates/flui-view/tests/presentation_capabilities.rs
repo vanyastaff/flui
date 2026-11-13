@@ -6,16 +6,15 @@ use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 
 use flui_objects::RenderSizedBox;
 use flui_platform::{Unsupported, UnsupportedReason};
 use flui_rendering::protocol::BoxProtocol;
-use flui_testing::HeadlessBinding;
-use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_testing::storage::MemoryStorage;
 use flui_view::persist::{StorageCapability, StorageHandle};
 use flui_view::prelude::*;
+use flui_view::tree::ElementTree;
+use flui_view::{BuildOwner, RebuildReason};
 use flui_view::{CapabilitySource, PresentationCapabilities};
 
 /// What `init_state` found, one flag per capability.
@@ -92,17 +91,17 @@ impl ViewState<Asker> for AskerState {
 
 fn found_after(install: impl FnOnce(&mut PresentationCapabilities)) -> Present {
     let found = Rc::new(RefCell::new(None));
-    let mut owners = MountOwners::fresh();
-    install(owners.build_owner.capabilities_mut());
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(
+    let mut owner = BuildOwner::new();
+    install(owner.capabilities_mut());
+    let mut tree = ElementTree::new();
+    let root = tree.mount_root(
         &Asker {
             found: Rc::clone(&found),
         },
-        owners,
-        MountOptions::tight(100.0, 100.0),
+        &mut owner.element_owner_mut(),
     );
-    binding.pump_frame(Duration::from_millis(16));
+    owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
     found.borrow_mut().take().expect("init_state ran")
 }
 

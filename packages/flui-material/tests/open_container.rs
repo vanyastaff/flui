@@ -15,18 +15,16 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::{LaidOut, lay_out_animated, tight};
-use flui_material::{
-    CloseAction, ContainerTransition, MaterialApp, OpenAction, OpenContainer, Theme, ThemeData,
-};
+use flui_material::{CloseAction, ContainerTransition, MaterialApp, OpenAction, OpenContainer};
 use flui_sdk::animation::{Curve, MotionOverride, Vsync, curves};
 use flui_sdk::geometry::{EdgeInsets, Point, Radius};
 use flui_sdk::painting::{Alignment, BorderRadius, Color, DrawOp};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    ColoredBox, Column, CrossAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PageRoute,
-    Routable, RouteParseError, RoutePath, RouteResultError, Router, ScrollController, ScrollView,
-    Semantics, SingleChildScrollView, SizedBox, Transform, WidgetsApp,
+    ColoredBox, Column, CrossAxisAlignment, MainAxisSize, Padding, PageHandle, Routable,
+    RouteParseError, RoutePath, RouteResultError, Router, ScrollController, ScrollView, Semantics,
+    SingleChildScrollView, SizedBox, Transform,
 };
 use flui_testing::{Action, ActionRequest, TreeId};
 
@@ -54,7 +52,7 @@ const PAGE_LABEL: &str = "Details page";
 type Closed = Result<Option<i32>, RouteResultError>;
 
 struct Rig {
-    navigator: Rc<RefCell<Option<NavigatorHandle>>>,
+    home: Rc<RefCell<Option<PageHandle>>>,
     /// Space above the app, from [`Setup::inset`].
     inset: f64,
     /// The app's scale, from [`Setup::scale`].
@@ -147,15 +145,20 @@ fn rig_with(setup: Setup) -> Rig {
     let results = Rc::new(RefCell::new(Vec::new()));
     let close_slot = Rc::new(RefCell::new(None));
     let open_slot = Rc::new(RefCell::new(None));
-    let navigator_slot = Rc::new(RefCell::new(None));
+    let home_slot = Rc::new(RefCell::new(None));
 
     let container = OpenContainer::<i32>::new(
         {
             let open_slot = Rc::clone(&open_slot);
-            let navigator_slot = Rc::clone(&navigator_slot);
+            let home_slot = Rc::clone(&home_slot);
             move |ctx, open| {
                 *open_slot.borrow_mut() = Some(open.clone());
-                *navigator_slot.borrow_mut() = NavigatorHandle::maybe_of(ctx);
+                // The morph builds the closed content again, on the open
+                // page: the home page is the route it first built on.
+                let mut home = home_slot.borrow_mut();
+                if home.is_none() {
+                    *home = PageHandle::of(ctx);
+                }
                 ColoredBox::new(CLOSED_CONTENT).child(SizedBox::expand())
             }
         },
@@ -215,22 +218,11 @@ fn rig_with(setup: Setup) -> Rig {
     let app: BoxedView = if router {
         let router = Router::from_location("/", move |_route: &HomeLocation, _ctx| home.clone())
             .expect("the root location parses");
-        // A Router app has no `MaterialApp` above it to provide the theme.
-        Theme::new(ThemeData::light(), WidgetsApp::router(router))
-            .into_view()
-            .boxed()
+        MaterialApp::router(router).into_view().boxed()
     } else {
-        // A page route keeps the home page mounted under the pushed one, as an
-        // app that wants its scroll position and its containers to survive does.
-        let navigator = NavigatorHandle::new();
-        let _home =
-            navigator.seed_initial(PageRoute::<()>::new(move |_ctx, _primary, _secondary| {
-                home.clone()
-            }));
-        MaterialApp::new(SizedBox::shrink())
-            .navigator(navigator)
-            .into_view()
-            .boxed()
+        // The home page stays mounted under the open page, so its scroll
+        // position and its containers survive.
+        MaterialApp::new(home).into_view().boxed()
     };
     let app = lay_out_animated(
         VsyncScope::new(
@@ -243,7 +235,7 @@ fn rig_with(setup: Setup) -> Rig {
         registry.clone(),
     );
     Rig {
-        navigator: navigator_slot,
+        home: home_slot,
         inset,
         scale,
         app,
@@ -289,13 +281,15 @@ impl Rig {
         self.app.pump_for(Duration::ZERO);
     }
 
+    /// How many routes are up: the home page alone, or the open page over it.
     fn routes(&self) -> usize {
-        self.navigator
+        let home_is_current = self
+            .home
             .borrow()
             .as_ref()
-            .expect("the closed content found its navigator")
-            .route_ids()
-            .len()
+            .expect("the closed content is on its page")
+            .is_current();
+        if home_is_current { 1 } else { 2 }
     }
 }
 
@@ -778,8 +772,8 @@ fn a_zero_duration_opens_at_once() {
     assert_eq!(*rig.results.borrow(), vec![Ok(None)]);
 }
 
-/// Under a `Router`, whose navigator admits only popups, the container still
-/// opens its page, morphs it, and delivers the result.
+/// Under a `Router`, the container opens its page as a popup over the
+/// Router's page, morphs it, and delivers the result.
 fn it_opens_under_a_router() {
     let mut rig = rig_with(Setup {
         router: true,

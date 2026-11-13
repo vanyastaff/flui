@@ -28,12 +28,10 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorRoute, SimpleRoute};
 use flui_widgets::__test_access::{NavigatorProbe as _, OverlayProbe as _};
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, NavigatorRoute, Route, RouteContentBuilder, RouteSettings,
-    SimpleRoute,
-};
+use flui_widgets::navigator::{Route, RouteContentBuilder, RouteSettings};
 
 use crate::common::harness::{Harness, mount};
 
@@ -92,7 +90,7 @@ impl StatelessView for Host {
 
 /// Mount a navigator seeded with one route named `"/"`.
 fn navigator_with(built: &Built) -> (NavigatorHandle, Harness) {
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     handle.seed_initial(page(built, "/"));
     let harness = mount(Navigator::new(handle.clone()));
     (handle, harness)
@@ -167,7 +165,7 @@ pub(crate) fn navigator_pop_removes_top_route_and_completes_result() {
 /// Its value is as a regression tripwire (nextest's per-test timeout catches it).
 pub(crate) fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
     let pushed = Arc::new(AtomicUsize::new(0));
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
 
     {
         let pushed = Arc::clone(&pushed);
@@ -270,7 +268,7 @@ pub(crate) mod local_history {
     use super::*;
     use flui_widgets::__test_access::{LocalHistoryEntry, LocalHistoryHandle};
 
-    use flui_widgets::navigator::NavigatorObserver;
+    use flui_widgets::__test_access::NavigatorObserver;
     use flui_widgets::navigator::PageRoute;
     use flui_widgets::navigator::RouteId;
 
@@ -650,7 +648,7 @@ pub(crate) mod local_history {
         }
 
         let built = Built::default();
-        let handle = NavigatorHandle::new();
+        let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         handle.seed_initial(page(&built, "/"));
         let pop_in_build = Rc::new(std::cell::Cell::new(false));
         let stage = |mounted| Stage {
@@ -744,7 +742,7 @@ pub(crate) fn a_panicking_route_hook_leaves_the_navigator_usable() {
     }
 
     let built = Built::default();
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     handle.seed_initial(page(&built, "/"));
     let mut harness = mount(Host {
         show: true,
@@ -802,11 +800,12 @@ pub(crate) fn closing_mid_transition_releases_the_route_overlay_and_hero() {
     use flui_foundation::ValueKey;
     use flui_view::CloseReason;
     use flui_view::environment::VsyncScope;
+    use flui_widgets::__test_access::NavigatorObserver;
     use flui_widgets::__test_access::{
         HeroControllerProbe as _, OverlayEntryProbe as _, RouteProbe as _,
     };
     use flui_widgets::Center;
-    use flui_widgets::navigator::{Hero, HeroController, NavigatorObserver, PageRoute};
+    use flui_widgets::navigator::{Hero, HeroController, PageRoute};
 
     use crate::common::{lay_out_animated, tight};
 
@@ -833,7 +832,7 @@ pub(crate) fn closing_mid_transition_releases_the_route_overlay_and_hero() {
         let frame_requests = Rc::clone(&frame_requests);
         move || frame_requests.set(frame_requests.get() + 1)
     })));
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(hero_page(None));
     let controller = HeroController::new();
     navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);

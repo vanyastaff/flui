@@ -2,9 +2,9 @@
 
 - **Status:** Accepted (2026-07-09)
 - **Date:** 2026-07-09
-- **Superseded-by:** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) for §2 (a
-  navigation handle is a `RouterHandle` acquired in a lifecycle hook, not a `NavigatorHandle`
-  looked up from a build context, and the Navigator is the Router's internal page stack) and for
+- **Superseded-by:** [ADR-0330](ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md) for §2 (a
+  navigation handle is a `RouterHandle` or `PageHandle` resolved from the build context, not a
+  `NavigatorHandle`, and the Navigator is the Router's internal page stack) and for
   §3 only where the result crosses as `Box<dyn Any + Send>`, a mismatched type completes with
   `None` and `RouteResult<T>` is a `Future<Output = Option<T>>` (it crosses as `Box<dyn Any>`
   in an owner-thread channel that is not `Send`, `RouteResult<T>` resolves to

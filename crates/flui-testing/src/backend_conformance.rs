@@ -411,6 +411,7 @@ pub enum RowGroup {
 
 /// What one row concluded.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RowOutcome {
     /// The backend's output held the row.
     Held,

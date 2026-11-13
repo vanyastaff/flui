@@ -571,12 +571,14 @@ macro_rules! ids {
             $(
                 #[doc = concat!("Marker type for [`", stringify!($pname), "`](super::", stringify!($pname), ").")]
                 #[derive(Debug)]
+#[expect(clippy::exhaustive_enums, reason = "an uninhabited id marker has no variants")]
                 pub enum $pmarker {}
                 impl super::Marker for $pmarker {}
             )*
             $(
                 #[doc = concat!("Marker type for [`", stringify!($gname), "`](super::", stringify!($gname), ").")]
                 #[derive(Debug)]
+#[expect(clippy::exhaustive_enums, reason = "an uninhabited id marker has no variants")]
                 pub enum $gmarker {}
                 impl super::Marker for $gmarker {}
             )*

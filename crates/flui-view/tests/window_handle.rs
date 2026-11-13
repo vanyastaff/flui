@@ -6,7 +6,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Duration;
 
 use flui_foundation::geometry::Size;
 use flui_objects::RenderSizedBox;
@@ -16,13 +15,11 @@ use flui_platform::{
     WindowState,
 };
 use flui_rendering::protocol::BoxProtocol;
-use flui_testing::HeadlessBinding;
-use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_view::__runtime::{LifecycleSource, WindowSource};
 use flui_view::prelude::*;
+use flui_view::tree::ElementTree;
+use flui_view::{BuildOwner, RebuildReason};
 use flui_view::{WindowClosed, WindowHandle};
-
-const FRAME: Duration = Duration::from_millis(16);
 
 /// A control that records the commands it was handed.
 #[derive(Clone, Default)]
@@ -103,21 +100,21 @@ impl ViewState<Asker> for AskerState {
 
 fn mount(control: Option<StubControl>) -> (Option<WindowSource>, Option<WindowHandle>) {
     let taken = Rc::new(RefCell::new(Vec::new()));
-    let mut owners = MountOwners::fresh();
+    let mut owner = BuildOwner::new();
     let source = control.map(|control| {
         let source = WindowSource::new(control);
-        owners.build_owner.set_window_handle(source.handle());
+        owner.set_window_handle(source.handle());
         source
     });
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(
+    let mut tree = ElementTree::new();
+    let root = tree.mount_root(
         &Asker {
             taken: Rc::clone(&taken),
         },
-        owners,
-        MountOptions::tight(100.0, 100.0),
+        &mut owner.element_owner_mut(),
     );
-    binding.pump_frame(FRAME);
+    owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
     let handle = taken.borrow().first().cloned().expect("init_state ran");
     (source, handle)
 }

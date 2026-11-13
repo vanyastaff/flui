@@ -95,11 +95,6 @@ testing = ["dep:icu_properties"]
 name = "painting_it"
 path = "tests/main.rs"
 
-# cargo-shear reports the trybuild compile-fail inputs as unlinked: the
-# `compile_fail` test hands them to rustc by glob, no module declares them.
-[package.metadata.cargo-shear]
-ignored-paths = ["tests/compile_fail/*.rs"]
-
 [lints]
 workspace = true
 

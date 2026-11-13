@@ -95,27 +95,14 @@
 //! When `leading` is unset and `automatically_imply_leading` is set, the
 //! Material spec synthesizes a drawer button if the enclosing `Scaffold` has
 //! a drawer, else a back/close button if the enclosing route can be
-//! dismissed. This substrate has no drawer and no modal-route abstraction
-//! (routes are plain [`flui_sdk::widgets::Route`]s, not modal-aware ones), so
-//! `resolve_leading` narrows the condition to what is reachable: no leading
-//! set, `automatically_imply_leading` set, a [`NavigatorHandle`] ancestor
-//! exists, and it reports [`NavigatorHandle::can_pop`] — always a
-//! [`crate::BackButton`], never a close button (no fullscreen-dialog
-//! substrate to pick that branch) or drawer button (no drawer substrate at
-//! all). **Named limitation**, not a silently dropped case.
-//!
-//! **Second named limitation, worth calling out precisely:**
-//! `NavigatorHandle::can_pop` is navigator-global, but the right question is
-//! about the SPECIFIC route this `AppBar`'s subtree is inside — a
-//! bottom-of-stack route's own app bar should not imply a back button even
-//! while the navigator as a whole can pop (a route above it exists). This
-//! substrate has no modal-route equivalent to ask "which route is this
-//! `AppBar` inside, and specifically is IT poppable" — every mounted
-//! `AppBar` under the same navigator sees the same global answer. In the
-//! common case (one route showing an `AppBar` at a time, which is what an
-//! `Overlay`-based navigator is for) this is unobservable; it only differs
-//! when multiple routes carrying their own `AppBar` are simultaneously
-//! mounted, where every one of them shows the implied leading.
+//! dismissed. `resolve_leading` asks the route this `AppBar` is on: a
+//! [`PageHandle`] above it that reports [`PageHandle::can_pop`] (Flutter's
+//! `ModalRoute.impliesAppBarDismissal`) implies a [`crate::BackButton`]. The
+//! answer is per route, so a covered page's own app bar at the bottom of the
+//! stack shows none, and it follows the stack: the route's entry rebuilds
+//! when a route is added or removed below it. **Named limitation:** always a
+//! back button, never a close button (no fullscreen-dialog substrate to pick
+//! that branch) or drawer button (no drawer substrate at all).
 //!
 //! ## The leading slot is a fixed `LEADING_WIDTH`, not the leading widget's own intrinsic size
 //!
@@ -136,8 +123,8 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Center, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded,
-    Flexible, HeadingLevel, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle,
-    Positioned, PreferredSizeView, Row, SafeArea, Semantics, SizedBox, Stack,
+    Flexible, HeadingLevel, IconTheme, IconThemeData, MainAxisAlignment, PageHandle, Positioned,
+    PreferredSizeView, Row, SafeArea, Semantics, SizedBox, Stack,
 };
 use flui_sdk::{geometry::Size, painting::Alignment};
 
@@ -225,7 +212,7 @@ impl AppBar {
 
     /// Whether a [`crate::BackButton`] is synthesized into the leading slot
     /// when [`Self::leading`] is unset and a poppable
-    /// [`NavigatorHandle`] ancestor exists.
+    /// route is above it ([`PageHandle::can_pop`]).
     /// Defaults to `true`. See the module docs' "Implied leading" section
     /// for the narrowed condition this substrate checks.
     #[must_use]
@@ -403,26 +390,26 @@ fn resolve_style(
 }
 
 /// [`leading_short_circuit`]'s verdict: either the leading slot is already
-/// settled with no need to consult a [`NavigatorHandle`] at all, or the
+/// settled with no need to consult a [`PageHandle`] at all, or the
 /// caller must look one up. Not `Option<Option<BoxedView>>` — clippy's
 /// `option_option` lint rightly rejects that shape as ambiguous; this names
 /// the two outcomes instead.
 enum LeadingShortCircuit {
     /// Neither the explicit-`leading` nor the `automatically_imply_leading:
     /// false` short-circuit applies — settled state unknown without a
-    /// navigator lookup.
-    ConsultNavigator,
+    /// page lookup.
+    ConsultPage,
     /// Already resolved: `Some` (the explicit `leading`) or `None`
     /// (suppressed by `automatically_imply_leading: false`).
     Resolved(Option<BoxedView>),
 }
 
 /// The two outcomes `resolve_leading` can settle without ever consulting a
-/// [`NavigatorHandle`]: an explicit `leading` always wins, and
+/// [`PageHandle`]: an explicit `leading` always wins, and
 /// `automatically_imply_leading: false` always suppresses the implied
 /// button. Split out as a pure, `BuildContext`-free function so this half of
 /// `resolve_leading`'s logic is unit-testable without a mounted tree; the
-/// navigator-consulting half needs a real `BuildContext` and is covered
+/// page-consulting half needs a real `BuildContext` and is covered
 /// end-to-end by `tests/app_bar.rs`.
 fn leading_short_circuit(
     leading: Option<&BoxedView>,
@@ -434,12 +421,12 @@ fn leading_short_circuit(
     if !automatically_imply_leading {
         return LeadingShortCircuit::Resolved(None);
     }
-    LeadingShortCircuit::ConsultNavigator
+    LeadingShortCircuit::ConsultPage
 }
 
 /// Resolves the leading slot: `self.leading` verbatim if set, else a
 /// synthesized [`BackButton`] when `automatically_imply_leading` is set and
-/// a poppable navigator ancestor exists — see the module docs' "Implied
+/// the route it is on can pop — see the module docs' "Implied
 /// leading" section.
 fn resolve_leading(
     leading: Option<&BoxedView>,
@@ -448,10 +435,10 @@ fn resolve_leading(
 ) -> Option<BoxedView> {
     match leading_short_circuit(leading, automatically_imply_leading) {
         LeadingShortCircuit::Resolved(result) => return result,
-        LeadingShortCircuit::ConsultNavigator => {}
+        LeadingShortCircuit::ConsultPage => {}
     }
-    let navigator = NavigatorHandle::maybe_of(ctx)?;
-    navigator.can_pop().then(|| BackButton::new().boxed())
+    let page = PageHandle::of(ctx)?;
+    page.can_pop().then(|| BackButton::new().boxed())
 }
 
 impl StatelessView for AppBar {

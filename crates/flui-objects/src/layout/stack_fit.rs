@@ -3,6 +3,7 @@
 /// How a `Stack` sizes its non-positioned children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, flui_foundation::inspect::Inspect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum StackFit {
     /// The constraints passed to the stack from its parent are loosened
     /// (the default).

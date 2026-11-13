@@ -12,10 +12,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_objects::RenderSizedBox;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
-use flui_testing::HeadlessBinding;
-use flui_testing::bootstrap::{MountOptions, MountOwners};
+use flui_testing::widgets::{LaidOut, lay_out, tight};
 use flui_view::prelude::*;
+use flui_view::tree::ElementTree;
 use flui_view::{Signal, SignalSender};
 
 static_assertions::assert_not_impl_any!(Signal<u32>: Send, Sync);
@@ -107,6 +108,34 @@ impl ViewState<Bystander> for BystanderState {
 
 const FRAME: Duration = Duration::from_millis(16);
 
+/// A bare owner triple for the tests that drive the tree by hand.
+struct Owners {
+    build_owner: BuildOwner,
+    tree: ElementTree,
+    pipeline_owner: PipelineCell,
+}
+
+impl Owners {
+    fn fresh() -> Self {
+        Self {
+            build_owner: BuildOwner::new(),
+            tree: ElementTree::new(),
+            pipeline_owner: PipelineCell::new(PipelineOwner::new(
+                flui_rendering::TextContextHandle::standalone(),
+            )),
+        }
+    }
+}
+
+/// A UI runtime showing a [`Leaf`], with its owner's signal graph and writer,
+/// so a test makes its signals before it mounts the readers.
+fn runtime() -> (LaidOut, flui_view::Reactive, flui_view::WriterSource) {
+    let mut laid = lay_out(Leaf, tight(100.0, 100.0));
+    let (graph, writer) =
+        laid.with_build_owner_mut(|owner| (owner.signal_graph().clone(), owner.writer_source()));
+    (laid, graph, writer)
+}
+
 #[derive(Clone, StatelessView)]
 struct ManyReader {
     signals: Rc<Vec<Signal<u32>>>,
@@ -168,9 +197,7 @@ impl View for ReaderRow {
 }
 
 pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
-    let owners = MountOwners::fresh();
-    let graph = owners.build_owner.signal_graph().clone();
-    let writer = owners.build_owner.writer_source();
+    let (mut laid, graph, writer) = runtime();
     let signals = Rc::new((0..9).map(|_| graph.signal(0u32)).collect::<Vec<_>>());
     let order = Rc::new(RefCell::new(Vec::new()));
     let readers = (0..9)
@@ -183,13 +210,8 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
             label,
         })
         .collect::<Vec<_>>();
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(
-        &ReaderRow(readers.clone()),
-        owners,
-        MountOptions::tight(100.0, 100.0),
-    );
-    binding.pump_frame(FRAME);
+    laid.pump_widget(ReaderRow(readers.clone()));
+    laid.pump_for(FRAME);
     let mut expected = (0..9).collect::<Vec<_>>();
 
     for round in 0..24 {
@@ -199,14 +221,14 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
         writer
             .write(|ctx| readers[label].trigger.set(ctx, round as u32))
             .expect("live");
-        binding.pump_frame(FRAME);
+        laid.pump_for(FRAME);
         expected.retain(|value| *value != label);
         expected.push(label);
         order.borrow_mut().clear();
         writer
             .write(|ctx| signals[8].set(ctx, round as u32))
             .expect("live");
-        binding.pump_frame(FRAME);
+        laid.pump_for(FRAME);
         assert_eq!(*order.borrow(), expected, "peer order after re-reading");
         assert_eq!(
             graph.readers_of(signals[8].slot()),
@@ -226,12 +248,12 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
                 .write(|ctx| reader.trigger.set(ctx, count as u32))
                 .expect("live");
         }
-        binding.pump_frame(FRAME);
+        laid.pump_for(FRAME);
         order.borrow_mut().clear();
         writer
             .write(|ctx| signals[8].set(ctx, count as u32))
             .expect("live");
-        binding.pump_frame(FRAME);
+        laid.pump_for(FRAME);
         let expected = if count == 9 {
             (0..9).collect()
         } else {
@@ -246,7 +268,7 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
     writer
         .write(|ctx| replacement.set(ctx, 43))
         .expect("replacement is live");
-    binding.pump_frame(FRAME);
+    laid.pump_for(FRAME);
     assert!(order.borrow().is_empty(), "slot reuse inherits no readers");
 }
 
@@ -311,7 +333,7 @@ pub(crate) fn owner_release_commits_the_batch_before_the_first_destructor_failur
             panic!("later release destructor");
         }
     }
-    let mut owners = MountOwners::fresh();
+    let mut owners = Owners::fresh();
     let graph = owners.build_owner.signal_graph().clone();
     let writer = owners.build_owner.writer_source();
     let element = owners.tree.mount_root_with_pipeline_owner(
@@ -412,7 +434,7 @@ pub(crate) fn owner_release_refuses_signals_its_destructors_reintroduce() {
         }
     }
 
-    let mut owners = MountOwners::fresh();
+    let mut owners = Owners::fresh();
     let graph = owners.build_owner.signal_graph().clone();
     let element = owners.tree.mount_root_with_pipeline_owner(
         &Leaf,
@@ -506,7 +528,7 @@ impl Drop for Recreate {
 }
 
 pub(crate) fn owner_release_bounds_a_destructor_that_always_recreates_itself() {
-    let mut owners = MountOwners::fresh();
+    let mut owners = Owners::fresh();
     let graph = owners.build_owner.signal_graph().clone();
     let drops = Rc::new(Cell::new(0));
     // Twice: the second release shows the first left no refusal state behind.
@@ -576,7 +598,7 @@ pub(crate) fn a_panicking_refusal_diagnostic_cannot_unwind_into_a_retained_value
         }
     }
 
-    let mut owners = MountOwners::fresh();
+    let mut owners = Owners::fresh();
     let graph = owners.build_owner.signal_graph().clone();
     let drops = Rc::new(Cell::new(0));
     let element = owners.tree.mount_root_with_pipeline_owner(
@@ -626,8 +648,7 @@ pub(crate) fn a_panicking_refusal_diagnostic_cannot_unwind_into_a_retained_value
 }
 
 pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
-    let owners = MountOwners::fresh();
-    let graph = owners.build_owner.signal_graph().clone();
+    let (mut laid, graph, writer) = runtime();
     let sig = graph.signal(1u32);
     let reader_builds = Rc::new(Cell::new(0));
     let bystander_builds = Rc::new(Cell::new(0));
@@ -641,15 +662,13 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
         builds: Rc::clone(&bystander_builds),
     };
 
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
-    let writer = binding.writer_source().expect("tree-bound");
+    laid.pump_widget(root);
     assert_eq!(
         writer.write(|ctx| flui_view::ReadGraph::graph_id(ctx)),
         graph.id(),
-        "the binding writes the owner's graph"
+        "the writer writes the owner's graph"
     );
-    binding.pump_frame(FRAME);
+    laid.pump_for(FRAME);
     assert_eq!(
         (reader_builds.get(), bystander_builds.get()),
         (1, 1),
@@ -661,13 +680,13 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     writer
         .write(|ctx| sig.set(ctx, 2))
         .expect("a write outside the frame phases");
-    binding.pump_frame(FRAME);
+    laid.pump_for(FRAME);
 
     assert_eq!(reader_builds.get(), 2, "the write rebuilds the reader");
     assert_eq!(bystander_builds.get(), 1, "and nothing else");
     // The drain rebuilt the reader for the write, and the leaf below it as
     // that rebuild's child update; nothing was scheduled for any other reason.
-    let report = binding.build_owner_mut().last_frame_build_report();
+    let report = laid.with_build_owner_mut(|owner| owner.last_frame_build_report());
     assert_eq!(report.elements_built, 2, "{report:?}");
     assert_eq!(report.count(RebuildReason::SignalChange), 1, "{report:?}");
     assert_eq!(report.count(RebuildReason::ParentUpdate), 1, "{report:?}");
@@ -679,9 +698,7 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
 }
 
 pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader() {
-    let owners = MountOwners::fresh();
-    let graph = owners.build_owner.signal_graph().clone();
-    let writer = owners.build_owner.writer_source();
+    let (mut laid, graph, writer) = runtime();
     let signal = graph.signal(1u32);
     let builds = Rc::new(Cell::new(0));
     let reader_id = Rc::new(Cell::new(None));
@@ -690,9 +707,8 @@ pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader
         builds: Rc::clone(&builds),
         id: Rc::clone(&reader_id),
     };
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
-    binding.pump_frame(FRAME);
+    laid.pump_widget(root);
+    laid.pump_for(FRAME);
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         writer.write(|ctx| {
@@ -705,13 +721,13 @@ pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader
     assert!(outcome.is_err());
     assert_eq!(signal.peek(&graph, |value| *value), Ok(9));
 
-    binding.pump_frame(FRAME);
+    laid.pump_for(FRAME);
     assert_eq!(
         builds.get(),
         2,
         "the partial commit invalidates its live reader"
     );
-    let report = binding.build_owner_mut().last_frame_build_report();
+    let report = laid.with_build_owner_mut(|owner| owner.last_frame_build_report());
     assert_eq!(report.count(RebuildReason::SignalChange), 1, "{report:?}");
 }
 

@@ -59,6 +59,10 @@
 //! The crate is a contract crate (ADR-0095 §1): no upstream type appears in
 //! its signatures and it depends on no runtime, platform or OS crate.
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![deny(missing_docs)]
 
 #[macro_use]

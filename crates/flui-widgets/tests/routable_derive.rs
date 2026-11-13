@@ -1,4 +1,4 @@
-//! `#[derive(Routable)]` (ADR-0093 §1) through the crate's public surface: the
+//! `#[derive(Routable)]` (ADR-0330 §1) through the crate's public surface: the
 //! round trip over generated values, the typed errors, specificity, and the
 //! back-stack a derived type opens with.
 

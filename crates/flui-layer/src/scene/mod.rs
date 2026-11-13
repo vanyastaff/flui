@@ -15,8 +15,8 @@ mod version;
 pub use content::{BoundaryContent, Bounds, Chunk, ContentBuilder, Entry, EntryIndex};
 pub use id::{ContentVersion, Lineage, SceneNodeId, SceneNodeMarker, SceneVersionId};
 pub use owner::{
-    Applied, Placement, ReleasedContents, SceneError, SceneOp, SceneOwner, ScenePublication,
-    SceneWriter, SurfaceKey,
+    Applied, Placement, Reclaimed, ReleasedContents, SceneError, SceneOp, SceneOwner,
+    ScenePublication, SceneWriter, SurfaceKey,
 };
 pub use version::{EntryAddress, SceneNode, SceneVersion, SubtreeCull};
 
@@ -56,6 +56,10 @@ enum Held {
 
 /// What a [`Scene`] holds, borrowed.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a scene is a layer tree or a retained version, and its walk handles both"
+)]
 pub enum SceneContent<'a> {
     /// A composited layer tree, walked from its root.
     Tree(&'a LayerTree),

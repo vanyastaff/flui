@@ -8,8 +8,8 @@
 //! application shell (ADR-0042 — brightness via Apple's optional-override
 //! model over `flui-widgets`' design-neutral `WidgetsApp`, no `ThemeMode`),
 //! [`CupertinoButton`],
-//! [`cupertino_page_route`] (the iOS slide-in page transition with
-//! edge-swipe-back), [`CupertinoNavigationBar`], [`CupertinoPageScaffold`],
+//! the iOS parallax page slide that [`CupertinoApp`] installs for its routes,
+//! [`CupertinoNavigationBar`], [`CupertinoPageScaffold`],
 //! [`CupertinoPageControl`], and [`CupertinoTabScaffold`]/[`CupertinoTabBar`] (the lazy-build,
 //! state-retaining tabbed root layout).
 //!
@@ -31,25 +31,23 @@
 //! (ADR-0081 §3, ADR-0088 §2) refuses that edge in any dependency kind. It
 //! adds no render object of its own either: every component here composes
 //! existing widgets — `FadeTransition`, `GestureDetector`, `DecoratedBox`,
-//! `SlideTransition`, `Stack`/`Positioned`, `Offstage`, `HeroMode`, … The one
-//! render-layer value it names is
-//! [`flui_sdk::rendering::objects::TranslationFraction`] (the facade's
-//! `flui::rendering::objects` path), which `SlideTransition` requires as its
-//! animation parameter (see [`route`]'s module docs).
+//! `Stack`/`Positioned`, `Offstage`, `HeroMode`, …, and names no render-layer
+//! value.
 //!
-//! ## Scope (V1 — theming, one page route, and the two-scaffold family)
+//! ## Scope (V1 — theming, the page slide, and the two-scaffold family)
 //!
 //! This crate ships the color/typography/theme substrate,
-//! [`CupertinoButton`], [`cupertino_page_route`], [`CupertinoNavigationBar`],
+//! [`CupertinoButton`], [`CupertinoNavigationBar`],
 //! [`CupertinoPageScaffold`], and [`CupertinoTabScaffold`]/[`CupertinoTabBar`].
 //! It deliberately does **not** ship:
 //!
 //! - Every other Cupertino component not listed above (`CupertinoTextField`,
 //!   pickers, action sheets, `CupertinoSliverNavigationBar`/large titles, …)
 //!   — later increments on this same substrate.
-//! - `cupertino_page_route`'s `title`/`previousTitle`,
-//!   `fullscreenDialog`, and `delegatedTransition` — see [`route`]'s module
-//!   docs for exactly what and why.
+//! - `CupertinoPageRoute`'s barrier dim, edge-swipe back, `title`/`previousTitle`,
+//!   `fullscreenDialog` and `delegatedTransition`: a page is a Router route
+//!   value, and the ambient page transition carries only the slide (see
+//!   [`app`]'s module docs).
 //! - `CupertinoNavigationBar`'s `.large()`/large-title layout, automatic
 //!   leading/middle heuristics, scroll-under background fade, blur, and the
 //!   hero transition between nav bars across a route push — see [`nav_bar`]'s
@@ -88,7 +86,6 @@ pub mod colors;
 pub mod nav_bar;
 pub mod page_control;
 pub mod page_scaffold;
-pub mod route;
 pub mod tab_scaffold;
 pub mod text_theme;
 pub mod theme;
@@ -101,7 +98,6 @@ pub use colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 pub use nav_bar::CupertinoNavigationBar;
 pub use page_control::CupertinoPageControl;
 pub use page_scaffold::CupertinoPageScaffold;
-pub use route::cupertino_page_route;
 pub use tab_scaffold::{CupertinoTabController, CupertinoTabScaffold, CupertinoTabScaffoldState};
 pub use text_theme::CupertinoTextThemeData;
 pub use theme::{CupertinoTheme, CupertinoThemeData};

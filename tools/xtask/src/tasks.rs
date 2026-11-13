@@ -1058,12 +1058,12 @@ pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
 /// Arguments for `cargo xtask deps`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct DepsArgs {
-    /// Run one part: `policy` (cargo-deny's bans, licenses and sources, and
-    /// cargo-shear) or `advisories` (cargo-deny's, against today's RustSec
-    /// database). Both by default.
+    /// Run one part: `policy` (cargo-deny's bans, licenses and sources) or
+    /// `advisories` (cargo-deny's, against today's RustSec database). Both by
+    /// default.
     #[arg(long, value_enum)]
     only: Option<deps::Part>,
-    /// Fail when cargo-deny or cargo-shear is not installed instead of
+    /// Fail when cargo-deny is not installed instead of
     /// skipping it (CI).
     #[arg(long)]
     strict: bool,
@@ -1079,11 +1079,11 @@ pub(crate) fn deps_tools() -> impl Iterator<Item = (&'static str, &'static str)>
         .map(|tool| (tool.sub, tool.install))
 }
 
-/// `cargo xtask deps`: check the dependency graph and the manifests (cargo-deny, cargo-shear).
+/// `cargo xtask deps`: check the dependency graph (cargo-deny).
 ///
 /// `cargo deny --workspace --locked check` split into its policy checks and
-/// its advisories, and `cargo shear --locked` (`--format github` under GitHub
-/// Actions). Every step runs; exit 1 if any failed. CI's `deps` job runs
+/// its advisories; an unused or misplaced dependency is cargo's own
+/// `unused_dependencies` lint in every build. Every step runs; exit 1 if any failed. CI's `deps` job runs
 /// `--only policy` and `--only advisories` as two steps, the second blocking
 /// only in the `wide` and `full` lanes; advisories.yml runs it daily on main.
 pub(crate) fn deps(args: &DepsArgs) -> anyhow::Result<ExitCode> {

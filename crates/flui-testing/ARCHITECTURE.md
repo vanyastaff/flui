@@ -179,18 +179,17 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ### Registry drivers revoke their frame authority on replacement
 
-Default, adopted and extra presentation registries request samples through the
-binding's weak scheduler wake capability. Each driver also carries weak authority
-owned by its binding or clock entry. Replacement commits the new registry and
-revokes the old authority before invoking callbacks or retiring outgoing state.
-Installation failure still finishes outgoing retirement, retaining the first
-failure when both compete. A standalone old registry remains manually drivable;
-its observer clones cannot wake the binding that replaced it.
+A registry `LaidOut::adopt_vsync` adopts is attached as a child of the UI
+runtime's own registry, which ticks it each frame and takes its frame requests.
+Replacement attaches the new registry before it detaches and drops the old one,
+so a refused attachment keeps the current registry and its pending runs. A
+standalone old registry remains manually drivable; its observer clones cannot
+wake the runtime that replaced it.
 
 `starting_an_idle_bound_controller_requests_its_first_frame`,
 `adopting_a_registry_revokes_the_previous_driver_binding` and
-`driver_replacement_preserves_first_failure_and_recovers` exercise public handles
-in `headless_frame_driver_matrix`. The public
+`widget_registry_adoption_preserves_its_driver_on_refusal` exercise public
+handles in `headless_frame_driver_matrix`. The public
 `extra_registry_drivers_request_frames_and_retire_on_replacement` row checks
 extra clock installation and replacement while preserving a sibling's driver.
 

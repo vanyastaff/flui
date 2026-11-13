@@ -457,6 +457,11 @@ pub(crate) enum DeferredEffect {
     /// on the next one, which is exactly the timing ADR-0064's
     /// navigator-consumer constraint rules out.
     AwaitPush(RouteId, AnimationRunFuture),
+    /// This route was told of a new neighbour below or above it, so what its
+    /// `PageHandle` answers may have changed: its overlay entry rebuilds,
+    /// outside the lock, as Flutter's `ModalRoute.didChangePrevious` calls
+    /// `changedInternalState`.
+    NeighboursChanged(RouteId),
 }
 
 impl Drop for FlushOutcome {
@@ -1382,7 +1387,11 @@ impl RouteHistory {
         // cannot leave the borrow. See `observer.rs` for the ordering divergence
         // this buys — they precede the observer callbacks rather than following
         // them, and are invisible through the observer surface.
-        self.flush_route_announcement();
+        deferred.extend(
+            self.flush_route_announcement()
+                .into_iter()
+                .map(DeferredEffect::NeighboursChanged),
+        );
 
         let last = self.current();
         if let Some(top) = last
@@ -1410,8 +1419,11 @@ impl RouteHistory {
         }
     }
 
-    /// Tell each route about its new neighbours, once per change.
-    fn flush_route_announcement(&mut self) {
+    /// Tell each route about its new neighbours, once per change, and name
+    /// the routes told: their `PageHandle` answers (`can_pop`, `is_current`)
+    /// may have changed, so their entries rebuild once the lock is released.
+    fn flush_route_announcement(&mut self) -> Vec<RouteId> {
+        let mut changed = Vec::new();
         let mut index: isize = self.entries.len() as isize - 1;
         while index >= 0 {
             let position = index as usize;
@@ -1419,6 +1431,7 @@ impl RouteHistory {
                 index -= 1;
                 continue;
             }
+            let mut told = false;
 
             let next = self.route_after(
                 position + 1,
@@ -1430,6 +1443,7 @@ impl RouteHistory {
                 }
                 // Updated even when the announcement was suppressed.
                 self.entries[position].last_announced_next = Announced::Route(next);
+                told = true;
             }
 
             let previous =
@@ -1437,10 +1451,15 @@ impl RouteHistory {
             if Announced::Route(previous) != self.entries[position].last_announced_previous {
                 self.entries[position].route.did_change_previous(previous);
                 self.entries[position].last_announced_previous = Announced::Route(previous);
+                told = true;
             }
 
+            if told {
+                changed.push(self.entries[position].id());
+            }
             index -= 1;
         }
+        changed
     }
 }
 
