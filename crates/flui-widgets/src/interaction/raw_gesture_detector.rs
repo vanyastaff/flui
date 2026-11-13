@@ -219,6 +219,15 @@ impl FactoryEntry {
         Self { key: None, factory }
     }
 
+    /// A shared factory that also names its group by `key`: a change of key
+    /// replaces the recognizer, as for [`keyed`](Self::keyed).
+    pub(super) fn shared_keyed(key: impl ViewKey, factory: Rc<dyn ErasedFactory>) -> Self {
+        Self {
+            key: Some(Rc::new(key)),
+            factory,
+        }
+    }
+
     /// A recognizer identified by its factory's type and `key`.
     pub(crate) fn keyed(key: impl ViewKey, factory: impl GestureRecognizerFactory) -> Self {
         Self {

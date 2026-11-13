@@ -431,7 +431,7 @@ pub(super) struct PressCallbacks {
     pub(super) tap_up: Option<ValueCallback<TapUpDetails>>,
     pub(super) tap_cancel: Option<ValueCallback<TapDetails>>,
     secondary_tap: Option<EventCallback>,
-    long_press: Option<EventCallback>,
+    pub(super) long_press: Option<EventCallback>,
     double_tap: Option<EventCallback>,
     double_tap_down: Option<ValueCallback<DoubleTapDetails>>,
     /// Where the tap writes [`WidgetState::Pressed`](crate::WidgetState::Pressed): set at its down,
@@ -1265,8 +1265,8 @@ struct TapCallbacks {
 impl PressLive for TapLive {
     fn press(&self) -> PressRead<'_> {
         let live = self.0.borrow();
-        // Outside this module a source can only set the tap family, which
-        // is the group the slot mounts.
+        // Outside this module a source can only set the tap family and the
+        // long press, the slots of the group the slot mounts.
         let mut press = live
             .tap
             .as_deref()
@@ -1277,15 +1277,28 @@ impl PressLive for TapLive {
     }
 }
 
+impl TapLive {
+    /// The group the source's slots make: the lone tap unless it also long
+    /// presses. Reading it clones the source's callbacks and runs none.
+    fn shape(&self) -> PressShape {
+        self.0
+            .borrow()
+            .tap
+            .as_deref()
+            .map_or(PressShape::TAP, |source| source.callbacks().shape())
+    }
+}
+
 impl ErasedFactory for TapLive {
-    // A slot's group is always the lone tap, so the type identifies it.
+    // The type identifies the lone tap; a slot of another shape is keyed by
+    // it (`TapSlot::factory`), so a change of shape replaces the group.
     fn factory_type(&self) -> TypeId {
         TypeId::of::<Self>()
     }
 
     fn create_live(self: Rc<Self>, ctx: &RecognizerContext) -> Rc<dyn LiveRecognizer> {
         Rc::new(PressRecognizers {
-            shape: PressShape::TAP,
+            shape: self.shape(),
             live: self,
             ctx: ctx.clone(),
             members: OnceCell::new(),
@@ -1354,11 +1367,48 @@ impl TapSlot {
         }
     }
 
+    /// Whether the slot's source has a slot of the tap family: assistive
+    /// technology then offers [`click`](Self::click).
+    pub(super) fn taps(&self) -> bool {
+        self.live.shape().tap
+    }
+
+    /// Whether the slot's source long presses: assistive technology then
+    /// offers [`show_context_menu`](Self::show_context_menu), as a detector
+    /// with `on_long_press` does.
+    pub(super) fn long_presses(&self) -> bool {
+        self.live.shape().long_press
+    }
+
+    /// The long press assistive technology invokes as *show context menu*,
+    /// read and run as [`click`](Self::click) is.
+    pub(super) fn show_context_menu(&self) -> impl Fn(&mut EventContext<'_>) + 'static + use<> {
+        let live = Rc::clone(&self.live);
+        move |ctx| {
+            let callback = live
+                .0
+                .borrow()
+                .tap
+                .as_deref()
+                .and_then(|source| source.callbacks().long_press);
+            if let Some(callback) = callback {
+                callback(ctx);
+            }
+        }
+    }
+
     /// The recognizer to mount: the press group while there is a callback,
-    /// none otherwise.
+    /// none otherwise. The lone tap is named by the slot's type alone and
+    /// allocates nothing; another shape is keyed by it, so a control that
+    /// gains or loses its long press replaces the group.
     pub(super) fn factory(&self) -> Option<FactoryEntry> {
-        self.is_set()
-            .then(|| FactoryEntry::shared(Rc::clone(&self.live) as Rc<dyn ErasedFactory>))
+        self.is_set().then(|| {
+            let factory = Rc::clone(&self.live) as Rc<dyn ErasedFactory>;
+            match self.live.shape() {
+                PressShape::TAP => FactoryEntry::shared(factory),
+                shape => FactoryEntry::shared_keyed(ValueKey::new(shape), factory),
+            }
+        })
     }
 }
 

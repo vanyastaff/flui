@@ -149,12 +149,13 @@ pub(super) trait NodePress: PressSource {
     }
 }
 
-/// The tap family of a control on an [`InteractiveNode`]: the slots of
-/// [`GestureDetector`](crate::GestureDetector) of that family, mounted as
-/// the same press group, so the control competes in the gesture arena
-/// exactly as a detector with these slots does. A control that follows the
-/// contact past the recognizer (a ripple that ends at the last button's
-/// release) adds the raw ends a [`Listener`] reports.
+/// The tap family and the long press of a control on an
+/// [`InteractiveNode`]: the slots of [`GestureDetector`](crate::GestureDetector)
+/// of those families, mounted as the same press group, so the control
+/// competes in the gesture arena exactly as a detector with these slots
+/// does. A control that follows the contact past the recognizer (a ripple
+/// that ends at the last button's release) adds the raw ends a [`Listener`]
+/// reports.
 #[derive(Clone, Default)]
 pub struct ControlTap {
     press: PressCallbacks,
@@ -168,6 +169,7 @@ impl std::fmt::Debug for ControlTap {
             .field("tap_down", &self.press.tap_down.is_some())
             .field("tap_up", &self.press.tap_up.is_some())
             .field("tap_cancel", &self.press.tap_cancel.is_some())
+            .field("long_press", &self.press.long_press.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -223,6 +225,18 @@ impl ControlTap {
         self
     }
 
+    /// As [`GestureDetector::on_long_press`](crate::GestureDetector::on_long_press):
+    /// the press group gains the long press, and assistive technology is
+    /// offered it as *show context menu*.
+    #[must_use]
+    pub fn on_long_press<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventContext<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.press.long_press = Some(event_callback(callback));
+        self
+    }
     /// As [`Listener::on_pointer_up`].
     #[must_use]
     pub fn on_pointer_up<F, R>(mut self, callback: F) -> Self
@@ -606,7 +620,15 @@ impl InteractiveNodeState {
             .as_ref()
             .map(|described| described.build().enabled(view.enabled));
         if self.tap.is_set() {
-            semantics = Some(semantics.unwrap_or_default().on_click(self.tap.click()));
+            // A detector with these slots offers the same two actions.
+            let mut actions = semantics.unwrap_or_default();
+            if self.tap.taps() {
+                actions = actions.on_click(self.tap.click());
+            }
+            if self.tap.long_presses() {
+                actions = actions.on_show_context_menu(self.tap.show_context_menu());
+            }
+            semantics = Some(actions);
         }
         let focus = self
             .focus

@@ -106,6 +106,10 @@ fn component_contracts() {
             button::long_press_only_button_announces_enabled,
         ),
         (
+            "button::a held press long presses and a quick one taps",
+            button::a_held_press_long_presses_and_a_quick_one_taps,
+        ),
+        (
             "button::disabled button announces disabled",
             button::disabled_button_announces_disabled,
         ),

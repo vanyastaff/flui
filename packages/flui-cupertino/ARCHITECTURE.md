@@ -77,10 +77,11 @@ selection, subsequent valid selection and pointer delivery) and
 ### Button availability reaches accessibility
 
 A button is enabled when either its tap or long-press callback exists. Its
-`Semantics` wrapper publishes that same state along with the button role,
-including for disabled buttons whose text label merges into the node. This
-uses the existing `Semantics::enabled` contract also consumed by `RawButton`;
-no callback conversion or separate accessibility state is introduced.
+behaviours and its semantics are one interactive node (ADR-0322 §1), as
+`RawButton`'s are: the node's description is the button role, its switch is
+that enabled state, including for disabled buttons whose text label merges
+into the node, and its press group offers the tap as the click and the long
+press as the context menu. No separate accessibility state is introduced.
 
 The `component_contracts` family checks the labelled tap button,
 `long_press_only_button_announces_enabled`, and
