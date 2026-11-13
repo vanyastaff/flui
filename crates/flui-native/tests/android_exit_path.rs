@@ -49,7 +49,7 @@ const LOOP_HEADER: &str = "loop {";
 const QUIT_CALL: &str = "invoke_quit()";
 
 /// The take that releases the platform's own window reference.
-const WINDOW_TAKE: &str = ".window.lock().take()";
+const WINDOW_TAKE: &str = ".window.borrow_mut().take()";
 
 /// The clear the exit path owes the window's handler.
 const HANDLER_CLEAR: &str = ".delivery().clear()";
@@ -391,10 +391,10 @@ fn window_clear_line(region: &[String]) -> (usize, &str) {
 /// binds the platform's window to.
 ///
 /// The `let`-statement requirement refuses the fused
-/// `if let Some(w) = self.window.lock().take() { w.delivery().clear(); }`
+/// `if let Some(w) = self.window.borrow_mut().take() { w.delivery().clear(); }`
 /// whose scrutinee guard lives through the body — on edition 2024 an `if let`
 /// drops its scrutinee's temporaries only after the whole `if let` — and
-/// would therefore run the clear under the `window` lock. Whether the clear
+/// would therefore run the clear under the `window` borrow. Whether the clear
 /// reaches the window this take released is
 /// [`assert_only_the_expected_lines_name_the_binding`]'s question.
 fn window_take_binding(region: &[String]) -> (usize, &str) {
@@ -430,7 +430,7 @@ fn window_take_binding(region: &[String]) -> (usize, &str) {
     // take off another receiver, re-derives the value while every shape
     // assertion above stays true — the name tie would then be satisfied by a
     // window the platform never released, or by `None`.
-    let expected = format!("let {binding} = self.window.lock().take();");
+    let expected = format!("let {binding} = self.window.borrow_mut().take();");
     assert_eq!(
         take_line,
         expected.as_str(),
@@ -554,10 +554,10 @@ fn android_run_lets_go_of_the_window_handler_between_its_loop_and_the_quit_hook(
     let (clear_index, clear_line) = window_clear_line(&region);
     let (take_index, binding) = window_take_binding(&region);
     assert!(
-        !clear_line.contains(".lock()"),
-        "the exit-path clear must not run under the platform's `window` lock: found \
+        !clear_line.contains(".borrow"),
+        "the exit-path clear must not run under a borrow of the platform's `window`: found \
          `{clear_line}`. It drops embedder closures, which may re-enter platform code that \
-         takes the same lock (ADR-0287)"
+         borrows the same slot (ADR-0287)"
     );
     let own_statement = format!("{binding}.delivery().clear();");
     assert_eq!(

@@ -678,7 +678,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             .publish_through(Arc::downgrade(&window), AndroidWindow::read_state);
         let previous = owner
             .window
-            .lock()
+            .borrow_mut()
             .replace(Arc::clone(&window) as Arc<dyn ActivityWindow>);
         if let Some(previous) = previous {
             previous.retire_java_view();
@@ -696,7 +696,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
     fn active(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> Option<WindowId> {
         owner
             .window
-            .lock()
+            .borrow()
             .as_ref()
             .map(|window| window.activity_id().window())
     }
