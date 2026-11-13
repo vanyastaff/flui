@@ -23346,9 +23346,12 @@ pub fn flui::testing::Tester::expect(&mut self, locator: flui::testing::Locator)
 pub fn flui::testing::Tester::find_all(&mut self, locator: &flui::testing::Locator) -> Vec<flui::testing::Match>
 pub fn flui::testing::Tester::inspect_render(&mut self) -> flui::testing::InspectReading
 pub fn flui::testing::Tester::inspect_widgets(&mut self) -> flui::testing::InspectReading
+pub fn flui::testing::Tester::key_down(&mut self, key: &str)
+pub fn flui::testing::Tester::key_up(&mut self, key: &str)
 pub fn flui::testing::Tester::long_press(&mut self, locator: &flui::testing::Locator, duration: core::time::Duration)
 pub fn flui::testing::Tester::mount<V>(view: V) -> Self where V: flui::app::View + Clone + 'static
 pub fn flui::testing::Tester::mount_in<V>(view: V, window: flui::testing::TestWindow) -> Self where V: flui::app::View + Clone + 'static
+pub fn flui::testing::Tester::press_keys(&mut self, chords: &[&str])
 pub fn flui::testing::Tester::pump(&mut self)
 pub fn flui::testing::Tester::pump_and_settle(&mut self) -> usize
 pub fn flui::testing::Tester::pump_for(&mut self, duration: core::time::Duration)
@@ -23360,7 +23363,10 @@ pub fn flui::testing::Tester::try_drag(&mut self, locator: &flui::testing::Locat
 pub fn flui::testing::Tester::try_drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_enter_text(&mut self, locator: &flui::testing::Locator, text: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_find_all(&mut self, locator: &flui::testing::Locator) -> Result<Vec<flui::testing::Match>, flui::testing::TestError>
+pub fn flui::testing::Tester::try_key_down(&mut self, key: &str) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_key_up(&mut self, key: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_long_press(&mut self, locator: &flui::testing::Locator, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_press_keys(&mut self, chords: &[&str]) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_pump_and_settle(&mut self, max_frames: usize) -> Result<usize, flui::testing::TestError>
 pub fn flui::testing::Tester::try_read(&mut self, locator: &flui::testing::Locator) -> Result<flui::testing::Node, flui::testing::TestError>
 pub fn flui::testing::Tester::try_rect(&mut self, locator: &flui::testing::Locator) -> Result<flui::testing::LogicalRect, flui::testing::TestError>

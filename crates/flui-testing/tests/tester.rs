@@ -365,3 +365,91 @@ fn a_drag_from_a_point_presses_there_and_moves_by_the_offset() {
         "one release, at start + offset"
     );
 }
+
+/// What a focused element heard: each key event as `down`/`up`/`repeat`, its
+/// key, and `^` for each of Control and Shift held.
+fn key_log() -> (Tester, Rc<std::cell::RefCell<Vec<String>>>) {
+    use flui_interaction::KeyEventResult;
+    use flui_platform::keyboard::{Key, KeyRepeat, KeyState, Modifiers};
+
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let heard = Rc::clone(&log);
+    let t = Tester::mount(
+        flui_widgets::Focus::new(SizedBox::new(40.0, 40.0))
+            .autofocus(true)
+            .on_key_event(move |_ctx, event| {
+                let state = match (event.state(), event.repeat()) {
+                    (KeyState::Down, KeyRepeat::AutoRepeat) => "repeat",
+                    (KeyState::Down, _) => "down",
+                    _ => "up",
+                };
+                let key = match &event.key {
+                    Key::Named(named) => named.as_str().to_owned(),
+                    Key::Character(text) => text.as_str().to_owned(),
+                    other => format!("{other:?}"),
+                };
+                let held = [Modifiers::CONTROL, Modifiers::SHIFT]
+                    .into_iter()
+                    .filter(|modifier| event.modifiers.contains(*modifier))
+                    .count();
+                heard
+                    .borrow_mut()
+                    .push(format!("{state} {key}{}", "^".repeat(held)));
+                KeyEventResult::Handled
+            }),
+    );
+    (t, log)
+}
+
+#[test]
+fn press_keys_presses_each_chord_in_turn_and_releases_it_in_reverse() {
+    let (mut t, log) = key_log();
+    t.press_keys(&["Control+a", "Enter", "Shift++"]);
+    assert_eq!(
+        *log.borrow(),
+        [
+            "down Control^",
+            "down a^",
+            "up a^",
+            "up Control",
+            "down Enter",
+            "up Enter",
+            "down Shift^",
+            "down +^",
+            "up +^",
+            "up Shift",
+        ]
+    );
+}
+
+#[test]
+fn a_held_key_repeats_when_pressed_again_and_modifies_chords_meanwhile() {
+    let (mut t, log) = key_log();
+    t.key_down("Shift");
+    t.press_keys(&["Tab"]);
+    t.key_down("Shift");
+    t.key_up("Shift");
+    t.key_up("Shift");
+    assert_eq!(
+        *log.borrow(),
+        [
+            "down Shift^",
+            "down Tab^",
+            "up Tab^",
+            "repeat Shift^",
+            "up Shift",
+        ],
+        "a second press of a held key is its auto-repeat, and lifting a key that is up sends \
+         nothing"
+    );
+}
+
+#[test]
+fn a_chord_with_an_unnamed_key_presses_nothing() {
+    let (mut t, log) = key_log();
+    let error = t
+        .try_press_keys(&["Enter", "Control+"])
+        .expect_err("an empty key is refused");
+    assert!(matches!(error, TestError::Agent(_)), "{error:?}");
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+}

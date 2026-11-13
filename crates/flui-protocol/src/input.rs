@@ -257,7 +257,8 @@ pub enum WheelAction {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum KeyAction {
-    /// Press a key.
+    /// Press a key. Pressing a key the source already holds repeats it, as WebDriver dispatches
+    /// a second `keyDown`.
     Down {
         /// The key.
         key: String,

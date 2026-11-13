@@ -37,9 +37,9 @@ use flui_protocol::method::{
 };
 use flui_protocol::{
     ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ErrorObject,
-    InputParams, InputSource, InspectParams, InspectReading, LocateParams, Locator, LogicalPoint,
-    LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice, ReadParams, Tree,
-    outline,
+    InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams, Locator,
+    LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
+    ReadParams, Tree, outline,
 };
 use flui_view::View;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
@@ -86,7 +86,7 @@ impl TestWindow {
     }
 
     /// Follow `platform`'s conventions (chords, handles, menus, transitions)
-    /// instead of the build host's.
+    /// instead of the platform-neutral ones a headless window follows.
     #[must_use]
     pub const fn platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
         self.platform = Some(platform);
@@ -661,6 +661,95 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"));
     }
 
+    /// Press `chords` in turn, as `element.press_keys` does, to the window's
+    /// focused element.
+    ///
+    /// A chord is `+`-joined keys, each a W3C key name (`"Enter"`, `"Tab"`,
+    /// `"ArrowDown"`, `"Control"`) or the text the key types (`"a"`, `"+"`):
+    /// `"Control+a"`, `"Shift+Tab"`, `"Shift++"`. A chord presses its keys left
+    /// to right and releases them right to left. A key held with
+    /// [`Self::key_down`] stays held, so it modifies every chord pressed
+    /// meanwhile.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::Agent`] when a key is neither a key name nor the text of
+    /// one, as in `"Control+"`; nothing is pressed then.
+    pub fn try_press_keys(&mut self, chords: &[&str]) -> Result<(), TestError> {
+        let mut actions = Vec::new();
+        for chord in chords {
+            let keys = chord_keys(chord);
+            actions.extend(keys.iter().map(|key| KeyAction::Down {
+                key: (*key).to_owned(),
+            }));
+            actions.extend(keys.iter().rev().map(|key| KeyAction::Up {
+                key: (*key).to_owned(),
+            }));
+        }
+        self.inject(vec![keyboard(actions)])
+    }
+
+    /// Press `chords` in turn to the window's focused element: `"Enter"`,
+    /// `"Control+a"`, `"Shift+Tab"`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_press_keys`] fails.
+    #[track_caller]
+    pub fn press_keys(&mut self, chords: &[&str]) {
+        self.try_press_keys(chords)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// Press `key` and hold it until [`Self::key_up`]: a modifier held across
+    /// several chords, or a key held through its auto-repeats. Pressing a key
+    /// already held repeats it, as a platform repeats a held key and as
+    /// WebDriver dispatches a second `keyDown`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_press_keys`].
+    pub fn try_key_down(&mut self, key: &str) -> Result<(), TestError> {
+        self.inject(vec![keyboard(vec![KeyAction::Down {
+            key: key.to_owned(),
+        }])])
+    }
+
+    /// Press `key` and hold it until [`Self::key_up`]; pressing it again
+    /// while held is an auto-repeat.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_key_down`] fails.
+    #[track_caller]
+    pub fn key_down(&mut self, key: &str) {
+        self.try_key_down(key)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// Release `key`, held since [`Self::key_down`]. Releasing a key that is
+    /// not held sends nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_press_keys`].
+    pub fn try_key_up(&mut self, key: &str) -> Result<(), TestError> {
+        self.inject(vec![keyboard(vec![KeyAction::Up {
+            key: key.to_owned(),
+        }])])
+    }
+
+    /// Release `key`, held since [`Self::key_down`].
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_key_up`] fails.
+    #[track_caller]
+    pub fn key_up(&mut self, key: &str) {
+        self.try_key_up(key)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
     // --- Expecting --------------------------------------------------------
 
     /// What a test expects of the elements `locator` matches. Each assertion
@@ -770,17 +859,21 @@ impl Tester {
     /// Deliver `sources` through the window's input lease and run the frame
     /// after the last tick.
     fn inject(&mut self, sources: Vec<InputSource>) -> Result<(), TestError> {
-        // The agent plays a pause or a timed move for its whole duration
-        // before it answers, so the budget is that span in frames on top of
-        // the ticks' own.
-        let span = sources.iter().map(source_span).max().unwrap_or_default();
-        let frame_ms = u64::try_from(FRAME.as_millis()).unwrap_or(u64::MAX);
-        let span_frames = u32::try_from(span.div_ceil(frame_ms)).unwrap_or(u32::MAX);
-        let call = self.lease.call::<InputInject>(InputParams::new(
-            self.lease.window(),
-            ActionSequence::new(sources),
-        ))?;
-        let _outcome = self.answered_within(call, ANSWER_FRAMES.saturating_add(span_frames))?;
+        // The agent plays a tick per frame, and a pause or a timed move for
+        // its whole duration, before it answers, so the budget is the ticks
+        // and that span in frames on top of the answer's own.
+        let sequence = ActionSequence::new(sources);
+        let frame_ms = FRAME.as_millis();
+        let span_frames =
+            u32::try_from(sequence.span().as_millis().div_ceil(frame_ms)).unwrap_or(u32::MAX);
+        let ticks = u32::try_from(sequence.ticks()).unwrap_or(u32::MAX);
+        let call = self
+            .lease
+            .call::<InputInject>(InputParams::new(self.lease.window(), sequence))?;
+        let budget = ANSWER_FRAMES
+            .saturating_add(ticks)
+            .saturating_add(span_frames);
+        let _outcome = self.answered_within(call, budget)?;
         Ok(())
     }
 
@@ -985,23 +1078,6 @@ fn line_of(node: &Node) -> String {
         .to_owned()
 }
 
-/// How long `source` plays in milliseconds: the sum of its pauses and timed
-/// moves, saturating.
-fn source_span(source: &InputSource) -> u64 {
-    match source {
-        InputSource::Pointer { actions, .. } => actions
-            .iter()
-            .map(|action| match action {
-                PointerAction::Move { duration_ms, .. } | PointerAction::Pause { duration_ms } => {
-                    *duration_ms
-                }
-                _ => 0,
-            })
-            .fold(0, u64::saturating_add),
-        _ => 0,
-    }
-}
-
 fn pointer(actions: Vec<PointerAction>) -> InputSource {
     InputSource::Pointer {
         id: "tester".to_owned(),
@@ -1017,5 +1093,24 @@ fn move_to(at: LogicalPoint) -> PointerAction {
         to: at,
         duration_ms: 0,
         pressure: None,
+    }
+}
+
+fn keyboard(actions: Vec<KeyAction>) -> InputSource {
+    InputSource::Keys {
+        id: "tester".to_owned(),
+        actions,
+    }
+}
+
+/// The keys of `chord`, `+`-joined; a `+` key is the last one, as in
+/// `"Shift++"`, or the whole chord.
+fn chord_keys(chord: &str) -> Vec<&str> {
+    if chord == "+" {
+        return vec!["+"];
+    }
+    match chord.strip_suffix("++") {
+        Some(held) if !held.is_empty() => held.split('+').chain(["+"]).collect(),
+        _ => chord.split('+').collect(),
     }
 }
