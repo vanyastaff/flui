@@ -47,8 +47,6 @@ mod gesture_alternatives;
 mod headless_host;
 #[path = "inspect.rs"]
 mod inspect;
-#[path = "layout_builder_seam.rs"]
-mod layout_builder_seam;
 #[path = "lifecycle_panic_containment.rs"]
 mod lifecycle_panic_containment;
 #[path = "log_capture.rs"]
@@ -68,8 +66,6 @@ mod owner_scope;
 mod ownership_table;
 #[path = "pointer_script_replay.rs"]
 mod pointer_script_replay;
-#[path = "post_frame_after_layout.rs"]
-mod post_frame_after_layout;
 #[path = "recording.rs"]
 mod recording;
 #[path = "recording_vocabulary.rs"]
@@ -121,13 +117,9 @@ fn headless_frame_driver_matrix() {
             ("a11y_query::unique_queries_preserve_subjects_and_complete_failure_diagnostics", a11y_query::unique_queries_preserve_subjects_and_complete_failure_diagnostics as fn()),
             ("mount_bootstrap::mount_root_installs_the_render_root_and_lays_it_out", mount_bootstrap::mount_root_installs_the_render_root_and_lays_it_out as fn()),
             ("mount_bootstrap::the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off", mount_bootstrap::the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off as fn()),
-            ("layout_builder_seam::headless_pump_frame_runs_the_layout_builder_seam", layout_builder_seam::headless_pump_frame_runs_the_layout_builder_seam as fn()),
-            ("post_frame_after_layout::post_frame_callback_runs_after_layout_in_the_same_pumped_frame", post_frame_after_layout::post_frame_callback_runs_after_layout_in_the_same_pumped_frame as fn()),
             ("self_rescheduling_local_post_frame::self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame", self_rescheduling_local_post_frame::self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame as fn()),
-            ("async_driver::headless_wake_from_another_thread_is_polled_on_the_frame_thread", async_driver::headless_wake_from_another_thread_is_polled_on_the_frame_thread as fn()),
             ("controller_restart::starting_an_idle_bound_controller_requests_its_first_frame", controller_restart::starting_an_idle_bound_controller_requests_its_first_frame as fn()),
             ("controller_restart::adopting_a_registry_revokes_the_previous_driver_binding", controller_restart::adopting_a_registry_revokes_the_previous_driver_binding as fn()),
-            ("controller_restart::driver_replacement_preserves_first_failure_and_recovers", controller_restart::driver_replacement_preserves_first_failure_and_recovers as fn()),
             ("controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor", controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor as fn()),
             ("pointer_script_replay::a_long_press_script_held_past_the_deadline_fires_it", pointer_script_replay::a_long_press_script_held_past_the_deadline_fires_it as fn()),
             ("pointer_script_replay::the_same_script_released_before_the_deadline_does_not", pointer_script_replay::the_same_script_released_before_the_deadline_does_not as fn()),

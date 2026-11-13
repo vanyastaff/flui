@@ -90,8 +90,8 @@ pub use layer::{
 pub use link::{LayerLink, leader_origin, resolve_follower_transform};
 pub use scene::{
     Applied, BoundaryContent, Bounds, Chunk, ContentBuilder, ContentVersion, Entry, EntryAddress,
-    EntryIndex, Lineage, Placement, ReleasedContents, Scene, SceneContent, SceneError, SceneNode,
-    SceneNodeId, SceneNodeMarker, SceneOp, SceneOwner, ScenePublication, SceneVersion,
+    EntryIndex, Lineage, Placement, Reclaimed, ReleasedContents, Scene, SceneContent, SceneError,
+    SceneNode, SceneNodeId, SceneNodeMarker, SceneOp, SceneOwner, ScenePublication, SceneVersion,
     SceneVersionId, SceneWriter, SubtreeCull, SurfaceKey,
 };
 pub use scene_snapshot::{

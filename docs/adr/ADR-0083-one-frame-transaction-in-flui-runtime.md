@@ -253,7 +253,7 @@ surface — every name and probe method, with the reason for each entry — and 
 module re-export or any other kind of `pub` item. It is kept apart from the runtime's
 `__runtime` seam so the two can be removed separately. An entry leaves when its tests assert
 through public API — for the navigator internals, the Router conformance suite of
-[ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) — and the module is deleted when
+[ADR-0330](ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md) — and the module is deleted when
 empty.
 
 ### 5. The two-consumer condition is met

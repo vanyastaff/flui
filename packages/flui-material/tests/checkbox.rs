@@ -104,20 +104,23 @@ pub fn indeterminate_tristate_exports_mixed_semantics() {
     );
 }
 
-/// Each toggle is one node, whatever its state: its role, its checked state,
+/// Each toggle and each pressable chip is one node, whatever its state: its
+/// role, its checked state,
 /// its label when it has one, disabled without a handler, and with one the
-/// click and the focus a screen reader acts on. `Switch` and `Radio` share
-/// the composition, so they are rows here too.
-pub fn toggles_are_one_node_with_their_state() {
-    use flui_material::{Radio, Switch};
+/// click and the focus a screen reader acts on. `Switch`, `Radio` and the
+/// chips describe themselves on their well as `Checkbox` does, so they are
+/// rows here too.
+pub fn toggles_and_chips_are_one_node_with_their_state() {
+    use flui_material::{Chip, FilterChip, Radio, Switch};
     use flui_sdk::view::prelude::*;
+    use flui_sdk::widgets::Text;
     use flui_testing::a11y::{Action, Role};
 
     /// What the row is, the node it must form, and the control.
     struct Row {
         name: &'static str,
         role: Role,
-        toggled: Toggled,
+        toggled: Option<Toggled>,
         enabled: bool,
         label: Option<&'static str>,
         view: fn() -> BoxedView,
@@ -126,7 +129,7 @@ pub fn toggles_are_one_node_with_their_state() {
         Row {
             name: "checkbox off",
             role: Role::CheckBox,
-            toggled: Toggled::False,
+            toggled: Some(Toggled::False),
             enabled: true,
             label: None,
             view: || Checkbox::new(false).on_changed(|_ctx, _value| {}).boxed(),
@@ -134,7 +137,7 @@ pub fn toggles_are_one_node_with_their_state() {
         Row {
             name: "checkbox labelled",
             role: Role::CheckBox,
-            toggled: Toggled::True,
+            toggled: Some(Toggled::True),
             enabled: true,
             label: Some("Agree"),
             view: || {
@@ -147,7 +150,7 @@ pub fn toggles_are_one_node_with_their_state() {
         Row {
             name: "checkbox disabled",
             role: Role::CheckBox,
-            toggled: Toggled::True,
+            toggled: Some(Toggled::True),
             enabled: false,
             label: None,
             view: || Checkbox::new(true).boxed(),
@@ -155,7 +158,7 @@ pub fn toggles_are_one_node_with_their_state() {
         Row {
             name: "switch on",
             role: Role::Switch,
-            toggled: Toggled::True,
+            toggled: Some(Toggled::True),
             enabled: true,
             label: None,
             view: || Switch::new(true).on_changed(|_ctx, _value| {}).boxed(),
@@ -163,7 +166,7 @@ pub fn toggles_are_one_node_with_their_state() {
         Row {
             name: "switch disabled",
             role: Role::Switch,
-            toggled: Toggled::False,
+            toggled: Some(Toggled::False),
             enabled: false,
             label: None,
             view: || Switch::new(false).boxed(),
@@ -171,7 +174,7 @@ pub fn toggles_are_one_node_with_their_state() {
         Row {
             name: "radio selected",
             role: Role::RadioButton,
-            toggled: Toggled::True,
+            toggled: Some(Toggled::True),
             enabled: true,
             label: None,
             view: || {
@@ -183,10 +186,52 @@ pub fn toggles_are_one_node_with_their_state() {
         Row {
             name: "radio disabled",
             role: Role::RadioButton,
-            toggled: Toggled::False,
+            toggled: Some(Toggled::False),
             enabled: false,
             label: None,
             view: || Radio::new("a", Some("b")).boxed(),
+        },
+        Row {
+            name: "chip",
+            role: Role::Button,
+            toggled: None,
+            enabled: true,
+            label: Some("Tag"),
+            view: || Chip::new(Text::new("Tag")).on_pressed(|_ctx| {}).boxed(),
+        },
+        Row {
+            name: "chip disabled",
+            role: Role::Button,
+            toggled: None,
+            enabled: false,
+            label: Some("Tag"),
+            view: || {
+                Chip::new(Text::new("Tag"))
+                    .on_pressed(|_ctx| {})
+                    .enabled(false)
+                    .boxed()
+            },
+        },
+        Row {
+            name: "filter chip selected",
+            role: Role::Button,
+            toggled: Some(Toggled::True),
+            enabled: true,
+            label: Some("Tag"),
+            view: || {
+                FilterChip::new(Text::new("Tag"))
+                    .selected(true)
+                    .on_selected(|_ctx, _selected| {})
+                    .boxed()
+            },
+        },
+        Row {
+            name: "filter chip disabled",
+            role: Role::Button,
+            toggled: Some(Toggled::False),
+            enabled: false,
+            label: Some("Tag"),
+            view: || FilterChip::new(Text::new("Tag")).boxed(),
         },
     ];
 
@@ -225,7 +270,7 @@ pub fn toggles_are_one_node_with_their_state() {
         );
         let wanted = (
             row.role,
-            Some(row.toggled),
+            row.toggled,
             row.label,
             !row.enabled,
             row.enabled,

@@ -6,7 +6,7 @@
 
 [radio_alone]
 allocations = 103
-bytes = 13828
+bytes = 13644
 elements = 4
 reallocations = 3
 render_nodes = 2

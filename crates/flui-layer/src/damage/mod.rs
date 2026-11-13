@@ -29,6 +29,7 @@ pub use differ::LayerDiffer;
 /// Whether the raster side draws damage, and when a region is large
 /// enough that a full repaint is cheaper.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum DamageMode {
     /// Retain nothing and report every frame as
     /// [`DamageRegion::Full`](crate::DamageRegion::Full) for

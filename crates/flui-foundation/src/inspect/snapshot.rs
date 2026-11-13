@@ -431,6 +431,7 @@ impl Sink for OwnedSink<'_> {
 
 /// Why a typed field read failed.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum FieldError {
     /// The node has no such field.
     #[error("{kind} {id} has no field `{name}`")]
@@ -522,6 +523,7 @@ impl<'a> FromField<'a> for Variant<'a> {
 
 /// Why a lookup by kind did not find exactly one node.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum MatchError {
     /// No node matched.
     #[error("no {kind} in the tree")]

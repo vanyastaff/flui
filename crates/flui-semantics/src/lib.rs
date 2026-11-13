@@ -29,6 +29,10 @@
 //! The rules that are not visible in the types live in the crate's
 //! `ARCHITECTURE.md`; the cross-crate ones in ADR-0203, ADR-0205 and ADR-0206.
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(

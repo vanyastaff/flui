@@ -44,6 +44,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum BudgetPolicy {
     /// Continue work (may drop frames)
     Continue = 0,

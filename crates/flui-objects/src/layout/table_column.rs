@@ -10,6 +10,7 @@
 /// therefore [`Clone`] but not `Copy` (a recursive type cannot be `Copy`).
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum TableColumnWidth {
     /// Fixed width in logical pixels.
     ///

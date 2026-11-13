@@ -128,7 +128,6 @@ fn descriptor_face(descriptor: &CTFontDescriptor) -> Option<FaceRef> {
     // SAFETY: as above.
     let family = unsafe { descriptor.attribute(kCTFontFamilyNameAttribute) }
         .and_then(|value| value.downcast::<CFString>().ok())
-        .map(|name| name.to_string())
-        .unwrap_or_default();
+        .map_or_default(|name| name.to_string());
     super::face_by_file(url.and_then(|url| url.to_file_path()), &family)
 }

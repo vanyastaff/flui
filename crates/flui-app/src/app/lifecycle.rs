@@ -195,6 +195,10 @@ pub(crate) fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
 /// purpose: these three are a complete classification of how one-shot work
 /// ends, and a caller should be forced to consider each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "one-shot work completes, is cancelled or panics, and a caller handles each"
+)]
 pub enum TaskOutcome<T> {
     /// The task ran to completion and produced its value.
     ///

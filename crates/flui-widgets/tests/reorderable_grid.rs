@@ -24,10 +24,11 @@ use flui_testing::widgets::SharedSignal;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle};
 use flui_widgets::{
-    Align, Alternative, Directionality, GestureAlternatives, GestureCommand, MenuSpec, Navigator,
-    NavigatorHandle, PageRoute, ReorderCause, ReorderIntent, ReorderableGrid, SingleActivator,
-    SizedBox, SliverGridDelegateWithMaxCrossAxisExtent, Text, Urgency,
+    Align, Alternative, Directionality, GestureAlternatives, GestureCommand, MenuSpec, PageRoute,
+    ReorderCause, ReorderIntent, ReorderableGrid, SingleActivator, SizedBox,
+    SliverGridDelegateWithMaxCrossAxisExtent, Text, Urgency,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -120,7 +121,7 @@ impl StatefulView for Desk {
     type State = DeskState;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> DeskState {
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         let board = self.0.clone();
         navigator.seed_initial(PageRoute::<()>::new(move |_, _, _| {
             BoardGrid(board.clone()).into_view().boxed()
@@ -297,8 +298,7 @@ fn tile_node(laid: &LaidOut, tile: &str) -> Option<(NodeId, Vec<(String, i32)>)>
 /// The moves the tile named `tile` offers assistive technology, in order.
 fn offered(laid: &LaidOut, tile: &str) -> Vec<String> {
     tile_node(laid, tile)
-        .map(|(_, moves)| moves.into_iter().map(|(label, _)| label).collect())
-        .unwrap_or_default()
+        .map_or_default(|(_, moves)| moves.into_iter().map(|(label, _)| label).collect())
 }
 
 /// Invoke `label` on the tile named `tile`, as assistive technology does.

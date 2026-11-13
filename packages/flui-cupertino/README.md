@@ -4,7 +4,7 @@ iOS-style (Cupertino) theming foundation for [FLUI](https://github.com/vanyastaf
 `CupertinoDynamicColor`/`CupertinoColors`, `CupertinoTextThemeData`, `CupertinoTheme`/
 `CupertinoThemeData`, the `CupertinoApp` application shell, and the Cupertino widget family —
 `CupertinoButton`, `CupertinoNavigationBar`, `CupertinoTabBar`/`CupertinoTabScaffold`,
-`CupertinoPageScaffold`, and `cupertino_page_route`.
+and `CupertinoPageScaffold`; `CupertinoApp` slides its routes in with the iOS parallax transition.
 
 It is an official package (ADR-0088): its only FLUI dependency is `flui-sdk`, the
 package-author surface, the same one a third-party design system builds on.

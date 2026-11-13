@@ -25,10 +25,11 @@ use flui_testing::widgets::SharedSignal;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle};
 use flui_widgets::{
     Alternative, DecoratedBox, DefaultFocusRingStyle, FocusRingStyle, GestureAlternatives,
-    GestureCommand, MenuSpec, Navigator, NavigatorHandle, PageRoute, ReorderCause, ReorderIntent,
-    ReorderPreview, ReorderableList, SelectionArea, SingleActivator, SizedBox, Text, Urgency,
+    GestureCommand, MenuSpec, PageRoute, ReorderCause, ReorderIntent, ReorderPreview,
+    ReorderableList, SelectionArea, SingleActivator, SizedBox, Text, Urgency,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -149,7 +150,7 @@ impl StatefulView for Desk {
     type State = DeskState;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> DeskState {
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         let shelf = self.0.clone();
         navigator.seed_initial(PageRoute::<()>::new(move |_, _, _| {
             ShelfList(shelf.clone()).into_view().boxed()

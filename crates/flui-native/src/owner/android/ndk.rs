@@ -298,7 +298,13 @@ ndk_function!(
     FontMatcherMatch,
     c"AFontMatcher_match",
     29,
-    unsafe extern "C" fn(*const AFontMatcher, *const c_char, *const u16, u32, *mut u32) -> *mut AFont
+    unsafe extern "C" fn(
+        *const AFontMatcher,
+        *const c_char,
+        *const u16,
+        u32,
+        *mut u32,
+    ) -> *mut AFont
 );
 ndk_function!(
     /// `const char* AFont_getFontFilePath(const AFont*)` (`<android/font.h>`).

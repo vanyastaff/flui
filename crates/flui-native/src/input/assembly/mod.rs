@@ -88,8 +88,7 @@ pub fn framed(contacts: impl IntoIterator<Item = Assembled>) -> Assembled {
         })
         .collect();
     PointerFrame::try_new(events)
-        .map(|frame| smallvec::smallvec![PlatformInput::PointerFrame(frame)])
-        .unwrap_or_default()
+        .map_or_default(|frame| smallvec::smallvec![PlatformInput::PointerFrame(frame)])
 }
 
 /// The input surface a contact belongs to: a backend's window, or `0` for a
