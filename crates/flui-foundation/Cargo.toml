@@ -52,7 +52,6 @@ flui-macros = { workspace = true }
 
 # Optional dependencies
 serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -99,7 +98,7 @@ harness = false
 default = []
 ## Keep creation sites (`CreationSite`) in release builds; debug builds always keep them.
 creation-site = []
-serde = ["dep:serde", "dep:serde_json"]
+serde = ["dep:serde"]
 ## Test support (ADR-0243): `testing::CountingWaker` and `testing::panicking_waker`.
 testing = []
 
