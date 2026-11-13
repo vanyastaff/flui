@@ -292,6 +292,58 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
 }
 
+/// Frames a scenario pumps before it measures a steady one: enough for every
+/// buffer the app keeps between frames (the scene owner's spares, the
+/// recorder's room) to have come back once.
+const WARM_SCROLLS: u32 = 8;
+
+/// A one-screen scroll once the app has scrolled before: what every scroll
+/// after the first few costs, with the buffers kept between frames already
+/// back. The first-frames row above shows what filling them costs; this one
+/// fails when a frame stops reusing them.
+#[test]
+fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
+    let mut app = mount();
+    for screen in 1..=WARM_SCROLLS {
+        app.writer
+            .set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
+        app.pump_many(2);
+    }
+    let band = app.render_nodes();
+    app.writer.set_pixels(
+        HEIGHT * f64::from(WARM_SCROLLS + 1),
+        OffsetWriteCause::Programmatic,
+    );
+    let (report, allocations) = perf_measured(|| app.pump_many(2));
+    record("list_10k_scroll_warm", &report, allocations);
+
+    let laid_out = counter(&report, "nodes_laid_out");
+    assert!(
+        laid_out >= 1 && laid_out <= band as u64,
+        "a warm scroll lays out only a band ({band}), got {laid_out}: {report:#?}"
+    );
+    assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
+}
+
+/// A full reassemble after two others: what a hot-reload loop costs once the
+/// buffers kept between frames are back, against the first one above.
+#[test]
+fn perf_a_repeated_full_reassemble_reuses_what_the_last_one_kept() {
+    let mut app = mount();
+    for _ in 0..2 {
+        app.binding.perform_reassemble();
+        app.binding.reassemble_render_tree();
+        app.binding.pump_frame_report(FRAME);
+    }
+    app.binding.perform_reassemble();
+    app.binding.reassemble_render_tree();
+    let (report, allocations) = perf_measured(|| app.binding.pump_frame_report(FRAME));
+    record("full_reassemble_repeated", &report, allocations);
+
+    assert!(counter(&report, "nodes_laid_out") > 0, "{report:#?}");
+    assert!(counter(&report, "nodes_painted") > 0, "{report:#?}");
+    assert_eq!(report.pipeline.frames_produced, 1, "{report:#?}");
+}
 /// Rows under the sliding panel: enough painted content that a subtree
 /// repaint and a layer patch differ visibly in `nodes_painted`.
 const PANEL_ROWS: usize = 30;
