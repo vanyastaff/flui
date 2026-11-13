@@ -2,7 +2,7 @@
 //!
 //! The module is private; [`RouteResult`] and [`RouteResultError`] are
 //! re-exported from the crate root. The channel is owner-thread state, an
-//! `Rc`/`RefCell` pair: neither half nor the value crosses a thread (ADR-0093
+//! `Rc`/`RefCell` pair: neither half nor the value crosses a thread (ADR-0330
 //! §3).
 //!
 //! `Navigator::push` returns the [`RouteResult`] *before* any lifecycle runs, and

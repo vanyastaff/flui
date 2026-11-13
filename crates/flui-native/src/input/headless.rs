@@ -4,13 +4,11 @@
 //! assembled, through a window's callbacks (`HeadlessHostWindow`).
 
 use std::num::NonZeroU64;
-use std::sync::{Arc, Weak};
 
 use flui_foundation::IdMint;
 use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::pointer::{DeviceId, PointerDeviceChange, PointerKind};
 use flui_platform::{EventTime, PlatformInput};
-use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::input::assembly::{DeviceRegistry, NativeDevice};
@@ -45,7 +43,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn input_devices(&self) -> HeadlessInputDevices {
         HeadlessInputDevices {
-            state: Arc::downgrade(&self.owner().state),
+            state: std::rc::Rc::downgrade(&self.owner().state),
         }
     }
 }
@@ -67,7 +65,7 @@ impl host::Input<HeadlessLoop> for HeadlessInputDevices {
 /// ([`HeadlessPlatform::input_devices`](crate::HeadlessPlatform::input_devices)).
 #[derive(Clone)]
 pub struct HeadlessInputDevices {
-    state: Weak<Mutex<HeadlessState>>,
+    state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
 
 impl std::fmt::Debug for HeadlessInputDevices {
@@ -86,7 +84,7 @@ impl HeadlessInputDevices {
         use flui_platform::pointer::PointerEvent;
         let state = self.state.upgrade()?;
         let (change, windows, present) = {
-            let mut state = state.lock();
+            let mut state = state.borrow_mut();
             let time = EventTime::from_nanos(crate::input::event_timestamp_ns());
             let change = state.devices.attach(kind, time)?;
             let windows = state.windows.deliveries_of_all();
@@ -110,7 +108,7 @@ impl HeadlessInputDevices {
             return false;
         };
         let (removed, windows, present) = {
-            let mut state = state.lock();
+            let mut state = state.borrow_mut();
             let time = EventTime::from_nanos(crate::input::event_timestamp_ns());
             let Some(removed) = state.devices.remove(id, time) else {
                 return false;

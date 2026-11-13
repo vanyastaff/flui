@@ -2,7 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/flui-cli.svg)](https://crates.io/crates/flui-cli)
 [![CI](https://github.com/vanyastaff/flui/actions/workflows/ci.yml/badge.svg)](https://github.com/vanyastaff/flui/actions/workflows/ci.yml)
-[![MSRV](https://img.shields.io/badge/MSRV-1.99-blue.svg)](https://github.com/vanyastaff/flui/blob/main/crates/flui-cli/Cargo.toml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.100-blue.svg)](https://github.com/vanyastaff/flui/blob/main/crates/flui-cli/Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
 
 The command-line tool for the [FLUI](https://github.com/vanyastaff/flui)
@@ -56,7 +56,7 @@ cd flui
 cargo install --path crates/flui-cli --locked
 ```
 
-Requires Rust 1.99 or newer with Cargo, rustup and Git. Platform toolchains
+Requires Rust 1.100 or newer with Cargo, rustup and Git. Platform toolchains
 are only needed for the platforms you build: Xcode command line tools for
 macOS and iOS; for Android the SDK (`ANDROID_HOME`) with `platform-tools`,
 `build-tools` and an NDK, `cargo-ndk`, the `aarch64-linux-android` target,
@@ -197,6 +197,9 @@ the app): `flui run --scene --scene-crate <crate> --package <android.package>`.
 
 ## Driving an app from an agent
 
+**Experimental.** The agent protocol is 0.x: its methods, tool arguments and
+replies can change in any minor release.
+
 ```bash
 flui run --agent                         # debug build, on this desktop
 flui run --agent --release               # release build with the `driver` feature
@@ -241,7 +244,9 @@ runs. Tools:
 |------|------|
 | `flui_windows` | List the windows that have content. |
 | `flui_read` | Read a window's semantics tree (`root`, `max_depth`, `max_nodes`). |
+| `flui_locate` | Find the elements a locator (`role`, `name`, `state`, …) matches. |
 | `flui_act` | Perform an action a node advertises (`invoke`, `toggle`, `set_value`, …). |
+| `flui_wait` | Hold out until an element appears, goes or matches, the window settles or frames present (`timeout_ms`). |
 | `flui_motion` | Read, pause or step the animation clock. |
 
 `window` may be left out when the app has one. Failures carry the wire's

@@ -93,8 +93,9 @@ use flui_sdk::painting::Paint;
 use flui_sdk::painting::TextDirection;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Directionality, MotionBuilder, Semantics, WidgetState,
+    CustomPaint, CustomPainter, Directionality, MotionBuilder, SemanticsRole, Toggled, WidgetState,
     WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 
@@ -384,7 +385,15 @@ impl ViewState<Switch> for SwitchState {
             .shape(MaterialShape::Stadium)
             .overlay_color(overlay_color)
             .states_controller(self.states.clone())
-            .focus_indicator(FocusIndicator::Halo);
+            .focus_indicator(FocusIndicator::Halo)
+            // Flutter's `Semantics(toggled: …, enabled: …)` around the switch:
+            // the well's node is that one node, enabled while the well has its
+            // tap.
+            .description(
+                Description::new(SemanticsRole::Switch)
+                    .identifier(view.identifier.clone())
+                    .toggled(Toggled::from_bool(view.value)),
+            );
         if interactive {
             ink_well = ink_well.on_tap(move |ctx| {
                 if let Some(handler) = &on_changed {
@@ -393,10 +402,7 @@ impl ViewState<Switch> for SwitchState {
             });
         }
 
-        crate::button_style_button::identified(Semantics::new(), view.identifier.as_ref())
-            .switch(view.value)
-            .enabled(interactive)
-            .child(ink_well)
+        ink_well
     }
 
     fn dispose(&mut self) {

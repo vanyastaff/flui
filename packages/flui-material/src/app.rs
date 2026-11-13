@@ -44,7 +44,7 @@
 //! - **`MaterialLocalizations`** — FLUI ships no Material resource set yet;
 //!   when one lands its delegate is appended here. Caller delegates pass
 //!   through to `WidgetsApp` unchanged.
-//! - **`Title`/`color`, named routes/`Router`, restoration, debug overlays**
+//! - **`Title`/`color`, restoration, debug overlays**
 //!   — deferred at the `WidgetsApp` layer; see its module docs.
 //!
 //! ## Documented behavior
@@ -59,7 +59,6 @@
 
 use std::fmt;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_sdk::painting::Color;
 use flui_sdk::painting::{FontWeight, TextStyle};
@@ -68,8 +67,8 @@ use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::{MediaQuery, PlatformConvention};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    AppBuilder, BoxedLocalizationsDelegate, NavigatorHandle, NavigatorObserver, PageTransitions,
-    RefreshIndicatorPhase, RefreshIndicatorStyle, SizedBox, WidgetsApp,
+    AppBuilder, BoxedLocalizationsDelegate, PageTransitions, RefreshIndicatorPhase,
+    RefreshIndicatorStyle, Routable, Router, SizedBox, WidgetsApp,
 };
 
 use crate::page_transitions::dialog_transition;
@@ -85,6 +84,10 @@ use crate::theme_data::ThemeData;
 /// theme *selection* belongs to the design system that defines the tokens,
 /// not the application framework (ADR-0042 §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a theme follows the platform or picks one of its two brightnesses"
+)]
 pub enum ThemeMode {
     /// Follow the platform's light/dark preference, read from the ambient
     /// `MediaQueryData::platform_brightness`.
@@ -185,9 +188,7 @@ fn resolve_theme(
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct MaterialApp {
-    home: Option<BoxedView>,
-    navigator: Option<NavigatorHandle>,
-    observers: Vec<Arc<dyn NavigatorObserver>>,
+    routing: Routing,
     user_builder: Option<AppBuilder>,
     theme: Option<ThemeData>,
     dark_theme: Option<ThemeData>,
@@ -202,7 +203,7 @@ pub struct MaterialApp {
 impl fmt::Debug for MaterialApp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MaterialApp")
-            .field("has_home", &self.home.is_some())
+            .field("routing", &self.routing)
             .field("has_builder", &self.user_builder.is_some())
             .field("theme_mode", &self.theme_mode)
             .field("has_dark_theme", &self.dark_theme.is_some())
@@ -213,9 +214,7 @@ impl fmt::Debug for MaterialApp {
 impl MaterialApp {
     fn bare() -> Self {
         Self {
-            home: None,
-            navigator: None,
-            observers: Vec::new(),
+            routing: Routing::Builder,
             user_builder: None,
             theme: None,
             dark_theme: None,
@@ -228,12 +227,46 @@ impl MaterialApp {
         }
     }
 
-    /// A Material app whose navigator shows `home` as its root route — see
-    /// `WidgetsApp::new` for the seeding contract.
+    /// A Material app showing `home`, Flutter's `MaterialApp(home:)`: one page
+    /// with no URL, on which popups open — see `WidgetsApp::new` for the
+    /// seeding contract.
     #[must_use]
     pub fn new(home: impl IntoView) -> Self {
         Self {
-            home: Some(home.into_view().boxed()),
+            routing: Routing::Home(home.into_view().boxed()),
+            ..Self::bare()
+        }
+    }
+
+    /// A Material app rooted in `router`, Flutter's `MaterialApp.router`: the
+    /// [`Router`] is the app's routing subtree, below the Material bands, and
+    /// its navigator is the app's only one (ADR-0330 §4).
+    ///
+    /// ```
+    /// use flui_material::MaterialApp;
+    /// use flui_sdk::view::prelude::*;
+    /// use flui_sdk::widgets::{Routable, Router, Text};
+    ///
+    /// #[derive(Routable, Clone, PartialEq)]
+    /// enum AppRoute {
+    ///     #[route("/")]
+    ///     Home,
+    ///     #[route("/note/:id")]
+    ///     Note { id: u32 },
+    /// }
+    ///
+    /// let app = MaterialApp::router(Router::new(AppRoute::Home, |route: &AppRoute, _ctx| {
+    ///     match route {
+    ///         AppRoute::Home => Text::new("Home").into_view().boxed(),
+    ///         AppRoute::Note { id } => Text::new(format!("Note {id}")).into_view().boxed(),
+    ///     }
+    /// }));
+    /// # let _ = app;
+    /// ```
+    #[must_use]
+    pub fn router<R: Routable>(router: Router<R>) -> Self {
+        Self {
+            routing: Routing::Router(Box::new(WidgetsApp::router(router))),
             ..Self::bare()
         }
     }
@@ -290,22 +323,6 @@ impl MaterialApp {
     #[must_use]
     pub fn theme_mode(mut self, mode: ThemeMode) -> Self {
         self.theme_mode = mode;
-        self
-    }
-
-    /// Drive the navigator through a caller-owned handle — see
-    /// `WidgetsApp::navigator` for the pre-seeded-handle contract.
-    #[must_use]
-    pub fn navigator(mut self, handle: NavigatorHandle) -> Self {
-        self.navigator = Some(handle);
-        self
-    }
-
-    /// Register `observer` on the navigator at mount; see
-    /// `WidgetsApp::observer`.
-    #[must_use]
-    pub fn observer(mut self, observer: Arc<dyn NavigatorObserver>) -> Self {
-        self.observers.push(observer);
         self
     }
 
@@ -408,24 +425,52 @@ impl StatelessView for MaterialApp {
             AnimatedTheme::new(resolved, routes).boxed()
         };
 
-        let mut app = match &self.home {
-            Some(home) => WidgetsApp::new(home.clone()).builder(material_builder),
-            None => WidgetsApp::with_builder(material_builder),
-        };
-        app = app
+        match &self.routing {
+            Routing::Home(home) => self
+                .configure(WidgetsApp::new(home.clone()).builder(material_builder))
+                .boxed(),
+            Routing::Router(app) => self
+                .configure((**app).clone().builder(material_builder))
+                .boxed(),
+            Routing::Builder => self
+                .configure(WidgetsApp::with_builder(material_builder))
+                .boxed(),
+        }
+    }
+}
+
+impl MaterialApp {
+    /// The shell configuration both routing forms share.
+    fn configure(&self, app: WidgetsApp) -> WidgetsApp {
+        let app = app
             .supported_locales(self.supported_locales.clone())
             .localizations_delegates(self.localizations_delegates.clone())
             .text_style(error_text_style());
-        if let Some(locale) = &self.locale {
-            app = app.locale(locale.clone());
+        match &self.locale {
+            Some(locale) => app.locale(locale.clone()),
+            None => app,
         }
-        if let Some(handle) = &self.navigator {
-            app = app.navigator(handle.clone());
-        }
-        for observer in &self.observers {
-            app = app.observer(Arc::clone(observer));
-        }
-        app
+    }
+}
+
+/// What a [`MaterialApp`] routes with.
+#[derive(Clone)]
+enum Routing {
+    /// [`MaterialApp::new`]: one home page.
+    Home(BoxedView),
+    /// [`MaterialApp::router`]: the router shell, already built.
+    Router(Box<WidgetsApp>),
+    /// [`MaterialApp::with_builder`]: no routing.
+    Builder,
+}
+
+impl fmt::Debug for Routing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Home(_) => "Home",
+            Self::Router(_) => "Router",
+            Self::Builder => "Builder",
+        })
     }
 }
 

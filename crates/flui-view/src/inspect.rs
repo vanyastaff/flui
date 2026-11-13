@@ -78,8 +78,7 @@ impl InspectTree for ElementTree {
     fn children(&self, id: InspectId) -> impl Iterator<Item = InspectId> + '_ {
         element_id(id)
             .and_then(|id| self.get(id))
-            .map(crate::tree::ElementNode::child_ids)
-            .unwrap_or_default()
+            .map_or_default(crate::tree::ElementNode::child_ids)
             .iter()
             .map(|&child| child.into())
     }

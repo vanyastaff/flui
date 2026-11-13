@@ -16,4 +16,6 @@ pub use flui_painting::{BlurSigma, Canvas, DisplayList, DrawCommand, DrawOp};
 /// Paint, style and text values: paths, shaders, colours, borders, decorations, text styles.
 pub use flui_painting::{paint, styling, typography};
 pub use flui_rendering::delegates::CustomPainter;
-pub use flui_rendering::semantics::{SemanticsRegion, SemanticsRegionKey, SemanticsRegions};
+pub use flui_rendering::semantics::{
+    SemanticsRegion, SemanticsRegionId, SemanticsRegionKey, SemanticsRegions,
+};

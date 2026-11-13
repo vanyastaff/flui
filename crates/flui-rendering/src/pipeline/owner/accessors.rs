@@ -465,10 +465,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &self,
         error: crate::error::RenderError,
     ) -> flui_foundation::TreeError<crate::error::RenderError> {
-        let context = error
-            .node()
-            .map(|id| self.tree_context(id))
-            .unwrap_or_default();
+        let context = error.node().map_or_default(|id| self.tree_context(id));
         flui_foundation::TreeError::new(error, context)
     }
 
@@ -914,7 +911,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // Correlated as a follower this frame but resolved to hidden
             // (unlinked and not shown, or its leader clipped out) — mirrors the
             // render path's `resolve_follower_transform -> None -> don't
-            // descend` (flui-engine's `render_layer_recursive`).
+            // descend` (flui-engine's `layer_walk`).
             // No HitTestEntry, no descent.
             return false;
         } else {

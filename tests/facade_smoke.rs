@@ -12,18 +12,13 @@
 //!
 //! This lives in the root crate's `tests/` (not `flui-widgets`' own tests)
 //! because it is exercising the `flui` package's own public surface — the
-//! facade re-exports under test only exist on this package. The mount
-//! sequence (`mount_root_with_pipeline_owner` → set root constraints → run
-//! one frame) is trimmed to the minimum needed to prove a
-//! `flui::prelude`-authored tree mounts and lays out — this test is not
-//! another acceptance test for a sample app, just a compile-and-mount
-//! smoke check for the facade surface itself.
+//! facade re-exports under test only exist on this package. It mounts the tree
+//! with `Tester` and finds its text: not another acceptance test for a sample
+//! app, just a compile-and-mount smoke check for the facade surface itself.
 
 use flui::prelude::*;
-use flui_foundation::geometry::Size;
-use flui_rendering::constraints::BoxConstraints;
-use flui_testing::HeadlessBinding;
-use flui_testing::bootstrap::{MountOptions, MountOwners};
+use flui_testing::widgets::{lay_out, tight};
+use flui_testing::{Tester, find};
 
 /// A trivial tree authored entirely off `flui::prelude::*` — the same import
 /// shape `src/lib.rs`'s crate-level doc-test demonstrates.
@@ -38,32 +33,16 @@ impl StatelessView for FacadeSmokeApp {
     }
 }
 
-fn root_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(320.0, 240.0))
-}
-
 #[test]
 fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
-    // Through `flui-testing`'s canonical bootstrap rather than a hand-rolled
-    // copy of it: the ordering is load-bearing at nearly every step, and copies
-    // of it have drifted silently before.
-    let mut binding = HeadlessBinding::new();
-    let mounted = binding.mount_root(
-        &FacadeSmokeApp,
-        MountOwners::fresh(),
-        MountOptions::new(root_constraints()),
-    );
-    assert!(
-        mounted.painted,
-        "a prelude-authored tree must commit a frame through the headless pipeline"
-    );
+    let mut t = Tester::mount(FacadeSmokeApp);
+    t.expect(find::text("flui facade smoke test")).to_exist();
 }
 
 #[test]
 fn a_fixed_oval_clip_is_configured_through_the_facade() {
     use flui::geometry::{RRect, Rect};
     use flui::widgets::{ClipOval, Oval};
-    use flui_testing::widgets::{lay_out, tight};
 
     let bounds = Rect::from_ltrb(20.0, 30.0, 80.0, 70.0);
     let tree = lay_out(

@@ -107,10 +107,12 @@ pub(crate) trait SimulatedOffers: Send {
 /// The displays position is the loop's: the snapshot it holds.
 impl host::Displays<HeadlessLoop> for HeadlessLoop {
     fn snapshot(owner: &HeadlessLoop) -> Result<DisplaySnapshot, PlatformError> {
-        owner.with_state(|state| match state.display_failure.take() {
+        let displays = owner.with_state(|state| Arc::clone(&state.displays));
+        let mut displays = displays.lock();
+        match displays.failure.take() {
             Some(message) => Err(PlatformError::Displays { message }),
-            None => Ok(state.displays.clone()),
-        })
+            None => Ok(displays.snapshot.clone()),
+        }
     }
 }
 
@@ -122,7 +124,7 @@ impl host::Displays<HeadlessLoop> for HeadlessLoop {
 /// whether a window is left (the exit policy) and opens a deferred window
 /// through it; the simulated devices and drag sessions reach a window's
 /// callbacks through it.
-pub(crate) trait TrackedWindows: OpenWindows + Send + Sync {
+pub(crate) trait TrackedWindows: OpenWindows {
     /// Builds a window delivering to `handler` under the locked `state` and
     /// tracks it; `platform` is the lock `state` came from, which the window
     /// keeps to close. The caller delivers the capability snapshot once the
@@ -134,7 +136,7 @@ pub(crate) trait TrackedWindows: OpenWindows + Send + Sync {
     fn open(
         self: Arc<Self>,
         state: &mut HeadlessState,
-        platform: Weak<Mutex<HeadlessState>>,
+        platform: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
@@ -159,7 +161,7 @@ pub(crate) trait TrackedWindows: OpenWindows + Send + Sync {
 pub struct HeadlessLoop {
     pub(crate) signal: Arc<crate::owner::signal::OwnerSignal>,
     wake_failure: Arc<std::sync::atomic::AtomicBool>,
-    pub(crate) state: Arc<Mutex<HeadlessState>>,
+    pub(crate) state: std::rc::Rc<std::cell::RefCell<HeadlessState>>,
 }
 
 /// What the simulated system keeps of drag and drop (ADR-0211): the offers it
@@ -193,6 +195,27 @@ pub(crate) struct DragOver {
     pub(crate) position: Point<f64>,
 }
 
+/// The displays the simulated system reports, which the OS may change from
+/// any thread, as Linux's display thread does: its controls commit here and
+/// wake the owner, which samples it on its next turn.
+#[derive(Debug)]
+pub(crate) struct SimulatedDisplays {
+    pub(crate) snapshot: DisplaySnapshot,
+    /// The failure the next `Platform::display_snapshot` read reports instead
+    /// of the snapshot ([`HeadlessDisplayControls::fail_next_read`](crate::HeadlessDisplayControls::fail_next_read)).
+    pub(crate) failure: Option<String>,
+}
+
+/// The preferences the simulated system reports: unknown until
+/// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences)
+/// or [`HeadlessPreferences::set`](crate::HeadlessPreferences::set).
+#[derive(Debug, Default)]
+pub(crate) struct SimulatedPreferences {
+    pub(crate) values: flui_platform::SystemPreferences,
+    /// The failure the next `Platform::preferences` read reports instead of a
+    /// value ([`HeadlessPreferences::fail_next_read`](crate::HeadlessPreferences::fail_next_read)).
+    pub(crate) failure: Option<String>,
+}
 pub(crate) struct HeadlessState {
     /// What the simulated system keeps of drag and drop.
     pub(crate) drags: Arc<Mutex<OsDrags>>,
@@ -244,13 +267,13 @@ pub(crate) struct HeadlessState {
     /// ([`HeadlessHost::displays`]); replaced by
     /// [`HeadlessPlatform::with_displays`](crate::HeadlessPlatform::with_displays) and changed through
     /// [`HeadlessDisplayControls`](crate::HeadlessDisplayControls).
-    pub(crate) displays: DisplaySnapshot,
+    pub(crate) displays: Arc<Mutex<SimulatedDisplays>>,
     /// The channel system notices take to the host; a wake marks every window
     /// opened here stale first.
     pub(crate) notices: Arc<dyn crate::owner::notices::NoticeChannel>,
     /// How many times the host told this platform it released a session end it
     /// had answered with a block.
-    pub(crate) session_end_releases: usize,
+    pub(crate) session_end_releases: Arc<std::sync::atomic::AtomicUsize>,
     /// How this platform stands in for the session's end: `Hold`, a desktop
     /// that waits for a block, until
     /// [`HeadlessPlatform::with_session_end_support`](crate::HeadlessPlatform::with_session_end_support).
@@ -264,15 +287,9 @@ pub(crate) struct HeadlessState {
     /// store per application, for as long as the platform lives; never the
     /// user's data directories.
     pub(crate) memory: HashMap<flui_platform::AppDataDir, crate::storage::MemoryStore>,
-    /// What `Platform::preferences` reports: unknown until
-    /// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences) or [`HeadlessPreferences::set`](crate::HeadlessPreferences::set).
-    pub(crate) preferences: flui_platform::SystemPreferences,
-    /// The failure the next `Platform::preferences` read reports instead of a
-    /// value ([`HeadlessPreferences::fail_next_read`](crate::HeadlessPreferences::fail_next_read)).
-    pub(crate) preference_failure: Option<String>,
-    /// The failure the next `Platform::display_snapshot` read reports instead
-    /// of the snapshot ([`HeadlessDisplayControls::fail_next_read`](crate::HeadlessDisplayControls::fail_next_read)).
-    pub(crate) display_failure: Option<String>,
+    /// What `Platform::preferences` reports, which the OS may change from any
+    /// thread, as Linux's portal source does.
+    pub(crate) preferences: Arc<Mutex<SimulatedPreferences>>,
     /// What makes the drag source of a window opened now, as the table names
     /// it ([`HeadlessHost::drag_source`]).
     drag_source: fn(&HeadlessState) -> Option<Arc<dyn PlatformDragSource>>,
@@ -285,20 +302,22 @@ impl HeadlessState {
     /// The display a new window opens on: the primary, or the first when
     /// none is.
     pub(crate) fn window_display(&self) -> Option<DisplayId> {
-        self.displays
+        let displays = self.displays.lock();
+        displays
+            .snapshot
             .primary()
-            .or_else(|| self.displays.displays().first())
+            .or_else(|| displays.snapshot.displays().first())
             .map(|display| display.id)
     }
 
     /// Whether the system holds display `id`.
     pub(crate) fn holds_display(&self, id: DisplayId) -> bool {
-        self.displays.get(id).is_some()
+        self.displays.lock().snapshot.get(id).is_some()
     }
 
     /// The bounds of display `id` in the logical pixels of its own scale.
     pub(crate) fn display_bounds(&self, id: DisplayId) -> Option<Bounds<f64>> {
-        let display = self.displays.get(id)?;
+        let display = self.displays.lock().snapshot.get(id)?.clone();
         let scale = display.scale_factor;
         let device = display.bounds;
         Some(Bounds::new(
@@ -347,14 +366,15 @@ impl HeadlessLoop {
             text_store_host: None,
             input_availability: default_input_availability(),
             devices: H::devices(),
-            displays: H::displays(),
-            session_end_releases: 0,
+            displays: Arc::new(Mutex::new(SimulatedDisplays {
+                snapshot: H::displays(),
+                failure: None,
+            })),
+            session_end_releases: Arc::default(),
             session_end_support: flui_platform::SessionEndSupport::Hold,
             data_root: None,
             memory: HashMap::new(),
-            preferences: flui_platform::SystemPreferences::default(),
-            preference_failure: None,
-            display_failure: None,
+            preferences: Arc::default(),
             drag_source: H::drag_source,
         };
 
@@ -371,9 +391,9 @@ impl HeadlessLoop {
                     Ok(())
                 }
             })),
-            state: Arc::new(Mutex::new(state)),
+            state: std::rc::Rc::new(std::cell::RefCell::new(state)),
         };
-        platform.state.lock().owner_signal = Arc::downgrade(&platform.signal);
+        platform.state.borrow_mut().owner_signal = Arc::downgrade(&platform.signal);
         platform
     }
 
@@ -381,7 +401,7 @@ impl HeadlessLoop {
     where
         F: FnOnce(&mut HeadlessState) -> R,
     {
-        let mut state = self.state.lock();
+        let mut state = self.state.borrow_mut();
         f(&mut state)
     }
 }
@@ -389,9 +409,9 @@ impl HeadlessLoop {
 /// Stop the platform and tell the application's handler it quits; the
 /// delivery hears the quit once per run. The signal, when there is one,
 /// closes first.
-fn finish_quit(state: &Mutex<HeadlessState>) {
+fn finish_quit(state: &std::cell::RefCell<HeadlessState>) {
     let (signal, app) = {
-        let mut state = state.lock();
+        let mut state = state.borrow_mut();
         state.is_running = false;
         (state.owner_signal.upgrade(), Arc::clone(&state.app))
     };
@@ -410,9 +430,9 @@ fn finish_quit(state: &Mutex<HeadlessState>) {
 /// opening another window, say). Emptiness is checked before the question and
 /// again before quitting, so a window opened meanwhile — by the handler itself
 /// too — keeps the platform running. `true` when it quit.
-pub(crate) fn consult_exit_policy(state: &Mutex<HeadlessState>) -> bool {
+pub(crate) fn consult_exit_policy(state: &std::cell::RefCell<HeadlessState>) -> bool {
     let app = {
-        let state = state.lock();
+        let state = state.borrow_mut();
         if !state.windows.is_empty() {
             return false;
         }
@@ -423,7 +443,7 @@ pub(crate) fn consult_exit_policy(state: &Mutex<HeadlessState>) -> bool {
     // hosts, whose loop ends with its last window when nothing says
     // otherwise.
     let allowed = app.exit_policy().or_resume(false);
-    if !allowed || !state.lock().windows.is_empty() {
+    if !allowed || !state.borrow_mut().windows.is_empty() {
         return false;
     }
     finish_quit(state);
@@ -440,7 +460,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
         HeadlessOwnerTurns {
             signal: Arc::downgrade(&owner.signal),
             wake_failure: Arc::downgrade(&owner.wake_failure),
-            state: Arc::downgrade(&owner.state),
+            state: std::rc::Rc::downgrade(&owner.state),
             owner_affinity: std::marker::PhantomData,
         }
     }
@@ -453,7 +473,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn exit_reevaluation(&self) -> HeadlessExitReevaluation {
         HeadlessExitReevaluation {
-            state: Arc::downgrade(&self.owner().state),
+            state: std::rc::Rc::downgrade(&self.owner().state),
         }
     }
 
@@ -470,7 +490,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
         self.owner()
             .with_state(|state| state.deferred_window_open = true);
         HeadlessDeferredWindowOpens {
-            state: Arc::downgrade(&self.owner().state),
+            state: std::rc::Rc::downgrade(&self.owner().state),
         }
     }
 }
@@ -489,7 +509,7 @@ impl host::Loop for HeadlessLoop {
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting headless platform (no event loop)");
 
-        let state_handle = Arc::clone(&self.state);
+        let state_handle = std::rc::Rc::clone(&self.state);
         let signal = Arc::clone(&self.signal);
         signal.bind_owner();
         struct BootstrapGuard(Option<Arc<crate::owner::signal::OwnerSignal>>);
@@ -514,7 +534,7 @@ impl host::Loop for HeadlessLoop {
         // mode (`enable_deferred_window_open`) opts into the `Pending` arm
         // instead, so a probe can exercise the completion path of a backend
         // that defers, without a real event loop.
-        let deferred_window_open = state_handle.lock().deferred_window_open;
+        let deferred_window_open = state_handle.borrow().deferred_window_open;
         let owner_thread = thread::current().id();
 
         let hooks: Rc<dyn OwnerHooks> = if deferred_window_open {
@@ -536,7 +556,7 @@ impl host::Loop for HeadlessLoop {
         // is no loop to keep running with a half-built app -- propagate
         // straight out of `run`. The handler stays bound for the platform's
         // life: a test reports to it after `run` returned.
-        let app = Arc::clone(&self.state.lock().app);
+        let app = Arc::clone(&self.state.borrow_mut().app);
         app.bind(handler, &platform, &hooks);
         app.resume_through_signal(&signal);
         if let Err(error) = app.ready(OwnerPlatform::new(platform, hooks)) {
@@ -644,7 +664,7 @@ pub(crate) struct PendingOpen {
 
 struct HeadlessDeferredOwnerHooks {
     signal: Arc<crate::owner::signal::OwnerSignal>,
-    state: Arc<Mutex<HeadlessState>>,
+    state: std::rc::Rc<std::cell::RefCell<HeadlessState>>,
     owner_thread: ThreadId,
 }
 
@@ -678,7 +698,7 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
             });
         }
         let (slot, handle) = claim_slot::<OpenWindowResult>(Arc::new(|| {}));
-        self.state.lock().pending_opens.push(PendingOpen {
+        self.state.borrow_mut().pending_opens.push(PendingOpen {
             slot,
             options,
             handler: kept,
@@ -700,7 +720,7 @@ pub struct HeadlessOwnerTurns {
     wake_failure: Weak<std::sync::atomic::AtomicBool>,
     owner_affinity: std::marker::PhantomData<std::rc::Rc<()>>,
     signal: Weak<crate::owner::signal::OwnerSignal>,
-    state: Weak<Mutex<HeadlessState>>,
+    state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
 static_assertions::assert_not_impl_any!(HeadlessOwnerTurns: Send, Sync);
 impl std::fmt::Debug for HeadlessOwnerTurns {
@@ -722,7 +742,7 @@ impl HeadlessOwnerTurns {
     pub fn is_running(&self) -> bool {
         self.state
             .upgrade()
-            .is_some_and(|state| state.lock().is_running)
+            .is_some_and(|state| state.borrow_mut().is_running)
     }
 
     /// Perform one owner turn, including a pending explicit quit. No worker callback execution.
@@ -752,7 +772,7 @@ impl HeadlessOwnerTurns {
 /// owner loop's control arm) is driven explicitly by the
 /// embedding test through [`drive`](Self::drive).
 pub struct HeadlessExitReevaluation {
-    state: Weak<Mutex<HeadlessState>>,
+    state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
 
 impl std::fmt::Debug for HeadlessExitReevaluation {
@@ -774,7 +794,7 @@ impl HeadlessExitReevaluation {
         let Some(state) = self.state.upgrade() else {
             return false;
         };
-        let requested = state.lock().exit_reevaluation_requested;
+        let requested = state.borrow_mut().exit_reevaluation_requested;
         drop(state);
         requested
     }
@@ -812,7 +832,7 @@ impl HeadlessExitReevaluation {
             return false;
         };
         {
-            let mut state = platform_state.lock();
+            let mut state = platform_state.borrow_mut();
             if !state.exit_reevaluation_requested {
                 return false;
             }
@@ -831,7 +851,7 @@ impl HeadlessExitReevaluation {
 /// past the platform's own lifetime (same rationale as
 /// `HeadlessHostWindow::platform_state`).
 pub struct HeadlessDeferredWindowOpens {
-    state: Weak<Mutex<HeadlessState>>,
+    state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
 
 impl std::fmt::Debug for HeadlessDeferredWindowOpens {
@@ -869,7 +889,7 @@ impl HeadlessDeferredWindowOpens {
         // no-op here, but a future caller reusing this pattern must not
         // rely on that.
         let (slot, window) = {
-            let mut state = platform_state.lock();
+            let mut state = platform_state.borrow_mut();
             // The handler lives on the owner thread that asked: off it, the
             // request stays pending.
             if state.pending_opens.first()?.handler.is_occupied() != Some(true) {
@@ -886,7 +906,7 @@ impl HeadlessDeferredWindowOpens {
             let windows = Arc::clone(&state.windows);
             let opened = Arc::clone(&windows).open(
                 &mut state,
-                Arc::downgrade(&platform_state),
+                std::rc::Rc::downgrade(&platform_state),
                 options,
                 handler,
             );
@@ -1001,7 +1021,7 @@ mod tests {
         fn open(
             self: Arc<Self>,
             _: &mut HeadlessState,
-            _: Weak<Mutex<HeadlessState>>,
+            _: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
             _: WindowOptions,
             _: Rc<dyn WindowHandler>,
         ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
@@ -1029,17 +1049,17 @@ mod tests {
 
         use crate::owner::app_delivery::testing::{AppCall, AppLog, bind};
 
-        let platform = Arc::new(HeadlessLoop::new::<EmptyHost>(Arc::new(NoWindows)));
-        platform.state.lock().is_running = true;
+        let platform = Rc::new(HeadlessLoop::new::<EmptyHost>(Arc::new(NoWindows)));
+        platform.state.borrow_mut().is_running = true;
         let app = AppLog::new();
-        let delivery = Arc::clone(&platform.state.lock().app);
+        let delivery = Arc::clone(&platform.state.borrow().app);
         let run = bind(delivery, app.clone());
         run.delivery.ready(run.owner()).expect("bootstrap");
         let unlocked = Rc::new(Cell::new(false));
-        let (seen, reentered) = (Rc::clone(&unlocked), Arc::clone(&platform));
+        let (seen, reentered) = (Rc::clone(&unlocked), Rc::clone(&platform));
         app.react(move |call, _| {
             if call == AppCall::Quit {
-                seen.set(reentered.state.try_lock().is_some());
+                seen.set(reentered.state.try_borrow_mut().is_ok());
                 reentered.quit();
             }
         });
@@ -1050,7 +1070,7 @@ mod tests {
             unlocked.get(),
             "the handler heard the quit outside the state lock"
         );
-        assert!(!platform.state.lock().is_running);
+        assert!(!platform.state.borrow().is_running);
         run.delivery.release();
     }
 }

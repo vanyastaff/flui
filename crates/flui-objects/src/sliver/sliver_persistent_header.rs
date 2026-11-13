@@ -166,6 +166,10 @@ pub struct SnapCommand {
 
 /// The two things a scroll edge asks of a floating header's snap machinery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a scroll edge either ends a user scroll or begins one"
+)]
 pub enum SnapAction {
     /// A user scroll ended moving in `ScrollDirection`: settle the reveal
     /// to the nearest edge (fully open for `Forward`).

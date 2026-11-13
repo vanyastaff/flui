@@ -26,11 +26,11 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use flui_view::environment::VsyncScope;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, SimpleRoute};
 use flui_widgets::__test_access::{
     NavigatorProbe as _, RouteLifecycle, TransitionHandle, TransitionRoute,
 };
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{Navigator, NavigatorHandle, SimpleRoute};
 
 use crate::common::harness::{Harness, mount};
 
@@ -62,7 +62,7 @@ fn transition_with_duration(
 
 /// A navigator seeded with a plain first route.
 fn navigator() -> (NavigatorHandle, Harness) {
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     handle.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
@@ -148,7 +148,7 @@ pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_co
 /// command resurrects the entry to `Idle` instead of leaving it `Popping`.
 pub(crate) fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping() {
     let vsync = Vsync::new();
-    let navigator_handle = NavigatorHandle::new();
+    let navigator_handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator_handle.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
@@ -190,7 +190,7 @@ pub(crate) fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_pop
 pub(crate) fn scope_replacement_moves_an_existing_route_without_restarting_it() {
     let old = Vsync::new();
     let new = Vsync::new();
-    let navigator = NavigatorHandle::new();
+    let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
@@ -275,7 +275,7 @@ pub(crate) fn status_listener_does_not_hold_a_lock_across_the_binding_call() {
 /// `on_switched` callback of `TransitionRoute::update_secondary_animation`.
 pub(crate) fn hopping_route_dropped_without_dispose_frees_proxy() {
     let (bottom, bottom_handle) = transition("bottom");
-    let navigator_handle = NavigatorHandle::new();
+    let navigator_handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     navigator_handle.seed_initial(bottom);
     let mut harness = mount(Navigator::new(navigator_handle.clone()));
 
@@ -313,7 +313,7 @@ pub(crate) fn hopping_route_dropped_without_dispose_frees_proxy() {
 pub(crate) fn replacement_retains_near_zero_secondary_progress_until_crossing() {
     for progress in [0.5e-6, f64::EPSILON / 4.0] {
         let (bottom, bottom_handle) = transition("bottom");
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         navigator.seed_initial(bottom);
         let mut harness = mount(Navigator::new(navigator.clone()));
         let (middle, middle_handle) = transition("middle");

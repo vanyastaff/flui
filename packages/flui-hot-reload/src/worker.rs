@@ -295,6 +295,7 @@ impl Drop for WorkerPlugin {
 
 /// Result of polling a [`WorkerReloadDriver`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WorkerPollOutcome {
     /// No mtime change since the last poll.
     NoChange,

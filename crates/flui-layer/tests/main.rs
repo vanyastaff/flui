@@ -22,6 +22,8 @@ mod scene_damage;
 mod scene_effect_update;
 #[path = "scene_links.rs"]
 mod scene_links;
+#[path = "scene_reclaim.rs"]
+mod scene_reclaim;
 #[path = "texture_registry.rs"]
 mod texture_registry;
 
@@ -508,4 +510,11 @@ fn scene_effect_update() {
         assert!(!shared.seen.is_empty(), "{name}: the row reads its damage");
         assert_eq!(shared.seen, unshared.seen, "{name}");
     }
+}
+
+/// A cull asked in walk order answers each slot as one asked about that slot
+/// alone (ADR-0304 §9).
+#[test]
+fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
+    scene_damage::a_cull_asked_in_walk_order_answers_as_one_asked_alone();
 }

@@ -12,7 +12,7 @@
   `LifecycleContext::storage` is removed), [ADR-0127](ADR-0127-exceptional-path-retention.md) (an
   exceptional path's operation boundaries), [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)
   §2 (no `serde` in a Stable signature), [ADR-0097](ADR-0097-no-process-global-state-gate.md) (no
-  `static`), [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) (the router whose
+  `static`), [ADR-0330](ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md) (the router whose
   stack §6 restores; web history, query and fragment are its own)
 - **Revised:** 2026-11-04 — accepted as built: Confirmation names the tests that hold each
   section, the native run owed is a row of `docs/platform-parity.md`, and §1 says which crate of
@@ -243,7 +243,7 @@ stack, bottom to top, and `RouterHandle::stack(&self) -> Vec<R>` reads it as eve
 left it; an empty stack is `RouterError::EmptyStack`. The application stores the stack as paths
 (`Routable::to_path`) in its own document and parses them back with `from_path`, falling back to
 its home route when a path no longer parses or names an item that is gone. This is the whole of
-the router's stack restoration; web history, query and fragment belong to ADR-0093.
+the router's stack restoration; web history, query and fragment belong to ADR-0330.
 
 ### Consequences
 

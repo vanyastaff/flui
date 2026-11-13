@@ -533,20 +533,31 @@ jobs:
         run: cargo xtask test --nested --nested-group native
 
   # The compile-fail suites: on main, and on a pull request whose diff can
-  # change what a case prints. They are the longest job (16-25 min). `plan`
-  # reads the sources each `*.stderr` expectation cites in its `--> path`
-  # lines, plus the cases beside them, the runners, the toolchain and
-  # Cargo.lock (tools/xtask/src/change_scope/diagnostics.rs), and sets
-  # `trybuild_required` when the diff touches one; any other pull request
-  # skips the job. Locally a changed crate's `cargo nextest run` still runs
-  # its suite, and `cargo xtask test --nested --nested-group trybuild` runs
-  # them all.
+  # change what a case prints. `plan` reads the sources each `*.stderr`
+  # expectation cites in its `--> path` lines, plus the cases beside them, the
+  # runners, the toolchain and Cargo.lock
+  # (tools/xtask/src/change_scope/diagnostics.rs), and sets `trybuild_required`
+  # when the diff touches one; any other pull request skips the job. Locally a
+  # changed crate's `cargo nextest run` still runs its suite, and
+  # `cargo xtask test --nested --nested-group trybuild` runs them all.
+  #
+  # Three shards on three runners (`TrybuildShard` in tools/xtask/src/tasks.rs
+  # lists each one's suites): every trybuild project builds into the one
+  # directory target/tests/trybuild under Cargo's lock on it, so suites
+  # started together on one runner wait for each other, and one job ran them
+  # one after another past its 40 minutes. Each shard builds only its own test
+  # targets, with the whole run's packages and features, and keeps its own
+  # cache entry, saved on main.
   test-trybuild:
-    name: test-trybuild
+    name: test-trybuild (${{ matrix.shard }})
     needs: [checks, plan]
     if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.trybuild_required == 'true')
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [facade, core, view]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -558,12 +569,15 @@ jobs:
         with:
           components: rust-src
 
+      # One entry per shard: a shard's nested builds hold only its suites'
+      # dependencies. A pull request restores the newest entry main saved
+      # under the shard's prefix, whatever its Cargo.lock.
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
           cache-on-failure: true
-          shared-key: workspace-trybuild-v1
+          shared-key: workspace-trybuild-v2-${{ matrix.shard }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
@@ -571,14 +585,16 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      - name: cargo xtask test --nested --nested-group trybuild
-        run: cargo xtask test --nested --nested-group trybuild
+      - name: cargo xtask test --nested --nested-group trybuild --trybuild-shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: cargo xtask test --nested --nested-group trybuild --trybuild-shard "$SHARD"
 
       - name: Upload trybuild output on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: trybuild-wip
+          name: trybuild-wip-${{ matrix.shard }}
           path: "**/wip/*.stderr"
           if-no-files-found: ignore
           retention-days: 7
@@ -899,11 +915,12 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
-  # licenses and sources against deny.toml, advisories against RustSec) and
-  # cargo-shear (a dependency no code uses, a test-only one declared as a
-  # normal one, a [workspace.dependencies] entry nothing inherits; only a
-  # warning when the dependency is optional or a feature names it). Nothing
-  # compiles but xtask. Two steps, split by what decides the result:
+  # licenses and sources against deny.toml, advisories against RustSec).
+  # Nothing compiles but xtask. A dependency no code uses, a test-only one
+  # declared as a normal one and a [workspace.dependencies] entry nothing
+  # inherits are cargo's `unused_dependencies` lint, which CARGO_BUILD_WARNINGS
+  # above makes fatal in every job that builds. Two steps, split by what
+  # decides the result:
   #   policy      the commit, and the std-replacement list cargo-deny fetches
   #               for [bans.std-replacements]: blocking in every lane. A new
   #               entry in that list can fail a commit that passed, but only
@@ -934,12 +951,10 @@ jobs:
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
 
-      - name: Install cargo-deny and cargo-shear
+      - name: Install cargo-deny
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          # cargo-shear 1.13: the newest this install-action release has a
-          # prebuilt binary for; a later pin falls back to compiling it.
-          tool: cargo-deny@0.20,cargo-shear@1.13
+          tool: cargo-deny@0.20
 
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

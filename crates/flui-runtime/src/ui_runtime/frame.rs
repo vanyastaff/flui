@@ -690,8 +690,8 @@ impl UiRuntime {
                 let publication = scene.publication();
                 // Back in its slot before anything it released drops.
                 drop(scene);
-                drop(released);
                 drop(version);
+                presentation.scene.restock(released);
                 FramePaintOutcome::Painted(publication)
             }
             crate::presentation_scene::Produced::Refused { released, retry } => {
@@ -993,7 +993,7 @@ impl UiRuntime {
             // A shown version is the raster side's new base: the log before it is let go.
             // What the log held drops at the end of this block, after the replies and the
             // commit, with no borrow held: an annotation's `Drop` is user code.
-            let _released = matches!(
+            let released = matches!(
                 render_verdict,
                 SubmitVerdict::Presented | SubmitVerdict::NoPresent
             )
@@ -1236,6 +1236,12 @@ impl UiRuntime {
                     }
                 }
             });
+            // What the log held drops here, after the replies and the commit, with no borrow
+            // held, beside the first panic of the work above; what nobody else holds goes back
+            // to the scene's owner.
+            if let Some(Some(released)) = released {
+                post_submit.contain(|| producer.scene.restock(released));
+            }
             if post_submit.is_held() {
                 // A panic here must not drop the first panic of a layer read's reply: the first
                 // one is the one resumed.

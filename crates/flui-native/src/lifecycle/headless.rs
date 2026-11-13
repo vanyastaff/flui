@@ -1,13 +1,15 @@
 //! The headless host's lifecycle: the session ends and system notices a test
 //! reports, the way an operating system does.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
-use parking_lot::Mutex;
 
 use crate::host::{self, Host};
-use crate::owner::headless::{HeadlessLoop, HeadlessState};
+use crate::owner::app_delivery::AppDelivery;
+use crate::owner::headless::HeadlessLoop;
+use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
 
 /// The headless platform's lifecycle controls, taken before
@@ -19,7 +21,13 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     #[must_use]
     pub fn host_events(&self) -> HeadlessHostEvents {
         HeadlessHostEvents {
-            state: Arc::downgrade(&self.owner().state),
+            app: self.owner().with_state(|state| Arc::downgrade(&state.app)),
+            notices: self
+                .owner()
+                .with_state(|state| Arc::downgrade(&state.notices)),
+            releases: self
+                .owner()
+                .with_state(|state| Arc::downgrade(&state.session_end_releases)),
         }
     }
 
@@ -49,7 +57,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
 
 impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
     fn release_session_end(owner: &HeadlessLoop) {
-        owner.with_state(|state| state.session_end_releases += 1);
+        owner.with_state(|state| state.session_end_releases.fetch_add(1, Ordering::SeqCst));
     }
 
     /// A desktop that waits for a block unless the test chose otherwise: a
@@ -77,7 +85,9 @@ impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
 /// it is heard.
 #[derive(Clone)]
 pub struct HeadlessHostEvents {
-    state: Weak<Mutex<HeadlessState>>,
+    app: Weak<AppDelivery>,
+    notices: Weak<dyn NoticeChannel>,
+    releases: Weak<AtomicUsize>,
 }
 
 impl std::fmt::Debug for HeadlessHostEvents {
@@ -96,10 +106,9 @@ impl HeadlessHostEvents {
     /// may be called from inside another method, as a session end arriving in
     /// a nested native loop is.
     pub fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        let Some(state) = self.state.upgrade() else {
+        let Some(app) = self.app.upgrade() else {
             return SessionEndAnswer::Proceed;
         };
-        let app = Arc::clone(&state.lock().app);
         app.session_end(phase).or_resume(SessionEndAnswer::Proceed)
     }
 
@@ -111,11 +120,9 @@ impl HeadlessHostEvents {
     /// A wake marks the state of every window opened on this platform stale
     /// first (`owner::notices`).
     pub fn notice(&self, notice: SystemNotice) {
-        let Some(state) = self.state.upgrade() else {
-            return;
-        };
-        let notices = Arc::clone(&state.lock().notices);
-        notices.dispatch(notice);
+        if let Some(notices) = self.notices.upgrade() {
+            notices.dispatch(notice);
+        }
     }
 
     /// The user reopened the application, as AppKit reports a click on the
@@ -123,19 +130,17 @@ impl HeadlessHostEvents {
     /// ([`AppHandler::reopen`](crate::AppHandler::reopen)). Nothing happens
     /// once the platform is gone.
     pub fn reopen(&self) {
-        let Some(state) = self.state.upgrade() else {
-            return;
-        };
-        let app = Arc::clone(&state.lock().app);
-        app.reopen().or_resume(());
+        if let Some(app) = self.app.upgrade() {
+            app.reopen().or_resume(());
+        }
     }
 
     /// How many times the host told the platform it released a session end it
     /// had answered with a block (`Platform::release_session_end`).
     #[must_use]
     pub fn session_end_releases(&self) -> usize {
-        self.state
+        self.releases
             .upgrade()
-            .map_or(0, |state| state.lock().session_end_releases)
+            .map_or(0, |releases| releases.load(Ordering::SeqCst))
     }
 }

@@ -117,10 +117,24 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `HeadlessHost::enter` are crate-private, and `LaidOut` and `Harness` hand
   out narrow accessors (the window's cursor, the accessibility action
   listener, the post-frame handle, the scheduler) rather than the UI runtime:
-  `flui-runtime` is not an embedder API, and `flui::testing` re-exports
-  `widgets`, so a public path to `UiRuntime` here would open the UI runtime's frame
-  entry points (ADR-0083 §2) to every application with the `testing`
-  feature.
+  `flui-runtime` is not an embedder API, and a public path to `UiRuntime` here
+  would open the UI runtime's frame entry points (ADR-0083 §2) to every crate
+  that tests with this one.
+- **An application's test goes through the agent.** `Tester` (`src/tester.rs`)
+  holds a `HeadlessHost`, its window's `AgentWindow` and one `InputLease`, and
+  nothing else: it finds with `semantics.locate`, checks with
+  `element.actionability` and delivers input with `input.inject`, so it
+  hit-tests and walks no tree itself and proves what the driver would. Each
+  read first runs the frames due now at zero duration, so its answer comes
+  from the tree that work committed. An expectation pumps a frame only while
+  `time_to_next_frame` is zero (a scheduled frame or pending work); with
+  nothing due now the application is idle and the expectation fails at once,
+  so a timer of the application, however close, never elapses inside an
+  expectation. Tests: `an_expectation_does_not_fire_a_timer_due_within_a_frame`,
+  `an_expectation_does_not_pass_on_the_tree_a_ready_completion_replaced`.
+  `flui::testing` re-exports `Tester`,
+  `find`, the protocol's locator and node types and `rendering`, and none of
+  this crate's other harnesses.
 - **A headless root is the root a runner attaches.** `HeadlessHost::attach`
   and `attach_to` pass the view through `flui_widgets::app_root`, the one
   function `flui-app`'s runners call, before the UI runtime adds its scopes,
@@ -165,18 +179,17 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ### Registry drivers revoke their frame authority on replacement
 
-Default, adopted and extra presentation registries request samples through the
-binding's weak scheduler wake capability. Each driver also carries weak authority
-owned by its binding or clock entry. Replacement commits the new registry and
-revokes the old authority before invoking callbacks or retiring outgoing state.
-Installation failure still finishes outgoing retirement, retaining the first
-failure when both compete. A standalone old registry remains manually drivable;
-its observer clones cannot wake the binding that replaced it.
+A registry `LaidOut::adopt_vsync` adopts is attached as a child of the UI
+runtime's own registry, which ticks it each frame and takes its frame requests.
+Replacement attaches the new registry before it detaches and drops the old one,
+so a refused attachment keeps the current registry and its pending runs. A
+standalone old registry remains manually drivable; its observer clones cannot
+wake the runtime that replaced it.
 
 `starting_an_idle_bound_controller_requests_its_first_frame`,
 `adopting_a_registry_revokes_the_previous_driver_binding` and
-`driver_replacement_preserves_first_failure_and_recovers` exercise public handles
-in `headless_frame_driver_matrix`. The public
+`widget_registry_adoption_preserves_its_driver_on_refusal` exercise public
+handles in `headless_frame_driver_matrix`. The public
 `extra_registry_drivers_request_frames_and_retire_on_replacement` row checks
 extra clock installation and replacement while preserving a sibling's driver.
 

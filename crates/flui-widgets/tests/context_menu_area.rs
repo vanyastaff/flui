@@ -23,10 +23,11 @@ use flui_testing::widgets::SharedSignal;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle};
 use flui_widgets::{
     Actions, Alternative, AlternativeKind, CallbackAction, ColoredBox, CommandAppearance,
     ContextMenuArea, Directionality, DragCommands, Draggable, GestureAlternatives, GestureCommand,
-    Intent, MenuSpec, Navigator, NavigatorHandle, Padding, PageRoute, Positioned, SizedBox, Stack,
+    Intent, MenuSpec, Padding, PageRoute, Positioned, SizedBox, Stack,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -126,7 +127,7 @@ impl Scene {
     /// log its commands write.
     fn view(self, shown: &SharedSignal<bool>) -> (BoxedView, Log) {
         let log: Log = Rc::default();
-        let navigator = NavigatorHandle::new();
+        let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
         let (page_log, shown) = (Rc::clone(&log), shown.clone());
         navigator.seed_initial(PageRoute::<()>::new(move |_, _, _| {
             let row = Shown {

@@ -45,6 +45,7 @@ use web_time::{Duration, Instant};
 
 /// Category for timeline events
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum EventCategory {
     /// Frame event (entire frame)
     Frame,

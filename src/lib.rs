@@ -205,6 +205,7 @@ fn main() -> Result<(), flui::LaunchError> {
 pub mod interaction;
 pub mod painting;
 pub mod rendering;
+pub mod semantics;
 #[cfg(feature = "testing")]
 pub mod testing;
 

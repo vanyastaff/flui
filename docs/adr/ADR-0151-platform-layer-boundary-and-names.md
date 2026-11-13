@@ -369,10 +369,11 @@ that class named once.
 
 ### 5. Stability: closed enums decided, the closure gated, the seal explicit, the version with the train
 
-- **`clippy::exhaustive_enums`** is enabled in the contract, with winit's rule
-  ([rust-windowing/winit@1893565716 winit-core/src/lib.rs:9-14](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/lib.rs#L9-L14)). A closed enum carries an
-  `#[allow]` with the reason its variants can never grow; every other public enum is
-  `#[non_exhaustive]`. 26 of 82 are closed today with no such reason.
+- **`clippy::exhaustive_enums`** holds the contract to winit's rule
+  ([rust-windowing/winit@1893565716 winit-core/src/lib.rs:9-14](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/src/lib.rs#L9-L14)).
+  [ADR-0329](ADR-0329-a-public-enum-is-open-unless-its-closure-is-a-decision.md) states the rule
+  for every crate of the workspace: a closed enum carries an `#[expect]` with the reason its
+  variants can never grow, and every other public enum is `#[non_exhaustive]`.
 - **The API-closure gate** of ADR-0089 §6 is built before the contract's first publication. The
   size of the promise is the size of the closure. For the same reason the contract's flag sets
   (`TransferActions`, `PointerKindSet`) are its own types: the `bitflags` macro puts its `Flags`

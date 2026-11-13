@@ -203,6 +203,7 @@ const ENTRY_TRANSITION_DURATION: Duration = Duration::from_millis(250);
 /// See the module docs' "V1 scope" section for which variants are
 /// reachable today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SnackBarClosedReason {
     /// Closed after the user pressed the [`crate::snack_bar::SnackBarAction`].
     Action,

@@ -10,8 +10,8 @@ use super::actions::{
     Action, ActionOutcome, ActivateIntent, ActivationPressIntent, ButtonActivateIntent,
 };
 use super::focus_host::FocusConfig;
-use super::gesture_detector::{PressCallbacks, PressSource};
-use super::node::{Description, InteractiveNode, NodePress};
+use super::gesture_detector::{PressCallbacks, PressShape, PressSource};
+use super::node::{ActionBinding, Description, InteractiveNode, NodePress};
 use crate::support::event_callback;
 use crate::widget_state::WidgetStatesController;
 
@@ -148,6 +148,10 @@ impl PressSource for Press {
     fn callbacks(&self) -> PressCallbacks {
         PressCallbacks::tap(self.0.clone())
     }
+
+    fn shape(&self) -> PressShape {
+        PressShape::TAP
+    }
 }
 
 impl NodePress for Press {}
@@ -181,9 +185,11 @@ impl StatelessView for RawButton {
                 ..FocusConfig::new()
             })
             .focus_ring()
-            .action::<ActivateIntent, Press>(&press)
-            .action::<ButtonActivateIntent, Press>(&press)
-            .action::<ActivationPressIntent, Press>(&press);
+            .bindings([
+                ActionBinding::shared::<ActivateIntent, Press>(&press),
+                ActionBinding::shared::<ButtonActivateIntent, Press>(&press),
+                ActionBinding::shared::<ActivationPressIntent, Press>(&press),
+            ]);
         // The node replaces its callbacks on every build, so a new closure
         // takes effect on the next press.
         if enabled {

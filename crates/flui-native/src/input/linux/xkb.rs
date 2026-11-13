@@ -993,8 +993,7 @@ mod keyboard {
                     let text = (written > 0)
                         // SAFETY: libxkbcommon NUL-terminates what it wrote.
                         .then(|| unsafe { CStr::from_ptr(buffer.as_ptr()) })
-                        .map(|text| text.to_string_lossy().into_owned())
-                        .unwrap_or_default();
+                        .map_or_default(|text| text.to_string_lossy().into_owned());
                     // SAFETY: the live compose state.
                     let sym = unsafe { (compose.api.xkb_compose_state_get_one_sym)(state) };
                     self.reset_compose();

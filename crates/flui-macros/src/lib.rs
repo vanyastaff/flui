@@ -276,7 +276,7 @@ pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
 }
 
 /// Emit `impl Routable` for a route enum: `to_path` and `from_path` from one
-/// `#[route("…")]` pattern per variant (ADR-0093 §1).
+/// `#[route("…")]` pattern per variant (ADR-0330 §1).
 ///
 /// ```rust,ignore
 /// use flui_widgets::prelude::*;

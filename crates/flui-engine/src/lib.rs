@@ -1,3 +1,7 @@
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(
@@ -438,6 +442,9 @@ mod paragraph_readback_tests;
 // like the suites above, self-skipping without an adapter.
 #[cfg(test)]
 mod damage_readback_tests;
+// A retained version drawn by the engine walk, against its flattened tree.
+#[cfg(test)]
+mod version_readback_tests;
 
 #[cfg(test)]
 #[path = "layer_effect_tests.rs"]

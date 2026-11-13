@@ -20,9 +20,9 @@ Citations below name symbols, not line numbers.
 | `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_transform`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
 | `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `LayerTree::find_annotations` (`src/tree/annotations.rs`); see [Producers](#producers). |
 | `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is a scene patch (decision 5). |
-| `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | A frozen `LayerTree` (decision 6). |
+| `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | A frozen `SceneVersion` or `LayerTree` (decision 6). |
 | Retained scene | [`src/scene/`](src/scene/) `SceneOwner`, `SceneVersion`, `BoundaryContent`, `SceneOp` | A persistent version changed by typed patches (decision 9), which `flui-rendering`'s paint writes; what ADR-0304 still owes is its item of [`docs/gaps.md`](../../docs/gaps.md). |
-| Retained layers across frames | the retained scene (decision 9) | A clean repaint boundary keeps its `BoundaryContent` in the next version and costs no operation; the engine draws the version flattened to a tree. Cross-frame damage is the footprint of the patch (decision 9), not a comparison of frames. |
+| Retained layers across frames | the retained scene (decision 9) | A clean repaint boundary keeps its `BoundaryContent` in the next version and costs no operation; the engine walks the version in place and skips each boundary a partial frame's damage cannot reach (`SceneVersion::subtree_cull`). Cross-frame damage is the footprint of the patch (decision 9), not a comparison of frames. |
 | Composition callbacks | none | They would fire after a scene-add step this architecture does not have. |
 | `Layer::Canvas(CanvasLayer)` | `Layer::Canvas(CanvasLayer)` | A live recorder inside the tree; see [Producers](#producers). |
 
@@ -105,21 +105,24 @@ Tests: `tests/follower.rs`, run as `follower_resolution` in `tests/main.rs`
 ### 5. `SceneBuilder` is secondary; the composer writes the frame into the retained scene
 
 `flui-rendering`'s `FragmentComposer` writes each repainted boundary's content through
-`ContentBuilder` into a `SceneWriter` patch (decision 9), and the engine draws the applied version
-through `SceneVersion::flatten`. `SceneBuilder` is the push/pop shape for hand-authored scenes (`flui_app::run_direct`, examples,
+`ContentBuilder` into a `SceneWriter` patch (decision 9), and the engine walks the applied version in place
+(`flui-engine`'s `layer_walk`). `SceneBuilder` is the push/pop shape for hand-authored scenes (`flui_app::run_direct`, examples,
 the GPU readback tests). `pop` returns `Option<LayerId>` — an empty stack is absence, the
 `Vec::pop` contract — so the crate has no error type. The builder's typed `push_*`/`add_*` are
 one-line conveniences over `push(impl Into<Layer>)` / `add(..)`; a variant without one is reached
 through `push(SomeLayer::new(..))`.
 
-### 6. `Scene` is a frozen tree
+### 6. `Scene` is what the raster side draws, frozen
 
-`Scene::new(tree)` adds one fact over the tree: no `&mut` path back to it. Its former `size`,
-`root` and `frame_number` fields had no reader that did not already hold the value (`root` was a
-copy of `LayerTree::root` that eleven of thirteen callers left disagreeing; `frame_number` is the
-presentation's counter, read back by its writer; `size` had no reader). `flui-hot-reload` moves a
-`Scene` across its dlopen boundary and hashes `size_of::<Scene>` into its ABI token, which pins
-that the type is nameable without an engine dependency — not its field set.
+A `Scene` holds a retained `SceneVersion` (`Scene::of_version`), which the engine walks in place,
+or a `LayerTree` (`Scene::new`), which a plugin image, a hand-built scene and a headless capture
+still hand it; `Scene::content` names which. It adds one fact over either: no `&mut` path back.
+Its former `size`, `root` and `frame_number` fields had no reader that did not already hold the
+value (`root` was a copy of `LayerTree::root` that eleven of thirteen callers left disagreeing;
+`frame_number` is the presentation's counter, read back by its writer; `size` had no reader).
+`flui-hot-reload` moves a `Scene` across its dlopen boundary and hashes `size_of::<Scene>` into
+its ABI token, which pins that the type is nameable without an engine dependency — not its field
+set.
 
 ### 7. Runtime state lives with its owner
 
@@ -201,9 +204,12 @@ layer is held beside the stream, one per effect in paint order (`BoundaryContent
 the stream sits in an `Arc` with everything that depends on the entries alone: each effect's
 entry, the effects and slots in order, each effect's scope end and the union of its direct
 chunks' bounds, the union of the top-level chunks' bounds, the slots by node, and the chunks'
-texture and closure entries. `with_effects`, the composited-layer update, copies the layers,
-rebuilds the indexes they feed (links, texture layers, filter closures) and shares the stream, so
-it costs the content's effects and never its chunks.
+texture and closure entries. `SceneWriter::with_effects`, the composited-layer update, copies the
+layers into a content the owner reclaimed when it holds one, rebuilds the indexes they feed (links,
+texture layers, filter closures) and shares the stream, so it costs the content's effects and never
+its chunks. A refused update (an index that names no effect, or names one twice) hands the
+layers it was given to the owner, which drops them when the next patch opens, as it does a
+discarded content.
 
 `SceneOwner::apply` builds the patch on a copy of the version and keeps it only when every
 operation is valid: an id of another lineage, an unknown or stale id, a retired node a slot still
@@ -216,8 +222,8 @@ under a `Lineage` from a process `AtomicIdMint`, so a replaced or renewed owner 
 a spent sequence refuses with `VersionsExhausted`; `renew` starts a new lineage, runs the
 sequence on unless it is spent, and starts with empty
 slots, whose next publication is `Full(Resync(_))`. `SceneVersion::flatten` is the layer tree the
-raster lane hands the engine until the engine walks the version itself, and the oracle a retained
-frame is compared against (ADR-0304 §11).
+oracle a walked frame is compared against (ADR-0304 §11): the engine walks the version itself, and
+the agent's layer reads are the one production reader left ([`docs/gaps.md`](../../docs/gaps.md)).
 
 An apply's damage is the footprint of its operations (ADR-0304 §4, `src/scene/footprint.rs`),
 read under the version before and the version after. A node record keeps its subtree bounds in
@@ -255,18 +261,30 @@ log holds sixteen entries; a seventeenth folds the two oldest under the newer id
 older contents, so a raster stall over-reports damage and never holds more than sixteen entries of
 buffers. An acknowledgement moves forward only and ignores another lineage or a version never
 applied. `apply` (in `Applied::released`), `completed` and `renew` return what they release as
-`ReleasedContents`, the version an apply replaced and the contents a fold let go of included, which a caller
-holding the owner in a `RefCell` passes to an `Outbox`: a released annotation value's destructor is
-user code and finds the owner free. A painter that gives up contents it recorded for a patch never
-applied hands them to `SceneWriter::discard`; the owner drops them when `writer` opens the next
-patch or `renew` returns them, both outside the painter's borrows.
+`ReleasedContents`, which a caller holding the owner in a `RefCell` passes to an `Outbox`: a
+released annotation value's destructor is user code and finds the owner free. An apply keeps the
+version it replaced among two retiring ones and releases it once no other holder reads it (an
+`Arc` count of one) or a newer one pushes it out; a fold, a completion or a renewal releases
+contents. `ReleasedContents::reclaim`, run with no borrow held, drops what was released and keeps,
+emptied, the version records, table nodes (`table.rs` `Spares`) and contents the owner held alone;
+`SceneOwner::restock` takes them back under small caps. A write that copies a shared table node
+copies it into an emptied one, an apply's version takes an emptied record, and `with_effects`
+writes into an emptied content, so a steady layer update reuses the same buffers each frame. A
+painter that gives up contents it recorded for a patch never applied hands them to
+`SceneWriter::discard`; the owner drops them when `writer` opens the next patch or `renew` returns
+them, both outside the painter's borrows.
 
 Pinned by `layer_it`: `pending_log_contract`, `scene_patch_damage`, `patch_damage_covers_diff_damage` (random patches,
 whose damage must cover what `LayerDiffer` finds between the flattened versions),
 `scene_apply_contract`, `content_version_contract` and `scene_table_cost`
 (an apply's copies are at most its operations times the table height, equal at 1 100 and 8 000
 nodes, and a republished parent copies as much at 40 children as at 200); the table's model
-test against `BTreeMap` is `scene::table::tests`.
+test against `BTreeMap` is `scene::table::tests`. `scene_reclaim`: a version someone holds keeps
+what it was applied with while the owner reuses what it held alone
+(`reclaimed_buffers_never_change_a_version_someone_holds`, against an owner that reclaims nothing),
+an update takes what a completion handed back (`an_update_writes_into_what_the_owner_reclaimed`),
+and a refused update drops none of its layers while the writer borrows the owner
+(`a_refused_effect_update_drops_its_layers_outside_the_writer`).
 
 ### Deleted, with the reason
 

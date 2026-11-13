@@ -4,7 +4,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_foundation::notifier::{Listenable, ListenerObserver};
-use flui_foundation::{ListenerCallback, Subscription};
+use flui_foundation::{ListenerCallback, MutatedDuringBuild, Subscription};
 
 use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
@@ -13,9 +13,9 @@ use crate::navigator::{RouteId, RouteResult};
 
 /// An owned, cloneable capability to drive the nearest
 /// [`Router<R>`](super::Router), acquired with
-/// [`Router::handle`](super::Router::handle).
+/// [`Router::of`](super::Router::of).
 ///
-/// Owner-affine (`!Send`), like [`NavigatorHandle`](crate::NavigatorHandle),
+/// Owner-affine (`!Send`), like [`PageHandle`](crate::PageHandle),
 /// and inert once the router unmounts: every edit then answers
 /// [`RouterError::Disposed`]. Each edit takes effect on the router's navigator
 /// at once; the pages it adds build on the next frame.
@@ -64,6 +64,15 @@ impl<R: Routable> RouterHandle<R> {
         }
     }
 
+    /// Whether an edit may run now: the router is mounted and its UI runtime
+    /// is not building (ADR-0330 §3). A refusal from `build` is reported on
+    /// the `flui.signals` target.
+    fn editable(&self) -> Result<(), RouterError> {
+        self.mounted()?;
+        let building = self.shared.build_phase.is_building();
+        MutatedDuringBuild::check(building, "Router").map_err(|_| RouterError::DuringBuild)
+    }
+
     /// The id of the top page.
     fn top_page(&self) -> RouteId {
         self.shared
@@ -74,7 +83,7 @@ impl<R: Routable> RouterHandle<R> {
             .expect("BUG: a mounted Router's stack always holds a page")
     }
 
-    /// Pop the popups above the top page: they belong to it (ADR-0093 §2).
+    /// Pop the popups above the top page: they belong to it (ADR-0330 §2).
     fn dismiss_popups(&self) {
         let top = self.top_page();
         self.shared.navigator.pop_until(|id| id == top);
@@ -85,7 +94,8 @@ impl<R: Routable> RouterHandle<R> {
     ///
     /// # Errors
     ///
-    /// [`RouterError::Disposed`] once the router has unmounted.
+    /// [`RouterError::Disposed`] once the router has unmounted, and
+    /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn push(&self, route: R) -> Result<(), RouterError> {
         self.push_for_result::<()>(route).map(drop)
     }
@@ -104,9 +114,10 @@ impl<R: Routable> RouterHandle<R> {
     ///
     /// # Errors
     ///
-    /// [`RouterError::Disposed`] once the router has unmounted.
+    /// [`RouterError::Disposed`] once the router has unmounted, and
+    /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn push_for_result<T: 'static>(&self, route: R) -> Result<RouteResult<T>, RouterError> {
-        self.mounted()?;
+        self.editable()?;
         let _told = self.shared.announce_on_exit();
         let page = self.shared.page_route::<T>(&route);
         let ((), result) = self.shared.navigator.push_page(page, |id| {
@@ -123,9 +134,10 @@ impl<R: Routable> RouterHandle<R> {
     ///
     /// # Errors
     ///
-    /// [`RouterError::Disposed`] once the router has unmounted.
+    /// [`RouterError::Disposed`] once the router has unmounted, and
+    /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn replace(&self, route: R) -> Result<(), RouterError> {
-        self.mounted()?;
+        self.editable()?;
         let _told = self.shared.announce_on_exit();
         self.dismiss_popups();
         let target = self.top_page();
@@ -154,9 +166,10 @@ impl<R: Routable> RouterHandle<R> {
     ///
     /// # Errors
     ///
-    /// [`RouterError::Disposed`] once the router has unmounted.
+    /// [`RouterError::Disposed`] once the router has unmounted, and
+    /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn pop(&self) -> Result<bool, RouterError> {
-        self.mounted()?;
+        self.editable()?;
         let popup_on_top = self.shared.navigator.current() != Some(self.top_page());
         if !popup_on_top && self.shared.stack.borrow().len() <= 1 {
             return Ok(false);
@@ -176,9 +189,10 @@ impl<R: Routable> RouterHandle<R> {
     ///
     /// # Errors
     ///
-    /// [`RouterError::Disposed`] once the router has unmounted.
+    /// [`RouterError::Disposed`] once the router has unmounted, and
+    /// [`RouterError::DuringBuild`] while its UI runtime builds.
     pub fn pop_with<T: 'static>(&self, value: T) -> Result<bool, RouterError> {
-        self.mounted()?;
+        self.editable()?;
         let popup_on_top = self.shared.navigator.current() != Some(self.top_page());
         if !popup_on_top && self.shared.stack.borrow().len() <= 1 {
             return Ok(false);
@@ -199,10 +213,11 @@ impl<R: Routable> RouterHandle<R> {
     /// # Errors
     ///
     /// [`RouterError::Parse`] when `location` does not parse or matches no
-    /// route — the stack is then unchanged — and [`RouterError::Disposed`]
-    /// once the router has unmounted.
+    /// route — the stack is then unchanged — [`RouterError::Disposed`] once
+    /// the router has unmounted, and [`RouterError::DuringBuild`] while its UI
+    /// runtime builds.
     pub fn go(&self, location: &str) -> Result<(), RouterError> {
-        self.mounted()?;
+        self.editable()?;
         let _told = self.shared.announce_on_exit();
         // Parsed values can own arbitrary destructors, including values in the
         // retained prefix. Protect them before popup dismissal delivers effects.
@@ -363,4 +378,10 @@ pub enum RouterError {
     /// A router was asked to open on an empty stack; it needs a page.
     #[error("a Router cannot open on an empty stack")]
     EmptyStack,
+    /// The edit was made while the router's UI runtime was building, and
+    /// refused: `build` describes the tree and drives nothing (ADR-0330 §3).
+    /// Navigate from an event callback, a lifecycle hook or a post-frame
+    /// callback.
+    #[error("a Router was edited during build")]
+    DuringBuild,
 }

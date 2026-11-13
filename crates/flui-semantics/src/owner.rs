@@ -1849,8 +1849,7 @@ impl SemanticsOwner {
     ) -> flui_protocol::AnnouncementJournal {
         self.announcements
             .as_ref()
-            .map(|announcements| announcements.journal(params.since, params.max_entries))
-            .unwrap_or_default()
+            .map_or_default(|announcements| announcements.journal(params.since, params.max_entries))
     }
 
     /// The revision the publication in progress makes current.

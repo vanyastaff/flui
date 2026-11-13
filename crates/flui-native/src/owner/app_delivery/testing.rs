@@ -28,6 +28,10 @@ impl Bound {
 
 /// `delivery` bound to `handler` on this thread, over a headless platform.
 pub(crate) fn bind(delivery: Arc<AppDelivery>, handler: Rc<dyn AppHandler>) -> Bound {
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
+    )]
     let platform: Arc<dyn Platform> = Arc::new(crate::HeadlessPlatform::new());
     let signal = OwnerSignal::new(Arc::new(|| Ok(())));
     let hooks: Rc<dyn OwnerHooks> =

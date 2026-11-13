@@ -15,8 +15,8 @@
 //! resolved at render time**: `paint` publishes this node's own laid-out
 //! size onto the pushed `Layer::Follower` (mirroring how
 //! `RenderLeaderLayer` publishes its size), and `flui-engine`'s
-//! `render_layer_recursive` resolves the actual pixel offset against the
-//! already-fully-built `LayerTree`, which indexes that frame's leaders — see
+//! `layer_walk` resolves the actual pixel offset against the
+//! frame's scene, which indexes its leaders — see
 //! `flui_layer::resolve_follower_transform`, which takes the leader's full transform
 //! (scale and rotation included) and, under [`LeaderClip::Hide`], hides the
 //! follower while the leader's anchor is clipped out.

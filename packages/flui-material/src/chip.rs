@@ -147,6 +147,7 @@ use flui_sdk::painting::{Paint, Path};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::icon::IconData;
+use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
     IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, SemanticsRole,
@@ -571,14 +572,22 @@ impl StatelessView for Chip {
             .foreground_painter(ChipBorderPainter { side, shape })
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
-        crate::button_style_button::identified(Semantics::new(), self.identifier.as_ref())
+        // The chip keeps its own node whether it is a button or not: a chip
+        // that gains or loses `on_pressed` keeps the same subtree, its label,
+        // avatar and delete button included. A button description on the
+        // well would leave a chip without `on_pressed` a disabled node, since
+        // the well's switch follows its tap.
+        let mut semantics = Semantics::new()
             .role(if self.on_pressed.is_some() {
                 SemanticsRole::Button
             } else {
                 SemanticsRole::None
             })
-            .enabled(self.enabled)
-            .child(container)
+            .enabled(self.enabled);
+        if let Some(identifier) = &self.identifier {
+            semantics = semantics.identifier(std::sync::Arc::clone(identifier));
+        }
+        semantics.child(container)
     }
 }
 
@@ -845,7 +854,18 @@ impl StatelessView for FilterChip {
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
         );
 
-        let mut ink_well = InkWell::new().child(padded_content).shape(shape);
+        // A filter chip is a toggle button: ARIA carries its selection as the
+        // button's pressed state, which `aria-selected` on a button is not.
+        // Flutter's `Semantics(button: true, toggled: …, enabled: …)` around
+        // the chip is the well's node, enabled while the well has its tap.
+        let mut ink_well = InkWell::new()
+            .child(padded_content)
+            .shape(shape)
+            .description(
+                Description::new(SemanticsRole::Button)
+                    .identifier(self.identifier.clone())
+                    .toggled(Toggled::from_bool(selected)),
+            );
         if enabled {
             let on_selected = self.on_selected.clone();
             ink_well = ink_well.on_tap(move |ctx| {
@@ -855,17 +875,9 @@ impl StatelessView for FilterChip {
             });
         }
 
-        let container = CustomPaint::new()
+        CustomPaint::new()
             .foreground_painter(ChipBorderPainter { side, shape })
-            .child(Material::new(background_color).shape(shape).child(ink_well));
-
-        // A filter chip is a toggle button: ARIA carries its selection as the
-        // button's pressed state, which `aria-selected` on a button is not.
-        crate::button_style_button::identified(Semantics::new(), self.identifier.as_ref())
-            .role(SemanticsRole::Button)
-            .toggled(Toggled::from_bool(selected))
-            .enabled(enabled)
-            .child(container)
+            .child(Material::new(background_color).shape(shape).child(ink_well))
     }
 }
 

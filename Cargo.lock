@@ -2140,6 +2140,7 @@ dependencies = [
  "proptest",
  "raw-window-handle",
  "roxmltree",
+ "rustc-hash 2.1.3",
  "rustix 1.1.6",
  "rustls",
  "serde",

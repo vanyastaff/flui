@@ -2,11 +2,11 @@
 //!
 //! cargo-deny checks the resolved graph of every workspace member against
 //! deny.toml (bans, licenses, sources) and against the RustSec database
-//! (advisories). cargo-shear checks each manifest against the code: a
-//! dependency no code uses, one only tests use declared as a normal one, a
-//! `[workspace.dependencies]` entry no member inherits. It only warns when
-//! the dependency is optional or a feature names it, and the gate passes
-//! those. Nothing compiles.
+//! (advisories). Nothing compiles. A dependency no code uses, one only tests
+//! use declared as a normal one and a `[workspace.dependencies]` entry no
+//! member inherits are cargo's own `unused_dependencies` lint, which every
+//! CI build reports and `CARGO_BUILD_WARNINGS=deny` makes fatal, per feature
+//! and per target the build compiles.
 //!
 //! Every step runs even when an earlier one failed, so one run reports every
 //! problem. CI runs the two [`Part`]s as separate steps so that the
@@ -21,8 +21,7 @@ use super::exec::{Cmd, Runner, Step, installed};
 /// A part of the gate, split by what decides its result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub(super) enum Part {
-    /// cargo-deny's bans, licenses and sources, and cargo-shear: the commit
-    /// decides them, apart from the std-replacement list that
+    /// cargo-deny's bans, licenses and sources: the commit decides them, apart from the std-replacement list that
     /// `[bans.std-replacements]` fetches when it runs. A new entry there can
     /// fail a commit that passed, but only for a crate a member declares
     /// directly, and the fix is always this repository's to make (the std
@@ -49,16 +48,11 @@ const DENY: Tool = Tool {
     install: "cargo-deny",
 };
 
-const SHEAR: Tool = Tool {
-    sub: "shear",
-    install: "cargo-shear",
-};
-
 /// Every tool the gate runs, once each, read off the full plan so that a
 /// step cannot need a tool `cargo xtask doctor full` does not check.
 pub(super) fn tools() -> Vec<Tool> {
     let mut tools = Vec::new();
-    for (tool, _) in plan(None, false) {
+    for (tool, _) in plan(None) {
         if !tools.contains(&tool) {
             tools.push(tool);
         }
@@ -73,28 +67,12 @@ fn deny(checks: &[&str]) -> Cmd {
     Cmd::cargo(["deny", "--workspace", "--locked", "check"]).args(checks)
 }
 
-/// `cargo shear`, which fails on its errors (a dependency unused or used only
-/// by tests, a `[workspace.dependencies]` entry nothing inherits) and only
-/// reports its warnings, among them the same findings for an optional
-/// dependency or one a feature names, and unlinked or empty files. `annotate`:
-/// GitHub workflow commands, so each finding lands on the manifest line in
-/// the pull request's diff.
-fn shear(annotate: bool) -> Cmd {
-    let cmd = Cmd::cargo(["shear", "--locked"]);
-    if annotate {
-        cmd.args(["--format", "github"])
-    } else {
-        cmd
-    }
-}
-
 /// The commands of `only` (both parts when `None`), each with the tool it
 /// needs.
-fn plan(only: Option<Part>, annotate: bool) -> Vec<(Tool, Cmd)> {
+fn plan(only: Option<Part>) -> Vec<(Tool, Cmd)> {
     let mut plan = Vec::new();
     if only != Some(Part::Advisories) {
         plan.push((DENY, deny(&["bans", "licenses", "sources"])));
-        plan.push((SHEAR, shear(annotate)));
     }
     if only != Some(Part::Policy) {
         plan.push((DENY, deny(&["advisories"])));
@@ -132,15 +110,10 @@ fn steps(
     (steps, missing)
 }
 
-/// Whether this process runs as a GitHub Actions step.
-fn on_github_actions() -> bool {
-    std::env::var_os("GITHUB_ACTIONS").is_some_and(|value| value == "true")
-}
-
 /// Runs the gate; an error names every failed command and, under `strict`,
 /// every tool that is not installed.
 pub(super) fn run(runner: Runner, only: Option<Part>, strict: bool) -> anyhow::Result<()> {
-    let (steps, missing) = steps(plan(only, on_github_actions()), strict, |tool| {
+    let (steps, missing) = steps(plan(only), strict, |tool| {
         runner.dry_run || installed("cargo", &[tool.sub, "--version"])
     });
     let ran = runner.every(&steps);
@@ -195,25 +168,19 @@ mod tests {
     }
 
     fn a_missing_tool_is_a_note_or_under_strict_a_failure() {
-        let only_shear = |tool: Tool| tool == SHEAR;
-        let (skipped, missing) = steps(plan(None, false), false, only_shear);
+        // Both parts need cargo-deny; a missing tool is reported once.
+        let (skipped, missing) = steps(plan(None), false, |_| false);
         assert_eq!(missing, [] as [Tool; 0]);
         assert_eq!(
             skipped.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            [
-                "cargo deny: not installed, skipped (cargo install --locked cargo-deny; CI runs it)",
-                "$ cargo shear --locked",
-            ]
+            ["cargo deny: not installed, skipped (cargo install --locked cargo-deny; CI runs it)"]
         );
-        let (strict, missing) = steps(plan(None, false), true, only_shear);
+        let (strict, missing) = steps(plan(None), true, |_| false);
         assert_eq!(missing, [DENY]);
-        assert_eq!(
-            strict.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            ["$ cargo shear --locked"]
-        );
-        let (all, missing) = steps(plan(None, false), true, |_| true);
+        assert_eq!(strict.len(), 0);
+        let (all, missing) = steps(plan(None), true, |_| true);
         assert_eq!(missing, [] as [Tool; 0]);
-        assert_eq!(all.len(), 3);
+        assert_eq!(all.len(), 2);
     }
 
     #[test]

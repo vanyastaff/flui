@@ -134,7 +134,8 @@ pub(crate) fn plan_frame(
 /// Opens a partial frame on `painter`: scissors every later draw to the
 /// whole pixels `damage` touches, and repaints them the frame's
 /// [`BACKGROUND`](crate::frame_protocol::BACKGROUND), the colour the full
-/// clear pass uses.
+/// clear pass uses. Returns those whole pixels: what the frame redraws, so
+/// what a walk of it must not skip.
 ///
 /// The clear has to be a draw inside the scissor rather than the full-frame
 /// clear pass, which would wipe the retained pixels outside the damage; and
@@ -143,18 +144,24 @@ pub(crate) fn plan_frame(
 /// fill under `SrcOver` overwrites exactly as `Src` would, without taking the
 /// coverage-destructive blend path; the rect reaches one pixel past the
 /// scissor on every side, so every scissored pixel is fully covered.
-pub(crate) fn begin_partial(painter: &mut crate::painter::WgpuPainter, damage: Rect<f64>) {
+#[must_use = "a walk of the frame culls by the pixels it redraws"]
+pub(crate) fn begin_partial(
+    painter: &mut crate::painter::WgpuPainter,
+    damage: Rect<f64>,
+) -> Rect<f64> {
     painter.clip_rect_enclosing(damage);
+    let redrawn = flui_foundation::geometry::cover(damage);
     let covering = Rect::from_ltrb(
-        damage.left().floor() - 1.0,
-        damage.top().floor() - 1.0,
-        damage.right().ceil() + 1.0,
-        damage.bottom().ceil() + 1.0,
+        redrawn.left() - 1.0,
+        redrawn.top() - 1.0,
+        redrawn.right() + 1.0,
+        redrawn.bottom() + 1.0,
     );
     painter.draw_rect(
         covering,
         &flui_painting::Paint::fill(crate::frame_protocol::BACKGROUND),
     );
+    redrawn
 }
 
 #[cfg(test)]

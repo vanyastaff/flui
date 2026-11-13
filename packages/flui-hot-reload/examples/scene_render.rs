@@ -152,7 +152,7 @@ fn build_test_scene(width: f64, height: f64) -> Scene {
 fn capture_effects(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let renderer = pollster::block_on(flui_engine::HeadlessRenderer::new())?;
     let scene = effects::build(800.0, 600.0);
-    let pixels = renderer.render_layer_tree(scene.tree(), (800, 600))?;
+    let pixels = renderer.render_scene(&scene, (800, 600))?;
     image::save_buffer_with_format(
         path,
         &pixels,

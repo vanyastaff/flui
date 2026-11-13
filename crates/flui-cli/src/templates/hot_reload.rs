@@ -100,7 +100,7 @@ members = ["{types_package}", "{worker_package}", "{host_package}"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.100"
 
 [workspace.dependencies]
 tracing = "0.1"
@@ -514,7 +514,7 @@ hot_reload_worker!(init_counter_worker, fingerprint: TYPE_FINGERPRINT);
 mod tests {
     use std::sync::{Arc, atomic::AtomicI32};
 
-    use flui::testing::widgets::{lay_out, tight};
+    use flui::testing::{Tester, find};
     use __TYPES_CRATE__::{CounterApp, CounterBuild};
 
     use super::{INCREMENT_LABEL, build_counter_ui};
@@ -523,28 +523,13 @@ mod tests {
     /// with no reload hook installed.
     #[test]
     fn a_tap_shows_the_new_count() {
-        let mut app = lay_out(
-            CounterApp {
-                initial: 0,
-                count: Arc::new(AtomicI32::new(0)),
-                build: CounterBuild::Linked(build_counter_ui),
-            },
-            tight(480.0, 320.0),
-        );
-        let button = app
-            .find_text(INCREMENT_LABEL)
-            .expect("the increment button is laid out");
-        let origin = app.absolute_offset(button);
-        let size = app.size(button);
-        let (x, y) = (origin.dx + size.width / 2.0, origin.dy + size.height / 2.0);
-
-        app.dispatch_pointer_down(x, y);
-        app.dispatch_pointer_up(x, y);
-        // A frame that rebuilds only what was scheduled (`pump` would rebuild
-        // the root whatever the tap did).
-        app.tick();
-
-        assert!(app.find_text("Count: 1").is_some(), "the tap must rebuild the count");
+        let mut t = Tester::mount(CounterApp {
+            initial: 0,
+            count: Arc::new(AtomicI32::new(0)),
+            build: CounterBuild::Linked(build_counter_ui),
+        });
+        t.tap(&find::text(INCREMENT_LABEL));
+        t.expect(find::text("Count: 1")).to_exist();
     }
 }
 "#;
