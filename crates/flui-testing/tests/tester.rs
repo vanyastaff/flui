@@ -570,7 +570,8 @@ struct Notebook {
     hold_close: bool,
     /// Written into the note when the window detaches.
     save_on_detach: Option<&'static str>,
-    /// Panics when the session-ended notice arrives.
+    /// Panics when the session-ended notice arrives and when the window
+    /// detaches.
     panic_at_session_end: bool,
     opened: Rc<std::cell::RefCell<Opened>>,
 }
@@ -618,6 +619,10 @@ impl ViewState<Notebook> for NotebookState {
                     }
                 }
                 lifecycle.borrow_mut().lifecycle.push(state);
+                assert!(
+                    !(panic_at_session_end && state == flui_view::AppLifecycleState::Detached),
+                    "an observer fails as the window detaches"
+                );
             })
             .expect("the window is open");
         *self.0.opened.borrow_mut() = Opened {
@@ -792,7 +797,7 @@ fn a_session_end_writes_what_the_window_publishes_as_it_detaches() {
     assert_eq!(*loaded, Note("draft".to_owned()));
 }
 
-/// A subscriber that panics at the session's end does not cost the session
+/// A subscriber and an observer that panic at the session's end do not cost the session
 /// its close or its write: the window still detaches and publishes, the
 /// documents are written, and the panic reaches the test afterwards.
 #[test]

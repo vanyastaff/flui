@@ -897,8 +897,8 @@ impl Tester {
     /// same storage, as when the application quits and is opened again: the
     /// window commits its composition and closes past every hold, what the
     /// documents published is written (a write the storage holds is not
-    /// waited for), and the old tree, its states and its runtime are gone
-    /// before the new one mounts.
+    /// waited for: the storage decides it when its hold ends), and the old
+    /// tree, its states and its runtime are gone before the new one mounts.
     ///
     /// # Panics
     ///

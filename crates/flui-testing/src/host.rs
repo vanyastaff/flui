@@ -1529,8 +1529,8 @@ impl HeadlessHost {
     /// The application quits now: each window commits its composition and
     /// closes past every hold, so its Detached observers publish what they
     /// keep, and then what the documents published is written. A write a
-    /// storage holds is not waited for: the run ends without it, as a
-    /// process that exits does.
+    /// storage holds is not waited for: it stays with the storage, which
+    /// decides it when its hold is released or dropped.
     ///
     /// Each step runs whatever an earlier one's user code did: the first
     /// panic resumes once the write is done.
