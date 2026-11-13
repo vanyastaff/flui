@@ -1,19 +1,12 @@
 //! The web host's loop: the state every position of its table reads, and the
 //! `requestAnimationFrame` loop that drives its frames.
 //!
-//! Its `Send` and `Sync` claims rest on the page having one thread, which this
-//! module enforces by refusing a `+atomics` build.
+//! The loop is neither `Send` nor `Sync`. The JS-backed values of the web
+//! features still claim both on the page having one thread, which this module
+//! enforces by refusing a `+atomics` build.
 
-// This module is one of the workspace's sanctioned `unsafe` islands: the page
-// has one thread, so the loop claims `Send`/`Sync` by hand. The
-// workspace lint `unsafe_code = "warn"` is opted out here, at the module
-// boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
-
-// The host's `Send`/`Sync` claims rest on the page having one thread: the JS
-// handles and `RefCell`s it holds are never reached from another. A
-// shared-memory build (`+atomics`, wasm threads) breaks that, so it is refused
-// here rather than left to a data race.
+// A shared-memory build (`+atomics`, wasm threads) would let another thread
+// reach those values, so it is refused here rather than left to a data race.
 #[cfg(target_feature = "atomics")]
 compile_error!(
     "the web backend assumes one thread; build wasm32 without the `atomics` target feature"
@@ -493,7 +486,6 @@ pub(crate) struct WebState {
     /// Issues the id of every window the page opens, never one twice: a
     /// window opened after the first retired is another window.
     pub(crate) window_ids: WindowIdMint,
-    owner: Weak<WebLoop>,
 }
 
 impl WebState {
@@ -505,11 +497,46 @@ impl WebState {
     }
 }
 
-// SAFETY: the page has one thread (`owner::web` refuses `+atomics`), so the
-// value is never reached from another.
-unsafe impl Send for WebLoop {}
-// SAFETY: one thread, as for `Send` above: no second thread can share it.
-unsafe impl Sync for WebLoop {}
+// Owner-local (ADR-0327 §5): the loop holds the page's JS-backed state and
+// never leaves the page's one thread.
+static_assertions::assert_not_impl_any!(WebLoop: Send, Sync);
+
+/// The running loop the owner signal's wake hook reaches. The hook is
+/// `Send + Sync`, as the signal holds every host's, and the loop is neither,
+/// so the hook carries only its loop's state and finds the loop here, on the
+/// page's one thread.
+struct PageLoop {
+    /// The state of the loop that entered: a hook of another loop's state
+    /// finds nothing.
+    state: Weak<Mutex<WebState>>,
+    owner: Weak<WebLoop>,
+}
+
+thread_local! {
+    static PAGE_LOOP: RefCell<Option<PageLoop>> = const { RefCell::new(None) };
+}
+
+impl PageLoop {
+    /// `owner` runs: the wake hook of its state reaches it from now on.
+    fn enter(owner: &Arc<WebLoop>) {
+        let entered = PageLoop {
+            state: Arc::downgrade(&owner.state),
+            owner: Arc::downgrade(owner),
+        };
+        // The replaced entry holds only weak handles: dropping it runs no
+        // loop code.
+        let _replaced = PAGE_LOOP.replace(Some(entered));
+    }
+
+    /// The loop whose state is `state`, if it entered and is still alive.
+    fn of(state: &Weak<Mutex<WebState>>) -> Option<Arc<WebLoop>> {
+        PAGE_LOOP.with_borrow(|page| {
+            page.as_ref()
+                .filter(|page| Weak::ptr_eq(&page.state, state))
+                .and_then(|page| page.owner.upgrade())
+        })
+    }
+}
 
 impl std::fmt::Debug for WebLoop {
     // Hand-written: the state holds JS-backed handles (clipboard,
@@ -531,7 +558,6 @@ impl WebLoop {
             is_running: false,
             window: None,
             window_ids: WindowIdMint::new(),
-            owner: Weak::new(),
         };
         let state = Arc::new(Mutex::new(state));
         let weak = Arc::downgrade(&state);
@@ -543,10 +569,8 @@ impl WebLoop {
                 let Some(state) = weak.upgrade() else {
                     return;
                 };
-                let (owner, window) = {
-                    let state = state.lock();
-                    (state.owner.upgrade(), state.window_delivery())
-                };
+                let window = state.lock().window_delivery();
+                let owner = PageLoop::of(&weak);
                 // A wake is how a screen change reaches the page: the window
                 // reads which screen it is on again before the owner's turn, so
                 // the turn sees the display in the window's snapshot.
@@ -745,7 +769,7 @@ impl host::Loop for WebLoop {
 
         self.with_state(|s| s.is_running = true);
 
-        self.with_state(|state| state.owner = Arc::downgrade(&self));
+        PageLoop::enter(&self);
         self.signal.start().map_err(|error| PlatformError::Init {
             message: error.to_string(),
         })?;
