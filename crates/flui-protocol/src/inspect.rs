@@ -5,7 +5,8 @@
 //! field typed ([`InspectValue`]) and carrying its detail [`InspectLevel`] and [`InspectUnit`].
 //! Ids and links are the inspected tree's handles: a prefix for the tree (`v` element, `r`
 //! render, `l` layer, `s` semantics) and the node's slot, with `.N` for a generation past the
-//! first (`r12`, `v3.2`).
+//! first (`r12`, `v3.2`). A layer adds its entry after a colon and its scene after an at sign:
+//! `l4.2:3@7` is entry 3 of the boundary `l4.2@7`, which keeps that id across frames.
 
 use crate::geometry::LogicalRect;
 

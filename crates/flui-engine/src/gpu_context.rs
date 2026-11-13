@@ -613,7 +613,6 @@ impl GpuContext {
     }
 
     /// The device domain every slot submits through.
-    #[cfg(test)]
     pub(crate) fn domain(&self) -> &Arc<DeviceDomain> {
         &self.domain
     }

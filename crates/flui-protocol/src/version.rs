@@ -69,7 +69,7 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 10);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 11);
 
 /// A published version that is not additive to the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,19 +82,29 @@ pub struct Break {
     pub renamed: &'static [(&'static str, &'static str)],
 }
 
-/// The versions whose schema is not additive to the one before it, each with the ADR that
-/// decided the break and exactly what it renamed.
-pub const BREAKING: &[Break] = &[Break {
-    version: ProtocolVersion::new(0, 5),
-    adr: "ADR-0238",
-    // The ADR-0095 endpoint's operations, now methods of the one table (`crate::method`).
-    renamed: &[
-        ("windows", "windows.list"),
-        ("read", "semantics.read"),
-        ("act", "semantics.act"),
-        ("motion", "motion.set"),
-    ],
-}];
+/// The versions that are not additive to the one before it, by their schema or by a value
+/// given a new meaning, each with the ADR that decided the break and exactly what it renamed.
+pub const BREAKING: &[Break] = &[
+    Break {
+        version: ProtocolVersion::new(0, 5),
+        adr: "ADR-0238",
+        // The ADR-0095 endpoint's operations, now methods of the one table (`crate::method`).
+        renamed: &[
+            ("windows", "windows.list"),
+            ("read", "semantics.read"),
+            ("act", "semantics.act"),
+            ("motion", "motion.set"),
+        ],
+    },
+    Break {
+        version: ProtocolVersion::new(0, 11),
+        adr: "ADR-0304",
+        // A layer's handle names a retained boundary by slot, generation and lineage
+        // (`l4.2:3@7`), where it named a node of a frame's flattened tree (`l4.37`): no name
+        // is respelled, the handle has a new meaning, so an older client cannot read it.
+        renamed: &[],
+    },
+];
 
 impl fmt::Display for ProtocolVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -177,8 +187,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.10");
-        assert_eq!("0.10".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.11");
+        assert_eq!("0.11".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -200,10 +210,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.10"))
+            Some(serde_json::json!("0.11"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.10")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.11")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());
