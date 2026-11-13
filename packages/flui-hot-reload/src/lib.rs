@@ -116,10 +116,6 @@
 //! ```
 
 // Every public item is documented; keep it that way.
-#![expect(
-    clippy::exhaustive_enums,
-    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
-)]
 #![deny(missing_docs)]
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
 // After the `warn(clippy::all)` above, which would otherwise turn the lint back on in tests.

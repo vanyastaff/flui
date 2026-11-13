@@ -4,6 +4,7 @@
 
 /// How a code change is applied at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HotReloadTier {
     /// Re-run `build()` on the retained element tree; preserve `State`.
     HotReload,
@@ -31,6 +32,7 @@ impl HotReloadTier {
 
 /// Result of attempting a hot reload operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HotReloadOutcome {
     /// Reload succeeded at the requested tier.
     Applied(HotReloadTier),

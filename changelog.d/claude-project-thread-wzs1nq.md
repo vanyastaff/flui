@@ -27,3 +27,8 @@
 - These public enums are `#[non_exhaustive]` too (ADR-0329): `SpeedLimit`, `StartupWindow`,
   `DiagnosticsProfile`, `CacheCapacity`, `AssetError`, `LoadState`, `CupertinoButtonSize`,
   `SnackBarClosedReason` and `TabIndicatorAnimation`.
+- Also `#[non_exhaustive]` (ADR-0329): the scheduler's `BudgetPolicy`, `SchedulerPhase`,
+  `FramePhase` and `Priority`; the layer crate's `DamageMode`, `PlatformViewHitTestBehavior`,
+  `SceneError`, `FullReason` and `ResyncReason`; flui-log's `EventOrigin`, `SubscriberPolicy`,
+  `InstallPolicy` and `LogBridgePolicy`; and flui-hot-reload's `ReloadStrategy`, `HotReloadTier`,
+  `HotReloadOutcome`, `PluginKind` and `WorkerPollOutcome`.

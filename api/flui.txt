@@ -24480,7 +24480,7 @@ pub const flui::view::FrameId::FIRST: Self = _
 pub const fn flui::view::FrameId::from_count(count: u64) -> Option<Self>
 pub const fn flui::view::FrameId::get(self) -> u64
 pub const fn flui::view::FrameId::next(self) -> Option<Self>
-#[repr(u8)] pub enum flui::view::FramePhase
+#[non_exhaustive] #[repr(u8)] pub enum flui::view::FramePhase
 impl Clone for flui::view::FramePhase
 impl Copy for flui::view::FramePhase
 impl Default for flui::view::FramePhase
@@ -30854,7 +30854,7 @@ pub fn flui_layer::layer::picture::PictureLayer::from_shared(picture: alloc::rcs
 pub fn flui_layer::layer::picture::PictureLayer::is_empty(&self) -> bool
 pub fn flui_layer::layer::picture::PictureLayer::new(picture: flui::painting::DisplayList) -> Self
 pub fn flui_layer::layer::picture::PictureLayer::picture(&self) -> &flui::painting::DisplayList
-pub enum flui_layer::layer::platform_view::PlatformViewHitTestBehavior
+#[non_exhaustive] pub enum flui_layer::layer::platform_view::PlatformViewHitTestBehavior
 impl Clone for flui_layer::layer::platform_view::PlatformViewHitTestBehavior
 impl Copy for flui_layer::layer::platform_view::PlatformViewHitTestBehavior
 impl Default for flui_layer::layer::platform_view::PlatformViewHitTestBehavior
@@ -31061,7 +31061,7 @@ impl core::marker::StructuralPartialEq for flui_layer::scene::owner::Placement
 pub const flui_layer::scene::owner::Placement::ZERO: Self = _
 pub fn flui_layer::scene::owner::Placement::offset(self) -> flui::geometry::Offset<f64>
 pub fn flui_layer::scene::owner::Placement::try_new(offset: flui::geometry::Offset<f64>) -> Result<Self, flui_layer::scene_snapshot::NonFinite>
-pub enum flui_layer::scene::owner::SceneError
+#[non_exhaustive] pub enum flui_layer::scene::owner::SceneError
 impl Clone for flui_layer::scene::owner::SceneError
 impl Copy for flui_layer::scene::owner::SceneError
 impl Eq for flui_layer::scene::owner::SceneError
@@ -31170,7 +31170,7 @@ pub fn flui_layer::scene_snapshot::DamageRegion::union(self, other: Self) -> Sel
 variant flui_layer::scene_snapshot::DamageRegion::Full(flui_layer::scene_snapshot::FullReason) // at 2
 variant flui_layer::scene_snapshot::DamageRegion::Region(flui_layer::scene_snapshot::Region) // at 1
 variant flui_layer::scene_snapshot::DamageRegion::Unchanged // at 0
-pub enum flui_layer::scene_snapshot::FullReason
+#[non_exhaustive] pub enum flui_layer::scene_snapshot::FullReason
 impl Clone for flui_layer::scene_snapshot::FullReason
 impl Copy for flui_layer::scene_snapshot::FullReason
 impl Eq for flui_layer::scene_snapshot::FullReason
@@ -31206,7 +31206,7 @@ pub fn flui_layer::scene_snapshot::Region::bounds(&self) -> flui_layer::scene_sn
 pub fn flui_layer::scene_snapshot::Region::insert(&mut self, rect: flui_layer::scene_snapshot::DamageRect)
 pub fn flui_layer::scene_snapshot::Region::new(rect: flui_layer::scene_snapshot::DamageRect) -> Self
 pub fn flui_layer::scene_snapshot::Region::rects(&self) -> &[flui_layer::scene_snapshot::DamageRect]
-pub enum flui_layer::scene_snapshot::ResyncReason
+#[non_exhaustive] pub enum flui_layer::scene_snapshot::ResyncReason
 impl Clone for flui_layer::scene_snapshot::ResyncReason
 impl Copy for flui_layer::scene_snapshot::ResyncReason
 impl Eq for flui_layer::scene_snapshot::ResyncReason
@@ -36270,7 +36270,7 @@ impl serde_core::ser::Serialize for flui_scheduler::budget::AllPhaseStats
 impl<'de> serde_core::de::Deserialize<'de> for flui_scheduler::budget::AllPhaseStats
 pub fn flui_scheduler::budget::AllPhaseStats::total_budget_percent(&self) -> flui::view::BudgetPercentage
 pub fn flui_scheduler::budget::AllPhaseStats::total_duration(&self) -> flui::view::Milliseconds
-#[repr(u8)] pub enum flui_scheduler::budget::BudgetPolicy
+#[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::budget::BudgetPolicy
 impl Clone for flui_scheduler::budget::BudgetPolicy
 impl Copy for flui_scheduler::budget::BudgetPolicy
 impl Default for flui_scheduler::budget::BudgetPolicy
@@ -36347,7 +36347,7 @@ pub type flui_scheduler::frame::LifecycleStateCallback = alloc::rcs::rc::Rc<dyn 
 pub type flui_scheduler::frame::OneShotFrameCallback = Box<dyn FnOnce(std::time::Instant)>
 pub type flui_scheduler::frame::PostFrameCallback = Box<dyn FnOnce(&flui::view::FrameTiming)>
 pub type flui_scheduler::frame::RecurringFrameCallback = alloc::rcs::rc::Rc<dyn Fn(&flui::view::FrameTiming)>
-#[repr(u8)] pub enum flui_scheduler::frame::SchedulerPhase
+#[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::frame::SchedulerPhase
 impl Clone for flui_scheduler::frame::SchedulerPhase
 impl Copy for flui_scheduler::frame::SchedulerPhase
 impl Default for flui_scheduler::frame::SchedulerPhase
@@ -36580,7 +36580,7 @@ impl core::marker::StructuralPartialEq for flui_scheduler::scheduler::execution:
 variant flui_scheduler::scheduler::execution::ExecutionError::AlreadyExecuting // at 0
 variant flui_scheduler::scheduler::execution::ExecutionError::Retired // at 1
 variant flui_scheduler::scheduler::execution::ExecutionError::SchedulerClosed // at 2
-#[repr(u8)] pub enum flui_scheduler::task::Priority
+#[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::task::Priority
 impl Clone for flui_scheduler::task::Priority
 impl Copy for flui_scheduler::task::Priority
 impl Default for flui_scheduler::task::Priority

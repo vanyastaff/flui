@@ -44,6 +44,7 @@ impl TryFrom<usize> for EntryIndex {
 
 /// Where a recording or an effect reaches, in its own space.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(clippy::exhaustive_enums, reason = "a reach is finite or it is not")]
 pub enum Bounds {
     /// Inside the rect.
     Finite(Rect<f64>),
@@ -163,6 +164,10 @@ impl Chunk {
 /// held beside the stream ([`BoundaryContent::effect_layer`]), so replacing
 /// it shares the stream.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a walk over a boundary's stream that skipped a new kind of entry would lose its paint"
+)]
 pub enum Entry {
     /// A layer the boundary's paint pushed, which its children sit under.
     Effect {

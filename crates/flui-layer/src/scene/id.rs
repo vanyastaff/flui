@@ -97,6 +97,10 @@ impl ContentVersion {
 
 /// The slot domain of scene nodes.
 #[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "an uninhabited marker of a slot domain has no variants"
+)]
 pub enum SceneNodeMarker {}
 
 impl Marker for SceneNodeMarker {}

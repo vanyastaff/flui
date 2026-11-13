@@ -49,6 +49,10 @@ impl Placement {
 
 /// One typed change to a scene.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "applying a patch handles every op: a `_` arm would drop a change"
+)]
 pub enum SceneOp {
     /// Replaces the node's content, or creates the node, unattached until a
     /// parent's slot names it, when the owner minted the id in this patch.
@@ -75,6 +79,7 @@ pub enum SceneOp {
 
 /// Why a patch was refused; the version is as it was before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum SceneError {
     /// The id comes from another owner, or from this one before a
     /// [`renew`](SceneOwner::renew).
