@@ -116,6 +116,9 @@ pub(super) struct LaneArgs {
     /// A changed file sits under a source the `miri` job interprets whole: a
     /// pull request runs `miri`.
     pub(super) miri_required: bool,
+    /// A changed file can move a count the `perf-gates` job compares: a pull
+    /// request runs its baseline comparison.
+    pub(super) perf_required: bool,
     pub(super) reason: String,
     pub(super) packages: String,
     pub(super) pkg_args: String,
@@ -141,7 +144,7 @@ impl LaneArgs {
     }
 
     /// `(key, value)` in output order; booleans as `true`/`false`.
-    pub(super) fn fields(&self) -> [(&'static str, String); 24] {
+    pub(super) fn fields(&self) -> [(&'static str, String); 25] {
         let b = |v: bool| if v { "true" } else { "false" }.to_owned();
         [
             ("lane", self.lane.as_str().to_owned()),
@@ -151,6 +154,7 @@ impl LaneArgs {
             ("size_required", b(self.size_required)),
             ("send_positions_required", b(self.send_positions_required)),
             ("miri_required", b(self.miri_required)),
+            ("perf_required", b(self.perf_required)),
             ("reason", self.reason.clone()),
             ("packages", self.packages.clone()),
             ("pkg_args", self.pkg_args.clone()),
@@ -332,6 +336,7 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
         size_required: scope.size_input.is_some(),
         send_positions_required: scope.send_positions_input.is_some(),
         miri_required: scope.miri_input.is_some(),
+        perf_required: scope.perf_input.is_some(),
         reason: scope.reason.clone(),
         packages: scope.packages.join(" "),
         pkg_args: if full {
@@ -466,6 +471,7 @@ mod tests {
             size_input: None,
             send_positions_input: None,
             miri_input: None,
+            perf_input: None,
             reason: String::new(),
         };
         let a = lane_args(repo(), &only_platform, Event::PullRequest).expect("lane args");

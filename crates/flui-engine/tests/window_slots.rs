@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use flui_engine::{
     EngineError, FrameLatency, RasterCommand, RasterExecutor, RasterSender, RasterVerdict,
-    SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotTarget,
-    SurfaceFactory, UnconfiguredSurface,
+    SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotSize, SlotTarget,
+    SurfaceFactory, SurfaceHold, UnconfiguredSurface,
     testing::{
         AttachedTarget, FakeDisplay, FakeWindow, ScriptedAnswer, ScriptedSlots, SlotCall,
         noop_surface_factory,
@@ -288,8 +288,9 @@ fn a_dropped_surface_is_asked_of_the_owner_and_a_restore_answers_it() {
     let _ = rig.executor.turn();
     assert_eq!(rig.verdicts(slot), [(0, RasterVerdict::NotShown)]);
     let record = rig.sender.record(slot).expect("held");
-    assert!(
-        record.wants_surface,
+    assert_eq!(
+        record.surface.hold,
+        SurfaceHold::Wanted,
         "the record asks the owner for a surface"
     );
     assert_ne!(record.required_generation, before);
@@ -306,7 +307,10 @@ fn a_dropped_surface_is_asked_of_the_owner_and_a_restore_answers_it() {
     let _ = rig.frame(slot, restored, 2);
     let _ = rig.executor.turn();
     assert_eq!(rig.verdicts(slot), [(2, RasterVerdict::Presented)]);
-    assert!(!rig.sender.record(slot).expect("held").wants_surface);
+    assert_eq!(
+        rig.sender.record(slot).expect("held").surface.hold,
+        SurfaceHold::Held
+    );
 }
 
 /// A restore keeps the barrier of a size the backend refused: the restored
@@ -356,13 +360,17 @@ fn a_restore_keeps_the_barrier_of_a_refused_size() {
 }
 
 /// A [`ScriptedSlots`] whose next render sends a restore through the owner's
-/// sender before it answers, as an owner woken inside the frame would.
-struct RestoresDuringRender {
+/// sender before it answers, and whose next resize sends sizes, as an owner
+/// woken inside the frame or the resize would.
+struct ReentersOwner {
     inner: ScriptedSlots,
     restore: std::rc::Rc<std::cell::RefCell<Option<(RasterSender, UnconfiguredSurface)>>>,
+    /// Sizes the next resize sends through the owner's sender before it
+    /// answers.
+    resizes: std::rc::Rc<std::cell::RefCell<Vec<(RasterSender, SlotChange)>>>,
 }
 
-impl flui_engine::SlotBackend for RestoresDuringRender {
+impl flui_engine::SlotBackend for ReentersOwner {
     fn attach(
         &mut self,
         slot: SlotId,
@@ -373,6 +381,12 @@ impl flui_engine::SlotBackend for RestoresDuringRender {
     }
 
     fn resize(&mut self, slot: SlotId, size: DeviceSize) -> flui_engine::EngineResult<()> {
+        let queued = std::mem::take(&mut *self.resizes.borrow_mut());
+        for (sender, change) in queued {
+            let _receipt = sender
+                .send(RasterCommand::Configure { slot, change })
+                .expect("accepted");
+        }
         self.inner.resize(slot, size)
     }
 
@@ -458,9 +472,10 @@ impl flui_engine::SlotBackend for RestoresDuringRender {
 fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
     let inner = ScriptedSlots::new();
     let restore = std::rc::Rc::new(std::cell::RefCell::new(None));
-    let backend = RestoresDuringRender {
+    let backend = ReentersOwner {
         inner: inner.clone(),
         restore: std::rc::Rc::clone(&restore),
+        resizes: std::rc::Rc::default(),
     };
     let (executor, sender) = RasterExecutor::new(
         backend,
@@ -546,8 +561,9 @@ fn a_window_the_rebuilt_device_cannot_present_to_asks_for_a_new_surface() {
     rig.backend
         .refuse_on_rebuild(slot, EngineError::IncompatibleSurface);
     let _ = rig.executor.turn();
-    assert!(
-        rig.sender.record(slot).expect("held").wants_surface,
+    assert_eq!(
+        rig.sender.record(slot).expect("held").surface.hold,
+        SurfaceHold::Wanted,
         "the owner makes a new surface"
     );
     assert!(matches!(
@@ -563,7 +579,10 @@ fn a_window_the_rebuilt_device_cannot_present_to_asks_for_a_new_surface() {
     let _ = rig.frame(slot, restored, 1);
     let _ = rig.executor.turn();
     assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::Presented)]);
-    assert!(!rig.sender.record(slot).expect("held").wants_surface);
+    assert_eq!(
+        rig.sender.record(slot).expect("held").surface.hold,
+        SurfaceHold::Held
+    );
 }
 
 /// The record tells a new surface the backend refused from a surface dropped
@@ -579,7 +598,7 @@ fn a_refused_restore_is_told_apart_from_a_surface_dropped_after_one() {
     let _ = rig.executor.turn();
     assert_eq!(rig.verdicts(slot), [(0, RasterVerdict::NotShown)]);
     let record = rig.sender.record(slot).expect("held");
-    assert!(record.wants_surface && !record.surface_refused);
+    assert_eq!(record.surface.hold, SurfaceHold::Wanted);
 
     rig.backend
         .script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
@@ -589,8 +608,9 @@ fn a_refused_restore_is_told_apart_from_a_surface_dropped_after_one() {
     });
     let _ = rig.executor.turn();
     let record = rig.sender.record(slot).expect("held");
-    assert!(
-        record.wants_surface && record.surface_refused,
+    assert_eq!(
+        record.surface.hold,
+        SurfaceHold::Refused,
         "the refused restore is named"
     );
     assert!(matches!(
@@ -611,8 +631,9 @@ fn a_refused_restore_is_told_apart_from_a_surface_dropped_after_one() {
     let _ = rig.frame(slot, restored, 1);
     let _ = rig.executor.turn();
     let record = rig.sender.record(slot).expect("held");
-    assert!(
-        record.wants_surface && !record.surface_refused,
+    assert_eq!(
+        record.surface.hold,
+        SurfaceHold::Wanted,
         "a surface dropped after a taken restore is not a refusal"
     );
     let _ = rig.verdicts(slot);
@@ -625,7 +646,10 @@ fn a_refused_restore_is_told_apart_from_a_surface_dropped_after_one() {
         surface: rig.surface(),
     });
     let _ = rig.executor.turn();
-    assert!(rig.sender.record(slot).expect("held").surface_refused);
+    assert_eq!(
+        rig.sender.record(slot).expect("held").surface.hold,
+        SurfaceHold::Refused
+    );
     let _ = rig.sender.take_failure(slot);
     rig.backend.script_restore(ScriptedAnswer::Panic);
     let _ = rig.send(RasterCommand::Restore {
@@ -634,8 +658,9 @@ fn a_refused_restore_is_told_apart_from_a_surface_dropped_after_one() {
     });
     let _ = rig.executor.turn();
     let record = rig.sender.record(slot).expect("held");
-    assert!(
-        record.wants_surface && !record.surface_refused,
+    assert_eq!(
+        record.surface.hold,
+        SurfaceHold::Wanted,
         "a panicked restore is not a refusal"
     );
     assert!(matches!(
@@ -667,14 +692,21 @@ fn a_restore_over_the_size_limit_keeps_its_surface() {
     });
     let _ = rig.executor.turn();
     let record = rig.sender.record(slot).expect("held");
-    assert!(
-        !record.wants_surface && !record.surface_refused,
+    assert_eq!(
+        record.surface.hold,
+        SurfaceHold::Held,
         "the surface is kept"
     );
     assert!(matches!(
         rig.sender.take_failure(slot),
         Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
     ));
+    // A frame stamped with the newest generation is laid out for the refused
+    // size: it settles stale, not drawn on an unconfigured surface.
+    let required = rig.sender.record(slot).expect("held").required_generation;
+    let _ = rig.frame(slot, required, 9);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(9, RasterVerdict::SurfaceStale)]);
     let SendReceipt::Configured(resized) = rig.send(RasterCommand::Configure {
         slot,
         change: SlotChange::Size(DeviceSize::new(16, 8)),
@@ -702,14 +734,21 @@ fn a_window_over_the_rebuilt_device_limit_waits_for_a_size_that_fits() {
         },
     );
     let _ = rig.executor.turn();
-    assert!(
-        !rig.sender.record(slot).expect("held").wants_surface,
+    assert_eq!(
+        rig.sender.record(slot).expect("held").surface.hold,
+        SurfaceHold::Held,
         "the surface is kept"
     );
     assert!(matches!(
         rig.sender.take_failure(slot),
         Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
     ));
+    // A frame stamped with the newest generation is laid out for the refused
+    // size: it settles stale, not drawn on an unconfigured surface.
+    let required = rig.sender.record(slot).expect("held").required_generation;
+    let _ = rig.frame(slot, required, 9);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(9, RasterVerdict::SurfaceStale)]);
     let SendReceipt::Configured(resized) = rig.send(RasterCommand::Configure {
         slot,
         change: SlotChange::Size(DeviceSize::new(16, 8)),
@@ -758,8 +797,9 @@ fn a_rebuild_refusal_is_committed_before_the_clock_is_read_again() {
     if let Some(payload) = caught.into_payload() {
         flui_foundation::panic::discard_payload(payload);
     }
-    assert!(
-        rig.sender.record(slot).expect("held").wants_surface,
+    assert_eq!(
+        rig.sender.record(slot).expect("held").surface.hold,
+        SurfaceHold::Wanted,
         "the owner makes a new surface"
     );
     assert!(matches!(
@@ -768,16 +808,17 @@ fn a_rebuild_refusal_is_committed_before_the_clock_is_read_again() {
     ));
 }
 
-/// A size the lost device refused is the rebuilt device's to answer: it is
-/// tried again, and a refusal of it the owner had not taken yet is dropped
-/// with the old device, so the owner does not hold the new device to it.
+/// A size the lost device refused is the rebuilt device's to answer: the
+/// record shows it pending again, the rebuilt device takes it, and the frame
+/// laid out for it presents.
 #[test]
 fn a_size_the_lost_device_refused_is_tried_on_the_rebuilt_one() {
     let mut rig = rig();
     let (slot, _) = rig.sized_window();
+    let wide = DeviceSize::new(64, 32);
     let _ = rig.send(RasterCommand::Configure {
         slot,
-        change: SlotChange::Size(DeviceSize::new(64, 32)),
+        change: SlotChange::Size(wide),
     });
     rig.backend
         .script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
@@ -785,75 +826,417 @@ fn a_size_the_lost_device_refused_is_tried_on_the_rebuilt_one() {
             height: 32,
         }));
     let _ = rig.executor.turn();
+    assert_eq!(
+        rig.sender.record(slot).expect("held").surface.size,
+        SlotSize::Refused(wide)
+    );
     rig.backend.lose_device();
     let _ = rig.executor.turn();
-    assert!(
-        rig.sender.take_failure(slot).is_none(),
-        "the old device's refusal went with it"
+    assert_eq!(
+        rig.sender.record(slot).expect("held").surface.size,
+        SlotSize::Applied(wide),
+        "the rebuilt device took the size"
     );
     let required = rig.sender.record(slot).expect("held").required_generation;
     let _ = rig.frame(slot, required, 1);
     let _ = rig.executor.turn();
-    assert_eq!(
-        rig.verdicts(slot),
-        [(1, RasterVerdict::Presented)],
-        "the rebuilt device took the size"
-    );
+    assert_eq!(rig.verdicts(slot), [(1, RasterVerdict::Presented)]);
 }
 
-/// A rebuild that configures every slot anew answers each slot's size
-/// afresh: a size refusal by the device before it, which the owner had not
-/// taken, goes with that device.
+/// Whether the device came back from a rebuild that configured every slot
+/// or from one that panicked with its device in place, a size the device
+/// before it refused is asked of the new one: the record never holds the
+/// new device to an older device's refusal.
 #[test]
-fn a_rebuild_that_takes_the_size_drops_the_old_devices_refusal() {
-    let mut rig = rig();
-    let (slot, _) = rig.sized_window();
-    rig.backend.lose_device();
-    rig.backend.refuse_on_rebuild(
-        slot,
-        EngineError::InvalidTargetSize {
-            width: 32,
-            height: 16,
-        },
-    );
-    let _ = rig.executor.turn();
-    rig.backend.lose_device();
-    let _ = rig.executor.turn();
-    assert!(
-        rig.sender.take_failure(slot).is_none(),
-        "the second device took the size"
-    );
+fn a_rebuilt_device_answers_the_size_the_one_before_it_refused() {
+    for panics in [false, true] {
+        let mut rig = rig();
+        let (slot, _) = rig.sized_window();
+        let size = DeviceSize::new(32, 16);
+        rig.backend.lose_device();
+        rig.backend.refuse_on_rebuild(
+            slot,
+            EngineError::InvalidTargetSize {
+                width: 32,
+                height: 16,
+            },
+        );
+        let _ = rig.executor.turn();
+        let record = rig.sender.record(slot).expect("held");
+        assert_eq!(
+            (record.surface.hold, record.surface.size),
+            (SurfaceHold::Held, SlotSize::Refused(size)),
+            "the surface is kept, unconfigured at its size"
+        );
+        rig.backend.lose_device();
+        if panics {
+            rig.backend.script_rebuild(ScriptedAnswer::Panic);
+        }
+        let mut caught = flui_foundation::panic::FirstPanic::new();
+        let turn = caught.contain(|| rig.executor.turn());
+        assert_eq!(
+            turn.is_none() && caught.into_payload().is_some(),
+            panics,
+            "a rebuild's panic is resumed"
+        );
+        assert_eq!(
+            rig.sender.record(slot).expect("held").surface.size,
+            SlotSize::Applied(size),
+            "the second device took the size (panicked rebuild: {panics})"
+        );
+    }
 }
 
-/// A device that comes back from a rebuild that panicked with it in place
-/// has answered no slot anew: a size refusal the owner has not taken stays
-/// held for it, since nothing answers that size again.
+/// One step of a row of [`each_surface_event_reaches_the_record`].
+enum Step {
+    /// The owner sends this size.
+    Size(DeviceSize),
+    /// The next resize answers this way.
+    Resize(ScriptedAnswer),
+    /// A frame whose render needs a new surface, which the turn drops.
+    DropSurface,
+    /// The owner sends a surface, and the executor has not turned since.
+    SendRestore,
+    /// The owner restores a surface, which the backend answers this way.
+    Restore(ScriptedAnswer),
+    /// The device is lost; its rebuild refuses the slot with this error, if
+    /// one is given.
+    LoseDevice(Option<EngineError>),
+    /// The executor turns.
+    Turn,
+}
+
+/// The table of the slot surface model (ADR-0305 §6): each row drives a sized
+/// window slot through the executor's commands and the backend's answers,
+/// and reads the state its record publishes.
 #[test]
-fn a_rebuild_that_panics_in_place_keeps_a_refusal_it_does_not_answer() {
-    let mut rig = rig();
-    let (slot, _) = rig.sized_window();
-    rig.backend.lose_device();
-    rig.backend.refuse_on_rebuild(
-        slot,
-        EngineError::InvalidTargetSize {
-            width: 32,
-            height: 16,
-        },
-    );
-    let _ = rig.executor.turn();
-    rig.backend.lose_device();
-    rig.backend.script_rebuild(ScriptedAnswer::Panic);
-    let mut caught = flui_foundation::panic::FirstPanic::new();
-    let turn = caught.contain(|| rig.executor.turn());
-    assert!(
-        turn.is_none() && caught.into_payload().is_some(),
-        "the rebuild's panic is resumed"
-    );
-    assert!(
-        matches!(
-            rig.sender.take_failure(slot),
-            Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
+fn each_surface_event_reaches_the_record() {
+    use SlotSize::{Applied, Pending, Refused};
+    use Step::{DropSurface, LoseDevice, Resize, Restore, SendRestore, Size, Turn};
+    let sized = DeviceSize::new(32, 16);
+    let wide = DeviceSize::new(64, 32);
+    let over = |size: DeviceSize| EngineError::InvalidTargetSize {
+        width: size.width.unsigned_abs(),
+        height: size.height.unsigned_abs(),
+    };
+    let rows: Vec<(&str, Vec<Step>, SurfaceHold, SlotSize)> = vec![
+        (
+            "a size sent",
+            vec![Size(wide)],
+            SurfaceHold::Held,
+            Pending(wide),
         ),
-        "the refusal waits for the owner"
+        (
+            "a size taken",
+            vec![Size(wide), Turn],
+            SurfaceHold::Held,
+            Applied(wide),
+        ),
+        (
+            "a size refused for good",
+            vec![Resize(ScriptedAnswer::Fail(over(wide))), Size(wide), Turn],
+            SurfaceHold::Held,
+            Refused(wide),
+        ),
+        (
+            "a size refused for now",
+            vec![
+                Resize(ScriptedAnswer::Fail(EngineError::SurfaceLost)),
+                Size(wide),
+                Turn,
+            ],
+            SurfaceHold::Held,
+            Pending(wide),
+        ),
+        (
+            "a resize that panics",
+            vec![Resize(ScriptedAnswer::Panic), Size(wide), Turn],
+            SurfaceHold::Held,
+            Pending(wide),
+        ),
+        (
+            "a refused size, then another",
+            vec![
+                Resize(ScriptedAnswer::Fail(over(wide))),
+                Size(wide),
+                Turn,
+                Size(sized),
+                Turn,
+            ],
+            SurfaceHold::Held,
+            Applied(sized),
+        ),
+        (
+            "a dropped surface",
+            vec![DropSurface],
+            SurfaceHold::Wanted,
+            Applied(sized),
+        ),
+        (
+            "a restore on its way",
+            vec![DropSurface, SendRestore],
+            SurfaceHold::Restoring,
+            Applied(sized),
+        ),
+        (
+            "a restore on its way, taken",
+            vec![DropSurface, SendRestore, Turn],
+            SurfaceHold::Held,
+            Applied(sized),
+        ),
+        (
+            "a restore taken",
+            vec![
+                DropSurface,
+                Restore(ScriptedAnswer::Answer(
+                    flui_engine::PresentDisposition::Presented,
+                )),
+            ],
+            SurfaceHold::Held,
+            Applied(sized),
+        ),
+        (
+            "a restore refused",
+            vec![
+                DropSurface,
+                Restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface)),
+            ],
+            SurfaceHold::Refused,
+            Applied(sized),
+        ),
+        (
+            "a restore that panics after one refused",
+            vec![
+                DropSurface,
+                Restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface)),
+                Restore(ScriptedAnswer::Panic),
+            ],
+            SurfaceHold::Wanted,
+            Applied(sized),
+        ),
+        (
+            "a refused restore's surface dropped again after a taken one",
+            vec![
+                DropSurface,
+                Restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface)),
+                Restore(ScriptedAnswer::Answer(
+                    flui_engine::PresentDisposition::Presented,
+                )),
+                DropSurface,
+            ],
+            SurfaceHold::Wanted,
+            Applied(sized),
+        ),
+        (
+            "a restore over the size limit",
+            vec![DropSurface, Restore(ScriptedAnswer::Fail(over(sized)))],
+            SurfaceHold::Held,
+            Refused(sized),
+        ),
+        (
+            "a restore over the limit at a size the owner has left",
+            vec![
+                DropSurface,
+                Size(wide),
+                Restore(ScriptedAnswer::Fail(over(sized))),
+            ],
+            SurfaceHold::Held,
+            Applied(wide),
+        ),
+        (
+            "a rebuilt device that cannot present to the window",
+            vec![LoseDevice(Some(EngineError::IncompatibleSurface)), Turn],
+            SurfaceHold::Wanted,
+            Applied(sized),
+        ),
+        (
+            "a rebuilt device under the window's size",
+            vec![LoseDevice(Some(over(sized))), Turn],
+            SurfaceHold::Held,
+            Refused(sized),
+        ),
+        (
+            "a rebuilt device under the window's size, behind a failure the owner has not taken",
+            vec![
+                Resize(ScriptedAnswer::Panic),
+                Size(wide),
+                Turn,
+                Size(sized),
+                Turn,
+                LoseDevice(Some(over(sized))),
+                Turn,
+            ],
+            SurfaceHold::Held,
+            Refused(sized),
+        ),
+        (
+            "a refused size on a rebuilt device",
+            vec![
+                Resize(ScriptedAnswer::Fail(over(wide))),
+                Size(wide),
+                Turn,
+                LoseDevice(None),
+                Turn,
+            ],
+            SurfaceHold::Held,
+            Applied(wide),
+        ),
+    ];
+    for (row, steps, hold, size) in rows {
+        let mut rig = rig();
+        let (slot, _) = rig.sized_window();
+        let mut epoch = 0;
+        for step in steps {
+            match step {
+                Size(size) => {
+                    let _ = rig.send(RasterCommand::Configure {
+                        slot,
+                        change: SlotChange::Size(size),
+                    });
+                }
+                Resize(answer) => rig.backend.script_resize(answer),
+                DropSurface => {
+                    rig.backend
+                        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceReplacementNeeded));
+                    let required = rig.sender.record(slot).expect("held").required_generation;
+                    epoch += 1;
+                    let _ = rig.frame(slot, required, epoch);
+                    turn_contained(&mut rig);
+                    let _ = rig.verdicts(slot);
+                }
+                Restore(answer) => {
+                    rig.backend.script_restore(answer);
+                    let _ = rig.send(RasterCommand::Restore {
+                        slot,
+                        surface: rig.surface(),
+                    });
+                    turn_contained(&mut rig);
+                }
+                LoseDevice(refusal) => {
+                    rig.backend.lose_device();
+                    if let Some(error) = refusal {
+                        rig.backend.refuse_on_rebuild(slot, error);
+                    }
+                }
+                SendRestore => {
+                    let _ = rig.send(RasterCommand::Restore {
+                        slot,
+                        surface: rig.surface(),
+                    });
+                }
+                Turn => turn_contained(&mut rig),
+            }
+        }
+        let record = rig.sender.record(slot).expect("held");
+        assert_eq!(
+            (record.surface.hold, record.surface.size),
+            (hold, size),
+            "{row}"
+        );
+    }
+}
+
+/// Turn the executor, discarding a panic the row scripted.
+fn turn_contained(rig: &mut Rig) {
+    let mut caught = flui_foundation::panic::FirstPanic::new();
+    let _ = caught.contain(|| rig.executor.turn());
+    if let Some(payload) = caught.into_payload() {
+        flui_foundation::panic::discard_payload(payload);
+    }
+}
+
+/// The backend's answer to a resize is matched to the size sent by its
+/// generation, not by its value: when the owner sends another size and then
+/// the same one again while the resize runs, the answer is to the older send,
+/// and the newest generation is applied by the next turn instead of being
+/// left unauthorised behind a size the record calls applied.
+///
+/// Red-check: let any answer for the pending size apply it, and the frame
+/// stamped with the required generation settles `SurfaceStale`.
+#[test]
+fn a_resize_answer_is_matched_to_its_send_by_generation() {
+    let resizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let backend = ReentersOwner {
+        inner: ScriptedSlots::new(),
+        restore: std::rc::Rc::default(),
+        resizes: std::rc::Rc::clone(&resizes),
+    };
+    let (mut executor, sender) = RasterExecutor::new(
+        backend,
+        std::rc::Rc::new(flui_foundation::SystemClock),
+        || {},
+    );
+    let display: Arc<dyn DisplayConnection> = Arc::new(FakeDisplay);
+    let factory = noop_surface_factory(display);
+    let slot = sender.mint_slot().expect("a slot id is left");
+    let _ = sender
+        .send(RasterCommand::Attach {
+            slot,
+            address: address(),
+            target: SlotTarget::Window(
+                factory
+                    .create(Arc::new(FakeWindow::new(7)))
+                    .expect("the no-op backend makes a surface for any window"),
+            ),
+            config: SlotConfig::new(),
+        })
+        .expect("accepted");
+    let sized = DeviceSize::new(32, 16);
+    let wide = DeviceSize::new(64, 32);
+    let _ = sender
+        .send(RasterCommand::Configure {
+            slot,
+            change: SlotChange::Size(sized),
+        })
+        .expect("accepted");
+    let _ = executor.turn();
+
+    let _ = sender
+        .send(RasterCommand::Configure {
+            slot,
+            change: SlotChange::Size(wide),
+        })
+        .expect("accepted");
+    resizes.borrow_mut().extend([
+        (sender.clone(), SlotChange::Size(sized)),
+        (sender.clone(), SlotChange::Size(wide)),
+    ]);
+    let _ = executor.turn();
+    let record = sender.record(slot).expect("held");
+    assert_eq!(
+        record.surface.size,
+        SlotSize::Pending(wide),
+        "the answer was to the older send"
+    );
+    let mut epoch = FrameEpoch::ZERO;
+    epoch = epoch.next();
+    let _ = sender
+        .send(RasterCommand::Frame {
+            slot,
+            snapshot: SceneSnapshot::new(
+                FrameStamp::new(
+                    address(),
+                    epoch,
+                    record.required_generation,
+                    GpuResourceGeneration::ZERO,
+                ),
+                DamageRegion::Unchanged,
+                Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
+            ),
+        })
+        .expect("accepted");
+    let _ = executor.turn();
+    let mut settled = Vec::new();
+    sender.drain_settlements(slot, &mut settled);
+    assert_eq!(
+        settled
+            .iter()
+            .map(|settlement| settlement.verdict)
+            .collect::<Vec<RasterVerdict>>(),
+        [RasterVerdict::Presented]
+    );
+    assert_eq!(
+        sender.record(slot).expect("held").surface.size,
+        SlotSize::Applied(wide)
     );
 }

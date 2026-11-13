@@ -19,6 +19,7 @@ use parking_lot::{Mutex, MutexGuard};
 use flui_platform::DisplayColor;
 
 use super::command::{RasterVerdict, SlotSettlement, SlotVisibility};
+use super::surface::SlotSurface;
 use crate::{FrameLatency, error::EngineError};
 
 /// How many settlements an inline slot holds undrained: the executor starts
@@ -91,26 +92,21 @@ pub struct SlotRecord {
     pub undrained: usize,
     /// The generation the slot's next frame must be stamped with.
     pub required_generation: SurfaceGeneration,
-    /// The window slot lost its surface for good and dropped it: the owner
-    /// makes a new one with its [`SurfaceFactory`](crate::SurfaceFactory) and
-    /// sends it in a [`RasterCommand::Restore`](super::RasterCommand::Restore).
-    /// Until one is restored the slot's frames settle not shown.
-    pub wants_surface: bool,
-    /// The newest surface the owner sent in a
-    /// [`RasterCommand::Restore`](super::RasterCommand::Restore) was refused,
-    /// and the slot still waits for one: a frame has no surface until the
-    /// owner sends another. A surface dropped after a restore the backend
-    /// took (a rebuilt device, a render that needs a new one) is not a
-    /// refusal, and clears it.
-    pub surface_refused: bool,
+    /// Whether the slot has a surface, and its newest size with the
+    /// backend's answer: what the owner does next (a new surface, another
+    /// size, nothing until the window changes) is read here, not from the
+    /// failures it takes.
+    pub surface: SlotSurface,
 }
 
 /// The values one slot's owner and executor exchange.
 pub(crate) struct InboxState {
     /// The frame waiting for the executor; a later frame supersedes it.
     pub(crate) frame: Option<SceneSnapshot>,
-    /// The latest size asked for and not applied yet.
-    pub(crate) size: Option<DeviceSize>,
+    /// The slot's surface and size, changed only through
+    /// [`SlotSurface::on`]: a [`SlotSize::Pending`](super::SlotSize::Pending) size is the one the
+    /// executor applies next.
+    pub(crate) surface: SlotSurface,
     /// The latest visibility asked for and not applied yet.
     pub(crate) visibility: Option<SlotVisibility>,
     /// The latest display colour reported and not applied yet.
@@ -122,10 +118,6 @@ pub(crate) struct InboxState {
     pub(crate) generation: SurfaceGeneration,
     /// Frames accepted and not settled yet.
     pub(crate) in_flight: u32,
-    /// Whether the slot dropped its surface and waits for a restore.
-    pub(crate) wants_surface: bool,
-    /// Whether the newest restore was refused (see [`SlotRecord`]).
-    pub(crate) surface_refused: bool,
     /// Settlements not drained yet, oldest first.
     pub(crate) settlements: VecDeque<SlotSettlement>,
     pub(crate) phase: SlotPhase,
@@ -140,19 +132,21 @@ pub(crate) struct SlotInbox {
 }
 
 impl SlotInbox {
-    pub(crate) fn new(address: PresentationAddress, generation: SurfaceGeneration) -> Self {
+    pub(crate) fn new(
+        address: PresentationAddress,
+        generation: SurfaceGeneration,
+        size: Option<DeviceSize>,
+    ) -> Self {
         Self {
             address,
             state: Mutex::new(InboxState {
                 frame: None,
-                size: None,
+                surface: SlotSurface::attached(size),
                 visibility: None,
                 color: None,
                 latency: None,
                 generation,
                 in_flight: 0,
-                wants_surface: false,
-                surface_refused: false,
                 settlements: VecDeque::with_capacity(INLINE_DEPTH),
                 phase: SlotPhase::Attaching,
                 failure: None,
@@ -173,8 +167,7 @@ impl SlotInbox {
             in_flight: state.in_flight,
             undrained: state.settlements.len(),
             required_generation: state.generation,
-            wants_surface: state.wants_surface,
-            surface_refused: state.surface_refused,
+            surface: state.surface,
         }
     }
 }

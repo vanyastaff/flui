@@ -29,6 +29,7 @@ mod device_health;
 mod inbox;
 mod sender;
 mod slot;
+mod surface;
 
 use std::{rc::Rc, sync::Arc};
 
@@ -36,6 +37,7 @@ use crossbeam_channel::{Receiver, bounded};
 use flui_foundation::{
     SurfaceGeneration,
     clock::MonotonicClock,
+    geometry::DeviceSize,
     panic::{FirstPanic, discard_payload},
 };
 use flui_layer::{DamageRegion, FullReason, ResyncReason, SceneSnapshot};
@@ -50,6 +52,8 @@ pub use inbox::{SlotFailure, SlotPhase, SlotRecord};
 pub use sender::RasterSender;
 pub(crate) use slot::SlotMint;
 pub use slot::{SlotDomain, SlotId};
+use surface::SurfaceEvent;
+pub use surface::{SlotSize, SlotSurface, SurfaceHold};
 
 use self::{
     device_health::{DeviceRebuilds, FailedRebuild},
@@ -84,8 +88,9 @@ struct ExecSlot {
     /// failed.
     full_redraw: Option<FullReason>,
     /// The size the backend last refused, so a size refused again on every
-    /// turn or every send warns once.
-    refused_size: Option<flui_foundation::geometry::DeviceSize>,
+    /// turn warns once. What became of the size is the slot's
+    /// [`SlotSurface`], in its inbox.
+    warned_size: Option<DeviceSize>,
     /// Whether the slot presents to a window's surface, which only its owner
     /// can replace.
     window: bool,
@@ -319,7 +324,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 applied: generation,
                 visibility: config.visibility,
                 full_redraw: Some(FullReason::FirstFrame),
-                refused_size: None,
+                warned_size: None,
                 window,
             });
             return 0;
@@ -362,7 +367,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             // slots are restamped all the same, so "healthy after lost" always
             // means every frame stamped before the loss is refused.
             self.rebuilds.recovered();
-            self.after_rebuild(None, first);
+            self.after_rebuild(Vec::new(), first);
             rebuilt = true;
         }
         let mut failure = None;
@@ -380,7 +385,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                         // The slots are restamped before the health says the
                         // device renders, so no owner stamps a frame for the
                         // old device after reading it.
-                        self.after_rebuild(Some(refused), first);
+                        self.after_rebuild(refused, first);
                         rebuilt = true;
                     }
                     Some(Err(error)) => {
@@ -398,7 +403,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     // slots are restamped before this turn serves them, as
                     // after a rebuild that succeeded.
                     self.rebuilds.recovered();
-                    self.after_rebuild(None, first);
+                    self.after_rebuild(Vec::new(), first);
                     rebuilt = true;
                 }
             } else {
@@ -473,69 +478,36 @@ impl<B: SlotBackend> RasterExecutor<B> {
 
     /// The device was rebuilt: every frame stamped before it is refused on
     /// its generation, as after a restore, and every slot redraws in full. A
-    /// size still pending or refused keeps its barrier: only a size the
-    /// backend accepts authorises frames laid out for it, and a size the lost
-    /// device refused is tried on the new one. A slot the new device cannot
-    /// present to waits for a new surface from its owner.
+    /// size the lost device refused is the new device's to answer, and is
+    /// pending again; a size still pending keeps its barrier, since only a
+    /// size the backend accepts authorises frames laid out for it. A slot
+    /// the new device cannot present to waits for a new surface from its
+    /// owner, and one over its size limit for a size that fits.
     ///
-    /// `refused` is `Some` when the backend configured every slot on the new
-    /// device and named those it refused: a size refusal the owner has not
-    /// taken yet is then the old device's and goes. `None` when the device
-    /// came back without such an answer (a rebuild that panicked or failed
-    /// with its device in place): only the refusal of a size tried again
-    /// goes, since nothing answers the others anew.
-    fn after_rebuild(
-        &mut self,
-        refused: Option<Vec<(SlotId, EngineError)>>,
-        first: &mut FirstPanic,
-    ) {
-        let answered = refused.is_some();
+    /// `refused` names the slots the backend could not configure on the new
+    /// device; it is empty when the device came back without that answer (a
+    /// rebuild that panicked or failed with its device in place).
+    fn after_rebuild(&mut self, refused: Vec<(SlotId, EngineError)>, first: &mut FirstPanic) {
         for slot in self.slots.iter_mut().flatten() {
             slot.owe_full(RESET);
-            let stale = {
-                let mut state = slot.inbox.lock();
-                let retried = slot.refused_size;
-                if let Some(size) = retried {
-                    state.size.get_or_insert(size);
-                }
-                let stale = match &state.failure {
-                    Some(SlotFailure::Refused(EngineError::InvalidTargetSize {
-                        width,
-                        height,
-                    })) if answered
-                        || retried.is_some_and(|size| {
-                            u32::try_from(size.width) == Ok(*width)
-                                && u32::try_from(size.height) == Ok(*height)
-                        }) =>
-                    {
-                        state.failure.take()
-                    }
-                    _ => None,
-                };
-                // A window slot that never had a size has no frame to refuse.
-                if state.generation != SurfaceGeneration::ZERO {
-                    state.generation = state.generation.next();
-                    if state.size.is_none() && slot.refused_size.is_none() {
-                        slot.applied = state.generation;
-                    }
-                }
-                stale
-            };
-            retire(None, stale, first);
+            let mut state = slot.inbox.lock();
+            state.surface = state.surface.on(SurfaceEvent::DeviceRebuilt);
         }
-        for (id, error) in refused.into_iter().flatten() {
+        for (id, error) in refused {
             let Some(slot) = self.attached(id) else {
                 let _dropped = first.contain(move || drop(error));
                 continue;
             };
             let extra = {
                 let mut state = slot.inbox.lock();
-                // A window slot dropped its surface or failed to configure it,
-                // and the owner makes another; a slot over the new device's
-                // limit, window or offscreen, waits for a size that fits.
-                if slot.window && !matches!(error, EngineError::InvalidTargetSize { .. }) {
-                    state.wants_surface = true;
-                    state.surface_refused = false;
+                // A slot over the new device's limit, window or offscreen,
+                // keeps its target and waits for a size that fits; a window
+                // slot dropped its surface or failed to configure it, and the
+                // owner makes another.
+                if let Some(size) = over_limit(&error) {
+                    state.surface = state.surface.on(SurfaceEvent::OverLimit(size));
+                } else if slot.window {
+                    state.surface = state.surface.on(SurfaceEvent::SurfaceDropped);
                 }
                 state.hold_failure(SlotFailure::Refused(error))
             };
@@ -547,6 +519,18 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 },
                 first,
             );
+        }
+        // Minted once the new device's answers are in: a size it refused is
+        // not settled, so its new generation authorises no frame.
+        for slot in self.slots.iter_mut().flatten() {
+            let mut state = slot.inbox.lock();
+            // A window slot that never had a size has no frame to refuse.
+            if state.generation != SurfaceGeneration::ZERO {
+                state.generation = state.generation.next();
+                if state.surface.size.is_settled() {
+                    slot.applied = state.generation;
+                }
+            }
         }
     }
 
@@ -620,47 +604,50 @@ impl<B: SlotBackend> RasterExecutor<B> {
         // keeps its barrier: the restored surface is configured at the size
         // the slot has, and only a size the backend accepts authorises frames
         // laid out for a newer one.
-        let newest = {
-            let state = held.inbox.lock();
-            state.generation == generation && state.size.is_none()
-        };
-        if newest && held.refused_size.is_none() {
-            held.applied = generation;
-        }
+        // It is authorised once the backend answered: a restore over the size
+        // limit leaves the size refused, and frames stamped for it stale.
         held.owe_full(FullReason::SurfaceChanged);
         let mut caught = FirstPanic::new();
-        match caught.contain(|| backend.restore(slot, surface)) {
-            Some(Ok(())) => {
-                let mut state = held.inbox.lock();
-                state.wants_surface = false;
-                state.surface_refused = false;
+        let answer = caught.contain(|| backend.restore(slot, surface));
+        let (event, failure) = match answer {
+            Some(Ok(())) => (SurfaceEvent::Restored, None),
+            // A size over the device's limit keeps the surface, as after a
+            // rebuild: the slot waits for a size that fits, not for another
+            // surface.
+            Some(Err(error)) => (
+                over_limit(&error).map_or(SurfaceEvent::RestoreRefused, SurfaceEvent::OverLimit),
+                Some(error),
+            ),
+            // The newest restore was not refused: it panicked, which the
+            // owner hears as the slot's held panic, and the slot still wants
+            // a surface.
+            None => (SurfaceEvent::RestorePanicked, None),
+        };
+        let extra = {
+            let mut state = held.inbox.lock();
+            state.surface = state.surface.on(event);
+            if state.generation == generation && state.surface.size.is_settled() {
+                held.applied = generation;
             }
-            Some(Err(error)) => {
-                let extra = {
-                    let mut state = held.inbox.lock();
-                    // A size over the device's limit keeps the surface, as
-                    // after a rebuild: the slot waits for a size that fits,
-                    // not for another surface.
-                    let kept = matches!(error, EngineError::InvalidTargetSize { .. });
-                    state.wants_surface = !kept;
-                    state.surface_refused = !kept;
-                    state.hold_failure(SlotFailure::Refused(error))
-                };
-                retire(None, extra, first);
-                report(
-                    Report::Refused {
-                        slot,
-                        cause: "refused",
-                    },
-                    first,
-                );
-            }
-            None => {
-                // The newest restore was not refused: it panicked, which the
-                // owner hears as the slot's held panic.
-                held.inbox.lock().surface_refused = false;
-                hold_panic(&held.inbox, caught, first);
-            }
+            failure.and_then(|error| state.hold_failure(SlotFailure::Refused(error)))
+        };
+        if event == SurfaceEvent::RestorePanicked {
+            hold_panic(&held.inbox, caught, first);
+            return;
+        }
+        let refused = matches!(
+            event,
+            SurfaceEvent::RestoreRefused | SurfaceEvent::OverLimit(_)
+        );
+        retire(None, extra, first);
+        if refused {
+            report(
+                Report::Refused {
+                    slot,
+                    cause: "refused",
+                },
+                first,
+            );
         }
     }
 
@@ -680,7 +667,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 None
             };
             (
-                state.size.take(),
+                pending_size(state.surface.size),
                 state.generation,
                 state.visibility.take(),
                 state.color.take(),
@@ -715,36 +702,40 @@ impl<B: SlotBackend> RasterExecutor<B> {
             }
         }
         let mut failure = None;
-        // A resize that panicked or was refused for now stays pending, so the
-        // next turn retries it: the owner already stamps frames with the
-        // generation it minted. One the backend always refuses is not retried:
-        // the slot keeps its configuration until the owner sends another size.
-        let mut retry = None;
+        // A resize that panicked or failed for any reason but its size stays
+        // pending, so the next turn retries it: the owner already stamps
+        // frames with the generation it minted. A size past the device's
+        // limit is not retried: the slot keeps its configuration until the
+        // owner sends another size or the device is rebuilt.
+        let mut answer = None;
         let mut resize_report = None;
         if let Some(size) = size {
             let mut caught = FirstPanic::new();
             match caught.contain(|| backend.resize(slot.id, size)) {
                 Some(Ok(())) => {
                     slot.applied = generation;
-                    slot.refused_size = None;
+                    slot.warned_size = None;
                     slot.owe_full(FullReason::SurfaceChanged);
+                    answer = Some(SurfaceEvent::Resized(size));
                 }
                 Some(Err(error)) => {
-                    let transient = error.recoverability() == Recoverability::Recoverable;
-                    if transient {
-                        retry = Some(size);
+                    // Only a size past the device's limit is refused for
+                    // good; any other error is the surface's or the moment's,
+                    // and the size stays pending for the next turn.
+                    let refused = over_limit(&error) == Some(size);
+                    if refused {
+                        answer = Some(SurfaceEvent::SizeRefused(size));
                     }
                     // One warning a size, however often it is refused.
-                    if slot.refused_size.replace(size) != Some(size) {
+                    if slot.warned_size.replace(size) != Some(size) {
                         resize_report = Some(Report::ResizeRefused {
                             slot: slot.id,
-                            retried: transient,
+                            retried: !refused,
                         });
                     }
                     failure = Some(SlotFailure::Refused(error));
                 }
                 None => {
-                    retry = Some(size);
                     failure = caught.into_payload().map(SlotFailure::Panicked);
                 }
             }
@@ -781,8 +772,12 @@ impl<B: SlotBackend> RasterExecutor<B> {
         let Some(frame) = frame else {
             let extra = {
                 let mut state = slot.inbox.lock();
-                if let Some(size) = retry {
-                    state.size.get_or_insert(size);
+                // The answer counts only while no newer size was sent since the
+                // one answered: a newer one stays pending for the next turn.
+                if let Some(answer) = answer
+                    && state.generation == generation
+                {
+                    state.surface = state.surface.on(answer);
                 }
                 failure.and_then(|failure| state.hold_failure(failure))
             };
@@ -800,20 +795,23 @@ impl<B: SlotBackend> RasterExecutor<B> {
         };
         let extra = {
             let mut state = slot.inbox.lock();
-            if let Some(size) = retry {
-                state.size.get_or_insert(size);
+            // The answer counts only while no newer size was sent since the
+            // one answered: a newer one stays pending for the next turn.
+            if let Some(answer) = answer
+                && state.generation == generation
+            {
+                state.surface = state.surface.on(answer);
             }
             if surface_loss != SurfaceLoss::Kept {
                 state.generation = state.generation.next();
                 // A resize still pending or refused keeps its barrier: only a
                 // size the backend accepts authorises frames laid out for it.
-                if state.size.is_none() && slot.refused_size.is_none() {
+                if state.surface.size.is_settled() {
                     slot.applied = state.generation;
                 }
             }
             if surface_loss == SurfaceLoss::Dropped {
-                state.wants_surface = true;
-                state.surface_refused = false;
+                state.surface = state.surface.on(SurfaceEvent::SurfaceDropped);
             }
             state.settle(&frame, verdict);
             failure.and_then(|failure| state.hold_failure(failure))
@@ -823,6 +821,26 @@ impl<B: SlotBackend> RasterExecutor<B> {
         retire(None, discarded_render, first);
         report_each([resize_report, textures_report, render_report], first);
         1
+    }
+}
+
+/// The size a slot was sent and the executor has not applied yet.
+fn pending_size(size: SlotSize) -> Option<DeviceSize> {
+    match size {
+        SlotSize::Pending(size) => Some(size),
+        SlotSize::Unsized | SlotSize::Applied(_) | SlotSize::Refused(_) => None,
+    }
+}
+
+/// The size `error` says the device cannot configure a surface at, when it
+/// is a size past the device's limit.
+fn over_limit(error: &EngineError) -> Option<DeviceSize> {
+    match *error {
+        EngineError::InvalidTargetSize { width, height } => Some(DeviceSize::new(
+            i32::try_from(width).ok()?,
+            i32::try_from(height).ok()?,
+        )),
+        _ => None,
     }
 }
 

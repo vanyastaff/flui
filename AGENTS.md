@@ -121,8 +121,11 @@ conversation:
   `feature-scope` runs over the changed crates' features, `size` runs when the diff reaches a
   manifest, `Cargo.lock`, the toolchain, a `flui create` template or `perf/size.toml`,
   `send-positions` runs when a changed line of the facade's crates names `Send`, `Sync`, a
-  `pub use`/`pub mod` or a listed item, and `miri` runs when a changed file sits under a source
-  it interprets whole. A new main-only job that a pull request can break gets such a row.
+  `pub use`/`pub mod` or a listed item, `miri` runs when a changed file sits under a source
+  it interprets whole, and `perf-gates` compares the baseline when a changed file sits under a
+  source that runs for every node of a frame (the element tree and its owners, render storage,
+  the pipeline owner's passes, the semantics model).
+  A new main-only job that a pull request can break gets such a row.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
