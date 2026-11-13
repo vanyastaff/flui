@@ -6,7 +6,7 @@
 //! - Managing GlobalKey registry
 //! - Coordinating InheritedElement lookups
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::{
     cell::{Cell, RefCell},
     cmp::Reverse,
@@ -1062,20 +1062,23 @@ impl BuildOwner {
     /// Return the nearest mounted layout-builder scope containing `element`.
     /// The search includes `element` itself: a scope root belongs to its own
     /// scope.
-    fn live_layout_scope_ids(&self, tree: &ElementTree) -> FxHashSet<ElementId> {
+    fn live_layout_scope_ids(&self, tree: &ElementTree) -> SlotSet<ElementId> {
         self.layout_builder_registry.with_entries(|entries| {
-            entries
+            let mut live = SlotSet::new();
+            for entry in entries
                 .values()
                 .filter(|entry| tree.contains(entry.element))
-                .map(|entry| entry.element)
-                .collect()
+            {
+                live.insert(entry.element);
+            }
+            live
         })
     }
 
     fn nearest_layout_builder_scope(
         tree: &ElementTree,
         element: ElementId,
-        live_scopes: &FxHashSet<ElementId>,
+        live_scopes: &SlotSet<ElementId>,
     ) -> Option<ElementId> {
         #[cfg(test)]
         LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
@@ -1083,7 +1086,7 @@ impl BuildOwner {
         while let Some(candidate) = cursor {
             #[cfg(test)]
             LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
-            if live_scopes.contains(&candidate) && tree.contains(candidate) {
+            if live_scopes.contains(candidate) && tree.contains(candidate) {
                 return Some(candidate);
             }
             cursor = tree
@@ -1132,7 +1135,7 @@ impl BuildOwner {
     pub(crate) fn repartition_dirty(
         &mut self,
         tree: &ElementTree,
-        live_scopes: &FxHashSet<ElementId>,
+        live_scopes: &SlotSet<ElementId>,
     ) {
         self.collect_partitioned_dirty();
         let mut memo = std::mem::take(
@@ -1158,7 +1161,7 @@ impl BuildOwner {
             LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
             let scope = memo.nearest(
                 dirty.id(),
-                |id| live_scopes.contains(&id) && tree.contains(id),
+                |id| live_scopes.contains(id) && tree.contains(id),
                 |id| {
                     #[cfg(test)]
                     LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
@@ -1558,7 +1561,7 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         target: BuildScopeTarget,
-        live_scopes: Option<&FxHashSet<ElementId>>,
+        live_scopes: Option<&SlotSet<ElementId>>,
     ) -> BuildDrainResult {
         #[cfg(not(debug_assertions))]
         if matches!(target, BuildScopeTarget::All) {
@@ -1613,7 +1616,7 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         target: BuildScopeTarget,
-        live_scopes: Option<&FxHashSet<ElementId>>,
+        live_scopes: Option<&SlotSet<ElementId>>,
     ) -> BuildDrainResult {
         let mut result = BuildDrainResult::default();
         let mut absorbed_mid_drain = 0usize;
@@ -2410,9 +2413,11 @@ impl BuildOwner {
 
         // Collect all affected sliver ids (may have requests, bands, or both).
         let affected_ids: Vec<RenderId> = {
-            let mut ids: FxHashSet<RenderId> = requests_by_sliver.keys().copied().collect();
-            ids.extend(bands_by_sliver.keys().copied());
-            ids.into_iter().collect()
+            let mut ids: SlotSet<RenderId> = SlotSet::new();
+            for &id in requests_by_sliver.keys().chain(bands_by_sliver.keys()) {
+                ids.insert(id);
+            }
+            ids.as_slice().to_vec()
         };
 
         // 3. Clone manager Rcs out of the registry before any service call.

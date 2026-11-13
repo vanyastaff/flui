@@ -35,7 +35,7 @@ use std::{
     rc::Rc,
 };
 
-use flui_foundation::{ElementId, RenderId};
+use flui_foundation::{ElementId, RenderId, SlotSet};
 use flui_objects::BuildDuringLayoutCell;
 // Only the `testing` registration helper names the concrete cell; the registry
 // itself is payload-blind.
@@ -103,14 +103,14 @@ enum FixpointEnd {
 /// build-during-layout scopes rebuilt as their own target.
 struct LayoutBuilderService {
     any_rebuilt: bool,
-    rebuilt_scopes: FxHashSet<ElementId>,
+    rebuilt_scopes: SlotSet<ElementId>,
 }
 
 impl LayoutBuilderService {
     fn of(any_rebuilt: bool) -> Self {
         Self {
             any_rebuilt,
-            rebuilt_scopes: FxHashSet::default(),
+            rebuilt_scopes: SlotSet::new(),
         }
     }
 }
@@ -138,8 +138,8 @@ impl LayoutBuilderService {
 fn classify_pass(
     service: &LayoutBuilderService,
     serviced_lazy: bool,
-    built_earlier: &FxHashSet<ElementId>,
-    previous: &FxHashSet<ElementId>,
+    built_earlier: &SlotSet<ElementId>,
+    previous: &SlotSet<ElementId>,
     alive: impl Fn(ElementId) -> bool,
     parent_of: impl Fn(ElementId) -> Option<ElementId>,
 ) -> PassOutcome {
@@ -150,19 +150,25 @@ fn classify_pass(
         return PassOutcome::Advanced;
     }
     let explained = |scope: ElementId| {
-        if !built_earlier.contains(&scope) || !alive(scope) {
+        if !built_earlier.contains(scope) || !alive(scope) {
             return true;
         }
         let mut ancestor = parent_of(scope);
         while let Some(id) = ancestor {
-            if previous.contains(&id) {
+            if previous.contains(id) {
                 return true;
             }
             ancestor = parent_of(id);
         }
         false
     };
-    if !service.rebuilt_scopes.is_empty() && service.rebuilt_scopes.iter().all(|s| explained(*s)) {
+    if !service.rebuilt_scopes.is_empty()
+        && service
+            .rebuilt_scopes
+            .as_slice()
+            .iter()
+            .all(|s| explained(*s))
+    {
         PassOutcome::Advanced
     } else {
         PassOutcome::Charged
@@ -337,7 +343,7 @@ impl BuildOwner {
             // those surviving buckets against an empty live-scope set and
             // drain them globally now; otherwise no registry entry remains to
             // request another layout-service pass.
-            let live_scopes = FxHashSet::default();
+            let live_scopes = SlotSet::new();
             self.repartition_dirty(tree, &live_scopes);
             self.activate_build_target(BuildScopeTarget::Global);
             let drain = self.drain_prepared_build_target(
@@ -359,7 +365,7 @@ impl BuildOwner {
             FxHashMap::default();
         let mut live_entries: FxHashMap<ElementId, (RenderId, Rc<dyn BuildDuringLayoutCell>)> = // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
             FxHashMap::default();
-        let mut live_scopes = FxHashSet::default();
+        let mut live_scopes = SlotSet::new();
         pipeline.with(|pipeline_owner| {
             self.layout_builder_registry.with_entries_mut(|registry| {
                 registry.retain(|render_id, entry| {
@@ -451,7 +457,7 @@ impl BuildOwner {
             "service_layout_builders: draining isolated layout-builder scopes"
         );
 
-        let mut rebuilt_scopes = FxHashSet::default();
+        let mut rebuilt_scopes = SlotSet::new();
         for scope in &ready_scopes {
             self.activate_build_target(BuildScopeTarget::LayoutBuilder(*scope));
             let drain = self.drain_prepared_build_target(
@@ -468,7 +474,7 @@ impl BuildOwner {
         let unchanged_registrations = self.unchanged_layout_builder_registrations(&scheduled);
         pipeline.with_mut(|pipeline_owner| {
             for (element, (render_id, cell)) in &scheduled {
-                if rebuilt_scopes.contains(element)
+                if rebuilt_scopes.contains(*element)
                     && unchanged_registrations.contains(element)
                     && tree.contains(*element)
                     && pipeline_owner.render_tree().get(*render_id).is_some()
@@ -556,8 +562,8 @@ impl BuildOwner {
         // The scopes built by this fixpoint's passes so far, and by the pass
         // before the current one: the progress signal of `classify_pass`.
         // Per settle call, so the focus re-settle of a frame has its own.
-        let mut built_earlier: FxHashSet<ElementId> = FxHashSet::default();
-        let mut previous: FxHashSet<ElementId> = FxHashSet::default();
+        let mut built_earlier: SlotSet<ElementId> = SlotSet::new();
+        let mut previous: SlotSet<ElementId> = SlotSet::new();
         let converged: Result<
             FixpointEnd,
             flui_foundation::TreeError<flui_rendering::error::RenderError>,
@@ -607,7 +613,9 @@ impl BuildOwner {
                     |scope| tree.contains(scope),
                     |scope| tree.get(scope).and_then(crate::tree::ElementNode::parent),
                 );
-                built_earlier.extend(service.rebuilt_scopes.iter().copied());
+                for &scope in service.rebuilt_scopes.as_slice() {
+                    built_earlier.insert(scope);
+                }
                 previous = service.rebuilt_scopes;
                 Ok(outcome)
             })
@@ -864,7 +872,13 @@ mod tests {
                 .into_iter()
                 .collect();
         let classify = |rebuilt: &[usize], earlier: &[usize], previous: &[usize], lazy: bool| {
-            let set = |ids: &[usize]| ids.iter().map(|n| id(*n)).collect::<FxHashSet<ElementId>>();
+            let set = |ids: &[usize]| {
+                let mut set = SlotSet::new();
+                for n in ids {
+                    set.insert(id(*n));
+                }
+                set
+            };
             let service = LayoutBuilderService {
                 any_rebuilt: !rebuilt.is_empty(),
                 rebuilt_scopes: set(rebuilt),
@@ -916,8 +930,8 @@ mod tests {
                 classify_pass(
                     &LayoutBuilderService::of(true),
                     false,
-                    &FxHashSet::default(),
-                    &FxHashSet::default(),
+                    &SlotSet::new(),
+                    &SlotSet::new(),
                     |_| true,
                     |_| None,
                 ),

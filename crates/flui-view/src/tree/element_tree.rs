@@ -54,7 +54,7 @@ fn append_sparse_sliver_children(
     // A child the walk did not reach is a lazy sliver child when its parent
     // data says so; most parents have none, so membership in the walk's own
     // list is built only once the first such child turns up.
-    let mut desired_membership: Option<FxHashSet<RenderId>> = None;
+    let mut desired_membership: Option<flui_foundation::SlotSet<RenderId>> = None;
     let mut sparse_children: Vec<(usize, RenderId)> = Vec::new();
     for &child in parent_node.children() {
         let Some(child_node) = render_tree.get(child) else {
@@ -71,12 +71,13 @@ fn append_sparse_sliver_children(
             continue;
         };
         let desired = desired_membership.get_or_insert_with(|| {
-            desired_children
-                .iter()
-                .copied()
-                .collect::<FxHashSet<RenderId>>()
+            let mut desired = flui_foundation::SlotSet::new();
+            for &child in desired_children.iter() {
+                desired.insert(child);
+            }
+            desired
         });
-        if !desired.contains(&child) {
+        if !desired.contains(child) {
             sparse_children.push((index, child));
         }
     }
@@ -1476,10 +1477,11 @@ impl ElementTree {
 
         // Tree borrows are dropped; the checkout guards only the render tree.
         pipeline_owner.with_mut(|owner| {
-            let mut dirty_render_parents: FxHashSet<flui_foundation::RenderId> =
-                FxHashSet::default();
-            let mut membership_changed_parents: FxHashSet<flui_foundation::RenderId> =
-                FxHashSet::default();
+            let mut dirty_render_parents: flui_foundation::SlotSet<flui_foundation::RenderId> =
+                flui_foundation::SlotSet::new();
+            let mut membership_changed_parents: flui_foundation::SlotSet<
+                flui_foundation::RenderId,
+            > = flui_foundation::SlotSet::new();
             {
                 let render_tree = owner.render_tree_mut();
                 for &(render_id, desired) in &desired_parent {
@@ -1534,9 +1536,9 @@ impl ElementTree {
                 }
             }
 
-            for parent in dirty_render_parents {
+            for &parent in dirty_render_parents.as_slice() {
                 if owner.render_tree().contains(parent) {
-                    let impact = if membership_changed_parents.contains(&parent) {
+                    let impact = if membership_changed_parents.contains(parent) {
                         flui_rendering::RenderUpdateImpact::LAYOUT
                             | flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
                             | flui_rendering::RenderUpdateImpact::SEMANTICS
