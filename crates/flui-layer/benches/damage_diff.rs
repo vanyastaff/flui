@@ -65,7 +65,7 @@ fn damage_diff(c: &mut Criterion) {
         let mut differ = LayerDiffer::default();
         let mut flip = false;
         b.iter(|| {
-            flip = !flip;
+            flip.toggle();
             let frame = if flip { &after } else { &before };
             black_box(differ.diff(black_box(frame), SURFACE))
         });

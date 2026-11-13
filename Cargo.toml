@@ -660,6 +660,11 @@ unnecessary_unwrap = "warn"
 # `PresentDisposition` and the raster seam's outcome enums are, for ADR-0068
 # §2's reason), so its match needs no `_`. A foreign enum's site takes
 # `#[expect(..., reason = "...")]`.
+# A public enum is `#[non_exhaustive]` unless its closure is a decision, which
+# `#[expect(clippy::exhaustive_enums, reason = "...")]` on it states (ADR-0329).
+# A crate whose enums are not decided yet carries the `expect` at its root, and
+# `docs/gaps.md` lists those crates.
+exhaustive_enums = "warn"
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
 too_many_lines = "allow"
@@ -740,18 +745,6 @@ edge-exceptions = [
     { to = "flui-cupertino", exit = "ADR-0088", reason = "the optional `cupertino` catalog re-export" },
     { to = "flui-devtools", exit = "ADR-0088", reason = "the optional `devtools` re-export" },
     { to = "flui-material", exit = "ADR-0088", reason = "the optional `material` catalog re-export" },
-]
-
-# cargo-shear reports these as unlinked: `tests/thread_boundary_ui.rs` hands the
-# trybuild inputs to rustc by glob.
-[package.metadata.cargo-shear]
-ignored-paths = [
-    "tests/ui/thread_boundary/*.rs",
-    "tests/ui/thread_boundary/material/*.rs",
-    "tests/ui/thread_boundary/cupertino/*.rs",
-    "tests/ui/unstable_input/*.rs",
-    "tests/ui/unstable_windows/*.rs",
-    "tests/ui/native/*.rs",
 ]
 
 [lints]
@@ -964,6 +957,13 @@ required-features = ["material", "serde"]
 name = "acceptance_app_faults"
 path = "examples/acceptance_app_faults.rs"
 required-features = ["material", "serde"]
+
+# One typed Router: a push, a page popped with a result, and a dialog
+# (ADR-0330).
+[[example]]
+name = "navigation"
+path = "examples/navigation.rs"
+required-features = ["material"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles

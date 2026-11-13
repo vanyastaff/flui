@@ -242,7 +242,6 @@ classification, with the command above as its census:
 | widgets `interaction/listener.rs` | `on_pointer_{down,up,move,hover,cancel,signal}`, `on_pointer_pan_zoom_update` | event | no | pointer dispatch |
 | widgets `interaction/listener.rs` | `on_scroll_claim`, `on_pointer_pan_zoom_claim` (`-> EventPropagation`) | **query** | no | — |
 | widgets `interaction/mouse_region.rs` | `on_enter`, `on_hover`, `on_exit` | event | no | not yet audited |
-| widgets `navigator/navigator.rs` | `on_generate_route`, `on_unknown_route` (`-> Option<GeneratedRoute>`) | **query** | no | — |
 | widgets `navigator/pop_scope.rs` | `on_pop_invoked` | event | no | not yet audited |
 | widgets `scroll/page_view.rs` | `on_page_changed` | event | no (was yes) | the controller listener records the page; delivered on the local post-frame lane |
 | widgets `scroll/refresh_indicator.rs` | `on_refresh` | event | no | not yet audited |

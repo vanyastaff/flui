@@ -15,6 +15,7 @@ use std::time::Duration;
 
 /// How code changes are applied during development.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ReloadStrategy {
     /// In-process dynamic library swap via [`crate::HotReloadDriver`].
     ///

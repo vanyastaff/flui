@@ -4,6 +4,10 @@
 /// rotations exact (no floating-point drift) and cheap to compose.
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a quarter turn is zero, one, two or three of them"
+)]
 pub enum QuarterTurns {
     /// No rotation.
     #[default]

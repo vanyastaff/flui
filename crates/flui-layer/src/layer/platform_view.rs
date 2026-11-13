@@ -23,6 +23,7 @@ impl PlatformViewId {
 
 /// Hit test behavior for platform views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
+#[non_exhaustive]
 pub enum PlatformViewHitTestBehavior {
     /// The platform view is opaque to hit testing - all hits are consumed.
     #[default]

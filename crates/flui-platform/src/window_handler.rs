@@ -12,7 +12,7 @@ use crate::{DispatchEventResult, FrameRequest, PlatformInput};
 
 /// What a [`WindowHandler`] answers when its window is asked to close.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a close request is granted or refused; a host matches both"
 )]
@@ -44,7 +44,7 @@ pub enum FrameOutcome {
 /// Which way the surface behind a window changes, as
 /// [`WindowHandler::surface_changed`] reports it (ADR-0063 decision 6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a surface is released or rebuilt; a renderer matches both"
 )]

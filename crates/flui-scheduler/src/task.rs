@@ -43,6 +43,7 @@ fn next_task_id() -> Option<TaskId> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum Priority {
     /// Background/idle work (GC, telemetry). Numeric value 0.
     Idle = 0,

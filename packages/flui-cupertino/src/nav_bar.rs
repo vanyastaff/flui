@@ -27,8 +27,8 @@
 //!
 //! - **Automatic leading/middle** (a back chevron and title implied from the
 //!   previous route's title). No consumer route carries a `title` to imply
-//!   from yet in this crate (`cupertino_page_route`'s own `title` is itself
-//!   deferred — see `route.rs`'s module docs). `leading`/`middle` are always
+//!   from yet: a Router page carries no `title` (`CupertinoPageRoute.title` is
+//!   not modelled). `leading`/`middle` are always
 //!   exactly what the caller supplies.
 //! - **Large title / `bottom`** — the expanded large-title
 //!   layout and the bottom-accessory slot. This type ships the collapsed

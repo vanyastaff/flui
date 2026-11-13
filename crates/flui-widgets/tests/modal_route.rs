@@ -28,8 +28,9 @@ use flui_view::prelude::*;
 use flui_widgets::__test_access::{
     ModalRoute, NavigatorProbe as _, OverlayEntryProbe as _, TransitionHandle,
 };
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, SimpleRoute};
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{Navigator, NavigatorHandle, RouteId, SimpleRoute};
+use flui_widgets::navigator::RouteId;
 
 use crate::common::harness::{Harness, mount};
 
@@ -60,7 +61,7 @@ fn plain_page() -> SimpleRoute<i32> {
 
 /// A navigator with `bottom` seeded, mounted and settled.
 fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
-    let handle = NavigatorHandle::new();
+    let handle = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     handle.seed_initial(plain_page());
     let harness = mount(Navigator::new(handle.clone()));
     let bottom = handle.route_ids()[0];

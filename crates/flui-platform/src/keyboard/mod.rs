@@ -88,7 +88,7 @@ impl From<NamedKey> for Key {
 
 /// Whether the key went down or came up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(clippy::exhaustive_enums, reason = "a key goes down or comes up")]
+#[expect(clippy::exhaustive_enums, reason = "a key goes down or comes up")]
 pub enum KeyState {
     /// The key was pressed, or auto-repeated while held ([`KeyEvent::repeat`]).
     Down,
@@ -98,7 +98,7 @@ pub enum KeyState {
 
 /// Which of several keys with the same meaning was used: the W3C `location` value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "the W3C `KeyboardEvent.location` values, which no platform extends"
 )]
@@ -116,7 +116,7 @@ pub enum Location {
 
 /// Whether a key-down is the first press or an auto-repeat of a held key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a key-down is the first press or a repeat"
 )]
@@ -149,7 +149,7 @@ pub enum KeyRelease {
 /// A shortcut must not fire on a key that arrives during a composition: the input method owns
 /// it (Enter commits the composition, it does not submit a form).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "an input method was composing or it was not"
 )]

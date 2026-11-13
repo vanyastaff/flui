@@ -1,5 +1,5 @@
 //! The plain popup menu: shows a [`MenuRequest`] as a popup route on the
-//! nearest [`Navigator`](crate::Navigator), placed at the pointer that opened
+//! nearest navigator, placed at the pointer that opened
 //! it or below its anchor, with a focus trap, the focus restored on close,
 //! Escape and a tap outside as dismissal, and the page below hidden from
 //! assistive technology while it is open. [`ContextMenuArea`](crate::ContextMenuArea)

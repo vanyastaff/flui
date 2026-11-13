@@ -91,6 +91,7 @@
 /// the cross-platform contract and the platform mechanism it maps onto read as
 /// one thing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(clippy::exhaustive_enums, reason = "a field is published or redacted")]
 pub enum FieldPrivacy {
     /// The value is published verbatim.
     Public,
@@ -104,6 +105,10 @@ pub enum FieldPrivacy {
 /// because they cannot embed free-form user content; anything rendered from a
 /// string or a `Debug`/`Display` implementation can.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "`tracing`'s `Visit` protocol records a scalar or a rendering that can carry free text"
+)]
 pub enum FieldKind {
     /// A numeric or boolean value (`record_i64`, `record_u64`, `record_i128`,
     /// `record_u128`, `record_f64`, `record_bool`).
@@ -120,6 +125,7 @@ pub enum FieldKind {
 /// third party's fully interpolated string. Named fields classify identically
 /// under both origins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum EventOrigin {
     /// Emitted through `tracing`'s own macros. The callsite can carry field
     /// markers and is subject to this workspace's fields-not-messages rule, so

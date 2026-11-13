@@ -87,19 +87,24 @@ The `component_contracts` family checks the labelled tap button,
 `long_press_only_button_announces_enabled`, and
 `disabled_button_announces_disabled` through the emitted accessibility tree.
 
-### The page route plays the shared parallax slide
+### The app plays the shared parallax slide for its routes
 
-`cupertino_page_route` builds a `PageRoute` with `flui-widgets`'
-`ParallaxPageTransition` through the same `PageTransitionBuilder` hook a theme
-installs (ADR-0221). The slide is not this package's copy: Material's
-Apple-platform default plays the same type, and official packages depend only
-on `flui-sdk`, so the one shared implementation lives a layer down (ADR-0221
-D4). Its leading-edge shadow is a `DecoratedBoxTransition` on the route's own
-progress, painted only while the page moves.
+`CupertinoApp` installs a `PageTransitions` whose page builder is
+`flui-widgets`' `ParallaxPageTransition` (ADR-0221), so a page a `Router`
+places, given no transitions of its own, slides in as a `CupertinoPage` does.
+The slide is not this package's copy: Material's Apple-platform default plays
+the same type, and official packages depend only on `flui-sdk`, so the one
+shared implementation lives a layer down (ADR-0221 D4). Its leading-edge
+shadow is a `DecoratedBoxTransition` on the route's own progress, painted only
+while the page moves. The route chrome of `CupertinoPageRoute`, the
+transition-only barrier dim and the edge-swipe back gesture, belongs to a
+route and not to the ambient hook, so a Router's pages have neither yet
+([gaps](../../docs/gaps.md#a-router-page-carries-no-route-chrome)).
 
+`cupertino_app_slides_a_page_in_from_off_the_right_edge_over_500ms`,
 `cupertino_route_casts_its_edge_shadow_only_while_moving` and
-`cupertino_route_does_not_slide_under_reduced_motion` pin the route through
-this package's public entry point.
+`cupertino_route_does_not_slide_under_reduced_motion` pin the slide through
+`CupertinoApp::router`.
 
 ### The page control is the shared indicator in the iOS look
 
