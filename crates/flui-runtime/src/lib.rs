@@ -101,7 +101,7 @@ pub use input_tap::{
 pub use recording_wire::Privacy;
 
 /// The input recording's wire conversions: the seam `flui-testing`'s recording format
-/// frames and replays through. Not part of an application's API.
+/// frames and replays through. Not part of an application's API and carries no semver promise.
 #[doc(hidden)]
 pub mod __runtime {
     #[cfg(feature = "testing")]
