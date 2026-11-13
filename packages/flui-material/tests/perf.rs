@@ -13,22 +13,32 @@
 //! `FLUI_PERF_OUT=<dir>` writes each record to `<dir>/<scenario>.toml`
 //! before asserting, and a lower record is copied into the baseline by hand.
 //!
+//! The plateau test at the end holds the heap level: a Material application navigated and
+//! dropped again and again leaves no more bytes live each time
+//! (`flui_testing::heap::assert_rounds_plateau`).
+//!
 //! A target of its own, not a module of `tests/main.rs`: it pins the
 //! process-global font system and installs the kit's counting global
 //! allocator.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use flui_material::{
-    Checkbox, Chip, ElevatedButton, FilterChip, InkWell, NavigationBar, NavigationDestination,
-    Radio, Switch, Tab, TabBar, TabController, Theme, ThemeData,
+    AlertDialog, AppBar, Checkbox, Chip, ElevatedButton, FilterChip, InkWell, MaterialApp,
+    NavigationBar, NavigationDestination, Radio, Scaffold, Switch, Tab, TabBar, TabController,
+    TextButton, Theme, ThemeData, show_dialog,
 };
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
+use flui_sdk::view::{AsyncDriver, Signal, TaskToken, WriterSource};
 use flui_sdk::widgets::icon::IconData;
-use flui_sdk::widgets::{Icon, Text};
+use flui_sdk::widgets::{Column, Icon, PageHandle, Routable, Router, Text};
 use flui_testing::control_cost::{
     ControlCost, control_alone_under, control_over_text, control_over_text_under,
 };
-use flui_testing::heap::CountingAllocator;
+use flui_testing::heap::{CountingAllocator, assert_rounds_plateau};
+use flui_testing::{Tester, find};
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -272,4 +282,124 @@ fn perf_navigation_bar_alone() {
         "a navigation bar adds {} render nodes",
         cost.render_nodes
     );
+}
+
+/// The routes of the application a plateau round drives.
+#[derive(Routable, Clone, Debug, PartialEq)]
+enum Mail {
+    #[route("/")]
+    Inbox,
+    #[route("/message/:id")]
+    Message { id: u32 },
+}
+
+/// The inbox opens a message and shows what the message page answered.
+#[derive(Clone, StatefulView)]
+struct Inbox;
+
+struct InboxState {
+    answer: Signal<String>,
+    writer: WriterSource,
+    driver: Option<AsyncDriver>,
+    /// The task awaiting the open message's result; dropping it cancels it.
+    waiting: Rc<RefCell<Option<TaskToken>>>,
+}
+
+impl StatefulView for Inbox {
+    type State = InboxState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        InboxState {
+            answer: ctx.signal("Open the message".to_owned()),
+            writer: ctx.writer_source(),
+            driver: ctx.async_driver(),
+            waiting: Rc::default(),
+        }
+    }
+}
+
+impl ViewState<Inbox> for InboxState {
+    fn build(&self, _view: &Inbox, ctx: &dyn BuildContext) -> impl IntoView {
+        let router = Router::<Mail>::of(ctx).expect("the inbox is a page of the Router");
+        let (answer, writer, driver) = (self.answer, self.writer.clone(), self.driver.clone());
+        let waiting = Rc::clone(&self.waiting);
+        let open = move |_ctx: &mut EventContext<'_>| {
+            let (Ok(result), Some(driver)) = (
+                router.push_for_result::<bool>(Mail::Message { id: 1 }),
+                &driver,
+            ) else {
+                return;
+            };
+            let writer = writer.clone();
+            let task = driver.spawn_local(Box::pin(async move {
+                let text = match result.await {
+                    Ok(Some(true)) => "Archived",
+                    _ => "Kept",
+                };
+                let _ = writer.write(|ctx| answer.set(ctx, text.to_owned()));
+            }));
+            *waiting.borrow_mut() = Some(task);
+        };
+        Scaffold::new()
+            .app_bar(AppBar::new().title(Text::new("Inbox")))
+            .body(Column::new((
+                Text::new(answer.get(ctx)),
+                TextButton::new(Text::new("Open message 1")).on_pressed(open),
+                Checkbox::new(false),
+                Switch::new(true),
+            )))
+    }
+}
+
+/// A message: archiving it asks first, in a dialog, then pops the page with `true`.
+#[derive(Clone, StatelessView)]
+struct Message {
+    id: u32,
+}
+
+impl StatelessView for Message {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let page = PageHandle::of(ctx).expect("a message is a page of the Router");
+        let ask = move |_ctx: &mut EventContext<'_>| {
+            let message = page.clone();
+            let _dialog = show_dialog::<(), _, _>(&page, move |ctx| {
+                let dialog = PageHandle::of(ctx).expect("the dialog is a route");
+                let archive = message.clone();
+                AlertDialog::new()
+                    .title(Text::new("Archive this message?"))
+                    .actions(vec![
+                        TextButton::new(Text::new("Archive it"))
+                            .on_pressed(move |_ctx| {
+                                let _ = dialog.pop();
+                                let _ = archive.pop_with(true);
+                            })
+                            .boxed(),
+                    ])
+            });
+        };
+        Scaffold::new()
+            .app_bar(AppBar::new().title(Text::new(format!("Message {}", self.id))))
+            .body(ElevatedButton::new(Text::new("Archive")).on_pressed(ask))
+    }
+}
+
+/// A Material application with a Router: a page pushed for a result, a dialog over it, both
+/// popped, the awaiting task writing the answer back. Routes, overlays, transitions, ink and
+/// the async driver each hold `Rc`s to the others; a cycle among them would leave a page behind
+/// every round (`flui_testing::heap::assert_rounds_plateau`).
+#[test]
+fn a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap() {
+    assert_rounds_plateau(|| {
+        let router = Router::new(Mail::Inbox, |route: &Mail, _ctx| match route {
+            Mail::Inbox => Inbox.boxed(),
+            Mail::Message { id } => Message { id: *id }.boxed(),
+        });
+        let mut tester = Tester::mount(MaterialApp::router(router));
+        tester.tap(&find::button("Open message 1"));
+        tester.expect(find::text("Message 1")).to_exist();
+        tester.tap(&find::button("Archive"));
+        tester.expect(find::button("Archive it")).to_exist();
+        tester.tap(&find::button("Archive it"));
+        tester.expect(find::text("Archived")).to_exist();
+    });
 }

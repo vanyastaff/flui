@@ -122,3 +122,47 @@ unsafe impl GlobalAlloc for CountingAllocator {
         new_ptr
     }
 }
+
+/// Rounds [`assert_rounds_plateau`] runs before it starts comparing: the first ones fill what a
+/// process keeps for good (a font system, shaped-text and type tables, thread-local pools).
+const PLATEAU_WARM_UP: usize = 3;
+/// Rounds [`assert_rounds_plateau`] compares.
+const PLATEAU_ROUNDS: usize = 8;
+
+/// Runs `round` again and again on this thread and panics when its live heap keeps growing:
+/// the last round has to leave no more bytes live than the last warm-up round did.
+///
+/// A round mounts an application, drives it and drops it. Everything an owner thread holds is
+/// `Rc` (ADR-0323 §1), so a cycle between an element, its state, a listener and a signal frees
+/// nothing, and no tool reports it: each round leaves one more tree behind. The counters are
+/// per thread, so a round whose application frees on another thread what this one allocated
+/// reads as a fall, never as growth.
+///
+/// # Panics
+///
+/// When the rounds leave more bytes live each time, and when no round allocated anything:
+/// the test target has not installed [`CountingAllocator`], and every reading is zero.
+#[track_caller]
+pub fn assert_rounds_plateau(mut round: impl FnMut()) {
+    let start = HeapCounts::now();
+    let live: Vec<i64> = (0..PLATEAU_WARM_UP + PLATEAU_ROUNDS)
+        .map(|_| {
+            round();
+            HeapCounts::now().since(start).live_bytes.cast_signed()
+        })
+        .collect();
+    assert!(
+        HeapCounts::now().since(start).allocations > 0,
+        "no round allocated: the test target does not install `CountingAllocator`"
+    );
+    let settled = live.get(PLATEAU_WARM_UP - 1..).unwrap_or_default();
+    let (Some(first), Some(last)) = (settled.first(), settled.last()) else {
+        return;
+    };
+    assert!(
+        last <= first,
+        "the last {PLATEAU_ROUNDS} rounds left {} more bytes live; after each round, against \
+         the start: {live:?}",
+        last - first
+    );
+}

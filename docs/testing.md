@@ -590,6 +590,21 @@ flui-widgets' suite on every PR; the `perf-gates` job runs `perf --check` and
 `perf --instructions --check` in the `full` lane, and `perf --check` alone on a pull request
 whose diff reaches code that runs for every node of a frame (`perf_required`, below).
 
+The perf targets of flui-widgets and flui-material also hold the heap level:
+`flui_testing::heap::assert_rounds_plateau`
+runs a round (mount an application, drive it, drop it) again and again and
+fails when the test thread's live bytes keep growing. An owner thread holds
+its state in `Rc` (ADR-0323 §1), so a cycle through an element, a state, a
+listener or a signal frees nothing and no tool reports it; each round would
+leave one more tree behind.
+`an_app_mounted_driven_and_dropped_again_and_again_holds_no_more_heap`
+(flui-widgets) runs eager rows under signals, a scrolled lazy list, presses
+through the agent and a running transition;
+`a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap`
+(flui-material) pushes a page for a result, opens a dialog over it and pops
+both, with a task awaiting the result. A widget family that keeps state of a
+new kind (a controller, an overlay, a route) adds its round there.
+
 `perf --size` measures what an application costs before it does anything,
 against `perf/size.toml`: the packages of the facade's default graph on Linux,
 Windows, macOS, Android and wasm32 (`cargo tree -p flui`, each name and version
