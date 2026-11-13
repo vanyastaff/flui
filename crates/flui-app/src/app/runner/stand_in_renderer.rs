@@ -44,8 +44,8 @@ struct Device {
     rebuild_attempts: u32,
     /// How many of the next frames, of any window, panic.
     panics_ahead: u32,
-    /// Whether the next resize of any window panics.
-    panic_resize: bool,
+    /// How many of the next resizes, of any window, panic.
+    panic_resizes: u32,
     /// Whether the next slot's attach is refused.
     refuse_attach: bool,
     /// The largest side a slot can be sized to.
@@ -98,10 +98,10 @@ impl StandInRenderer {
         self.shared.lock().device.panics_ahead = frames;
     }
 
-    /// Make the next resize, of any window of the run, panic in the
+    /// Make the next `resizes` resizes, of any window of the run, panic in the
     /// renderer, as a driver reconfiguring a surface can.
-    pub fn panic_in_next_resize(&self) {
-        self.shared.lock().device.panic_resize = true;
+    pub fn panic_in_next_resizes(&self, resizes: u32) {
+        self.shared.lock().device.panic_resizes = resizes;
     }
 
     /// Refuse the next window's slot, as a GPU that cannot present to that
@@ -204,7 +204,8 @@ impl SlotBackend for StandInBackend {
 
     fn resize(&mut self, _slot: SlotId, size: DeviceSize) -> EngineResult<()> {
         let mut shared = self.shared.lock();
-        if std::mem::take(&mut shared.device.panic_resize) {
+        if shared.device.panic_resizes > 0 {
+            shared.device.panic_resizes -= 1;
             drop(shared);
             panic!("injected panic in a stand-in resize");
         }

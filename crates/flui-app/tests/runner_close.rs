@@ -959,11 +959,6 @@ pub(crate) fn a_panicking_frame_is_reported_and_the_window_draws_again() {
     started.renderer.panic_in_next_frames(8);
     observed.schedule_rebuild();
     started.run.run_owner_turn();
-    assert_eq!(
-        observed.frame_panics.load(Ordering::SeqCst),
-        1,
-        "the renderer's panic was reported to the frame-failure handler"
-    );
     let paints = observed.paints.load(Ordering::SeqCst);
     // The loop's own deadlines pass with nothing asked of the window: the
     // panicked frame is not retried into the same panic.
@@ -977,7 +972,7 @@ pub(crate) fn a_panicking_frame_is_reported_and_the_window_draws_again() {
     assert_eq!(
         observed.frame_panics.load(Ordering::SeqCst),
         1,
-        "a panicked frame is not retried into the same panic"
+        "the panic was reported once, and its frame not retried into the same panic"
     );
     assert_eq!(
         observed.paints.load(Ordering::SeqCst),
@@ -1099,7 +1094,7 @@ pub(crate) fn a_panicking_resize_is_reported_and_the_window_reaches_its_size() {
     let observed = Observed::default();
     let started = start(&observed);
     let presented = started.renderer.frames_presented();
-    started.renderer.panic_in_next_resize();
+    started.renderer.panic_in_next_resizes(1);
     started.window.simulate_resize(700.0, 500.0);
     started.run.run_owner_turn();
     assert_eq!(
@@ -1119,6 +1114,42 @@ pub(crate) fn a_panicking_resize_is_reported_and_the_window_reaches_its_size() {
     assert!(
         started.renderer.frames_presented() > presented,
         "the window drew at its new size after the panic"
+    );
+    join_ok_after_close(started);
+}
+
+/// A resize the renderer panics on every time is retried once, not on every
+/// frame after it.
+pub(crate) fn a_resize_that_keeps_panicking_is_not_retried_forever() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.renderer.panic_in_next_resizes(8);
+    started.window.simulate_resize(700.0, 500.0);
+    started.run.run_owner_turn();
+    for _ in 0..4 {
+        let Some(deadline) = started.run.wake_deadline() else {
+            break;
+        };
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        started.run.run_owner_turn();
+    }
+    assert_eq!(
+        observed.frame_panics.load(Ordering::SeqCst),
+        2,
+        "the resize's panic and its one retry's were reported, and no more"
+    );
+    assert_eq!(
+        started.run.wake_deadline(),
+        None,
+        "no retry of the panicking resize is armed"
+    );
+    let presented = started.renderer.frames_presented();
+    started.renderer.panic_in_next_resizes(0);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the window's next change draws at its size"
     );
     join_ok_after_close(started);
 }
@@ -1209,6 +1240,10 @@ fn runner_close() {
             (
                 "a_panicking_resize_is_reported_and_the_window_reaches_its_size",
                 a_panicking_resize_is_reported_and_the_window_reaches_its_size,
+            ),
+            (
+                "a_resize_that_keeps_panicking_is_not_retried_forever",
+                a_resize_that_keeps_panicking_is_not_retried_forever,
             ),
         ],
     );
