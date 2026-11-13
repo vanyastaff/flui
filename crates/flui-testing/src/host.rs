@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
@@ -1497,11 +1498,79 @@ impl HeadlessHost {
         self.close_presentation(window.0)
     }
 
+    /// Whether `window` has closed: at once by [`request_close`](Self::request_close),
+    /// by a pump after its close's last hold was released or a decision
+    /// closed it, or because it is gone. A close refused and still recorded
+    /// is not one.
+    #[must_use]
+    pub fn is_closed(&self, window: HeadlessWindowId) -> bool {
+        self.ui_runtime
+            .presentation_closing_for_test(window.0)
+            .unwrap_or(true)
+    }
+
+    /// The session ends now, in the order a runner carries it out: the
+    /// session-ended notice reaches every subscriber, then every window
+    /// closes and what the documents published is written, as in
+    /// [`quit_now`](Self::quit_now).
+    ///
+    /// Each step runs whatever an earlier one's user code did: the first
+    /// panic resumes once the write is done.
+    pub(crate) fn end_session_now(&mut self) {
+        let mut first = FirstPanic::new();
+        first.contain(|| {
+            self.ui_runtime
+                .deliver_host_notice(&flui_platform::HostNotice::SessionEnded);
+        });
+        self.quit_into(&mut first);
+        first.resume();
+    }
+
+    /// The application quits now: each window commits its composition and
+    /// closes past every hold, so its Detached observers publish what they
+    /// keep, and then what the documents published is written. A write a
+    /// storage holds is not waited for, since nothing on this thread can
+    /// finish it: it stays with the storage, which decides it when its hold
+    /// is released or dropped, and what any document still owes then is
+    /// lost, as at an exit the write outlasts.
+    ///
+    /// Each step runs whatever an earlier one's user code did: the first
+    /// panic resumes once the write is done.
+    pub(crate) fn quit_now(&mut self) {
+        let mut first = FirstPanic::new();
+        self.quit_into(&mut first);
+        first.resume();
+    }
+
+    /// Close every window, then write what the documents published without
+    /// waiting for a held write; a panic goes to `first`.
+    fn quit_into(&mut self, first: &mut FirstPanic) {
+        for id in self.presentation_ids() {
+            first.contain(|| self.ui_runtime.commit_composition_for_close(id));
+            first.contain(|| self.close_presentation(id));
+        }
+        first.contain(|| self.write_published());
+    }
+
+    /// Run the queued registry writes until none finishes, then write what
+    /// every document still owes and run what that queued. A write the
+    /// storage holds is not waited for: nothing on this thread can finish it,
+    /// and while any write is in flight the flush starts none, so what a
+    /// document still owes then, a retry included, is not written.
+    fn write_published(&self) {
+        self.run_flush_writes();
+        if let Some(flush) = &self.flush {
+            let _report = flush.flush_within(std::time::Instant::now());
+        }
+        self.run_flush_writes();
+    }
+
     /// One phase of the user's session ending, as the operating system reports
     /// it (ADR-0260). `Query` asks every window's guard for the session's
     /// end and answers [`Block`](SessionEndAnswer::Block) when one refuses;
     /// `Cancelled` withdraws only those session-end records; `Ending` writes
-    /// what the documents published, within [`SESSION_END_BUDGET`].
+    /// what the documents published, not waiting for a write the storage
+    /// holds.
     pub fn end_session(&self, phase: SessionEndPhase) -> SessionEndAnswer {
         let windows = self.presentation_ids();
         match phase {
@@ -1521,11 +1590,7 @@ impl HeadlessHost {
                 SessionEndAnswer::Proceed
             }
             SessionEndPhase::Ending => {
-                self.run_flush_writes();
-                if let Some(flush) = &self.flush {
-                    let _report =
-                        flush.flush_within(std::time::Instant::now() + SESSION_END_BUDGET);
-                }
+                self.write_published();
                 SessionEndAnswer::Proceed
             }
             // A phase added later asks this host nothing.
@@ -2257,16 +2322,25 @@ impl HeadlessHost {
         }
     }
 
-    /// Poll every queued registry write once, keeping those still waiting
-    /// for their storage. The queue's lock is not held while a write runs.
+    /// Poll the queued registry writes, keeping those still waiting for their
+    /// storage, until a pass finishes none: a finished write may queue the
+    /// revision published behind it, which the next pass runs. The queue's
+    /// lock is not held while a write runs.
     fn run_flush_writes(&self) {
-        let writes = std::mem::take(&mut *self.flush_writes.lock());
         let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
-        let waiting: Vec<FlushWrite> = writes
-            .into_iter()
-            .filter_map(|mut write| write.as_mut().poll(&mut ctx).is_pending().then_some(write))
-            .collect();
-        self.flush_writes.lock().extend(waiting);
+        loop {
+            let writes = std::mem::take(&mut *self.flush_writes.lock());
+            let queued = writes.len();
+            let waiting: Vec<FlushWrite> = writes
+                .into_iter()
+                .filter_map(|mut write| write.as_mut().poll(&mut ctx).is_pending().then_some(write))
+                .collect();
+            let finished_any = waiting.len() < queued;
+            self.flush_writes.lock().extend(waiting);
+            if !finished_any {
+                return;
+            }
+        }
     }
 
     /// Close presentation `id`: a secondary window's presentation is closed

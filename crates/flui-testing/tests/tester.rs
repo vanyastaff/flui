@@ -365,3 +365,535 @@ fn a_drag_from_a_point_presses_there_and_moves_by_the_offset() {
         "one release, at start + offset"
     );
 }
+
+/// What a focused element heard: each key event as `down`/`up`/`repeat`, its
+/// key, and `^` for each of Control and Shift held.
+fn key_log() -> (Tester, Rc<std::cell::RefCell<Vec<String>>>) {
+    use flui_interaction::KeyEventResult;
+    use flui_platform::keyboard::{Key, KeyRepeat, KeyState, Modifiers};
+
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let heard = Rc::clone(&log);
+    let t = Tester::mount(
+        flui_widgets::Focus::new(SizedBox::new(40.0, 40.0))
+            .autofocus(true)
+            .on_key_event(move |_ctx, event| {
+                let state = match (event.state(), event.repeat()) {
+                    (KeyState::Down, KeyRepeat::AutoRepeat) => "repeat",
+                    (KeyState::Down, _) => "down",
+                    _ => "up",
+                };
+                let key = match &event.key {
+                    Key::Named(named) => named.as_str().to_owned(),
+                    Key::Character(text) => text.as_str().to_owned(),
+                    other => format!("{other:?}"),
+                };
+                let held = [Modifiers::CONTROL, Modifiers::SHIFT]
+                    .into_iter()
+                    .filter(|modifier| event.modifiers.contains(*modifier))
+                    .count();
+                heard
+                    .borrow_mut()
+                    .push(format!("{state} {key}{}", "^".repeat(held)));
+                KeyEventResult::Handled
+            }),
+    );
+    (t, log)
+}
+
+#[test]
+fn press_keys_presses_each_chord_in_turn_and_releases_it_in_reverse() {
+    let (mut t, log) = key_log();
+    t.press_keys(&["Control+a", "Enter", "Shift++"]);
+    assert_eq!(
+        *log.borrow(),
+        [
+            "down Control^",
+            "down a^",
+            "up a^",
+            "up Control",
+            "down Enter",
+            "up Enter",
+            "down Shift^",
+            "down +^",
+            "up +^",
+            "up Shift",
+        ]
+    );
+}
+
+#[test]
+fn a_held_key_repeats_when_pressed_again_and_modifies_chords_meanwhile() {
+    let (mut t, log) = key_log();
+    t.key_down("Shift");
+    t.press_keys(&["Tab"]);
+    t.key_down("Shift");
+    t.key_up("Shift");
+    t.key_up("Shift");
+    assert_eq!(
+        *log.borrow(),
+        [
+            "down Shift^",
+            "down Tab^",
+            "up Tab^",
+            "repeat Shift^",
+            "up Shift",
+        ],
+        "a second press of a held key is its auto-repeat, and lifting a key that is up sends \
+         nothing"
+    );
+}
+
+#[test]
+fn a_chord_naming_a_held_key_leaves_it_held() {
+    let (mut t, log) = key_log();
+    t.key_down("Shift");
+    t.press_keys(&["Shift+Tab", "Tab"]);
+    t.key_up("Shift");
+    assert_eq!(
+        *log.borrow(),
+        [
+            "down Shift^",
+            "down Tab^",
+            "up Tab^",
+            "down Tab^",
+            "up Tab^",
+            "up Shift",
+        ],
+        "the chord neither repeats nor releases the held Shift, so it modifies both Tabs"
+    );
+}
+
+#[test]
+fn a_chord_with_an_unnamed_key_presses_nothing() {
+    let (mut t, log) = key_log();
+    let error = t
+        .try_press_keys(&["Enter", "Control+"])
+        .expect_err("an empty key is refused");
+    assert!(matches!(error, TestError::Agent(_)), "{error:?}");
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+}
+
+/// A field holding `Trip `, focused by a tap.
+fn title_field() -> Tester {
+    let field = flui_widgets::EditableText::new(
+        flui_widgets::TextEditingController::with_text("Trip "),
+        flui_interaction::FocusNode::with_debug_label("title"),
+    );
+    let mut t = Tester::mount(Center::new().child(SizedBox::new(300.0, 40.0).child(field)));
+    t.tap(&find::role(flui_testing::Role::TextInput));
+    t
+}
+
+/// The field's editable render object's `name` field, as an agent inspects it.
+fn editable_field(t: &mut Tester, name: &str) -> Option<flui_testing::InspectValue> {
+    fn find_editable(nodes: &[flui_testing::InspectNode]) -> Option<&flui_testing::InspectNode> {
+        nodes.iter().find_map(|node| {
+            if node.kind == "RenderEditable" {
+                Some(node)
+            } else {
+                find_editable(&node.children)
+            }
+        })
+    }
+    let reading = t.inspect_render();
+    let node = find_editable(&reading.roots).expect("the field has an editable render object");
+    node.fields
+        .iter()
+        .find(|field| field.name == name)
+        .map(|field| field.value.clone())
+}
+
+#[test]
+fn a_composition_shows_in_the_focused_field_until_it_is_committed() {
+    use flui_testing::InspectValue::{Bool, Uint};
+
+    let mut t = title_field();
+    t.compose("とう", Some(1));
+    t.expect(find::role(flui_testing::Role::TextInput))
+        .to_have_value("Trip とう");
+    assert_eq!(editable_field(&mut t, "composing_start"), Some(Uint(5)));
+    assert_eq!(editable_field(&mut t, "composing_end"), Some(Uint(11)));
+    assert_eq!(
+        editable_field(&mut t, "caret_byte_offset"),
+        Some(Uint(8)),
+        "the caret is one character into the composition"
+    );
+    assert_eq!(editable_field(&mut t, "show_caret"), Some(Bool(true)));
+
+    t.compose("東京", None);
+    assert_eq!(
+        editable_field(&mut t, "show_caret"),
+        Some(Bool(false)),
+        "a composition without a caret hides it"
+    );
+
+    t.commit_composition("東京");
+    t.expect(find::role(flui_testing::Role::TextInput))
+        .to_have_value("Trip 東京");
+    assert_ne!(editable_field(&mut t, "composing_start"), Some(Uint(5)));
+}
+
+#[test]
+fn a_cancelled_composition_leaves_the_text_as_it_was() {
+    let mut t = title_field();
+    t.compose("abc", Some(3));
+    t.cancel_composition();
+    t.expect(find::role(flui_testing::Role::TextInput))
+        .to_have_value("Trip ");
+
+    let error = t
+        .try_compose("ab", Some(3))
+        .expect_err("a caret past the composition is refused");
+    assert!(matches!(error, TestError::Agent(_)), "{error:?}");
+}
+
+/// One line of text, kept in the window's storage.
+#[derive(Debug, PartialEq)]
+struct Note(String);
+
+impl flui_view::persist::Document for Note {
+    const NAME: flui_platform::StorageName = flui_platform::StorageName::from_static("note");
+    const VERSION: u32 = 1;
+    const MAX_BYTES: u64 = 64;
+
+    fn initial() -> Self {
+        Self(String::new())
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        self.0.clone().into_bytes()
+    }
+
+    fn decode(_version: u32, body: &[u8]) -> Result<Self, flui_view::persist::DecodeError> {
+        String::from_utf8(body.to_vec())
+            .map(Self)
+            .map_err(|error| flui_view::persist::DecodeError::new(error.to_string()))
+    }
+}
+
+/// What a [`Notebook`] took in `init_state`: its document, its window's close
+/// guard and a hold over the close when it was asked to take one.
+#[derive(Default)]
+struct Opened {
+    note: Option<flui_view::persist::Persisted<Note>>,
+    hold: Option<flui_view::CloseHold>,
+    lifecycle: Vec<flui_view::AppLifecycleState>,
+    _observation: Option<flui_view::LifecycleSubscription>,
+    _notices: Option<flui_view::HostNoticeSubscription>,
+}
+
+/// Opens [`Note`] and the window's close guard, and records the window's
+/// lifecycle; each mount, a restart's included, refills `opened`.
+#[derive(Clone, StatefulView)]
+struct Notebook {
+    hold_close: bool,
+    /// Written into the note when the window detaches.
+    save_on_detach: Option<&'static str>,
+    /// Panics when the session-ended notice arrives and when the window
+    /// detaches.
+    panic_at_session_end: bool,
+    opened: Rc<std::cell::RefCell<Opened>>,
+}
+
+struct NotebookState(Notebook);
+
+impl StatefulView for Notebook {
+    type State = NotebookState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        NotebookState(self.clone())
+    }
+}
+
+impl ViewState<Notebook> for NotebookState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let guard = ctx
+            .close_guard()
+            .expect("a hosted window has a close guard");
+        let lifecycle = Rc::clone(&self.0.opened);
+        let save_on_detach = self.0.save_on_detach;
+        let panic_at_session_end = self.0.panic_at_session_end;
+        let notices = ctx
+            .lifecycle_handle()
+            .expect("a hosted window has a lifecycle")
+            .subscribe_notices(move |notice| {
+                assert!(
+                    !(panic_at_session_end
+                        && matches!(notice, flui_platform::HostNotice::SessionEnded)),
+                    "a subscriber fails at the session's end"
+                );
+            })
+            .expect("the window is open");
+        let (_, observation) = ctx
+            .lifecycle_handle()
+            .expect("a hosted window has a lifecycle")
+            .subscribe(move |state| {
+                if state == flui_view::AppLifecycleState::Detached
+                    && let Some(text) = save_on_detach
+                {
+                    let note = lifecycle.borrow().note.clone();
+                    if let Some(note) = note {
+                        note.set(Note(text.to_owned()))
+                            .expect("a loaded note takes a value");
+                    }
+                }
+                lifecycle.borrow_mut().lifecycle.push(state);
+                assert!(
+                    !(panic_at_session_end && state == flui_view::AppLifecycleState::Detached),
+                    "an observer fails as the window detaches"
+                );
+            })
+            .expect("the window is open");
+        *self.0.opened.borrow_mut() = Opened {
+            note: Some(flui_view::persist::Persisted::open(ctx)),
+            hold: self.0.hold_close.then(|| guard.hold()),
+            lifecycle: Vec::new(),
+            _observation: Some(observation),
+            _notices: Some(notices),
+        };
+    }
+
+    fn build(&self, _view: &Notebook, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(40.0, 40.0)
+    }
+}
+
+fn notebook(hold_close: bool) -> (Notebook, Rc<std::cell::RefCell<Opened>>) {
+    notebook_saving(hold_close, None, false)
+}
+
+fn notebook_saving(
+    hold_close: bool,
+    save_on_detach: Option<&'static str>,
+    panic_at_session_end: bool,
+) -> (Notebook, Rc<std::cell::RefCell<Opened>>) {
+    let opened = Rc::new(std::cell::RefCell::new(Opened::default()));
+    let view = Notebook {
+        hold_close,
+        save_on_detach,
+        panic_at_session_end,
+        opened: Rc::clone(&opened),
+    };
+    (view, opened)
+}
+
+/// The note the current run opened.
+fn note(opened: &Rc<std::cell::RefCell<Opened>>) -> flui_view::persist::Persisted<Note> {
+    opened
+        .borrow()
+        .note
+        .clone()
+        .expect("init_state opened the note")
+}
+
+/// Poll `future` between frames until it completes.
+fn settle<F: std::future::Future>(t: &mut Tester, future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
+    for _ in 0..20 {
+        if let std::task::Poll::Ready(output) = future.as_mut().poll(&mut ctx) {
+            return output;
+        }
+        t.pump();
+    }
+    panic!("the future did not complete within 20 frames");
+}
+
+#[test]
+fn a_restart_launches_the_same_view_over_the_storage_the_run_left() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let loaded = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    assert_eq!(*loaded, Note(String::new()));
+    note(&opened)
+        .set(Note("groceries".to_owned()))
+        .expect("a loaded note takes a value");
+    t.pump_and_settle();
+    let storage = t.storage().expect("a window keeps a storage").clone();
+
+    let mut t = t.restart();
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(
+        *loaded,
+        Note("groceries".to_owned()),
+        "the restart read what the run wrote"
+    );
+    assert!(
+        storage
+            .contents(&flui_platform::StorageName::from_static("note"))
+            .is_some(),
+        "the run wrote into the storage the test kept"
+    );
+
+    let mut t = Tester::mount_in(notebook(false).0, TestWindow::default().storage(storage));
+    assert!(t.storage().is_some());
+    t.pump();
+}
+
+#[test]
+fn a_window_without_storage_refuses_a_write() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(view, TestWindow::default().without_storage());
+    assert!(t.storage().is_none());
+    let _ = settle(&mut t, note(&opened).load());
+    assert!(
+        note(&opened).set(Note("lost".to_owned())).is_err(),
+        "a document with nowhere to go is read-only"
+    );
+}
+
+#[test]
+fn a_held_close_waits_for_its_hold_and_a_session_end_does_not() {
+    let (view, opened) = notebook(true);
+    let mut t = Tester::mount(view);
+    assert!(!t.request_close(), "the hold refuses the close");
+    assert!(!t.is_closed());
+    drop(opened.borrow_mut().hold.take());
+    t.pump();
+    assert!(
+        t.is_closed(),
+        "the frame after the release carries the close out"
+    );
+
+    let (view, _opened) = notebook(true);
+    let mut t = Tester::mount(view);
+    t.end_session();
+    assert!(
+        t.is_closed(),
+        "a session that is ending closes past the hold"
+    );
+}
+
+#[test]
+fn the_window_losing_focus_makes_the_application_inactive() {
+    use flui_view::AppLifecycleState::{Inactive, Resumed};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    opened.borrow_mut().lifecycle.clear();
+    t.set_window_focused(false);
+    t.set_window_focused(true);
+    assert_eq!(opened.borrow().lifecycle, [Inactive, Resumed]);
+}
+
+/// A restart is the user quitting and opening the application again: a write
+/// the run accepted and had not yet carried out still reaches the storage.
+#[test]
+fn a_restart_writes_what_the_run_accepted_before_it_stops() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    note(&opened)
+        .set(Note("unsaved".to_owned()))
+        .expect("a loaded note takes a value");
+
+    let mut t = t.restart();
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("unsaved".to_owned()));
+}
+
+/// A value set twice before the restart is written as its latest: the first
+/// write finishes as the run stops and the second, queued behind it, runs too.
+#[test]
+fn a_restart_writes_the_latest_of_two_values_set_before_it() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    note(&opened)
+        .set(Note("first".to_owned()))
+        .expect("a loaded note takes a value");
+    note(&opened)
+        .set(Note("second".to_owned()))
+        .expect("a loaded note takes a value");
+
+    let mut t = t.restart();
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("second".to_owned()));
+}
+
+/// At a session's end the window detaches before the documents are written,
+/// so what a Detached observer publishes is in the storage the run leaves.
+#[test]
+fn a_session_end_writes_what_the_window_publishes_as_it_detaches() {
+    let (view, opened) = notebook_saving(false, Some("draft"), false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    t.end_session();
+    assert!(
+        opened
+            .borrow()
+            .lifecycle
+            .contains(&flui_view::AppLifecycleState::Detached),
+        "the window detached"
+    );
+    let storage = t.storage().expect("a window keeps a storage").clone();
+    drop(t);
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("draft".to_owned()));
+}
+
+/// A subscriber and an observer that panic at the session's end do not cost the session
+/// its close or its write: the window still detaches and publishes, the
+/// documents are written, and the panic reaches the test afterwards.
+#[test]
+fn a_session_end_writes_even_when_a_subscriber_panics() {
+    let (view, opened) = notebook_saving(false, Some("draft"), true);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t.storage().expect("a window keeps a storage").clone();
+    let ended = catch_unwind(AssertUnwindSafe(|| t.end_session()));
+    assert!(ended.is_err(), "the subscriber's panic reaches the test");
+    drop(t);
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("draft".to_owned()));
+}
+
+/// A listener that panics as the window's composition is committed at the
+/// session's end does not cost the session its close or its write.
+#[test]
+fn a_session_end_writes_even_when_committing_the_composition_panics() {
+    use flui_foundation::Listenable as _;
+
+    let (book, opened) = notebook_saving(false, Some("draft"), false);
+    let controller = flui_widgets::TextEditingController::with_text("Trip ");
+    let field = flui_widgets::EditableText::new(
+        controller.clone(),
+        flui_interaction::FocusNode::with_debug_label("title"),
+    );
+    let mut t = Tester::mount(Column::new((book, SizedBox::new(300.0, 40.0).child(field))));
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    t.tap(&find::role(flui_testing::Role::TextInput));
+    t.compose("とう", Some(1));
+    let _listening = controller.listen(Rc::new({
+        let controller = controller.clone();
+        move || {
+            assert!(
+                controller.is_composing(),
+                "a listener fails as the composition is committed"
+            );
+        }
+    }));
+    let storage = t.storage().expect("a window keeps a storage").clone();
+    let ended = catch_unwind(AssertUnwindSafe(|| t.end_session()));
+    assert!(ended.is_err(), "the listener's panic reaches the test");
+    assert!(
+        opened
+            .borrow()
+            .lifecycle
+            .contains(&flui_view::AppLifecycleState::Detached),
+        "the window detached past the panic"
+    );
+    drop(t);
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("draft".to_owned()));
+}

@@ -257,7 +257,8 @@ pub enum WheelAction {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum KeyAction {
-    /// Press a key.
+    /// Press a key. Pressing a key the source already holds repeats it, as WebDriver dispatches
+    /// a second `keyDown`.
     Down {
         /// The key.
         key: String,
@@ -288,7 +289,8 @@ pub enum KeyAction {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum ImeAction {
-    /// Show `text` as the composition, the caret at `cursor` characters (its end when absent).
+    /// Show `text` as the composition, the caret at `cursor` characters (its end when absent),
+    /// or no caret when `caret_hidden`.
     SetComposition {
         /// The text being composed.
         text: String,
@@ -298,6 +300,14 @@ pub enum ImeAction {
             serde(default, skip_serializing_if = "Option::is_none")
         )]
         cursor: Option<u32>,
+        /// The input method shows no caret in the composition, as one that reports no cursor
+        /// does while it converts; the caret is at the composition's end. A hidden caret has
+        /// no `cursor`.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "crate::skip::is_default")
+        )]
+        caret_hidden: bool,
     },
     /// End the composition by committing `text`.
     Commit {
