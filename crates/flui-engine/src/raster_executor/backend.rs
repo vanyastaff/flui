@@ -46,7 +46,7 @@ pub trait SlotBackend {
     /// Give window slot `slot` a new surface, configured at its size.
     ///
     /// # Errors
-    /// [`EngineError::InvalidTargetSize`](crate::EngineError::InvalidTargetSize)
+    /// [`EngineError::InvalidTargetSize`]
     /// when the slot's size is over the device's limit: the surface is kept,
     /// unconfigured, until a resize fits. Any other error: the surface cannot
     /// be used (the adapter cannot present to it, it cannot be configured),
