@@ -48,6 +48,10 @@ struct Device {
     panic_resizes: u32,
     /// Whether the next slot's attach is refused.
     refuse_attach: bool,
+    /// Whether a rebuilt device drops every window's surface.
+    drop_surfaces: bool,
+    /// Whether a new surface for a window is refused.
+    refuse_restores: bool,
     /// The largest side a slot can be sized to.
     max_side: Option<i32>,
 }
@@ -114,6 +118,19 @@ impl StandInRenderer {
     /// device's texture limit does.
     pub fn limit_size(&self, side: i32) {
         self.shared.lock().device.max_side = Some(side);
+    }
+
+    /// Make every rebuild of the device drop each window's surface, so each
+    /// window asks for a new one, as a rebuilt device that cannot present to
+    /// the old surfaces does.
+    pub fn drop_surfaces_on_rebuild(&self) {
+        self.shared.lock().device.drop_surfaces = true;
+    }
+
+    /// Refuse every new surface a window asks for, as a GPU that cannot
+    /// present to the window any more does.
+    pub fn refuse_restores(&self) {
+        self.shared.lock().device.refuse_restores = true;
     }
 
     /// Rebuilds of the run's device attempted so far.
@@ -224,6 +241,9 @@ impl SlotBackend for StandInBackend {
     fn release(&mut self, _slot: SlotId) {}
 
     fn restore(&mut self, _slot: SlotId, _surface: UnconfiguredSurface) -> EngineResult<()> {
+        if self.shared.lock().device.refuse_restores {
+            return Err(EngineError::IncompatibleSurface);
+        }
         Ok(())
     }
 
@@ -277,14 +297,23 @@ impl SlotBackend for StandInBackend {
     }
 
     fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
-        let device = &mut self.shared.lock().device;
+        let shared = &mut *self.shared.lock();
+        let device = &mut shared.device;
         device.rebuild_attempts = device.rebuild_attempts.saturating_add(1);
         if device.failing_rebuilds > 0 {
             device.failing_rebuilds -= 1;
             return Err(EngineError::DeviceLost);
         }
         device.lost = false;
-        Ok(Vec::new())
+        if !device.drop_surfaces {
+            return Ok(Vec::new());
+        }
+        Ok(shared
+            .windows
+            .iter()
+            .filter_map(|window| window.slot)
+            .map(|slot| (slot, EngineError::SurfaceLost))
+            .collect::<Vec<(SlotId, EngineError)>>())
     }
 
     fn rebuilds_inline(&self) -> bool {

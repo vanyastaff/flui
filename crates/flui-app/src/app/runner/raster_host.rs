@@ -264,6 +264,9 @@ pub(crate) fn host_busy() -> EngineError {
 enum SlotTurn {
     Clean,
     Panicked,
+    /// The GPU refused the window's new surface: a frame has nowhere to go,
+    /// and its retry would be refused the same way.
+    SurfaceRefused,
 }
 
 impl RasterHost {
@@ -526,7 +529,15 @@ impl RasterHost {
                     slot.refused_size = slot.size.take().map(|size| (size, generation));
                 }
                 tracing::warn!(%error, "raster host: the executor refused a window's command");
-                SlotTurn::Clean
+                if placed
+                    .sender
+                    .record(slot.slot)
+                    .is_some_and(|record| record.wants_surface)
+                {
+                    SlotTurn::SurfaceRefused
+                } else {
+                    SlotTurn::Clean
+                }
             }
             Some(failure) => {
                 tracing::warn!(?failure, "raster host: a window's slot failed");
@@ -803,6 +814,13 @@ impl RasterHost {
             // drawn in full.
             slot.base.forget();
             return verdict;
+        }
+        if turned == SlotTurn::SurfaceRefused {
+            // No surface to draw on, and none the GPU takes: nothing until
+            // the window's next change asks for one again. Retried, the
+            // frame would meet a stale surface every display period.
+            slot.base.forget();
+            return SubmitVerdict::Failed;
         }
         if slot.refused_size.is_some() {
             // Drawn at no size the device accepts: nothing until the next
