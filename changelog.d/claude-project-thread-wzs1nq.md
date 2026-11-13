@@ -60,3 +60,9 @@
 - `flui-native` decides each public enum (ADR-0329), so every crate of the workspace now states
   each public enum's closure at its declaration; `MacOSWindowLevel`, `AxisSource`, `ClockChoice`,
   `CodecError`, `ReplayError` and `AppCall` are `#[non_exhaustive]`.
+- `flui::app` is a curated module instead of the whole `flui-app` crate: the entry, its
+  configuration, background work, close requests, frame failures, window control and the input
+  tap. The bindings (`WidgetsBinding`, `RenderingBinding`, `GestureBinding`), `PipelineOwner`,
+  `UpdateScheduler`, the root render view, `embedder`, `native`, `testing`, `prelude` and the view
+  re-exports are no longer reachable through `flui::app`; widgets reach the presentation through
+  `BuildContext` and their lifecycle hooks.

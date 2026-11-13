@@ -202,6 +202,7 @@ fn main() -> Result<(), flui::LaunchError> {
 // Every public facade item is documented; keep it that way.
 #![deny(missing_docs)]
 
+pub mod app;
 pub mod interaction;
 pub mod painting;
 pub mod rendering;
@@ -210,7 +211,6 @@ pub mod semantics;
 pub mod testing;
 
 pub use flui_animation as animation;
-pub use flui_app as app;
 /// The iOS-style design system (`flui-cupertino`). Requires the `cupertino`
 /// feature.
 #[cfg(feature = "cupertino")]
