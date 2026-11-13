@@ -15457,6 +15457,7 @@ pub fn flui::prelude::BuildOwner::build_phase(&self) -> flui::foundation::BuildP
 pub fn flui::prelude::BuildOwner::build_scope(&mut self, tree: &mut flui::prelude::ElementTree)
 pub fn flui::prelude::BuildOwner::capabilities(&self) -> &flui::view::PresentationCapabilities
 pub fn flui::prelude::BuildOwner::capabilities_mut(&mut self) -> &mut flui::view::PresentationCapabilities
+pub fn flui::prelude::BuildOwner::clear_frame_build_report_for_test(&mut self)
 pub fn flui::prelude::BuildOwner::clear_tree_observer(&mut self)
 pub fn flui::prelude::BuildOwner::dirty_count(&self) -> usize
 pub fn flui::prelude::BuildOwner::element_for_global_key(&self, key: &dyn flui::foundation::ViewKey) -> Option<flui::foundation::ElementId>
@@ -23124,7 +23125,6 @@ pub fn flui::testing::harness::HeadlessBinding::install_build_capabilities(&self
 pub fn flui::testing::harness::HeadlessBinding::install_hit_test_capability(&self, build_owner: &mut flui::prelude::BuildOwner, pipeline_owner: &flui::rendering::PipelineCell)
 pub fn flui::testing::harness::HeadlessBinding::install_presentation_clock(&mut self, id: flui::foundation::PresentationId) -> flui::animation::Vsync
 pub fn flui::testing::harness::HeadlessBinding::interaction_dispatch_handle(&self) -> flui_interaction::pointer::interaction_lane::InteractionDispatchHandle
-pub fn flui::testing::harness::HeadlessBinding::last_frame_report(&self) -> &flui_testing::FrameReport
 pub fn flui::testing::harness::HeadlessBinding::layer_tree(&self) -> Option<&flui_layer::tree::layer_tree::LayerTree>
 pub fn flui::testing::harness::HeadlessBinding::mark_presentation_demand(&self, id: flui::foundation::PresentationId, kind: flui_scheduler::frame_clock::DemandKind)
 pub fn flui::testing::harness::HeadlessBinding::motion_clock_mut(&mut self) -> &mut flui::animation::MotionClock
@@ -23138,7 +23138,6 @@ pub fn flui::testing::harness::HeadlessBinding::presentation_produced_count(&sel
 pub fn flui::testing::harness::HeadlessBinding::presentation_vsync(&self, id: flui::foundation::PresentationId) -> Option<flui::animation::Vsync>
 pub fn flui::testing::harness::HeadlessBinding::pump_all(&self, dt: core::time::Duration)
 pub fn flui::testing::harness::HeadlessBinding::pump_frame(&mut self, dt: core::time::Duration)
-pub fn flui::testing::harness::HeadlessBinding::pump_frame_report(&mut self, dt: core::time::Duration) -> flui_testing::FrameReport
 pub fn flui::testing::harness::HeadlessBinding::pump_presentation(&self, id: flui::foundation::PresentationId, dt: core::time::Duration)
 pub fn flui::testing::harness::HeadlessBinding::reassemble_render_tree(&self)
 pub fn flui::testing::harness::HeadlessBinding::replay(&mut self, script: &flui::testing::harness::replay::PointerScript)
@@ -23585,6 +23584,7 @@ pub fn flui::testing::harness::widgets::LaidOut::post_frame_handle(&mut self) ->
 pub fn flui::testing::harness::widgets::LaidOut::primary_selection(&self) -> flui_testing::primary_selection::ScriptedPrimarySelection
 pub fn flui::testing::harness::widgets::LaidOut::pump(&mut self)
 pub fn flui::testing::harness::widgets::LaidOut::pump_for(&mut self, dt: core::time::Duration)
+pub fn flui::testing::harness::widgets::LaidOut::pump_report(&mut self, dt: core::time::Duration) -> flui_testing::FrameReport
 pub fn flui::testing::harness::widgets::LaidOut::pump_widget(&mut self, new_root: impl flui::prelude::View)
 pub fn flui::testing::harness::widgets::LaidOut::reassemble_render_tree(&self)
 pub fn flui::testing::harness::widgets::LaidOut::release_background(&mut self)
@@ -24299,11 +24299,11 @@ impl Default for flui::view::Milliseconds
 impl From<core::time::Duration> for flui::view::Milliseconds
 impl From<f64> for flui::view::Milliseconds
 impl From<flui::view::Microseconds> for flui::view::Milliseconds
-impl From<flui::view::Milliseconds> for core::time::Duration
 impl From<flui::view::Milliseconds> for flui::view::Seconds
 impl From<flui::view::Seconds> for flui::view::Milliseconds
 impl PartialEq for flui::view::Milliseconds
 impl PartialOrd for flui::view::Milliseconds
+impl TryFrom<flui::view::Milliseconds> for core::time::Duration { type Error = core::time::TryFromFloatSecsError; }
 impl core::fmt::Debug for flui::view::Milliseconds
 impl core::fmt::Display for flui::view::Milliseconds
 impl core::marker::StructuralPartialEq for flui::view::Milliseconds
@@ -24484,10 +24484,10 @@ impl Default for flui::view::Seconds
 impl From<core::time::Duration> for flui::view::Seconds
 impl From<f64> for flui::view::Seconds
 impl From<flui::view::Milliseconds> for flui::view::Seconds
-impl From<flui::view::Seconds> for core::time::Duration
 impl From<flui::view::Seconds> for flui::view::Milliseconds
 impl PartialEq for flui::view::Seconds
 impl PartialOrd for flui::view::Seconds
+impl TryFrom<flui::view::Seconds> for core::time::Duration { type Error = core::time::TryFromFloatSecsError; }
 impl core::fmt::Debug for flui::view::Seconds
 impl core::fmt::Display for flui::view::Seconds
 impl core::marker::StructuralPartialEq for flui::view::Seconds
@@ -35318,6 +35318,15 @@ variant flui_runtime::sink::SubmitVerdict::NotShown // at 2
 variant flui_runtime::sink::SubmitVerdict::Presented // at 0
 variant flui_runtime::sink::SubmitVerdict::Retry // at 3
 variant flui_runtime::sink::SubmitVerdict::SurfaceStale // at 4
+#[non_exhaustive] pub struct flui_runtime::testing::SceneTotals
+field flui_runtime::testing::SceneTotals::depth_updates: u64 // at 2
+field flui_runtime::testing::SceneTotals::nodes_visited: u64 // at 1
+field flui_runtime::testing::SceneTotals::patch_damage: flui_layer::scene_snapshot::DamageRegion // at 3
+field flui_runtime::testing::SceneTotals::version: flui_layer::scene::id::SceneVersionId // at 0
+impl Clone for flui_runtime::testing::SceneTotals
+impl PartialEq for flui_runtime::testing::SceneTotals
+impl core::fmt::Debug for flui_runtime::testing::SceneTotals
+impl core::marker::StructuralPartialEq for flui_runtime::testing::SceneTotals
 pub struct flui_runtime::ui_runtime::UiRuntime { .. }
 impl Drop for flui_runtime::ui_runtime::UiRuntime
 impl core::fmt::Debug for flui_runtime::ui_runtime::UiRuntime
@@ -35377,10 +35386,10 @@ pub fn flui_runtime::ui_runtime::UiRuntime::presentation_factory(&self) -> flui_
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_gestures_for_test(&self, id: flui::foundation::PresentationId) -> &flui::testing::harness::GestureBinding
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_hidden_for_test(&self, id: flui::foundation::PresentationId) -> Option<bool>
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_id(&self) -> flui::foundation::PresentationId
+pub fn flui_runtime::ui_runtime::UiRuntime::presentation_scene_totals_for_test(&self, id: flui::foundation::PresentationId) -> Option<flui_runtime::testing::SceneTotals>
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_widgets_for_test(&self, id: flui::foundation::PresentationId) -> &flui::prelude::WidgetsBinding
 pub fn flui_runtime::ui_runtime::UiRuntime::primary_device_recovery(&self) -> Option<flui::app::DeviceRecovery>
 pub fn flui_runtime::ui_runtime::UiRuntime::primary_id_excluding(&self, id: flui::foundation::PresentationId) -> Option<flui::foundation::PresentationId>
-pub fn flui_runtime::ui_runtime::UiRuntime::primary_produced_count_for_test(&self) -> u64
 pub fn flui_runtime::ui_runtime::UiRuntime::pump(&mut self, clock: &mut dyn flui_runtime::pump::FrameClockSource, sink: &mut dyn flui_runtime::sink::FrameSink) -> flui_runtime::pump::FrameOutcome
 pub fn flui_runtime::ui_runtime::UiRuntime::pump_background(&mut self)
 pub fn flui_runtime::ui_runtime::UiRuntime::record_compositor_tick(&self, now: std::time::Instant)

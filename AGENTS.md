@@ -272,6 +272,12 @@ the change reads it to break it:
 The implementer does not review and the reviewer does not implement. A pull request the `docs`
 lane takes (documentation only) skips the step; its body says so under `## Review`.
 
+The step never holds a green pull request. When no reviewer can be started (the runtime refuses
+a subagent and no second session is at hand), the author writes
+`Independent read unavailable: <reason>` under `## Review`, reads the diff once more from the
+diff alone, item by item through "Before each push", writes there the scenarios tried and what
+each showed, takes the automated review of the pull request as the second reader, and merges.
+
 ## Where to read next
 
 `docs/architecture.md` (the code as it is), `docs/adr/` (the decisions), `docs/testing.md` (test

@@ -533,14 +533,19 @@ pipeline did per phase — layout passes and roots, nodes laid out and painted,
 layers produced and grafted from retained boundaries, semantics nodes
 published, frames produced — as monotonic totals (a frame's work is the
 difference across it; see `crates/flui-rendering/ARCHITECTURE.md`, "Phase
-counters"). `HeadlessBinding::last_frame_report()` pairs that difference with
-`BuildOwner::last_frame_build_report()` (distinct elements rebuilt and builds
-run) for the last pump.
+counters"). `LaidOut::pump_report(dt)` drives one frame of the UI runtime and
+pairs that difference with `BuildOwner::last_frame_build_report()` (distinct
+elements rebuilt and builds run) and the cost of the frame's scene patch.
 
 `crates/flui-widgets/tests/perf.rs` drives a fixed app — a label over a lazy
-10 000-row list — through a one-screen scroll and a full reassemble, a
-`SlideTransition` tick over a painted panel, and a label change over an eager
-column of 500 and of 5 000 buttons, and asserts budgets on those reports. Each
+10 000-row list — through a one-screen scroll (measured once as the first after
+mount on the binding, and once after earlier scrolls through the UI runtime,
+where it must build every newly visible row, two consecutive scrolls must cost
+the same within a slack, and the frame after a scroll must cost what an idle
+one does; the two rows run on different drivers and are not compared) and a
+full reassemble, a `SlideTransition` tick over a painted panel, and a label
+change over an eager column of 500 and of 5 000 buttons, and asserts budgets
+on those reports. Each
 record also carries what the measured frames asked of the heap on the test
 thread, counted by the target's `#[global_allocator]`: `allocations` (a
 `realloc` included), `reallocations` (buffers that outgrew their capacity) and

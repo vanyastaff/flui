@@ -246,19 +246,9 @@ pub(crate) fn debug_assert_appkit_main_thread(op: &'static str) {
     }
 }
 
-// SAFETY: the application and the screen observer are `NativeOwner`s, which
-// only a main-thread marker reads and which release their value there wherever
-// the loop is dropped; the preference source and the notice sources are read
-// and started on the main thread only, and what they hold of AppKit is
-// notification-centre tokens, which any thread may remove; the window map is
-// reached by the owner thread alone; every other field is `Arc`/`Mutex`-
-// protected. The host still shares the loop through `Arc` until its owner-local
-// step (ADR-0327 §5), which deletes these impls.
-unsafe impl Send for MacOSLoop {}
-// SAFETY: see `Send` above: interior mutability is Mutex-guarded, and the
-// application and the screen observer are reached only through a main-thread
-// marker.
-unsafe impl Sync for MacOSLoop {}
+// Owner-local (ADR-0327 §5): the loop belongs to the main thread, which
+// alone reaches the application, its windows and its observers.
+static_assertions::assert_not_impl_any!(MacOSLoop: Send, Sync);
 
 impl std::fmt::Debug for MacOSLoop {
     // Hand-written: the remaining fields are raw platform handles and callback
@@ -359,8 +349,8 @@ impl host::Loop for MacOSLoop {
         // Idempotent when `MacOSPlatform::try_new` already bound on this thread; trips
         // a debug assertion if `run` somehow migrated threads (ADR-0039).
         self.affinity.bind_current();
-        // The loop is shareable, so only AppKit can say this is the main
-        // thread the application runs on, in a release build too.
+        // The affinity check is debug-only, so AppKit is what proves this is the
+        // main thread the application runs on, in a release build too.
         let main = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
             message: "MacOSPlatform::run must run on the AppKit main thread".to_string(),
         })?;
