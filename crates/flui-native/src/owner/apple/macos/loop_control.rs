@@ -1,5 +1,6 @@
 //! Standalone AppKit loop ownership and orderly, policy-aware stopping.
-use std::sync::{Arc, Weak};
+use std::rc::Rc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use block2::RcBlock;
 use objc2::runtime::AnyObject;
@@ -25,12 +26,14 @@ use super::owner_lane::{
 use crate::{
     error::PlatformError,
     owner::app_delivery::AppDelivery,
+    owner::apple::NativeOwner,
     owner::apple::terminate_gate::ANNOUNCEMENT_LIFETIME,
     owner::apple::terminate_gate::DEFERRAL_LIMIT,
     owner::apple::terminate_gate::TerminateGate,
     owner::apple::terminate_gate::Termination,
     owner::call_point::Called,
     owner::panic_boundary::{AfterPanic, contain_os_entry, os_entry},
+    owner::signal::OwnerTurnSlot,
 };
 
 /// Whether finishing a session end also answers a waiting
@@ -71,9 +74,31 @@ pub(crate) struct LoopControl {
     /// Connects the session-end announcement to the terminate request that
     /// follows it. Never held across a call into the application's handler.
     terminate_gate: Mutex<TerminateGate>,
+    /// The application's wake callback between owner turns: main-thread
+    /// state, made there the first time the owner needs it, since the owner
+    /// turn the signal posts reaches it through this shared control.
+    turn: OnceLock<NativeOwner<Rc<OwnerTurnSlot>>>,
 }
 
 impl LoopControl {
+    /// The slot the application's wake callback waits in between turns.
+    pub(crate) fn turn(&self, main: MainThreadMarker) -> Rc<OwnerTurnSlot> {
+        Rc::clone(
+            self.turn
+                .get_or_init(|| NativeOwner::new(Rc::default(), main))
+                .get(main),
+        )
+    }
+
+    /// Stops admission and scheduling; on main, the application's wake
+    /// callback is dropped too, otherwise it goes with the control.
+    fn close_signal(&self) {
+        match (MainThreadMarker::new(), self.turn.get()) {
+            (Some(main), Some(turn)) => self.owner_signal.close_in(turn.get(main)),
+            _ => self.owner_signal.close(),
+        }
+    }
+
     pub(super) fn new(windows: super::WindowRegistry, app: Arc<AppDelivery>) -> Arc<Self> {
         Arc::new_cyclic(|weak: &Weak<Self>| {
             let weak = weak.clone();
@@ -81,8 +106,10 @@ impl LoopControl {
                 let weak = weak.clone();
                 exec_async_on_owner(owner_queue(), move || {
                     cleanup_step(|| {
+                        let main = MainThreadMarker::new()
+                            .expect("BUG: the owner queue is the AppKit main queue");
                         if let Some(control) = weak.upgrade()
-                            && control.owner_signal.drive()
+                            && control.owner_signal.drive_in(&control.turn(main))
                         {
                             control.quit();
                         }
@@ -104,6 +131,7 @@ impl LoopControl {
                 windows,
                 app,
                 terminate_gate: Mutex::new(TerminateGate::new()),
+                turn: OnceLock::new(),
             }
         })
     }
@@ -359,7 +387,7 @@ impl LoopControl {
             state.pending_reopens = 0;
             running
         };
-        self.owner_signal.close();
+        self.close_signal();
         if running {
             stop_application();
         }
@@ -426,7 +454,7 @@ impl LoopControl {
             state.phase = Phase::Stopping;
             state.pending_reopens = 0;
         }
-        self.owner_signal.close();
+        self.close_signal();
         // No queued cleanup: these resources must be released while main is alive.
         let windows = self.windows.values();
         for window in &windows {

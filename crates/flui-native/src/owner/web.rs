@@ -453,6 +453,8 @@ pub struct WebLoop {
     /// canvas's input through it.
     pub(crate) input: Rc<dyn HostInput>,
     pub(crate) signal: Arc<OwnerSignal>,
+    /// The application's wake callback between owner turns.
+    turn: Rc<crate::owner::signal::OwnerTurnSlot>,
     /// The system preference source the table made; present until the platform
     /// quits.
     preferences: RefCell<Option<Rc<dyn SystemPreferenceSource>>>,
@@ -604,7 +606,7 @@ impl WebLoop {
                 if let Some(owner) = owner {
                     // A frame request wakes the owner: the loop runs again.
                     owner.resume_frames();
-                    if owner.signal.drive() {
+                    if owner.signal.drive_in(&owner.turn) {
                         owner.quit();
                     }
                 }
@@ -618,6 +620,7 @@ impl WebLoop {
             drag: H::drag(),
             input: H::input(),
             signal,
+            turn: Rc::default(),
             preferences: RefCell::new(Some(preferences)),
             displays: H::displays(),
             display_observers: RefCell::new(None),
@@ -801,6 +804,7 @@ impl host::Loop for WebLoop {
         let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.signal),
+            Rc::clone(&self.turn),
         ));
 
         // Run the bootstrap synchronously — the browser's event loop is
@@ -825,7 +829,7 @@ impl host::Loop for WebLoop {
 
     fn quit(&self) {
         tracing::info!("Web platform quit requested");
-        self.signal.close();
+        self.signal.close_in(&self.turn);
         let preferences = self.preferences.borrow_mut().take();
         drop(preferences);
         let display_observers = self.display_observers.borrow_mut().take();

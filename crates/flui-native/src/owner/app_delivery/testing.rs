@@ -34,8 +34,11 @@ pub(crate) fn bind(delivery: Arc<AppDelivery>, handler: Rc<dyn AppHandler>) -> B
     )]
     let platform: Arc<dyn Platform> = Arc::new(crate::HeadlessPlatform::new());
     let signal = OwnerSignal::new(Arc::new(|| Ok(())));
-    let hooks: Rc<dyn OwnerHooks> =
-        Rc::new(DirectOwnerHooks::with_signal(Arc::clone(&platform), signal));
+    let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
+        Arc::clone(&platform),
+        signal,
+        Rc::default(),
+    ));
     delivery.bind(handler, &platform, &hooks);
     Bound {
         delivery,

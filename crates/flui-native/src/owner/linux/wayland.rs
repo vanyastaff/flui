@@ -391,7 +391,7 @@ mod event_loop {
     use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
     use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
     use crate::owner::panic_boundary::contain_owner_callback;
-    use crate::owner::signal::OwnerSignal;
+    use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
     use crate::owner::slot::OwnerCell;
     use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
     use crate::owner::watch::Watch;
@@ -1529,6 +1529,8 @@ mod event_loop {
         protocol: WaylandProtocol,
         waker: Arc<LoopWaker>,
         signal: Arc<OwnerSignal>,
+        /// The application's wake callback between owner turns.
+        turn: Rc<OwnerTurnSlot>,
         app: Arc<AppDelivery>,
         windows: Rc<WindowTable>,
         /// The thread that made the platform, which owns its windows and
@@ -1724,6 +1726,7 @@ mod event_loop {
                 dispatcher: RefCell::new(Dispatcher { queue, state }),
                 waker,
                 signal,
+                turn: Rc::default(),
                 notices: H::notices(&app),
                 app,
                 // The variable stays set: unsetting it races every thread
@@ -1943,7 +1946,7 @@ mod event_loop {
             }
             let turn = self.signal.begin_turn();
             self.deliver_host_notices();
-            if turn.drive() || self.exit_due() {
+            if turn.drive_in(&self.turn) || self.exit_due() {
                 return Ok(true);
             }
             let now = Instant::now();
@@ -2100,7 +2103,7 @@ mod event_loop {
         /// still reports wakes nobody, then the sources. Runs no application
         /// code, so an unwinding run calls it too.
         fn stop_sources(&self) {
-            self.signal.close();
+            self.signal.close_in(&self.turn);
             let watch = self.display_watch.borrow_mut().take();
             let sources = std::mem::take(&mut *self.sources.borrow_mut());
             self.portal.set(None);
@@ -2161,6 +2164,7 @@ mod event_loop {
             let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
                 Arc::clone(&platform),
                 Arc::clone(&self.signal),
+                Rc::clone(&self.turn),
             ));
             // The delivery holds the run's hooks weakly and mints the owner
             // capability of every later call from them: the run keeps them.

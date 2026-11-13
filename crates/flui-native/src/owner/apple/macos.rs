@@ -361,6 +361,7 @@ impl host::Loop for MacOSLoop {
         let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.loop_control.owner_signal),
+            self.loop_control.turn(main),
         ));
         let ownership = loop_control::LoopOwnership::acquire(
             self.app.get(main),

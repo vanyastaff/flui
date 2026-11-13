@@ -1290,7 +1290,7 @@ mod broadcasts {
             receiver.send_with_for_test(WM_DISPLAYCHANGE, 32, 0);
             assert!(samples_again(&displays), "a display change marked nothing");
             assert_eq!(wakes.load(Ordering::SeqCst), 1);
-            signal.drive();
+            signal.drive_in(&crate::owner::signal::OwnerTurnSlot::default());
 
             receiver.send_with_for_test(WM_SETTINGCHANGE, SPI_SETWORKAREA.0 as usize, 0);
             assert!(
@@ -1298,7 +1298,7 @@ mod broadcasts {
                 "a work-area change marked nothing"
             );
             assert_eq!(wakes.load(Ordering::SeqCst), 2);
-            signal.drive();
+            signal.drive_in(&crate::owner::signal::OwnerTurnSlot::default());
 
             receiver.send_with_for_test(WM_SETTINGCHANGE, 0, 0);
             assert!(
