@@ -12,7 +12,7 @@ use crate::{
     error::{EngineResult, ExternalTextureError},
 };
 use flui_painting::paint::TextureId;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::{Arc, Weak};
 
 /// Default sampling used by the resource-sampling draw entry point.
@@ -212,17 +212,7 @@ impl ExternalTextureRegistry {
             depth_or_array_layers: 1,
         };
         // Refuse before allocating: wgpu rejects these extents itself.
-        if size.width == 0
-            || size.height == 0
-            || size.width > self.max_dimension
-            || size.height > self.max_dimension
-        {
-            return Err(ExternalTextureError::InvalidTextureSize {
-                width: size.width,
-                height: size.height,
-            }
-            .into());
-        }
+        check_frame_size(self.max_dimension, frame)?;
         let texture = domain.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("external texture frame"),
             size,
@@ -453,20 +443,38 @@ impl ExternalTextureRegistry {
     }
 }
 
+/// Refuse a frame no texture of a device whose largest 2D texture side is
+/// `max_dimension` can hold.
+fn check_frame_size(max_dimension: u32, frame: &flui_painting::paint::Image) -> EngineResult<()> {
+    let (width, height) = (frame.width(), frame.height());
+    if width == 0 || height == 0 || width > max_dimension || height > max_dimension {
+        return Err(ExternalTextureError::InvalidTextureSize { width, height }.into());
+    }
+    Ok(())
+}
+
 /// One presentation's external textures in a context that shares its device
-/// and painter between presentations: the allocations on the current device,
-/// and the newest image of each texture the device accepted, so a new device
-/// gets every texture back.
+/// and painter between presentations: the newest image of each live texture,
+/// and their allocations on the current device.
+///
+/// An image reaches the device only when the slot is about to draw
+/// ([`Self::on`]): `write_texture` holds staging memory until a submission
+/// completes, and a hidden slot submits nothing, so a producer streaming into
+/// it replaces one image per texture instead of piling up uploads. A new
+/// device gets every image back the same way.
 #[derive(Debug, Default)]
 pub(crate) struct KeptTextures {
-    /// The allocations, `None` until the first use and after the device they
-    /// were on is replaced; [`Self::on`] uploads them again from `frames`.
+    /// The allocations, `None` until the first draw and after the device
+    /// they were on is replaced or a frame unwound with them lent.
     registry: Option<ExternalTextureRegistry>,
     frames: FxHashMap<TextureId, flui_painting::paint::Image>,
+    /// The textures whose newest image `registry` does not hold yet.
+    unuploaded: FxHashSet<TextureId>,
 }
 
 impl KeptTextures {
-    /// Apply `updates` on `domain`'s device, keeping each image it accepts.
+    /// Keep each frame of `updates` that a texture of `domain`'s device can
+    /// hold, for the next draw to upload, and release the retired textures.
     ///
     /// # Errors
     /// The first frame refused; the texture keeps its previous image, and
@@ -481,22 +489,20 @@ impl KeptTextures {
         } = updates;
         for id in &retired {
             self.frames.remove(id);
+            self.unuploaded.remove(id);
         }
-        self.on(domain);
-        let Self {
-            registry,
-            frames: kept,
-        } = self;
-        let registry = registry
-            .as_mut()
-            .expect("BUG: `on` left a registry on this device");
-        let mut retirements = flui_layer::TextureUpdates::default();
-        retirements.retired = retired;
-        let mut first_error = registry.apply(retirements).err();
+        if let Some(registry) = &mut self.registry {
+            for id in retired {
+                registry.unregister(id);
+            }
+        }
+        let max_dimension = domain.device().limits().max_texture_dimension_2d;
+        let mut first_error = None;
         for (id, frame) in frames {
-            match registry.upload(domain, id, &frame) {
+            match check_frame_size(max_dimension, &frame) {
                 Ok(()) => {
-                    kept.insert(id, frame);
+                    self.frames.insert(id, frame);
+                    self.unuploaded.insert(id);
                 }
                 Err(error) => {
                     first_error.get_or_insert(error);
@@ -506,25 +512,35 @@ impl KeptTextures {
         first_error.map_or(Ok(()), Err)
     }
 
-    /// The allocations on `domain`'s device, uploaded from the kept images
-    /// first when they are on no device or another one.
+    /// The allocations on `domain`'s device, each holding its texture's
+    /// newest image: the images not uploaded yet are uploaded first, every
+    /// one of them when the allocations are on no device or another one.
     pub(crate) fn on(&mut self, domain: &Arc<DeviceDomain>) -> &mut ExternalTextureRegistry {
         if !self
             .registry
             .as_ref()
             .is_some_and(|registry| registry.is_on(domain))
         {
-            let mut registry = ExternalTextureRegistry::new(domain);
-            for (id, frame) in &self.frames {
-                if let Err(error) = registry.upload(domain, *id, frame) {
-                    tracing::warn!(target: "flui.gpu", %error, "external texture re-upload refused a frame");
+            self.registry = Some(ExternalTextureRegistry::new(domain));
+            self.unuploaded.extend(self.frames.keys().copied());
+        }
+        let registry = self
+            .registry
+            .as_mut()
+            .expect("BUG: the registry is on this device, made above if it was not");
+        if !self.unuploaded.is_empty() {
+            let unuploaded: Vec<TextureId> = self.unuploaded.iter().copied().collect();
+            for id in unuploaded {
+                self.unuploaded.remove(&id);
+                let Some(frame) = self.frames.get(&id) else {
+                    continue;
+                };
+                if let Err(error) = registry.upload(domain, id, frame) {
+                    tracing::warn!(target: "flui.gpu", %error, "external texture upload refused a frame");
                 }
             }
-            self.registry = Some(registry);
         }
-        self.registry
-            .as_mut()
-            .expect("BUG: the registry was made on this device above")
+        registry
     }
 
     /// The allocations on `domain`'s device, taken out for one frame: until
@@ -533,9 +549,11 @@ impl KeptTextures {
     /// textures.
     pub(crate) fn lend(&mut self, domain: &Arc<DeviceDomain>) -> ExternalTextureRegistry {
         debug_assert!(
-            self.registry
-                .as_ref()
-                .is_some_and(|registry| registry.is_on(domain)),
+            self.unuploaded.is_empty()
+                && self
+                    .registry
+                    .as_ref()
+                    .is_some_and(|registry| registry.is_on(domain)),
             "BUG: textures are put on the device before they are lent, outside the frame"
         );
         self.on(domain);
@@ -553,6 +571,12 @@ impl KeptTextures {
     /// images stay for the next device.
     pub(crate) fn leave_device(&mut self) {
         self.registry = None;
+    }
+
+    /// How many textures hold an image the device has not received yet.
+    #[cfg(test)]
+    pub(crate) fn unuploaded(&self) -> usize {
+        self.unuploaded.len()
     }
 }
 

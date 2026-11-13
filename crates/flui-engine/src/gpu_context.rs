@@ -252,8 +252,6 @@ pub(crate) struct ContextBuilds {
     pub(crate) glyph_atlases: usize,
     /// Pipeline sets built: one per painter and per further target format.
     pub(crate) pipeline_sets: usize,
-    /// Submissions made only to flush texture uploads no frame submitted.
-    pub(crate) upload_flushes: usize,
 }
 
 /// The one GPU context of an application (ADR-0305 §1).
@@ -298,11 +296,6 @@ pub struct GpuContext {
     /// a slot's textures for the length of its frame. Kept from a slot's
     /// first update until it detaches, across device rebuilds.
     textures: FxHashMap<SlotId, KeptTextures>,
-    /// Whether texture uploads were written to the queue since the last
-    /// submission. `write_texture` holds staging memory until a submission
-    /// completes, and a hidden slot submits nothing, so the next upload
-    /// submits the earlier ones first: one batch is pending at most.
-    uploads_unsubmitted: bool,
     #[cfg(test)]
     builds: ContextBuilds,
     /// How many of the next offscreen frames panic after their recording.
@@ -538,13 +531,11 @@ impl GpuContext {
             blit: None,
             slots: SlotTable::default(),
             textures: FxHashMap::default(),
-            uploads_unsubmitted: false,
             #[cfg(test)]
             builds: ContextBuilds {
                 devices: 1,
                 glyph_atlases: 0,
                 pipeline_sets: 0,
-                upload_flushes: 0,
             },
             #[cfg(test)]
             panics_ahead: 0,
@@ -587,7 +578,6 @@ impl GpuContext {
         self.painter = None;
         self.pipelines = None;
         self.blit = None;
-        self.uploads_unsubmitted = false;
         for kept in self.textures.values_mut() {
             kept.leave_device();
         }
@@ -764,24 +754,10 @@ impl GpuContext {
         if updates.frames.is_empty() && !self.textures.contains_key(&slot) {
             return Ok(());
         }
-        let uploads = !updates.frames.is_empty();
-        if uploads && self.uploads_unsubmitted {
-            // Bounded by the domain's submission ledger, as a frame is.
-            self.domain
-                .submit(self.domain.prepare(Vec::new(), Vec::new())?)?;
-            self.uploads_unsubmitted = false;
-            #[cfg(test)]
-            {
-                self.builds.upload_flushes += 1;
-            }
-        }
-        let applied = self
-            .textures
+        self.textures
             .entry(slot)
             .or_default()
-            .apply(&self.domain, updates);
-        self.uploads_unsubmitted |= uploads;
-        applied
+            .apply(&self.domain, updates)
     }
 
     /// Put `slot`'s external textures on the current device, uploading its
@@ -889,10 +865,6 @@ impl GpuContext {
             unreachable!("BUG: a contained call that did not return holds its panic")
         };
         self.painter = Some(painter);
-        // The frame's submission carried the uploads written before it.
-        if drawn.is_ok() {
-            self.uploads_unsubmitted = false;
-        }
         drawn
     }
 
@@ -965,9 +937,6 @@ impl GpuContext {
         // acquire errors come before it records, and a recording error is
         // closed by the frame protocol's cleanup.
         self.painter = Some(painter);
-        if matches!(rendered, Ok(PresentDisposition::Presented)) {
-            self.uploads_unsubmitted = false;
-        }
         rendered
     }
 
@@ -1978,15 +1947,15 @@ mod tests {
         );
     }
 
-    /// A hidden slot whose producer keeps sending frames submits nothing,
-    /// so each texture upload submits the ones written before it: the queue
-    /// holds one batch of staging writes at most. A shown slot's frames carry
-    /// its uploads and need no extra submission.
+    /// A hidden slot whose producer keeps sending frames writes none of them
+    /// to the queue, which holds staging memory until a submission and gets
+    /// none from a hidden slot: it keeps the newest image of each texture,
+    /// and shown again, it uploads and draws that one.
     ///
-    /// Red-check: drop the submission in `apply_slot_textures` and a hidden
-    /// slot's uploads pile up unsubmitted: no flush is counted.
+    /// Red-check: upload each frame as it is applied and the hidden slot's
+    /// frames reach the queue: nothing is left to upload while it is hidden.
     #[test]
-    fn a_hidden_slots_texture_uploads_are_submitted_one_batch_at_a_time() {
+    fn a_hidden_slot_keeps_its_newest_images_off_the_queue() {
         use crate::raster_executor::{SlotChange, SlotVisibility};
         use flui_foundation::ManualClock;
         use flui_layer::{Layer, TextureLayer, TextureRegistry};
@@ -2040,29 +2009,37 @@ mod tests {
             sender.drain_settlements(slot, &mut settled);
             settled[0].verdict
         };
+        let show = |executor: &mut RasterExecutor<GpuContext>, visibility| {
+            let _receipt = sender
+                .send(RasterCommand::Configure {
+                    slot,
+                    change: SlotChange::Shown(visibility),
+                })
+                .expect("the change is accepted");
+            let _ = executor.turn();
+        };
 
-        for shade in 1..=3 {
-            assert_eq!(draw(&mut executor, shade), RasterVerdict::Presented);
-        }
-        assert_eq!(
-            executor.backend().builds().upload_flushes,
-            0,
-            "a shown slot's frames submit its uploads"
-        );
-
-        let _receipt = sender
-            .send(RasterCommand::Configure {
-                slot,
-                change: SlotChange::Shown(SlotVisibility::Hidden),
-            })
-            .expect("the change is accepted");
-        for shade in 4..=7 {
+        assert_eq!(draw(&mut executor, 10), RasterVerdict::Presented);
+        show(&mut executor, SlotVisibility::Hidden);
+        for shade in 20..=23 {
             assert_eq!(draw(&mut executor, shade), RasterVerdict::NotShown);
+            assert_eq!(
+                executor.backend().textures[&slot].unuploaded(),
+                1,
+                "the hidden slot keeps one image per texture off the queue"
+            );
         }
+        show(&mut executor, SlotVisibility::Shown);
+        assert_eq!(draw(&mut executor, 30), RasterVerdict::Presented);
+        assert_eq!(executor.backend().textures[&slot].unuploaded(), 0);
+        let pixels = executor
+            .backend()
+            .read_slot(slot)
+            .expect("the slot reads back");
         assert_eq!(
-            executor.backend().builds().upload_flushes,
-            3,
-            "each upload after the first submits the batch before it"
+            [pixels[0], pixels[1], pixels[2], pixels[3]],
+            [30, 0, 0, 255],
+            "shown again, the slot draws its newest image"
         );
     }
 
