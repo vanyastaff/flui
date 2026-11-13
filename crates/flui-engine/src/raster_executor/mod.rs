@@ -474,19 +474,39 @@ impl<B: SlotBackend> RasterExecutor<B> {
     /// The device was rebuilt: every frame stamped before it is refused on
     /// its generation, as after a restore, and every slot redraws in full. A
     /// size still pending or refused keeps its barrier: only a size the
-    /// backend accepts authorises frames laid out for it. A slot the new
+    /// backend accepts authorises frames laid out for it, and a size the lost
+    /// device refused is tried on the new one, its old refusal dropped if the
+    /// owner has not taken it. A slot the new
     /// device cannot present to waits for a new surface from its owner.
     fn after_rebuild(&mut self, refused: Vec<(SlotId, EngineError)>, first: &mut FirstPanic) {
         for slot in self.slots.iter_mut().flatten() {
             slot.owe_full(RESET);
-            let mut state = slot.inbox.lock();
-            // A window slot that never had a size has no frame to refuse.
-            if state.generation != SurfaceGeneration::ZERO {
-                state.generation = state.generation.next();
-                if state.size.is_none() && slot.refused_size.is_none() {
-                    slot.applied = state.generation;
+            let stale = {
+                let mut state = slot.inbox.lock();
+                // A size the lost device refused is the new device's to
+                // answer: it is tried again, and a refusal of it the owner
+                // has not taken yet is the old device's, so it goes.
+                if let Some(size) = slot.refused_size {
+                    state.size.get_or_insert(size);
                 }
-            }
+                let stale = if matches!(
+                    state.failure,
+                    Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
+                ) {
+                    state.failure.take()
+                } else {
+                    None
+                };
+                // A window slot that never had a size has no frame to refuse.
+                if state.generation != SurfaceGeneration::ZERO {
+                    state.generation = state.generation.next();
+                    if state.size.is_none() && slot.refused_size.is_none() {
+                        slot.applied = state.generation;
+                    }
+                }
+                stale
+            };
+            retire(None, stale, first);
         }
         for (id, error) in refused {
             let Some(slot) = self.attached(id) else {

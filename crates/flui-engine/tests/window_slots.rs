@@ -767,3 +767,36 @@ fn a_rebuild_refusal_is_committed_before_the_clock_is_read_again() {
         Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
     ));
 }
+
+/// A size the lost device refused is the rebuilt device's to answer: it is
+/// tried again, and a refusal of it the owner had not taken yet is dropped
+/// with the old device, so the owner does not hold the new device to it.
+#[test]
+fn a_size_the_lost_device_refused_is_tried_on_the_rebuilt_one() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    let _ = rig.send(RasterCommand::Configure {
+        slot,
+        change: SlotChange::Size(DeviceSize::new(64, 32)),
+    });
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+            width: 64,
+            height: 32,
+        }));
+    let _ = rig.executor.turn();
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    assert!(
+        rig.sender.take_failure(slot).is_none(),
+        "the old device's refusal went with it"
+    );
+    let required = rig.sender.record(slot).expect("held").required_generation;
+    let _ = rig.frame(slot, required, 1);
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rig.verdicts(slot),
+        [(1, RasterVerdict::Presented)],
+        "the rebuilt device took the size"
+    );
+}
