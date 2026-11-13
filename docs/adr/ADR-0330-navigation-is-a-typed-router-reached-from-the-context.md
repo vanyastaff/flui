@@ -206,7 +206,6 @@ A page's result is typed and stays on the owner thread:
 impl<R: Routable> RouterHandle<R> {
     pub fn push_for_result<T: 'static>(&self, route: R) -> Result<RouteResult<T>, RouterError>;
     pub fn pop_with<T: 'static>(&self, value: T) -> Result<bool, RouterError>;
-    pub fn maybe_pop(&self) -> bool; // honours `PopScope`
 }
 pub struct RouteResult<T> { /* Rc<RefCell<_>>: !Send */ }
 impl<T: 'static> Future for RouteResult<T> {
@@ -219,7 +218,8 @@ pub enum RouteResultError { TypeMismatch { expected: &'static str } }
 The value crosses the stack as `Box<dyn Any>` in the result's `Rc`/`RefCell` channel, and a
 value of another type is `RouteResultError::TypeMismatch`, not a silent `None`. A page or popup
 removed without a value (replaced, swept, its Router unmounted) completes `Ok(None)`, so no
-awaiting caller hangs. System back goes to the URL-owning Router's `maybe_pop`.
+awaiting caller hangs. The Back key reaches the Router through its pages' `BackIntent`, which
+honours `PopScope` and bubbles to an enclosing navigator.
 
 ### §4. Navigator is the Router's internal page stack
 

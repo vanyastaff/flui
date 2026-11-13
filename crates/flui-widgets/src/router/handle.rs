@@ -200,22 +200,6 @@ impl<R: Routable> RouterHandle<R> {
         Ok(self.shared.navigator.pop_with(value))
     }
 
-    /// Pop the top navigator route as the Back key does: a popup above the
-    /// top page if there is one, else the top page, unless a
-    /// [`PopScope`](crate::PopScope) on it vetoes the pop. Flutter's
-    /// `Navigator.maybePop`.
-    ///
-    /// Answers whether the request was handled: `true` when a route popped or
-    /// a `PopScope` vetoed it, `false` when only one page is left (a Router
-    /// never empties its stack), the router has unmounted, or its UI runtime
-    /// is building.
-    pub fn maybe_pop(&self) -> bool {
-        if self.editable().is_err() {
-            return false;
-        }
-        self.shared.navigator.maybe_pop()
-    }
-
     /// Navigate to `location`: derive its stack with
     /// [`Routable::back_stack`] and reconcile the current stack to it.
     ///

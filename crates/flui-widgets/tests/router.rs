@@ -1868,7 +1868,6 @@ impl StatelessView for BuildProbe {
             let mut edits = self.seen.edits.borrow_mut();
             if let Ok(router) = &router {
                 edits.push(format!("push {:?}", router.push(AppRoute::Note { id: 9 })));
-                edits.push(format!("maybe_pop {}", router.maybe_pop()));
             }
             if let Some(page) = &page {
                 let popup = PopupRoute::<()>::new(|_ctx, _a, _s| text("Built".to_owned()));

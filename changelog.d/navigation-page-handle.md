@@ -4,7 +4,7 @@
   router and the route a widget is on from any build context, Flutter's `GoRouter.of(context)`
   and `ModalRoute.of(context)`. `PageHandle` has `is_current`, `can_pop`, `maybe_pop`, `pop`,
   `pop_with` and `push_popup`; it acts only on its own route, so a callback that fires after a
-  popup covered its page does not pop the popup. `RouterHandle::maybe_pop` honours `PopScope`.
+  popup covered its page does not pop the popup.
   A navigation made while the UI runtime builds is refused with `RouterError::DuringBuild` or
   `PageError::DuringBuild` and changes nothing
   ([ADR-0330](/docs/adr/ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md)).

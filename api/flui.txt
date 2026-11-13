@@ -18178,7 +18178,6 @@ pub fn flui::prelude::RouterHandle::can_pop(&self) -> bool // impl<R: flui::prel
 pub fn flui::prelude::RouterHandle::current(&self) -> R // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::go(&self, location: &str) -> Result<(), flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::location(&self) -> flui::prelude::RoutePath // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
-pub fn flui::prelude::RouterHandle::maybe_pop(&self) -> bool // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::pop(&self) -> Result<bool, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::pop_with<T: 'static>(&self, value: T) -> Result<bool, flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
 pub fn flui::prelude::RouterHandle::push(&self, route: R) -> Result<(), flui::widgets::RouterError> // impl<R: flui::prelude::Routable> flui::prelude::RouterHandle<R>
