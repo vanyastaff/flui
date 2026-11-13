@@ -988,11 +988,10 @@ impl PipelineOwner<PaintPhase> {
         // Every child returned to `end`; what is left is this node's
         // replayed operations. A pass that fails above leaves the rest for
         // the next pass's `clear`.
-        let ops = composer.work.recorder.0.ops_mut();
+        let work = &mut *composer.work;
+        let ops = work.recorder.0.ops_mut();
+        work.fragment_peak = work.fragment_peak.max(ops.len());
         ops.truncate(start);
-        if start == 0 && ops.capacity() > KEPT_FRAGMENT_OPS {
-            *ops = Vec::new();
-        }
 
         // The children that went down, in the order they lie over each other and at the
         // opacity of the scopes around them: what the input-region and presented walks
@@ -1654,7 +1653,23 @@ impl PaintScratch {
         recycle_vec(&mut composer.stale);
         recycle_vec(&mut composer.orphans);
         recycle_vec(&mut composer.own_effects);
-        recycle_vec(composer.recorder.0.ops_mut());
+        // The pass's buffer keeps the room two passes in a row needed, so a
+        // pass that repeats over the same tree (a list scrolled by a screen)
+        // grows nothing, while one large pass, a mount, leaves no room behind.
+        let peak = std::mem::take(&mut composer.fragment_peak);
+        let kept = peak.min(composer.last_fragment_peak).min(KEPT_CAPACITY);
+        composer.last_fragment_peak = peak;
+        let ops = composer.recorder.0.ops_mut();
+        ops.clear();
+        if kept <= KEPT_FRAGMENT_OPS {
+            if ops.capacity() > KEPT_FRAGMENT_OPS {
+                *ops = Vec::new();
+            }
+        } else if ops.capacity() > kept.saturating_mul(2) {
+            // Half of it idle: a pass that needs a little more than the last
+            // finds room, and one a little less gives none back.
+            ops.shrink_to(kept);
+        }
     }
 
     /// Hands back the maps a staged patch held, for the next pass to stage
@@ -1682,10 +1697,10 @@ impl PaintScratch {
 /// have room for.
 const KEPT_CAPACITY: usize = 1024;
 
-/// The most fragment operations the pass's shared buffer keeps room for
-/// between passes (an operation is 176 bytes): enough for the path down a
-/// deep tree, not the child list of a long column, which the next pass
-/// allocates again.
+/// The least room for fragment operations the pass's shared buffer keeps
+/// between passes, whatever the last pass needed: enough for the path down a
+/// deep tree. Past it the buffer keeps the smaller of what the last two passes
+/// held at once, up to [`KEPT_CAPACITY`].
 const KEPT_FRAGMENT_OPS: usize = 64;
 
 fn recycle_map<K, V>(map: &mut FxHashMap<K, V>) {
@@ -1743,6 +1758,12 @@ struct ComposerScratch {
     /// paints it interned, from node to node and pass to pass. A node whose
     /// paint panics leaves it a fresh canvas.
     recorder: PassRecorder,
+    /// The most operations the recorder's buffer held at once this pass:
+    /// what the pass's end weighs against the pass before.
+    fragment_peak: usize,
+    /// The peak of the pass before: room is kept only for what two passes in
+    /// a row needed.
+    last_fragment_peak: usize,
     /// The layers of the node being painted for its own effects, collected
     /// inside its paint's containment and pushed before its children paint:
     /// empty between nodes.
