@@ -99,9 +99,9 @@ impl<T> std::fmt::Debug for Spares<T> {
 
 impl<T> Spares<T> {
     /// Moves `other`'s nodes in, up to the cap; the rest are freed.
-    pub(crate) fn absorb(&mut self, other: Self) {
-        fill(&mut self.branches, other.branches);
-        fill(&mut self.leaves, other.leaves);
+    pub(crate) fn absorb(&mut self, other: &mut Self) {
+        fill(&mut self.branches, &mut other.branches);
+        fill(&mut self.leaves, &mut other.leaves);
     }
 
     /// Nodes held, of both kinds.
@@ -111,10 +111,15 @@ impl<T> Spares<T> {
     }
 }
 
-/// `into` with as many of `from` as fit under [`SPARE_CAP`].
-fn fill<N>(into: &mut Stock<N>, from: Stock<N>) {
-    let room = SPARE_CAP.saturating_sub(into.len());
-    into.extend(from.into_iter().take(room));
+/// Moves `from`'s nodes into `into` while it has room; the rest are freed.
+fn fill<N>(into: &mut Stock<N>, from: &mut Stock<N>) {
+    while into.len() < SPARE_CAP {
+        let Some(node) = from.pop() else {
+            return;
+        };
+        into.push(node);
+    }
+    from.clear();
 }
 
 /// A persistent map from `u64` to `T`, ordered by key.
@@ -355,7 +360,7 @@ impl<T> Table<T> {
 
     /// Hands back the spares its writes left.
     pub(crate) fn return_spares(&mut self, spares: &mut Spares<T>) {
-        spares.absorb(std::mem::take(&mut self.spares));
+        spares.absorb(&mut self.spares);
     }
 
     /// Takes apart a table no other version reads: each node it alone holds
@@ -364,7 +369,7 @@ impl<T> Table<T> {
     /// can hold a content whose annotations are user values). A node another
     /// version shares is let go.
     pub(crate) fn harvest(mut self, spares: &mut Spares<T>) {
-        spares.absorb(std::mem::take(&mut self.spares));
+        spares.absorb(&mut self.spares);
         if let Some(root) = self.root.take() {
             harvest_node(root, spares);
         }

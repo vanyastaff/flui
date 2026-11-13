@@ -212,14 +212,19 @@ pub(crate) struct VersionSpares {
 }
 
 impl VersionSpares {
-    /// Moves `other`'s spares in, up to each cap.
-    pub(crate) fn absorb(&mut self, other: Self) {
-        self.nodes.absorb(other.nodes);
-        self.links.absorb(other.links);
-        self.textures.absorb(other.textures);
-        self.filtered.absorb(other.filtered);
-        let room = SPARE_VERSIONS.saturating_sub(self.versions.len());
-        self.versions.extend(other.versions.into_iter().take(room));
+    /// Moves `other`'s spares in, up to each cap; the rest are freed.
+    pub(crate) fn absorb(&mut self, other: &mut Self) {
+        self.nodes.absorb(&mut other.nodes);
+        self.links.absorb(&mut other.links);
+        self.textures.absorb(&mut other.textures);
+        self.filtered.absorb(&mut other.filtered);
+        while self.versions.len() < SPARE_VERSIONS {
+            let Some(record) = other.versions.pop() else {
+                return;
+            };
+            self.versions.push(record);
+        }
+        other.versions.clear();
     }
 
     /// `inner` as a version, in a spare record when one is held.

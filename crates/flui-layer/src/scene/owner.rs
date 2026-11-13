@@ -170,7 +170,9 @@ impl ReleasedContents {
                 continue;
             };
             held.scrub(empty);
-            if reclaimed.contents.len() < SPARE_CONTENTS {
+            // One without room for a layer saves a composited-layer update
+            // nothing but its `Arc`, and would hold a slot a roomier one needs.
+            if held.layer_room() > 0 && reclaimed.contents.len() < SPARE_CONTENTS {
                 reclaimed.contents.push(content);
             }
         }
@@ -608,11 +610,14 @@ impl SceneOwner {
 
     /// Takes back what [`ReleasedContents::reclaim`] kept, up to the owner's
     /// caps; the rest is freed. Nothing it takes holds a value of the scene.
-    pub fn restock(&mut self, reclaimed: Reclaimed) {
-        let Reclaimed { versions, contents } = reclaimed;
-        self.scratch.spares.absorb(versions);
-        let room = SPARE_CONTENTS.saturating_sub(self.spare_contents.len());
-        self.spare_contents.extend(contents.into_iter().take(room));
+    pub fn restock(&mut self, mut reclaimed: Reclaimed) {
+        self.scratch.spares.absorb(&mut reclaimed.versions);
+        while self.spare_contents.len() < SPARE_CONTENTS {
+            let Some(content) = reclaimed.contents.pop() else {
+                return;
+            };
+            self.spare_contents.push(content);
+        }
     }
 
     /// Emptied buffers the owner holds for its next applies, of every kind.
@@ -916,10 +921,15 @@ impl SceneWriter<'_> {
         replaced: impl IntoIterator<Item = (EntryIndex, Layer)>,
     ) -> Result<Arc<BoundaryContent>, EntryIndex> {
         let owner = &mut *self.owner;
-        let mut fresh = owner
+        // The spare with room for the layers, so the copy reuses its vector.
+        let roomy = owner
             .spare_contents
-            .pop()
-            .unwrap_or_else(|| Arc::new(content.blank()));
+            .iter()
+            .position(|spare| spare.layer_room() >= content.layer_count());
+        let mut fresh = match roomy {
+            Some(at) => owner.spare_contents.swap_remove(at),
+            None => Arc::new(content.blank()),
+        };
         let target =
             Arc::get_mut(&mut fresh).expect("BUG: a spare content is held by its pool alone");
         content.effects_into(target, replaced)?;

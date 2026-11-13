@@ -520,6 +520,16 @@ impl BoundaryContent {
         Ok(())
     }
 
+    /// Layers held, one per effect.
+    pub(crate) fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
+
+    /// Layers the content's vector holds room for without allocating.
+    pub(crate) fn layer_room(&self) -> usize {
+        self.layers.capacity()
+    }
+
     /// A content to write [`Self::effects_into`] into when no reclaimed one
     /// is held: `self`'s stream, room for its layers, none written yet.
     pub(crate) fn blank(&self) -> Self {
