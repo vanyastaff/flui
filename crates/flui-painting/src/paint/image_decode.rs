@@ -9,8 +9,8 @@ use super::image::Image;
 /// Checked against the header's dimensions before any pixel is decoded, and
 /// given to the decoder as its allocation limit, so an image that compresses
 /// small but decodes huge is refused instead of allocating. The limit bounds
-/// each block a decode asks for, not their sum: a decode at the limit holds
-/// the decoder's buffer and the RGBA8 copy together, up to about twice it.
+/// each block a decode asks for, not their sum: a decode near the limit holds
+/// several at once (a decoder's working planes, its buffer, the RGBA8 copy).
 #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
 pub const MAX_DECODED_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
 /// The largest image a decode produces, in RGBA8 bytes: 256 MiB (a 64 MP
@@ -19,8 +19,8 @@ pub const MAX_DECODED_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
 /// Checked against the header's dimensions before any pixel is decoded, and
 /// given to the decoder as its allocation limit, so an image that compresses
 /// small but decodes huge is refused instead of allocating. The limit bounds
-/// each block a decode asks for, not their sum: a decode at the limit holds
-/// the decoder's buffer and the RGBA8 copy together, up to about twice it.
+/// each block a decode asks for, not their sum: a decode near the limit holds
+/// several at once (a decoder's working planes, its buffer, the RGBA8 copy).
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 pub const MAX_DECODED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 

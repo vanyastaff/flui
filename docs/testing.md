@@ -499,10 +499,10 @@ A bound the parsed value cannot show, such as a decoder's working memory,
 is held by the property from the entry's own constant: both binaries of
 `image_decode` install the property's global allocator, which keeps the
 largest block each thread asked for. The block is bounded, not the sum of
-the blocks live at once: a decode at the limit holds its decoder's buffer
-and the RGBA8 copy together. The wire property is checked as the session
-writes, against what the client had sent by then; its run also caps a single
-allocation at 64 MiB, which a conversation of 2 KiB comes nowhere near.
+the blocks live at once, as `MAX_DECODED_IMAGE_BYTES` states. The wire
+property is checked as the session writes, against what the client had sent
+by then; its run also caps a single allocation at 64 MiB, which a
+conversation of 2 KiB comes nowhere near.
 
 A target is an example of the crate it tests, `crates/<crate>/fuzz/<name>.rs`,
 so it builds from the workspace's lockfile, with the versions an application
