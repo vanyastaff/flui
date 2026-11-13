@@ -9,4 +9,4 @@
 ### Changed
 
 - A slide or any other transform animation no longer re-assembles the whole semantics tree on
-  each frame while semantics are on; a steady slide frame allocates 4 times instead of 21.
+  each frame while semantics are on; a steady slide frame allocates 7 times instead of 30.

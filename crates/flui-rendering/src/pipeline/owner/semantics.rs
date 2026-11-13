@@ -215,6 +215,13 @@ impl PipelineOwner<Semantics> {
                         let published = owner.flush();
                         self.counters.semantics_nodes_updated += published as u64;
                     }
+                    // A flush records what it found wrong; report it this
+                    // frame, as the assembling branch does.
+                    let diagnostics = owner.take_diagnostics();
+                    #[cfg(any(test, feature = "testing"))]
+                    self.unchecked_semantics_diagnostics
+                        .extend(diagnostics.iter().cloned());
+                    self.semantics_diagnostics.extend(diagnostics);
                     callbacks = std::mem::take(&mut regions.callbacks);
                     self.semantics_regions.visited = std::mem::take(&mut regions.visited);
                 } else {
@@ -942,24 +949,15 @@ impl SemanticsClips {
         }
     }
 
-    /// Whether [`apply`](Self::apply) can mark some rect hidden under these
-    /// clips: part of what the semantics clip keeps lies outside the paint
-    /// clip, and that part is hidden (no reveal ancestor, or authored
-    /// occlusion). Under a plain clip the semantics region is the paint clip,
-    /// so a rect outside it is dropped, never hidden.
+    /// Whether [`apply`](Self::apply) could mark a rect hidden under clips of
+    /// these kinds, wherever the rect and the clips land. A geometry move
+    /// shifts the clips inside the moved subtree against the ones above it,
+    /// so how they overlap this pass says nothing about the last one: only
+    /// which clips exist is the same in both. Without a paint clip nothing is
+    /// hidden; with one, content outside it is hidden unless a reveal ancestor
+    /// keeps it, and authored occlusion hides it even then.
     fn can_hide(self, revealable: bool) -> bool {
-        let Some(paint) = self.paint else {
-            return false;
-        };
-        if revealable && self.occlusion.is_none() {
-            return false;
-        }
-        let kept = if revealable {
-            self.semantics
-        } else {
-            intersect_clips(self.semantics, self.cache)
-        };
-        !kept.is_some_and(|kept| paint.contains_rect(&kept))
+        self.paint.is_some() && (!revealable || self.occlusion.is_some())
     }
 
     /// The clips a child of this node inherits.
