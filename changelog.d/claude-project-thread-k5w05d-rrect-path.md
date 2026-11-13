@@ -4,4 +4,4 @@
 
 ### Removed
 
-- `Path::bounds` and `Path::cached_bounds`: a path no longer caches its bounds, which took 40 bytes of every `Path` (now 144 bytes, 160 before this change); `Path::compute_bounds` gives them.
+- `Path::bounds` and `Path::cached_bounds`: a path no longer caches its bounds, which took 40 bytes of every `Path`; `Path::compute_bounds` gives them.

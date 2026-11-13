@@ -447,7 +447,7 @@ impl ClipGeometry for Path {
         // contract asks for, and it is safe in the direction that matters: a
         // `ClipPath` narrows no accessibility rect it should have narrowed,
         // rather than dropping one it should have kept. `Path::compute_bounds`
-        // would tighten it at the cost of walking the curves on each query.
+        // would tighten it at the cost of walking a built path's curves on each query.
         Rect::from_origin_size(Point::ZERO, size)
     }
 
