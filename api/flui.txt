@@ -8712,14 +8712,16 @@ impl core::fmt::Debug for flui::material::ButtonStyle
 impl core::marker::StructuralPartialEq for flui::material::ButtonStyle
 pub struct flui::material::Card { .. }
 impl Clone for flui::material::Card
+impl Default for flui::material::Card
 impl core::fmt::Debug for flui::material::Card
 impl flui::app::StatelessView for flui::material::Card
 impl flui::app::View for flui::material::Card where Self: flui::app::StatelessView
+pub fn flui::material::Card::child(self, child: impl flui::prelude::IntoView) -> Self
 pub fn flui::material::Card::clip_behavior(self, clip_behavior: flui::prelude::Clip) -> Self
 pub fn flui::material::Card::color(self, color: flui::prelude::Color) -> Self
 pub fn flui::material::Card::elevation(self, elevation: f64) -> Self
 pub fn flui::material::Card::margin(self, margin: flui::geometry::EdgeInsets) -> Self
-pub fn flui::material::Card::new(child: impl flui::prelude::IntoView) -> Self
+pub fn flui::material::Card::new() -> Self
 pub fn flui::material::Card::shape(self, shape: flui::material::MaterialShape) -> Self
 pub struct flui::material::CardThemeData
 field flui::material::CardThemeData::color: Option<flui::prelude::Color> // at 0
@@ -9057,16 +9059,18 @@ impl core::fmt::Debug for flui::material::DefaultTabControllerState
 impl flui::prelude::ViewState<flui::material::DefaultTabController> for flui::material::DefaultTabControllerState
 pub struct flui::material::Dialog { .. }
 impl Clone for flui::material::Dialog
+impl Default for flui::material::Dialog
 impl core::fmt::Debug for flui::material::Dialog
 impl flui::app::StatelessView for flui::material::Dialog
 impl flui::app::View for flui::material::Dialog where Self: flui::app::StatelessView
 pub fn flui::material::Dialog::alignment(self, alignment: flui::painting::Alignment) -> Self
+pub fn flui::material::Dialog::child(self, child: impl flui::prelude::IntoView) -> Self
 pub fn flui::material::Dialog::clip_behavior(self, clip_behavior: flui::prelude::Clip) -> Self
 pub fn flui::material::Dialog::color(self, color: flui::prelude::Color) -> Self
 pub fn flui::material::Dialog::constraints(self, constraints: flui::prelude::BoxConstraints) -> Self
 pub fn flui::material::Dialog::elevation(self, elevation: f64) -> Self
 pub fn flui::material::Dialog::inset_padding(self, inset_padding: flui::geometry::EdgeInsets) -> Self
-pub fn flui::material::Dialog::new(child: impl flui::prelude::IntoView) -> Self
+pub fn flui::material::Dialog::new() -> Self
 pub fn flui::material::Dialog::shape(self, shape: flui::material::MaterialShape) -> Self
 pub struct flui::material::DialogThemeData
 field flui::material::DialogThemeData::background_color: Option<flui::prelude::Color> // at 0
@@ -9235,11 +9239,13 @@ impl flui::prelude::InheritedView for flui::material::FlexibleSpaceBarSettings {
 pub fn flui::material::FlexibleSpaceBarSettings::new(data: flui::material::FlexibleSpaceBarData, child: impl flui::prelude::IntoView) -> Self
 pub struct flui::material::FloatingActionButton { .. }
 impl Clone for flui::material::FloatingActionButton
+impl Default for flui::material::FloatingActionButton
 impl core::fmt::Debug for flui::material::FloatingActionButton
 impl flui::app::StatefulView for flui::material::FloatingActionButton { type State = flui::material::floating_action_button::FloatingActionButtonState; }
 impl flui::app::View for flui::material::FloatingActionButton where Self: flui::app::StatefulView
 impl flui::prelude::ViewState<flui::material::FloatingActionButton> for flui::material::floating_action_button::FloatingActionButtonState
-pub fn flui::material::FloatingActionButton::new(child: impl flui::prelude::IntoView) -> Self
+pub fn flui::material::FloatingActionButton::child(self, child: impl flui::prelude::IntoView) -> Self
+pub fn flui::material::FloatingActionButton::new() -> Self
 pub fn flui::material::FloatingActionButton::on_pressed<R: flui::prelude::EventOutcome>(self, callback: impl Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static) -> Self
 pub struct flui::material::IconButton { .. }
 impl Clone for flui::material::IconButton
@@ -9261,12 +9267,14 @@ impl core::fmt::Debug for flui::material::IconButtonThemeData
 impl core::marker::StructuralPartialEq for flui::material::IconButtonThemeData
 pub struct flui::material::InkWell { .. }
 impl Clone for flui::material::InkWell
+impl Default for flui::material::InkWell
 impl core::fmt::Debug for flui::material::InkWell
 impl flui::app::StatefulView for flui::material::InkWell { type State = flui::material::InkWellState; }
 impl flui::app::View for flui::material::InkWell where Self: flui::app::StatefulView
 impl flui::prelude::ViewState<flui::material::InkWell> for flui::material::InkWellState
+pub fn flui::material::InkWell::child(self, child: impl flui::prelude::IntoView) -> Self
 pub fn flui::material::InkWell::focus_node(self, node: alloc::rcs::rc::Rc<flui::interaction::FocusNode>) -> Self
-pub fn flui::material::InkWell::new(child: impl flui::prelude::IntoView) -> Self
+pub fn flui::material::InkWell::new() -> Self
 pub fn flui::material::InkWell::on_tap<R: flui::prelude::EventOutcome>(self, callback: impl Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static) -> Self
 pub fn flui::material::InkWell::overlay_color(self, overlay_color: flui::prelude::WidgetStateProperty<Option<flui::prelude::Color>>) -> Self
 pub fn flui::material::InkWell::shape(self, shape: flui::material::MaterialShape) -> Self

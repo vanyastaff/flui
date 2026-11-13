@@ -26,7 +26,9 @@ fn ms(value: u64) -> Duration {
 }
 
 fn well() -> InkWell {
-    InkWell::new(SizedBox::new(WIDTH, HEIGHT)).on_tap(|_| {})
+    InkWell::new()
+        .child(SizedBox::new(WIDTH, HEIGHT))
+        .on_tap(|_| {})
 }
 
 fn tinted(child: impl IntoView) -> RippleScope {
@@ -361,7 +363,11 @@ pub fn a_huge_well_publishes_only_finite_ink() {
             .alignment(Alignment::TOP_LEFT)
             .max_width(huge)
             .max_height(huge)
-            .child(InkWell::new(SizedBox::new(huge, huge)).on_tap(|_| {})),
+            .child(
+                InkWell::new()
+                    .child(SizedBox::new(huge, huge))
+                    .on_tap(|_| {}),
+            ),
     ));
     laid.dispatch_pointer_down(10.0, 10.0);
     laid.tick();
