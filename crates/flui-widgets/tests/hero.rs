@@ -4,8 +4,8 @@
 //! on: a hero can be *found* by tag from outside the tree, it can be *measured*, and
 //! it can be *told* to show a placeholder.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
+use std::rc::Rc;
 
 use flui_foundation::ValueKey;
 use flui_view::prelude::*;
@@ -150,7 +150,7 @@ mod registry_reentry {
             vsync,
         );
         let controller = HeroController::new();
-        navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+        navigator.add_observer(Rc::clone(&controller) as Rc<dyn NavigatorObserver>);
         MANAGER.with(|slot| *slot.borrow_mut() = Some(Rc::clone(controller.flights())));
         CALLBACK.set(Some(if operation == "hash" {
             "hash"
@@ -600,7 +600,7 @@ pub(crate) fn unmount_releases_hero_configuration_despite_a_retained_handle() {
 pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key() {
     /// Counts how many times its state is created.
     #[derive(Clone)]
-    struct Counter(Arc<AtomicUsize>);
+    struct Counter(Rc<Cell<usize>>);
     impl View for Counter {
         fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
             flui_view::element::ElementKind::stateful(self)
@@ -609,7 +609,7 @@ pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key(
     impl StatefulView for Counter {
         type State = CounterState;
         fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-            self.0.fetch_add(1, Ordering::SeqCst);
+            self.0.set(self.0.get() + 1);
             CounterState
         }
     }
@@ -623,7 +623,7 @@ pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key(
     #[derive(Clone)]
     struct Stage {
         registry: HeroRegistry,
-        creations: Arc<AtomicUsize>,
+        creations: Rc<Cell<usize>>,
     }
     impl View for Stage {
         fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
@@ -636,19 +636,19 @@ pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key(
                 self.registry.clone(),
                 Center::new().child(Hero::new(
                     ValueKey::new("a"),
-                    Counter(Arc::clone(&self.creations)),
+                    Counter(Rc::clone(&self.creations)),
                 )),
             )
         }
     }
 
     let registry = HeroRegistry::new();
-    let creations = Arc::new(AtomicUsize::new(0));
+    let creations = Rc::new(Cell::new(0));
     let mut harness = mount(Stage {
         registry: registry.clone(),
-        creations: Arc::clone(&creations),
+        creations: Rc::clone(&creations),
     });
-    assert_eq!(creations.load(Ordering::SeqCst), 1, "built once on mount");
+    assert_eq!(creations.get(), 1, "built once on mount");
 
     let hero = registry.get(&tag("a")).expect("registered");
 
@@ -656,7 +656,7 @@ pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key(
     hero.start_flight(true).expect("measured");
     harness.tick();
     assert_eq!(
-        creations.load(Ordering::SeqCst),
+        creations.get(),
         1,
         "the child's element migrated into the placeholder — not rebuilt"
     );
@@ -665,7 +665,7 @@ pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key(
     hero.end_flight(false);
     harness.tick();
     assert_eq!(
-        creations.load(Ordering::SeqCst),
+        creations.get(),
         1,
         "…and migrated back out again, state intact, with no GlobalKey"
     );

@@ -477,3 +477,117 @@ pub(crate) fn a_route_pushed_while_durations_are_read_adopts_the_new_hooks() {
         "replacing: the exit runs the new hook's 100 ms: alpha {alpha}"
     );
 }
+
+/// A fade that carries an iOS page's chrome: the edge swipe back and a
+/// barrier colour.
+struct ChromeFade(Color);
+
+impl PageTransitionBuilder for ChromeFade {
+    fn duration(&self) -> Duration {
+        Duration::from_millis(1000)
+    }
+
+    fn back_gesture(&self) -> bool {
+        true
+    }
+
+    fn barrier_color(&self) -> Option<Color> {
+        Some(self.0)
+    }
+
+    fn build(
+        &self,
+        _ctx: &dyn BuildContext,
+        primary: &RouteAnimation,
+        _secondary: &RouteAnimation,
+        child: BoxedView,
+    ) -> BoxedView {
+        FadeTransition::new(Rc::clone(primary))
+            .child(child)
+            .into_view()
+            .boxed()
+    }
+}
+
+/// The opacity of the fill painted in `color`'s hue in the last frame, or
+/// `None` when nothing paints it.
+fn barrier_opacity(app: &LaidOut, color: Color) -> Option<f64> {
+    app.draw_ops()
+        .into_iter()
+        .find_map(|command| match command.op {
+            DrawOp::Rect { paint, .. } if paint.color.with_opacity(1.0) == color => {
+                Some(f64::from(paint.color.opacity()))
+            }
+            _ => None,
+        })
+}
+
+/// Push `route`, read its barrier half way through the 1000 ms entrance,
+/// settle it, swipe from the leading edge, and report the barrier's opacity
+/// and whether the swipe popped the page.
+fn push_and_swipe(
+    navigator: &NavigatorHandle,
+    app: &mut LaidOut,
+    route: PageRoute<()>,
+    barrier: Color,
+) -> (Option<f64>, bool) {
+    let _result = navigator.push(route);
+    app.pump_for(Duration::ZERO);
+    app.pump_for(ms(500));
+    let opacity = barrier_opacity(app, barrier);
+    app.pump_for(ms(600));
+    app.tick();
+    let before = navigator.route_ids().len();
+    app.dispatch_pointer_down(5.0, 50.0);
+    app.dispatch_pointer_move(55.0, 50.0);
+    app.dispatch_pointer_move(180.0, 50.0);
+    app.dispatch_pointer_up(180.0, 50.0);
+    for _ in 0..40 {
+        app.pump_for(ms(50));
+    }
+    let popped = navigator.route_ids().len() < before;
+    if !popped {
+        assert!(navigator.pop());
+        for _ in 0..40 {
+            app.pump_for(ms(50));
+        }
+    }
+    (opacity, popped)
+}
+
+/// A page route that adopts the hook's builder adopts its chrome with it: it
+/// pops on an edge swipe, and the builder's barrier colour fades in under it
+/// along `Curves.ease`. A route that sets either itself keeps its own.
+///
+/// Red-check: drop `adopt_chrome` from `adopt_ambient_transition` — the
+/// adopting route neither dims nor pops on the swipe.
+pub(crate) fn an_adopted_builder_brings_its_chrome_unless_the_route_sets_it() {
+    use flui_animation::{Curve, curves};
+    let hook = Color::GREEN;
+    let own = Color::BLUE;
+    let (navigator, mut app, _registry) = mount(|navigator| {
+        PageTransitions::new(navigator)
+            .page(Rc::new(ChromeFade(hook)))
+            .boxed()
+    });
+    let expected = curves::EASE.transform(0.5);
+
+    let (opacity, popped) = push_and_swipe(&navigator, &mut app, PageRoute::<()>::new(page), hook);
+    let opacity = opacity.expect("the adopted barrier paints half way through the entrance");
+    assert!(
+        (opacity - expected).abs() < 0.01,
+        "the adopted barrier has faded in along Curves.ease to {expected}: {opacity}"
+    );
+    assert!(popped, "the adopted back gesture pops the page");
+
+    let (opacity, popped) = push_and_swipe(
+        &navigator,
+        &mut app,
+        PageRoute::<()>::new(page)
+            .back_gesture(false)
+            .barrier_color(own),
+        own,
+    );
+    assert!(opacity.is_some(), "the route's own barrier colour wins");
+    assert!(!popped, "the route's own `back_gesture(false)` wins");
+}

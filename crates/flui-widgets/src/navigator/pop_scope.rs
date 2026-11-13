@@ -17,14 +17,13 @@
 //!   over a widget's lifetime (no `GlobalKey` reparenting across routes), so
 //!   there is no re-registration on route change.
 
+use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 /// Reports a pop attempt's outcome: `true` — the route is leaving; `false` —
 /// the pop was refused (a veto, this scope's or a sibling's).
@@ -38,8 +37,8 @@ type BoundPopCallback = Rc<dyn Fn(bool)>;
 
 /// One mounted [`PopScope`]'s live state.
 struct PopEntry {
-    can_pop: AtomicBool,
-    on_pop_invoked: Mutex<Option<BoundPopCallback>>,
+    can_pop: Cell<bool>,
+    on_pop_invoked: RefCell<Option<BoundPopCallback>>,
 }
 
 /// Every [`PopScope`] mounted inside one route. The route's `ModalInner` owns
@@ -47,7 +46,7 @@ struct PopEntry {
 /// route's `vetoes_pop` / `on_pop_invoked` consult it.
 #[derive(Clone, Default)]
 pub(crate) struct PopEntryRegistry {
-    entries: Arc<super::lifecycle::TerminalVec<Arc<PopEntry>>>,
+    entries: Rc<super::lifecycle::TerminalVec<Rc<PopEntry>>>,
 }
 
 impl PopEntryRegistry {
@@ -55,30 +54,30 @@ impl PopEntryRegistry {
         Self::default()
     }
 
-    fn register(&self, entry: Arc<PopEntry>) {
-        self.entries.lock().push(entry);
+    fn register(&self, entry: Rc<PopEntry>) {
+        self.entries.borrow_mut().push(entry);
     }
 
-    fn deregister(&self, entry: &Arc<PopEntry>) {
-        let mut entries = std::mem::take(&mut *self.entries.lock());
-        entries.retain(|held| !Arc::ptr_eq(held, entry));
-        let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
+    fn deregister(&self, entry: &Rc<PopEntry>) {
+        let mut entries = std::mem::take(&mut *self.entries.borrow_mut());
+        entries.retain(|held| !Rc::ptr_eq(held, entry));
+        let _prev = std::mem::replace(&mut *self.entries.borrow_mut(), entries);
     }
 
     /// The veto half of a pop: any entry with `can_pop = false`.
     pub(crate) fn any_vetoes(&self) -> bool {
         self.entries
-            .lock()
+            .borrow_mut()
             .iter()
-            .any(|entry| !entry.can_pop.load(Ordering::Relaxed))
+            .any(|entry| !entry.can_pop.get())
     }
 
     /// Fan a pop attempt's outcome out to every registered scope.
     pub(crate) fn notify_pop_invoked(&self, did_pop: bool) {
-        // Clone out so a callback may mount/unmount scopes without deadlock.
-        let entries = self.entries.lock().clone();
+        // Clone out so a callback may mount/unmount scopes without a second borrow.
+        let entries = self.entries.borrow().clone();
         for entry in &entries {
-            let callback = entry.on_pop_invoked.lock().clone();
+            let callback = entry.on_pop_invoked.borrow().clone();
             if let Some(callback) = callback {
                 callback(did_pop);
             }
@@ -89,7 +88,7 @@ impl PopEntryRegistry {
 impl std::fmt::Debug for PopEntryRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PopEntryRegistry")
-            .field("entries", &self.entries.lock().len())
+            .field("entries", &self.entries.borrow().len())
             .finish()
     }
 }
@@ -253,9 +252,9 @@ impl StatefulView for PopScope {
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         PopScopeState {
-            entry: crate::navigator::lifecycle::Terminal::new(Arc::new(PopEntry {
-                can_pop: AtomicBool::new(self.can_pop),
-                on_pop_invoked: Mutex::new(None),
+            entry: crate::navigator::lifecycle::Terminal::new(Rc::new(PopEntry {
+                can_pop: Cell::new(self.can_pop),
+                on_pop_invoked: RefCell::new(None),
             })),
             registry: None,
             callback: self.on_pop_invoked.clone(),
@@ -269,7 +268,7 @@ impl StatefulView for PopScope {
 pub struct PopScopeState {
     callback: Option<PopInvokedCallback>,
     writer: Option<WriterSource>,
-    entry: crate::navigator::lifecycle::Terminal<Arc<PopEntry>>,
+    entry: crate::navigator::lifecycle::Terminal<Rc<PopEntry>>,
     registry: Option<PopEntryRegistry>,
 }
 
@@ -286,7 +285,7 @@ impl Drop for PopScopeState {
 impl std::fmt::Debug for PopScopeState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PopScopeState")
-            .field("can_pop", &self.entry.can_pop.load(Ordering::Relaxed))
+            .field("can_pop", &self.entry.can_pop.get())
             .finish_non_exhaustive()
     }
 }
@@ -298,16 +297,14 @@ impl ViewState<PopScope> for PopScopeState {
         self.writer = Some(ctx.writer_source());
         self.install_callback();
         if let Some(registry) = ctx.get::<PopEntryScope, _>(|scope| scope.registry.clone()) {
-            registry.register(Arc::clone(&self.entry));
+            registry.register(Rc::clone(&self.entry));
             self.registry = Some(registry);
         }
     }
 
     /// Keep the live entry current with the new `can_pop` and callback.
     fn did_update_view(&mut self, _old: &PopScope, new_view: &PopScope) {
-        self.entry
-            .can_pop
-            .store(new_view.can_pop, Ordering::Relaxed);
+        self.entry.can_pop.set(new_view.can_pop);
         self.callback.clone_from(&new_view.on_pop_invoked);
         self.install_callback();
     }
@@ -335,7 +332,7 @@ impl PopScopeState {
             let writer = crate::navigator::lifecycle::Terminal::new(writer);
             Rc::new(move |did_pop| writer.write(|ctx| callback(ctx, did_pop))) as Rc<dyn Fn(bool)>
         });
-        let previous = std::mem::replace(&mut *self.entry.on_pop_invoked.lock(), callback);
+        let previous = std::mem::replace(&mut *self.entry.on_pop_invoked.borrow_mut(), callback);
         drop(previous);
     }
 }

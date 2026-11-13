@@ -10,17 +10,12 @@
 //! | 4. Route subtree | the route's subtree context | `route_subtree_*` |
 //! | 5. Overlay access | the navigator's overlay | `overlay_*` |
 
-// ADR-0027: these tests capture owner-local handles in shared cells. The
-// library carries the same lint expectation; an integration test is a
-// separate crate, so it is repeated here.
-#![expect(clippy::arc_with_non_send_sync)]
-
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
+use std::rc::Rc;
 
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
 use flui_widgets::navigator::{PageRoute, RouteAnimation, RouteId};
@@ -109,20 +104,20 @@ pub(crate) fn an_observer_may_push_from_did_push_without_deadlocking() {
     /// Pushes exactly one extra route, the first time it hears about a push.
     #[derive(Default)]
     struct Reentrant {
-        handle: Mutex<Option<NavigatorHandle>>,
-        pushed_once: AtomicBool,
-        depths: Mutex<Vec<usize>>,
+        handle: RefCell<Option<NavigatorHandle>>,
+        pushed_once: Cell<bool>,
+        depths: RefCell<Vec<usize>>,
     }
     impl NavigatorObserver for Reentrant {
         fn did_attach(&self, navigator: NavigatorHandle) {
-            let _prev = self.handle.lock().replace(navigator);
+            let _prev = self.handle.borrow_mut().replace(navigator);
         }
         fn did_push(&self, _route: RouteId, _previous: Option<RouteId>) {
-            let Some(navigator) = self.handle.lock().clone() else {
+            let Some(navigator) = self.handle.borrow_mut().clone() else {
                 return;
             };
-            self.depths.lock().push(navigator.route_ids().len());
-            if self.pushed_once.swap(true, Ordering::SeqCst) {
+            self.depths.borrow_mut().push(navigator.route_ids().len());
+            if self.pushed_once.replace(true) {
                 return; // Guard the recursion this test is exercising.
             }
             let _result = navigator.push(PageRoute::<i32>::new(page));
@@ -130,8 +125,8 @@ pub(crate) fn an_observer_may_push_from_did_push_without_deadlocking() {
     }
 
     let navigator = seeded_navigator();
-    let observer = Arc::new(Reentrant::default());
-    navigator.add_observer(Arc::clone(&observer) as Arc<dyn NavigatorObserver>);
+    let observer = Rc::new(Reentrant::default());
+    navigator.add_observer(Rc::clone(&observer) as Rc<dyn NavigatorObserver>);
 
     let mut harness = mount_navigator(&navigator);
     let _result = navigator.push(PageRoute::<i32>::new(page));
@@ -143,7 +138,7 @@ pub(crate) fn an_observer_may_push_from_did_push_without_deadlocking() {
         "the seeded route, the one the observer pushed, and the one the test pushed"
     );
 
-    let depths = observer.depths.lock().clone();
+    let depths = observer.depths.borrow_mut().clone();
     assert_eq!(
         depths,
         vec![1, 2, 3],
