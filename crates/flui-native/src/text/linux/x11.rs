@@ -383,8 +383,11 @@ struct Leaving {
 pub(crate) struct X11Ime {
     connection: Option<Arc<X11Connection>>,
     bus: Arc<Bus>,
-    state: OwnerCell<Ime>,
+    state: RefCell<Ime>,
 }
+// Owner-local (ADR-0327 §5): the windows' contexts and held keys are the
+// owner thread's; only the bus behind `Arc<Bus>` reaches its task.
+static_assertions::assert_not_impl_any!(X11Ime: Send, Sync);
 
 impl std::fmt::Debug for X11Ime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -399,7 +402,7 @@ impl X11Ime {
         connection: &Arc<X11Connection>,
         executor: &NativeExecutor,
         doorbell: &Doorbell,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let doorbell = doorbell.clone();
         let wake = Box::new(move || {
             if let Err(error) = doorbell.ring() {
@@ -407,21 +410,28 @@ impl X11Ime {
             }
         });
         let bus = Bus::start(&executor.handle(), Reach::Session, wake);
-        Arc::new(Self::with_bus(Some(Arc::clone(connection)), bus))
+        Rc::new(Self::with_bus(Some(Arc::clone(connection)), bus))
     }
 
     fn with_bus(connection: Option<Arc<X11Connection>>, bus: Bus) -> Self {
         Self {
             connection,
             bus: Arc::new(bus),
-            state: OwnerCell::new(),
+            state: RefCell::default(),
         }
+    }
+
+    /// Run `f` over the text input's state. It runs no user code: a key's
+    /// delivery, a client's callback and a dropped handle go after the
+    /// borrow ends.
+    fn ime<R>(&self, f: impl FnOnce(&mut Ime) -> R) -> R {
+        f(&mut self.state.borrow_mut())
     }
 
     /// Send again each focus the bus could not take, while its window's
     /// context lives: what the daemon sends stays fenced until it answers.
     fn resend_focus(&self) {
-        self.state.with(|ime| {
+        self.ime(|ime| {
             for held in &ime.windows {
                 let wire = &held.wire;
                 let Some(fence) = wire.unsent.get() else {
@@ -446,7 +456,7 @@ impl X11Ime {
 
     /// Deliver the keys whose turn came, each contained.
     fn deliver_ready(&self, failure: &mut FirstPanic) {
-        let ready = self.state.with(|ime| ime.hold.ready()).unwrap_or_default();
+        let ready = self.ime(|ime| ime.hold.ready());
         for key in ready {
             failure.contain(key.deliver);
         }
@@ -455,20 +465,17 @@ impl X11Ime {
     /// The window `xid` took the keyboard's focus: its field reaches the
     /// input method, after the window that had it let go.
     fn focus_in(&self, xid: xproto::Window, failure: &mut FirstPanic) {
-        let moved = self
-            .state
-            .with(|ime| {
-                let held = ime.by_xid(xid)?;
-                let id = held.window.id;
-                if ime.focused == Some(id) {
-                    return None;
-                }
-                let entering = (held.text.client(), Rc::clone(&held.wire));
-                let previous = ime.focused.replace(id);
-                let leaving = previous.and_then(|previous| self.leave(ime, previous));
-                Some((entering, leaving))
-            })
-            .flatten();
+        let moved = self.ime(|ime| {
+            let held = ime.by_xid(xid)?;
+            let id = held.window.id;
+            if ime.focused == Some(id) {
+                return None;
+            }
+            let entering = (held.text.client(), Rc::clone(&held.wire));
+            let previous = ime.focused.replace(id);
+            let leaving = previous.and_then(|previous| self.leave(ime, previous));
+            Some((entering, leaving))
+        });
         let Some(((client, wire), leaving)) = moved else {
             return;
         };
@@ -486,16 +493,13 @@ impl X11Ime {
     /// The window `xid` moved on the screen: its focused field's caret is
     /// told again, at its new place on the screen.
     fn window_moved(&self, xid: xproto::Window, failure: &mut FirstPanic) {
-        let target = self
-            .state
-            .with(|ime| {
-                let held = ime.by_xid(xid)?;
-                if ime.focused != Some(held.window.id) || !held.wire.asks() {
-                    return None;
-                }
-                Some((held.text.client()?, Rc::clone(&held.wire)))
-            })
-            .flatten();
+        let target = self.ime(|ime| {
+            let held = ime.by_xid(xid)?;
+            if ime.focused != Some(held.window.id) || !held.wire.asks() {
+                return None;
+            }
+            Some((held.text.client()?, Rc::clone(&held.wire)))
+        });
         if let Some((client, wire)) = target {
             failure.contain(|| client.window_moved(&*wire));
         }
@@ -503,17 +507,14 @@ impl X11Ime {
 
     /// The window `xid` lost the keyboard's focus.
     fn focus_out(&self, xid: xproto::Window, failure: &mut FirstPanic) {
-        let leaving = self
-            .state
-            .with(|ime| {
-                let id = ime.by_xid(xid)?.window.id;
-                if ime.focused != Some(id) {
-                    return None;
-                }
-                ime.focused = None;
-                self.leave(ime, id)
-            })
-            .flatten();
+        let leaving = self.ime(|ime| {
+            let id = ime.by_xid(xid)?.window.id;
+            if ime.focused != Some(id) {
+                return None;
+            }
+            ime.focused = None;
+            self.leave(ime, id)
+        });
         if let Some(leaving) = leaving {
             self.finish_leaving(leaving, failure);
         }
@@ -554,26 +555,23 @@ impl X11Ime {
     /// old one sends reaches the field; the field's composition, which the
     /// old context made, ends, and the field is stated to the new one.
     fn replace_context(&self, id: WindowId, failure: &mut FirstPanic) {
-        let replaced = self
-            .state
-            .with(|ime| {
-                let next = ime.next;
-                let held = ime.by_id(id)?;
-                let wire = Rc::clone(&held.wire);
-                if !wire.opened.get() || wire.lost.get() {
-                    return None;
-                }
-                let client = held.text.client();
-                ime.next = next.next();
-                let old = wire.context.replace(next);
-                // The keys the old context still holds go as typed too.
-                ime.hold.release_where(|key| key.window.id == id);
-                wire.fenced.set(wire.fence.get());
-                wire.unsent.set(None);
-                wire.forget_preedit();
-                Some((old, next, wire, client))
-            })
-            .flatten();
+        let replaced = self.ime(|ime| {
+            let next = ime.next;
+            let held = ime.by_id(id)?;
+            let wire = Rc::clone(&held.wire);
+            if !wire.opened.get() || wire.lost.get() {
+                return None;
+            }
+            let client = held.text.client();
+            ime.next = next.next();
+            let old = wire.context.replace(next);
+            // The keys the old context still holds go as typed too.
+            ime.hold.release_where(|key| key.window.id == id);
+            wire.fenced.set(wire.fence.get());
+            wire.unsent.set(None);
+            wire.forget_preedit();
+            Some((old, next, wire, client))
+        });
         let Some((old, next, wire, client)) = replaced else {
             return;
         };
@@ -592,10 +590,7 @@ impl X11Ime {
         failure.contain(|| client.left(&*wire));
         self.deliver_ready(failure);
         // A key delivered may have moved the focus or closed the window.
-        let still = self
-            .state
-            .with(|ime| ime.focused == Some(id) && ime.by_id(id).is_some())
-            .unwrap_or(false);
+        let still = self.ime(|ime| ime.focused == Some(id) && ime.by_id(id).is_some());
         if still && !wire.lost.get() {
             let wire: Rc<dyn TextInputWire> = wire;
             failure.contain(|| client.entered(wire));
@@ -608,51 +603,45 @@ impl X11Ime {
         if let Heard::Spilled(_) = heard {
             // The context's stream has a gap: it goes as one that left a key
             // unanswered.
-            let window = self
-                .state
-                .with(|ime| ime.by_context(context).map(|held| held.window.id))
-                .flatten();
+            let window = self.ime(|ime| ime.by_context(context).map(|held| held.window.id));
             if let Some(window) = window {
                 self.replace_context(window, failure);
             }
             return;
         }
-        let target = self
-            .state
-            .with(|ime| {
-                match &heard {
-                    Heard::Answer(_, ticket, taken) => {
-                        // A key the input method took before it answered the
-                        // field's last focus made its edit for the field
-                        // before, which reached none (a Tab it let through
-                        // moved the field ahead of the key): it goes as typed.
-                        let current = ime
-                            .by_context(context)
-                            .is_none_or(|held| held.wire.current());
-                        ime.hold.answer(*ticket, *taken && current);
-                        return None;
-                    }
-                    Heard::Lost(_) => {
-                        let held = ime.by_context(context)?;
-                        held.wire.lost.set(true);
-                        held.wire.focused.set(false);
-                        let (id, client, wire) =
-                            (held.window.id, held.text.client(), Rc::clone(&held.wire));
-                        ime.hold.release_where(|key| key.window.id == id);
-                        // Its client hears it leave, below.
-                        return client.map(|client| (client, wire));
-                    }
-                    Heard::Fenced(_, fence) => {
-                        ime.by_context(context)?.wire.fenced.set(*fence);
-                        return None;
-                    }
-                    Heard::Ready(_) => return None,
-                    _ => {}
+        let target = self.ime(|ime| {
+            match &heard {
+                Heard::Answer(_, ticket, taken) => {
+                    // A key the input method took before it answered the
+                    // field's last focus made its edit for the field
+                    // before, which reached none (a Tab it let through
+                    // moved the field ahead of the key): it goes as typed.
+                    let current = ime
+                        .by_context(context)
+                        .is_none_or(|held| held.wire.current());
+                    ime.hold.answer(*ticket, *taken && current);
+                    return None;
                 }
-                let held = ime.by_context(context)?;
-                Some((held.text.client()?, Rc::clone(&held.wire)))
-            })
-            .flatten();
+                Heard::Lost(_) => {
+                    let held = ime.by_context(context)?;
+                    held.wire.lost.set(true);
+                    held.wire.focused.set(false);
+                    let (id, client, wire) =
+                        (held.window.id, held.text.client(), Rc::clone(&held.wire));
+                    ime.hold.release_where(|key| key.window.id == id);
+                    // Its client hears it leave, below.
+                    return client.map(|client| (client, wire));
+                }
+                Heard::Fenced(_, fence) => {
+                    ime.by_context(context)?.wire.fenced.set(*fence);
+                    return None;
+                }
+                Heard::Ready(_) => return None,
+                _ => {}
+            }
+            let held = ime.by_context(context)?;
+            Some((held.text.client()?, Rc::clone(&held.wire)))
+        });
         let Some((client, wire)) = target else {
             return;
         };
@@ -732,7 +721,7 @@ impl LoopText for X11Ime {
             return;
         };
         let locate = locate(self.connection.clone(), window.xid, scale);
-        let replaced = self.state.with(|ime| {
+        let replaced = self.ime(|ime| {
             let context = ime.next;
             ime.next = context.next();
             let wire = Rc::new(BusWire {
@@ -761,7 +750,7 @@ impl LoopText for X11Ime {
             ime.windows.push(Attached { window, text, wire });
             replaced
         });
-        if let Some(Some(replaced)) = replaced {
+        if let Some(replaced) = replaced {
             if replaced.wire.opened.get() {
                 self.bus.close(replaced.wire.context.get());
             }
@@ -770,20 +759,17 @@ impl LoopText for X11Ime {
     }
 
     fn window_closed(&self, window: WindowRef) {
-        let removed = self
-            .state
-            .with(|ime| {
-                let index = ime
-                    .windows
-                    .iter()
-                    .position(|held| held.window.id == window.id)?;
-                if ime.focused == Some(window.id) {
-                    ime.focused = None;
-                }
-                ime.hold.release_where(|key| key.window.id == window.id);
-                Some(ime.windows.remove(index))
-            })
-            .flatten();
+        let removed = self.ime(|ime| {
+            let index = ime
+                .windows
+                .iter()
+                .position(|held| held.window.id == window.id)?;
+            if ime.focused == Some(window.id) {
+                ime.focused = None;
+            }
+            ime.hold.release_where(|key| key.window.id == window.id);
+            Some(ime.windows.remove(index))
+        });
         let mut failure = FirstPanic::new();
         self.deliver_ready(&mut failure);
         if let Some(removed) = removed {
@@ -828,13 +814,10 @@ impl LoopText for X11Ime {
     fn pointer_pressed(&self, xid: xproto::Window) {
         // What the input method answered already counts first.
         self.deliver(Instant::now());
-        let waiting = self
-            .state
-            .with(|ime| {
-                let id = ime.by_xid(xid)?.window.id;
-                ime.hold.waits(|key| key.window.id == id).then_some(id)
-            })
-            .flatten();
+        let waiting = self.ime(|ime| {
+            let id = ime.by_xid(xid)?.window.id;
+            ime.hold.waits(|key| key.window.id == id).then_some(id)
+        });
         let Some(window) = waiting else {
             return;
         };
@@ -851,7 +834,7 @@ impl LoopText for X11Ime {
         let now = Instant::now();
         let mut evicted = None;
         let mut refused = None;
-        self.state.with(|ime| {
+        self.ime(|ime| {
             let wire = ime
                 .focused
                 .filter(|focused| *focused == key.window.id)
@@ -911,7 +894,7 @@ impl LoopText for X11Ime {
             self.deliver_ready(&mut failure);
         }
         let mut overdue = Vec::new();
-        self.state.with(|ime| {
+        self.ime(|ime| {
             ime.hold.expire(now, |key| {
                 if !overdue.contains(&key.window.id) {
                     overdue.push(key.window.id);
@@ -927,29 +910,24 @@ impl LoopText for X11Ime {
     }
 
     fn deadline(&self) -> Option<Instant> {
-        self.state
-            .with(|ime| {
-                let retry = ime
-                    .windows
-                    .iter()
-                    .any(|held| held.wire.unsent.get().is_some())
-                    .then(|| Instant::now() + FOCUS_RETRY);
-                [ime.hold.deadline(), retry].into_iter().flatten().min()
-            })
-            .flatten()
+        self.ime(|ime| {
+            let retry = ime
+                .windows
+                .iter()
+                .any(|held| held.wire.unsent.get().is_some())
+                .then(|| Instant::now() + FOCUS_RETRY);
+            [ime.hold.deadline(), retry].into_iter().flatten().min()
+        })
     }
 
     fn release(&self) {
-        let taken = self.state.with(|ime| {
+        let (hold, windows) = self.ime(|ime| {
             ime.focused = None;
             (
                 std::mem::take(&mut ime.hold),
                 std::mem::take(&mut ime.windows),
             )
         });
-        let Some((hold, windows)) = taken else {
-            return;
-        };
         for held in &windows {
             if held.wire.opened.get() {
                 self.bus.close(held.wire.context.get());

@@ -36,10 +36,10 @@
 //! A reentrant phase inside the same phase is covered by its outer extent.
 //!
 //! A frame is delimited by the `frame` span `UpdateScheduler::drive_frame`
-//! opens — the one driver every runner and `HeadlessBinding::pump_frame`
+//! opens — the one driver every runner and the headless UI runtime
 //! share — so a profiled frame's extent is exactly the scheduler's own
 //! "in a frame" state. Phase spans outside any frame are ignored rather than
-//! folded into a neighbouring frame: a headless bootstrap or a one-off layout
+//! folded into a neighbouring frame: a one-off layout
 //! pass is not a frame, and attributing its cost to one would be a fabricated
 //! measurement.
 //!

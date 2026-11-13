@@ -2,8 +2,8 @@
 //!
 //! `frame_timing_layer`'s unit tests emit the frame and phase spans
 //! themselves, so they can only prove that the layer maps the right names.
-//! This test drives a real tree through `HeadlessBinding::pump_frame`, which
-//! runs the same `UpdateScheduler::drive_frame` the desktop, Android and web
+//! This test drives a real tree through a headless UI runtime's frames, which
+//! run the same `UpdateScheduler::drive_frame` the desktop, Android and web
 //! runners run, and reads the profile back. If the scheduler stops opening
 //! the `frame` span, or the pipeline renames a phase span, this is the test
 //! that fails — the unit tests cannot.
@@ -19,8 +19,11 @@ use std::time::Duration;
 use flui_devtools::profiler::{FramePhase, FrameStats};
 use flui_devtools::{FrameTimingLayer, Profiler};
 use flui_objects::RenderSizedBox;
+use flui_sdk::animation::Vsync;
+use flui_sdk::geometry::Size;
+use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::{RenderView, View};
-use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
+use flui_testing::widgets::{LaidOut, lay_out_animated};
 use tracing::Dispatch;
 use tracing_subscriber::layer::SubscriberExt;
 
@@ -54,6 +57,12 @@ impl View for Leaf {
     }
 }
 
+/// `Leaf` mounted on a headless UI runtime at 64×64, whose frames also tick
+/// `vsync`. Mounting runs the runtime's first frame.
+fn leaf(vsync: Vsync) -> LaidOut {
+    lay_out_animated(Leaf, BoxConstraints::tight(Size::new(64.0, 64.0)), vsync)
+}
+
 fn phases(stats: &FrameStats) -> Vec<FramePhase> {
     stats.phases.iter().map(|info| info.phase).collect()
 }
@@ -69,59 +78,47 @@ fn a_real_frame_reaches_the_profiler_with_its_phases() {
     let subscriber =
         tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
 
-    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        let mut binding = HeadlessBinding::new();
-        let mounted =
-            binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
-        assert!(mounted.painted, "the bootstrap frame must commit a paint");
-
-        // The bootstrap runs the pipeline directly, outside `drive_frame`, so
-        // it is not a frame: nothing may be attributed to a frame that never
-        // opened. An empty history here is the honest reading.
+    let mounted = tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        // Mounting is a frame the runtime drives: it builds, lays out and
+        // paints the tree, so it is profiled like any other frame.
+        let mut laid = leaf(Vsync::new());
         assert!(
-            profiler.frame_history().is_empty(),
-            "the bootstrap is not a frame; got {:?}",
-            profiler.frame_history()
+            laid.did_paint_last_frame(),
+            "the mount frame must commit a paint"
         );
-
-        // An idle frame: build and layout run (their spans are unconditional),
-        // there is nothing to paint.
-        binding.pump_frame(Duration::from_millis(16));
+        let mounted = profiler.frame_history();
 
         // Dirty the root and pump again: this frame paints.
-        binding
-            .pipeline_owner()
-            .expect("mount_root leaves the binding tree-bound")
-            .with_mut(|owner| owner.mark_needs_paint(mounted.render_root));
-        binding.pump_frame(Duration::from_millis(16));
+        let root = laid.root();
+        laid.pipeline_owner()
+            .with_mut(|owner| owner.mark_needs_paint(root));
+        laid.pump_for(Duration::from_millis(16));
         assert!(
-            binding.did_paint_last_frame(),
-            "marking the root dirty must make the second pump paint"
+            laid.did_paint_last_frame(),
+            "marking the root dirty must make the pump paint"
         );
+        mounted
     });
 
+    let seen: Vec<FramePhase> = mounted.iter().flat_map(phases).collect();
+    for phase in [FramePhase::Build, FramePhase::Layout, FramePhase::Paint] {
+        assert!(
+            seen.contains(&phase),
+            "the mount's pipeline span must land as {phase:?}; saw {seen:?}"
+        );
+    }
     let history = profiler.frame_history();
-    assert_eq!(
-        history.len(),
-        2,
-        "one profiled frame per `drive_frame`, and only those; got {history:?}"
+    assert!(
+        history.len() > mounted.len(),
+        "the pump after the mount is a profiled frame; got {history:?}"
     );
     for (index, frame) in history.iter().enumerate() {
-        let seen = phases(frame);
-        assert!(
-            seen.contains(&FramePhase::Build),
-            "frame {index}: the pipeline's `build` span must land as Build; saw {seen:?}"
-        );
-        assert!(
-            seen.contains(&FramePhase::Layout),
-            "frame {index}: the pipeline's `layout` span must land as Layout; saw {seen:?}"
-        );
         assert!(
             frame.total_time_ms() > 0.0,
             "frame {index}: a driven frame takes time; got {frame:?}"
         );
     }
-    let painted = phases(&history[1]);
+    let painted = phases(history.last().expect("a profiled frame"));
     assert!(
         painted.contains(&FramePhase::Paint),
         "the dirtied frame's `paint` span must land as Paint; saw {painted:?}"
@@ -136,23 +133,25 @@ fn a_real_animation_reaches_the_profiler_with_its_work() {
     use std::rc::Rc;
 
     flui_testing::log_capture::disarm_interest_cache();
-    let profiler = Arc::new(Profiler::new());
-    let subscriber =
-        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
     let notifications = Rc::new(Cell::new(0));
-    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        for source in ["time", "spring", "repeat"] {
-            let mut binding = HeadlessBinding::new();
-            let mounted =
-                binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
-            let owner = AnimationController::builder(Duration::from_millis(100))
-                .build_on(Some(binding.vsync()));
+    for source in ["time", "spring", "repeat"] {
+        // A profiler follows the first runtime it sees, and each source
+        // mounts a runtime of its own.
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let vsync = Vsync::new();
+            let mut laid = leaf(vsync.clone());
+            let owner =
+                AnimationController::builder(Duration::from_millis(100)).build_on(Some(&vsync));
             let controller = owner.controller();
-            let pipeline = binding.pipeline_owner().expect("mounted pipeline").clone();
+            let pipeline = laid.pipeline_owner();
+            let root = laid.root();
             let delivered = Rc::clone(&notifications);
             let _listening = controller.listen(Rc::new(move || {
                 delivered.set(delivered.get() + 1);
-                pipeline.with_mut(|pipeline| pipeline.mark_needs_paint(mounted.render_root));
+                pipeline.with_mut(|pipeline| pipeline.mark_needs_paint(root));
             }));
             let run = match source {
                 "time" => controller.forward().expect("registered run"),
@@ -175,15 +174,15 @@ fn a_real_animation_reaches_the_profiler_with_its_work() {
                     .expect("finite repeat"),
                 _ => unreachable!(),
             };
-            binding.pump_frame(Duration::ZERO);
-            binding.pump_frame(Duration::from_millis(50));
+            laid.pump_for(Duration::ZERO);
+            laid.pump_for(Duration::from_millis(50));
             if source == "spring" {
                 assert!(controller.value() > 0.0 && controller.value() < 1.0);
             } else {
                 assert!((controller.value() - 0.5).abs() < 1e-9);
             }
             assert!(
-                binding.did_paint_last_frame(),
+                laid.did_paint_last_frame(),
                 "the animation listener must produce paint"
             );
             assert!(notifications.get() >= 2);
@@ -199,9 +198,9 @@ fn a_real_animation_reaches_the_profiler_with_its_work() {
                     "a real progressing animation must profile {phase}: {frame:?}"
                 );
             }
-            binding.pump_frame(Duration::from_secs(5));
+            laid.pump_for(Duration::from_secs(5));
             assert!(run.is_complete());
-            binding.pump_frame(Duration::from_millis(50));
+            laid.pump_for(Duration::from_millis(50));
             let idle = profiler.frame_stats().expect("idle frame");
             assert!(
                 idle.phase(FramePhase::Custom("Animation sampling"))
@@ -211,39 +210,38 @@ fn a_real_animation_reaches_the_profiler_with_its_work() {
                 idle.phase(FramePhase::Custom("Animation listeners"))
                     .is_none()
             );
-        }
-    });
+        });
+    }
 }
 
 fn a_nested_runtime_cannot_blend_its_animation_into_the_owning_frame() {
     use flui_sdk::animation::{Animation, AnimationController};
-    use flui_sdk::view::PostFrameHandle;
     use std::{cell::RefCell, rc::Rc};
     flui_testing::log_capture::disarm_interest_cache();
     let profiler = Arc::new(Profiler::new());
     let subscriber =
         tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        let mut outer = HeadlessBinding::new();
-        outer.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
-        let mut inner = HeadlessBinding::new();
-        inner.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        let mut outer = leaf(Vsync::new());
+        let inner_vsync = Vsync::new();
+        let mut inner = leaf(inner_vsync.clone());
         let owner =
-            AnimationController::builder(Duration::from_millis(100)).build_on(Some(inner.vsync()));
+            AnimationController::builder(Duration::from_millis(100)).build_on(Some(&inner_vsync));
         let controller = owner.controller().clone();
         let run = controller.forward().expect("inner run");
-        inner.pump_frame(Duration::ZERO);
+        inner.pump_for(Duration::ZERO);
         let inner = Rc::new(RefCell::new(inner));
         let nested = Rc::clone(&inner);
         let previous_frames = profiler.frame_history().len();
-        PostFrameHandle::new(outer.scheduler())
+        outer
+            .post_frame_handle()
             .schedule(move |_| {
-                nested.borrow_mut().pump_frame(Duration::from_millis(50));
+                nested.borrow_mut().pump_for(Duration::from_millis(50));
                 assert!((controller.value() - 0.5).abs() < 1e-9);
                 assert!(!run.is_complete());
             })
             .expect("nested runtime callback");
-        outer.pump_frame(Duration::from_millis(16));
+        outer.pump_for(Duration::from_millis(16));
         // Keep foreign owners alive through the outer frame: cancellation in
         // its post-frame callback would be real outer delivery work.
         drop(owner);
@@ -332,7 +330,6 @@ fn zero_history_capacity_keeps_counters_without_frames() {
 }
 
 fn retained_rendering_spans_cannot_charge_a_later_frame() {
-    use flui_sdk::view::PostFrameHandle;
     use std::sync::{
         Mutex,
         atomic::{AtomicBool, Ordering},
@@ -369,19 +366,15 @@ fn retained_rendering_spans_cannot_charge_a_later_frame() {
             spans: Arc::clone(&retained),
         });
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        let mut binding = HeadlessBinding::new();
-        let mounted =
-            binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
-        binding
-            .pipeline_owner()
-            .expect("mounted owner")
-            .with_mut(|owner| {
-                owner.mark_needs_layout(mounted.render_root);
-                owner.mark_needs_compositing_bits_update(mounted.render_root);
-                owner.mark_needs_paint(mounted.render_root);
-            });
+        let mut laid = leaf(Vsync::new());
+        let root = laid.root();
+        laid.pipeline_owner().with_mut(|owner| {
+            owner.mark_needs_layout(root);
+            owner.mark_needs_compositing_bits_update(root);
+            owner.mark_needs_paint(root);
+        });
         armed.store(true, Ordering::Relaxed);
-        binding.pump_frame(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
         armed.store(false, Ordering::Relaxed);
         let original = profiler.frame_stats().expect("rendered frame");
         let current_is_complete = [
@@ -409,13 +402,13 @@ fn retained_rendering_spans_cannot_charge_a_later_frame() {
             );
         }
         std::thread::sleep(original.total_time + Duration::from_millis(20));
-        PostFrameHandle::new(binding.scheduler())
+        laid.post_frame_handle()
             .schedule(move |_| {
                 let spans = std::mem::take(&mut *retained.lock().expect("retained phases"));
                 drop(spans);
             })
             .expect("retire old rendering spans");
-        binding.pump_frame(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
         let later = profiler.frame_stats().expect("later idle frame");
         assert_eq!(
             (
@@ -430,7 +423,6 @@ fn retained_rendering_spans_cannot_charge_a_later_frame() {
 
 fn application_frame_names_do_not_hide_real_animation_work() {
     use flui_sdk::animation::{Animation, AnimationController};
-    use flui_sdk::view::PostFrameHandle;
 
     flui_testing::log_capture::disarm_interest_cache();
     let profiler = Arc::new(Profiler::new());
@@ -438,11 +430,10 @@ fn application_frame_names_do_not_hide_real_animation_work() {
         .with(tracing_subscriber::layer::Identity::new())
         .with(FrameTimingLayer::new(Arc::clone(&profiler)));
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        let mut binding = HeadlessBinding::new();
-        binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        let mut laid = leaf(Vsync::new());
         let controller = AnimationController::builder(Duration::from_millis(100)).build();
         let run = controller.forward().expect("manual run");
-        PostFrameHandle::new(binding.scheduler())
+        laid.post_frame_handle()
             .schedule(move |_| {
                 let frame = tracing::Span::current();
                 {
@@ -454,7 +445,7 @@ fn application_frame_names_do_not_hide_real_animation_work() {
                 assert!(!run.is_complete());
             })
             .expect("animation callback");
-        binding.pump_frame(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
         let frame = profiler.frame_stats().expect("scheduler frame");
         for phase in ["Animation sampling", "Animation listeners"] {
             assert!(
@@ -472,7 +463,6 @@ fn application_frame_names_do_not_hide_real_animation_work() {
 
 fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
     use flui_sdk::animation::{Animation, AnimationController, Curve};
-    use flui_sdk::view::PostFrameHandle;
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
@@ -497,12 +487,11 @@ fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
     let subscriber =
         tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        let mut binding = HeadlessBinding::new();
-        binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        let vsync = Vsync::new();
+        let mut laid = leaf(vsync.clone());
         let retained = Rc::new(RefCell::new(None));
         let source_time = Rc::new(Cell::new(Duration::ZERO));
-        let owner = AnimationController::builder(Duration::from_millis(100))
-            .build_on(Some(binding.vsync()));
+        let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&vsync));
         let controller = owner.controller();
         let run = controller
             .animate_to_curved(
@@ -511,8 +500,8 @@ fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
                 RetainingCurve(Rc::clone(&retained), Rc::clone(&source_time)),
             )
             .expect("curved run");
-        binding.pump_frame(Duration::ZERO);
-        binding.pump_frame(Duration::from_millis(50));
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_millis(50));
         assert!(!run.is_complete());
         assert!((controller.value() - 0.5).abs() < 1e-9);
         let frame = profiler.frame_stats().expect("sampled frame");
@@ -523,7 +512,7 @@ fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
         assert!(retained.borrow().is_some());
         controller.stop().expect("stop before the next frame");
         assert!(run.is_canceled());
-        PostFrameHandle::new(binding.scheduler())
+        laid.post_frame_handle()
             .schedule(move |_| {
                 let span = retained
                     .borrow_mut()
@@ -532,7 +521,7 @@ fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
                 let _late_entry = span.enter();
             })
             .expect("release retained span in next frame");
-        binding.pump_frame(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
         let next = profiler.frame_stats().expect("next frame");
         assert_eq!(
             (
@@ -626,11 +615,10 @@ fn a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame() {
             ..boundary.clone()
         });
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        let mut binding = HeadlessBinding::new();
-        binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        let vsync = Vsync::new();
+        let mut laid = leaf(vsync.clone());
         let retained = Rc::new(RefCell::new(None));
-        let owner = AnimationController::builder(Duration::from_millis(100))
-            .build_on(Some(binding.vsync()));
+        let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&vsync));
         let controller = owner.controller();
         let run = controller
             .animate_to_curved(1.0, None, RetainingCurve(Rc::clone(&retained)))
@@ -651,9 +639,9 @@ fn a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame() {
                 delivered.set(delivered.get() + 1);
             }
         }));
-        binding.pump_frame(Duration::ZERO);
+        laid.pump_for(Duration::ZERO);
         boundary.armed.store(true, Ordering::Relaxed);
-        binding.pump_frame(Duration::from_millis(50));
+        laid.pump_for(Duration::from_millis(50));
         assert!((controller.value() - 0.5).abs() < 1e-9);
         assert!(!run.is_complete());
         assert_eq!(calls.get(), 1);
@@ -945,36 +933,51 @@ fn developer_history_respects_capacity_and_clear() {
     assert!(failures.is_empty(), "failed cases: {failures:?}");
 }
 
-/// The framework half of the jank line: the real `frame` span carries the
-/// scheduler budget's period in `period_us`, and the profiler judges the frame
-/// by it. A budget no real frame can meet makes every frame jank; a budget no
-/// real frame can miss makes none.
+/// The framework half of the jank line: the runtime sets the scheduler's
+/// budget from the refresh period of the display its window is on, the real
+/// `frame` span carries that period in `period_us`, and the profiler judges
+/// the frame by it. The same 5 ms of frame work is jank on a 1000 Hz display
+/// and is not on a 1 Hz one.
 #[test]
 fn a_real_frame_is_judged_against_the_period_its_scheduler_reports() {
-    use flui_scheduler::FrameDuration;
+    use flui_platform::{DisplayKey, DisplayRegistry, RefreshPeriod, WindowDisplay};
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+
+    const WORK: Duration = Duration::from_millis(5);
 
     flui_testing::log_capture::disarm_interest_cache();
-    for (period, janky) in [
-        (Duration::from_micros(1), true),
-        (Duration::from_secs(10), false),
-    ] {
+    for (period, janky) in [(RefreshPeriod::MIN, true), (RefreshPeriod::MAX, false)] {
         let profiler = Arc::new(Profiler::new());
         let subscriber =
             tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-            let mut binding = HeadlessBinding::new();
-            binding.scheduler().set_budget_frame_duration(
-                FrameDuration::try_from_period(period).expect("a nonzero period"),
+            let mut host = HeadlessHost::new(HeadlessWindow::new(64, 64));
+            let display = WindowDisplay::new(
+                DisplayRegistry::new()
+                    .mint(&DisplayKey::Injected(1))
+                    .expect("a fresh registry mints an id"),
+                Some(RefreshPeriod::try_from(period).expect("a period the display accepts")),
             );
-            binding.pump_frame(Duration::from_millis(16));
+            host.set_window_display(host.primary_window(), Some(display));
+            host.attach(&Leaf).expect("the leaf attaches");
+            let _mounted = host.pump(Duration::ZERO);
+            host.post_frame_handle()
+                .schedule(|_| std::thread::sleep(WORK))
+                .expect("frame work");
+            host.request_frame();
+            let _outcome = host.pump(Duration::from_millis(16));
         });
         let frame = profiler
             .frame_stats()
             .expect("one driven frame is one profiled frame");
+        assert!(
+            frame.total_time >= WORK,
+            "the frame did its work: {frame:?}"
+        );
         assert_eq!(
             frame.is_jank(),
             janky,
-            "a {period:?} budget judged a real frame that took {:.3} ms",
+            "a {period:?} display judged a real frame that took {:.3} ms",
             frame.total_time_ms()
         );
     }
