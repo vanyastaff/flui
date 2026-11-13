@@ -694,6 +694,35 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 }
             }
         }
+        // A frame's texture updates apply whether or not it is shown: a
+        // retirement releases memory, and a hidden slot's next frame draws
+        // the newest image. A panic joins this turn's failure: the first of
+        // the resize's, the textures' and the render's is the one held.
+        let mut frame = frame;
+        let mut discarded = None;
+        let textures_report = frame.as_mut().and_then(|frame| {
+            let updates = std::mem::take(&mut frame.textures);
+            if updates.is_empty() {
+                return None;
+            }
+            let mut caught = FirstPanic::new();
+            match caught.contain(|| backend.apply_textures(slot.id, updates)) {
+                Some(Ok(())) => None,
+                Some(Err(error)) => Some(Report::TexturesRefused {
+                    slot: slot.id,
+                    error,
+                }),
+                None => {
+                    let panicked = caught.into_payload().map(SlotFailure::Panicked);
+                    if failure.is_none() {
+                        failure = panicked;
+                    } else {
+                        discarded = panicked;
+                    }
+                    None
+                }
+            }
+        });
         let Some(frame) = frame else {
             let extra = {
                 let mut state = slot.inbox.lock();
@@ -703,11 +732,12 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 failure.and_then(|failure| state.hold_failure(failure))
             };
             retire(None, extra, first);
-            report_each([resize_report, None], first);
+            retire(None, discarded, first);
+            report_each([resize_report, textures_report], first);
             return 0;
         };
         let (verdict, render_failure, surface_loss, render_report) = render(backend, slot, &frame);
-        let discarded = if failure.is_none() {
+        let discarded_render = if failure.is_none() {
             failure = render_failure;
             None
         } else {
@@ -734,7 +764,8 @@ impl<B: SlotBackend> RasterExecutor<B> {
         };
         retire(Some(frame), extra, first);
         retire(None, discarded, first);
-        report_each([resize_report, render_report], first);
+        retire(None, discarded_render, first);
+        report_each([resize_report, textures_report, render_report], first);
         1
     }
 }
@@ -843,6 +874,12 @@ enum Report {
         stamped: SurfaceGeneration,
         applied: SurfaceGeneration,
     },
+    /// A frame's texture update refused an image; the texture keeps its
+    /// previous one.
+    TexturesRefused {
+        slot: SlotId,
+        error: EngineError,
+    },
     FrameFailed {
         slot: SlotId,
         error: EngineError,
@@ -891,6 +928,11 @@ fn report(report: Report, first: &mut FirstPanic) {
             ?stamped,
             ?applied,
             "raster executor: frame stamped against another surface generation"
+        ),
+        Report::TexturesRefused { slot, error } => tracing::warn!(
+            ?slot,
+            %error,
+            "raster executor: external texture frame refused; the texture keeps its previous image"
         ),
         Report::FrameFailed {
             slot,

@@ -971,7 +971,7 @@ graph LR
   соединения Linux под winit (`observe` вместо `stop()`; каскад `cfg` при остановке
   `owner/winit.rs` ушёл). macOS держит наблюдение в `NativeOwner<Watch>` (`owner/apple/native_owner.rs`,
   был `owner/apple/ios/native_owner.rs`, теперь общий для обоих циклов): значение отпускается на
-  главном потоке, где бы цикл ни упал, и `SAFETY` у `Send`/`Sync` `MacOSLoop` это называет.
+  главном потоке, где бы цикл ни упал, а сам цикл живёт только на главном потоке (ADR-0327 §5).
   (2) headless — переделка вынужденная: на `main` цикл держал `HeadlessDisplays` из
   `platforms::headless`, а `owner/` не может назвать фичу (base ниже features), и сам тип был только
   обёрткой снимка, чей `host::Displays` читал `owner.displays`. Цикл держит `DisplaySnapshot`,
