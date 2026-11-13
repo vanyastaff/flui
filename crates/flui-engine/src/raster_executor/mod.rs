@@ -498,8 +498,10 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 // A window slot dropped its surface or failed to configure it,
                 // and the owner makes another; a slot over the new device's
                 // limit, window or offscreen, waits for a size that fits.
-                state.wants_surface |=
-                    slot.window && !matches!(error, EngineError::InvalidTargetSize { .. });
+                if slot.window && !matches!(error, EngineError::InvalidTargetSize { .. }) {
+                    state.wants_surface = true;
+                    state.surface_refused = false;
+                }
                 state.hold_failure(SlotFailure::Refused(error))
             };
             retire(None, extra, first);
@@ -593,9 +595,17 @@ impl<B: SlotBackend> RasterExecutor<B> {
         held.owe_full(FullReason::SurfaceChanged);
         let mut caught = FirstPanic::new();
         match caught.contain(|| backend.restore(slot, surface)) {
-            Some(Ok(())) => held.inbox.lock().wants_surface = false,
+            Some(Ok(())) => {
+                let mut state = held.inbox.lock();
+                state.wants_surface = false;
+                state.surface_refused = false;
+            }
             Some(Err(error)) => {
-                let extra = held.inbox.lock().hold_failure(SlotFailure::Refused(error));
+                let extra = {
+                    let mut state = held.inbox.lock();
+                    state.surface_refused = true;
+                    state.hold_failure(SlotFailure::Refused(error))
+                };
                 retire(None, extra, first);
                 report(
                     Report::Refused {
@@ -758,6 +768,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
             }
             if surface_loss == SurfaceLoss::Dropped {
                 state.wants_surface = true;
+                state.surface_refused = false;
             }
             state.settle(&frame, verdict);
             failure.and_then(|failure| state.hold_failure(failure))

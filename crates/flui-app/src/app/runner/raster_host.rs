@@ -240,9 +240,10 @@ struct HostSlot {
     /// Whether the slot's next frame is the retry of a frame whose resize
     /// or upload panicked: a stale surface it meets again is not retried.
     retrying_panic: bool,
-    /// Whether the host sent the slot a new surface its next turn answers:
-    /// a slot that still wants one after that turn had it refused.
-    restored: bool,
+    /// Whether the host sent the slot a size its next turn answers. The slot
+    /// holds one failure a turn, so a refusal of that size behind another
+    /// failure goes unheard: the host then sends the size again.
+    size_sent: bool,
     /// The first panic of the slot's frames since the window last reported
     /// one to its UI runtime ([`RasterSlot::report_frame_panic`]).
     panic: flui_foundation::panic::FirstPanic,
@@ -367,7 +368,7 @@ impl RasterHost {
                 visibility: SlotVisibility::Shown,
                 refused_size: None,
                 retrying_panic: false,
-                restored: false,
+                size_sent: false,
                 panic: caught,
             },
         );
@@ -519,26 +520,28 @@ impl RasterHost {
             caught.resume();
             return SlotTurn::Clean;
         };
-        let settled = match placed.sender.take_failure(slot.slot) {
+        let size_sent = std::mem::take(&mut slot.size_sent);
+        let failure = placed.sender.take_failure(slot.slot);
+        let size_refused = matches!(
+            failure,
+            Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
+        );
+        if size_sent && failure.is_some() && !size_refused {
+            // The failure held may hide a refusal of the size sent with it:
+            // the next frame sends the size again and hears its own answer.
+            slot.size = None;
+        }
+        let record = placed.sender.record(slot.slot);
+        let settled = match failure {
             Some(SlotFailure::Panicked(payload)) => {
                 slot.panic.record(payload);
-                // The slot holds one failure a turn: a size refused after
-                // this panic went unheard, so the next frame sends it again.
-                slot.size = None;
                 SlotTurn::Panicked
             }
             Some(SlotFailure::Refused(error)) => {
-                if matches!(error, EngineError::InvalidTargetSize { .. }) {
-                    let generation = placed
-                        .sender
-                        .record(slot.slot)
-                        .map_or(SurfaceGeneration::ZERO, |record| record.required_generation);
+                if size_refused {
+                    let generation =
+                        record.map_or(SurfaceGeneration::ZERO, |record| record.required_generation);
                     slot.refused_size = slot.size.take().map(|size| (size, generation));
-                } else {
-                    // The slot holds one failure a turn: a size refused
-                    // after this one went unheard, so the next frame sends
-                    // the size again and hears its own answer.
-                    slot.size = None;
                 }
                 tracing::warn!(%error, "raster host: the executor refused a window's command");
                 SlotTurn::Clean
@@ -549,17 +552,12 @@ impl RasterHost {
             }
             None => SlotTurn::Clean,
         };
-        // A new surface the host sent and the slot still wants was refused.
-        // Only that one: a slot that dropped its surface in this turn (a
-        // rebuilt device) has not been sent a new one yet, and gets it on
-        // the frame's retry.
-        let restored = std::mem::take(&mut slot.restored);
+        // The new surface the host sent last was refused, and the slot has
+        // none: not a surface dropped after a restore the backend took (a
+        // rebuilt device, a render that needs another), which the frame's
+        // retry asks for again.
         let settled = if settled == SlotTurn::Clean
-            && restored
-            && placed
-                .sender
-                .record(slot.slot)
-                .is_some_and(|record| record.wants_surface)
+            && record.is_some_and(|record| record.wants_surface && record.surface_refused)
         {
             SlotTurn::SurfaceRefused
         } else {
@@ -709,14 +707,16 @@ impl RasterHost {
                 tracing::warn!(%error, "raster host: a window's new surface was refused");
                 return None;
             }
-            slot.restored = true;
         }
         if slot.size != Some(size) {
             match placed.sender.send(RasterCommand::Configure {
                 slot: slot.slot,
                 change: SlotChange::Size(size),
             }) {
-                Ok(SendReceipt::Configured(_)) => slot.size = Some(size),
+                Ok(SendReceipt::Configured(_)) => {
+                    slot.size = Some(size);
+                    slot.size_sent = true;
+                }
                 Ok(SendReceipt::Unconfigured | SendReceipt::Accepted) => {
                     slot.size = None;
                     return None;

@@ -96,6 +96,13 @@ pub struct SlotRecord {
     /// sends it in a [`RasterCommand::Restore`](super::RasterCommand::Restore).
     /// Until one is restored the slot's frames settle not shown.
     pub wants_surface: bool,
+    /// The newest surface the owner sent in a
+    /// [`RasterCommand::Restore`](super::RasterCommand::Restore) was refused,
+    /// and the slot still waits for one: a frame has no surface until the
+    /// owner sends another. A surface dropped after a restore the backend
+    /// took (a rebuilt device, a render that needs a new one) is not a
+    /// refusal, and clears it.
+    pub surface_refused: bool,
 }
 
 /// The values one slot's owner and executor exchange.
@@ -117,6 +124,8 @@ pub(crate) struct InboxState {
     pub(crate) in_flight: u32,
     /// Whether the slot dropped its surface and waits for a restore.
     pub(crate) wants_surface: bool,
+    /// Whether the newest restore was refused (see [`SlotRecord`]).
+    pub(crate) surface_refused: bool,
     /// Settlements not drained yet, oldest first.
     pub(crate) settlements: VecDeque<SlotSettlement>,
     pub(crate) phase: SlotPhase,
@@ -143,6 +152,7 @@ impl SlotInbox {
                 generation,
                 in_flight: 0,
                 wants_surface: false,
+                surface_refused: false,
                 settlements: VecDeque::with_capacity(INLINE_DEPTH),
                 phase: SlotPhase::Attaching,
                 failure: None,
@@ -164,6 +174,7 @@ impl SlotInbox {
             undrained: state.settlements.len(),
             required_generation: state.generation,
             wants_surface: state.wants_surface,
+            surface_refused: state.surface_refused,
         }
     }
 }

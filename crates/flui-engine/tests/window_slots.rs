@@ -566,6 +566,57 @@ fn a_window_the_rebuilt_device_cannot_present_to_asks_for_a_new_surface() {
     assert!(!rig.sender.record(slot).expect("held").wants_surface);
 }
 
+/// The record tells a new surface the backend refused from a surface dropped
+/// after a restore it took: the owner gives up on a frame only in the first
+/// case, since in the second the next restore can draw it.
+#[test]
+fn a_refused_restore_is_told_apart_from_a_surface_dropped_after_one() {
+    let mut rig = rig();
+    let (slot, before) = rig.sized_window();
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceReplacementNeeded));
+    let _ = rig.frame(slot, before, 0);
+    let _ = rig.executor.turn();
+    assert_eq!(rig.verdicts(slot), [(0, RasterVerdict::NotShown)]);
+    let record = rig.sender.record(slot).expect("held");
+    assert!(record.wants_surface && !record.surface_refused);
+
+    rig.backend
+        .script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+    let _ = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    });
+    let _ = rig.executor.turn();
+    let record = rig.sender.record(slot).expect("held");
+    assert!(
+        record.wants_surface && record.surface_refused,
+        "the refused restore is named"
+    );
+    assert!(matches!(
+        rig.sender.take_failure(slot),
+        Some(SlotFailure::Refused(EngineError::IncompatibleSurface))
+    ));
+
+    // The next restore is taken, and the frame of the same turn drops the
+    // new surface again.
+    let SendReceipt::Configured(restored) = rig.send(RasterCommand::Restore {
+        slot,
+        surface: rig.surface(),
+    }) else {
+        panic!("a restore of a sized window mints a generation");
+    };
+    rig.backend
+        .script_render(ScriptedAnswer::Fail(EngineError::SurfaceReplacementNeeded));
+    let _ = rig.frame(slot, restored, 1);
+    let _ = rig.executor.turn();
+    let record = rig.sender.record(slot).expect("held");
+    assert!(
+        record.wants_surface && !record.surface_refused,
+        "a surface dropped after a taken restore is not a refusal"
+    );
+}
+
 /// A window over the rebuilt device's size limit keeps its surface: its
 /// record holds why and asks for no new surface, and a size that fits
 /// renders again.
