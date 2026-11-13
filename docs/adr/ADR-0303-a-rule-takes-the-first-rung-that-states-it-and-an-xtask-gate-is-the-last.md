@@ -249,6 +249,12 @@ of its own.
   filters. `plan` sets `miri_required` when a changed file sits under one of those roots, or is
   the job's plan or its rule (`change_scope::miri_scope`). A change that reaches only a narrower
   filter is left to main.
+- **What runs for every node of a frame is read by its path.** The `perf-gates` job compares the
+  perf scenarios' counts with their baseline. `plan` sets `perf_required` when a changed file
+  sits under the pipeline owner's passes or the semantics model, where one more allocation is a
+  rise in every scenario, or is the baseline, the scenarios, the task or the rule
+  (`change_scope::perf_scope`). A pull request then runs the comparison; callgrind and a rise
+  from any other source are left to main.
 - **The aggregator recomputes the run.** Each such job is a row of `ON_DEMAND`
   (`change_scope/aggregator.rs`), which names the job and the `plan` output that asks for it.
   `ci-verify` reads that output and fails a job that ran without being asked, or skipped when it
