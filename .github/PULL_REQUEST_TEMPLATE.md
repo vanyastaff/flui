@@ -15,6 +15,12 @@ Describe the change and why it belongs in FLUI.
 One line per path `cargo xtask expectations` lists: the path (or its directory, with the trailing
 `/`) and why the old expectation was wrong or the new one is right. "None" when it lists nothing.
 
+## Review
+
+Who read the diff in a fresh context before the merge (AGENTS.md, "Before a merge"), each finding
+and what became of it: fixed, or refuted by a line or a test. "Documentation only" when the `docs`
+lane takes the pull request.
+
 ## Architecture
 
 - [ ] No new `edge-exceptions`, `reach-exceptions` or allowlist entry without the ADR that removes it

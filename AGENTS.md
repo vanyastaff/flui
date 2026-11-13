@@ -245,6 +245,33 @@ with an answer you can point to in the code; the reviewers ask the same ones.
     An expectation moved to turn a check green is the defect the check was there to find. The
     pull request's body names each path under `## Expectations` with that answer (ADR-0331).
 
+## Before a merge
+
+The author merges a pull request once CI is green, so the author's reading is the only one a
+change is sure to get, and it is the one least able to find what is wrong: the list above is
+answered by the reasoning that wrote the code. Before the merge, a reviewer that did not write
+the change reads it to break it:
+
+- **A fresh context.** A subagent or a separate session that has seen none of the author's
+  conversation. It gets the diff against the merge base, the list `cargo xtask expectations`
+  prints and the checkout; not the plan, not the PR body, not the author's account of why the
+  change is right.
+- **One job.** It assumes the change has a defect and looks for the input, the order of events
+  or the state that shows it, in the code around the diff as much as in the changed lines,
+  working from "Recurring defects", "Before each push" and "Review guidelines". It does not fix,
+  and it does not sum up what is good.
+- **A finding is a failure scenario**, in the form [`REVIEW.md`](REVIEW.md) asks for: the state,
+  the operation, the wrong result, the `file:line`. A reviewer that finds none names the
+  scenarios it tried.
+- **The author answers each finding** under `## Review` in the PR body: fixed, with its class
+  (item 12), or refuted by the line or the test that shows the scenario cannot happen. That it
+  is unlikely is not a refutation.
+- **A fix is read again.** The review that found a defect has not seen its fix: a change pushed
+  after the review gets the same reading of its own diff.
+
+The implementer does not review and the reviewer does not implement. A pull request the `docs`
+lane takes (documentation only) skips the step; its body says so under `## Review`.
+
 ## Where to read next
 
 `docs/architecture.md` (the code as it is), `docs/adr/` (the decisions), `docs/testing.md` (test
@@ -252,10 +279,10 @@ tiers), `docs/platform-parity.md` and `docs/gaps.md`, [`CONTRIBUTING.md`](CONTRI
 
 ## Review guidelines
 
-Pull request reviewers (Codex, Claude Code Review, a local `/code-review`) work from this
-section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code Review. Report defects
-with a concrete failure scenario, and code an experienced Rust developer would be embarrassed
-by, with the better shape. What this repository keeps getting wrong:
+Pull request reviewers (Codex, Claude Code Review, a local `/code-review`, the reader of "Before a
+merge") work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code
+Review. Report defects with a concrete failure scenario, and code an experienced Rust developer
+would be embarrassed by, with the better shape. What this repository keeps getting wrong:
 
 - a new `pub` item that no production path reaches, unless the PR names the follow-up;
 - an edited expectation (the list `cargo xtask expectations` prints) whose line under
