@@ -1,6 +1,6 @@
 //! Clock-driven gesture recognition: a `GestureDetector`'s `on_long_press` and
 //! `on_double_tap` fire deterministically when the detector reads a shared,
-//! clock-bound arena from a `GestureArenaScope` and a `HeadlessBinding` drives
+//! clock-bound arena from its UI runtime, which drives
 //! the arena's deadlines via `pump`. All timing is virtual — no `thread::sleep`.
 //!
 //! The competition tests exercise the two fixes that make a multi-recognizer

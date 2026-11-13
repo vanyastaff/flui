@@ -1,7 +1,7 @@
 //! Public-API tests for `Hero`.
 //!
 //! Driven through the real `flui_widgets::prelude` surface, a real `Vsync`, and a
-//! `HeadlessBinding` frame — the production path. If `Hero` or `HeroController` were
+//! frame of a UI runtime — the production path. If `Hero` or `HeroController` were
 //! not exported, this file would not compile.
 //!
 //! A flight is observed the only way public API allows: by scanning the render tree
