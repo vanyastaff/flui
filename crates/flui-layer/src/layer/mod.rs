@@ -75,6 +75,10 @@ pub use transform::TransformLayer;
 /// assert!(opacity.bounds().is_none());
 /// ```
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "every backend draws every layer kind: a `_` arm would draw nothing for a new one"
+)]
 pub enum Layer {
     /// A live recorder whose commands draw when the layer is lowered.
     Canvas(Box<CanvasLayer>),

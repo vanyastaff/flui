@@ -55,6 +55,10 @@ enum Held {
 
 /// What a [`Scene`] holds, borrowed.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a scene is a layer tree or a retained version, and its walk handles both"
+)]
 pub enum SceneContent<'a> {
     /// A composited layer tree, walked from its root.
     Tree(&'a LayerTree),

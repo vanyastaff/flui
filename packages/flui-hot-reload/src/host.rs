@@ -46,6 +46,7 @@ struct ResolvedSceneFamily {
 
 /// Which symbol convention the loaded plugin uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PluginKind {
     /// `flui_app_build` — widget-based plugin (from `app_plugin!`)
     App,
