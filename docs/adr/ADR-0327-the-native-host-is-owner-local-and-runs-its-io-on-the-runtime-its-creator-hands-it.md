@@ -186,8 +186,8 @@ documentation and type-checked:
    its `unsafe impl Send/Sync`: headless, X11, Wayland, Windows, macOS, iOS, Android, web. Each
    host keeps an owner-local turn slot, where the callback of `on_wake` waits between turns, so
    that callback is not `Send` and other threads, which lock the owner signal to wake the owner,
-   never reach it. With the last of them `run_shared` takes `Rc<Self>` and the callbacks of
-   `on_keyboard_layout_change` lose `Send`;
+   never reach it. With the last of them `run_shared` takes `Rc<Self>`, the loop runs as an `Rc`
+   and the callbacks of `on_keyboard_layout_change` lose `Send`;
 6. `flui-platform`'s five traits lose `Send + Sync` (ADR-0323 §4) and `WindowFacets` holds `Rc`;
 7. `OwnerSlot`, `OwnerCell` and `OwnerMap` are deleted.
 

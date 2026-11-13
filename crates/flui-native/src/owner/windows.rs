@@ -475,7 +475,7 @@ pub(crate) struct AppHooks {
     /// The loop's delivery to the application's handler.
     pub(crate) app: Arc<AppDelivery>,
     /// Called when the keyboard layout changes.
-    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
+    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut()>>,
 }
 
 impl AppHooks {
@@ -1268,8 +1268,8 @@ impl WindowsLoop {
 
 impl host::Loop for WindowsLoop {
     fn run(
-        self: Arc<Self>,
-        platform: Arc<dyn Platform>,
+        self: Rc<Self>,
+        platform: Rc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Running Windows platform");
@@ -1279,7 +1279,7 @@ impl host::Loop for WindowsLoop {
         // message-only window's queue is bound to the constructing thread).
         self.affinity.bind_current();
 
-        struct RunGuard(Arc<WindowsLoop>);
+        struct RunGuard(Rc<WindowsLoop>);
         impl Drop for RunGuard {
             fn drop(&mut self) {
                 // Close (which frees the owner context on this thread), and
@@ -1300,14 +1300,14 @@ impl host::Loop for WindowsLoop {
         // this frame until the loop ends, declared before the guard so they
         // outlive it and the handler can still hear the quit.
         let hooks: Rc<dyn OwnerHooks> = Rc::new(control::WindowsOwnerHooks::new(
-            Arc::clone(&platform),
+            Rc::clone(&platform),
             &self.owner_control,
         ));
-        let _guard = RunGuard(Arc::clone(&self));
+        let _guard = RunGuard(Rc::clone(&self));
         self.app.bind(handler, &platform, &hooks);
         self.app.resume_through_signal(&self.owner_control.signal);
         self.app
-            .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)))
+            .ready(OwnerPlatform::new(Rc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         self.owner_control
             .signal

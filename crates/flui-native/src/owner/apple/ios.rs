@@ -746,16 +746,16 @@ struct DelegateState {
     /// them weakly.
     hooks: Option<Rc<dyn OwnerHooks>>,
     /// Live for the whole session; read by every lifecycle callback.
-    platform: Option<Arc<IOSLoop>>,
+    platform: Option<Rc<IOSLoop>>,
     /// The platform over `platform` that the owner capability is built on,
     /// handed in by `run`.
-    owner_platform: Option<Arc<dyn Platform>>,
+    owner_platform: Option<Rc<dyn Platform>>,
 }
 
 impl host::Loop for IOSLoop {
     fn run(
-        self: Arc<Self>,
-        platform: Arc<dyn Platform>,
+        self: Rc<Self>,
+        platform: Rc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Init {
@@ -901,7 +901,7 @@ fn run_pending_bootstrap() -> bool {
     };
 
     let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
-        Arc::clone(&owner_platform),
+        Rc::clone(&owner_platform),
         Arc::clone(&platform.signal),
         Rc::clone(&platform.turn),
     ));

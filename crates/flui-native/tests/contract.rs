@@ -1534,11 +1534,7 @@ mod native_windows {
         reason = "actual owned Win32 system-key dispatch and message pumping"
     )]
     fn system_keyboard_close(mode: &'static str) {
-        #[expect(
-            clippy::arc_with_non_send_sync,
-            reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
-        )]
-        let platform = Arc::new(WindowsPlatform::try_new().expect("native Windows platform"));
+        let platform = Rc::new(WindowsPlatform::try_new().expect("native Windows platform"));
         let window = open_shown(&platform);
         let original_weak = Rc::downgrade(&window);
         let replacement = Rc::new(RefCell::new(None::<Opened>));
@@ -1562,7 +1558,7 @@ mod native_windows {
             let input_observations = Arc::clone(&input_count);
             let weak = Rc::downgrade(&window);
             let raw_hwnd = hwnd.0 as isize;
-            let callback_platform = Arc::downgrade(&platform);
+            let callback_platform = Rc::downgrade(&platform);
             let callback_replacement = Rc::clone(&replacement);
             let callback_replacement_closes = Arc::clone(&replacement_closes);
             window.handler.react_to_input(move |event| {

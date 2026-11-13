@@ -1280,7 +1280,7 @@ mod live {
         state: Rc<RefCell<State>>,
         /// The name of the layout the keyboard is in.
         layout: RefCell<String>,
-        layout_listeners: RefCell<Vec<Box<dyn FnMut() + Send>>>,
+        layout_listeners: RefCell<Vec<Box<dyn FnMut()>>>,
         /// The windows' text input, which every key goes through: the
         /// input method of the focused field takes it or lets it through.
         text: Rc<dyn LoopText>,
@@ -2237,7 +2237,7 @@ mod live {
             self.layout.borrow().clone()
         }
 
-        fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
+        fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
             self.layout_listeners.borrow_mut().push(callback);
         }
     }

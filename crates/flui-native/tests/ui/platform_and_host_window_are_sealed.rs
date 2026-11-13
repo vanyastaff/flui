@@ -89,7 +89,7 @@ impl Platform for OutsidePlatform {
         String::new()
     }
 
-    fn on_keyboard_layout_change(&self, _: Box<dyn FnMut() + Send>) {}
+    fn on_keyboard_layout_change(&self, _: Box<dyn FnMut()>) {}
 
     fn release_session_end(&self) {}
 

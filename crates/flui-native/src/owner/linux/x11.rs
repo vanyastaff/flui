@@ -338,7 +338,7 @@ pub(crate) trait LoopInput {
     fn keyboard_layout(&self) -> String;
 
     /// [`Platform::on_keyboard_layout_change`].
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>);
 }
 
 /// One key as the input read it, which the text input hands to the window's
@@ -510,7 +510,7 @@ impl host::Input<X11Loop> for X11Loop {
         owner.input.keyboard_layout()
     }
 
-    fn on_keyboard_layout_change(owner: &X11Loop, callback: Box<dyn FnMut() + Send>) {
+    fn on_keyboard_layout_change(owner: &X11Loop, callback: Box<dyn FnMut()>) {
         owner.input.on_keyboard_layout_change(callback);
     }
 }
@@ -1033,8 +1033,8 @@ impl Drop for RunGuard<'_> {
 
 impl host::Loop for X11Loop {
     fn run(
-        self: Arc<Self>,
-        platform: Arc<dyn Platform>,
+        self: Rc<Self>,
+        platform: Rc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         if !self.affinity.is_owner() {
@@ -1050,7 +1050,7 @@ impl host::Loop for X11Loop {
         // this frame until the loop ends, declared before the guard so they
         // outlive it and the handler still hears the quit.
         let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
-            Arc::clone(&platform),
+            Rc::clone(&platform),
             Arc::clone(&self.signal),
             Rc::clone(&self.turn),
         ));
@@ -1072,7 +1072,7 @@ impl host::Loop for X11Loop {
         // not in the light one it would otherwise wait a turn to leave.
         self.deliver_appearance();
         self.app
-            .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)))
+            .ready(OwnerPlatform::new(Rc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         self.signal
             .start()

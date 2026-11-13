@@ -1213,7 +1213,7 @@ pub(crate) mod macos {
             String::new()
         }
 
-        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut() + Send>) {
+        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut()>) {
             // No layout is read, so no change is ever reported.
             drop(callback);
         }
@@ -2312,7 +2312,7 @@ pub(crate) mod ios {
             String::new()
         }
 
-        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut() + Send>) {
+        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut()>) {
             // No layout is read, so no change is ever reported.
             drop(callback);
         }

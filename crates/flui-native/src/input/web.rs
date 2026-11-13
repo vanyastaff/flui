@@ -1891,7 +1891,7 @@ pub(crate) mod events {
             "en-US".to_string()
         }
 
-        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut() + Send>) {
+        fn on_keyboard_layout_change(_: &Self, callback: Box<dyn FnMut()>) {
             // The layout is the fixed "en-US" above; nothing changes it.
             drop(callback);
         }

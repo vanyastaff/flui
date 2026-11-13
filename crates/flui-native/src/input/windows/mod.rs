@@ -90,7 +90,7 @@ impl crate::host::Input<WindowsLoop> for WindowsLoop {
         }
     }
 
-    fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
+    fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut()>) {
         owner.register_handler("on_keyboard_layout_change", callback, |hooks| {
             &mut hooks.keyboard_layout_changed
         });

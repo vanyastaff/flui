@@ -15,9 +15,9 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak as RcWeak};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
-use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_native::{HeadlessPlatform, HostWindow, OwnerPlatform, Platform};
@@ -90,7 +90,7 @@ trait Reach {
     fn touch(&self);
 }
 
-impl Reach for Arc<dyn Platform> {
+impl Reach for Rc<dyn Platform> {
     fn open(
         &self,
         options: WindowOptions,
@@ -132,25 +132,26 @@ impl Reach for OwnerPlatform {
 /// The keyboard layout callback, the one application-level registration left:
 /// a replaced callback whose captures call the platform when dropped reaches
 /// the platform from its destructor.
-fn a_replaced_keyboard_layout_callback_reaches_the_platform(platform: &Arc<dyn Platform>) {
+fn a_replaced_keyboard_layout_callback_reaches_the_platform(platform: &Rc<dyn Platform>) {
     std::thread_local! {
         /// The platform the capture's destructor reaches: the callback is
         /// `Send` and the platform is not, so the destructor finds it on the
         /// owner thread that drops it.
-        static REACHED: RefCell<Option<Weak<dyn Platform>>> = const { RefCell::new(None) };
+        static REACHED: RefCell<Option<std::rc::Weak<dyn Platform>>> = const { RefCell::new(None) };
     }
     /// Reaches the platform when dropped.
     struct CallsBack(Arc<AtomicBool>);
     impl Drop for CallsBack {
         fn drop(&mut self) {
-            let platform = REACHED.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+            let platform =
+                REACHED.with(|slot| slot.borrow().as_ref().and_then(std::rc::Weak::upgrade));
             if let Some(platform) = platform {
                 let _ = platform.active_window();
                 self.0.store(true, Ordering::SeqCst);
             }
         }
     }
-    REACHED.with(|slot| *slot.borrow_mut() = Some(Arc::downgrade(platform)));
+    REACHED.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(platform)));
     let reached = Arc::new(AtomicBool::new(false));
     let capture = CallsBack(Arc::clone(&reached));
     platform.on_keyboard_layout_change(Box::new(move || {
@@ -683,11 +684,7 @@ fn headless_a_run_inside_a_handler_binds_its_own() {
 
 fn headless_replaced_keyboard_layout_callback_reaches_the_platform() {
     within("headless keyboard layout callback", || {
-        #[expect(
-            clippy::arc_with_non_send_sync,
-            reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
-        )]
-        let platform: Arc<dyn Platform> = Arc::new(HeadlessPlatform::new());
+        let platform: Rc<dyn Platform> = Rc::new(HeadlessPlatform::new());
         a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
     });
 }
@@ -740,7 +737,6 @@ mod win32 {
 
     use std::cell::Cell;
     use std::rc::Rc;
-    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use flui_native::{AppHandler, Platform, WindowsPlatform};
@@ -760,12 +756,8 @@ mod win32 {
     use crate::app::{AppCall, AppLog};
 
     fn platform() -> Rc<dyn Reach> {
-        #[expect(
-            clippy::arc_with_non_send_sync,
-            reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
-        )]
-        let platform: Arc<dyn Platform> =
-            Arc::new(WindowsPlatform::try_new().expect("native Windows platform"));
+        let platform: Rc<dyn Platform> =
+            Rc::new(WindowsPlatform::try_new().expect("native Windows platform"));
         Rc::new(platform)
     }
 
@@ -922,12 +914,8 @@ mod win32 {
 
     fn replaced_keyboard_layout_callback() {
         within("Win32 keyboard layout callback", || {
-            #[expect(
-                clippy::arc_with_non_send_sync,
-                reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
-            )]
-            let platform: Arc<dyn Platform> =
-                Arc::new(WindowsPlatform::try_new().expect("native Windows platform"));
+            let platform: Rc<dyn Platform> =
+                Rc::new(WindowsPlatform::try_new().expect("native Windows platform"));
             a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
         });
     }
