@@ -292,14 +292,30 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
 }
 
-/// One-screen scrolls a scenario pumps before it measures a steady one. Eight
-/// is where a scroll stops costing less than the one before it: the next two
-/// differ by at most [`STEADY_SLACK`] allocations, which the scenario asserts.
+/// One-screen scrolls a scenario pumps before it measures a steady one. A
+/// margin, not a measured threshold: the scenario asserts that the two scrolls
+/// after it cost the same ([`assert_steady`]), so a warm-up that runs past it
+/// fails there.
 const WARM_SCROLLS: u32 = 8;
 
-/// How many allocations two steady scrolls may differ by: the rows a band
-/// rebuilds are not the same rows from one screen to the next.
+/// Reassembles a scenario runs before it measures a steady one, held the same
+/// way as [`WARM_SCROLLS`].
+const WARM_REASSEMBLES: usize = 2;
+
+/// How many allocations or reallocations two steady frames may differ by: the
+/// rows a band rebuilds are not the same rows from one screen to the next.
 const STEADY_SLACK: u64 = 2;
+
+/// Fails unless `next` asked as much of the heap as `first`, within
+/// [`STEADY_SLACK`] allocations and reallocations: a run whose buffers are
+/// still growing allocates or reallocates more in the earlier frame.
+fn assert_steady(what: &str, first: HeapCounts, next: HeapCounts) {
+    assert!(
+        first.allocations.abs_diff(next.allocations) <= STEADY_SLACK
+            && first.reallocations.abs_diff(next.reallocations) <= STEADY_SLACK,
+        "{what} is still warming up: one asked {first:?} of the heap, the next {next:?}"
+    );
+}
 
 /// A one-screen scroll once the app has scrolled eight screens: what every
 /// scroll after the first few costs. The first-scroll row above includes the
@@ -324,10 +340,7 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     let (_, next) = scroll_to(WARM_SCROLLS + 2);
     record("list_10k_scroll_warm", &report, allocations);
 
-    assert!(
-        allocations.allocations.abs_diff(next.allocations) <= STEADY_SLACK,
-        "the warm-up is not over: one scroll asked {allocations:?} of the heap, the next {next:?}"
-    );
+    assert_steady("a warm scroll", allocations, next);
     let visible_rows = ((HEIGHT - LABEL_HEIGHT) / ROW_HEIGHT) as u64;
     let laid_out = counter(&report, "nodes_laid_out");
     assert!(
@@ -345,20 +358,24 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
 #[test]
 fn perf_a_repeated_full_reassemble_reuses_what_the_last_one_kept() {
     let mut app = mount();
-    for _ in 0..2 {
+    let mut reassemble = || {
         app.binding.perform_reassemble();
         app.binding.reassemble_render_tree();
-        app.binding.pump_frame_report(FRAME);
+        perf_measured(|| app.binding.pump_frame_report(FRAME))
+    };
+    for _ in 0..WARM_REASSEMBLES {
+        reassemble();
     }
-    app.binding.perform_reassemble();
-    app.binding.reassemble_render_tree();
-    let (report, allocations) = perf_measured(|| app.binding.pump_frame_report(FRAME));
+    let (report, allocations) = reassemble();
+    let (_, next) = reassemble();
     record("full_reassemble_repeated", &report, allocations);
 
+    assert_steady("a repeated reassemble", allocations, next);
     assert!(counter(&report, "nodes_laid_out") > 0, "{report:#?}");
     assert!(counter(&report, "nodes_painted") > 0, "{report:#?}");
     assert_eq!(report.pipeline.frames_produced, 1, "{report:#?}");
 }
+
 /// Rows under the sliding panel: enough painted content that a subtree
 /// repaint and a layer patch differ visibly in `nodes_painted`.
 const PANEL_ROWS: usize = 30;
