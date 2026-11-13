@@ -240,9 +240,10 @@ impl Canvas {
     // ===== Query Methods =====
 
     /// The room, in paints and in saved states, the canvas holds for its next
-    /// recording.
+    /// recording: a probe for the crate's tests, outside the public API.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
+    #[doc(hidden)]
     pub fn kept_room(&self) -> (usize, usize) {
         (self.paint_pool.capacity(), self.save_stack.capacity())
     }
