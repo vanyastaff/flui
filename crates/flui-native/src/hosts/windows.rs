@@ -118,6 +118,9 @@ impl WindowsHost for Windows {
 /// The native Windows platform: Win32 windows and message loop, OLE drag and
 /// drop, TSF text input and the system's clipboard, displays and preferences.
 pub type WindowsPlatform = HostPlatform<Windows>;
+// Owner-local (ADR-0327 §5): the platform and its window set never leave the
+// thread that built them; another thread reaches it through its proxy.
+static_assertions::assert_not_impl_any!(WindowsPlatform: Send, Sync);
 
 impl HostPlatform<Windows> {
     /// Create a new Windows platform instance.
