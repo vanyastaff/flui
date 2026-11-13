@@ -612,7 +612,12 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
         }
         // The shadow silhouette and child clip share the same local shape.
         // Semantics uses its conservative bounds, not the shadow's spread.
-        Some(self.clip_source.compute_clip(size).shadow_path().bounds())
+        Some(
+            self.clip_source
+                .compute_clip(size)
+                .shadow_path()
+                .compute_bounds(),
+        )
     }
 
     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {

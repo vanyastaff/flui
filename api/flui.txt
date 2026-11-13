@@ -10460,7 +10460,6 @@ impl From<flui::painting::paint::Path> for flui_painting::paint::path::PathRepr
 impl From<flui_painting::paint::path::PathRepr> for flui::painting::paint::Path
 impl PartialEq for flui::painting::paint::Path
 impl core::fmt::Debug for flui::painting::paint::Path
-impl core::marker::StructuralPartialEq for flui::painting::paint::Path
 impl serde_core::ser::Serialize for flui::painting::paint::Path
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::Path
 pub const fn flui::painting::paint::Path::fill_type(&self) -> flui::painting::paint::PathFillType
@@ -10468,8 +10467,6 @@ pub fn flui::painting::paint::Path::add_arc(&mut self, rect: flui::geometry::Rec
 pub fn flui::painting::paint::Path::add_oval(&mut self, rect: flui::geometry::Rect<f64>)
 pub fn flui::painting::paint::Path::add_rect(&mut self, rect: flui::geometry::Rect<f64>)
 pub fn flui::painting::paint::Path::arc(rect: flui::geometry::Rect<f64>, start_angle: f64, sweep_angle: f64) -> Self
-pub fn flui::painting::paint::Path::bounds(&mut self) -> flui::geometry::Rect<f64>
-pub fn flui::painting::paint::Path::cached_bounds(&self) -> Option<flui::geometry::Rect<f64>>
 pub fn flui::painting::paint::Path::circle(center: flui::geometry::Point<f64>, radius: f64) -> Self
 pub fn flui::painting::paint::Path::close(&mut self)
 pub fn flui::painting::paint::Path::commands(&self) -> impl ExactSizeIterator<Item = flui::painting::paint::PathCommand> + '_
