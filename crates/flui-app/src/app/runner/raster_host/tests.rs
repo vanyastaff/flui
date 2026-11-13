@@ -787,3 +787,54 @@ fn a_surface_deadline_is_only_its_own_windows() {
         .try_read(|host| assert_eq!(host.window_deadline(other), None))
         .expect("the host is idle");
 }
+
+/// Attach `at`'s window to `shared` and give it a frame, then have the
+/// backend refuse the surface the platform gives back: the window is owed a
+/// surface on its pace. Answers that pace's deadline. For the frame drivers'
+/// wake tests, which read it through the loop's wake hook.
+pub(in crate::app::runner) fn owe_a_surface(
+    shared: &SharedRasterHost,
+    slots: &ScriptedSlots,
+    at: PresentationAddress,
+    window: std::ffi::c_ulong,
+) -> web_time::Instant {
+    shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(window)),
+                at,
+                &crate::app::AppConfig::default(),
+                None,
+                None,
+            )
+            .expect("the scripted backend attaches any window");
+            let scene = TestScene::new(AT);
+            let _ = host.submit(at, SIZE, scene.publication());
+            let _ = host.set_surface(at, false);
+            slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
+            assert!(!host.set_surface(at, true));
+            host.window_deadline(at)
+                .expect("a refused surface is owed on its pace")
+        })
+        .expect("the host is idle")
+}
+
+/// Attach `at`'s window to `shared`, as the loop does when it opens one.
+pub(in crate::app::runner) fn attach_a_window(
+    shared: &SharedRasterHost,
+    at: PresentationAddress,
+    window: std::ffi::c_ulong,
+) {
+    shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(window)),
+                at,
+                &crate::app::AppConfig::default(),
+                None,
+                None,
+            )
+        })
+        .expect("the host is idle")
+        .expect("the scripted backend attaches any window");
+}

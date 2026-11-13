@@ -1139,10 +1139,10 @@ impl RasterHost {
     /// past instant through this one on every wake, which this window's
     /// frame cannot move.
     pub(crate) fn window_deadline(&self, address: PresentationAddress) -> Option<Instant> {
-        match (self.device_retry_at(), self.surface_retry_at_for(address)) {
-            (Some(device), Some(surface)) => Some(device.min(surface)),
-            (device, surface) => device.or(surface),
-        }
+        super::host::merge_wake_deadlines(
+            self.device_retry_at(),
+            self.surface_retry_at_for(address),
+        )
     }
 
     /// Whether the device refused `surface`, the size `address`'s window is
@@ -1422,10 +1422,7 @@ pub(crate) fn raster_wake_at() -> Option<Instant> {
     super::host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
         state.raster_host.try_read(|host| {
-            match (host.device_retry_at(), host.surface_retry_at()) {
-                (Some(device), Some(surface)) => Some(device.min(surface)),
-                (device, surface) => device.or(surface),
-            }
+            super::host::merge_wake_deadlines(host.device_retry_at(), host.surface_retry_at())
         })?
     })
 }
@@ -1618,4 +1615,4 @@ impl Drop for RasterSlot {
 }
 
 #[cfg(all(test, feature = "testing"))]
-mod tests;
+pub(super) mod tests;

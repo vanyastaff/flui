@@ -256,9 +256,10 @@ the dispatch layer moves there too.
   no surface of their own; a surface the backend refuses is asked for again
   at the window's `RestorePace` (16 ms doubling to 1 s), only while the
   window is shown. `RasterHost::window_deadline` (that deadline and the
-  device's next rebuild) is what the window's wake hook reports and its
+  device's next rebuild) is what a desktop window's wake hook reports and its
   frame gate counts, so no window wakes the loop for a deadline only another
-  window's frame serves. A window whose
+  window's frame serves; a mobile loop has one window, whose hook reports
+  the whole host's (`raster_wake_at`), the same deadline. A window whose
   native surface does not exist yet is taken as released until the platform
   reports one. The development scene plugin draws through
   `RasterHost::render_lent`, after which the window's next frame draws in
