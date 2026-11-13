@@ -1555,8 +1555,8 @@ impl HeadlessHost {
     /// Run the queued registry writes until none finishes, then write what
     /// every document still owes and run what that queued. A write the
     /// storage holds is not waited for: nothing on this thread can finish it,
-    /// and while it is in flight the registry starts no other write, so what
-    /// any document still owes then is not written.
+    /// and while any write is in flight the flush starts none, so what a
+    /// document still owes then, a retry included, is not written.
     fn write_published(&self) {
         self.run_flush_writes();
         if let Some(flush) = &self.flush {
