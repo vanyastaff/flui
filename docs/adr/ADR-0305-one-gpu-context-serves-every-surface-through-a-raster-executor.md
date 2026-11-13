@@ -202,11 +202,11 @@ pub struct GpuBootstrap {
   command (§3). `wgpu::Instance` is `Clone + Send + Sync` (`wgpu/src/api/instance.rs:31-36`), so
   the factory and the context share one instance. The executor makes no surface either: a
   window surface still lost after a reconfigure is dropped, the frame answers
-  `EngineError::SurfaceReplacementNeeded`, and the slot's record says it wants a surface
-  (`SlotRecord::wants_surface`) until the owner sends one in a `Restore`. A `Restore` the backend
-  cannot use is named by `SlotRecord::surface_refused`, so the owner tells it from a surface
-  dropped after one it took, and stops retrying that frame; one over the device's size limit
-  keeps its surface, as after a rebuild, and waits for a size that fits.
+  `EngineError::SurfaceReplacementNeeded`, and the slot's surface is `SurfaceHold::Wanted` (§6)
+  until the owner sends one in a `Restore`. A `Restore` the backend cannot use makes it
+  `SurfaceHold::Refused`, so the owner tells it from a surface dropped after one it took, and
+  stops retrying that frame; one over the device's size limit keeps its surface, as after a
+  rebuild, and the size it was configured at becomes `SlotSize::Refused` until a size that fits.
 - **The bootstrap runs ADR-0244 decision 1's probe once**, over the first window when there is
   one: each backend attempt in its own instance, the winning instance kept by both the factory
   and the context. It is `async`; native runners block on it once at startup, and the web runner
@@ -325,13 +325,21 @@ holds per slot: the counter lives in the slot's inbox state and changes only und
 the raster side mints there on a lost surface, and a frame renders only when its stamp equals the
 applied configuration's generation. `SurfaceGeneration::ZERO` still means no surface, and a size
 with a zero or negative side mints no generation and leaves the slot unconfigured, as `resize`
-answers `None` for it today (`raster_owner.rs:928`). A minted size the backend refuses for now
-(an error whose `Recoverability` is `Recoverable`) or whose resize panics stays pending, and the
-next turn retries it; a size it always refuses is not retried: the slot keeps its previous
-configuration, so frames stamped with that generation settle `SurfaceStale`, the failure waits in
-the slot's record, and the executor warns once for that size until the owner sends another one.
-A size pending or refused is a barrier for every newer generation: neither a lost surface nor a
-`Restore` authorises frames laid out for a size the slot does not have.
+answers `None` for it today (`raster_owner.rs:928`). Where the slot's surface and size stand is
+one state, `SlotSurface { hold: SurfaceHold, size: SlotSize }`, which changes only through its
+transition function under the inbox lock and which `SlotRecord::surface` publishes; the owner
+decides from it (a new surface, another size, nothing until the window changes), and a failure the
+slot holds is only what it reports. `SurfaceHold` is `Held`, `Wanted` (the slot dropped its
+surface) or `Refused` (the newest `Restore` was refused); `SlotSize` is `Unsized`, `Pending`,
+`Applied` or `Refused`. A minted size is `Pending`; the backend's answer to it makes it `Applied`,
+or `Refused` when the backend always refuses it, and leaves it `Pending` when it refuses it for now
+(an error whose `Recoverability` is `Recoverable`) or the resize panics, so the next turn retries
+it. A `Refused` size is not retried: the slot keeps its previous configuration, frames stamped
+with that generation settle `SurfaceStale`, and the executor warns once for that size until the
+owner sends another one. A size that is not settled (`Pending` or `Refused`) is a barrier for
+every newer generation: neither a lost surface nor a `Restore` authorises frames laid out for a
+size the slot does not have. The transition table is in `raster_executor/surface.rs`, and
+`window_slots::each_surface_event_reaches_the_record` drives each row through the executor.
 `GpuResourceGeneration`, `FrameStamp::gpu_resource_generation`,
 `RasterHandle::bind_gpu_resource_generation` (`raster_owner.rs:954`) and
 `PumpOutcome::ResourceOutdated` are deleted: a frame carries CPU data only, every GPU object it
@@ -388,7 +396,8 @@ executor runs each command under its own catch, in both placements.
   rebuilds exhausted the backoff may be the cause: the factory is replaced and every slot gets a
   new surface from the owner in a `Restore`.
 - A rebuild that succeeds mints each configured slot's next surface generation, so a frame
-  stamped before it is refused as after a `Restore`; a size pending or refused keeps its barrier
+  stamped before it is refused as after a `Restore`; a size the lost device refused is `Pending`
+  again, for the new device to answer, and a size not settled keeps its barrier
   (§6), and every slot redraws in full.
 - The rebuild runs where the executor runs (§10). It keeps the instance and every surface,
   requests an adapter and device on that instance, compatible with the surface of the first window
@@ -399,8 +408,8 @@ executor runs each command under its own catch, in both placements.
   `EngineError::IncompatibleSurface` at that slot's address, an error of that slot and not of
   the context. A slot whose reconfigure fails settles `SurfaceStale`, and its
   record asks the owner for a new surface, which the owner makes with the factory and sends in a
-  `Restore`. A slot over the new device's size limit keeps its surface unconfigured and holds
-  `InvalidTargetSize` until a resize fits, as an offscreen slot does. Each slot redraws in full
+  `Restore`. A slot over the new device's size limit keeps its surface unconfigured, its size
+  becomes `SlotSize::Refused` until a resize fits, as an offscreen slot's does. Each slot redraws in full
   and re-uploads its external textures from the newest image of each that it keeps
   (ADR-0233).
 - On the web the rebuild is a future the owner spawns; frames settle `DeviceLost` until it ends.
