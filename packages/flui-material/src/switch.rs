@@ -280,6 +280,14 @@ impl StatefulView for Switch {
             None,
         )
         .expect("BUG: a switch position is 0 or 1, always finite");
+        // `Disabled` is seeded from the switch the well is given: the well's
+        // node writes the same value, and this build reads it first
+        // (ADR-0322 §3).
+        let initial = if self.is_interactive() {
+            initial
+        } else {
+            initial.with_state(WidgetState::Disabled)
+        };
         SwitchState {
             states: WidgetStatesController::new(initial),
             states_listener: None,
@@ -313,6 +321,12 @@ impl ViewState<Switch> for SwitchState {
     }
 
     fn did_update_view(&mut self, old_view: &Switch, new_view: &Switch) {
+        // Seeded before this build reads it, from the switch the well is
+        // given; the well's node writes the same value (ADR-0322 §3).
+        if old_view.is_interactive() != new_view.is_interactive() {
+            self.states
+                .update(WidgetState::Disabled, !new_view.is_interactive());
+        }
         if old_view.value != new_view.value {
             self.states.update(WidgetState::Selected, new_view.value);
         }
@@ -385,6 +399,7 @@ impl ViewState<Switch> for SwitchState {
             .shape(MaterialShape::Stadium)
             .overlay_color(overlay_color)
             .states_controller(self.states.clone())
+            .enabled(interactive)
             .focus_indicator(FocusIndicator::Halo)
             // Flutter's `Semantics(toggled: …, enabled: …)` around the switch:
             // the well's node is that one node, enabled while the well has its

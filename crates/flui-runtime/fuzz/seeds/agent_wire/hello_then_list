@@ -1,0 +1,2 @@
+0{"hello":{"token":"a-token-long-enough-for-the-launch-0123456789","protocol":"0.11","client":"seed"}}
+{"id":1,"method":"windows.list","params":{}}

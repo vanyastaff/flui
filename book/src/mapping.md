@@ -14,7 +14,7 @@ struct in `crates/`.
 | `Router` | `Router<R: Routable>` + `RouterHandle<R>`, with `#[derive(Routable)]` on a route enum | `crates/flui-widgets/src/router/` |
 | `WidgetsApp` | `WidgetsApp` (`WidgetsApp::new(home)` or `WidgetsApp::router(router)`) | `crates/flui-widgets/src/app/widgets_app.rs` |
 | `MaterialApp` / `CupertinoApp` | `MaterialApp` / `CupertinoApp` | `packages/flui-material/src/app.rs`, `packages/flui-cupertino/src/app.rs` |
-| `WidgetTester` (`testWidgets`, `pumpWidget`, `pump`, `pumpAndSettle`, `tap`, `enterText`) | `Tester` (`Tester::mount`, `pump`, `pump_for`, `pump_and_settle`, `tap`, `enter_text`), synchronous | `crates/flui-testing/src/tester.rs` |
+| `WidgetTester` (`testWidgets`, `pumpWidget`, `pump`, `pumpAndSettle`, `tap`, `enterText`, `sendKeyEvent`) | `Tester` (`Tester::mount`, `pump`, `pump_for`, `pump_and_settle`, `tap`, `enter_text`, `press_keys`), synchronous | `crates/flui-testing/src/tester.rs` |
 | `find.text`, `find.byKey`, `find.bySemanticsLabel` | `find::text`, `find::id`, `find::button`, `find::role`: each a `Locator` over the semantics tree | `crates/flui-testing/src/find.rs`, `crates/flui-protocol/src/locator.rs` |
 | `expect(finder, findsOneWidget)` | `t.expect(locator).to_exist()` (`to_be_gone`, `to_have_count`, `to_have_name`, `to_be_checked`, …) | `crates/flui-testing/src/tester.rs` |
 

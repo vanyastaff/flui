@@ -102,6 +102,8 @@ mod error_view;
 
 #[path = "contracts/agent_service.rs"]
 mod agent_service;
+#[path = "support/agent_wire.rs"]
+mod agent_wire;
 
 #[path = "contracts/agent_act.rs"]
 mod agent_act;

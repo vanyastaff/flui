@@ -18,6 +18,7 @@
 //! ```
 
 pub use flui_testing::find;
+pub use flui_testing::storage::{CommitBarrier, CopyHold, MemoryStorage, WriteHold};
 pub use flui_testing::{
     Expectation, InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalPoint,
     LogicalRect, Match, Node, Pick, Role, StateFilter, TestError, TestWindow, Tester, TextMatch,

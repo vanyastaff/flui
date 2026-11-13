@@ -215,6 +215,14 @@ fn action_component_contracts() {
             ink_well::the_press_hold_survives_a_rebuild_and_a_disable_ends_it,
         ),
         (
+            "ink_well::a replaced controller keeps no disabled",
+            ink_well::a_replaced_controller_keeps_no_disabled,
+        ),
+        (
+            "ink_well::a control turned off or on builds each element once",
+            ink_well::a_control_turned_off_or_on_builds_each_element_once,
+        ),
+        (
             "ink_well::a rebuilt well calls its new handler and releases it when unmounted",
             ink_well::a_rebuilt_well_calls_its_new_handler_and_releases_it_when_unmounted,
         ),
@@ -257,6 +265,14 @@ fn action_component_contracts() {
         (
             "list_tile::whole tile tap fires from a point inside the content padding",
             list_tile::whole_tile_tap_fires_from_a_point_inside_the_content_padding,
+        ),
+        (
+            "list_tile::a tile is disabled only when it says so and operable with a handler",
+            list_tile::a_tile_is_disabled_only_when_it_says_so_and_operable_with_a_handler,
+        ),
+        (
+            "list_tile::turning a tile off and on keeps its handler and builds the well once",
+            list_tile::turning_a_tile_off_and_on_keeps_its_handler_and_builds_the_well_once,
         ),
     ]);
 }

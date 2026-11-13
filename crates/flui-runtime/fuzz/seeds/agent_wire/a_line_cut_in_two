@@ -1,0 +1,2 @@
+1{"id":1,"method":"semantics.locÿate","params":{"window":"$window","locator":{"name":{"match":"exact","text":"Go"}}}}
+{"id":"two","method":"element.actionability","params":{"window":"$window","target":{"locator":{"name":{"match":"exact","text":"Go"}}},"action":"invoke"}}

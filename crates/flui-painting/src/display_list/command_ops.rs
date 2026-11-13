@@ -119,12 +119,12 @@ fn stretch(matrix: &Matrix4) -> f64 {
     f64::midpoint(sum, discriminant.sqrt()).sqrt()
 }
 
-impl DrawCommand {
+impl DrawCommand<'_> {
     /// The command's conservative damage extent in the display list's
     /// coordinate space — see [`DrawOp::damage_bounds`]. `None` for ops that
     /// draw nothing (clips and scope markers).
     pub(crate) fn damage_extent(&self) -> Option<DamageExtent> {
-        Some(self.op.damage_bounds()?.transformed(&self.transform))
+        Some(self.op.damage_bounds()?.transformed(self.transform))
     }
 
     /// The bounding rectangle of this command in the display list's

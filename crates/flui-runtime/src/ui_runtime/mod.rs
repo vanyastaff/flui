@@ -121,6 +121,7 @@ mod construct;
 mod frame;
 mod frame_clock;
 mod input;
+mod navigation;
 mod presentations;
 mod pump;
 mod recording;

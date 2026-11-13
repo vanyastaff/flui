@@ -296,7 +296,7 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
 }
 
 pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
-    use flui_widgets::{SizedBox, app_root};
+    use flui_widgets::SizedBox;
     const STEP: Duration = Duration::from_millis(10);
     for (vertical, sign) in [(false, 1.0), (false, -1.0), (true, 1.0), (true, -1.0)] {
         let progress = Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -328,7 +328,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         }
         let vsync = Vsync::new();
         let mut laid = lay_out_animated(
-            app_root(VsyncScope::new(vsync.clone(), card)),
+            VsyncScope::new(vsync.clone(), card),
             tight(200.0, 200.0),
             vsync.clone(),
         );

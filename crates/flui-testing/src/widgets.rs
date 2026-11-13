@@ -600,16 +600,14 @@ impl LaidOut {
     }
 
     /// End the session the tree runs in, as the operating system does at log
-    /// off or shut down once the session is ending: what the documents
-    /// published is written, then the presentation closes, past every hold
+    /// off or shut down once the session is ending, in a runner's order: the
+    /// session-ended notice, then the presentation commits its composition
+    /// and closes past every hold
     /// ([`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd) can
-    /// no longer be refused once the session is ending).
-    pub fn end_session(&self) {
-        let runtime = self.host.ui_runtime();
-        let _answer = runtime.end_session(flui_platform::SessionEndPhase::Ending);
-        runtime
-            .ui_runtime()
-            .enter(flui_runtime::ui_runtime::UiRuntime::stop_presentations);
+    /// no longer be refused once the session is ending), then what the
+    /// documents published is written.
+    pub fn end_session(&mut self) {
+        self.host.ui_runtime_mut().end_session_now();
     }
 
     /// Deliver an accessibility action to the node it addresses, as a platform
@@ -1635,14 +1633,17 @@ impl LaidOut {
     /// Every draw operation in the last submitted scene's picture layers, in
     /// layer order, each with its recorded transform: what a paint test
     /// samples at a virtual time.
-    pub fn draw_ops(&self) -> Vec<flui_painting::display_list::DrawCommand> {
+    pub fn draw_ops(&self) -> Vec<DrawnOp> {
         let Some(tree) = self.layer_tree() else {
             return Vec::new();
         };
         let mut ops = Vec::new();
         for (_, node) in tree.iter() {
             if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
-                ops.extend(picture.picture().iter().cloned());
+                ops.extend(picture.picture().iter().map(|command| DrawnOp {
+                    transform: *command.transform,
+                    op: command.op.clone(),
+                }));
             }
         }
         ops
@@ -2110,4 +2111,15 @@ pub fn rgba(color: flui_painting::styling::Color) -> flui_foundation::inspect::R
         Value::Color(rgba) => rgba,
         other => unreachable!("BUG: a Color describes itself as a colour, not {other:?}"),
     }
+}
+
+/// One draw operation of a submitted picture, owned so a test can keep it:
+/// what [`LaidOut::draw_ops`] returns.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct DrawnOp {
+    /// The transform the operation was recorded under, absolute in its layer.
+    pub transform: Matrix4,
+    /// The operation.
+    pub op: flui_painting::DrawOp,
 }

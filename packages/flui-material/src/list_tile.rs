@@ -139,8 +139,10 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
-    MainAxisSize, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
+    MainAxisSize, Padding, Row, SafeArea, SemanticsRole, SizedBox,
 };
+
+use flui_sdk::widgets::interaction::node::Description;
 
 use crate::ink_well::InkWell;
 use crate::material::Material;
@@ -477,12 +479,6 @@ impl ListTile {
         self.min_tile_height = Some(height);
         self
     }
-
-    /// Whether this tile responds to a whole-tile tap: enabled with an
-    /// `on_tap` set.
-    fn is_interactive(&self) -> bool {
-        self.enabled && self.on_tap.is_some()
-    }
 }
 
 /// [`ListTile`]'s theme-resolved geometry/color/style — see [`resolve_style`]'s
@@ -788,26 +784,37 @@ impl StatelessView for ListTile {
         // keeps it whether or not it is selected; any other tile declares no
         // selection (its `selected` only recolors it), so a tappable one is a
         // button and a tile merged into a radio or check box adds no state
-        // those roles do not carry.
+        // those roles do not carry. The well's node carries the description
+        // and the tile's switch: a tile without a handler is enabled or not as
+        // the tile says, and the node stays put when the handler comes or goes.
+        //
+        // A plain tile (no handler, not selectable) declares nothing while
+        // enabled, so its text folds into the node above it as Flutter's
+        // non-container `Semantics` lets it. Disabled, it is a node of its own
+        // that says so: Flutter folds `enabled: false` upward too, which would
+        // say an enclosing list or row is disabled.
         let role = if self.selectable {
-            SemanticsRole::ListBoxOption
+            Some(SemanticsRole::ListBoxOption)
         } else if self.on_tap.is_some() {
-            SemanticsRole::Button
+            Some(SemanticsRole::Button)
+        } else if !self.enabled {
+            Some(SemanticsRole::None)
         } else {
-            SemanticsRole::None
+            None
         };
-        let mut semantics = Semantics::new().role(role).enabled(self.enabled);
-        if self.selectable {
-            semantics = semantics.selected(self.selected);
-        }
-        let semantics = semantics.child(content);
 
-        let mut ink_well = InkWell::new().child(semantics).shape(resolved.shape);
-        if self.is_interactive() {
-            let on_tap = self
-                .on_tap
-                .clone()
-                .expect("BUG: is_interactive() checked on_tap.is_some()");
+        let mut ink_well = InkWell::new()
+            .child(content)
+            .shape(resolved.shape)
+            .enabled(self.enabled);
+        if let Some(role) = role {
+            let mut description = Description::new(role);
+            if self.selectable {
+                description = description.selected(self.selected);
+            }
+            ink_well = ink_well.description(description);
+        }
+        if let Some(on_tap) = self.on_tap.clone() {
             ink_well = ink_well.on_tap(move |ctx| on_tap(ctx));
         }
 
