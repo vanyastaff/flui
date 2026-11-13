@@ -7,7 +7,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Interval, curves};
@@ -63,9 +62,9 @@ fn mount_navigator(navigator: &NavigatorHandle) -> Harness {
     })
 }
 
-fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
+fn install(navigator: &NavigatorHandle) -> Rc<HeroController> {
     let controller = HeroController::new();
-    navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+    navigator.add_observer(Rc::clone(&controller) as Rc<dyn NavigatorObserver>);
     controller
 }
 
@@ -125,7 +124,7 @@ fn fly(
 /// begin/end swapped (the shuttle now heads back to where it came from).
 ///
 /// Red-check: in `FlightManager::start`, replace the `existing.divert(…); return;`
-/// with an end-and-restart (`self.flights.lock().remove(&tag)` + `finish` + a fresh
+/// with an end-and-restart (`self.flights.borrow_mut().remove(&tag)` + `finish` + a fresh
 /// `start`). The entry id then changes and the begin/end are the fresh push tween.
 pub(crate) fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
     let navigator = seeded_navigator();
@@ -332,7 +331,7 @@ pub(crate) fn removing_the_observer_mid_flight_ends_the_flight() {
         .entry_id();
     assert_eq!(navigator.overlay().entry_ids().last().copied(), shuttle);
 
-    let observer: Arc<dyn NavigatorObserver> = controller.clone();
+    let observer: Rc<dyn NavigatorObserver> = controller.clone();
     harness.enter_owner_scope(|| navigator.remove_observer(&observer));
     harness.tick();
 
@@ -494,7 +493,7 @@ pub(crate) fn cancelling_a_hero_mapping_does_not_refreeze_the_previous_page() {
             Rc::new(move || {
                 if armed.replace(false) {
                     cancelled.set(true);
-                    navigator.add_observer(Arc::new(PassiveHeroObserver));
+                    navigator.add_observer(Rc::new(PassiveHeroObserver));
                 }
             })
         };
@@ -561,7 +560,7 @@ fn rect_mapping_reentry(phase: &'static str) {
     let busy = Rc::new(Cell::new(false));
     let nested = Rc::new(Cell::new(None));
     let hook: Rc<dyn Fn()> = {
-        let controller = Arc::downgrade(&controller);
+        let controller = Rc::downgrade(&controller);
         let armed = Rc::clone(&armed);
         let busy = Rc::clone(&busy);
         let nested = Rc::clone(&nested);
@@ -977,7 +976,7 @@ fn exercise_hero_geometry_authority(phase: &'static str, cancel: bool) {
         let armed = Rc::clone(&armed);
         let replacement = Rc::clone(&replacement);
         let nested = Rc::clone(&nested);
-        let controller = Arc::downgrade(&controller);
+        let controller = Rc::downgrade(&controller);
         Rc::new(move || {
             if !armed.replace(false) {
                 return;
@@ -1129,17 +1128,13 @@ pub(crate) fn hero_geometry_reentry_preserves_the_newer_authority() {
 
 #[derive(Clone, Debug)]
 struct OverrideHeroCurve {
-    armed: Arc<std::sync::atomic::AtomicBool>,
+    armed: Rc<Cell<bool>>,
     sample: f64,
 }
 
 impl flui_animation::Curve for OverrideHeroCurve {
     fn transform(&self, t: f64) -> f64 {
-        if self.armed.load(std::sync::atomic::Ordering::SeqCst) {
-            self.sample
-        } else {
-            t
-        }
+        if self.armed.get() { self.sample } else { t }
     }
 }
 
@@ -1205,12 +1200,12 @@ fn missing_destination_fade_case(
     let mut harness = mount_navigator(&navigator);
     let visible = Rc::new(Cell::new(true));
     let rebuild = Rc::new(RefCell::new(None));
-    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let armed = Rc::new(Cell::new(false));
     let page = DisappearingHero {
         visible: Rc::clone(&visible),
         rebuild: Rc::clone(&rebuild),
         curve: OverrideHeroCurve {
-            armed: Arc::clone(&armed),
+            armed: Rc::clone(&armed),
             sample: sample.unwrap_or(0.0),
         },
     };
@@ -1309,7 +1304,7 @@ fn missing_destination_fade_case(
     let mounted_heroes = harness
         .elements_of_type(std::any::TypeId::of::<Hero>())
         .len();
-    armed.store(sample.is_some(), std::sync::atomic::Ordering::SeqCst);
+    armed.set(sample.is_some());
     visible.set(false);
     let handle = rebuild
         .borrow()
@@ -1347,7 +1342,7 @@ fn missing_destination_fade_case(
         1,
         "a missing destination still fades in its existing flight"
     );
-    armed.store(false, std::sync::atomic::Ordering::SeqCst);
+    armed.set(false);
     harness.enter_owner_scope(|| {
         transition
             .controller()

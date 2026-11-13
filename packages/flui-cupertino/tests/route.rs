@@ -269,3 +269,89 @@ pub fn cupertino_app_slides_a_page_in_from_off_the_right_edge_over_500ms() {
          once the transition completes: {settled_dx}"
     );
 }
+
+/// The opacity of every translucent black fill painted in the last frame: the
+/// barrier under the pushed page. The home page is opaque black, so it is not
+/// among them.
+fn barrier_opacities(laid: &common::LaidOut) -> Vec<f32> {
+    laid.draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::Rect { paint, .. }
+                if paint.color.with_opacity(1.0) == Color::rgb(0, 0, 0)
+                    && paint.color.opacity() < 1.0 =>
+            {
+                Some(paint.color.opacity())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// While the pushed page slides over the home page, the home page dims under
+/// it: `CupertinoPageRoute`'s barrier, `0x18000000`, faded in along the
+/// route's entrance through `Curves.ease`. Before the push nothing dims it.
+///
+/// Red-check: install `ParallaxPageTransition::new()` without `.barrier(…)`
+/// in `CupertinoApp::build` — the midpoint frame paints no translucent fill.
+/// Red-check 2: paint the barrier flat in `ModalInner::barrier_fill` — the
+/// midpoint reads the full `0x18` instead of the eased fraction.
+pub fn cupertino_app_dims_the_page_below_while_the_next_slides_over_it() {
+    let vsync = Vsync::new();
+    let (app, slot) = app(&vsync, next_page);
+    let mut laid = lay_out_animated(app, tight(400.0, 800.0), vsync);
+    assert!(
+        barrier_opacities(&laid).is_empty(),
+        "nothing dims the home page before a push"
+    );
+    push_next(&slot);
+    laid.tick();
+    laid.pump_for(TRANSITION / 2);
+    let full = f64::from(0x18_u8) / 255.0;
+    let expected = full * curves::EASE.transform(0.5);
+    let opacities = barrier_opacities(&laid);
+    assert_eq!(opacities.len(), 1, "one barrier under the sliding page");
+    assert!(
+        (f64::from(opacities[0]) - expected).abs() < 0.005,
+        "half way the dim has faded in along Curves.ease to {expected}: {}",
+        opacities[0]
+    );
+}
+
+/// A page pushed under a `CupertinoApp` pops on a drag from its leading edge,
+/// as a `CupertinoPageRoute` does, and the Router's stack follows.
+///
+/// Red-check: make `ParallaxPageTransition::back_gesture` return `false` —
+/// the drag reaches the page and the Router stays on `Next`.
+pub fn cupertino_app_page_pops_on_an_edge_swipe() {
+    let vsync = Vsync::new();
+    let (app, slot) = app(&vsync, next_page);
+    let mut laid = lay_out_animated(app, tight(400.0, 800.0), vsync);
+    push_next(&slot);
+    laid.tick();
+    for _ in 0..PUMPS {
+        laid.pump_for(FRAME);
+    }
+    let router = slot
+        .borrow()
+        .clone()
+        .expect("the home page is mounted under the Router");
+    assert_eq!(router.current(), Screen::Next, "the pushed page settled");
+
+    laid.dispatch_pointer_down(5.0, 400.0);
+    laid.dispatch_pointer_move(105.0, 400.0);
+    laid.dispatch_pointer_move(305.0, 400.0);
+    laid.dispatch_pointer_up(305.0, 400.0);
+    for _ in 0..PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(
+        router.current(),
+        Screen::Home,
+        "a drag from the leading edge past half way pops the page"
+    );
+    assert!(
+        barrier_opacities(&laid).is_empty(),
+        "the popped page's barrier left with it"
+    );
+}
