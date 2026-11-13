@@ -2,9 +2,10 @@
 //!
 //! Implement [`RenderBox`] or [`RenderSliver`] and connect it to a
 //! [`crate::view::RenderView`]. Layout, painting, hit testing, semantics, and
-//! invalidation use the same types as built-in widgets. Arena storage and the
-//! GPU compositor remain implementation details outside this authoring module; the built-in
-//! render objects are in [`objects`].
+//! invalidation use the same types as built-in widgets; the built-in render objects are in
+//! [`objects`]. [`PipelineOwner`] and [`PipelineCell`] are here because the view layer's
+//! signatures name them (a lifecycle hook's pipeline handle, a custom element's owner); the
+//! render tree they own and the GPU compositor are the runtime's, not authoring contracts.
 
 pub use flui_foundation::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
 pub use flui_rendering::constraints::{

@@ -190,8 +190,8 @@ fn main() -> Result<(), flui::LaunchError> {
 //! | `native` | `flui-native`, through `flui-app` | `native` | one operating system's window extensions |
 //!
 //! [`app`], [`painting`], [`rendering`], and [`interaction`] expose selected authoring
-//! contracts for applications, custom drawing, render objects, and gestures. Arena storage,
-//! the engine, and platform implementations remain outside this facade.
+//! contracts for applications, custom drawing, render objects, and gestures. The runtime's
+//! owners appear only where a kept signature names them; platform implementations stay outside.
 //! Enable `testing` in a development dependency for deterministic headless tests.
 //! `flui::material` and `flui::cupertino` sit *above* [`widgets`] (ADR-0028's
 //! design-system decoupling contract — `material --> widgets`,

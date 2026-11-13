@@ -66,4 +66,4 @@
   `embedder`, `native`, `testing`, `prelude` and the view re-exports are no longer under
   `flui::app`. The types public signatures name moved: `PipelineOwner` and `PipelineCell` to
   `flui::rendering`, `UpdateScheduler` to `flui::view`, `GestureBinding` to
-  `flui::testing::harness`.
+  the deprecated `flui::testing::harness` (feature `testing`).
