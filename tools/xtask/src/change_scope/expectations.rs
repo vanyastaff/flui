@@ -374,7 +374,9 @@ fn edits(changes: &[Change]) -> Vec<Edit> {
             if *status == Status::Deleted {
                 edit(Kind::PerfBaseline, status.verb().to_owned());
             } else if edited {
-                for detail in baseline_rises(old_text, new_text) {
+                // The size file holds ceilings only; a scenario's file also holds work counts.
+                let ceilings_only = path == SIZE_BASELINE;
+                for detail in baseline_edits(old_text, new_text, ceilings_only) {
                     edit(Kind::PerfBaseline, detail);
                 }
             }
@@ -489,22 +491,32 @@ fn values_added(old: &str, new: &str) -> Option<String> {
     Some(format!("{} value(s) added: {shown}{more}", added.len()))
 }
 
-/// What a perf baseline lost between `old` and `new`: each count that rose and each count that
-/// is no longer written. A fall tightens the baseline and a new count adds to it.
-fn baseline_rises(old: &str, new: &str) -> Vec<String> {
+/// What a perf baseline no longer holds the code to, between `old` and `new`: a ceiling that
+/// rose, a work count that changed, a count that is no longer written. A ceiling is a count the
+/// code only has to stay at or under (`cargo xtask perf`'s cost counters, and every count when
+/// `ceilings_only`), so its fall tightens the baseline; a work count has to match, so its fall
+/// is work that stopped happening. A new count adds to the baseline.
+fn baseline_edits(old: &str, new: &str, ceilings_only: bool) -> Vec<String> {
     let (Some(old), Some(new)) = (leaves_of(old), leaves_of(new)) else {
         return vec!["does not parse as TOML".to_owned()];
     };
     let new: BTreeMap<String, toml::Value> = new.into_iter().collect();
-    let mut rises = Vec::new();
+    let mut edits = Vec::new();
     for (path, was) in &old {
-        match (was.as_integer(), new.get(path).map(toml::Value::as_integer)) {
-            (Some(was), Some(Some(is))) if is > was => rises.push(format!("{path} {was} -> {is}")),
-            (_, None) => rises.push(format!("{path} removed")),
-            _ => {}
+        let Some(is) = new.get(path) else {
+            edits.push(format!("{path} removed"));
+            continue;
+        };
+        let (Some(was), Some(is)) = (was.as_integer(), is.as_integer()) else {
+            continue;
+        };
+        let counter = path.rsplit('.').next().unwrap_or(path);
+        let ceiling = ceilings_only || crate::perf::is_cost(counter);
+        if is > was || (is < was && !ceiling) {
+            edits.push(format!("{path} {was} -> {is}"));
         }
     }
-    rises
+    edits
 }
 
 /// How an allowlist grew from `old` to `new`: each entry with no counterpart before, each count
@@ -644,8 +656,15 @@ fn unnamed(edits: &[Edit], body: &str) -> Vec<String> {
     let names = |line: &str, name: &str| {
         line.match_indices(name).any(|(start, _)| {
             let (before, after) = (&line[..start], &line[start + name.len()..]);
+            // A dot goes on only into an extension: `a.rs.snap` does not name `a.rs`, and the
+            // full stop after `a.rs` ends a sentence.
+            let extends = |rest: &str| {
+                rest.strip_prefix('.')
+                    .is_some_and(|tail| tail.starts_with(char::is_alphanumeric))
+            };
             let alone = !before.ends_with(|c: char| in_a_path(c) || c == '.')
-                && !after.starts_with(in_a_path);
+                && !after.starts_with(in_a_path)
+                && !extends(after);
             let reason = before.chars().chain(after.chars());
             alone && reason.filter(|c| c.is_alphanumeric()).count() >= MIN_REASON_CHARS
         })
@@ -843,28 +862,27 @@ mod tests {
         );
     }
 
-    fn a_perf_baseline_counts_when_a_count_rises_or_leaves_and_not_when_it_falls() {
+    fn a_perf_baseline_counts_a_raised_ceiling_a_changed_work_count_and_a_dropped_count() {
         let path = "crates/flui-widgets/perf/baseline/label_change_small.toml";
         let old = "[label_change_small]\nallocations = 51\nbuilds_run = 12\nnodes_painted = 3\n";
         let cheaper = "[label_change_small]\nallocations = 40\nbuilds_run = 12\nnodes_painted = 3\nnew_count = 9\n";
         assert_eq!(edits(&modified(path, old, cheaper)), []);
-        let dearer = "[label_change_small]\nallocations = 60\nbuilds_run = 12\n";
+        let dearer = "[label_change_small]\nallocations = 60\nbuilds_run = 9\n";
         let found = edits(&modified(path, old, dearer));
         let details: Vec<&str> = found.iter().map(|e| e.detail.as_str()).collect();
         assert_eq!(
             details,
             [
                 "label_change_small.allocations 51 -> 60",
+                "label_change_small.builds_run 12 -> 9",
                 "label_change_small.nodes_painted removed"
             ]
         );
         assert!(found.iter().all(|e| e.kind == Kind::PerfBaseline));
-        let size = edits(&modified(
-            SIZE_BASELINE,
-            "[size]\ncrates_linux = 272\n",
-            "[size]\ncrates_linux = 273\n",
-        ));
-        assert_eq!(size[0].detail, "size.crates_linux 272 -> 273");
+        let size = |crates: u32| format!("[size]\ncrates_linux = {crates}\n");
+        let grown = edits(&modified(SIZE_BASELINE, &size(272), &size(273)));
+        assert_eq!(grown[0].detail, "size.crates_linux 272 -> 273");
+        assert_eq!(edits(&modified(SIZE_BASELINE, &size(272), &size(270))), []);
         let deleted = [change(Status::Deleted, path, Some(old), None)];
         assert_eq!(edits(&deleted)[0].detail, "deleted");
         let added = [change(Status::Added, path, None, Some(old))];
@@ -944,6 +962,17 @@ mod tests {
             unnamed(&found, &too_wide),
             ["api/flui.txt", "crates/x/tests/a.rs"]
         );
+        // A longer file name that starts with an edited path does not name it.
+        let longer = named.replace(
+            "`crates/x/tests/a.rs`: moved",
+            "crates/x/tests/a.rs.snap: moved",
+        );
+        assert_eq!(unnamed(&found, &longer), ["crates/x/tests/a.rs"]);
+        let sentence = named.replace(
+            "`crates/x/tests/a.rs`: moved to",
+            "Its cases moved out of crates/x/tests/a.rs. They are in",
+        );
+        assert_eq!(unnamed(&found, &sentence), Vec::<String>::new());
         assert_eq!(unnamed(&found, "no section").len(), 2);
         assert_eq!(unnamed(&[], ""), Vec::<String>::new());
     }
@@ -986,8 +1015,8 @@ mod tests {
                     an_exemption_counts_by_its_values_and_not_by_its_comments_or_reasons as fn(),
                 ),
                 (
-                    "a_perf_baseline_counts_when_a_count_rises_or_leaves_and_not_when_it_falls",
-                    a_perf_baseline_counts_when_a_count_rises_or_leaves_and_not_when_it_falls
+                    "a_perf_baseline_counts_a_raised_ceiling_a_changed_work_count_and_a_dropped_count",
+                    a_perf_baseline_counts_a_raised_ceiling_a_changed_work_count_and_a_dropped_count
                         as fn(),
                 ),
                 (

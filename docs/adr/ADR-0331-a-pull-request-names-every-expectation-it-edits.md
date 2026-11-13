@@ -66,7 +66,7 @@ base with the pull request and lists:
 | `api/flui.txt` | lines the snapshot no longer has (an added line is new API, which its own diff shows) |
 | a trybuild `*.stderr`, an insta `*.snap` | the file changed or deleted (an added one is a new case) |
 | `crates/flui-protocol/tests/schema/*.json` | the file added, changed or deleted: a published schema is frozen and a new one is a protocol version |
-| `perf/size.toml`, `*/perf/baseline/*.toml` | a count that rose or is no longer written, or the file deleted (a fall tightens the baseline) |
+| `perf/size.toml`, `*/perf/baseline/*.toml` | a ceiling that rose (a size, a package count, a cost counter of `cargo xtask perf`), a work count that changed either way (it has to match, so a fall is work that stopped happening), a count no longer written, or the file deleted |
 | `tools/xtask/allowlists/*.toml` | an entry with no counterpart before, a count that rose, a list of names that gained one |
 | a Rust file | fewer tests than before: test attributes (`#[test]`, a path ending in `test`, `#[wasm_bindgen_test]`, also under `cfg_attr`) plus table-test cases (`case as fn()`); or more `#[ignore]` attributes |
 | `deny.toml`, `typos.toml` | a value the file did not have: a new key, a new array item, a changed setting (a `reason` is prose and is not compared) |
