@@ -379,7 +379,10 @@ pub fn a_chip_is_its_own_node_and_disabled_only_when_it_says_so() {
                         None,
                         "{case}: the toolbar takes no label\n{shown}"
                     );
-                    (node.id(), delete_buttons.first().map(|delete| delete.id()))
+                    (
+                        node.id(),
+                        delete_buttons.first().map(flui_testing::A11yNode::id),
+                    )
                 };
                 if operable {
                     laid.invoke_semantics_action(ActionRequest {
