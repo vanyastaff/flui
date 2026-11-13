@@ -696,8 +696,10 @@ impl<B: SlotBackend> RasterExecutor<B> {
         }
         // A frame's texture updates apply whether or not it is shown: a
         // retirement releases memory, and a hidden slot's next frame draws
-        // the newest image.
+        // the newest image. A panic joins this turn's failure: the first of
+        // the resize's, the textures' and the render's is the one held.
         let mut frame = frame;
+        let mut discarded = None;
         let textures_report = frame.as_mut().and_then(|frame| {
             let updates = std::mem::take(&mut frame.textures);
             if updates.is_empty() {
@@ -711,7 +713,12 @@ impl<B: SlotBackend> RasterExecutor<B> {
                     error,
                 }),
                 None => {
-                    hold_panic(&slot.inbox, caught, first);
+                    let panicked = caught.into_payload().map(SlotFailure::Panicked);
+                    if failure.is_none() {
+                        failure = panicked;
+                    } else {
+                        discarded = panicked;
+                    }
                     None
                 }
             }
@@ -725,11 +732,12 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 failure.and_then(|failure| state.hold_failure(failure))
             };
             retire(None, extra, first);
+            retire(None, discarded, first);
             report_each([resize_report, textures_report], first);
             return 0;
         };
         let (verdict, render_failure, surface_loss, render_report) = render(backend, slot, &frame);
-        let discarded = if failure.is_none() {
+        let discarded_render = if failure.is_none() {
             failure = render_failure;
             None
         } else {
@@ -756,6 +764,7 @@ impl<B: SlotBackend> RasterExecutor<B> {
         };
         retire(Some(frame), extra, first);
         retire(None, discarded, first);
+        retire(None, discarded_render, first);
         report_each([resize_report, textures_report, render_report], first);
         1
     }

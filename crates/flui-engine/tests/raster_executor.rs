@@ -664,6 +664,54 @@ fn a_frames_texture_updates_apply_before_it_whether_shown_or_superseded() {
         "the panic is held in the slot's record"
     );
 }
+
+/// When a turn's resize fails and its frame's texture update then panics,
+/// the slot's record holds the resize's failure, the first of the turn.
+///
+/// Red-check: hold the texture panic in the inbox as it happens and the
+/// record holds the panic.
+#[test]
+fn a_texture_panic_after_a_failed_resize_keeps_the_resize_failure() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("an id is left");
+    texture.submit_frame(flui_painting::paint::Image::from_rgba8(
+        1,
+        1,
+        vec![9, 9, 9, 255],
+    ));
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    rig.backend.script_textures(ScriptedAnswer::Panic);
+    let receipt = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Size(DeviceSize::new(16, 16)),
+        })
+        .expect("accepted");
+    let SendReceipt::Configured(generation) = receipt else {
+        panic!("a positive size mints a generation: {receipt:?}");
+    };
+    let resized = Attached { generation, ..at };
+    let _ = rig
+        .sender
+        .send(RasterCommand::Frame {
+            slot: at.slot,
+            snapshot: snapshot(resized, 1, DamageRegion::Unchanged, scene())
+                .textures(registry.take_updates()),
+        })
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert!(
+        matches!(
+            rig.sender.take_failure(at.slot),
+            Some(SlotFailure::Refused(EngineError::GpuUnavailable))
+        ),
+        "the resize's failure is the one held"
+    );
+}
 /// A frame renders only against the generation the slot's configuration
 /// has: one stamped zero, or before a resize the executor applied, settles
 /// `SurfaceStale` without reaching the backend.
