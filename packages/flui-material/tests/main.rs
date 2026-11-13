@@ -223,6 +223,10 @@ fn action_component_contracts() {
             floating_action_button::mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_position,
         ),
         (
+            "floating_action_button::a floating action button is a button node enabled or disabled",
+            floating_action_button::a_floating_action_button_is_a_button_node_enabled_or_disabled,
+        ),
+        (
             "chip::a filter chip announces its selection as pressed",
             chip::a_filter_chip_announces_its_selection_as_pressed,
         ),
