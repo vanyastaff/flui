@@ -894,14 +894,16 @@ impl Tester {
     }
 
     /// Stop this run and launch the same view in the same window over the
-    /// same storage, as when the user quits and opens the application again:
-    /// the window commits its composition and closes, what the documents
-    /// published is written, and the old tree, its states and its runtime
-    /// are gone before the new one mounts.
+    /// same storage, as when the application quits and is opened again: the
+    /// window commits its composition and closes past every hold, what the
+    /// documents published is written (a write the storage holds is not
+    /// waited for), and the old tree, its states and its runtime are gone
+    /// before the new one mounts.
     ///
     /// # Panics
     ///
-    /// When the new run's first frame fails.
+    /// When code the quit runs panics (its first panic resumes once the write
+    /// is done), or when the new run's first frame fails.
     #[must_use]
     pub fn restart(mut self) -> Self {
         self.host.quit_now();
@@ -1078,9 +1080,10 @@ impl Tester {
             .saturating_add(span_frames);
         let outcome = self.answered_within(call, budget);
         if matches!(outcome, Err(TestError::Unanswered { .. })) {
-            // Whatever the sequence still plays, the keys and contacts it
-            // holds are let go once it ends, so a later action does not start
-            // with a modifier or a button down.
+            // The keys and contacts the sequence holds are let go once it ends:
+            // the release is queued behind it. A sequence still unfinished
+            // after a second budget keeps them held, and the test has
+            // already failed with this error.
             if let Ok(release) = self
                 .lease
                 .call::<InputRelease>(WindowParams::new(self.lease.window()))

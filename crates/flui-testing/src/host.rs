@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
@@ -1509,24 +1510,53 @@ impl HeadlessHost {
     }
 
     /// The session ends now, in the order a runner carries it out: the
-    /// session-ended notice reaches every subscriber, then the application
-    /// quits as [`quit_now`](Self::quit_now) does.
+    /// session-ended notice reaches every subscriber, then every window
+    /// closes and what the documents published is written, as in
+    /// [`quit_now`](Self::quit_now), within [`SESSION_END_BUDGET`].
+    ///
+    /// Each step runs whatever an earlier one's user code did: the first
+    /// panic resumes once the write is done.
     pub(crate) fn end_session_now(&mut self) {
-        self.ui_runtime
-            .deliver_host_notice(&flui_platform::HostNotice::SessionEnded);
-        self.quit_now();
+        let mut first = FirstPanic::new();
+        first.contain(|| {
+            self.ui_runtime
+                .deliver_host_notice(&flui_platform::HostNotice::SessionEnded);
+        });
+        self.quit_into(SESSION_END_BUDGET, &mut first);
+        first.resume();
     }
 
     /// The application quits now: each window commits its composition and
     /// closes past every hold, so its Detached observers publish what they
-    /// keep, and then what the documents published is written within
-    /// [`SESSION_END_BUDGET`].
+    /// keep, and then what the documents published is written. A write a
+    /// storage holds is not waited for: the run ends without it, as a
+    /// process that exits does.
+    ///
+    /// Each step runs whatever an earlier one's user code did: the first
+    /// panic resumes once the write is done.
     pub(crate) fn quit_now(&mut self) {
+        let mut first = FirstPanic::new();
+        self.quit_into(Duration::ZERO, &mut first);
+        first.resume();
+    }
+
+    /// Close every window, then write what the documents published, waiting
+    /// at most `budget` for a write in progress; a panic goes to `first`.
+    fn quit_into(&mut self, budget: Duration, first: &mut FirstPanic) {
         for id in self.presentation_ids() {
-            self.ui_runtime.commit_composition_for_close(id);
-            let _closed = self.close_presentation(id);
+            first.contain(|| self.ui_runtime.commit_composition_for_close(id));
+            first.contain(|| self.close_presentation(id));
         }
-        let _answer = self.end_session(SessionEndPhase::Ending);
+        first.contain(|| self.write_published(budget));
+    }
+
+    /// Run the queued registry writes, then write what every document still
+    /// owes, waiting at most `budget` for a write in progress.
+    fn write_published(&self, budget: Duration) {
+        self.run_flush_writes();
+        if let Some(flush) = &self.flush {
+            let _report = flush.flush_within(std::time::Instant::now() + budget);
+        }
     }
 
     /// One phase of the user's session ending, as the operating system reports
@@ -1553,11 +1583,7 @@ impl HeadlessHost {
                 SessionEndAnswer::Proceed
             }
             SessionEndPhase::Ending => {
-                self.run_flush_writes();
-                if let Some(flush) = &self.flush {
-                    let _report =
-                        flush.flush_within(std::time::Instant::now() + SESSION_END_BUDGET);
-                }
+                self.write_published(SESSION_END_BUDGET);
                 SessionEndAnswer::Proceed
             }
             // A phase added later asks this host nothing.

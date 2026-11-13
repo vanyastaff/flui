@@ -560,6 +560,7 @@ struct Opened {
     hold: Option<flui_view::CloseHold>,
     lifecycle: Vec<flui_view::AppLifecycleState>,
     _observation: Option<flui_view::LifecycleSubscription>,
+    _notices: Option<flui_view::HostNoticeSubscription>,
 }
 
 /// Opens [`Note`] and the window's close guard, and records the window's
@@ -569,6 +570,8 @@ struct Notebook {
     hold_close: bool,
     /// Written into the note when the window detaches.
     save_on_detach: Option<&'static str>,
+    /// Panics when the session-ended notice arrives.
+    panic_at_session_end: bool,
     opened: Rc<std::cell::RefCell<Opened>>,
 }
 
@@ -589,6 +592,18 @@ impl ViewState<Notebook> for NotebookState {
             .expect("a hosted window has a close guard");
         let lifecycle = Rc::clone(&self.0.opened);
         let save_on_detach = self.0.save_on_detach;
+        let panic_at_session_end = self.0.panic_at_session_end;
+        let notices = ctx
+            .lifecycle_handle()
+            .expect("a hosted window has a lifecycle")
+            .subscribe_notices(move |notice| {
+                assert!(
+                    !(panic_at_session_end
+                        && matches!(notice, flui_platform::HostNotice::SessionEnded)),
+                    "a subscriber fails at the session's end"
+                );
+            })
+            .expect("the window is open");
         let (_, observation) = ctx
             .lifecycle_handle()
             .expect("a hosted window has a lifecycle")
@@ -610,6 +625,7 @@ impl ViewState<Notebook> for NotebookState {
             hold: self.0.hold_close.then(|| guard.hold()),
             lifecycle: Vec::new(),
             _observation: Some(observation),
+            _notices: Some(notices),
         };
     }
 
@@ -619,17 +635,19 @@ impl ViewState<Notebook> for NotebookState {
 }
 
 fn notebook(hold_close: bool) -> (Notebook, Rc<std::cell::RefCell<Opened>>) {
-    notebook_saving(hold_close, None)
+    notebook_saving(hold_close, None, false)
 }
 
 fn notebook_saving(
     hold_close: bool,
     save_on_detach: Option<&'static str>,
+    panic_at_session_end: bool,
 ) -> (Notebook, Rc<std::cell::RefCell<Opened>>) {
     let opened = Rc::new(std::cell::RefCell::new(Opened::default()));
     let view = Notebook {
         hold_close,
         save_on_detach,
+        panic_at_session_end,
         opened: Rc::clone(&opened),
     };
     (view, opened)
@@ -754,7 +772,7 @@ fn a_restart_writes_what_the_run_accepted_before_it_stops() {
 /// so what a Detached observer publishes is in the storage the run leaves.
 #[test]
 fn a_session_end_writes_what_the_window_publishes_as_it_detaches() {
-    let (view, opened) = notebook_saving(false, Some("draft"));
+    let (view, opened) = notebook_saving(false, Some("draft"), false);
     let mut t = Tester::mount(view);
     let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
     t.end_session();
@@ -766,6 +784,25 @@ fn a_session_end_writes_what_the_window_publishes_as_it_detaches() {
         "the window detached"
     );
     let storage = t.storage().expect("a window keeps a storage").clone();
+    drop(t);
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(view, TestWindow::default().storage(storage));
+    let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
+    assert_eq!(*loaded, Note("draft".to_owned()));
+}
+
+/// A subscriber that panics at the session's end does not cost the session
+/// its close or its write: the window still detaches and publishes, the
+/// documents are written, and the panic reaches the test afterwards.
+#[test]
+fn a_session_end_writes_even_when_a_subscriber_panics() {
+    let (view, opened) = notebook_saving(false, Some("draft"), true);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t.storage().expect("a window keeps a storage").clone();
+    let ended = catch_unwind(AssertUnwindSafe(|| t.end_session()));
+    assert!(ended.is_err(), "the subscriber's panic reaches the test");
     drop(t);
 
     let (view, opened) = notebook(false);
