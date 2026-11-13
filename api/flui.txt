@@ -10463,6 +10463,7 @@ pub fn flui::painting::Canvas::finish(self) -> flui::painting::DisplayList
 pub fn flui::painting::Canvas::is_empty(&self) -> bool
 pub fn flui::painting::Canvas::len(&self) -> usize
 pub fn flui::painting::Canvas::new() -> Self
+pub fn flui::painting::Canvas::record_into(&mut self, buffer: flui::painting::DisplayList)
 pub fn flui::painting::Canvas::reset(&mut self)
 pub fn flui::painting::Canvas::restore(&mut self)
 pub fn flui::painting::Canvas::restore_to_count(&mut self, count: usize)
@@ -10506,6 +10507,7 @@ impl<'a> IntoIterator for &'a flui::painting::DisplayList { type IntoIter = core
 pub fn flui::painting::DisplayList::append(&mut self, other: flui::painting::DisplayList)
 pub fn flui::painting::DisplayList::append_isolated(&mut self, other: flui::painting::DisplayList)
 pub fn flui::painting::DisplayList::bounds(&self) -> Option<flui::geometry::Rect<f64>>
+pub fn flui::painting::DisplayList::clear(&mut self)
 pub fn flui::painting::DisplayList::commands(&self) -> &[flui::painting::DrawCommand]
 pub fn flui::painting::DisplayList::damage_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
 pub fn flui::painting::DisplayList::is_empty(&self) -> bool
@@ -10513,6 +10515,7 @@ pub fn flui::painting::DisplayList::iter(&self) -> core::slice::iter::Iter<'_, f
 pub fn flui::painting::DisplayList::len(&self) -> usize
 pub fn flui::painting::DisplayList::new() -> Self
 pub fn flui::painting::DisplayList::non_finite(&self) -> flui_painting::display_list::finite::NonFiniteOps
+pub fn flui::painting::DisplayList::room(&self) -> usize
 pub fn flui::painting::DisplayList::volatile_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
 pub struct flui::painting::DrawCommand
 field flui::painting::DrawCommand::op: flui::painting::DrawOp // at 1
@@ -30940,6 +30943,7 @@ impl Clone for flui_layer::scene::owner::ScenePublication
 impl core::fmt::Debug for flui_layer::scene::owner::ScenePublication
 pub struct flui_layer::scene::owner::SceneWriter<'a> { .. }
 impl<'a> core::fmt::Debug for flui_layer::scene::owner::SceneWriter<'a>
+pub fn flui_layer::scene::owner::SceneWriter::chunk(&mut self, owner: flui::foundation::RenderId, ordinal: u32, version: flui_layer::scene::id::ContentVersion, commands: &mut flui::painting::DisplayList) -> alloc::rcs::arc::Arc<flui_layer::scene::content::Chunk> // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::current(&self) -> &flui_layer::scene::version::SceneVersion // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::discard(&mut self, content: alloc::rcs::arc::Arc<flui_layer::scene::content::BoundaryContent>) // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::mint_node(&mut self) -> flui_layer::scene::id::SceneNodeId // impl flui_layer::scene::owner::SceneWriter<'_>

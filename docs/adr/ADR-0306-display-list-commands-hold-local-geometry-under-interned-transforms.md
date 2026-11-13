@@ -217,8 +217,10 @@ commands.
 §7. **Clearing commits before a destructor runs.** A list's ops reach user code through their
 destructors: a paragraph's font blob holds `FontBytes = Arc<dyn AsRef<[u8]> + Send + Sync>`
 (`crates/flui-painting/src/glyphs/registry.rs:12`), and its last owner may be a recorded paragraph.
-`DisplayList::clear` and `Canvas::reset` take the contents out with `std::mem::take`, reset every
-field (and the canvas's transform, save stack and paint pool), and drop what they took last, so a
+`Canvas::reset` takes the contents out with `std::mem::take`, resets every
+field (its transform, save stack and paint pool) and drops what it took last; `DisplayList::clear`
+resets every cached field first and then empties its command buffer in place, keeping its room
+(`Vec::clear` sets the length before it drops an op). Either way a
 destructor that panics leaves an empty list with no cached extent and a reset canvas (ADR-0287 §1's
 order). Nothing else in the list runs user code: `record` and `append` call no callback,
 `Canvas::transform` runs the caller's `Into<Matrix4>` before it changes the canvas
@@ -264,7 +266,8 @@ code, after the list is complete.
   `appended_commands_keep_their_transforms`, `a_non_finite_op_is_refused_by_kind` (one row per
   variant and one for a non-finite CTM: a draw is absent, a clip is empty, a save-layer is
   unbounded, the markers remain, `bounds()` and `damage_extent()` stay finite, and `non_finite()`
-  counts the reason), and `a_destructor_that_panics_during_reset_leaves_the_canvas_empty`.
+  counts the reason), `a_destructor_that_panics_during_reset_leaves_the_canvas_empty` and
+  `a_destructor_that_panics_during_clear_leaves_the_list_empty`.
 - In `flui-engine`: `inline_picture_replay_owns_its_root_clips`
   (`crates/flui-engine/src/clip_layer_readback_tests.rs:726`) is rewritten over `append_isolated`
   with its name and assertions; `a_non_finite_op_is_omitted_and_the_frame_draws` (to be added)
