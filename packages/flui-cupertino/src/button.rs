@@ -3,16 +3,13 @@
 //! [`CupertinoButtonSize`] selects padding, border radius and minimum
 //! geometry; theme and brightness determine its foreground and fill.
 //!
-//! ## Honest reduction: one recognized tap, not a real down/move/up sequence
+//! ## One recognized tap drives the fade
 //!
-//! A full implementation would drive the press-opacity animation off separate
-//! tap-down/move/up/cancel callbacks, so the fade can start the instant the
-//! finger goes down and reverse mid-gesture if the finger drags outside the
-//! tap-move slop before lifting. FLUI's [`flui_sdk::widgets::GestureDetector`] exposes only
-//! `on_tap` (fires once a tap is *recognized* — down + up without exceeding
-//! touch slop) and `on_long_press`, with no down/move primitives to hang
-//! separate handlers on — the same gap `flui-material`'s `ink_well` documents
-//! for its own press-state timing.
+//! Flutter starts the press-opacity fade the instant the finger goes down
+//! and reverses it at the up, or mid-gesture when the finger drags past the
+//! tap-move slop. This button runs the whole sequence on the recognized tap
+//! (down and up within touch slop) instead, the same reduction
+//! `flui-material`'s `ink_well` documents for its own press-state timing.
 //!
 //! So the fade *sequence* is applied uniformly to that single
 //! `on_tap` event: on tap, animate toward `CupertinoButton::pressed_opacity` over
@@ -36,7 +33,7 @@
 //!   against. Not "Cupertino doesn't use `WidgetState`" — just no consumer
 //!   for it in this crate yet.
 //! - **`onFocusChange`/`autofocus`** — no `FocusableActionDetector`-equivalent
-//!   wiring in this pass; [`crate::button`] wraps `GestureDetector` directly.
+//!   wiring in this pass: the button's interactive node takes no focus.
 //! - **Icon theming** — wrapping `child` in an `IconTheme` sized off
 //!   the resolved text style is not wired here (no icon-bearing V1 consumer).
 
@@ -58,17 +55,17 @@ use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, StatefulView, ViewState};
+use flui_sdk::widgets::interaction::node::{ControlTap, Description, InteractiveNode};
 use flui_sdk::widgets::prelude::BoxConstraints;
 use flui_sdk::widgets::{
-    Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, GestureDetector,
-    Padding, Semantics, SemanticsRole,
+    Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, Padding, SemanticsRole,
 };
 
 use crate::colors::{CupertinoColor, CupertinoColors};
 use crate::theme::CupertinoTheme;
 
 /// A user tap/long-press handler. `Rc`-based (owner-local, per ADR-0027) —
-/// matches `GestureDetector::on_tap`'s own callback shape.
+/// matches the callback shape of the node's `ControlTap::on_tap`.
 type ButtonCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 
 /// The press-in fade's duration.
@@ -299,7 +296,7 @@ impl CupertinoButton {
     }
 
     /// Sets the long-press handler — wired straight to
-    /// [`flui_sdk::widgets::GestureDetector::on_long_press`], with no fade
+    /// the long press of the button's node, with no fade
     /// animation tied to it (long press is a wholly separate recognizer from
     /// the tap-driven fade).
     #[must_use]
@@ -568,22 +565,22 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             None => std::rc::Rc::new(flui_sdk::animation::ConstantAnimation::new(1.0)),
         };
 
-        // The button role is applied unconditionally, not gated on `enabled`
-        // (a disabled button is still announced as a button, just an inert one).
-        // It sits above the gesture detector, so the button's own configuration
-        // forms its node and the tap action joins it, which is where the
-        // identifier names it (ADR-0240).
-        let mut semantics = Semantics::new()
-            .role(SemanticsRole::Button)
-            .enabled(enabled);
-        if let Some(identifier) = &view.identifier {
-            semantics = semantics.identifier(std::sync::Arc::clone(identifier));
-        }
+        // Flutter's `Semantics(button: true)` and `GestureDetector` around the
+        // button are one interactive node here (ADR-0322 §1): its description
+        // is the button, announced as one whether enabled or not (a disabled
+        // button is still a button, just an inert one), named by the
+        // identifier (ADR-0240); its switch says `enabled`, and its press
+        // group adds the click and, with a long press, the context menu.
+        let description =
+            Description::new(SemanticsRole::Button).identifier(view.identifier.clone());
         let faded =
             ConstrainedBox::new(constraints).child(FadeTransition::new(opacity).child(decorated));
 
-        let mut gesture_detector = GestureDetector::new();
-        if enabled {
+        let mut node = InteractiveNode::new(faded)
+            .enabled(enabled)
+            .semantics(description);
+        if enabled && (view.on_pressed.is_some() || view.on_long_press.is_some()) {
+            let mut tap = ControlTap::new();
             if let Some(on_pressed) = view.on_pressed.clone() {
                 let controller = self
                     .controller
@@ -591,7 +588,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                     .map(|owner| owner.controller().clone());
                 let rebuild = self.rebuild.clone();
                 let pressed_opacity = view.pressed_opacity;
-                gesture_detector = gesture_detector.on_tap(move |ctx| {
+                tap = tap.on_tap(move |ctx| {
                     if let Some(controller) = &controller
                         && let Some(future) =
                             start_press_fade(controller, pressed_opacity, rebuild.as_ref())
@@ -602,11 +599,11 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                 });
             }
             if let Some(on_long_press) = view.on_long_press.clone() {
-                gesture_detector = gesture_detector.on_long_press(move |ctx| on_long_press(ctx));
+                tap = tap.on_long_press(move |ctx| on_long_press(ctx));
             }
+            node = node.tap(tap);
         }
-
-        semantics.child(gesture_detector.child(faded))
+        node
     }
 
     fn dispose(&mut self) {

@@ -13,6 +13,8 @@
 //! [`control_over_text`], so a control in any crate is held to the same
 //! measure.
 
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
@@ -157,4 +159,56 @@ pub fn control_over_text_under(
             live_bytes: text.heap.live_bytes / rows,
         },
     }
+}
+
+/// Records `cost` as `scenario` and holds it to `<baseline_dir>/<scenario>.toml`,
+/// which only falls: it panics when a counter of `cost` is over the file's,
+/// or the file holds no such counter.
+///
+/// When `FLUI_PERF_OUT` names a directory, the record is written to
+/// `<FLUI_PERF_OUT>/<scenario>.toml` first, so a broken budget still reports
+/// its numbers; a lower record is copied into the baseline by hand.
+pub fn held_to_baseline(baseline_dir: &Path, scenario: &str, cost: ControlCost) -> ControlCost {
+    let counts = cost.counts();
+    record(scenario, &counts);
+    let path = baseline_dir.join(format!("{scenario}.toml"));
+    let body = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let baseline = body
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once('=')?;
+            let value = value.trim().parse::<u64>().ok()?;
+            Some((name.trim().to_owned(), value))
+        })
+        .collect::<Vec<(String, u64)>>();
+    for (name, value) in counts {
+        let held = baseline
+            .iter()
+            .find(|(counter, _)| *counter == name)
+            .map_or_else(
+                || panic!("{scenario}.toml holds no `{name}`"),
+                |(_, held)| *held,
+            );
+        assert!(
+            value <= held,
+            "{scenario}: {name} rose to {value} over the baseline's {held}"
+        );
+    }
+    cost
+}
+
+/// Writes `counts` as `<FLUI_PERF_OUT>/<scenario>.toml` when that variable is set.
+fn record(scenario: &str, counts: &[(&str, u64)]) {
+    let Some(dir) = std::env::var_os("FLUI_PERF_OUT") else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).expect("BUG: FLUI_PERF_OUT names a directory it can create");
+    let mut body = format!("[{scenario}]\n");
+    for (name, value) in counts {
+        writeln!(body, "{name} = {value}").expect("BUG: writing to a String cannot fail");
+    }
+    std::fs::write(dir.join(format!("{scenario}.toml")), body)
+        .expect("BUG: FLUI_PERF_OUT takes a perf record");
 }

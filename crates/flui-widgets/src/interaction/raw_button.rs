@@ -10,7 +10,7 @@ use super::actions::{
     Action, ActionOutcome, ActivateIntent, ActivationPressIntent, ButtonActivateIntent,
 };
 use super::focus_host::FocusConfig;
-use super::gesture_detector::{PressCallbacks, PressSource};
+use super::gesture_detector::{PressCallbacks, PressShape, PressSource};
 use super::node::{Description, InteractiveNode, NodePress};
 use crate::support::event_callback;
 use crate::widget_state::WidgetStatesController;
@@ -147,6 +147,10 @@ impl Action<ButtonActivateIntent> for Press {
 impl PressSource for Press {
     fn callbacks(&self) -> PressCallbacks {
         PressCallbacks::tap(self.0.clone())
+    }
+
+    fn shape(&self) -> PressShape {
+        PressShape::TAP
     }
 }
 
