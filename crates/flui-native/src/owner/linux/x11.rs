@@ -78,7 +78,7 @@ use crate::owner::handlers::OpenWindows;
 use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::contain_owner_callback;
-use crate::owner::signal::OwnerSignal;
+use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
 use crate::owner::wake_deadline::WakeDeadline;
 use crate::owner::watch::Watch;
 use crate::owner::window_delivery::WindowDelivery;
@@ -579,6 +579,8 @@ pub struct X11Loop {
     connection: Arc<X11Connection>,
     doorbell: Doorbell,
     signal: Arc<OwnerSignal>,
+    /// The application's wake callback between owner turns.
+    turn: Rc<OwnerTurnSlot>,
     app: Arc<AppDelivery>,
     notices: Arc<dyn NoticeChannel>,
     displays: Arc<dyn HostDisplays>,
@@ -640,6 +642,7 @@ impl X11Loop {
             connection,
             doorbell,
             signal,
+            turn: Rc::default(),
             app,
             notices,
             displays,
@@ -734,7 +737,7 @@ impl X11Loop {
             self.clipboard.deliver();
             let turn = self.signal.begin_turn();
             self.read_sources(&mut turns, None);
-            let _ = turn.drive();
+            let _ = turn.drive_in(&self.turn);
             self.windows.deliver_frames();
             let _ = self.windows.take_closed();
             if web_time::Instant::now() >= deadline {
@@ -868,7 +871,7 @@ impl X11Loop {
             self.clipboard.deliver();
             let turn = self.signal.begin_turn();
             self.read_sources(&mut turns, host_notices);
-            if turn.drive() {
+            if turn.drive_in(&self.turn) {
                 return Ok(());
             }
             self.windows.deliver_frames();
@@ -1006,7 +1009,7 @@ struct RunGuard<'a> {
 impl Drop for RunGuard<'_> {
     fn drop(&mut self) {
         let platform = self.platform;
-        platform.signal.close();
+        platform.signal.close_in(&platform.turn);
         // Admission is closed, so a change a source still reports wakes
         // nobody; now the sources end.
         drop(self.display_watch.take());
@@ -1049,6 +1052,7 @@ impl host::Loop for X11Loop {
         let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
             Arc::clone(&platform),
             Arc::clone(&self.signal),
+            Rc::clone(&self.turn),
         ));
         let mut guard = RunGuard {
             platform: &self,

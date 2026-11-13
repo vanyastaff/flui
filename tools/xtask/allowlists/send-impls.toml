@@ -35,11 +35,6 @@ traits = ["Send", "Sync"]
 
 [[allow]]
 crate = "flui-native"
-type = "MacOSLoop"
-traits = ["Send", "Sync"]
-
-[[allow]]
-crate = "flui-native"
 type = "MacOSTextInput"
 traits = ["Send", "Sync"]
 
@@ -61,11 +56,6 @@ traits = ["Send", "Sync"]
 [[allow]]
 crate = "flui-native"
 type = "WebDragSource"
-traits = ["Send", "Sync"]
-
-[[allow]]
-crate = "flui-native"
-type = "WebLoop"
 traits = ["Send", "Sync"]
 
 [[allow]]

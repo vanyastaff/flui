@@ -68,11 +68,10 @@ fn platform_of(device: &str) -> String {
         .unwrap_or_else(|| panic!("`flui devices` lists no device {device:?}:\n{listing}"))
 }
 
-/// A counter project generated against this checkout, with the workspace's
+/// The counter project `name` generated against this checkout, with the workspace's
 /// lockfile so it builds offline.
-fn counter_project(workdir: &Path) -> PathBuf {
+fn counter_project(workdir: &Path, name: &str) -> PathBuf {
     let repo_root = repo_root();
-    let name = "flui_live_agent";
     let status = flui()
         .current_dir(&repo_root)
         .env("CARGO_NET_OFFLINE", "true")
@@ -99,11 +98,18 @@ struct Mcp {
 }
 
 impl Mcp {
-    fn start(project: &Path) -> Self {
-        let mut child = flui()
+    /// `flui mcp` in `project`, finding the session file in `target_dir`
+    /// when the app builds into one of its own.
+    fn start(project: &Path, target_dir: Option<&Path>) -> Self {
+        let mut command = flui();
+        command
             .current_dir(project)
             .env_remove("FLUI_AGENT_ENDPOINT")
-            .env_remove("FLUI_AGENT_TOKEN")
+            .env_remove("FLUI_AGENT_TOKEN");
+        if let Some(dir) = target_dir {
+            command.env("CARGO_TARGET_DIR", dir);
+        }
+        let mut child = command
             .arg("mcp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -286,12 +292,14 @@ fn count(tree: &Value) -> Option<u64> {
 /// `flui run --agent --device <device>` in `project`, its JSON events on the
 /// returned channel, and whether the app started: an `Err` carries the
 /// message `flui run` reported instead. `env` is added to the run's
-/// environment.
+/// environment. The channel comes first, so bound in this order it drops
+/// after the run on every exit and still takes the run's last events while
+/// the run stops (locals drop in reverse order).
 fn launch(
     project: &Path,
     device: &str,
     env: &[(&str, &Path)],
-) -> (Session, mpsc::Receiver<Value>, Result<(), String>) {
+) -> (mpsc::Receiver<Value>, Session, Result<(), String>) {
     let mut command = flui();
     command
         .current_dir(project)
@@ -303,8 +311,8 @@ fn launch(
     for (key, value) in env {
         command.env(key, value);
     }
-    let mut run = Session::spawn(command);
     let (events, received) = mpsc::channel::<Value>();
+    let mut run = Session::spawn(command);
     let stdout = run.child.stdout.take().expect("BUG: stdout is piped");
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -326,12 +334,13 @@ fn launch(
             _ => {}
         }
     };
-    (run, received, started)
+    (received, run, started)
 }
 
 /// `flui mcp` in `project`, once the app it runs answers through its agent.
-fn connect(project: &Path, run: &mpsc::Receiver<Value>) -> Mcp {
-    let mut mcp = Mcp::start(project);
+/// `target_dir` is the one the app was launched to build into, if any.
+fn connect(project: &Path, target_dir: Option<&Path>, run: &mpsc::Receiver<Value>) -> Mcp {
+    let mut mcp = Mcp::start(project, target_dir);
     // The app builds and starts; it answers once it serves its agent.
     let deadline = Instant::now() + LAUNCH;
     while let Err(error) = mcp.call("flui_windows", json!({})) {
@@ -374,10 +383,10 @@ fn an_agent_presses_the_counter_on_a_live_device() {
         .find(|(on, _)| *on == platform)
         .map(|&(_, gap)| gap);
     let workdir = TempDir::new().expect("scaffold workdir");
-    let project = counter_project(workdir.path());
+    let project = counter_project(workdir.path(), "flui_live_agent");
 
     // Dropped last, after `mcp`: on every exit, a failed assertion included.
-    let (_run, received, started) = launch(&project, &device, &[]);
+    let (received, _run, started) = launch(&project, &device, &[]);
 
     if let Some(gap) = known_gap {
         match started {
@@ -394,7 +403,7 @@ fn an_agent_presses_the_counter_on_a_live_device() {
     }
     started.unwrap_or_else(|message| panic!("{message}"));
 
-    let mut mcp = connect(&project, &received);
+    let mut mcp = connect(&project, None, &received);
     let increment = mcp.read_until(&received, "Increment button with a count of 0", |tree| {
         (count(tree) == Some(0)).then(|| button(tree, "Increment"))?
     });
@@ -412,9 +421,9 @@ fn an_agent_presses_the_counter_on_a_live_device() {
 /// project of its own: the counter's manifest with the facade's `material`
 /// and `serde` features and the application's codec, and the fixture's
 /// `app.rs` as its library, launched with its documents under the storage
-/// directory `storage` instead of the fixture's own.
-fn acceptance_project(workdir: &Path, storage: &str) -> PathBuf {
-    let project = counter_project(workdir);
+/// directory `storage` instead of the fixture's own. `name` is its package.
+fn acceptance_project(workdir: &Path, name: &str, storage: &str) -> PathBuf {
+    let project = counter_project(workdir, name);
     let manifest_path = project.join("Cargo.toml");
     let text = std::fs::read_to_string(&manifest_path).expect("read the project manifest");
     let mut manifest = text
@@ -464,7 +473,7 @@ fn acceptance_project(workdir: &Path, storage: &str) -> PathBuf {
     std::fs::write(
         source.join("main.rs"),
         format!(
-            "use flui_live_agent::app;\n\n\
+            "use {name}::app;\n\n\
              fn main() -> Result<(), flui::LaunchError> {{\n    \
              let dir = flui::platform::AppDataDir::try_new({storage:?})\n        \
              .expect(\"BUG: the scenario's storage directory name is valid\");\n    \
@@ -476,6 +485,114 @@ fn acceptance_project(workdir: &Path, storage: &str) -> PathBuf {
     project
 }
 
+/// Whether `FLUI_CLI_LIVE_DEVICE` asks for the desktop scenarios; `test`
+/// says it skips otherwise.
+fn on_the_desktop(test: &str) -> bool {
+    let desktop = std::env::var("FLUI_CLI_LIVE_DEVICE").as_deref() == Ok("desktop");
+    if !desktop {
+        eprintln!("skipping {test}: set FLUI_CLI_LIVE_DEVICE=desktop to run it on this machine");
+    }
+    desktop
+}
+
+/// The target directory the acceptance application builds into: one under
+/// this test binary's own (`CARGO_TARGET_TMPDIR`), kept between runs, so
+/// a run after [`the_acceptance_app_builds_and_answers_on_the_desktop`]
+/// compiles only the generated crate and not the framework under it.
+fn acceptance_target_dir() -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join("live-agent/acceptance-app")
+}
+
+/// Held for one acceptance run: the runs share
+/// [`acceptance_target_dir`], and with it the agent's session file `flui run`
+/// writes there, so under `cargo test`'s threads one run's client would read
+/// the other's credentials. nextest's `live-acceptance-app` group keeps its
+/// processes apart; this keeps the threads of one process apart.
+static ACCEPTANCE_TARGET: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The acceptance application started with `flui run --agent` on the
+/// desktop and drawn: its home page has a Settings button. The fields drop
+/// in order: the agent's client, then the run, then the receiver of the
+/// run's output (the run's last events still reach it while the run stops),
+/// the documents the run wrote, its work directory, and last the shared
+/// target directory.
+struct AcceptanceRun {
+    mcp: Mcp,
+    _run: Session,
+    /// Kept open: the thread that forwards `flui run`'s output stops reading
+    /// it once nobody receives, and the run's next write to it then fails.
+    _received: mpsc::Receiver<Value>,
+    _documents: RunDocuments,
+    _workdir: TempDir,
+    _target: std::sync::MutexGuard<'static, ()>,
+}
+
+impl AcceptanceRun {
+    /// Starts the application as package `name`. Each test names its own,
+    /// so its build never writes over an executable the previous test ran
+    /// in the shared target directory, which Windows can still hold open
+    /// for a moment after the run's tree is killed.
+    fn start(name: &str) -> Self {
+        // A run that panicked poisons the lock; the directory is still the
+        // next run's to use.
+        let target = ACCEPTANCE_TARGET
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let workdir = TempDir::new().expect("scaffold workdir");
+        // A storage directory of the run's own: the user's acceptance
+        // application keeps its session, and a page it left open cannot start
+        // this run on it. Linux takes it under the work directory; the other
+        // desktops resolve it in the user's data roots, which the guard empties.
+        let storage = format!(
+            "dev.flui.acceptance-app.live-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("BUG: the clock is past the epoch")
+                .as_nanos()
+        );
+        let documents = RunDocuments::of(&storage);
+        let project = acceptance_project(workdir.path(), name, &storage);
+        let data = workdir.path().join("data");
+        let target_dir = acceptance_target_dir();
+        let (received, run, started) = launch(
+            &project,
+            "desktop",
+            &[("XDG_DATA_HOME", &data), ("CARGO_TARGET_DIR", &target_dir)],
+        );
+        started.unwrap_or_else(|message| panic!("{message}"));
+        let mut mcp = connect(&project, Some(&target_dir), &received);
+        // The app may still be building its first frame: the first read retries.
+        mcp.read_until(&received, "home page with a Settings button", |tree| {
+            button(tree, "Settings")
+        });
+        Self {
+            mcp,
+            _run: run,
+            _received: received,
+            _documents: documents,
+            _workdir: workdir,
+            _target: target,
+        }
+    }
+}
+
+/// The acceptance application builds and draws its home page on the
+/// desktop. This is the desktop scenario's cold build: nextest runs it
+/// first in the `live-acceptance-app` group, with a build's budget
+/// (`.config/nextest.toml`), and
+/// [`an_agent_drives_the_acceptance_app_on_the_desktop`] after it reuses its
+/// target directory, so the scenario's own budget is spent on driving the
+/// app and not on compiling the framework. Select this test with the
+/// scenario (nextest runs it first): the scenario selected alone builds cold.
+#[test]
+fn the_acceptance_app_builds_and_answers_on_the_desktop() {
+    if !on_the_desktop("the_acceptance_app_builds_and_answers_on_the_desktop") {
+        return;
+    }
+    AcceptanceRun::start("flui_acceptance_build");
+}
+
 /// The acceptance application on the desktop, driven through `flui mcp` as
 /// an agent drives it: read the tree until the app has drawn it, locate and
 /// press Settings, wait for the Settings page (a Back button, no Settings
@@ -484,37 +601,11 @@ fn acceptance_project(workdir: &Path, storage: &str) -> PathBuf {
 /// counter scenario covers the other devices.
 #[test]
 fn an_agent_drives_the_acceptance_app_on_the_desktop() {
-    if std::env::var("FLUI_CLI_LIVE_DEVICE").as_deref() != Ok("desktop") {
-        eprintln!(
-            "skipping an_agent_drives_the_acceptance_app_on_the_desktop: set \
-             FLUI_CLI_LIVE_DEVICE=desktop to run it on this machine"
-        );
+    if !on_the_desktop("an_agent_drives_the_acceptance_app_on_the_desktop") {
         return;
     }
-    let workdir = TempDir::new().expect("scaffold workdir");
-    // A storage directory of the run's own: the user's acceptance
-    // application keeps its session, and a page it left open cannot start
-    // this run on it. Linux takes it under the work directory; the other
-    // desktops resolve it in the user's data roots, which the guard empties.
-    let storage = format!(
-        "dev.flui.acceptance-app.live-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("BUG: the clock is past the epoch")
-            .as_nanos()
-    );
-    let _documents = RunDocuments::of(&storage);
-    let project = acceptance_project(workdir.path(), &storage);
-    let data = workdir.path().join("data");
-    let (_run, received, started) = launch(&project, "desktop", &[("XDG_DATA_HOME", &data)]);
-    started.unwrap_or_else(|message| panic!("{message}"));
-
-    let mut mcp = connect(&project, &received);
-    // The app may still be building its first frame: the first read retries.
-    mcp.read_until(&received, "home page with a Settings button", |tree| {
-        button(tree, "Settings")
-    });
+    let mut app = AcceptanceRun::start("flui_acceptance_drive");
+    let mcp = &mut app.mcp;
     mcp.call("flui_motion", json!({}))
         .unwrap_or_else(|error| panic!("reading the animation clock failed: {error}"));
     let settings = mcp.locate_button("Settings");

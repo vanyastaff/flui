@@ -137,7 +137,7 @@ use crate::host_window::{HostWindow, OwnerThreadToken};
 use crate::platform::Platform;
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{WindowHandler, WindowId, WindowOptions};
-use signal::{OwnerSignal, SignalTransport};
+use signal::{OwnerSignal, OwnerTurnSlot, SignalTransport};
 
 // ============================================================================
 // OwnerPlatform
@@ -191,7 +191,7 @@ impl OwnerPlatform {
     /// Delivery is deferred, coalesced and independent of visible windows.
     /// # Errors
     /// Returns unsupported on backends without this transport, or owner-gone after quit.
-    pub fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
+    pub fn on_wake(&self, callback: Box<dyn FnMut()>) -> Result<(), WakeRegistrationError> {
         self.hooks.on_wake(callback)
     }
 
@@ -913,7 +913,7 @@ pub enum WaitError {
 /// Backend-specific window-open dispatch behind [`OwnerPlatform`], kept
 /// `pub(crate)` alongside [`OwnerPlatform`]'s own private fields.
 pub(crate) trait OwnerHooks {
-    fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
+    fn on_wake(&self, callback: Box<dyn FnMut()>) -> Result<(), WakeRegistrationError> {
         drop(callback);
         Err(WakeRegistrationError::Unsupported)
     }
@@ -940,6 +940,8 @@ pub(crate) trait OwnerHooks {
 /// through the same platform in the owner's next turn.
 pub(crate) struct DirectOwnerHooks {
     signal: Arc<OwnerSignal>,
+    /// The loop's owner-turn slot, where `on_wake` installs the callback.
+    turn: Rc<OwnerTurnSlot>,
     platform: Arc<dyn Platform>,
 }
 
@@ -947,15 +949,24 @@ impl DirectOwnerHooks {
     /// Captures the calling thread as the permanent owner — call this from
     /// the backend's `on_ready` (or wherever it mints its `OwnerPlatform`),
     /// on the owner thread, which keeps the windows other threads open.
-    pub(crate) fn with_signal(platform: Arc<dyn Platform>, signal: Arc<OwnerSignal>) -> Self {
+    /// `turn` is the slot the loop drives its turns over.
+    pub(crate) fn with_signal(
+        platform: Arc<dyn Platform>,
+        signal: Arc<OwnerSignal>,
+        turn: Rc<OwnerTurnSlot>,
+    ) -> Self {
         signal.open_windows_through(&platform);
-        Self { signal, platform }
+        Self {
+            signal,
+            turn,
+            platform,
+        }
     }
 }
 
 impl OwnerHooks for DirectOwnerHooks {
-    fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
-        self.signal.register(callback)
+    fn on_wake(&self, callback: Box<dyn FnMut()>) -> Result<(), WakeRegistrationError> {
+        self.signal.register_in(&self.turn, callback)
     }
 
     fn open_owner_window(

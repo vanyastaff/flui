@@ -18,10 +18,13 @@
 //! allocator.
 
 use flui_material::{
-    Checkbox, Chip, ElevatedButton, FilterChip, InkWell, Radio, Switch, Theme, ThemeData,
+    Checkbox, Chip, ElevatedButton, FilterChip, InkWell, NavigationBar, NavigationDestination,
+    Radio, Switch, Tab, TabBar, TabController, Theme, ThemeData,
 };
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::Text;
+use flui_sdk::widgets::icon::IconData;
+use flui_sdk::widgets::{Icon, Text};
 use flui_testing::control_cost::{
     ControlCost, control_alone_under, control_over_text, control_over_text_under,
 };
@@ -197,6 +200,76 @@ fn perf_filter_chip_over_text() {
     assert!(
         cost.render_nodes <= 10,
         "a filter chip adds {} render nodes",
+        cost.render_nodes
+    );
+}
+
+/// What a `TabBar` of two text tabs costs in place of an empty box, under a
+/// theme: the bar's composition and indicator, and per tab its well, whose
+/// node carries the tab's role, selection and merged label, with no
+/// `Semantics` or `MergeSemantics` element of the tab's own.
+#[test]
+fn perf_tab_bar_alone() {
+    let cost = held_to_baseline(
+        "tab_bar_alone",
+        control_alone_under(
+            |column| Theme::new(ThemeData::light(), column).boxed(),
+            |_row| {
+                TabBar::secondary(vec![Tab::new().text("One"), Tab::new().text("Two")])
+                    .controller(TabController::new(2, 0))
+                    .boxed()
+            },
+        ),
+    );
+    // 45 elements and 28 render nodes while each tab had a `MergeSemantics`
+    // and a `Semantics` of its own.
+    assert!(
+        cost.elements <= 41,
+        "a tab bar adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 24,
+        "a tab bar adds {} render nodes",
+        cost.render_nodes
+    );
+}
+
+/// What a `NavigationBar` of two destinations costs in place of an empty
+/// box, under a theme and a `MediaQuery`: the bar's composition and per
+/// destination its well, whose node carries the destination's role,
+/// selection and merged label.
+#[test]
+fn perf_navigation_bar_alone() {
+    let cost = held_to_baseline(
+        "navigation_bar_alone",
+        control_alone_under(
+            |column| {
+                Theme::new(
+                    ThemeData::light(),
+                    MediaQuery::new(MediaQueryData::default(), column),
+                )
+                .boxed()
+            },
+            |_row| {
+                NavigationBar::new(vec![
+                    NavigationDestination::new(Icon::new(IconData::new(0xE88A)), "Home"),
+                    NavigationDestination::new(Icon::new(IconData::new(0xE7FD)), "Profile"),
+                ])
+                .boxed()
+            },
+        ),
+    );
+    // 55 elements and 30 render nodes while each destination had a
+    // `MergeSemantics` and a `Semantics` of its own.
+    assert!(
+        cost.elements <= 51,
+        "a navigation bar adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 26,
+        "a navigation bar adds {} render nodes",
         cost.render_nodes
     );
 }

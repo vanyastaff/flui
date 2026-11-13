@@ -2339,7 +2339,7 @@ one for Win32 makes that safe without changing a signature.
   keyboard-layout handler goes through `owner::call_point::call`: it is taken
   out of its slot, run with no borrow held, and put back only if the slot is
   still empty. A handler registered while it ran — including by itself — wins,
-  the rule `OwnerSignal::drive` already follows.
+  the rule `OwnerSignal::drive_in` already follows.
 - **Quit order.** The run's teardown destroys the owner window, tells the
   application's handler it quits (once, its panic contained), then releases
   the handler: it drops contained, or stays alive when the teardown runs
@@ -3116,22 +3116,24 @@ Quit fences admission before posting and remains retryable after posting failure
 Per-run weak proxy stamps retain the original owner thread even after expiry.
 
 The signal holds admission and scheduling state; the callback waits between
-turns in a `TurnSlot` the caller passes to `register_in` and `drive_in`. Win32
-keeps an `OwnerTurnSlot` (`!Send`) in its owner control context, so closing or
-dropping the last `Arc<OwnerSignal>` on another thread never drops the
-callback there; the owner clears the slot on quit, or `WM_NCDESTROY` frees it
-with the context, and a platform dropped off its owner leaks it with the
-context. **Unasserted:** no test pins this. macOS, UIKit and headless
-still use `register` and `drive`, backed by a shared slot inside the signal,
-until their own steps of ADR-0082 §4.
+turns in the `OwnerTurnSlot` (`!Send`) the host's loop keeps and passes to
+`register_in` and `drive_in`, so `OwnerPlatform::on_wake` takes a callback that
+is not `Send` and closing or dropping the last `Arc<OwnerSignal>` on another
+thread never drops it there. Each host clears the slot on the owner as it
+quits. Win32 keeps it in its owner control context, which `WM_NCDESTROY`
+frees, and a platform dropped off its owner leaks it with the context; AppKit
+keeps it main-thread-bound in its loop control, made on main the first time
+the owner needs it. Test, headless only:
+`an_owner_turn_callback_keeps_owner_local_state_until_the_quit`.
+**Unasserted:** no test pins the Win32 and AppKit paths.
 
 A posted turn is acknowledged when it begins (`OwnerSignal::begin_turn`), not
 when the application's turn runs. A loop that reads what wakes asked of it
 before driving (the Linux loops' host notices, portal appearance and X11 window
 properties) begins the turn, reads, then drives the `OwnerTurn`; a wake that
 lands while it reads posts the next turn, which reads again, instead of being
-settled by the drive with its change unread. `drive` and `drive_in` begin and
-drive at once, for loops that read nothing first (Win32, AppKit, UIKit, web,
+settled by the drive with its change unread. `OwnerSignal::drive_in` begins and
+drives at once, for loops that read nothing first (Win32, AppKit, UIKit, web,
 headless) or read only after the drive (Android's view events, UIKit's scene
 installation). A begun turn dropped before it is driven (a read that unwinds,
 a loop that returns early) posts the next turn for the work still owed. A wake that
@@ -3164,8 +3166,8 @@ window or UI runtime frame. It is not a generic closure executor.
 A live macOS run needs a GUI session. External counters assert owner affinity, nonrecursive delivery, shutdown capture
 release and rejected work after quit. On Windows, a turn through the real
 message loop runs on the owner and is released there. **Unasserted:** no test
-pins this. Pull-request CI only type-checks Win32. Mobile/web registration remains explicitly
-unsupported; proxy window creation support is separate from wake/quit support.
+pins this. Pull-request CI only type-checks Win32. UIKit, Android and the web register
+the same way over their loop's slot; proxy window creation support is separate from wake/quit support.
 
 ### Reveal without changing window mode
 

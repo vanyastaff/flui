@@ -1,7 +1,7 @@
 //! `flui devices` — list run targets: this desktop, Android devices/emulators
 //! visible to `adb`, iOS simulators, and installed web browsers.
 //!
-//! Every probe is bounded by [`PROBE_TIMEOUT`] and a missing tool is a
+//! Every probe is bounded ([`PROBE_TIMEOUT`], or the `simctl` budgets) and a missing tool is a
 //! [`Problem`] row, never a hard failure: the command always exits `0` and
 //! reports what it *could* find. This is also the regression guard for the
 //! macOS hang this module used to have — `flui devices` once shelled out to
@@ -336,6 +336,41 @@ fn parse_adb_devices(adb: &Path, output: &str, details: bool) -> Vec<Device> {
 // iOS (simctl) — reused by `emulators.rs`
 // ============================================================================
 
+/// The budgets of the attempts at `xcrun simctl list`. CoreSimulator can be
+/// slow to answer its first client after a simulator boots: on the nightly
+/// iOS runner, the first `simctl list` after the boot passed
+/// [`PROBE_TIMEOUT`] in two runs of three on one day, and the booted
+/// simulator was missing from the list. An attempt that times out has been
+/// killed, and the next one gets a longer budget; a hung service still ends
+/// as a [`Problem`] once the last one passes.
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(dead_code, reason = "only the macOS simulator probe retries")
+)]
+const SIMCTL_BUDGETS: [std::time::Duration; 2] =
+    [PROBE_TIMEOUT, std::time::Duration::from_secs(30)];
+
+/// Runs `attempt` with each of `budgets` in turn until one answers within
+/// its budget: the first answer that is not `ErrorKind::TimedOut`, or the
+/// last attempt's timeout.
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(dead_code, reason = "only the macOS simulator probe retries")
+)]
+fn retry_on_timeout<T>(
+    budgets: &[std::time::Duration],
+    mut attempt: impl FnMut(std::time::Duration) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut outcome = Err(std::io::Error::from(std::io::ErrorKind::TimedOut));
+    for &budget in budgets {
+        outcome = attempt(budget);
+        if !matches!(&outcome, Err(error) if error.kind() == std::io::ErrorKind::TimedOut) {
+            break;
+        }
+    }
+    outcome
+}
+
 /// List available iOS Simulators via `xcrun simctl list -j devices
 /// available`. `pub(crate)` so `emulators.rs` can reuse the same probe and
 /// JSON parsing for `flui emulators list`/`launch`.
@@ -348,11 +383,23 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
             hint: "install Xcode from the App Store, then run `xcode-select --install`".to_string(),
         });
     }
+    probe_simulators(Path::new("xcrun"), &SIMCTL_BUDGETS)
+}
 
-    match output_with_timeout(
-        Command::new("xcrun").args(["simctl", "list", "-j", "devices", "available"]),
-        PROBE_TIMEOUT,
-    ) {
+/// The simulators `xcrun simctl list` reports, through `xcrun` and with an
+/// attempt for each of `budgets`. Apart from [`probe_ios`] so a test runs it
+/// on every host against a stand-in `xcrun`.
+#[cfg_attr(
+    not(any(target_os = "macos", all(test, unix))),
+    expect(dead_code, reason = "only the macOS simulator probe lists simulators")
+)]
+fn probe_simulators(xcrun: &Path, budgets: &[std::time::Duration]) -> Result<Vec<Device>, Problem> {
+    match retry_on_timeout(budgets, |budget| {
+        output_with_timeout(
+            Command::new(xcrun).args(["simctl", "list", "-j", "devices", "available"]),
+            budget,
+        )
+    }) {
         Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout);
             parse_simctl_json(&text).map_err(|error| Problem {
@@ -368,7 +415,11 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
         }),
         Err(error) if error.kind() == std::io::ErrorKind::TimedOut => Err(Problem {
             platform: DevicePlatform::Ios,
-            message: format!("xcrun did not answer within {PROBE_TIMEOUT:?}"),
+            message: format!(
+                "xcrun did not answer within {:?} in {} attempts",
+                budgets.iter().sum::<std::time::Duration>(),
+                budgets.len()
+            ),
             hint: "Xcode's simulator service may be hung; try restarting it".to_string(),
         }),
         Err(error) => Err(Problem {
@@ -379,7 +430,10 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg_attr(
+    not(any(target_os = "macos", all(test, unix))),
+    expect(dead_code, reason = "only the macOS simulator probe lists simulators")
+)]
 fn parse_simctl_json(text: &str) -> Result<Vec<Device>, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
     let Some(devices_by_runtime) = value.get("devices").and_then(|d| d.as_object()) else {
@@ -439,7 +493,10 @@ fn parse_simctl_json(text: &str) -> Result<Vec<Device>, String> {
 }
 
 /// `com.apple.CoreSimulator.SimRuntime.iOS-17-2` → `iOS 17.2`.
-#[cfg(target_os = "macos")]
+#[cfg_attr(
+    not(any(target_os = "macos", all(test, unix))),
+    expect(dead_code, reason = "only the macOS simulator probe lists simulators")
+)]
 fn runtime_name(runtime_key: &str) -> String {
     let Some(suffix) = runtime_key.strip_prefix("com.apple.CoreSimulator.SimRuntime.") else {
         return runtime_key.to_string();
@@ -749,4 +806,136 @@ fn format_device_lines(device: &Device, show_details: bool) -> Vec<String> {
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::io::{Error, ErrorKind};
+    use std::time::Duration;
+
+    use super::{SIMCTL_BUDGETS, retry_on_timeout};
+
+    /// What the attempts answer in turn (`None` is an answer in time), then
+    /// the outcome and how many attempts ran.
+    struct Case {
+        name: &'static str,
+        answers: &'static [Option<ErrorKind>],
+        outcome: Result<usize, ErrorKind>,
+        attempts: usize,
+    }
+
+    #[test]
+    fn an_attempt_that_times_out_is_retried_with_the_next_budget() {
+        let cases = [
+            Case {
+                name: "answers at once",
+                answers: &[None],
+                outcome: Ok(1),
+                attempts: 1,
+            },
+            Case {
+                name: "times out, then answers",
+                answers: &[Some(ErrorKind::TimedOut), None],
+                outcome: Ok(2),
+                attempts: 2,
+            },
+            Case {
+                name: "times out every time",
+                answers: &[Some(ErrorKind::TimedOut), Some(ErrorKind::TimedOut)],
+                outcome: Err(ErrorKind::TimedOut),
+                attempts: 2,
+            },
+            Case {
+                name: "fails otherwise",
+                answers: &[Some(ErrorKind::NotFound)],
+                outcome: Err(ErrorKind::NotFound),
+                attempts: 1,
+            },
+        ];
+        for case in cases {
+            let given = RefCell::new(Vec::<Duration>::new());
+            let outcome = retry_on_timeout(&SIMCTL_BUDGETS, |budget| {
+                given.borrow_mut().push(budget);
+                let attempt = given.borrow().len();
+                match case.answers[attempt - 1] {
+                    Some(kind) => Err(Error::from(kind)),
+                    None => Ok(attempt),
+                }
+            });
+            assert_eq!(
+                outcome.map_err(|error| error.kind()),
+                case.outcome,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                given.into_inner(),
+                SIMCTL_BUDGETS[..case.attempts],
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    /// A stand-in `xcrun` in a directory of its own: a call that starts before
+    /// the Unix second `hangs_until` hangs, a later one lists one booted
+    /// simulator, as `simctl list -j` prints it. The decision reads the clock,
+    /// not a count of earlier calls, so a call killed before its first line
+    /// ran changes nothing for the next one.
+    #[cfg(unix)]
+    fn stand_in_xcrun(dir: &std::path::Path, hangs_until: u64) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let script = dir.join("xcrun");
+        let body = format!(
+            "#!/bin/sh\n\
+             if [ \"$(date +%s)\" -lt {hangs_until} ]; then exec sleep 30; fi\n\
+             echo '{{\"devices\":{{\"com.apple.CoreSimulator.SimRuntime.iOS-18-0\":\
+             [{{\"name\":\"iPhone Test\",\"udid\":\"UDID-1\",\"state\":\"Booted\",\
+             \"isAvailable\":true}}]}}}}'\n",
+        );
+        std::fs::write(&script, body).expect("write the stand-in xcrun");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("make the stand-in xcrun executable");
+        script
+    }
+
+    /// The probe `flui devices` runs on macOS, against an `xcrun` that hangs:
+    /// once (the simulator is listed on the retry) and every time (a
+    /// `Problem` that names both attempts). The first case's stand-in hangs
+    /// until two seconds past the whole second the test starts in, and the
+    /// first budget is three seconds: the retry starts after the stand-in
+    /// stopped hanging however late either call reaches its first line.
+    #[cfg(unix)]
+    #[test]
+    fn the_simulator_probe_retries_an_xcrun_that_hangs() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is past the epoch")
+            .as_secs();
+        let budgets = [Duration::from_secs(3), Duration::from_secs(20)];
+        let once = tempfile::tempdir().expect("a directory for the stand-in xcrun");
+        let devices = super::probe_simulators(&stand_in_xcrun(once.path(), now + 2), &budgets)
+            .unwrap_or_else(|problem| panic!("the retry lists the simulator: {}", problem.message));
+        let ids = devices
+            .iter()
+            .map(|device| device.id.as_str())
+            .collect::<Vec<&str>>();
+        assert_eq!(ids, ["UDID-1"]);
+
+        let short = [Duration::from_millis(200), Duration::from_millis(300)];
+        let always = tempfile::tempdir().expect("a directory for the stand-in xcrun");
+        let problem =
+            super::probe_simulators(&stand_in_xcrun(always.path(), u64::from(u32::MAX)), &short)
+                .expect_err("an xcrun that always hangs is a problem");
+        assert_eq!(
+            problem.message,
+            "xcrun did not answer within 500ms in 2 attempts"
+        );
+    }
+
+    #[test]
+    fn a_later_attempt_gets_a_longer_budget() {
+        assert!(SIMCTL_BUDGETS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 }

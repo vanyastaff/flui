@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-12)
 - **Date:** 2026-10-12
+- **Superseded-by:** [ADR-0332](ADR-0332-a-control-takes-the-content-roles-beneath-it.md) for
+  decision 4's rule that two declared roles always form separate nodes; the rest remains in force
 - **Replaces:** `crates/flui-semantics/ARCHITECTURE.md` mapping decisions 1 and 2 (the role
   cascade over flags), with the role precedence in decision 4 below.
 - **Supersedes:** [ADR-0168](ADR-0168-descendant-reveal-through-scroll-ancestors.md), in part:
@@ -50,7 +52,8 @@ while Slint keeps its own model and confines AccessKit to a backend.
 4. **One merge table.** Per group: union (relations, tags, and custom actions, which the
    contributor's follow and each keep their own handler), direction-aware concatenation (label,
    description), first wins (other naming, traversal), conflict when both
-   are present (role, each state through `StateMerge`, non-empty value, range, collection, text,
+   are present (role, except a control over content as [ADR-0332](ADR-0332-a-control-takes-the-content-roles-beneath-it.md)
+   decides; each state through `StateMerge`, non-empty value, range, collection, text,
    scroll, live, platform view). A conflict forms separate nodes; a forced merge
    (`MergeSemantics`) resolves it: states by `StateMerge::merge`, the receiver otherwise, and
    role by specificity — an authored structural role (tab, list item, dialog, …) first, then

@@ -102,11 +102,12 @@ use flui_sdk::painting::{Canvas, Color, Paint, TextDirection, TextStyle};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
+use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
     Center, Column, CompanionRegistration, Container, CrossAxisAlignment, CustomPaint,
-    CustomPainter, DefaultTextStyle, Directionality, Expanded, IgnorePointer, MergeSemantics,
-    Padding, Positioned, PreferredSizeView, Row, Semantics, SemanticsAnchor, SemanticsRole,
-    SizedBox, Stack, Text, WidgetState, WidgetStateConstraint, WidgetStateProperty,
+    CustomPainter, DefaultTextStyle, Directionality, Expanded, IgnorePointer, Padding, Positioned,
+    PreferredSizeView, Row, Semantics, SemanticsAnchor, SemanticsRole, SizedBox, Stack, Text,
+    WidgetState, WidgetStateConstraint, WidgetStateProperty,
 };
 
 use crate::ink_well::InkWell;
@@ -876,12 +877,15 @@ fn build_tab_cell(
         });
 
     // One node per tab, as a navigation destination is: the well's tap and
-    // the label text fold into it, and the anchor names it for the
-    // alternatives a [`crate::TabBarView`] relies on this bar for.
-    let tab_node = Semantics::new()
-        .role(SemanticsRole::Tab)
-        .selected(selected)
-        .anchor(anchor.clone())
-        .child(ink_well);
-    Expanded::new(MergeSemantics::new().child(tab_node)).boxed()
+    // focus and the label text fold into it, and the anchor names it for the
+    // alternatives a [`crate::TabBarView`] relies on this bar for. Flutter's
+    // `MergeSemantics` and `Semantics(selected:)` around the tab's `InkWell`
+    // are the well's own node here (ADR-0322 §1).
+    let ink_well = ink_well.description(
+        Description::new(SemanticsRole::Tab)
+            .selected(selected)
+            .anchor(anchor.clone())
+            .merges_descendants(),
+    );
+    Expanded::new(ink_well).boxed()
 }

@@ -17,7 +17,7 @@ WAI-ARIA 1.2 и AccessKit. Правила слияния — одна табли
 
 Удаляются: `SemanticsProperties`, флаговое слово `SemanticsFlag`/`SemanticsFlags`,
 `SemanticsNodeData`, `SemanticsNodeSnapshot`/`SemanticsSnapshot`, `SemanticsEvent`.
-Не меняются: сборка в `flui-rendering` (тот же `absorb`/`is_compatible_with`), `SemanticsTree`,
+Не меняются: сборка в `flui-rendering` (тот же `absorb` и `can_absorb`/`can_join`), `SemanticsTree`,
 инкрементальная публикация `SemanticsOwner`, ADR-0205.
 
 Три необратимых решения оформляются ADR до кода: модель и слияние (ADR-0206), словарь
@@ -30,7 +30,7 @@ WAI-ARIA 1.2 и AccessKit. Правила слияния — одна табли
 - Конфигурация — единственный вход: `RenderObject::describe_semantics_configuration(&mut
   SemanticsConfiguration)` (`crates/flui-rendering/src/traits/render_object.rs`), реализуют
   `RenderParagraph` и `RenderSemanticsAnnotations`. Сборка вызывает только `absorb`,
-  `is_compatible_with`, `set_index_in_parent`, `set_scroll_child_count`
+  `can_absorb`, `can_join`, `set_index_in_parent`, `set_scroll_child_count`
   (`crates/flui-rendering/src/pipeline/owner/semantics.rs:695`, `:715`, `:723`, `:1034`, `:1067`).
 - Трансляция (`accesskit_translation.rs`) получает `SemanticsNodeData` — копию конфигурации,
   собранную `SemanticsTree::node_data_of`. `SemanticsSnapshot` строится только тестами.
@@ -234,7 +234,7 @@ pub enum ActionCall {
 
 | Группа / поле | Обычное слияние | Принудительное (`MergeSemantics`) |
 |---|---|---|
-| `role` | конфликт, если объявлены обе | порядок специфичности (ниже) |
+| `role` | конфликт, если объявлены обе; контрол, названный содержимым, принимает роли содержимого (ADR-0332) | порядок специфичности (ниже) |
 | `naming.label`, `naming.description` | конкатенация с учётом направления | то же |
 | `naming.value` | конфликт, если обе непусты | получатель |
 | прочие `naming` | первый выигрывает | то же |

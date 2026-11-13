@@ -270,15 +270,21 @@ pub(crate) fn reduced_motion_shows_the_target_frame() {
     );
 }
 
-/// The label lives on the icon as an image; the animation is not announced.
+/// The label lives on the icon, with no role of its own; the animation is not announced.
 pub(crate) fn the_label_lives_on_the_icon() {
     let mut laid = mount(icon_at(0.5).semantic_label("Menu"));
     laid.enable_semantics();
     laid.tick();
     let tree = laid.a11y_tree().expect("semantics enabled");
     let node = tree.find_by_label("Menu").expect("the label");
-    assert_eq!(node.role(), Role::Image);
-    assert_eq!(node.value(), None, "no progress is announced");
+    assert_ne!(node.role(), Role::Image, "an icon names what holds it");
+    // A labelled node with no role is read as text: its value is its label,
+    // never the animation's progress.
+    assert!(
+        node.value().is_none_or(|value| value == "Menu"),
+        "no progress is announced: {:?}",
+        node.value()
+    );
 }
 
 /// `IconData::match_text_direction` flips the glyph in paint under RTL: the painted glyph is

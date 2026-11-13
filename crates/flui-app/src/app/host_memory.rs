@@ -48,6 +48,13 @@ impl HostMemory {
         deprecated,
         reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
     )]
+    #[cfg_attr(
+        not(any(target_os = "android", target_os = "ios")),
+        allow(
+            dead_code,
+            reason = "the Android and iOS runners keep the raster lane until they move to the raster executor (ADR-0305)"
+        )
+    )]
     pub(crate) fn track_raster_lane(&self, lane: flui_engine::RasterHandle) {
         let mut rasters = self.rasters.lock();
         rasters.retain(flui_engine::RasterHandle::is_live);

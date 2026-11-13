@@ -173,7 +173,7 @@
 // AppKit / UIKit / Android NDK / wasm-bindgen — `headless` has none). The
 // crate does not opt the whole tree out of `unsafe_code = "warn"`: each FFI
 // island carries its own `expect(unsafe_code)` where it is declared — the
-// loops `owner::windows`, `owner::apple`, `owner::web` and
+// loops `owner::windows`, `owner::apple` and
 // `owner::android::java_view`, and the platform files of the features that
 // call the OS directly (`window::windows`, `input::windows`,
 // `text::windows::tsf`, `display::apple::{macos, ios}`, `preferences::windows`

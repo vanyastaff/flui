@@ -567,3 +567,60 @@ pub fn a_signal_probe_reads_and_writes_its_current_mount_after_remount() {
     current.tick();
     assert_eq!(probe.value(), Ok(1));
 }
+
+// ---------------------------------------------------------------------------
+// The frame report
+// ---------------------------------------------------------------------------
+
+/// A swatch whose colour a shared signal picks, so a test can dirty one
+/// element between frames.
+#[derive(Clone, StatefulView)]
+struct Swatch {
+    dark: flui_testing::widgets::SharedSignal<bool>,
+}
+
+struct SwatchState {
+    dark: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for Swatch {
+    type State = SwatchState;
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        SwatchState {
+            dark: self.dark.clone(),
+        }
+    }
+}
+
+impl ViewState<Swatch> for SwatchState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.dark.bind(ctx);
+    }
+    fn build(&self, _view: &Swatch, ctx: &dyn BuildContext) -> impl IntoView {
+        let shade = if self.dark.get(ctx) { 0 } else { 255 };
+        SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(shade, shade, shade)))
+    }
+}
+
+/// `pump_report` counts the frame it drove: a change's frame reports its
+/// builds, paint and patch, and the frame after it, with nothing to do,
+/// reports none of them rather than the change's builds again.
+#[test]
+fn a_frame_report_counts_only_the_frame_it_drove() {
+    let dark = flui_testing::widgets::SharedSignal::new(false);
+    let mut laid = lay_out(Swatch { dark: dark.clone() }, tight(40.0, 40.0));
+    let frame = std::time::Duration::from_millis(16);
+
+    dark.set(true);
+    let changed = laid.pump_report(frame);
+    assert!(changed.build.elements_built >= 1, "{changed:#?}");
+    assert_eq!(changed.pipeline.frames_produced, 1, "{changed:#?}");
+    assert!(changed.pipeline.nodes_painted >= 1, "{changed:#?}");
+    assert_eq!(changed.scene.damage_rects, 1, "{changed:#?}");
+
+    let idle = laid.pump_report(frame);
+    assert_eq!(idle.build.elements_built, 0, "{idle:#?}");
+    assert_eq!(idle.build.builds_run, 0, "{idle:#?}");
+    assert_eq!(idle.pipeline.frames_produced, 0, "{idle:#?}");
+    assert_eq!(idle.scene.damage_rects, 0, "{idle:#?}");
+}

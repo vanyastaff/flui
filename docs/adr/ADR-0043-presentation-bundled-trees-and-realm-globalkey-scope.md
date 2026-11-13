@@ -88,7 +88,7 @@ Flutter's `WidgetsBinding` and `BuildOwner` are process-global singletons; a sin
 
 `ElementTree` and `WidgetsBinding` are untouched by the `flui-view` half of this decision. `retake_inactive_global_key` keeps its existing intra-tree semantics exactly as they were; it does not consult `GlobalKeyScope` and was never intended to, because the split-authority design in §2 makes that correct rather than an oversight — retake is a same-owner event, and the scope claim for a same-owner event never changes hands regardless of whether the reactivating call site happens to check it. Zero new `BuildContext` capability handles are introduced. `BuildOwner::focus_manager()`/`text_input_handle()` are unchanged.
 
-`BuildOwner::set_global_key_scope` is classified an additive, minor public API change — `BuildOwner` and `WidgetsBinding` are public surface (re-exported through `flui::app::*`, consumed by `flui-hot-reload`), and this is a new method with no change to any existing signature.
+`BuildOwner::set_global_key_scope` is classified an additive, minor public API change — `BuildOwner` and `WidgetsBinding` are public API of `flui-view` and `flui-app`, consumed by `flui-hot-reload`, and this is a new method with no change to any existing signature.
 
 ## Alternatives rejected
 

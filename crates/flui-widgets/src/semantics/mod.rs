@@ -1040,6 +1040,16 @@ impl Semantics {
         self
     }
 
+    /// Fold every node beneath this one into it, as a [`MergeSemantics`]
+    /// does: for a control's node that describes itself (ADR-0322 §1).
+    #[must_use]
+    pub(crate) fn merging_descendants(mut self) -> Self {
+        self.configuration.set_semantics_boundary(true);
+        self.configuration
+            .set_merging_semantics_of_descendants(true);
+        self
+    }
+
     /// Make this node a merge boundary (ADR-0214 §3): it keeps a node of its
     /// own inside a merging ancestor, and merges none of its descendants into
     /// it, so the controls and texts beneath it stay addressable.

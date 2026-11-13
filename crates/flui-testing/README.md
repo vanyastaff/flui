@@ -51,10 +51,11 @@ Implemented:
 - **Accessibility queries** (`a11y`) — the assembled semantics tree as AccessKit
   nodes, queried by role.
 - **The text-store conformance kit** (`text_store_kit`, ADR-0090).
-- **Per-frame work counts** — `HeadlessBinding::last_frame_report()` returns a
-  `FrameReport`: the build owner's report and the pipeline's phase counters
-  differenced across the last pump. The counted perf scenarios built on it
-  live in `flui-widgets`' `perf` test target (see `cargo xtask perf`).
+- **Per-frame work counts** — `LaidOut::pump_report` drives a frame of the UI
+  runtime and returns a `FrameReport`: the build owner's report, the pipeline's
+  phase counters and the scene patch's cost, differenced across the frame. The
+  counted perf scenarios built on it live in `flui-widgets`' `perf` test target
+  (see `cargo xtask perf`).
 
 This crate is the workspace's **test-support** package, not just one driver.
 Fake platform capabilities and golden-image helpers belong here as they land,

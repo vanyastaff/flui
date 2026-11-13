@@ -247,3 +247,68 @@ pub fn a_selected_icon_button_hovers_in_primary() {
         "{unselected:?}"
     );
 }
+
+/// A labelled icon names the button it sits in: an `IconButton`, a floating
+/// action button and an `ElevatedButton` over a labelled `Icon` are each one
+/// `Button` node with the icon's label and no child node, and a click on it
+/// presses the button, as Flutter's `Icon` (a label with no image flag)
+/// does under its button.
+///
+/// Red-check: give the icon's `Semantics` the `Image` role again (each
+/// button is a nameless node over an `Image` node).
+pub fn a_labelled_icon_names_the_button_it_sits_in() {
+    use flui_material::{ElevatedButton, FloatingActionButton};
+    use flui_sdk::widgets::Icon;
+    use flui_sdk::widgets::icon::IconData;
+    use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
+    use std::cell::Cell;
+
+    type Press = Rc<Cell<u32>>;
+    type Build = fn(Press) -> BoxedView;
+    let cases: [(&str, Build); 3] = [
+        ("IconButton", |pressed| {
+            IconButton::new(Icon::new(IconData::new(0xE145)).semantic_label("Add"))
+                .on_pressed(move |_ctx| pressed.set(pressed.get() + 1))
+                .boxed()
+        }),
+        ("FloatingActionButton", |pressed| {
+            FloatingActionButton::new()
+                .child(Icon::new(IconData::new(0xE145)).semantic_label("Add"))
+                .on_pressed(move |_ctx| pressed.set(pressed.get() + 1))
+                .boxed()
+        }),
+        ("ElevatedButton", |pressed| {
+            ElevatedButton::new(Icon::new(IconData::new(0xE145)).semantic_label("Add"))
+                .on_pressed(move |_ctx| pressed.set(pressed.get() + 1))
+                .boxed()
+        }),
+    ];
+    for (name, button) in cases {
+        let pressed: Press = Rc::new(Cell::new(0));
+        let mut laid = lay_out(
+            Theme::new(ThemeData::light(), button(Rc::clone(&pressed))),
+            tight(80.0, 56.0),
+        );
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame");
+        let shown = tree.describe();
+        let node = tree
+            .find_by_label("Add")
+            .unwrap_or_else(|error| panic!("{name}: no node labelled \"Add\": {error}\n{shown}"));
+        assert_eq!(node.role(), Role::Button, "{name}:\n{shown}");
+        assert!(node.child_ids().is_empty(), "{name}:\n{shown}");
+        let target = node.id();
+        laid.invoke_semantics_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: target,
+            data: None,
+        })
+        .unwrap_or_else(|error| panic!("{name}: the button takes a click: {error}"));
+        laid.pump();
+        assert_eq!(pressed.get(), 1, "{name}: a click on the node presses it");
+    }
+}

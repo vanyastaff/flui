@@ -83,6 +83,24 @@ impl TextureUpdates {
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty() && self.retired.is_empty()
     }
+
+    /// Fold `newer`, taken after these, into these, as one update that
+    /// applies both: a texture's frame in `newer` replaces its frame here, a
+    /// texture `newer` retires loses its frame here, and the retirements of
+    /// both are kept. An id is never issued again, so no frame follows its
+    /// retirement.
+    pub fn merge(&mut self, newer: Self) {
+        let Self { frames, retired } = newer;
+        if self.is_empty() {
+            *self = Self { frames, retired };
+            return;
+        }
+        self.frames.retain(|(id, _)| {
+            !retired.contains(id) && !frames.iter().any(|(newer_id, _)| newer_id == id)
+        });
+        self.frames.extend(frames);
+        self.retired.extend(retired);
+    }
 }
 
 impl TextureRegistry {

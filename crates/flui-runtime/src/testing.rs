@@ -371,3 +371,19 @@ impl FrameSink for ScriptedSink {
         (self.script)(call_index, &publication)
     }
 }
+
+/// A presentation's retained scene, as running totals a test kit differences
+/// across a frame: what the frame's patch made the owner copy, create and
+/// re-depth, and the damage of the version it holds now.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct SceneTotals {
+    /// The version the scene holds: a frame applied a patch when this moved.
+    pub version: flui_layer::SceneVersionId,
+    /// Scene nodes the owner's applies have copied or created, in total.
+    pub nodes_visited: u64,
+    /// Node depths the owner's applies have recomputed, in total.
+    pub depth_updates: u64,
+    /// The damage of the patch the owner applied last.
+    pub patch_damage: flui_layer::DamageRegion,
+}

@@ -48,6 +48,7 @@ pub mod rendering {
 /// goes before a release.
 #[deprecated(note = "use flui::testing::Tester and flui::testing::find")]
 pub mod harness {
+    pub use flui_interaction::binding::GestureBinding;
     pub use flui_rendering::testing::inspect::render_snapshot;
     pub use flui_testing::{
         BuildCapabilities, HeadlessBinding, MountOptions, MountOwners, Mounted,

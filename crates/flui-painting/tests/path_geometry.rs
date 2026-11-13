@@ -2,7 +2,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Radius, Rect};
 use flui_painting::paint::{Path, PathCommand, PathFillType};
 
 fn close(actual: f64, expected: f64, tolerance: f64, what: &str) {
@@ -821,4 +821,148 @@ pub(crate) fn lerp_morphs_compatible_paths_only() {
         Path::lerp(&a, &poisoned, 1.0).is_none(),
         "a NaN end at t = 1"
     );
+}
+
+/// A rectangle, oval or rounded rectangle leaves its curves unbuilt until they are read,
+/// and a move of it only records the offset. Whether its curves were built before a move,
+/// after it or never, it is the same path: equal, with the same elements to the bit, so a
+/// morph between the two still works; its bounds hold the curves; and a clone shares the
+/// curves the first read builds. A rounded rectangle whose radii overrun its sides is built
+/// at once, so its bounds are its curves'.
+pub(crate) fn a_shape_reads_alike_before_and_after_its_curves_are_built() {
+    /// How far the curves built for an oval or an arc stray from the true ellipse.
+    const CURVE_TOLERANCE: f64 = 1e-3;
+    // A fixed linear congruential sequence: the same shapes on every run.
+    let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = |scale: f64| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 11) as f64 / (1u64 << 53) as f64 * scale
+    };
+    let elements = |path: &Path| {
+        path.commands()
+            .map(|command| format!("{command:?}"))
+            .collect::<Vec<_>>()
+    };
+    for case in 0..600 {
+        let (left, top) = (next(2000.0) - 1000.0, next(2000.0) - 1000.0);
+        let (width, height) = (next(400.0), next(400.0));
+        let rect = Rect::from_ltrb(left, top, left + width, top + height);
+        let radius = next(width.min(height) / 2.0);
+        let shape = match case % 4 {
+            0 => Path::rectangle(rect),
+            1 => Path::oval(rect),
+            2 => Path::from_rrect(RRect::from_rect_circular(rect, radius)),
+            _ => Path::from_rrect(RRect::from_rect_xy(rect, radius, radius * 0.5)),
+        };
+        let offset = Offset::new(next(1000.0) - 500.0, next(1000.0) - 500.0);
+        let what = format!("case {case}: {rect:?} radius {radius} moved by {offset:?}");
+
+        let moved_unbuilt = shape.translate(offset);
+        let bounds = moved_unbuilt.compute_bounds();
+        // Read after the unbuilt move was taken, so that move saw no curves.
+        let _ = elements(&shape);
+        let moved_built = shape.translate(offset);
+
+        assert!(moved_unbuilt == moved_built, "{what}: equality");
+        assert_eq!(
+            elements(&moved_unbuilt),
+            elements(&moved_built),
+            "{what}: elements"
+        );
+        assert_eq!(
+            moved_unbuilt.rrect_hint(),
+            moved_built.rrect_hint(),
+            "{what}: analytic shape"
+        );
+        assert!(
+            Path::lerp(&moved_unbuilt, &moved_built, 0.5).is_some(),
+            "{what}: morph"
+        );
+        let built_bounds = moved_built.compute_bounds();
+        for (edge, outside) in [
+            ("left", built_bounds.left() - bounds.left()),
+            ("top", built_bounds.top() - bounds.top()),
+            ("right", bounds.right() - built_bounds.right()),
+            ("bottom", bounds.bottom() - built_bounds.bottom()),
+        ] {
+            assert!(
+                (-1e-9..=CURVE_TOLERANCE + 1e-9).contains(&outside),
+                "{what}: the {edge} bound lies {outside} outside the built curves'"
+            );
+        }
+    }
+
+    // A rounded rectangle whose radii overrun its sides, or are negative, reaches past its
+    // rectangle: its bounds are the curves'.
+    let square = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+    for rrect in [
+        RRect::from_rect_circular(square, 30.0),
+        RRect::from_rect_circular(square, -5.0),
+    ] {
+        let path = Path::from_rrect(rrect);
+        let bounds = path.compute_bounds();
+        let _ = elements(&path);
+        assert_eq!(bounds, path.compute_bounds(), "{rrect:?}: bounds");
+    }
+
+    // Separate constructions share nothing; a clone of an unbuilt shape builds alike but
+    // apart; a clone of built curves shares them; the bounds a path cached do not make it a
+    // different path.
+    let rrect = RRect::from_rect_circular(Rect::from_ltrb(10.0, 20.0, 130.0, 64.0), 12.0);
+    let (first, second) = (Path::from_rrect(rrect), Path::from_rrect(rrect));
+    assert!(
+        !first.shares_commands_with(&second),
+        "separate constructions"
+    );
+    let unbuilt_copy = first.clone();
+    assert_eq!(
+        elements(&unbuilt_copy),
+        elements(&first),
+        "an unbuilt clone"
+    );
+    assert!(
+        !unbuilt_copy.shares_commands_with(&first),
+        "an unbuilt clone builds its own curves"
+    );
+    let copy = first.clone();
+    assert!(
+        copy.shares_commands_with(&first),
+        "a clone shares the built curves"
+    );
+    let wide = Rect::from_ltrb(0.0, 0.0, 10.0, 40.0);
+    for drawn_from_curves in [
+        Path::oval(rrect.rect),
+        Path::rectangle(rrect.rect),
+        // Elliptical corners, and a corner wider than half the shorter side, fill through
+        // the path route.
+        Path::from_rrect(RRect::from_rect_xy(rrect.rect, 8.0, 4.0)),
+        Path::from_rrect(RRect::from_rect_and_corners(
+            wide,
+            Radius::circular(0.0),
+            Radius::circular(8.0),
+            Radius::circular(0.0),
+            Radius::circular(0.0),
+        )),
+    ] {
+        assert!(
+            drawn_from_curves
+                .clone()
+                .shares_commands_with(&drawn_from_curves),
+            "a shape no analytic route draws is built once for all its clones"
+        );
+    }
+
+    // Far from the origin a coordinate's rounding passes the curve tolerance, so such a
+    // shape is built at once and its bounds are its curves'.
+    let far = Path::from_rrect(RRect::from_rect_circular(
+        Rect::from_ltrb(0.0, 0.0, 3.3, 7.7),
+        1.0,
+    ))
+    .translate(Offset::new(1.1e14, -1.1e14));
+    let far_bounds = far.compute_bounds();
+    let built: Vec<_> = elements(&far);
+    assert_eq!(far_bounds, far.compute_bounds(), "far bounds: {built:?}");
+    assert_eq!(Path::new(), Path::new().translate(Offset::new(3.0, 4.0)));
 }

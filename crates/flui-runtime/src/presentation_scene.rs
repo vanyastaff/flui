@@ -223,6 +223,19 @@ impl SceneSlot {
         })
     }
 
+    /// The scene's running totals; see [`crate::testing::SceneTotals`].
+    /// `Err` while a frame holds it.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn totals(&self) -> Result<crate::testing::SceneTotals, SceneLent> {
+        let scene = self.scene.borrow();
+        let owner = &scene.as_ref().ok_or(SceneLent)?.owner;
+        Ok(crate::testing::SceneTotals {
+            version: owner.current().id(),
+            nodes_visited: owner.table_copies() + owner.table_nodes_created(),
+            depth_updates: owner.depth_updates(),
+            patch_damage: owner.patch_damage(),
+        })
+    }
     /// The current version with the damage since the acknowledged one.
     #[cfg(all(test, feature = "hot-reload"))]
     pub(crate) fn publication(&self) -> Result<ScenePublication, SceneLent> {

@@ -184,18 +184,25 @@ pub(crate) fn icon_labels_reach_the_assembled_accessibility_tree() {
             );
             assert!(tree.find_by_label("Open home").is_err() || label == Some("Open home"));
             assert!(tree.find_by_label("Go home").is_err() || label == Some("Go home"));
-            let images = tree.find_all(Role::Image);
+            let labelled: Vec<_> = tree
+                .nodes()
+                .filter(|node| node.raw().label().is_some())
+                .collect();
             match label {
                 Some(label) => {
                     assert_eq!(
-                        images.len(),
+                        labelled.len(),
                         1,
-                        "labelled icons are images, including absent glyphs"
+                        "a labelled icon is one node, including an absent glyph"
                     );
-                    assert_eq!(images[0].label(), Some(label));
-                    assert_eq!(tree.find_all_by_label(label).len(), 1);
+                    assert_eq!(labelled[0].label(), Some(label));
+                    assert_ne!(
+                        labelled[0].role(),
+                        Role::Image,
+                        "an icon names what holds it, with no role of its own"
+                    );
                 }
-                None => assert!(images.is_empty(), "decorative icons are not announced"),
+                None => assert!(labelled.is_empty(), "decorative icons are not announced"),
             }
         }
     }

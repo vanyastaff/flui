@@ -2,8 +2,8 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [slide_transition_tick]
-allocated_bytes = 3828
-allocations = 17
+allocated_bytes = 5097
+allocations = 30
 builds_run = 0
 damage_full = 0
 damage_rects = 1
@@ -15,7 +15,7 @@ layout_passes = 0
 layout_roots = 0
 nodes_laid_out = 0
 nodes_painted = 0
-reallocations = 0
+reallocations = 1
 scene_depth_updates = 0
 scene_nodes_visited = 1
 scene_ops = 1

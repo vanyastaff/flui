@@ -165,7 +165,7 @@ impl DrawOp { fn is_finite(&self) -> bool; }    // exhaustive, no wildcard
 
 `DrawOp::is_finite` checks every `f64` the op holds (coordinates, radii, angles, elevation,
 opacity, source and tile rectangles, an atlas's transforms, vertices and texture coordinates), its
-path's points (through a flag `PathData` keeps current in its mutators: its cached bounds cannot
+path's points (through a flag `PathData` keeps current in its mutators: its bounds cannot
 stand in, since kurbo 0.13.1, the locked version, folds a path's segment boxes with `f64::min` and
 `max` (its src/bezpath.rs lines 953-964 and src/rect.rs lines 198-205), which drop a NaN operand), and its paint's
 values (stroke width, dash intervals and

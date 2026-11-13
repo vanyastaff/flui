@@ -41,14 +41,12 @@ use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition}
 use flui_testing::control_cost::control_over_text;
 use flui_testing::heap::{CountingAllocator, HeapCounts};
 use flui_testing::widgets::SharedSignal;
-use flui_testing::{
-    FrameReport, HeadlessBinding, HeadlessHost, HeadlessWindow, MountOptions, MountOwners,
-};
-use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+use flui_testing::widgets::{LaidOut, lay_out, tight};
+use flui_testing::{FrameReport, HeadlessHost, HeadlessWindow};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, Column, Expanded, RawButton, RepaintBoundary, SingleChildScrollView, SizedBox,
-    SliverList, Text, Viewport, app_root,
+    SliverList, Text, Viewport,
 };
 
 #[global_allocator]
@@ -170,7 +168,7 @@ impl StatelessView for PerfApp {
 }
 
 struct Mounted {
-    binding: HeadlessBinding,
+    laid: LaidOut,
     writer: ScrollOffsetWriter,
 }
 impl Mounted {
@@ -178,15 +176,14 @@ impl Mounted {
     fn pump_many(&mut self, frames: usize) -> FrameReport {
         let mut total = FrameReport::default();
         for _ in 0..frames {
-            total += &self.binding.pump_frame_report(FRAME);
+            total += &self.laid.pump_report(FRAME);
         }
         total
     }
 
     fn render_nodes(&self) -> usize {
-        self.binding
+        self.laid
             .pipeline_owner()
-            .expect("tree-bound")
             .with(|owner: &PipelineOwner| owner.render_tree().len())
     }
 }
@@ -196,15 +193,9 @@ fn mount() -> Mounted {
     let label = SharedSignal::new(String::from("label"));
     let (position, writer) = ScrollPosition::with_writer(0.0);
     let app = PerfApp { label, position };
-    let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app_root(app)));
-    let _ = binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(WIDTH, HEIGHT),
-    );
-    binding.enable_semantics().expect("tree-bound");
-    Mounted { binding, writer }
+    let mut laid = lay_out(app, tight(WIDTH, HEIGHT));
+    laid.enable_semantics();
+    Mounted { laid, writer }
 }
 
 /// Writes `report` and what the measured frames asked of the heap for `xtask perf`
@@ -248,9 +239,9 @@ fn counter(report: &FrameReport, name: &str) -> u64 {
 #[test]
 fn perf_counters_are_live_on_a_full_reassemble() {
     let mut app = mount();
-    app.binding.perform_reassemble();
-    app.binding.reassemble_render_tree();
-    let (report, allocations) = perf_measured(|| app.binding.pump_frame_report(FRAME));
+    app.laid.perform_reassemble();
+    app.laid.reassemble_render_tree();
+    let (report, allocations) = perf_measured(|| app.laid.pump_report(FRAME));
     record("full_reassemble", &report, allocations);
 
     for (name, value) in report.counters() {
@@ -273,6 +264,9 @@ fn perf_counters_are_live_on_a_full_reassemble() {
 #[test]
 fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     let mut app = mount();
+    // Semantics reach the tree on the frame after the mount, which the
+    // scenario does not measure.
+    app.laid.pump_for(FRAME);
     let band = app.render_nodes();
 
     app.writer
@@ -405,22 +399,15 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
     );
     let app = Align::new(flui_painting::Alignment::TOP_LEFT)
         .child(RepaintBoundary::new().child(SlideTransition::new(position).child(panel)));
-    let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app_root(app)));
-    let _ = binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(WIDTH, HEIGHT),
-    );
-    binding.enable_semantics().expect("tree-bound");
+    let mut laid = lay_out(app, tight(WIDTH, HEIGHT));
+    laid.enable_semantics();
     controller.set_value(0.25).expect("no build is running");
-    binding.pump_frame(FRAME);
+    laid.pump_for(FRAME);
 
-    let ((), allocations) = perf_measured(|| {
+    let (report, allocations) = perf_measured(|| {
         controller.set_value(0.5).expect("no build is running");
-        binding.pump_frame(FRAME);
+        laid.pump_report(FRAME)
     });
-    let report = binding.last_frame_report().clone();
     record("slide_transition_tick", &report, allocations);
 
     assert_eq!(report.build.elements_built, 0, "{report:#?}");
@@ -634,27 +621,21 @@ impl StatelessView for CaretOverRows {
 /// heap counts they made.
 fn caret_blinks(rows: usize) -> (FrameReport, HeapCounts) {
     let shown = SharedSignal::new(true);
-    let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(
-        binding.arena().clone(),
-        FocusTreeRoot::new(app_root(CaretOverRows {
+    let mut laid = lay_out(
+        CaretOverRows {
             shown: shown.clone(),
             rows,
-        })),
-    );
-    let _ = binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(WIDTH, HEIGHT),
+        },
+        tight(WIDTH, HEIGHT),
     );
     for _ in 0..2 {
-        let _ = binding.pump_frame_report(FRAME);
+        laid.pump_for(FRAME);
     }
     perf_measured(|| {
         let mut total = FrameReport::default();
         for blink in 0..SCALING_FRAMES {
             shown.set(blink % 2 == 1);
-            total += &binding.pump_frame_report(FRAME);
+            total += &laid.pump_report(FRAME);
         }
         total
     })

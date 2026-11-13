@@ -196,25 +196,34 @@ impl WgpuPainter {
         // `PipelineSet::new` creates the viewport bind-group layout internally
         // and exposes it via `viewport_bind_group_layout()`.
         let pipelines = PipelineLibrary::new(domain.device(), surface_format);
-        Self::with_pipelines(domain, pipelines, size, source)
+        Self::with_pipelines(domain, &mut Some(pipelines), size, source)
     }
 
-    /// A painter over `pipelines`, a library an earlier painter on the same
-    /// device built, drawing into targets of the library's selected format.
-    /// Everything else (the glyph atlas, the image and path caches, the
-    /// scratch pools) starts empty.
+    /// A painter over the library in `pipelines`, one an earlier painter on
+    /// the same device built, drawing into targets of the library's selected
+    /// format. Everything else (the glyph atlas, the image and path caches,
+    /// the scratch pools) starts empty.
     ///
-    /// A library is never torn: an entry is inserted only once its pipeline
-    /// is built, so one taken from a painter whose frame unwound is whole.
+    /// The library is taken out of `pipelines` only once everything that can
+    /// fail is built, so a panic here (a tracing subscriber, wgpu's error
+    /// handler) leaves it there for the next painter. A library is never
+    /// torn: an entry is inserted only once its pipeline is built, so one
+    /// taken from a painter whose frame unwound is whole.
+    ///
+    /// # Panics
+    /// When `pipelines` holds no library.
     pub(crate) fn with_pipelines(
         domain: Arc<crate::device_domain::DeviceDomain>,
-        pipelines: PipelineLibrary,
+        pipelines: &mut Option<PipelineLibrary>,
         size: (u32, u32),
         source: crate::frame_protocol::FontSource,
     ) -> Self {
         let device = Arc::clone(domain.device());
         let queue = Arc::clone(domain.queue());
-        let surface_format = pipelines.current_format();
+        let library = pipelines
+            .as_ref()
+            .expect("BUG: a painter is built over a library its caller holds");
+        let surface_format = library.current_format();
         #[cfg(debug_assertions)]
         tracing::trace!(
             "WgpuPainter::new: format={:?}, size=({}, {})",
@@ -227,7 +236,7 @@ impl WgpuPainter {
         // `GpuReplay::new` builds the viewport bind group against the selected
         // set's layout; the library's other sets have layouts with the same
         // entries, so it binds under their pipelines too (group equivalence).
-        let replay = GpuReplay::new(&device, pipelines.current(), size.0, size.1);
+        let replay = GpuReplay::new(&device, library.current(), size.0, size.1);
 
         // Glyph bitmaps come from swash over the faces each paragraph's
         // runs carry (ADR-0092 §5): the atlas owns its rasterizer and the
@@ -235,12 +244,15 @@ impl WgpuPainter {
         let glyph_atlas = GlyphAtlas::new(
             Arc::clone(&device),
             Arc::clone(&queue),
-            &pipelines.current().glyph_atlas_bind_group_layout,
+            &library.current().glyph_atlas_bind_group_layout,
             source.rasterizer(),
         );
 
         // ===== Resource managers =====
         let resources = GpuResources::new(Arc::clone(&domain));
+        let pipelines = pipelines
+            .take()
+            .expect("BUG: the library was checked above and nothing took it");
 
         Self {
             domain,
@@ -688,79 +700,19 @@ impl WgpuPainter {
         &mut self,
         updates: flui_layer::TextureUpdates,
     ) -> crate::error::EngineResult<()> {
-        use crate::external_texture_registry::{
-            ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
-        };
-        let registry = self.resources.external_texture_registry_mut();
-        for id in updates.retired {
-            registry.unregister(id);
-        }
-        let mut first_error = None;
-        for (id, frame) in updates.frames {
-            let size = wgpu::Extent3d {
-                width: frame.width(),
-                height: frame.height(),
-                depth_or_array_layers: 1,
-            };
-            // Refuse before allocating: wgpu rejects these extents itself.
-            let limit = self.device.limits().max_texture_dimension_2d;
-            if size.width == 0 || size.height == 0 || size.width > limit || size.height > limit {
-                first_error.get_or_insert(crate::error::EngineError::from(
-                    crate::error::ExternalTextureError::InvalidTextureSize {
-                        width: size.width,
-                        height: size.height,
-                    },
-                ));
-                continue;
-            }
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("external texture frame"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                frame.data(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * size.width),
-                    rows_per_image: Some(size.height),
-                },
-                size,
-            );
-            let registry = self.resources.external_texture_registry_mut();
-            let same_size = registry
-                .get(id)
-                .is_some_and(|entry| entry.size() == (size.width, size.height));
-            let applied = if same_size {
-                registry.update(id, texture)
-            } else {
-                registry.unregister(id);
-                registry.register(
-                    id,
-                    texture,
-                    ExternalTextureDescriptor {
-                        sampling: ExternalSampling::Linear,
-                        alpha: ExternalAlpha::Straight,
-                        color: ExternalColorEncoding::EncodedSrgb,
-                    },
-                )
-            };
-            if let Err(error) = applied {
-                first_error.get_or_insert(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
+        self.resources
+            .external_texture_registry_mut()
+            .apply(updates)
+    }
+
+    /// Exchange the painter's external textures with `textures`: a context
+    /// that shares one painter between presentations lends each its own for
+    /// the length of its frame, and takes them back after.
+    pub(crate) fn swap_external_textures(
+        &mut self,
+        textures: &mut crate::external_texture_registry::ExternalTextureRegistry,
+    ) {
+        std::mem::swap(self.resources.external_texture_registry_mut(), textures);
     }
 
     // ===== Helper Methods =====
