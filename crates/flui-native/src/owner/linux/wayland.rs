@@ -1140,7 +1140,11 @@ mod event_loop {
         /// The windows held now, as a snapshot a window's settle may change
         /// the table under.
         fn values(&self) -> Vec<Rc<dyn LoopWindow>> {
-            self.windows.borrow().values().cloned().collect()
+            self.windows
+                .borrow()
+                .values()
+                .cloned()
+                .collect::<Vec<Rc<dyn LoopWindow>>>()
         }
 
         fn is_empty(&self) -> bool {
