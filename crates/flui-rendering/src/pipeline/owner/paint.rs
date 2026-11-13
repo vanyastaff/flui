@@ -1657,16 +1657,7 @@ impl PaintScratch {
         let kept = composer.fragment_room.after_pass(peak);
         let ops = composer.recorder.0.ops_mut();
         ops.clear();
-        if kept <= KEPT_FRAGMENT_OPS {
-            if ops.capacity() > KEPT_FRAGMENT_OPS {
-                *ops = Vec::new();
-            }
-        } else if ops.capacity() > kept.saturating_mul(2) || ops.capacity() > KEPT_CAPACITY {
-            // Half of it idle, or past the cap: a pass that needs a little
-            // more than the last finds room, one a little less gives none
-            // back, and no pass keeps more than the cap.
-            ops.shrink_to(kept);
-        }
+        keep_room(ops, kept);
     }
 
     /// Hands back the maps a staged patch held, for the next pass to stage
@@ -1702,14 +1693,34 @@ const KEPT_FRAGMENT_OPS: usize = 64;
 /// The passes [`FragmentRoom`] remembers.
 const FRAGMENT_PASSES: usize = 8;
 
+/// Trims the empty buffer `ops` to keep room for `kept` operations: none past
+/// [`KEPT_FRAGMENT_OPS`] when `kept` is within it, and otherwise what it has
+/// unless half of that would sit idle.
+///
+/// The slack lets a pass that needs a little more than the last find room and
+/// one that needs a little less give none back, so a buffer grown by doubling
+/// to the room it keeps is not cut and regrown each pass. A buffer therefore
+/// holds at most twice [`KEPT_CAPACITY`] between passes, and a pass that
+/// needs more than that regrows it.
+fn keep_room<T>(ops: &mut Vec<T>, kept: usize) {
+    debug_assert!(ops.is_empty(), "BUG: the room is kept for an empty buffer");
+    if kept <= KEPT_FRAGMENT_OPS {
+        if ops.capacity() > KEPT_FRAGMENT_OPS {
+            *ops = Vec::new();
+        }
+    } else if ops.capacity() > kept.saturating_mul(2) {
+        ops.shrink_to(kept);
+    }
+}
+
 /// How much room the pass's shared fragment buffer keeps between passes: the
 /// most that two of the last [`FRAGMENT_PASSES`] passes each needed, up to
-/// [`KEPT_CAPACITY`].
+/// [`KEPT_CAPACITY`] operations, which [`keep_room`] applies.
 ///
-/// A size that recurs is kept, so a list scrolled frame after frame grows
-/// nothing even when a small repaint (a caret, a scrollbar's fade) falls
-/// between its frames, while a size one pass needed once, a mount, leaves no
-/// room behind.
+/// A size that recurs is kept, so a list scrolled frame after frame (up to
+/// twice the cap) grows nothing even when a small repaint (a caret, a
+/// scrollbar's fade) falls between its frames, while a size one pass needed
+/// once, a mount, leaves no room behind.
 #[derive(Debug, Default)]
 struct FragmentRoom {
     /// The peaks of the last passes, the oldest overwritten first.
@@ -2495,5 +2506,59 @@ mod tests {
     #[test]
     fn fragment_room_never_passes_the_cap() {
         assert_eq!(room_after(&[1500, 1500]), KEPT_CAPACITY);
+    }
+}
+
+/// Passes that hold `peaks` operations at most, each through the buffer the
+/// last left: whether each grew it, and the room each left behind.
+#[cfg(test)]
+fn passes(peaks: &[usize]) -> Vec<(bool, usize)> {
+    let mut room = FragmentRoom::default();
+    let mut ops: Vec<u8> = Vec::new();
+    peaks
+        .iter()
+        .map(|&peak| {
+            let before = ops.capacity();
+            ops.extend(std::iter::repeat_n(0, peak));
+            let grew = ops.capacity() != before;
+            ops.clear();
+            keep_room(&mut ops, room.after_pass(peak));
+            (grew, ops.capacity())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod room_tests {
+    use super::{KEPT_CAPACITY, KEPT_FRAGMENT_OPS, passes};
+
+    #[test]
+    fn a_repeating_pass_grows_its_buffer_only_while_it_warms() {
+        for peaks in [
+            vec![300; 6],
+            [300, 40].repeat(4),
+            vec![1500; 6],
+            [2000, 1000].repeat(4),
+        ] {
+            let grown: Vec<bool> = passes(&peaks).iter().map(|&(grew, _)| grew).collect();
+            assert!(
+                grown[3..].iter().all(|&grew| !grew),
+                "passes {peaks:?} keep growing their buffer: {grown:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pass_needed_once_leaves_no_room_and_none_past_twice_the_cap() {
+        let left = passes(&[5000, 10]);
+        assert!(
+            left[1].1 <= KEPT_FRAGMENT_OPS,
+            "a mount's room stays: {left:?}"
+        );
+        let left = passes(&[5000, 5000]);
+        assert!(
+            left[1].1 <= 2 * KEPT_CAPACITY,
+            "room past twice the cap: {left:?}"
+        );
     }
 }
