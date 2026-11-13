@@ -82,9 +82,10 @@ const _: () = assert!(size_of::<RecordedOp>() <= 224);
 /// `PictureLayer`. Commands are read-only; recording and concatenation
 /// compute the cached [`bounds`](Self::bounds) from command geometry.
 ///
-/// Each distinct transform is stored once: an op holds a list-private id
-/// of its entry, the identity takes none, and [`Self::iter`] yields the
-/// transform and the op of each command (ADR-0306 §1, §5).
+/// Transforms are interned: an op holds a list-private id of its entry,
+/// consecutive ops under one transform share it, the identity takes none,
+/// and [`Self::iter`] yields the transform and the op of each command
+/// (ADR-0306 §1, §5).
 #[derive(Debug, Clone)]
 pub struct DisplayList {
     /// The transforms the commands were recorded under, each finite and none
@@ -506,5 +507,32 @@ impl<'a> IntoIterator for &'a DisplayList {
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DisplayList;
+    use flui_foundation::geometry::Matrix4;
+
+    use crate::DrawOp;
+
+    #[test]
+    fn a_cleared_list_keeps_none_of_its_transforms() {
+        let mut list = DisplayList::new();
+        for frame in 0..4 {
+            list.clear();
+            for step in 0..8 {
+                list.push(
+                    &Matrix4::translation(f64::from(frame * 8 + step + 1), 0.0, 0.0),
+                    DrawOp::Save,
+                );
+            }
+            assert_eq!(
+                list.transforms.len(),
+                8,
+                "frame {frame} keeps an earlier frame's transforms"
+            );
+        }
     }
 }

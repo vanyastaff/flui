@@ -861,6 +861,14 @@ pub(crate) fn appended_commands_keep_their_transforms() {
         ],
     );
 
+    // An empty list takes the appended run's storage, its transforms with it.
+    let mut empty = DisplayList::new();
+    empty.append(run(60.0, false));
+    assert_eq!(
+        transforms(&empty),
+        vec![(at(60.0, 0.0), "rect"), (at(60.0, 1.0), "rect")],
+    );
+
     let mut first = DisplayList::new();
     first.append_isolated(run(40.0, true));
     first.append(run(50.0, false));

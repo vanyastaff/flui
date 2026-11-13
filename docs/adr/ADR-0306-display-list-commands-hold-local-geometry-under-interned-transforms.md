@@ -81,7 +81,9 @@ struct TransformId(Option<NonZeroUsize>);   // None: the identity, which takes n
 struct RecordedOp { transform: TransformId, op: DrawOp }
 
 pub struct DisplayList {
-    transforms: Vec<Matrix4>,               // finite, none of them the identity
+    transforms: SmallVec<[Matrix4; 1]>,     // finite, none of them the identity; one
+                                            // entry inline, since most lists of a
+                                            // translated child have just one
     commands: Vec<RecordedOp>,
     bounds: Option<Rect<f64>>,
     damage: Option<DamageExtent>,
