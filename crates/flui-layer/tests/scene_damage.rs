@@ -12,7 +12,8 @@ use flui_layer::{
     ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, FollowerLayer, ImageFilterLayer,
     Layer, LayerDiffer, LayerLink, LayerNode, LayerTree, LeaderClip, LeaderLayer, OffsetLayer,
     OpacityLayer, PictureLayer, Placement, Region, Scene, SceneNodeId, SceneOp, SceneOwner,
-    SceneVersion, SurfaceKey, TransformLayer, close_over, read_closure, resolve_follower_transform,
+    SceneVersion, SubtreeCull, SurfaceKey, TransformLayer, close_over, read_closure,
+    resolve_follower_transform,
 };
 use flui_painting::paint::{BlendMode, Clip, ImageFilter};
 use flui_painting::styling::Color;
@@ -1627,5 +1628,65 @@ pub(crate) fn patch_damage_covers_diff_damage() {
     assert!(
         first_miss(10_000, true).is_some(),
         "a patch that drops one operation's footprint passes the oracle"
+    );
+}
+
+/// Asks `cull` about each slot under `node` in paint order, descending where
+/// it meets, and checks each answer against a cull asked fresh, which
+/// builds the chain from the root. Counts the slots it skips.
+fn walk_cull(
+    version: &SceneVersion,
+    rect: Rect<f64>,
+    cull: &mut SubtreeCull<'_>,
+    node: SceneNodeId,
+    skipped: &mut u32,
+) -> Result<(), String> {
+    let Some(held) = version.node(node) else {
+        return Ok(());
+    };
+    for entry in held.content().entries() {
+        let Entry::Slot { node: child, .. } = entry else {
+            continue;
+        };
+        let walked = cull.meets(*child);
+        let fresh = version.subtree_cull(rect).meets(*child);
+        if walked != fresh {
+            return Err(format!("{child:?}: walked {walked}, fresh {fresh}"));
+        }
+        if walked {
+            walk_cull(version, rect, cull, *child, skipped)?;
+        } else {
+            *skipped += 1;
+        }
+    }
+    Ok(())
+}
+
+/// A cull asked in walk order, which keeps the chains of the path it walks,
+/// answers each slot as a cull asked about that slot alone (ADR-0304 §9).
+pub(crate) fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
+    let mut skipped = 0_u32;
+    for case in 0..2_000_u64 {
+        let seed = 0x2545_F491_4F6C_DD1D ^ (case + 1).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        let mut rng = Rng(seed);
+        let mut owner = SceneOwner::new();
+        let mut model = Model {
+            ids: Vec::new(),
+            items: Vec::new(),
+            owners: 0,
+            leader: None,
+        };
+        initial(&mut rng, &mut owner, &mut model);
+        mutate(&mut rng, &mut owner, &mut model, false);
+        let version = owner.current();
+        let rect = rng.rect();
+        let mut cull = version.subtree_cull(rect);
+        if let Err(miss) = walk_cull(version, rect, &mut cull, version.root(), &mut skipped) {
+            panic!("case {case} (seed {seed:#x}): {miss}");
+        }
+    }
+    assert!(
+        skipped > 0,
+        "no case skipped a subtree, so a walk never climbed back past one"
     );
 }

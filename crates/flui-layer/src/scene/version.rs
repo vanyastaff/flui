@@ -8,11 +8,12 @@ use smallvec::SmallVec;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 
 use super::content::{BoundaryContent, Bounds, EntryIndex, LinkRole};
-use super::geometry::Geometry;
+use super::geometry::{Folded, Geometry, Links, Reach};
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
 use super::table::{Table, TableCost};
 use crate::link::LayerLink;
+use crate::scene_snapshot::DamageRegion;
 
 /// Where an entry sits: its boundary's node and its index in that content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -361,6 +362,141 @@ impl SceneVersion {
             .filtered
             .iter()
             .map(move |(_, key)| SceneNodeId::new(lineage, *key))
+    }
+
+    /// A reader of which subtrees can reach `rect`, in surface pixels: what
+    /// the raster side asks to skip a boundary outside a partial frame's
+    /// damage (ADR-0304 §9). See [`SubtreeCull`].
+    #[must_use]
+    pub fn subtree_cull(&self, rect: Rect<f64>) -> SubtreeCull<'_> {
+        SubtreeCull {
+            version: self,
+            rect,
+            path: Vec::new(),
+            scratch: Links::new(),
+        }
+    }
+
+    /// `region`, on a surface of `surface` pixels, closed over what this
+    /// version's filters and destination-reading chunks read where it
+    /// redraws (ADR-0304 §6): what the raster side redraws when the damage it
+    /// owes joins more than one publication, each closed under its own
+    /// version.
+    #[must_use]
+    pub fn close_damage(&self, region: DamageRegion, surface: (u32, u32)) -> DamageRegion {
+        let mut cost = super::footprint::FootprintCost::default();
+        let mut closures = Vec::new();
+        super::footprint::close_filtered(
+            region,
+            &[(Geometry::shown(&self.0), &self.0)],
+            surface,
+            &mut cost,
+            &mut closures,
+        )
+    }
+}
+
+/// Answers, for each slot a walk of one version meets, whether the subtree
+/// it holds can reach a rect of the surface (ADR-0304 §9).
+///
+/// It reads each node's stored subtree bounds and filter spread through its
+/// chain, as the damage of a patch does, so a subtree a change there can
+/// reach is never skipped: an unbounded or non-finite reach meets every
+/// rect, a hidden or unattached node or one of another lineage meets none,
+/// and edges count as meeting.
+///
+/// It keeps the chains of the nodes on the walk's current path folded, so a
+/// slot asked in depth-first paint order costs the effects above it in its
+/// parent and the clips, filters and extents above that, not the depth of
+/// the tree. A slot asked out of that order rebuilds the path from the root.
+pub struct SubtreeCull<'v> {
+    version: &'v SceneVersion,
+    rect: Rect<f64>,
+    /// The folded chain of each node from the root down to the last one
+    /// whose subtree met the rect.
+    path: Vec<Folded<'v>>,
+    scratch: Links<'v>,
+}
+
+impl std::fmt::Debug for SubtreeCull<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubtreeCull")
+            .field("version", &self.version.id())
+            .field("rect", &self.rect)
+            .field("depth", &self.path.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'v> SubtreeCull<'v> {
+    /// Whether anything `node`'s subtree draws can land in the rect.
+    pub fn meets(&mut self, node: SceneNodeId) -> bool {
+        if node.lineage() != self.version.lineage() {
+            return false;
+        }
+        let inner = self.version.inner();
+        let geometry = Geometry::shown(inner);
+        let Some(record) = inner.record(node.key()) else {
+            return false;
+        };
+        let folded = match record.parent() {
+            None if node.key() == inner.root => Folded::root(geometry),
+            None => return false,
+            Some(parent) => {
+                if !self.stand_in(geometry, parent) {
+                    return false;
+                }
+                let top = self
+                    .path
+                    .last()
+                    .expect("BUG: standing in a node leaves it on the path");
+                let Some(folded) = top.child(geometry, node.key(), &mut self.scratch) else {
+                    return false;
+                };
+                folded
+            }
+        };
+        let meets = match folded.subtree_reach(geometry) {
+            Reach::Nothing => false,
+            Reach::Rect(reach) => {
+                reach.left() <= self.rect.right()
+                    && self.rect.left() <= reach.right()
+                    && reach.top() <= self.rect.bottom()
+                    && self.rect.top() <= reach.bottom()
+            }
+            Reach::Unbounded | Reach::NonFinite => true,
+        };
+        if meets {
+            // The walk enters it next, and asks for its slots from there.
+            self.path.push(folded);
+        }
+        meets
+    }
+
+    /// Leaves `key` the last node on the path, rebuilding the path from the
+    /// root when `key` is not on it; `false` when `key` is not attached.
+    fn stand_in(&mut self, geometry: Geometry<'v>, key: NodeKey) -> bool {
+        while let Some(top) = self.path.last() {
+            if top.key == key {
+                return true;
+            }
+            self.path.pop();
+        }
+        let mut above: SmallVec<[NodeKey; 16]> = geometry.path_up(key).collect();
+        if above.last() != Some(&self.version.inner().root) {
+            return false;
+        }
+        above.pop();
+        self.path.push(Folded::root(geometry));
+        while let Some(next) = above.pop() {
+            let top = self.path.last().expect("BUG: the path holds the root");
+            let Some(folded) = top.child(geometry, next, &mut self.scratch) else {
+                self.path.clear();
+                return false;
+            };
+            self.path.push(folded);
+        }
+        true
     }
 }
 

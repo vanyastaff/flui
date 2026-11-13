@@ -202,7 +202,7 @@ pub(crate) fn patch_damage(
     let region = footprints.region(surface);
     let damage = close_filtered(
         region,
-        [(old, base), (new, next)],
+        &[(old, base), (new, next)],
         surface,
         &mut cost,
         closures,
@@ -844,16 +844,16 @@ fn out_of_order(
 /// footprint, which holds all they write: a patch pays for the filtered
 /// content its damage reaches, not for every filter in the scene. One whose
 /// filter paints transparent black has no bound and is read at once.
-fn close_filtered(
+pub(crate) fn close_filtered(
     region: DamageRegion,
-    versions: [(Geometry<'_>, &VersionInner); 2],
+    versions: &[(Geometry<'_>, &VersionInner)],
     surface: (u32, u32),
     cost: &mut FootprintCost,
     closures: &mut Vec<Closure>,
 ) -> DamageRegion {
     closures.clear();
     let mut waiting = Vec::new();
-    for (geometry, version) in versions {
+    for &(geometry, version) in versions {
         for (_, &key) in version.filtered.iter() {
             let Some(record) = version.record(key) else {
                 continue;

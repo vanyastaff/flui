@@ -122,13 +122,14 @@ Recoverable failure publishes reliable retry debt to the application and UI runt
 ## One frame
 
 ```text
-Scene (flui-layer)                one tree per frame, frozen for the raster side
+Scene (flui-layer)                the retained version (or a hand-built tree),
+    │                             frozen for the raster side
     │
     ▼
 Renderer::render_frame            plans the frame from its damage (skip, direct,
     │                             or into the retained target), acquires the
     │                             surface texture, clears (in full, or inside the
-    │                             damage scissor), walks the tree (layer_walk,
+    │                             damage scissor), walks the scene (layer_walk,
     │                             explicit stack); a retained frame is blitted
     │                             to the surface texture at the end
     ▼
@@ -209,15 +210,30 @@ or `replay/`. Direct `glam` is expected in the GPU modules and kept out of
 the GPU-free ones (`raster*`, `dispatch`, `error`, `fonts`, `frame_timing`,
 `layer_state_stack`, `superellipse`).
 
-### Layer traversal is iterative
+### Layer traversal is iterative and reads the scene in place
 
-Both walkers over a `LayerTree` — `Renderer`'s and `HeadlessRenderer`'s —
-share the explicit-stack traversal in `layer_walk.rs`, parameterised by a
-two-step visitor (`enter` answers `Descend` or `SkipSubtree`; `exit` runs the
-node's post-children cleanup). A Rust stack overflow is a process abort, not
-a panic, so one frame per layer would take the render path down on a
-deep-but-valid chain; `a_deep_chain_survives_a_small_stack` in
-`layer_walk.rs` pins a 10 000-deep walk on a small stack.
+`Renderer`'s and `HeadlessRenderer`'s walkers share the explicit-stack
+traversal in `layer_walk.rs`, parameterised by a two-step visitor (`enter`
+answers `Descend` or `SkipSubtree`; `exit` runs the node's post-children
+cleanup). A Rust stack overflow is a process abort, not a panic, so one frame
+per layer would take the render path down on a deep-but-valid chain;
+`a_deep_chain_survives_a_small_stack` in `layer_walk.rs` pins a 10 000-deep
+walk on a small stack.
+
+A scene holding a retained `SceneVersion` is walked without building a tree
+(ADR-0304 §9): each node is an offset at its placement, each effect entry its
+layer over the entries under it, each chunk its recording, and each slot the
+child node where it stands, in the order `SceneVersion::flatten` would build
+(`a_version_walks_as_its_flattened_tree`). A partial frame passes its damage
+rect, rounded out to the whole pixels its scissor admits, and a slot whose
+subtree cannot reach it is skipped
+(`SceneVersion::subtree_cull`, which keeps the folded chains of the path it
+walks, so a slot costs its own effects and not the depth of the tree), and
+the walk enters what the damage reaches
+(`a_partial_walk_enters_only_the_boundaries_its_damage_reaches`,
+`a_partial_frame_of_a_version_draws_as_its_flattened_tree`). Backdrop inputs
+of a version are closed by `SceneVersion::close_damage`, which reads only the
+version's filtered nodes; a hand-built tree is still walked whole for them.
 
 ---
 
