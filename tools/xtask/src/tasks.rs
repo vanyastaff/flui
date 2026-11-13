@@ -388,6 +388,8 @@ enum Stages {
     Nested,
     /// One nested group, for independent CI jobs.
     NestedGroup(NestedGroup),
+    /// One CI shard of the trybuild group.
+    TrybuildShard(TrybuildShard),
     /// Everything but the trybuild suites (`--no-trybuild`): what CI's
     /// Windows job runs, since compiler diagnostics do not depend on the host
     /// and Linux checks them.
@@ -420,6 +422,7 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
             scoped_nextest(host, NestedGroup::Trybuild.filterset()).into(),
             platform_compiler_tests().into(),
         ],
+        Stages::TrybuildShard(shard) => shard.plan(),
         Stages::NoTrybuild => with_platform(vec![
             scoped_nextest(host, "group(nested-cargo)").into(),
             Step::Note(
@@ -436,6 +439,7 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
             Stages::Fast => Some(format!("not ({NESTED})")),
             Stages::Nested => Some(NESTED.to_owned()),
             Stages::NestedGroup(group) => Some(group.filterset().to_owned()),
+            Stages::TrybuildShard(_) => Some(NestedGroup::Trybuild.filterset().to_owned()),
             Stages::NoTrybuild => Some("not (group(trybuild))".to_owned()),
         };
         let mut driver = driver_tests();
@@ -821,6 +825,107 @@ impl NestedGroup {
     }
 }
 
+/// The CI shards of the `trybuild` group: each runs on a runner of its own,
+/// because the suites cannot run side by side on one. Every trybuild project
+/// builds into the one directory `target/tests/trybuild`, and Cargo holds one
+/// lock on a build directory, so suites started together on a runner wait for
+/// each other. Each shard lists the test binaries it runs; .config/nextest.toml
+/// still says which tests are in the group, and
+/// `trybuild_shards_partition_the_group` holds the two together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum TrybuildShard {
+    /// The facade's thread boundary and the suites over the widget catalog.
+    Facade,
+    /// The suites of the lower crates: interaction, platform, engine, painting.
+    Core,
+    /// The view and rendering layers, the runtime, and flui-native's guards.
+    View,
+}
+
+impl TrybuildShard {
+    #[cfg(test)]
+    const ALL: [Self; 3] = [Self::Facade, Self::Core, Self::View];
+
+    /// The nextest binary ids (`package::target`) whose trybuild tests this
+    /// shard runs.
+    const fn binaries(self) -> &'static [&'static str] {
+        match self {
+            Self::Facade => &[
+                "flui::thread_boundary_ui",
+                "flui-sdk::compiler_guards",
+                "flui-widgets::routable_ui",
+                "flui-widgets::nested_scroll_ui",
+            ],
+            Self::Core => &[
+                "flui-interaction::compile_fail",
+                "flui-platform::compile_fail",
+                "flui-engine::compile_fail",
+                "flui-painting::painting_it",
+            ],
+            Self::View => &[
+                "flui-rendering::compile_fail",
+                "flui-runtime::compiler_guards",
+                "flui-view::view_it",
+            ],
+        }
+    }
+
+    /// The shard's run: [`TEST_SCOPE`]'s packages and features, so every
+    /// crate resolves the features it has in the whole run and the suites see
+    /// the same crates, but only the test targets the shard runs are built
+    /// (`--test` limits the targets, not the feature resolution). A target
+    /// name two packages share is built in both; the filterset runs only this
+    /// shard's binaries.
+    fn nextest(self) -> Cmd {
+        let mut targets: Vec<&str> = self
+            .binaries()
+            .iter()
+            .map(|binary| {
+                binary
+                    .split_once("::")
+                    .map_or(*binary, |(_, target)| target)
+            })
+            .collect();
+        targets.sort_unstable();
+        targets.dedup();
+        let binaries = self
+            .binaries()
+            .iter()
+            .map(|binary| format!("binary_id({binary})"))
+            .collect::<Vec<String>>()
+            .join(" | ");
+        targets
+            .iter()
+            .fold(
+                Cmd::cargo([
+                    "nextest",
+                    "run",
+                    "--workspace",
+                    "--exclude",
+                    "flui-native",
+                    "--locked",
+                    "--no-fail-fast",
+                ]),
+                |command, target| command.args(["--test", target]),
+            )
+            .args([
+                "--features",
+                TEST_FEATURES,
+                "-E",
+                &format!("{} & ({binaries})", NestedGroup::Trybuild.filterset()),
+            ])
+    }
+
+    /// The steps of the shard: its suites, and flui-native's compiler guards
+    /// in the shard that has room for their build of flui-native.
+    fn plan(self) -> Vec<Step> {
+        let mut steps = vec![self.nextest().into()];
+        if self == Self::View {
+            steps.push(platform_compiler_tests().into());
+        }
+        steps
+    }
+}
 /// Arguments for `cargo xtask test`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct TestArgs {
@@ -834,6 +939,9 @@ pub(crate) struct TestArgs {
     /// Select one nested suite; without this option --nested runs both.
     #[arg(long, value_enum, requires = "nested")]
     nested_group: Option<NestedGroup>,
+    /// Run one CI shard of the trybuild suites (`--nested-group trybuild`).
+    #[arg(long, value_enum, requires = "nested_group")]
+    trybuild_shard: Option<TrybuildShard>,
     /// Leave out only the trybuild suites (host-independent compiler output).
     #[arg(long, conflicts_with_all = ["fast", "nested"])]
     no_trybuild: bool,
@@ -846,8 +954,13 @@ pub(crate) fn test(args: &TestArgs) -> anyhow::Result<ExitCode> {
     let stages = if args.fast {
         Stages::Fast
     } else if args.nested {
-        args.nested_group
-            .map_or(Stages::Nested, Stages::NestedGroup)
+        match (args.nested_group, args.trybuild_shard) {
+            (Some(NestedGroup::Trybuild), Some(shard)) => Stages::TrybuildShard(shard),
+            (_, Some(_)) => {
+                anyhow::bail!("--trybuild-shard needs --nested-group trybuild")
+            }
+            (group, None) => group.map_or(Stages::Nested, Stages::NestedGroup),
+        }
     } else if args.no_trybuild {
         Stages::NoTrybuild
     } else {
@@ -1463,6 +1576,77 @@ mod tests {
         assert_eq!(packages, NESTED_CARGO_PACKAGES, "{filter}");
     }
 
+    /// Every trybuild suite runs in exactly one CI shard. The group's
+    /// override names most suites by binary; its one clause without a binary,
+    /// `test(=trybuild_ui::ui_tests)`, is the suites of flui-runtime, flui-sdk
+    /// and flui-view here, and flui-native's guards, which
+    /// `platform_compiler_tests` runs.
+    fn trybuild_shards_partition_the_group() {
+        let path = crate::util::repo_root().join(".config/nextest.toml");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let config = text
+            .parse::<toml::Table>()
+            .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+        let filter = config["profile"]["default"]["overrides"]
+            .as_array()
+            .expect("BUG: nextest.toml has profile.default.overrides")
+            .iter()
+            .find(|entry| entry.get("test-group").and_then(toml::Value::as_str) == Some("trybuild"))
+            .and_then(|entry| entry["filter"].as_str())
+            .expect("BUG: one override sets the trybuild group with a filter");
+        let unbound: Vec<&str> = filter
+            .split(" | ")
+            .filter(|clause| !clause.contains("binary_id("))
+            .collect();
+        assert_eq!(unbound, ["test(=trybuild_ui::ui_tests)"], "{filter}");
+        let mut expected: Vec<&str> = filter
+            .split("binary_id(")
+            .skip(1)
+            .map(|rest| {
+                rest.split(')')
+                    .next()
+                    .expect("BUG: split yields at least one piece")
+            })
+            .chain([
+                "flui-runtime::compiler_guards",
+                "flui-sdk::compiler_guards",
+                "flui-view::view_it",
+            ])
+            .collect();
+        expected.sort_unstable();
+        let mut sharded: Vec<&str> = TrybuildShard::ALL
+            .iter()
+            .flat_map(|shard| shard.binaries().iter().copied())
+            .collect();
+        sharded.sort_unstable();
+        assert_eq!(sharded, expected, "each suite in one shard");
+        let native = TrybuildShard::ALL
+            .iter()
+            .flat_map(|shard| lines(&shard.plan()))
+            .filter(|line| line.contains("-p flui-native --test compiler_guards"))
+            .count();
+        assert_eq!(native, 1, "flui-native's guards run in one shard");
+    }
+
+    /// A shard builds its own test targets over the whole run's packages and
+    /// features, and runs only its binaries of the group.
+    fn a_trybuild_shard_builds_its_targets_with_the_runs_features() {
+        assert_eq!(
+            lines(&test_plan(
+                Host::Linux,
+                Stages::TrybuildShard(TrybuildShard::View)
+            )),
+            [
+                format!(
+                    "$ cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --test compile_fail --test compiler_guards --test view_it --features {TEST_FEATURES} -E 'group(trybuild) & (binary_id(flui-rendering::compile_fail) | binary_id(flui-runtime::compiler_guards) | binary_id(flui-view::view_it))'"
+                ),
+                "$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast"
+                    .to_owned(),
+            ]
+        );
+    }
+
     fn nested_group_requires_nested_and_preserves_existing_modes() {
         #[derive(clap::Parser)]
         struct TestCli {
@@ -1603,6 +1787,14 @@ mod tests {
                 (
                     "nested_cargo_packages_are_the_groups_binary_packages",
                     nested_cargo_packages_are_the_groups_binary_packages as fn(),
+                ),
+                (
+                    "trybuild_shards_partition_the_group",
+                    trybuild_shards_partition_the_group as fn(),
+                ),
+                (
+                    "a_trybuild_shard_builds_its_targets_with_the_runs_features",
+                    a_trybuild_shard_builds_its_targets_with_the_runs_features as fn(),
                 ),
                 (
                     "nested_group_requires_nested_and_preserves_existing_modes",
