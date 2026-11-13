@@ -30,6 +30,7 @@ use super::shifted_box::AligningShiftedBox;
 
 /// Determines how `RenderConstrainedOverflowBox` computes its own size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, flui_foundation::inspect::Inspect)]
+#[non_exhaustive]
 pub enum OverflowBoxFit {
     /// Size to the maximum extent allowed by the parent constraints (`constraints.biggest()`).
     /// The child may be smaller or larger than this.

@@ -69,6 +69,7 @@ pub struct NodePath {
 
 /// One difference between two snapshots.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Change {
     /// A node only the newer snapshot has.
     Added(NodePath),

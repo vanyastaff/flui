@@ -11,6 +11,7 @@ use super::Axis;
 /// Used for corner-based operations like positioning, alignment, and styling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(clippy::exhaustive_enums, reason = "a rectangle has four corners")]
 pub enum Corner {
     /// Top-left corner (0, 0 in standard coordinate system).
     TopLeft,

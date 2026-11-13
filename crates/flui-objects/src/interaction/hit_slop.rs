@@ -19,6 +19,7 @@ use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::Ren
 
 /// Where a [`RenderHitSlop`] reads its minimum target side.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum MinTarget {
     /// An authored length in logical pixels.
     Fixed(f64),

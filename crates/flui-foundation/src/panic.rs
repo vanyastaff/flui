@@ -240,6 +240,10 @@ impl CapturedFailure {
 /// Postcondition proven at a framework callout's actual capture seam.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each class is a different postcondition a recovery acts on, and a `_` arm would guess one"
+)]
 pub enum FailureClass {
     /// A required proposal failed before its valid state commit.
     Computation,

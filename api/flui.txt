@@ -4130,7 +4130,7 @@ impl Copy for flui::foundation::inspect::Ansi
 impl Default for flui::foundation::inspect::Ansi
 impl core::fmt::Debug for flui::foundation::inspect::Ansi
 impl flui::foundation::inspect::Style for flui::foundation::inspect::Ansi
-pub enum flui::foundation::inspect::Change
+#[non_exhaustive] pub enum flui::foundation::inspect::Change
 impl Clone for flui::foundation::inspect::Change
 impl PartialEq for flui::foundation::inspect::Change
 impl core::fmt::Debug for flui::foundation::inspect::Change
@@ -4164,7 +4164,7 @@ impl<'a> Copy for flui::foundation::inspect::Field<'a>
 impl<'a> PartialEq for flui::foundation::inspect::Field<'a>
 impl<'a> core::fmt::Debug for flui::foundation::inspect::Field<'a>
 impl<'a> core::marker::StructuralPartialEq for flui::foundation::inspect::Field<'a>
-pub enum flui::foundation::inspect::FieldError
+#[non_exhaustive] pub enum flui::foundation::inspect::FieldError
 impl Clone for flui::foundation::inspect::FieldError
 impl Eq for flui::foundation::inspect::FieldError
 impl PartialEq for flui::foundation::inspect::FieldError
@@ -4241,7 +4241,7 @@ pub const fn flui::foundation::inspect::Level::as_str(self) -> &'static str
 variant flui::foundation::inspect::Level::Debug // at 2
 variant flui::foundation::inspect::Level::Detail // at 1
 variant flui::foundation::inspect::Level::Summary // at 0
-pub enum flui::foundation::inspect::Link
+#[non_exhaustive] pub enum flui::foundation::inspect::Link
 impl Clone for flui::foundation::inspect::Link
 impl Copy for flui::foundation::inspect::Link
 impl Eq for flui::foundation::inspect::Link
@@ -4274,7 +4274,7 @@ impl core::hash::Hash for flui::foundation::inspect::Links
 impl core::marker::StructuralPartialEq for flui::foundation::inspect::Links
 pub fn flui::foundation::inspect::Links::contains(&self, link: flui::foundation::inspect::Link) -> bool
 pub fn flui::foundation::inspect::Links::iter(&self) -> impl Iterator<Item = flui::foundation::inspect::Link>
-pub enum flui::foundation::inspect::MatchError
+#[non_exhaustive] pub enum flui::foundation::inspect::MatchError
 impl Clone for flui::foundation::inspect::MatchError
 impl Eq for flui::foundation::inspect::MatchError
 impl PartialEq for flui::foundation::inspect::MatchError
@@ -4403,7 +4403,7 @@ impl flui::foundation::inspect::ToValue for flui::foundation::inspect::Rgba
 impl<'a> flui::foundation::inspect::FromField<'a> for flui::foundation::inspect::Rgba
 pub const fn flui::foundation::inspect::Rgba::new(red: f32, green: f32, blue: f32, alpha: f32) -> Self
 pub fn flui::foundation::inspect::Rgba::to_rgba8(self) -> [u8; 4]
-pub enum flui::foundation::inspect::Role
+#[non_exhaustive] pub enum flui::foundation::inspect::Role
 impl Clone for flui::foundation::inspect::Role
 impl Copy for flui::foundation::inspect::Role
 impl Eq for flui::foundation::inspect::Role
@@ -5092,7 +5092,7 @@ fn flui::geometry::FloatUnit::from_f64(value: f64) -> Self
 fn flui::geometry::FloatUnit::midpoint(self, other: Self) -> Self { .. }
 impl flui::geometry::FloatUnit for f32
 impl flui::geometry::FloatUnit for f64
-pub enum flui::geometry::GeometryError
+#[non_exhaustive] pub enum flui::geometry::GeometryError
 impl Clone for flui::geometry::GeometryError
 impl core::error::Error for flui::geometry::GeometryError
 impl core::fmt::Debug for flui::geometry::GeometryError
@@ -16416,7 +16416,7 @@ impl flui::prelude::Intent for flui::prelude::CopySelectionTextIntent
 variant flui::prelude::CopySelectionTextIntent::Copy // at 0
 variant flui::prelude::CopySelectionTextIntent::Cut // at 1
 reexport flui::prelude::CreationSite => flui::foundation::CreationSite
-pub enum flui::prelude::CrossAxisAlignment
+#[non_exhaustive] pub enum flui::prelude::CrossAxisAlignment
 impl Clone for flui::prelude::CrossAxisAlignment
 impl Copy for flui::prelude::CrossAxisAlignment
 impl Default for flui::prelude::CrossAxisAlignment
@@ -17500,7 +17500,7 @@ pub trait flui::prelude::LocalizationsDelegate: core::fmt::Debug
 fn flui::prelude::LocalizationsDelegate::is_supported(&self, locale: &flui::platform::Locale) -> bool
 fn flui::prelude::LocalizationsDelegate::load(&self, locale: &flui::platform::Locale) -> <Self as flui::prelude::LocalizationsDelegate>::Resources
 type flui::prelude::LocalizationsDelegate::Resources: 'static
-pub enum flui::prelude::MainAxisAlignment
+#[non_exhaustive] pub enum flui::prelude::MainAxisAlignment
 impl Clone for flui::prelude::MainAxisAlignment
 impl Copy for flui::prelude::MainAxisAlignment
 impl Default for flui::prelude::MainAxisAlignment
@@ -17771,7 +17771,7 @@ pub fn flui::prelude::OverflowBox::max_width(self, max_width: f64) -> Self
 pub fn flui::prelude::OverflowBox::min_height(self, min_height: f64) -> Self
 pub fn flui::prelude::OverflowBox::min_width(self, min_width: f64) -> Self
 pub fn flui::prelude::OverflowBox::new() -> Self
-pub enum flui::prelude::OverflowBoxFit
+#[non_exhaustive] pub enum flui::prelude::OverflowBoxFit
 impl Clone for flui::prelude::OverflowBoxFit
 impl Copy for flui::prelude::OverflowBoxFit
 impl Default for flui::prelude::OverflowBoxFit
@@ -19058,7 +19058,7 @@ impl<C> flui::prelude::RenderView for flui::prelude::Stack<C> where C: flui::vie
 pub fn flui::prelude::Stack::alignment(self, alignment: impl Into<flui::painting::AlignmentGeometry>) -> Self // impl<C> flui::prelude::Stack<C>
 pub fn flui::prelude::Stack::fit(self, fit: flui::prelude::StackFit) -> Self // impl<C> flui::prelude::Stack<C>
 pub fn flui::prelude::Stack::new(children: C) -> Self // impl<C> flui::prelude::Stack<C>
-pub enum flui::prelude::StackFit
+#[non_exhaustive] pub enum flui::prelude::StackFit
 impl Clone for flui::prelude::StackFit
 impl Copy for flui::prelude::StackFit
 impl Default for flui::prelude::StackFit
@@ -19151,7 +19151,7 @@ variant flui::prelude::TableCellVerticalAlignment::Fill // at 3
 variant flui::prelude::TableCellVerticalAlignment::IntrinsicHeight // at 5
 variant flui::prelude::TableCellVerticalAlignment::Middle // at 1
 variant flui::prelude::TableCellVerticalAlignment::Top // at 0
-pub enum flui::prelude::TableColumnWidth
+#[non_exhaustive] pub enum flui::prelude::TableColumnWidth
 impl Clone for flui::prelude::TableColumnWidth
 impl Default for flui::prelude::TableColumnWidth
 impl PartialEq for flui::prelude::TableColumnWidth
@@ -19316,7 +19316,7 @@ reexport flui::prelude::View => flui::app::View
 pub trait flui::prelude::ViewExt: flui::app::View + Sized
 fn flui::prelude::ViewExt::boxed(self) -> flui::prelude::BoxedView { .. }
 impl<V: flui::app::View> flui::prelude::ViewExt for V
-pub enum flui::prelude::ViewFocusDirection
+#[non_exhaustive] pub enum flui::prelude::ViewFocusDirection
 impl Clone for flui::prelude::ViewFocusDirection
 impl Copy for flui::prelude::ViewFocusDirection
 impl Eq for flui::prelude::ViewFocusDirection
@@ -19587,7 +19587,7 @@ pub fn flui::prelude::Wrap::new(children: C) -> Self // impl<C> flui::prelude::W
 pub fn flui::prelude::Wrap::run_alignment(self, run_alignment: flui::prelude::WrapAlignment) -> Self // impl<C> flui::prelude::Wrap<C>
 pub fn flui::prelude::Wrap::run_spacing(self, run_spacing: f64) -> Self // impl<C> flui::prelude::Wrap<C>
 pub fn flui::prelude::Wrap::spacing(self, spacing: f64) -> Self // impl<C> flui::prelude::Wrap<C>
-pub enum flui::prelude::WrapAlignment
+#[non_exhaustive] pub enum flui::prelude::WrapAlignment
 impl Clone for flui::prelude::WrapAlignment
 impl Copy for flui::prelude::WrapAlignment
 impl Default for flui::prelude::WrapAlignment
@@ -19609,7 +19609,7 @@ variant flui::prelude::WrapAlignment::SpaceAround // at 4
 variant flui::prelude::WrapAlignment::SpaceBetween // at 3
 variant flui::prelude::WrapAlignment::SpaceEvenly // at 5
 variant flui::prelude::WrapAlignment::Start // at 0
-pub enum flui::prelude::WrapCrossAlignment
+#[non_exhaustive] pub enum flui::prelude::WrapCrossAlignment
 impl Clone for flui::prelude::WrapCrossAlignment
 impl Copy for flui::prelude::WrapCrossAlignment
 impl Default for flui::prelude::WrapCrossAlignment
@@ -20934,7 +20934,7 @@ variant flui::rendering::objects::LeaderClip::Hide // at 1
 reexport flui::rendering::objects::MAX_ITEM_EXTENT => flui::widgets::MAX_ITEM_EXTENT
 reexport flui::rendering::objects::MainAxisAlignment => flui::prelude::MainAxisAlignment
 reexport flui::rendering::objects::MainAxisSize => flui::prelude::MainAxisSize
-pub enum flui::rendering::objects::MinTarget
+#[non_exhaustive] pub enum flui::rendering::objects::MinTarget
 impl Clone for flui::rendering::objects::MinTarget
 impl From<f64> for flui::rendering::objects::MinTarget
 impl From<flui::interaction::GestureSettingsProvider> for flui::rendering::objects::MinTarget
@@ -23474,7 +23474,7 @@ pub fn flui::testing::find::text(text: impl Into<String>) -> flui::testing::Loca
 pub fn flui::testing::find::text_containing(text: impl Into<String>) -> flui::testing::Locator
 pub fn flui::testing::find::with_state(state: flui::testing::StateFilter) -> flui::testing::Locator
 pub mod flui::testing::harness
-pub enum flui::testing::harness::BuildCapabilities
+#[non_exhaustive] pub enum flui::testing::harness::BuildCapabilities
 impl Clone for flui::testing::harness::BuildCapabilities
 impl Copy for flui::testing::harness::BuildCapabilities
 impl Default for flui::testing::harness::BuildCapabilities
@@ -23607,7 +23607,7 @@ pub fn flui::testing::harness::a11y::A11yNode::supports_action(&self, action: ac
 pub fn flui::testing::harness::a11y::A11yNode::toggled(&self) -> Option<accesskit::Toggled> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
 pub fn flui::testing::harness::a11y::A11yNode::value(&self) -> Option<&'a str> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
 reexport flui::testing::harness::a11y::A11yPoint => accesskit::geometry::Point
-pub enum flui::testing::harness::a11y::A11yQuery
+#[non_exhaustive] pub enum flui::testing::harness::a11y::A11yQuery
 impl Clone for flui::testing::harness::a11y::A11yQuery
 impl Eq for flui::testing::harness::a11y::A11yQuery
 impl PartialEq for flui::testing::harness::a11y::A11yQuery
@@ -23617,7 +23617,7 @@ impl core::marker::StructuralPartialEq for flui::testing::harness::a11y::A11yQue
 variant flui::testing::harness::a11y::A11yQuery::Label(String) // at 1
 variant flui::testing::harness::a11y::A11yQuery::Role(accesskit::Role) // at 0
 variant flui::testing::harness::a11y::A11yQuery::RoleAndLabel(accesskit::Role, String) // at 2
-pub enum flui::testing::harness::a11y::A11yQueryError
+#[non_exhaustive] pub enum flui::testing::harness::a11y::A11yQueryError
 impl Clone for flui::testing::harness::a11y::A11yQueryError
 impl Eq for flui::testing::harness::a11y::A11yQueryError
 impl PartialEq for flui::testing::harness::a11y::A11yQueryError
@@ -23650,7 +23650,7 @@ pub fn flui::testing::harness::a11y::A11yTree::window_bounds(&self, node: &flui:
 reexport flui::testing::harness::a11y::Action => accesskit::Action
 reexport flui::testing::harness::a11y::ActionData => accesskit::ActionData
 reexport flui::testing::harness::a11y::ActionRequest => accesskit::ActionRequest
-pub enum flui::testing::harness::a11y::InvokeActionError
+#[non_exhaustive] pub enum flui::testing::harness::a11y::InvokeActionError
 impl From<flui_semantics::action::ActionDecodeError> for flui::testing::harness::a11y::InvokeActionError
 impl From<flui_semantics::owner::SemanticsActionError> for flui::testing::harness::a11y::InvokeActionError
 impl core::error::Error for flui::testing::harness::a11y::InvokeActionError
@@ -23711,7 +23711,7 @@ impl core::marker::StructuralPartialEq for flui::testing::harness::replay::Pinch
 variant flui::testing::harness::replay::PinchPhase::End // at 2
 variant flui::testing::harness::replay::PinchPhase::Start // at 0
 variant flui::testing::harness::replay::PinchPhase::Update { scale: f64, rotation: f64 } // at 1
-pub enum flui::testing::harness::replay::PointerPhase
+#[non_exhaustive] pub enum flui::testing::harness::replay::PointerPhase
 impl Clone for flui::testing::harness::replay::PointerPhase
 impl Copy for flui::testing::harness::replay::PointerPhase
 impl Eq for flui::testing::harness::replay::PointerPhase
@@ -24578,7 +24578,7 @@ field flui::view::KeepAliveNotification::keep_alive: bool // at 0
 impl Clone for flui::view::KeepAliveNotification
 impl core::fmt::Debug for flui::view::KeepAliveNotification
 impl flui::prelude::Notification for flui::view::KeepAliveNotification
-pub enum flui::view::KeyLookup
+#[non_exhaustive] pub enum flui::view::KeyLookup
 impl Clone for flui::view::KeyLookup
 impl Copy for flui::view::KeyLookup
 impl Eq for flui::view::KeyLookup
@@ -37090,7 +37090,7 @@ variant flui_testing::recording::format::RecordingError::NonReplayable { line: u
 variant flui_testing::recording::format::RecordingError::UnknownVariant { line: u64, tag: String } // at 3
 variant flui_testing::recording::format::RecordingError::Unmirrored { line: u64, what: &'static str } // at 6
 variant flui_testing::recording::format::RecordingError::Version { found: u32, supported: u32 } // at 2
-pub enum flui_testing::text_store_host::StoreHostCall
+#[non_exhaustive] pub enum flui_testing::text_store_host::StoreHostCall
 impl Clone for flui_testing::text_store_host::StoreHostCall
 impl Copy for flui_testing::text_store_host::StoreHostCall
 impl Eq for flui_testing::text_store_host::StoreHostCall
