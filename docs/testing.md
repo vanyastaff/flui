@@ -539,9 +539,11 @@ run) for the last pump.
 
 `crates/flui-widgets/tests/perf.rs` drives a fixed app — a label over a lazy
 10 000-row list — through a one-screen scroll (measured once as the first after
-mount and once after earlier scrolls, through the UI runtime, where two
-consecutive scrolls must cost the same within a slack) and a full reassemble, a
-`SlideTransition` tick over a painted panel, and a label change over an eager
+mount on the binding, and once after earlier scrolls through the UI runtime,
+where it must build every newly visible row and two consecutive scrolls must
+cost the same within a slack; the two rows run on different drivers and are not
+compared) and a full reassemble, a `SlideTransition` tick over a painted panel,
+and a label change over an eager
 column of 500 and of 5 000 buttons, and asserts budgets on those reports. Each
 record also carries what the measured frames asked of the heap on the test
 thread, counted by the target's `#[global_allocator]`: `allocations` (a
