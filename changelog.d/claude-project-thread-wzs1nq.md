@@ -46,3 +46,17 @@
   errors (`RasterCommand`, `SlotTarget`, `SlotChange`, `SlotVisibility`, `SlotPhase`, `SlotFailure`,
   `ExecutorHealth`, `DeviceHealth`, `RasterSendError`, `RasterSubmitError`, `FrameDropReason`) and
   its testing enums.
+- Also `#[non_exhaustive]` (ADR-0329): the painting `TextAlign`, `TextAlignVertical`, `TextOverflow`,
+  `TextWidthBasis`, `TextLeadingDistribution`, `PlaceholderAlignment`, `FontStyle`, `FilterQuality`,
+  `ImageRepeat`, `ClipBehavior`, `BorderStyle`, `BorderPosition`, `PhysicalShape`, `MaterialType`,
+  `ShadowQuality`, `BlurQuality`, `BlurMode`, `ColorAdjustment`, `PathPaintMode`, `FaceRef` and
+  the painting error enums.
+- Also `#[non_exhaustive]` (ADR-0329): the interaction `DragRepresentation`, `DragStage`,
+  `MoveOutcome`, `Autoscroll`, `TraversalEdgeBehavior` and `SweepModel`.
+- Also `#[non_exhaustive]` (ADR-0329): the widgets `TransitionGroup`, `RouteLifecycle`, `PanAxis`,
+  `WheelScaleGate` and `DismissDirection`.
+- `flui-protocol` decides each public enum (ADR-0329): the recording mirrors, `RecordRow`,
+  `Checked`, `Retry` and `RequestId` stay closed with their reason at the site.
+- `flui-native` decides each public enum (ADR-0329), so every crate of the workspace now states
+  each public enum's closure at its declaration; `MacOSWindowLevel`, `AxisSource`, `ClockChoice`,
+  `CodecError`, `ReplayError` and `AppCall` are `#[non_exhaustive]`.

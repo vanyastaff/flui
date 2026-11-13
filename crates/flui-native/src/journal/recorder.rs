@@ -16,6 +16,10 @@ use super::codec::{
 
 /// Whether a recorder keeps the text it journals (ADR-0215 §5).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a recorder redacts text or keeps it, the one opt-in"
+)]
 pub enum Privacy {
     /// Input method text and window titles are replaced, and each row that
     /// lost text is marked redacted, which its replay refuses. A display's

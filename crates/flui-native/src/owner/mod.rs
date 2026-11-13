@@ -360,6 +360,7 @@ assert_not_impl_any!(OwnerPlatform: Send, Sync);
 /// Result of an owner-thread window-open request.
 #[must_use = "a Pending window creation must be waited on or polled; \
               dropping it abandons the request (the owner unwinds or skips)"]
+#[expect(clippy::exhaustive_enums, reason = "a window opens at once or later")]
 pub enum WindowOpen {
     /// Created synchronously. Always the case inside `on_ready`, and on
     /// backends whose owner thread may create directly outside callbacks.
@@ -643,6 +644,10 @@ pub enum WakeRegistrationError {
 /// revision). Support is operation-specific; absent window creation does not
 /// imply absent wake or quit transport.
 #[derive(Debug, thiserror::Error)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a deliberately closed cross-thread vocabulary (ADR-0027 §4, ADR-0037 §3)"
+)]
 pub enum ProxySendError<T: fmt::Debug> {
     /// Native wake submission failed while admitting this request.
     #[error("native owner wake failed: {source}")]
@@ -729,6 +734,10 @@ impl OpenedWindow {
 }
 
 /// What [`OpenedWindow::window`] reaches.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the window is open here, closed, or on another thread"
+)]
 pub enum OpenedWindowReach {
     /// The window, which is open: the caller is on its owner thread.
     Open(Rc<dyn HostWindow>),

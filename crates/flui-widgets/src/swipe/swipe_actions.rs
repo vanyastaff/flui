@@ -61,6 +61,10 @@ impl fmt::Debug for SwipeAction {
 /// An edge of a [`SwipeActions`] row, in reading order: mirrored in a
 /// right-to-left locale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a row has a leading and a trailing edge"
+)]
 pub enum SwipeEdge {
     /// The reading start, revealed by a swipe toward the reading end: the
     /// left edge under left-to-right text.

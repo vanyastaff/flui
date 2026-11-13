@@ -53,6 +53,10 @@ impl VariationId {
 /// Horizontal quarter-pixel bin: the rule cosmic-text drew with, kept so a
 /// glyph draws the bitmap it drew there (`parley_oracle`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a glyph sits in one of four quarter-pixel bins"
+)]
 pub enum SubpixelBin {
     /// Offset 0.0.
     #[default]

@@ -382,6 +382,7 @@ impl<T: Unit> Default for BoxShadow<T> {
 /// Higher quality levels produce smoother shadows but require more computation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum ShadowQuality {
     /// Low quality - single pass blur approximation
     Low,

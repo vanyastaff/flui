@@ -44,6 +44,10 @@ pub trait MultiDragHandle {
 }
 /// Axis used for each contact's movement threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "free motion or one of the two axes of a plane"
+)]
 pub enum MultiDragAxis {
     /// Admit movement in every direction.
     Free,
