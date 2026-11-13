@@ -23033,6 +23033,13 @@ impl core::fmt::Debug for flui::services::system::testing::ScriptedSystem
 impl flui::platform::capability::Plugin for flui::services::system::testing::ScriptedSystem
 pub fn flui::services::system::testing::ScriptedSystem::new(launcher: flui::platform::testing::ScriptedLauncher, dialogs: flui::services::system::testing::ScriptedFileDialogs) -> Self
 pub mod flui::testing
+pub struct flui::testing::CommitBarrier { .. }
+impl Drop for flui::testing::CommitBarrier
+impl core::fmt::Debug for flui::testing::CommitBarrier
+pub fn flui::testing::CommitBarrier::commit(self)
+pub struct flui::testing::CopyHold { .. }
+impl Drop for flui::testing::CopyHold
+impl core::fmt::Debug for flui::testing::CopyHold
 pub struct flui::testing::Expectation<'t> { .. }
 impl core::fmt::Debug for flui::testing::Expectation<'_>
 pub fn flui::testing::Expectation::to_be_checked(self) // impl flui::testing::Expectation<'_>
@@ -23199,9 +23206,9 @@ pub fn flui::testing::MemoryStorage::contents(&self, name: &flui::platform::Stor
 pub fn flui::testing::MemoryStorage::fail_copies(&self, error: Option<flui::platform::StorageError>)
 pub fn flui::testing::MemoryStorage::fail_next(&self, error: flui::platform::StorageError)
 pub fn flui::testing::MemoryStorage::fail_reads(&self, error: Option<flui::platform::StorageError>)
-pub fn flui::testing::MemoryStorage::hold_commits(&self) -> flui::testing::harness::storage::CommitBarrier
-pub fn flui::testing::MemoryStorage::hold_copies(&self) -> flui::testing::harness::storage::CopyHold
-pub fn flui::testing::MemoryStorage::hold_writes(&self) -> flui::testing::harness::storage::WriteHold
+pub fn flui::testing::MemoryStorage::hold_commits(&self) -> flui::testing::CommitBarrier
+pub fn flui::testing::MemoryStorage::hold_copies(&self) -> flui::testing::CopyHold
+pub fn flui::testing::MemoryStorage::hold_writes(&self) -> flui::testing::WriteHold
 pub fn flui::testing::MemoryStorage::kept_aside(&self, name: &flui::platform::StorageName) -> Vec<Vec<u8>>
 pub fn flui::testing::MemoryStorage::live_requests(&self) -> usize
 pub fn flui::testing::MemoryStorage::new() -> Self
@@ -23434,6 +23441,9 @@ impl<'de> serde_core::de::Deserialize<'de> for flui::testing::Tree
 pub fn flui::testing::Tree::new(roots: Vec<flui::testing::Node>, truncated: bool) -> Self
 pub fn flui::testing::Tree::with_diagnostics(self, diagnostics: Vec<flui_protocol::tree::TreeDiagnostic>) -> Self
 pub fn flui::testing::Tree::with_revision(self, revision: flui_protocol::tree::TreeRevision) -> Self
+pub struct flui::testing::WriteHold { .. }
+impl Drop for flui::testing::WriteHold
+impl core::fmt::Debug for flui::testing::WriteHold
 pub mod flui::testing::find
 pub fn flui::testing::find::button(name: impl Into<String>) -> flui::testing::Locator
 pub fn flui::testing::find::id(identifier: impl Into<String>) -> flui::testing::Locator
@@ -23837,17 +23847,10 @@ pub fn flui::testing::harness::replay::VirtualScript::press_button(self, at: flu
 pub fn flui::testing::harness::replay::VirtualScript::release(self) -> Self
 pub fn flui::testing::harness::replay::VirtualScript::wait(self, duration: core::time::Duration) -> Self
 pub mod flui::testing::harness::storage
-pub struct flui::testing::harness::storage::CommitBarrier { .. }
-impl Drop for flui::testing::harness::storage::CommitBarrier
-impl core::fmt::Debug for flui::testing::harness::storage::CommitBarrier
-pub fn flui::testing::harness::storage::CommitBarrier::commit(self)
-pub struct flui::testing::harness::storage::CopyHold { .. }
-impl Drop for flui::testing::harness::storage::CopyHold
-impl core::fmt::Debug for flui::testing::harness::storage::CopyHold
+reexport flui::testing::harness::storage::CommitBarrier => flui::testing::CommitBarrier
+reexport flui::testing::harness::storage::CopyHold => flui::testing::CopyHold
 reexport flui::testing::harness::storage::MemoryStorage => flui::testing::MemoryStorage
-pub struct flui::testing::harness::storage::WriteHold { .. }
-impl Drop for flui::testing::harness::storage::WriteHold
-impl core::fmt::Debug for flui::testing::harness::storage::WriteHold
+reexport flui::testing::harness::storage::WriteHold => flui::testing::WriteHold
 pub mod flui::testing::harness::widgets
 pub struct flui::testing::harness::widgets::LaidOut { .. }
 impl core::fmt::Debug for flui::testing::harness::widgets::LaidOut
