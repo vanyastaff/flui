@@ -489,13 +489,22 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 if let Some(size) = slot.refused_size {
                     state.size.get_or_insert(size);
                 }
-                let stale = if matches!(
-                    state.failure,
-                    Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
-                ) {
-                    state.failure.take()
-                } else {
-                    None
+                // Only the refusal of that size goes: any other (a size over
+                // the limit that no resize was refused at) is not answered
+                // again, so it stays held for the owner.
+                let refused = slot.refused_size;
+                let stale = match &state.failure {
+                    Some(SlotFailure::Refused(EngineError::InvalidTargetSize {
+                        width,
+                        height,
+                    })) if refused.is_some_and(|size| {
+                        u32::try_from(size.width) == Ok(*width)
+                            && u32::try_from(size.height) == Ok(*height)
+                    }) =>
+                    {
+                        state.failure.take()
+                    }
+                    _ => None,
                 };
                 // A window slot that never had a size has no frame to refuse.
                 if state.generation != SurfaceGeneration::ZERO {
