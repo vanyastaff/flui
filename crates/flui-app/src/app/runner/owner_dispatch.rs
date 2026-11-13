@@ -777,7 +777,7 @@ fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
         memory.reclaim(level);
     }
     // The GPU memory behind every window's slot. A host already turning (a
-    // notice delivered from inside the GPU work) is trimmed by the next one.
+    // notice delivered from inside the GPU work) is trimmed when that turn ends.
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -787,11 +787,9 @@ fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
         let host = APP_RUNTIME.with(|slot| {
             slot.try_borrow()
                 .ok()
-                .map(|state| std::rc::Rc::clone(&state.raster_host))
+                .map(|state| state.raster_host.clone())
         });
-        if let Some(host) = host
-            && let Ok(mut host) = host.try_borrow_mut()
-        {
+        if let Some(host) = host {
             host.reclaim(level);
         }
     }

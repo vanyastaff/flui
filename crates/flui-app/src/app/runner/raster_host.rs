@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use flui_engine::{
     DeviceHealth, EngineError, RasterCommand, RasterExecutor, RasterSendError, RasterSender,
-    RasterVerdict, SendReceipt, SlotBackend, SlotChange, SlotConfig, SlotId, SlotSettlement,
-    SlotTarget, SlotVisibility, SurfaceFactory,
+    RasterVerdict, SendReceipt, SlotBackend, SlotChange, SlotConfig, SlotFailure, SlotId,
+    SlotSettlement, SlotTarget, SlotVisibility, SurfaceFactory,
 };
 use flui_foundation::geometry::DeviceSize;
 use flui_foundation::{
@@ -55,7 +55,85 @@ impl std::fmt::Debug for RasterFactory {
 }
 
 /// The loop's raster host, owner-local (ADR-0323 §1).
-pub(crate) type SharedRasterHost = Rc<RefCell<RasterHost>>;
+///
+/// The host is busy while it turns the executor, which runs code that is not
+/// ours (a tracing subscriber, a scene's or target's `Drop`). Work that
+/// finds it busy and must not be lost (a window's detach, a memory trim) is
+/// kept here and done when the turn that holds the host ends.
+#[derive(Clone, Default)]
+pub(crate) struct SharedRasterHost {
+    host: Rc<RefCell<RasterHost>>,
+    deferred: Rc<Deferred>,
+}
+
+/// Work that met a busy host.
+#[derive(Default)]
+struct Deferred {
+    detach: RefCell<Vec<PresentationAddress>>,
+    trim: std::cell::Cell<Option<flui_foundation::memory::MemoryPressureLevel>>,
+}
+
+impl SharedRasterHost {
+    /// A host whose executor will be placed on `factory`'s backend.
+    pub(crate) fn new(factory: RasterFactory) -> Self {
+        Self {
+            host: Rc::new(RefCell::new(RasterHost::new(factory))),
+            deferred: Rc::default(),
+        }
+    }
+
+    /// Run `with` on the host, then the work that met it busy meanwhile;
+    /// `None` while the host is turning.
+    pub(crate) fn try_with<R>(&self, with: impl FnOnce(&mut RasterHost) -> R) -> Option<R> {
+        let mut host = self.host.try_borrow_mut().ok()?;
+        let answer = with(&mut host);
+        self.run_deferred(&mut host);
+        Some(answer)
+    }
+
+    /// Read the host; `None` while it is turning.
+    pub(crate) fn try_read<R>(&self, read: impl FnOnce(&RasterHost) -> R) -> Option<R> {
+        let host = self.host.try_borrow().ok()?;
+        Some(read(&host))
+    }
+
+    /// Release `address`'s slot now, or when the turn that holds the host
+    /// ends.
+    pub(crate) fn detach(&self, address: PresentationAddress) {
+        if self.try_with(|host| host.detach(address)).is_none() {
+            self.deferred.detach.borrow_mut().push(address);
+        }
+    }
+
+    /// Trim the GPU memory behind every slot now, or when the turn that
+    /// holds the host ends; the strongest of the trims asked meanwhile.
+    pub(crate) fn reclaim(&self, level: flui_foundation::memory::MemoryPressureLevel) {
+        if self.try_with(|host| host.reclaim(level)).is_none() {
+            let strongest = self
+                .deferred
+                .trim
+                .get()
+                .map_or(level, |held| held.max(level));
+            self.deferred.trim.set(Some(strongest));
+        }
+    }
+
+    fn run_deferred(&self, host: &mut RasterHost) {
+        loop {
+            let detach = std::mem::take(&mut *self.deferred.detach.borrow_mut());
+            let trim = self.deferred.trim.take();
+            if detach.is_empty() && trim.is_none() {
+                return;
+            }
+            for address in detach {
+                host.detach(address);
+            }
+            if let Some(level) = trim {
+                host.reclaim(level);
+            }
+        }
+    }
+}
 
 /// The executor, once placed, and every window's slot on it.
 #[derive(Default)]
@@ -90,6 +168,13 @@ struct HostSlot {
     textures: Option<flui_layer::TextureRegistry>,
     display: Option<DisplayColor>,
     visibility: SlotVisibility,
+    /// A size the device cannot draw at (past its texture limit): the
+    /// window shows nothing at it, and is not sent it again, until the
+    /// platform announces another.
+    refused_size: Option<DeviceSize>,
+    /// The first panic of the slot's frames since the window last reported
+    /// one to its UI runtime ([`RasterSlot::report_frame_panic`]).
+    panic: flui_foundation::panic::FirstPanic,
 }
 
 /// The raster executor refused a window's slot.
@@ -99,6 +184,11 @@ pub(crate) struct SlotRefused(&'static str);
 
 fn refused(reason: &'static str) -> EngineError {
     EngineError::surface_creation(SlotRefused(reason))
+}
+
+/// The refusal of a window's slot asked for while the host is turning.
+pub(crate) fn host_busy() -> EngineError {
+    refused("the raster host is turning")
 }
 
 impl RasterHost {
@@ -149,7 +239,31 @@ impl RasterHost {
                 config: slot_config,
             })
             .map_err(|error| refused(send_refusal(&error)))?;
-        placed.executor.turn();
+        // The turn runs code that is not ours; whatever stops the slot from
+        // attaching (a refusal, a panic) detaches it before it is answered,
+        // so no executor slot outlives its window unnamed.
+        let mut caught = flui_foundation::panic::FirstPanic::new();
+        let _turned = caught.contain(|| placed.executor.turn());
+        let refusal = match placed.sender.record(slot).map(|record| record.phase) {
+            Some(flui_engine::SlotPhase::Attached) if caught.held().is_none() => None,
+            _ => match placed.sender.take_failure(slot) {
+                Some(SlotFailure::Refused(error)) => Some(error),
+                Some(SlotFailure::Panicked(payload)) => {
+                    caught.record(payload);
+                    Some(refused("attaching the slot panicked"))
+                }
+                // A failure added later is a refusal until this match names it.
+                Some(_) => Some(refused("the raster executor refused the slot")),
+                None => Some(refused("the raster executor did not attach the slot")),
+            },
+        };
+        if let Some(error) = refusal {
+            if placed.sender.send(RasterCommand::Detach { slot }).is_ok() {
+                let _turned = caught.contain(|| placed.executor.turn());
+            }
+            caught.resume();
+            return Err(error);
+        }
         let mut base = RasterBase::default();
         base.set_mode(damage_mode());
         placed.slots.insert(
@@ -163,6 +277,8 @@ impl RasterHost {
                 textures,
                 display,
                 visibility: SlotVisibility::Shown,
+                refused_size: None,
+                panic: flui_foundation::panic::FirstPanic::new(),
             },
         );
         Ok(())
@@ -273,6 +389,15 @@ impl RasterHost {
         }
     }
 
+    /// The first panic of `address`'s frames since the last one was taken.
+    fn take_frame_panic(
+        &mut self,
+        address: PresentationAddress,
+    ) -> Option<Box<dyn std::any::Any + Send>> {
+        let slot = self.placed.as_mut()?.slots.get_mut(&address)?;
+        std::mem::replace(&mut slot.panic, flui_foundation::panic::FirstPanic::new()).into_payload()
+    }
+
     /// Where the context's device stands.
     pub(crate) fn device_health(&self) -> DeviceHealth {
         self.placed
@@ -309,13 +434,16 @@ impl RasterHost {
         if slot.display == Some(color) {
             return false;
         }
-        slot.display = Some(color);
         match placed.sender.send(RasterCommand::Configure {
             slot: slot.slot,
             change: SlotChange::Color(color),
         }) {
-            Ok(_) => true,
+            Ok(_) => {
+                slot.display = Some(color);
+                true
+            }
             Err(error) => {
+                // Not recorded as sent, so the next frame asks again.
                 tracing::warn!(%error, "raster host: a display colour change was refused");
                 false
             }
@@ -338,12 +466,15 @@ impl RasterHost {
         if slot.visibility == visibility {
             return;
         }
-        slot.visibility = visibility;
-        if let Err(error) = placed.sender.send(RasterCommand::Configure {
+        match placed.sender.send(RasterCommand::Configure {
             slot: slot.slot,
             change: SlotChange::Shown(visibility),
         }) {
-            tracing::warn!(%error, "raster host: a visibility change was refused");
+            Ok(_) => slot.visibility = visibility,
+            // Not recorded as sent, so the next change asks again.
+            Err(error) => {
+                tracing::warn!(%error, "raster host: a visibility change was refused");
+            }
         }
     }
 
@@ -383,6 +514,10 @@ impl RasterHost {
             return None;
         };
         let size = DeviceSize::new(width, height);
+        if slot.refused_size == Some(size) {
+            return None;
+        }
+        slot.refused_size = None;
         if slot.size != Some(size) {
             match placed.sender.send(RasterCommand::Configure {
                 slot: slot.slot,
@@ -405,7 +540,10 @@ impl RasterHost {
     }
 
     /// Send `publication` to `address`'s slot, measured on `surface`, turn
-    /// the executor and answer what became of the frame.
+    /// the executor and answer what became of the frame. A panic of the
+    /// frame is held for the window to report to its UI runtime after the
+    /// frame ([`RasterSlot::report_frame_panic`]) and the frame is retried,
+    /// in full, on the runtime's failure backoff.
     fn submit(
         &mut self,
         address: PresentationAddress,
@@ -447,9 +585,36 @@ impl RasterHost {
             tracing::error!(%error, "raster host: a frame was refused");
             return SubmitVerdict::Failed;
         }
-        placed.executor.turn();
+        // The turn runs code that is not ours; its settlements are drained
+        // whatever it did, so a panic leaves none for the next frame to trip
+        // over.
+        let mut caught = flui_foundation::panic::FirstPanic::new();
+        let _turned = caught.contain(|| placed.executor.turn());
         placed.settlements.clear();
         placed.sender.drain_settlements(id, &mut placed.settlements);
+        let slot = placed
+            .slots
+            .get_mut(&address)
+            .expect("BUG: the slot is still there");
+        match placed.sender.take_failure(id) {
+            Some(SlotFailure::Panicked(payload)) => caught.record(payload),
+            Some(SlotFailure::Refused(error)) => {
+                if matches!(error, EngineError::InvalidTargetSize { .. }) {
+                    slot.refused_size = slot.size.take();
+                }
+                tracing::warn!(%error, "raster host: the executor refused a window's command");
+            }
+            Some(failure) => {
+                tracing::warn!(?failure, "raster host: a window's slot failed");
+            }
+            None => {}
+        }
+        if let Some(payload) = caught.into_payload() {
+            // The image may be torn: the frame after the panic is drawn in full.
+            slot.base.forget();
+            slot.panic.record(payload);
+            return SubmitVerdict::Retry;
+        }
         let Some(settlement) = placed
             .settlements
             .iter()
@@ -458,10 +623,11 @@ impl RasterHost {
             tracing::error!(?epoch, "raster host: an inline frame settled nothing");
             return SubmitVerdict::Failed;
         };
-        let slot = placed
-            .slots
-            .get_mut(&address)
-            .expect("BUG: the slot is still there");
+        if slot.refused_size.is_some() {
+            // Drawn at no size the device accepts: nothing until the next resize.
+            slot.base.forget();
+            return SubmitVerdict::NotShown;
+        }
         match settlement.verdict {
             RasterVerdict::Presented => {
                 slot.base.shown(shown, key);
@@ -487,7 +653,6 @@ impl RasterHost {
         }
     }
 }
-
 impl Placed {
     fn new(
         executor: RasterExecutor<Box<dyn SlotBackend>>,
@@ -550,10 +715,9 @@ impl FrameSink for SlotFrame {
     fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict {
         // A frame dispatched while the host is turning (a platform callback
         // re-entering from the GPU work) keeps its work for the next wake.
-        let Ok(mut host) = self.host.try_borrow_mut() else {
-            return SubmitVerdict::Retry;
-        };
-        host.submit(self.address, self.surface, publication)
+        self.host
+            .try_with(|host| host.submit(self.address, self.surface, publication))
+            .unwrap_or(SubmitVerdict::Retry)
     }
 }
 
@@ -563,8 +727,7 @@ impl FrameSink for SlotFrame {
 pub(crate) fn device_retry_at() -> Option<web_time::Instant> {
     super::host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
-        let host = state.raster_host.try_borrow().ok()?;
-        host.device_retry_at()
+        state.raster_host.try_read(RasterHost::device_retry_at)?
     })
 }
 
@@ -581,7 +744,25 @@ pub(crate) struct RasterSlot {
 impl RasterSlot {
     /// The sink of one frame, measured now.
     pub(crate) fn frame(&self) -> SlotFrame {
-        SlotFrame::new(Rc::clone(&self.host), self.address, self.size)
+        SlotFrame::new(self.host.clone(), self.address, self.size)
+    }
+
+    /// Report the first panic of the window's frames since the last report
+    /// to `ui_runtime`, which hands it to the application's frame-failure
+    /// handler. Run with no borrow of the host held: the handler is not ours.
+    pub(crate) fn report_frame_panic(&self, ui_runtime: &crate::app::ui_runtime::UiRuntime) {
+        let address = self.address;
+        let Some(payload) = self
+            .host
+            .try_with(|host| host.take_frame_panic(address))
+            .flatten()
+        else {
+            return;
+        };
+        let mut caught = flui_foundation::panic::FirstPanic::new();
+        let _reported = caught.contain(|| ui_runtime.report_contained_panic(address, &*payload));
+        flui_foundation::panic::discard_payload(payload);
+        caught.resume();
     }
 
     /// Tell `ui_runtime` where the device's rebuild stands after a frame, so
@@ -590,11 +771,19 @@ impl RasterSlot {
     pub(crate) fn settle_device(&mut self, ui_runtime: &crate::app::ui_runtime::UiRuntime) -> bool {
         use flui_runtime::frame_failure::DeviceRecovery;
 
-        let Ok(host) = self.host.try_borrow() else {
+        let Some((health, failure)) = self.host.try_read(|host| {
+            (
+                host.device_health(),
+                host.placed
+                    .as_ref()
+                    .and_then(|placed| placed.sender.take_device_failure()),
+            )
+        }) else {
             return false;
         };
-        let health = host.device_health();
-        drop(host);
+        if let Some(error) = failure {
+            tracing::warn!(%error, "GPU device rebuild failed");
+        }
         if health == self.device {
             return false;
         }
@@ -626,13 +815,6 @@ impl RasterSlot {
 
 impl Drop for RasterSlot {
     fn drop(&mut self) {
-        if let Ok(mut host) = self.host.try_borrow_mut() {
-            host.detach(self.address);
-        } else {
-            tracing::error!(
-                "BUG: raster host: a window's slot dropped while the host is turning; its \
-                 GPU target stays until the loop ends"
-            );
-        }
+        self.host.detach(self.address);
     }
 }

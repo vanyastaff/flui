@@ -42,6 +42,12 @@ struct Device {
     lost: bool,
     failing_rebuilds: u32,
     rebuild_attempts: u32,
+    /// How many of the next frames, of any window, panic.
+    panics_ahead: u32,
+    /// Whether the next slot's attach is refused.
+    refuse_attach: bool,
+    /// The largest side a slot can be sized to.
+    max_side: Option<i32>,
 }
 
 struct Window {
@@ -82,6 +88,24 @@ impl StandInRenderer {
     /// Fail the next `attempts` rebuilds of the device.
     pub fn fail_recoveries(&self, attempts: u32) {
         self.shared.lock().device.failing_rebuilds = attempts;
+    }
+
+    /// Make the next `frames` frames, of any window of the run, panic in the
+    /// renderer, as a driver or wgpu's error handler can.
+    pub fn panic_in_next_frames(&self, frames: u32) {
+        self.shared.lock().device.panics_ahead = frames;
+    }
+
+    /// Refuse the next window's slot, as a GPU that cannot present to that
+    /// window's surface does.
+    pub fn refuse_next_window(&self) {
+        self.shared.lock().device.refuse_attach = true;
+    }
+
+    /// Refuse sizes whose width or height passes `side` pixels, as a
+    /// device's texture limit does.
+    pub fn limit_size(&self, side: i32) {
+        self.shared.lock().device.max_side = Some(side);
     }
 
     /// Rebuilds of the run's device attempted so far.
@@ -158,6 +182,9 @@ impl SlotBackend for StandInBackend {
             .expected
             .take()
             .expect("BUG: the raster host names the window before it attaches its slot");
+        if std::mem::take(&mut shared.device.refuse_attach) {
+            return Err(EngineError::IncompatibleSurface);
+        }
         shared.windows.push(Window {
             id,
             slot: Some(slot),
@@ -167,7 +194,14 @@ impl SlotBackend for StandInBackend {
         Ok(())
     }
 
-    fn resize(&mut self, _slot: SlotId, _size: DeviceSize) -> EngineResult<()> {
+    fn resize(&mut self, _slot: SlotId, size: DeviceSize) -> EngineResult<()> {
+        let max = self.shared.lock().device.max_side;
+        if max.is_some_and(|max| size.width > max || size.height > max) {
+            return Err(EngineError::InvalidTargetSize {
+                width: size.width.unsigned_abs(),
+                height: size.height.unsigned_abs(),
+            });
+        }
         Ok(())
     }
 
@@ -196,6 +230,11 @@ impl SlotBackend for StandInBackend {
         let mut shared = self.shared.lock();
         if shared.device.lost {
             return Err(EngineError::DeviceLost);
+        }
+        if shared.device.panics_ahead > 0 {
+            shared.device.panics_ahead -= 1;
+            drop(shared);
+            panic!("injected panic in a stand-in frame");
         }
         let window = shared
             .slot(slot)

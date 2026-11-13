@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_app::app::{
-    AppConfig, AppHandle, Application, CloseReason, CloseRequestHandler, CloseResponse,
-    DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureHandlerFactory, FrameFailureKind,
-    WindowPolicy, open_window, request_presentation_close,
+    AppConfig, AppHandle, AppWindowError, Application, CloseReason, CloseRequestHandler,
+    CloseResponse, DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureHandlerFactory,
+    FrameFailureKind, WindowPolicy, open_window, request_presentation_close,
 };
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::PresentationAddress;
@@ -50,6 +50,8 @@ struct Observed {
     /// While set, the leaf under the load fails its paint: the frame is
     /// dropped.
     fail_paint: Arc<AtomicBool>,
+    /// How many times the leaf under the load painted.
+    paints: Arc<std::sync::atomic::AtomicU32>,
     /// The presentation the root's next build closes, and what the close
     /// answered.
     close_from_build: Rc<Cell<Option<PresentationAddress>>>,
@@ -60,6 +62,8 @@ struct Observed {
     guard: Rc<RefCell<Option<CloseGuard>>>,
     /// The device rebuild each frame dropped on a lost device reported.
     device_reports: Arc<Mutex<Vec<DeviceRecovery>>>,
+    /// Frames a panic dropped, as the frame-failure handler was told.
+    frame_panics: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Observed {
@@ -126,11 +130,13 @@ impl std::future::Future for GatedLoad {
 #[derive(Clone)]
 struct PaintTrip {
     armed: Arc<AtomicBool>,
+    paints: Arc<std::sync::atomic::AtomicU32>,
 }
 
 #[derive(Debug)]
 struct PaintTripBox {
     armed: Arc<AtomicBool>,
+    paints: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl flui_foundation::inspect::Inspect for PaintTripBox {
@@ -153,6 +159,7 @@ impl RenderBox for PaintTripBox {
     }
 
     fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
+        self.paints.fetch_add(1, Ordering::SeqCst);
         assert!(
             !self.armed.load(Ordering::SeqCst),
             "the leaf's paint failed"
@@ -167,6 +174,7 @@ impl RenderView for PaintTrip {
     fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> PaintTripBox {
         PaintTripBox {
             armed: Arc::clone(&self.armed),
+            paints: Arc::clone(&self.paints),
         }
     }
 
@@ -222,6 +230,7 @@ impl ViewState<ObservedRoot> for ObservedRootState {
         }
         let observed = self.observed.clone();
         let trip = Arc::clone(&self.observed.fail_paint);
+        let paints = Arc::clone(&self.observed.paints);
         FutureBuilder::keyed(
             Some(0_u32),
             Rc::new(move || {
@@ -233,6 +242,7 @@ impl ViewState<ObservedRoot> for ObservedRootState {
             Rc::new(move |_, _| {
                 PaintTrip {
                     armed: Arc::clone(&trip),
+                    paints: Arc::clone(&paints),
                 }
                 .boxed()
             }),
@@ -252,17 +262,21 @@ fn observed_app(
     handler: Option<CloseRequestHandler>,
 ) -> (Application, ObservedRoot) {
     let device_reports = Arc::clone(&observed.device_reports);
+    let frame_panics = Arc::clone(&observed.frame_panics);
     let mut config = AppConfig::new()
         .exit_policy(ExitPolicy::OnLastWindowClosed)
         .frame_failure_handler(FrameFailureHandlerFactory::new(move || {
             let reports = Arc::clone(&device_reports);
-            FrameFailureHandler::new(move |report| {
-                if let FrameFailureKind::DeviceLost { recovery, .. } = report.kind {
-                    reports
-                        .lock()
-                        .expect("BUG: the frame-failure handler does not panic")
-                        .push(recovery);
+            let panics = Arc::clone(&frame_panics);
+            FrameFailureHandler::new(move |report| match report.kind {
+                FrameFailureKind::DeviceLost { recovery, .. } => reports
+                    .lock()
+                    .expect("BUG: the frame-failure handler does not panic")
+                    .push(recovery),
+                FrameFailureKind::CallbackPanic { .. } => {
+                    panics.fetch_add(1, Ordering::SeqCst);
                 }
+                _ => {}
             })
         }));
     if let Some(handler) = handler {
@@ -934,6 +948,101 @@ pub(crate) fn two_windows_draw_on_one_device() {
     join_ok(run);
 }
 
+/// A panic in the renderer reaches the application's frame-failure handler
+/// as the frame's failure, and the window draws again after it.
+pub(crate) fn a_panicking_frame_is_reported_and_the_window_draws_again() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    let presented = started.renderer.frames_presented();
+    started.renderer.panic_in_next_frames(1);
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    assert_eq!(
+        observed.frame_panics.load(Ordering::SeqCst),
+        1,
+        "the renderer's panic was reported to the frame-failure handler"
+    );
+    // The dropped frame's retry is armed by the same turn.
+    let deadline = started.run.wake_deadline().unwrap_or_else(Instant::now);
+    wake_at(&started, deadline);
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the window drew again after the panic"
+    );
+    join_ok_after_close(started);
+}
+
+/// A window whose surface the run's GPU cannot draw to fails to open with
+/// a renderer error, instead of opening blank.
+pub(crate) fn a_window_the_gpu_refuses_does_not_open() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.renderer.refuse_next_window();
+    let mut request = open_window(
+        AppConfig::new(),
+        WindowPolicy::Isolated,
+        ObservedRoot {
+            observed: Observed::default(),
+        },
+    )
+    .expect("the window is admitted");
+    for _ in 0..4 {
+        started.run.run_owner_turn();
+    }
+    let answer = request
+        .try_result()
+        .expect("the window request is answered");
+    assert!(
+        matches!(answer, Err(AppWindowError::Renderer { .. })),
+        "{answer:?}"
+    );
+    assert_eq!(
+        started.run.open_windows().len(),
+        1,
+        "only the main window is open"
+    );
+    join_ok_after_close(started);
+}
+
+/// A window resized past what the device can draw shows nothing at that
+/// size without retrying it every frame, and draws again at a size the
+/// device takes.
+pub(crate) fn a_window_past_the_device_limit_waits_for_a_size_it_takes() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.renderer.limit_size(4096);
+    started.window.simulate_resize(8192.0, 600.0);
+    started.run.run_owner_turn();
+    let presented = started.renderer.frames_presented();
+    let paints = observed.paints.load(Ordering::SeqCst);
+    // The loop's own deadlines pass with nothing asked of the window: a
+    // refused size is not retried, frame after frame, as a stale surface.
+    for _ in 0..3 {
+        let Some(deadline) = started.run.wake_deadline() else {
+            break;
+        };
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        started.run.run_owner_turn();
+    }
+    assert_eq!(
+        observed.paints.load(Ordering::SeqCst),
+        paints,
+        "a refused size repaints nothing on its own"
+    );
+    assert_eq!(
+        started.renderer.frames_presented(),
+        presented,
+        "nothing is drawn at the refused size"
+    );
+    started.window.simulate_resize(800.0, 600.0);
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "a size the device takes draws again"
+    );
+    join_ok_after_close(started);
+}
+
 fn join_ok_after_close(started: Started) {
     close(&started, CloseRoute::User);
     assert!(!started.run.is_running(), "the close ended the loop");
@@ -1000,6 +1109,18 @@ fn runner_close() {
             (
                 "two_windows_draw_on_one_device",
                 two_windows_draw_on_one_device,
+            ),
+            (
+                "a_panicking_frame_is_reported_and_the_window_draws_again",
+                a_panicking_frame_is_reported_and_the_window_draws_again,
+            ),
+            (
+                "a_window_the_gpu_refuses_does_not_open",
+                a_window_the_gpu_refuses_does_not_open,
+            ),
+            (
+                "a_window_past_the_device_limit_waits_for_a_size_it_takes",
+                a_window_past_the_device_limit_waits_for_a_size_it_takes,
             ),
         ],
     );

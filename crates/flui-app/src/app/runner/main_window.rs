@@ -955,9 +955,7 @@ where
                 runtime.main_ingress = Some(Arc::clone(&ingress));
                 runtime.capabilities = Some(registry);
                 runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
-                runtime.raster_host = std::rc::Rc::new(std::cell::RefCell::new(
-                    super::raster_host::RasterHost::new(renderers),
-                ));
+                runtime.raster_host = super::raster_host::SharedRasterHost::new(renderers);
                 runtime.reopen_lifecycles();
                 runtime.ensure_execution();
             });

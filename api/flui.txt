@@ -2413,8 +2413,11 @@ impl core::fmt::Debug for flui::app::testing::StandInRenderer
 pub fn flui::app::testing::StandInRenderer::fail_recoveries(&self, attempts: u32)
 pub fn flui::app::testing::StandInRenderer::frames_presented(&self) -> u64
 pub fn flui::app::testing::StandInRenderer::is_released(&self) -> bool
+pub fn flui::app::testing::StandInRenderer::limit_size(&self, side: i32)
 pub fn flui::app::testing::StandInRenderer::lose_device(&self)
+pub fn flui::app::testing::StandInRenderer::panic_in_next_frames(&self, frames: u32)
 pub fn flui::app::testing::StandInRenderer::recovery_attempts(&self) -> u32
+pub fn flui::app::testing::StandInRenderer::refuse_next_window(&self)
 #[non_exhaustive] pub enum flui::app::testing::TeardownStep
 impl Clone for flui::app::testing::TeardownStep
 impl Copy for flui::app::testing::TeardownStep

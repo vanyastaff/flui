@@ -204,14 +204,22 @@ where
     // The slot holds the window's surface target, which the raster side may
     // hold on any thread, never the window itself (ADR-0254 §5). It is
     // unconfigured until its first frame measures the window.
-    let host = APP_RUNTIME.with(|slot| std::rc::Rc::clone(&slot.borrow().raster_host));
-    let attached = host.borrow_mut().attach(
-        window.as_ref(),
-        owner_dispatch.address,
-        config,
-        textures,
-        super::host::display_color_of(window.as_ref()),
-    );
+    let host = APP_RUNTIME.with(|slot| slot.borrow().raster_host.clone());
+    let display = super::host::display_color_of(window.as_ref());
+    let attached = host
+        .try_with(|host| {
+            host.attach(
+                window.as_ref(),
+                owner_dispatch.address,
+                config,
+                textures,
+                display,
+            )
+        })
+        // A window opened from code the host's turn runs (a scene's `Drop`,
+        // a tracing subscriber) finds it busy: refused, as a GPU that gives
+        // no surface is.
+        .unwrap_or_else(|| Err(super::raster_host::host_busy()));
     if let Err(error) = attached {
         tracing::error!(%error, "GPU init failed");
         return Err(crate::app::AppWindowError::Renderer {
@@ -495,15 +503,18 @@ impl DesktopFrameDriver {
 
         // A window whose frames are off cannot be seen: its slot is not
         // drawn, and draws in full when frames come back (ADR-0305).
-        if action != WakeAction::Skip
-            && let Ok(mut host) = self.raster.host.try_borrow_mut()
-        {
+        if action != WakeAction::Skip {
             let visibility = if action == WakeAction::Render {
                 SlotVisibility::Shown
             } else {
                 SlotVisibility::Hidden
             };
-            host.set_visibility(self.raster.address, visibility);
+            let address = self.raster.address;
+            // A host already turning is told on the next wake.
+            let _told = self
+                .raster
+                .host
+                .try_with(|host| host.set_visibility(address, visibility));
         }
         match action {
             WakeAction::Skip => return,
@@ -524,18 +535,21 @@ impl DesktopFrameDriver {
         // that is lost and due even when this frame has nothing new to draw.
         // A device that came back repaints the window in full, so this frame
         // submits a fresh scene.
-        let display_changed = match self.raster.host.try_borrow_mut() {
-            Ok(mut host) => {
-                if self.retry_pending {
-                    host.retry_device();
-                    self.retry_pending = false;
-                }
-                let changed = host.follow_display(self.raster.address, display_color);
-                host.service();
-                changed
+        let address = self.raster.address;
+        let retry_pending = self.retry_pending;
+        let turned = self.raster.host.try_with(|host| {
+            if retry_pending {
+                host.retry_device();
             }
-            Err(_) => false,
-        };
+            let changed = host.follow_display(address, display_color);
+            host.service();
+            changed
+        });
+        // A host already turning is asked again on the next wake.
+        if turned.is_some() {
+            self.retry_pending = false;
+        }
+        let display_changed = turned.unwrap_or(false);
         if display_changed | self.raster.settle_device(ui_runtime) {
             ui_runtime.mark_primary_needs_full_repaint();
         }
@@ -547,6 +561,9 @@ impl DesktopFrameDriver {
         let presented = ui_runtime
             .pump(&mut SampledClock(now), &mut sink)
             .presented();
+        // A panic of the frame's GPU work, held by the host, reaches the
+        // application's frame-failure handler.
+        self.raster.report_frame_panic(ui_runtime);
         // A device the frame itself lost is reported with the frames it
         // drops; its rebuild is due at the executor's deadline, which the
         // wake hook and the dirty predicate above both read.
