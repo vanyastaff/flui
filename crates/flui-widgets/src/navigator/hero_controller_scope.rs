@@ -16,7 +16,7 @@
 //! (a design-system app shell could install an app-level scope instead).
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_view::prelude::*;
 use flui_view::{BoxedView, impl_inherited_view};
@@ -37,13 +37,13 @@ use super::hero_controller::HeroController;
 /// default controller.
 #[derive(Clone)]
 pub struct HeroControllerScope {
-    controller: Option<Arc<HeroController>>,
+    controller: Option<Rc<HeroController>>,
     child: BoxedView,
 }
 
 impl HeroControllerScope {
     /// Provide `controller` to the `Navigator`s below.
-    pub fn new(controller: Arc<HeroController>, child: impl IntoView) -> Self {
+    pub fn new(controller: Rc<HeroController>, child: impl IntoView) -> Self {
         Self {
             controller: Some(controller),
             child: BoxedView::new(child.into_view()),
@@ -60,7 +60,7 @@ impl HeroControllerScope {
 
     /// The hosted controller, or `None` for a [`none`](Self::none) scope.
     #[must_use]
-    pub(crate) fn controller(&self) -> Option<Arc<HeroController>> {
+    pub(crate) fn controller(&self) -> Option<Rc<HeroController>> {
         self.controller.clone()
     }
 }
@@ -74,7 +74,7 @@ impl fmt::Debug for HeroControllerScope {
 }
 
 impl InheritedView for HeroControllerScope {
-    type Data = Option<Arc<HeroController>>;
+    type Data = Option<Rc<HeroController>>;
 
     fn data(&self) -> &Self::Data {
         &self.controller
@@ -90,7 +90,7 @@ impl InheritedView for HeroControllerScope {
         // report the change honestly by identity so a future re-resolving Navigator
         // would see it.
         match (&self.controller, &old.controller) {
-            (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+            (Some(a), Some(b)) => !Rc::ptr_eq(a, b),
             (None, None) => false,
             _ => true,
         }

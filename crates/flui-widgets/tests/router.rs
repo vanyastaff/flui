@@ -11,7 +11,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, child_process, lay_out_animated, tight};
@@ -276,9 +275,8 @@ impl NavigatorObserver for OneShotObserver {
 }
 
 fn observe_once(navigator: &NavigatorHandle, action: impl Fn() + 'static) {
-    // Observers are Arc-owned but the UI capability they observe is owner-local.
-    #[expect(clippy::arc_with_non_send_sync)]
-    let observer = Arc::new(OneShotObserver {
+    // Observers are Rc-owned, like the UI capability they observe.
+    let observer = Rc::new(OneShotObserver {
         action: RefCell::new(Some(Rc::new(action))),
     });
     navigator.add_observer(observer);
@@ -390,8 +388,7 @@ pub(crate) fn router_go_recomputes_its_prefix_after_popup_observer_navigation() 
     }));
     settle(&mut laid);
     let pop = navigator.clone();
-    #[expect(clippy::arc_with_non_send_sync)]
-    let observer = Arc::new(PopupRemovalObserver {
+    let observer = Rc::new(PopupRemovalObserver {
         popup: navigator.current().expect("popup"),
         action: RefCell::new(Some(Rc::new(move || assert!(pop.pop())))),
     });
@@ -857,18 +854,14 @@ impl NavigatorObserver for CountingObserver {
     }
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
-)]
 fn terminal_observer_competition() {
     let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let first = TerminalBomb::new("first observer");
     let first_calls = Rc::clone(&first.calls);
     let second = TerminalBomb::counting("second observer");
     let second_calls = Rc::clone(&second.calls);
-    navigator.add_observer(Arc::new(TerminalObserver(first)));
-    navigator.add_observer(Arc::new(TerminalObserver(second)));
+    navigator.add_observer(Rc::new(TerminalObserver(first)));
+    navigator.add_observer(Rc::new(TerminalObserver(second)));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(navigator)))
         .expect_err("the first terminal observer must fail");
     assert_terminal_failure(failure, "first observer");
@@ -876,18 +869,14 @@ fn terminal_observer_competition() {
     assert_eq!(second_calls.get(), 1);
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
-)]
 fn terminal_navigator_during_incoming_unwind() {
     let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let first = TerminalBomb::counting("first observer");
     let first_calls = Rc::clone(&first.calls);
     let second = TerminalBomb::counting("second observer");
     let second_calls = Rc::clone(&second.calls);
-    navigator.add_observer(Arc::new(TerminalObserver(first)));
-    navigator.add_observer(Arc::new(TerminalObserver(second)));
+    navigator.add_observer(Rc::new(TerminalObserver(first)));
+    navigator.add_observer(Rc::new(TerminalObserver(second)));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let _owner = navigator;
         panic!("incoming failure");
@@ -898,17 +887,13 @@ fn terminal_navigator_during_incoming_unwind() {
     assert_eq!(second_calls.get(), 1);
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
-)]
 fn terminal_aliases_preserve_healthy_observers() {
     let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let alias = navigator.clone();
     let probe = TerminalBomb::counting("healthy observer");
     let probe_calls = Rc::clone(&probe.calls);
     let pushes = Rc::new(Cell::new(0));
-    navigator.add_observer(Arc::new(CountingObserver {
+    navigator.add_observer(Rc::new(CountingObserver {
         probe,
         pushes: Rc::clone(&pushes),
     }));
@@ -946,19 +931,15 @@ fn terminal_router_config_destroys_factories_after_route_failure() {
     assert_eq!(transition_calls.get(), 1);
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
-)]
 fn terminal_route_result_failure_destroys_later_observer() {
     let navigator = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     let result = TerminalResult::new("route result", true);
-    let result_calls = Arc::clone(&result.calls);
+    let result_calls = std::sync::Arc::clone(&result.calls);
     navigator
         .seed_initial(SimpleRoute::new(|_| Text::new("route").boxed()).with_current_result(result));
     let observer = TerminalBomb::counting("later observer");
     let observer_calls = Rc::clone(&observer.calls);
-    navigator.add_observer(Arc::new(TerminalObserver(observer)));
+    navigator.add_observer(Rc::new(TerminalObserver(observer)));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(navigator)))
         .expect_err("the route's retained result must fail retirement");
     assert_terminal_failure(failure, "route result");
@@ -969,7 +950,7 @@ fn terminal_route_result_failure_destroys_later_observer() {
 #[derive(Clone)]
 struct TerminalResult {
     name: &'static str,
-    calls: Arc<std::sync::atomic::AtomicUsize>,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     fail: bool,
 }
 
@@ -977,7 +958,7 @@ impl TerminalResult {
     fn new(name: &'static str, fail: bool) -> Self {
         Self {
             name,
-            calls: Arc::default(),
+            calls: std::sync::Arc::default(),
             fail,
         }
     }
@@ -1019,7 +1000,7 @@ fn terminal_route_record_destroys_pending_waker() {
         _retirement: route,
     });
     let wake = TerminalResult::new("pending waker", false);
-    let wake_calls = Arc::clone(&wake.calls);
+    let wake_calls = std::sync::Arc::clone(&wake.calls);
     let waker = flui_foundation::testing::CountingWaker::new()
         .shared()
         .retiring_waker(|| {}, wake);
@@ -1067,7 +1048,7 @@ fn terminal_page_route_matrix(case: &str) {
     page.armed.set(case == "page-factory");
     let page_calls = Rc::clone(&page.calls);
     let result = TerminalResult::new("page result", case == "page-result");
-    let result_calls = Arc::clone(&result.calls);
+    let result_calls = std::sync::Arc::clone(&result.calls);
     let route = PageRoute::new(move |_, _, _| {
         let _ = &page;
         Text::new("page").boxed()

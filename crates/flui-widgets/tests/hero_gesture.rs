@@ -12,7 +12,7 @@
 //! path when a hero transition starts, inviting a hero into a flight, and the
 //! flight's reaction to animation updates.
 
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::AnimationController;
@@ -50,9 +50,9 @@ fn hero_page(opt_in: bool, width: f64, height: f64) -> PageRoute<i32> {
     .transition_duration(TRANSITION)
 }
 
-fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
+fn install(navigator: &NavigatorHandle) -> Rc<HeroController> {
     let controller = HeroController::new();
-    navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
+    navigator.add_observer(Rc::clone(&controller) as Rc<dyn NavigatorObserver>);
     controller
 }
 
@@ -95,7 +95,7 @@ fn gesture_fixture_with(
 ) -> (
     NavigatorHandle,
     Harness,
-    Arc<HeroController>,
+    Rc<HeroController>,
     RouteId,
     RouteId,
     AnimationController,
@@ -151,7 +151,7 @@ fn gesture_fixture(
 ) -> (
     NavigatorHandle,
     Harness,
-    Arc<HeroController>,
+    Rc<HeroController>,
     RouteId,
     RouteId,
     AnimationController,

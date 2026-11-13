@@ -44,10 +44,10 @@
 //! - Every other Cupertino component not listed above (`CupertinoTextField`,
 //!   pickers, action sheets, `CupertinoSliverNavigationBar`/large titles, …)
 //!   — later increments on this same substrate.
-//! - `CupertinoPageRoute`'s barrier dim, edge-swipe back, `title`/`previousTitle`,
-//!   `fullscreenDialog` and `delegatedTransition`: a page is a Router route
-//!   value, and the ambient page transition carries only the slide (see
-//!   [`app`]'s module docs).
+//! - `CupertinoPageRoute`'s `title`/`previousTitle`, `fullscreenDialog` and
+//!   `delegatedTransition`: a page is a Router route value, and the ambient
+//!   page transition carries the slide, the edge swipe back and the barrier
+//!   dim (see [`app`]'s module docs).
 //! - `CupertinoNavigationBar`'s `.large()`/large-title layout, automatic
 //!   leading/middle heuristics, scroll-under background fade, blur, and the
 //!   hero transition between nav bars across a route push — see [`nav_bar`]'s

@@ -12,12 +12,13 @@
 //!
 //! # Deferred by design
 //!
-//! No public detector API (this whole module is `pub(crate)`), no Cupertino
-//! edge-shadow/visuals, no per-hero `Hero.transitionOnUserGestures` opt-in
-//! (see `hero_controller.rs`'s doc block — every hero currently behaves as
-//! `transitionOnUserGestures = false`), and no `fullscreenDialog` (FLUI has
-//! no such route flag yet; opting a route into `back_gesture` is the gate
-//! instead of a `!fullscreenDialog` check).
+//! No public detector API (this whole module is `pub(crate)`): a page gets the
+//! gesture from `PageRoute::back_gesture` or from the transition builder it
+//! adopts (`PageTransitionBuilder::back_gesture`; the shared
+//! `ParallaxPageTransition` carries it, whose edge shadow is the visual). No
+//! per-hero `Hero.transitionOnUserGestures` opt-in (see `hero_controller.rs`'s
+//! doc block — every hero currently behaves as `transitionOnUserGestures =
+//! false`), and no `fullscreenDialog` (FLUI has no such route flag yet).
 //!
 //! # Ambient `Directionality`
 //!

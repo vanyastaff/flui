@@ -26,23 +26,32 @@ Official packages depend only on `flui-sdk` (ADR-0088), so `flui-material` canno
 pub trait PageTransitionBuilder {
     fn duration(&self) -> Duration;
     fn reverse_duration(&self) -> Duration { self.duration() }
-    fn build(&self, ctx: &BuildContext, primary: &RouteAnimation, secondary: &RouteAnimation,
+    fn back_gesture(&self) -> bool { false }
+    fn barrier_color(&self) -> Option<Color> { None }
+    fn build(&self, ctx: &dyn BuildContext, primary: &RouteAnimation, secondary: &RouteAnimation,
              child: BoxedView) -> BoxedView;
 }
 pub struct PageTransitions { .. }   // inherited view holding Rc<dyn PageTransitionBuilder>
 ```
 
-`PageTransitions` has separate slots for page routes and popup routes.
+`PageTransitions` has separate slots for page routes and popup routes. A builder carries the
+page's chrome beside its transition, as Flutter's `CupertinoPageTransitionsBuilder` wraps the
+page in the edge back-gesture detector and `CupertinoPageRoute` sets the barrier under it:
+`back_gesture` says whether the page pops on a drag from its leading edge, and `barrier_color`
+is the colour of the barrier under the page, which fades in along the route's entrance and out
+along its exit.
 
 **D2 — The navigator resolves the hook when it installs a route.** A route that was given no
-`.transitions()` adopts the nearest `PageTransitions` builder of its kind, with its durations,
-when the navigator installs it and before the push animation starts. An explicit
-`.transitions()` or duration on the route always wins. A route installed with no hook in scope
-keeps the jump cut.
+`.transitions()` adopts the nearest `PageTransitions` builder of its kind, with its durations
+and its chrome, when the navigator installs it and before the push animation starts. An
+explicit `.transitions()`, duration, `back_gesture` or `barrier_color` on the route always
+wins, and a builder passed to the route itself brings its chrome the same way. A route
+installed with no hook in scope keeps the jump cut.
 
-The navigator reads a hook builder's durations when it takes the hook (`init_state`,
-`did_change_dependencies`), with no navigator lock held. Install runs inside the locked history
-flush and calls no builder method there, so a builder may query the navigator it serves.
+The navigator reads a hook builder's durations and chrome when it takes the hook
+(`init_state`, `did_change_dependencies`), with no navigator borrow held. Install runs inside
+the history flush, under its borrow, and calls no builder method there, so a builder may query
+the navigator it serves.
 
 A route adopts its builder once. A theme change after the push does not swap the transition of
 a route already on the stack. Changing it mid-flight would replace a running transition with
@@ -51,13 +60,14 @@ one at a different progress mapping.
 **D3 — Policy lives in packages.** `flui-material` maps `TargetPlatform` to a `PageTransition`
 in its theme and installs, in `MaterialApp`, the `PageTransitions` the tree's `PlatformConvention`
 selects (ADR-0028). `flui-cupertino` installs, in `CupertinoApp`, a `PageTransitions` whose page
-builder is the shared iOS slide.
+builder is the shared iOS slide with `CupertinoPageRoute`'s dim (`0x18000000`) as its barrier.
+Material's Apple-platform slide has no barrier, as a `MaterialPageRoute` has none.
 
 **D4 — Shared transitions move down, not sideways.** A transition used by more than one package
-lives in `flui-widgets`. The iOS parallax slide moves out of `flui-cupertino` into
-`flui-widgets`. `CupertinoApp` and Material's Apple-platform default both use that
-single copy. Material-only transitions (fade-forwards, zoom, shared axis, fade through) live in
-`flui-material`.
+lives in `flui-widgets`. The iOS parallax slide (`ParallaxPageTransition`, which carries the
+edge back gesture) moves out of `flui-cupertino` into `flui-widgets`. `CupertinoApp` and
+Material's Apple-platform default both use that single copy. Material-only transitions
+(fade-forwards, zoom, shared axis, fade through) live in `flui-material`.
 
 **D5 — Reduced motion settles.** The route animation is a controller run like any other, so
 under `MotionPolicy::Reduce` it settles through the `Vsync` walk. Builders do not check the

@@ -35,7 +35,6 @@
 //! any other kind of `pub` item, so adding to the surface is a reviewed edit.
 
 use std::rc::Rc;
-use std::sync::Arc;
 
 use std::time::Duration;
 
@@ -99,7 +98,7 @@ pub trait NavigatorProbe {
     /// The render tree the navigator is mounted in.
     fn render_tree(&self) -> Option<PipelineCell>;
     /// Deregister `observer`, as a Router's teardown deregisters its own.
-    fn remove_observer(&self, observer: &Arc<dyn NavigatorObserver>);
+    fn remove_observer(&self, observer: &Rc<dyn NavigatorObserver>);
     /// Whether `route` may start an edge-swipe-back gesture right now.
     fn pop_gesture_enabled(&self, route: RouteId) -> bool;
     /// Pop `route`, pacing its reverse transition with `duration` and `curve`.
@@ -143,7 +142,7 @@ impl NavigatorProbe for NavigatorHandle {
     fn post_frame_handle(&self) -> Option<PostFrameHandle> {
         NavigatorHandle::post_frame_handle(self)
     }
-    fn remove_observer(&self, observer: &Arc<dyn NavigatorObserver>) {
+    fn remove_observer(&self, observer: &Rc<dyn NavigatorObserver>) {
         NavigatorHandle::remove_observer(self, observer);
     }
     fn render_tree(&self) -> Option<PipelineCell> {
