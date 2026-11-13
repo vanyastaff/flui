@@ -82,19 +82,29 @@ pub struct Break {
     pub renamed: &'static [(&'static str, &'static str)],
 }
 
-/// The versions whose schema is not additive to the one before it, each with the ADR that
-/// decided the break and exactly what it renamed.
-pub const BREAKING: &[Break] = &[Break {
-    version: ProtocolVersion::new(0, 5),
-    adr: "ADR-0238",
-    // The ADR-0095 endpoint's operations, now methods of the one table (`crate::method`).
-    renamed: &[
-        ("windows", "windows.list"),
-        ("read", "semantics.read"),
-        ("act", "semantics.act"),
-        ("motion", "motion.set"),
-    ],
-}];
+/// The versions that are not additive to the one before it, by their schema or by a value
+/// given a new meaning, each with the ADR that decided the break and exactly what it renamed.
+pub const BREAKING: &[Break] = &[
+    Break {
+        version: ProtocolVersion::new(0, 5),
+        adr: "ADR-0238",
+        // The ADR-0095 endpoint's operations, now methods of the one table (`crate::method`).
+        renamed: &[
+            ("windows", "windows.list"),
+            ("read", "semantics.read"),
+            ("act", "semantics.act"),
+            ("motion", "motion.set"),
+        ],
+    },
+    Break {
+        version: ProtocolVersion::new(0, 11),
+        adr: "ADR-0304",
+        // A layer's handle names a retained boundary by slot, generation and lineage
+        // (`l4.2:3@7`), where it named a node of a frame's flattened tree (`l4.37`): no name
+        // is respelled, the handle has a new meaning, so an older client cannot read it.
+        renamed: &[],
+    },
+];
 
 impl fmt::Display for ProtocolVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

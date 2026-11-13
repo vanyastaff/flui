@@ -120,7 +120,7 @@ fn generation32(generation: Option<NonZeroU64>) -> Option<Generation> {
 fn number(text: &str) -> Option<u64> {
     let canonical = text == "0"
         || (!text.starts_with('0') && !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()));
-    canonical.then(|| text.parse().ok()).flatten()
+    canonical.then(|| text.parse::<u64>().ok()).flatten()
 }
 
 /// A layer's text after its prefix: `4.2:3@7`, `4@7`.

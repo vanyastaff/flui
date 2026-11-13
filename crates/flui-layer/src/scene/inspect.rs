@@ -62,15 +62,14 @@ impl SceneVersion {
 
     /// `entry` of the node `key` names, or the node itself.
     fn link_of(&self, key: NodeKey, entry: Option<usize>) -> InspectId {
-        Link::Layer(SceneLayer {
+        InspectId::from(Link::Layer(SceneLayer {
             scene: self.scene(),
             slot: key.slot(),
             generation: key.generation(),
             entry: entry.map(|entry| {
                 u32::try_from(entry).expect("BUG: a boundary's entries are indexed by u32")
             }),
-        })
-        .into()
+        }))
     }
 
     /// What `id` names here: a live node of this lineage, or an effect or chunk of its content.
@@ -174,23 +173,17 @@ impl InspectTree for SceneVersion {
     }
 
     fn children(&self, id: InspectId) -> impl Iterator<Item = InspectId> + '_ {
-        let named = self.named(id);
-        let parent = named.and_then(|named| named.entry);
-        named.into_iter().flat_map(move |Named { record, entry }| {
-            // A chunk holds nothing; a node holds its top-level entries, an effect the
-            // entries under it.
-            let holds = entry.is_none_or(|entry| {
-                matches!(record.content().entries()[entry], Entry::Effect { .. })
-            });
-            record
-                .content()
-                .entries()
-                .iter()
-                .enumerate()
-                .filter(move |(_, candidate)| {
-                    holds && candidate.parent().map(EntryIndex::get) == parent
-                })
-                .filter_map(move |(position, candidate)| self.standing(record, position, candidate))
-        })
+        self.named(id)
+            .into_iter()
+            .flat_map(move |Named { record, entry }| {
+                // A node holds its top-level entries, an effect the entries under it, and
+                // a chunk nothing, which `children_of` answers for an index naming no effect.
+                let content = record.content();
+                content
+                    .children_of(entry.map(EntryIndex::at))
+                    .filter_map(move |position| {
+                        self.standing(record, position, &content.entries()[position])
+                    })
+            })
     }
 }
