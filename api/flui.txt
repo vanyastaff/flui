@@ -11139,7 +11139,6 @@ impl From<flui::painting::paint::Path> for flui_painting::paint::path::PathRepr
 impl From<flui_painting::paint::path::PathRepr> for flui::painting::paint::Path
 impl PartialEq for flui::painting::paint::Path
 impl core::fmt::Debug for flui::painting::paint::Path
-impl core::marker::StructuralPartialEq for flui::painting::paint::Path
 impl serde_core::ser::Serialize for flui::painting::paint::Path
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::Path
 pub const fn flui::painting::paint::Path::fill_type(&self) -> flui::painting::paint::PathFillType
