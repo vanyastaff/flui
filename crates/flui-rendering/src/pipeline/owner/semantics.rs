@@ -1530,7 +1530,7 @@ fn mark_configuration_conflicts(
             continue;
         };
 
-        if !parent.is_compatible_with(&pending.config) {
+        if !parent.can_absorb(&pending.config) {
             conflicts[index] = true;
         }
 
@@ -1538,7 +1538,7 @@ fn mark_configuration_conflicts(
             let SemanticsFragment::Pending(sibling) = &fragments[sibling_index] else {
                 continue;
             };
-            if !pending.config.is_compatible_with(&sibling.config) {
+            if !parent.can_absorb_both(&pending.config, &sibling.config) {
                 conflicts[index] = true;
                 conflicts[sibling_index] = true;
             }

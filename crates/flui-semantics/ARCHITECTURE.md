@@ -163,8 +163,12 @@ and a successful detach followed by reattachment.
 **Rule.** [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a node has one
 `SemanticsRole`, interactive kinds included (`Button`, `CheckBox`, `RadioButton`, `Switch`,
 `Link`, `Slider`, `Image`, `Heading`, the text-input kinds), and typed `States`. Two
-configurations that each declare a role, or each declare the same state, form separate nodes
-(`is_compatible_with`); a state declared `false` counts, so a node's shape does not depend on
+configurations that each declare the same state form separate nodes, and so do two that each
+declare a role, unless the upper one is a control named by its contents (button, link,
+checkable control, menu item, tab, option, tree item) and the lower one is content (image,
+heading, text-level role, meter, progress bar): the control takes it and its name
+([ADR-0332](../../docs/adr/ADR-0332-a-control-takes-the-content-roles-beneath-it.md),
+`can_absorb`, `can_absorb_both`). A state declared `false` counts, so a node's shape does not depend on
 its current values. A forced merge (`MergeSemantics`) cannot separate them and takes the role
 by `more_specific_role`: an authored structural role (tab, list item, dialog, …) over any
 interactive kind, then a checkable role, then `Button`, then link, text field, slider or other
@@ -200,8 +204,10 @@ every custom action.
 is the one the node declares, and a node that is two things at once is not representable. The
 precedence settles the merges a widget cannot avoid: `MergeSemantics` over a `ListTile`
 carrying a `Radio` is one radio button, not a button, and a structural role (a navigation tab
-that is also tappable) stays structural. Outside a forced merge two roles are two nodes: a
-button configuration over a `Radio` publishes the button and the radio, so neither is lost. A read-only value ranks as content because it carries no action:
+that is also tappable) stays structural. Outside a forced merge two controls are two nodes: a
+button configuration over a `Radio` publishes the button and the radio, so neither is lost.
+Content beneath a control is its name, not a second stop: a button over a labelled image is
+one button with that name, as in Flutter and as ARIA's presentational children. A read-only value ranks as content because it carries no action:
 a meter merged with a button would otherwise publish the button's actions under a role that
 announces none. A group mixed from two sources would publish a position from one scrollable
 against another's extents, an index in one set against another's count.
@@ -210,7 +216,8 @@ A node that merges its own descendants keeps its node inside an outer merge
 (`nested_merge_semantics_keeps_its_own_node`): a card merging its content still lets a screen
 reader stop on the tile inside it.
 
-**Test.** `role_precedence_settles_forced_merges`, `state_merge_precedence`,
+**Test.** `a_control_named_by_its_contents_takes_content_roles`,
+`role_precedence_settles_forced_merges`, `state_merge_precedence`,
 `a_forced_merge_keeps_one_scroll_group`, `a_forced_merge_keeps_one_collection_and_text_group`
 and `a_forced_merge_keeps_custom_actions_with_their_handler` in `configuration.rs`;
 `custom_actions_publish_with_their_ids` in `accesskit_translation.rs`;
