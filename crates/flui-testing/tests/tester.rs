@@ -36,7 +36,7 @@ impl ViewState<Counter> for CounterState {
             Text::new(count.get(ctx).to_string()),
             SizedBox::height(16.0),
             RawButton::new(Text::new("Increment"))
-                .on_press(move |cx| count.update(cx, |n| *n += 1)),
+                .on_pressed(move |ctx| count.update(ctx, |n| *n += 1)),
         )))
     }
 }
@@ -107,8 +107,8 @@ fn a_locator_that_matches_nothing_names_the_window_and_the_identifier_way_out() 
 #[test]
 fn a_locator_that_matches_several_elements_lists_them() {
     let mut t = Tester::mount(Column::new((
-        RawButton::new(Text::new("Same")).on_press(|_| {}),
-        RawButton::new(Text::new("Same")).on_press(|_| {}),
+        RawButton::new(Text::new("Same")).on_pressed(|_| {}),
+        RawButton::new(Text::new("Same")).on_pressed(|_| {}),
     )));
     let error = t
         .try_tap(&find::button("Same"))
@@ -145,7 +145,7 @@ fn an_element_disabled_through_an_ancestor_is_not_enabled() {
             .container(true)
             .enabled(false)
             .label("Group")
-            .child(RawButton::new(Text::new("Inside")).on_press(|_| {})),
+            .child(RawButton::new(Text::new("Inside")).on_pressed(|_| {})),
     );
     t.expect(find::button("Inside")).to_be_disabled();
     let message = panic_text(|| t.expect(find::button("Inside")).to_be_enabled());
@@ -177,11 +177,11 @@ fn pending_future() -> (Tester, impl FnOnce()) {
         Rc::new(move || {
             let waker = Rc::clone(&waker);
             let ready = Rc::clone(&ready);
-            Box::pin(std::future::poll_fn(move |cx: &mut Context<'_>| {
+            Box::pin(std::future::poll_fn(move |ctx: &mut Context<'_>| {
                 if *ready.borrow() {
                     return Poll::Ready(Ok(7));
                 }
-                *waker.borrow_mut() = Some(cx.waker().clone());
+                *waker.borrow_mut() = Some(ctx.waker().clone());
                 Poll::Pending
             }))
         })
