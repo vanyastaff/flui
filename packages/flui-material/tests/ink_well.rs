@@ -769,3 +769,96 @@ pub fn the_press_hold_survives_a_rebuild_and_a_disable_ends_it() {
         "a disable inside the delay ends the hold, so enabling again shows no press"
     );
 }
+
+/// The well makes its tap once and reads the handler at event time: a
+/// rebuild with a new handler is what the next tap calls, and the handlers
+/// it held are released when the well unmounts, so nothing the tap shares
+/// with the well keeps the well alive.
+///
+/// Red-check: drop the handler refresh from the well's `build` (the second
+/// tap calls the first handler), or let the state hold its tap through a
+/// strong cycle (the guard outlives the unmount).
+pub fn a_rebuilt_well_calls_its_new_handler_and_releases_it_when_unmounted() {
+    let generation = flui_testing::widgets::SharedSignal::new(0_u32);
+    let shown = flui_testing::widgets::SharedSignal::new(true);
+    let calls = Rc::new(std::cell::RefCell::new(Vec::<u32>::new()));
+    let guard = Rc::new(());
+    let mut laid = lay_out(
+        RebuiltWell {
+            generation: generation.clone(),
+            shown: shown.clone(),
+            calls: Rc::clone(&calls),
+            guard: Rc::clone(&guard),
+        },
+        tight(80.0, 40.0),
+    );
+
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    generation.set(1);
+    laid.pump();
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    assert_eq!(
+        *calls.borrow(),
+        [0, 1],
+        "the tap after a rebuild calls the rebuilt handler"
+    );
+
+    shown.set(false);
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        Rc::strong_count(&guard),
+        2,
+        "only the test and the view that holds the guard keep it once the well is gone"
+    );
+}
+
+/// A well whose handler records `generation`, removed while `shown` is
+/// `false`. Each handler holds a clone of `guard`.
+#[derive(Clone, StatefulView)]
+struct RebuiltWell {
+    generation: flui_testing::widgets::SharedSignal<u32>,
+    shown: flui_testing::widgets::SharedSignal<bool>,
+    calls: Rc<std::cell::RefCell<Vec<u32>>>,
+    guard: Rc<()>,
+}
+
+struct RebuiltWellState {
+    generation: flui_testing::widgets::SharedSignal<u32>,
+    shown: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for RebuiltWell {
+    type State = RebuiltWellState;
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        RebuiltWellState {
+            generation: self.generation.clone(),
+            shown: self.shown.clone(),
+        }
+    }
+}
+
+impl ViewState<RebuiltWell> for RebuiltWellState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.generation.bind(ctx);
+        self.shown.bind(ctx);
+    }
+
+    fn build(&self, view: &RebuiltWell, ctx: &dyn BuildContext) -> impl IntoView {
+        let generation = self.generation.get(ctx);
+        if !self.shown.get(ctx) {
+            return SizedBox::new(80.0, 40.0).into_view().boxed();
+        }
+        let calls = Rc::clone(&view.calls);
+        let guard = Rc::clone(&view.guard);
+        InkWell::new()
+            .child(SizedBox::new(80.0, 40.0))
+            .on_tap(move |_ctx| {
+                let _ = &guard;
+                calls.borrow_mut().push(generation);
+            })
+            .into_view()
+            .boxed()
+    }
+}

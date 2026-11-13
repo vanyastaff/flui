@@ -252,7 +252,7 @@ mod x11 {
 
         /// XInput 2's pointers, XKB's keyboard and the cursor theme, on the
         /// platform's connection.
-        fn input(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Rc<dyn LoopInput> {
+        fn input(connection: &Arc<X11Connection>, text: Rc<dyn LoopText>) -> Rc<dyn LoopInput> {
             X11Input::new(connection, text)
         }
 
@@ -262,7 +262,7 @@ mod x11 {
             connection: &Arc<X11Connection>,
             executor: &NativeExecutor,
             doorbell: &Doorbell,
-        ) -> Arc<dyn LoopText> {
+        ) -> Rc<dyn LoopText> {
             X11Ime::start(connection, executor, doorbell)
         }
 

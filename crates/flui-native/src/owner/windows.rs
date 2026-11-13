@@ -864,33 +864,9 @@ pub struct WindowsLoop {
     pub(crate) apartment: com_apartment::ApartmentHold,
 }
 
-// SAFETY: per field, `windows` and `displays` are `Send + Sync` by their
-// traits' bounds, `owner_control` holds only an `Arc`-shared signal and a
-// locked address (its owner-thread state, callbacks included, sits behind the
-// owner window's `GWLP_USERDATA` and is reached only through the owner-thread
-// gate `OwnerControl::shares`), and the executors are `Arc`-shared and
-// internally synchronized. The only non-`Sync` member is
-// `message_window: HWND`, a bare address that is never dereferenced here.
-//
-// NOT claimed — an earlier version of this comment claimed both, wrongly: that
-// an HWND is "thread-safe by design" (it is thread-AFFINE; its message queue
-// belongs to the creating thread, and `DestroyWindow` must run there), and that
-// the struct is itself just a handle. Sending the struct is sound because the
-// address alone aliases nothing; any Win32 call made through it still owes the
-// thread-affinity obligation. The soundness-relevant slice of that obligation
-// — dereferencing per-window `GWLP_USERDATA` contexts, and `DestroyWindow` —
-// is discharged by the window feature's `with_window_context`/`teardown_route`
-// gates over `hwnd_affinity` (see `WindowsWindow`'s `Send`/`Sync` docs); the
-// remaining affine calls here
-// (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
-// rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
-// — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
-// own owner-thread gate, and `drag` is `Send + Sync` by its trait's bound
-// (the OLE transport keeps its COM objects in an owner slot).
-unsafe impl Send for WindowsLoop {}
-// SAFETY: as for `Send` — `&WindowsLoop` grants no more than shared access
-// to already-synchronized members plus a never-dereferenced address.
-unsafe impl Sync for WindowsLoop {}
+// Owner-local (ADR-0327 §5): the loop, its window set and its message-only
+// window belong to the thread that built them.
+static_assertions::assert_not_impl_any!(WindowsLoop: Send, Sync);
 
 impl std::fmt::Debug for WindowsLoop {
     // Hand-written: the remaining fields are raw platform handles and callback
