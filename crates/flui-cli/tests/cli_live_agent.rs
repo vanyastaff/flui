@@ -311,8 +311,8 @@ fn launch(
     for (key, value) in env {
         command.env(key, value);
     }
-    let mut run = Session::spawn(command);
     let (events, received) = mpsc::channel::<Value>();
+    let mut run = Session::spawn(command);
     let stdout = run.child.stdout.take().expect("BUG: stdout is piped");
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
