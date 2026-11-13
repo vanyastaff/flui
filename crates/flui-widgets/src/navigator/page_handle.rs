@@ -64,12 +64,6 @@ impl PageHandle {
         ctx.depend_on::<PageScope, _>(|scope| scope.page.clone())
     }
 
-    /// The route this handle names.
-    #[must_use]
-    pub fn route(&self) -> RouteId {
-        self.route
-    }
-
     /// Whether this route is on top of its navigator.
     #[must_use]
     pub fn is_current(&self) -> bool {

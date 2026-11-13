@@ -4,7 +4,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_foundation::notifier::{Listenable, ListenerObserver};
-use flui_foundation::{BuildPhase, ListenerCallback, MutatedDuringBuild, Subscription};
+use flui_foundation::{ListenerCallback, MutatedDuringBuild, Subscription};
 
 use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
@@ -69,12 +69,7 @@ impl<R: Routable> RouterHandle<R> {
     /// the `flui.signals` target.
     fn editable(&self) -> Result<(), RouterError> {
         self.mounted()?;
-        let building = self
-            .shared
-            .build_phase
-            .borrow()
-            .as_ref()
-            .is_some_and(BuildPhase::is_building);
+        let building = self.shared.build_phase.is_building();
         MutatedDuringBuild::check(building, "Router").map_err(|_| RouterError::DuringBuild)
     }
 

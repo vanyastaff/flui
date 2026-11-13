@@ -17803,7 +17803,6 @@ pub fn flui::prelude::PageHandle::of(ctx: &dyn flui::app::BuildContext) -> Optio
 pub fn flui::prelude::PageHandle::pop(&self) -> Result<bool, flui::widgets::PageError>
 pub fn flui::prelude::PageHandle::pop_with<T: 'static>(&self, value: T) -> Result<bool, flui::widgets::PageError>
 pub fn flui::prelude::PageHandle::push_popup<T: 'static>(&self, popup: flui::prelude::PopupRoute<T>) -> Result<flui::widgets::RouteResult<T>, flui::widgets::PageError>
-pub fn flui::prelude::PageHandle::route(&self) -> flui::widgets::RouteId
 pub struct flui::prelude::PageRoute<T> { .. }
 impl<T: 'static> core::fmt::Debug for flui::prelude::PageRoute<T>
 impl<T: 'static> flui::widgets::Route for flui::prelude::PageRoute<T> { type Output = T; }

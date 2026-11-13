@@ -306,15 +306,15 @@ impl<R: Routable> View for Router<R> {
 impl<R: Routable> StatefulView for Router<R> {
     type State = RouterState<R>;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        RouterState::new(self)
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        RouterState::new(self, ctx.build_phase())
     }
 }
 
 impl<R: Routable> RouterState<R> {
     /// The state of `router`: its shared stack, observer and a copy of its
     /// initial routes.
-    fn new(router: &Router<R>) -> Self {
+    fn new(router: &Router<R>, build_phase: BuildPhase) -> Self {
         let shared = Rc::new(RouterShared {
             navigator: Terminal::new(NavigatorHandle::addressed(type_name::<R>())),
             stack: RefCell::new(Vec::new()),
@@ -322,7 +322,7 @@ impl<R: Routable> RouterState<R> {
             transitions: Terminal::new(Rc::new(RefCell::new(router.transitions.clone()))),
             transition_duration: Cell::new(router.transition_duration),
             mounted: Cell::new(false),
-            build_phase: RefCell::new(None),
+            build_phase,
             announcer: StackAnnouncer::default(),
         });
         let observer: Arc<dyn NavigatorObserver> = Arc::new(RouterObserver {
@@ -388,7 +388,6 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// once when it mounts.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.mounted.set(true);
-        *self.shared.build_phase.borrow_mut() = Some(ctx.build_phase());
         self.shared
             .navigator
             .add_observer(Arc::clone(&self.observer));
@@ -495,9 +494,9 @@ pub(super) struct RouterShared<R: Routable> {
     /// with.
     transition_duration: Cell<Option<Duration>>,
     pub(super) mounted: Cell<bool>,
-    /// The UI runtime's build phase, bound when the router mounts: an edit
+    /// The UI runtime's build phase, bound when the router's state is born: an edit
     /// made while it builds is refused (ADR-0330 §3).
-    pub(super) build_phase: RefCell<Option<BuildPhase>>,
+    pub(super) build_phase: BuildPhase,
     /// Tells the listeners of every [`RouterHandle`] of stack changes.
     pub(super) announcer: StackAnnouncer,
 }
@@ -788,7 +787,7 @@ mod seed_tests {
             };
             let mut router = Router::new(value(0), |_, _| crate::Text::new("page").boxed());
             router.initial.extend([value(1), value(2)]);
-            let mut state = RouterState::new(&router);
+            let mut state = RouterState::new(&router, BuildPhase::default());
             drop(router);
             RouteId::leave_process_identities(1);
             armed.store(true, Ordering::SeqCst);
@@ -867,7 +866,7 @@ mod seed_tests {
             let mut router = Router::new(route(false), |_, _| crate::Text::new("page").boxed());
             router.initial.push(route(true));
             let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                drop(RouterState::new(&router));
+                drop(RouterState::new(&router, BuildPhase::default()));
             }))
             .expect_err("the second route's copy fails");
             assert_eq!(
