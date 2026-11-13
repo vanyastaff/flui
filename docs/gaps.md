@@ -52,7 +52,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** Android, iOS, Web · **Who it hurts:** Every multi-screen mobile or web app · **Parity:** [Input](platform-parity.md#input)
 
 - From targetSdk 36 Android delivers neither `onBackPressed` nor `KEYCODE_BACK`, so only predictive back works.
-- iOS needs its own edge swipe.
+- iOS has no system back: a Router page under `CupertinoApp`, or under `MaterialApp` on an Apple platform, pops on the edge swipe its page transition carries, which headless tests drive and no iOS device has run.
 - The Web needs History or Navigation API routing.
 
 ### Most implemented rows never ran on their environment

@@ -31,18 +31,18 @@ with it; absent one, each controller keeps its own wall-clock ticker (as `Animat
 
 ### 2. Routes reach the navigator through a queued `RouteBinding`
 
-A route cannot call the navigator directly: the navigator holds its non-reentrant history lock
+A route cannot call the navigator directly: the navigator holds the history's `RefCell` borrow
 for the whole flush, and a route finalizing from a status listener inside that flush would
-deadlock. Instead:
+find it busy. Instead:
 
 - `RouteBinding` is an owned capability pre-bound to one `RouteId`: it enqueues a
-  `RouteCommand::Finalize` on a queue with its own lock and calls a `wake` closure, and it
+  `RouteCommand::Finalize` on a queue in its own `RefCell` and calls a `wake` closure, and it
   reaches the route's overlay entry (to write `opaque`, `maintain_state` and mark it for
   rebuild). A route can never finalize another. The entrance transition's completion arrives
   on the same queue as `RouteCommand::PushCompleted`, raised by a continuation on the
   `TickerFuture` that `did_push` returns (ADR-0064), not by the route.
-- `wake` `try_lock`s the history: between frames the commands apply and flush at once; during a
-  flush on this thread, that flush drains the queue before returning. The queue is Flutter's
+- `wake` takes the history with `try_borrow_mut`: between frames the commands apply and flush at
+  once; during a flush, that flush drains the queue before returning. The queue is Flutter's
   `_flushingHistory` deferral expressed as ownership instead of a flag.
 - `flush` is a bounded pass loop (apply pending, walk, repeat; `MAX_FLUSH_PASSES`), like the
   layout↔build fixpoint of ADR-0017. The `BUG:` assert on a genuinely recursive flush stays.
@@ -137,7 +137,7 @@ route, so a popup over a page drives no secondary animation on it.
 ## Alternatives rejected
 
 - **A direct navigator callback from the route** (`install(&mut self, binding)` calling into
-  the navigator). Deadlocks on the history lock, and threading the binding through the public
+  the navigator). Re-enters the history while the flush holds it, and threading the binding through the public
   `Route::install` would have made it public API.
 - **Each route owning an `Arc<Scheduler>`.** Decouples transitions from the navigator's clock;
   an off-screen navigator would keep animating.
