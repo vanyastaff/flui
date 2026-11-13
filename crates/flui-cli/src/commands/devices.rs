@@ -390,7 +390,7 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
 /// attempt for each of `budgets`. Apart from [`probe_ios`] so a test runs it
 /// on every host against a stand-in `xcrun`.
 #[cfg_attr(
-    not(any(target_os = "macos", test)),
+    not(any(target_os = "macos", all(test, unix))),
     expect(dead_code, reason = "only the macOS simulator probe lists simulators")
 )]
 fn probe_simulators(xcrun: &Path, budgets: &[std::time::Duration]) -> Result<Vec<Device>, Problem> {
@@ -431,7 +431,7 @@ fn probe_simulators(xcrun: &Path, budgets: &[std::time::Duration]) -> Result<Vec
 }
 
 #[cfg_attr(
-    not(any(target_os = "macos", test)),
+    not(any(target_os = "macos", all(test, unix))),
     expect(dead_code, reason = "only the macOS simulator probe lists simulators")
 )]
 fn parse_simctl_json(text: &str) -> Result<Vec<Device>, String> {
@@ -494,7 +494,7 @@ fn parse_simctl_json(text: &str) -> Result<Vec<Device>, String> {
 
 /// `com.apple.CoreSimulator.SimRuntime.iOS-17-2` → `iOS 17.2`.
 #[cfg_attr(
-    not(any(target_os = "macos", test)),
+    not(any(target_os = "macos", all(test, unix))),
     expect(dead_code, reason = "only the macOS simulator probe lists simulators")
 )]
 fn runtime_name(runtime_key: &str) -> String {
@@ -903,11 +903,14 @@ mod tests {
 
     /// The probe `flui devices` runs on macOS, against an `xcrun` that hangs:
     /// once (the simulator is listed on the retry) and every time (a
-    /// `Problem` that names both attempts).
+    /// `Problem` that names both attempts). The stand-in counts the calls that
+    /// reached its first line, so the first budget is long enough for `sh` to
+    /// start on a loaded runner: a call killed before it counts itself would
+    /// make the retry the one that hangs.
     #[cfg(unix)]
     #[test]
     fn the_simulator_probe_retries_an_xcrun_that_hangs() {
-        let budgets = [Duration::from_millis(300), Duration::from_secs(20)];
+        let budgets = [Duration::from_secs(2), Duration::from_secs(20)];
         let once = tempfile::tempdir().expect("a directory for the stand-in xcrun");
         let devices = super::probe_simulators(&stand_in_xcrun(once.path(), 1), &budgets)
             .unwrap_or_else(|problem| panic!("the retry lists the simulator: {}", problem.message));
