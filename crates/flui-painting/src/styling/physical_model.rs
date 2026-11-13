@@ -12,6 +12,7 @@ use flui_foundation::geometry::Offset;
 /// elevation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum PhysicalShape {
     /// Rectangular shape (possibly with rounded corners via border radius).
     #[default]
@@ -27,6 +28,7 @@ pub enum PhysicalShape {
 /// in the future (e.g., different shadow styles, surface finishes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum MaterialType {
     /// Standard material with normal elevation shadows.
     #[default]

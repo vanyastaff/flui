@@ -2,12 +2,6 @@
 # Written by `cargo xtask public-api --write` (ADR-0324); a pull request that
 # changes the API carries the diff of this file.
 pub mod flui
-pub struct flui::AppCapabilities { .. }
-impl Default for flui::AppCapabilities
-impl core::fmt::Debug for flui::AppCapabilities
-pub fn flui::AppCapabilities::capability<C: flui::platform::capability::Capability>(self, provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
-pub fn flui::AppCapabilities::new() -> Self
-pub fn flui::AppCapabilities::plugin(self, plugin: impl flui::platform::capability::Plugin) -> Self
 #[non_exhaustive] pub struct flui::AppConfig { .. }
 field flui::AppConfig::application_identity: flui::app::AppIdentity // at 0
 field flui::AppConfig::close_request_handler: Option<flui::app::CloseRequestHandler> // at 25
@@ -84,23 +78,6 @@ impl core::fmt::Debug for flui::AppHandle
 pub fn flui::AppHandle::request_quit(&self) -> Result<(), flui::AppControlError>
 pub fn flui::AppHandle::request_show_main_window(&self) -> Result<flui::app::WindowRequest, flui::AppControlError>
 pub fn flui::AppHandle::retry_render_device(&self) -> Result<(), flui::AppControlError>
-#[non_exhaustive] pub struct flui::AppLaunch { .. }
-impl Default for flui::AppLaunch
-impl core::fmt::Debug for flui::AppLaunch
-pub fn flui::AppLaunch::capabilities(self, capabilities: flui::AppCapabilities) -> Self
-pub fn flui::AppLaunch::config(self, config: flui::AppConfig) -> Self
-pub fn flui::AppLaunch::new() -> Self
-#[non_exhaustive] pub enum flui::AppRunError
-impl core::error::Error for flui::AppRunError
-impl core::fmt::Debug for flui::AppRunError
-impl core::fmt::Display for flui::AppRunError
-variant flui::AppRunError::CapabilityConflict(flui_runtime::capability::CapabilityConflict) // at 6
-variant flui::AppRunError::Configuration(flui::AppWindowError) // at 0
-variant flui::AppRunError::InitialWindow(flui::AppWindowError) // at 3
-variant flui::AppRunError::OnReadyPanicked // at 4
-variant flui::AppRunError::Platform { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 2
-variant flui::AppRunError::Service { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 5
-variant flui::AppRunError::UnsupportedSystem(flui::UnsupportedSystem) // at 1
 #[non_exhaustive] pub enum flui::AppWindowError
 impl Clone for flui::AppWindowError
 impl From<flui_app::app::runner::installed_host::InstallError> for flui::AppWindowError
@@ -117,16 +94,17 @@ variant flui::AppWindowError::NoOwnerLoop // at 8
 variant flui::AppWindowError::Renderer { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 1
 variant flui::AppWindowError::Show { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 5
 variant flui::AppWindowError::UnsupportedPolicy { reason: &'static str } // at 9
-pub struct flui::Application<V, F> { .. }
-impl<V, F> core::fmt::Debug for flui::Application<V, F>
-pub fn flui::Application::capability<C: flui::platform::capability::Capability>(self, provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self // impl<V, F> flui::Application<V, F> where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
-pub fn flui::Application::config(self, config: flui::AppConfig) -> Self // impl<V, F> flui::Application<V, F> where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
-pub fn flui::Application::new(factory: F) -> Self // impl<V, F> flui::Application<V, F> where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
-pub fn flui::Application::on_ready(self, callback: impl FnOnce(&flui::AppHandle) + 'static) -> Self // impl<V, F> flui::Application<V, F> where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
-pub fn flui::Application::on_window_error(self, callback: impl FnMut(&flui::AppWindowError) + 'static) -> Self // impl<V, F> flui::Application<V, F> where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
-pub fn flui::Application::plugin(self, plugin: impl flui::platform::capability::Plugin) -> Self // impl<V, F> flui::Application<V, F> where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
-pub fn flui::Application::run(self) -> Result<(), flui::AppRunError> // impl<V, F> flui::Application<V, F> where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
-pub fn flui::Application::startup_window(self, startup: flui::StartupWindow) -> Self // impl<V, F> flui::Application<V, F> where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
+pub struct flui::Application { .. }
+impl Default for flui::Application
+impl core::fmt::Debug for flui::Application
+pub fn flui::Application::capability<C: flui::platform::capability::Capability>(self, provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
+pub fn flui::Application::config(self, config: flui::AppConfig) -> Self
+pub fn flui::Application::new() -> Self
+pub fn flui::Application::on_ready(self, callback: impl FnOnce(&flui::AppHandle) + 'static) -> Self
+pub fn flui::Application::on_window_error(self, callback: impl FnMut(&flui::AppWindowError) + 'static) -> Self
+pub fn flui::Application::plugin(self, plugin: impl flui::platform::capability::Plugin) -> Self
+pub fn flui::Application::run<V>(self, root: V) -> Result<(), flui::LaunchError> where V: flui::app::View + Clone + 'static
+pub fn flui::Application::run_resident<V, F>(self, factory: F) -> Result<(), flui::LaunchError> where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
 #[non_exhaustive] pub struct flui::BackendFailure
 field flui::BackendFailure::backend: flui::GpuBackend // at 0
 field flui::BackendFailure::reason: String // at 1
@@ -177,18 +155,12 @@ impl core::error::Error for flui::LaunchError
 impl core::fmt::Debug for flui::LaunchError
 impl core::fmt::Display for flui::LaunchError
 variant flui::LaunchError::CapabilityConflict(flui_runtime::capability::CapabilityConflict) // at 0
+variant flui::LaunchError::InitialWindow(flui::AppWindowError) // at 3
+variant flui::LaunchError::NoAndroidEntry // at 6
+variant flui::LaunchError::OnReadyPanicked // at 4
 variant flui::LaunchError::Platform { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 2
+variant flui::LaunchError::Service { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 5
 variant flui::LaunchError::UnsupportedSystem(flui::UnsupportedSystem) // at 1
-#[non_exhaustive] pub enum flui::StartupWindow
-impl Clone for flui::StartupWindow
-impl Copy for flui::StartupWindow
-impl Default for flui::StartupWindow
-impl Eq for flui::StartupWindow
-impl PartialEq for flui::StartupWindow
-impl core::fmt::Debug for flui::StartupWindow
-impl core::marker::StructuralPartialEq for flui::StartupWindow
-variant flui::StartupWindow::None // at 1
-variant flui::StartupWindow::Open // at 0
 #[non_exhaustive] pub enum flui::UnsupportedSystem
 #[non_exhaustive] variant flui::UnsupportedSystem::MissingRequirement { environment: flui::platform::Environment, requirement: &'static str } // at 1
 #[non_exhaustive] variant flui::UnsupportedSystem::NoSupportedGpu { tried: Vec<flui::BackendFailure> } // at 2
@@ -1259,7 +1231,6 @@ reexport flui::animation::simulation::SpringSimulation => flui::animation::Sprin
 reexport flui::animation::simulation::SpringType => flui::animation::SpringType
 reexport flui::animation::simulation::Tolerance => flui::animation::Tolerance
 pub mod flui::app
-reexport flui::app::AppCapabilities => flui::AppCapabilities
 reexport flui::app::AppConfig => flui::AppConfig
 reexport flui::app::AppControlError => flui::AppControlError
 reexport flui::app::AppHandle => flui::AppHandle
@@ -1285,8 +1256,6 @@ pub fn flui::app::AppIdentity::apple_subsystem(&self) -> &str
 pub fn flui::app::AppIdentity::display_name(&self) -> &str
 pub fn flui::app::AppIdentity::try_new(display_name: impl Into<String>) -> Result<Self, flui_log::identity::IdentityError>
 pub fn flui::app::AppIdentity::with_app_id(self, app_id: flui::app::AppId) -> Self
-reexport flui::app::AppLaunch => flui::AppLaunch
-reexport flui::app::AppRunError => flui::AppRunError
 reexport flui::app::AppWindowError => flui::AppWindowError
 reexport flui::app::Application => flui::Application
 reexport flui::app::BackendFailure => flui::BackendFailure
@@ -2072,7 +2041,6 @@ impl core::marker::StructuralPartialEq for flui::app::SpawnError
 variant flui::app::SpawnError::Saturated // at 0
 variant flui::app::SpawnError::ShuttingDown // at 1
 variant flui::app::SpawnError::Unavailable // at 2
-reexport flui::app::StartupWindow => flui::StartupWindow
 pub trait flui::app::StatefulView: Clone + 'static + Sized
 fn flui::app::StatefulView::create_state(&self, ctx: &dyn flui::prelude::LifecycleContext) -> <Self as flui::app::StatefulView>::State
 type flui::app::StatefulView::State: flui::prelude::ViewState<Self>
@@ -2259,12 +2227,9 @@ pub fn flui::app::WorkerHandle::name(&self) -> &'static str // impl<I, O> flui::
 pub fn flui::app::WorkerHandle::submit(&mut self, input: I) -> Result<flui::app::WorkerGeneration, flui::app::SpawnError> // impl<I, O> flui::app::WorkerHandle<I, O> where I: Send + 'static, O: Send + 'static
 pub fn flui::app::WorkerHandle::try_latest(&self) -> Option<(flui::app::WorkerGeneration, O)> // impl<I, O> flui::app::WorkerHandle<I, O> where I: Send + 'static, O: Send + 'static
 pub mod flui::app::app
-reexport flui::app::app::AppCapabilities => flui::AppCapabilities
 reexport flui::app::app::AppConfig => flui::AppConfig
 reexport flui::app::app::AppControlError => flui::AppControlError
 reexport flui::app::app::AppHandle => flui::AppHandle
-reexport flui::app::app::AppLaunch => flui::AppLaunch
-reexport flui::app::app::AppRunError => flui::AppRunError
 reexport flui::app::app::AppWindowError => flui::AppWindowError
 reexport flui::app::app::Application => flui::Application
 reexport flui::app::app::CancellationSignal => flui::app::CancellationSignal
@@ -2325,7 +2290,6 @@ reexport flui::app::app::ServiceLifetime => flui::app::ServiceLifetime
 reexport flui::app::app::ServicePublisher => flui::app::ServicePublisher
 reexport flui::app::app::ServiceStartError => flui::app::ServiceStartError
 reexport flui::app::app::SpawnError => flui::app::SpawnError
-reexport flui::app::app::StartupWindow => flui::StartupWindow
 reexport flui::app::app::TaskContext => flui::app::TaskContext
 reexport flui::app::app::TaskHandle => flui::app::TaskHandle
 reexport flui::app::app::TaskOutcome => flui::app::TaskOutcome
@@ -2353,7 +2317,7 @@ reexport flui::app::app::runner::open_secondary_window => flui::open_secondary_w
 reexport flui::app::app::runner::open_window => flui::open_window
 reexport flui::app::app::runner::register_font => flui::register_font
 reexport flui::app::app::runner::request_presentation_close => flui::app::request_presentation_close
-reexport flui::app::app::runner::run_app_impl => flui::run_app
+reexport flui::app::app::runner::run_app => flui::run_app
 reexport flui::app::app::runner::window_handle => flui::app::window_handle
 reexport flui::app::app::service_events => flui::app::service_events
 reexport flui::app::app::window_handle => flui::app::window_handle
@@ -2381,15 +2345,15 @@ reexport flui::app::bindings::UpdateScheduler => flui::app::UpdateScheduler
 reexport flui::app::bindings::WidgetsBinding => flui::app::WidgetsBinding
 pub mod flui::app::embedder
 reexport flui::app::embedder::GestureBinding => flui::app::GestureBinding
+reexport flui::app::main => flui_macros::main
 pub mod flui::app::native
 reexport flui::app::native::HostWindow => flui::native::HostWindow
 reexport flui::app::native::with_window => flui::native::with_window
 reexport flui::app::open_secondary_window => flui::open_secondary_window
 reexport flui::app::open_window => flui::open_window
 pub mod flui::app::prelude
-reexport flui::app::prelude::AppCapabilities => flui::AppCapabilities
 reexport flui::app::prelude::AppConfig => flui::AppConfig
-reexport flui::app::prelude::AppLaunch => flui::AppLaunch
+reexport flui::app::prelude::Application => flui::Application
 reexport flui::app::prelude::GestureBinding => flui::app::GestureBinding
 reexport flui::app::prelude::LaunchError => flui::LaunchError
 reexport flui::app::prelude::PipelineOwner => flui::app::PipelineOwner
@@ -2421,13 +2385,15 @@ impl core::marker::StructuralPartialEq for flui::app::testing::ExitReport
 pub fn flui::app::testing::ExitReport::code(&self) -> i32
 #[non_exhaustive] pub struct flui::app::testing::HeadlessRun;
 impl core::fmt::Debug for flui::app::testing::HeadlessRun
-pub fn flui::app::testing::HeadlessRun::start<V, F>(application: flui::Application<V, F>) -> flui::app::testing::HeadlessRunHandle where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
-pub fn flui::app::testing::HeadlessRun::start_on<V, F>(application: flui::Application<V, F>, platform: flui_native::hosts::headless::HeadlessPlatform) -> flui::app::testing::HeadlessRunHandle where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
+pub fn flui::app::testing::HeadlessRun::start<V>(application: flui::Application, root: V) -> flui::app::testing::HeadlessRunHandle where V: flui::app::View + Clone + 'static
+pub fn flui::app::testing::HeadlessRun::start_on<V>(application: flui::Application, root: V, platform: flui_native::hosts::headless::HeadlessPlatform) -> flui::app::testing::HeadlessRunHandle where V: flui::app::View + Clone + 'static
+pub fn flui::app::testing::HeadlessRun::start_resident<V, F>(application: flui::Application, factory: F) -> flui::app::testing::HeadlessRunHandle where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
+pub fn flui::app::testing::HeadlessRun::start_resident_on<V, F>(application: flui::Application, factory: F, platform: flui_native::hosts::headless::HeadlessPlatform) -> flui::app::testing::HeadlessRunHandle where V: flui::app::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
 pub struct flui::app::testing::HeadlessRunHandle { .. }
 impl core::fmt::Debug for flui::app::testing::HeadlessRunHandle
 pub fn flui::app::testing::HeadlessRunHandle::end_session(&self, phase: flui::platform::SessionEndPhase) -> flui::platform::SessionEndAnswer
 pub fn flui::app::testing::HeadlessRunHandle::is_running(&self) -> bool
-pub fn flui::app::testing::HeadlessRunHandle::join(self) -> Result<flui::app::testing::ExitReport, flui::AppRunError>
+pub fn flui::app::testing::HeadlessRunHandle::join(self) -> Result<flui::app::testing::ExitReport, flui::LaunchError>
 pub fn flui::app::testing::HeadlessRunHandle::open_windows(&self) -> Vec<flui_native::window::headless::HeadlessHostWindow>
 pub fn flui::app::testing::HeadlessRunHandle::renderer(&self, window: &flui_native::window::headless::HeadlessHostWindow) -> Option<flui::app::testing::StandInRenderer>
 pub fn flui::app::testing::HeadlessRunHandle::run_owner_turn(&self)
@@ -8155,7 +8121,7 @@ impl core::fmt::Debug for flui::interaction::SequencedBranch
 pub fn flui::interaction::SequencedBranch::hand_off(&self, pointer: flui::interaction::PointerId) -> bool
 pub fn flui::interaction::SequencedBranch::hold(&self) -> flui::interaction::GestureArena
 pub fn flui::interaction::SequencedBranch::successor(&self) -> flui::interaction::GestureArena
-pub enum flui::interaction::SweepModel
+#[non_exhaustive] pub enum flui::interaction::SweepModel
 impl Clone for flui::interaction::SweepModel
 impl Copy for flui::interaction::SweepModel
 impl Eq for flui::interaction::SweepModel
@@ -8331,7 +8297,7 @@ impl core::fmt::Debug for flui::interaction::TraversalDirection
 impl core::marker::StructuralPartialEq for flui::interaction::TraversalDirection
 variant flui::interaction::TraversalDirection::Backward // at 1
 variant flui::interaction::TraversalDirection::Forward // at 0
-pub enum flui::interaction::TraversalEdgeBehavior
+#[non_exhaustive] pub enum flui::interaction::TraversalEdgeBehavior
 impl Clone for flui::interaction::TraversalEdgeBehavior
 impl Copy for flui::interaction::TraversalEdgeBehavior
 impl Default for flui::interaction::TraversalEdgeBehavior
@@ -8406,7 +8372,7 @@ pub const fn flui::interaction::drag::AllowedActions::is_empty(&self) -> bool
 pub const fn flui::interaction::drag::AllowedActions::new(within_app: flui::interaction::drag::TransferActions, outside_app: flui::interaction::drag::TransferActions) -> Self
 pub const fn flui::interaction::drag::AllowedActions::union(&self) -> flui::interaction::drag::TransferActions
 pub const fn flui::interaction::drag::AllowedActions::within(within_app: flui::interaction::drag::TransferActions) -> Self
-pub enum flui::interaction::drag::Autoscroll
+#[non_exhaustive] pub enum flui::interaction::drag::Autoscroll
 impl Clone for flui::interaction::drag::Autoscroll
 impl Copy for flui::interaction::drag::Autoscroll
 impl Default for flui::interaction::drag::Autoscroll
@@ -8498,7 +8464,7 @@ impl core::marker::StructuralPartialEq for flui::interaction::drag::DragReach
 variant flui::interaction::drag::DragReach::Runtime // at 1
 variant flui::interaction::drag::DragReach::System // at 2
 variant flui::interaction::drag::DragReach::Window // at 0
-pub enum flui::interaction::drag::DragRepresentation
+#[non_exhaustive] pub enum flui::interaction::drag::DragRepresentation
 impl core::fmt::Debug for flui::interaction::drag::DragRepresentation
 variant flui::interaction::drag::DragRepresentation::InProcess(alloc::rcs::rc::Rc<dyn core::any::Any>) // at 0
 variant flui::interaction::drag::DragRepresentation::Serialized(flui::platform::data_transfer::TransferFormat, flui::interaction::drag::LazyPayload) // at 1
@@ -8572,7 +8538,7 @@ pub struct flui::interaction::drag::LazyPayload(_)
 impl core::fmt::Debug for flui::interaction::drag::LazyPayload
 pub fn flui::interaction::drag::LazyPayload::new(provider: impl FnOnce() -> Result<flui::platform::data_transfer::TransferPayload, flui::platform::data_transfer::TransferError> + 'static) -> Self
 pub fn flui::interaction::drag::LazyPayload::ready(payload: flui::platform::data_transfer::TransferPayload) -> Self
-pub enum flui::interaction::drag::MoveOutcome
+#[non_exhaustive] pub enum flui::interaction::drag::MoveOutcome
 impl Clone for flui::interaction::drag::MoveOutcome
 impl Copy for flui::interaction::drag::MoveOutcome
 impl Eq for flui::interaction::drag::MoveOutcome
@@ -8619,6 +8585,7 @@ pub fn flui::interaction::drag::TransferActions::insert(&mut self, other: Self)
 pub fn flui::interaction::drag::TransferActions::iter_names(self) -> impl Iterator<Item = (&'static str, Self)>
 pub fn flui::interaction::drag::TransferActions::remove(&mut self, other: Self)
 pub fn flui::interaction::drag::TransferActions::set(&mut self, other: Self, value: bool)
+reexport flui::main => flui_macros::main
 pub mod flui::material
 pub struct flui::material::AlertDialog { .. }
 impl Clone for flui::material::AlertDialog
@@ -10496,6 +10463,7 @@ pub fn flui::painting::Canvas::finish(self) -> flui::painting::DisplayList
 pub fn flui::painting::Canvas::is_empty(&self) -> bool
 pub fn flui::painting::Canvas::len(&self) -> usize
 pub fn flui::painting::Canvas::new() -> Self
+pub fn flui::painting::Canvas::record_into(&mut self, buffer: flui::painting::DisplayList)
 pub fn flui::painting::Canvas::reset(&mut self)
 pub fn flui::painting::Canvas::restore(&mut self)
 pub fn flui::painting::Canvas::restore_to_count(&mut self, count: usize)
@@ -10539,6 +10507,7 @@ impl<'a> IntoIterator for &'a flui::painting::DisplayList { type IntoIter = core
 pub fn flui::painting::DisplayList::append(&mut self, other: flui::painting::DisplayList)
 pub fn flui::painting::DisplayList::append_isolated(&mut self, other: flui::painting::DisplayList)
 pub fn flui::painting::DisplayList::bounds(&self) -> Option<flui::geometry::Rect<f64>>
+pub fn flui::painting::DisplayList::clear(&mut self)
 pub fn flui::painting::DisplayList::commands(&self) -> &[flui::painting::DrawCommand]
 pub fn flui::painting::DisplayList::damage_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
 pub fn flui::painting::DisplayList::is_empty(&self) -> bool
@@ -10546,6 +10515,7 @@ pub fn flui::painting::DisplayList::iter(&self) -> core::slice::iter::Iter<'_, f
 pub fn flui::painting::DisplayList::len(&self) -> usize
 pub fn flui::painting::DisplayList::new() -> Self
 pub fn flui::painting::DisplayList::non_finite(&self) -> flui_painting::display_list::finite::NonFiniteOps
+pub fn flui::painting::DisplayList::room(&self) -> usize
 pub fn flui::painting::DisplayList::volatile_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
 pub struct flui::painting::DrawCommand
 field flui::painting::DrawCommand::op: flui::painting::DrawOp // at 1
@@ -10799,7 +10769,7 @@ pub fn flui::painting::TextSizing::resolve_with(&self, request: flui::foundation
 pub mod flui::painting::paint
 reexport flui::painting::paint::Alignment => flui::painting::Alignment
 reexport flui::painting::paint::BlendMode => flui::painting::BlendMode
-pub enum flui::painting::paint::BlurMode
+#[non_exhaustive] pub enum flui::painting::paint::BlurMode
 impl Clone for flui::painting::paint::BlurMode
 impl Copy for flui::painting::paint::BlurMode
 impl Default for flui::painting::paint::BlurMode
@@ -10812,7 +10782,7 @@ impl serde_core::ser::Serialize for flui::painting::paint::BlurMode
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::BlurMode
 variant flui::painting::paint::BlurMode::Backdrop // at 1
 variant flui::painting::paint::BlurMode::Content // at 0
-pub enum flui::painting::paint::BlurQuality
+#[non_exhaustive] pub enum flui::painting::paint::BlurQuality
 impl Clone for flui::painting::paint::BlurQuality
 impl Copy for flui::painting::paint::BlurQuality
 impl Default for flui::painting::paint::BlurQuality
@@ -10843,7 +10813,7 @@ variant flui::painting::paint::BlurStyle::Outer // at 2
 variant flui::painting::paint::BlurStyle::Solid // at 1
 reexport flui::painting::paint::BoxFit => flui::painting::BoxFit
 reexport flui::painting::paint::Clip => flui::prelude::Clip
-pub enum flui::painting::paint::ClipBehavior
+#[non_exhaustive] pub enum flui::painting::paint::ClipBehavior
 impl Clone for flui::painting::paint::ClipBehavior
 impl Copy for flui::painting::paint::ClipBehavior
 impl Default for flui::painting::paint::ClipBehavior
@@ -10873,7 +10843,7 @@ impl serde_core::ser::Serialize for flui::painting::paint::ClipOp
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::ClipOp
 variant flui::painting::paint::ClipOp::Difference // at 1
 variant flui::painting::paint::ClipOp::Intersect // at 0
-pub enum flui::painting::paint::ColorAdjustment
+#[non_exhaustive] pub enum flui::painting::paint::ColorAdjustment
 impl Clone for flui::painting::paint::ColorAdjustment
 impl PartialEq for flui::painting::paint::ColorAdjustment
 impl core::fmt::Debug for flui::painting::paint::ColorAdjustment
@@ -10971,7 +10941,7 @@ impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::DashPatter
 pub fn flui::painting::paint::DashPattern::cycle_length(&self) -> f64
 pub fn flui::painting::paint::DashPattern::is_valid(&self) -> bool
 pub fn flui::painting::paint::DashPattern::new(intervals: Vec<f64>, phase: f64) -> Self
-pub enum flui::painting::paint::FilterQuality
+#[non_exhaustive] pub enum flui::painting::paint::FilterQuality
 impl Clone for flui::painting::paint::FilterQuality
 impl Copy for flui::painting::paint::FilterQuality
 impl Default for flui::painting::paint::FilterQuality
@@ -11026,7 +10996,7 @@ pub const fn flui::painting::paint::ImageConfiguration::with_device_pixel_ratio(
 pub const fn flui::painting::paint::ImageConfiguration::with_size(self, size: flui::geometry::Size<f64>) -> Self
 pub fn flui::painting::paint::ImageConfiguration::physical_size(&self) -> Option<flui::geometry::Size<f64>>
 pub fn flui::painting::paint::ImageConfiguration::with_platform(self, platform: String) -> Self
-pub enum flui::painting::paint::ImageDataError
+#[non_exhaustive] pub enum flui::painting::paint::ImageDataError
 impl Clone for flui::painting::paint::ImageDataError
 impl Eq for flui::painting::paint::ImageDataError
 impl PartialEq for flui::painting::paint::ImageDataError
@@ -11239,7 +11209,7 @@ variant flui::painting::paint::PathOperation::Intersect // at 2
 variant flui::painting::paint::PathOperation::ReverseDifference // at 4
 variant flui::painting::paint::PathOperation::Union // at 1
 variant flui::painting::paint::PathOperation::Xor // at 3
-pub enum flui::painting::paint::PathPaintMode
+#[non_exhaustive] pub enum flui::painting::paint::PathPaintMode
 impl Clone for flui::painting::paint::PathPaintMode
 impl Copy for flui::painting::paint::PathPaintMode
 impl Eq for flui::painting::paint::PathPaintMode
@@ -11450,7 +11420,7 @@ pub const fn flui::painting::styling::BorderDirectional::all(side: flui::paintin
 pub const fn flui::painting::styling::BorderDirectional::new(start: Option<flui::painting::styling::BorderSide<T>>, top: Option<flui::painting::styling::BorderSide<T>>, end: Option<flui::painting::styling::BorderSide<T>>, bottom: Option<flui::painting::styling::BorderSide<T>>) -> Self // impl<T: flui::geometry::Unit> flui::painting::styling::BorderDirectional<T>
 pub const fn flui::painting::styling::BorderDirectional::none() -> Self // impl<T: flui::geometry::Unit> flui::painting::styling::BorderDirectional<T>
 pub const fn flui::painting::styling::BorderDirectional::resolve(self, ltr: bool) -> flui::painting::styling::Border<T> // impl<T: flui::geometry::Unit> flui::painting::styling::BorderDirectional<T>
-pub enum flui::painting::styling::BorderPosition
+#[non_exhaustive] pub enum flui::painting::styling::BorderPosition
 impl Clone for flui::painting::styling::BorderPosition
 impl Copy for flui::painting::styling::BorderPosition
 impl Eq for flui::painting::styling::BorderPosition
@@ -11533,7 +11503,7 @@ pub fn flui::painting::styling::BorderSide::is_visible(&self) -> bool
 pub fn flui::painting::styling::BorderSide::lerp(a: Self, b: Self, t: f64) -> Self // impl<T> flui::painting::styling::BorderSide<T> where T: core::ops::arith::Mul<f64, Output = T> + flui::geometry::NumericUnit
 pub fn flui::painting::styling::BorderSide::none() -> Self // impl<T: flui::geometry::Unit> flui::painting::styling::BorderSide<T>
 pub fn flui::painting::styling::BorderSide::scale(&self, factor: f64) -> Self // impl<T> flui::painting::styling::BorderSide<T> where T: core::ops::arith::Mul<f64, Output = T> + flui::geometry::NumericUnit
-pub enum flui::painting::styling::BorderStyle
+#[non_exhaustive] pub enum flui::painting::styling::BorderStyle
 impl Clone for flui::painting::styling::BorderStyle
 impl Copy for flui::painting::styling::BorderStyle
 impl Default for flui::painting::styling::BorderStyle
@@ -11719,7 +11689,7 @@ pub fn flui::painting::styling::LinearGradient::lerp(a: &Self, b: &Self, t: f64)
 pub fn flui::painting::styling::LinearGradient::new(begin: flui::painting::Alignment, end: flui::painting::Alignment, colors: Vec<flui::prelude::Color>, stops: Option<Vec<f64>>, tile_mode: flui::painting::paint::TileMode) -> Self
 pub fn flui::painting::styling::LinearGradient::simple(start_color: flui::prelude::Color, end_color: flui::prelude::Color, begin: flui::painting::Alignment, end: flui::painting::Alignment) -> Self
 pub fn flui::painting::styling::LinearGradient::vertical(colors: Vec<flui::prelude::Color>) -> Self
-pub enum flui::painting::styling::MaterialType
+#[non_exhaustive] pub enum flui::painting::styling::MaterialType
 impl Clone for flui::painting::styling::MaterialType
 impl Copy for flui::painting::styling::MaterialType
 impl Default for flui::painting::styling::MaterialType
@@ -11745,7 +11715,7 @@ impl core::fmt::Debug for flui::painting::styling::Oklab
 impl core::marker::StructuralPartialEq for flui::painting::styling::Oklab
 impl serde_core::ser::Serialize for flui::painting::styling::Oklab
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::styling::Oklab
-pub enum flui::painting::styling::ParseColorError
+#[non_exhaustive] pub enum flui::painting::styling::ParseColorError
 impl Clone for flui::painting::styling::ParseColorError
 impl Copy for flui::painting::styling::ParseColorError
 impl Eq for flui::painting::styling::ParseColorError
@@ -11756,7 +11726,7 @@ impl core::fmt::Display for flui::painting::styling::ParseColorError
 impl core::marker::StructuralPartialEq for flui::painting::styling::ParseColorError
 variant flui::painting::styling::ParseColorError::InvalidHex // at 0
 variant flui::painting::styling::ParseColorError::InvalidLength // at 1
-pub enum flui::painting::styling::PhysicalShape
+#[non_exhaustive] pub enum flui::painting::styling::PhysicalShape
 impl Clone for flui::painting::styling::PhysicalShape
 impl Copy for flui::painting::styling::PhysicalShape
 impl Default for flui::painting::styling::PhysicalShape
@@ -11823,7 +11793,7 @@ pub fn flui::painting::styling::Shadow::convert_radius_to_sigma(radius: f64) -> 
 pub fn flui::painting::styling::Shadow::lerp(a: Self, b: Self, t: f64) -> Self // impl<T> flui::painting::styling::Shadow<T> where T: core::ops::arith::Mul<f64, Output = T> + flui::geometry::NumericUnit
 pub fn flui::painting::styling::Shadow::lerp_list(a: &[Self], b: &[Self], t: f64) -> Vec<Self> // impl<T> flui::painting::styling::Shadow<T> where T: core::ops::arith::Mul<f64, Output = T> + flui::geometry::NumericUnit
 pub fn flui::painting::styling::Shadow::scale(&self, factor: f64) -> Self // impl<T> flui::painting::styling::Shadow<T> where T: core::ops::arith::Mul<f64, Output = T> + flui::geometry::NumericUnit
-pub enum flui::painting::styling::ShadowQuality
+#[non_exhaustive] pub enum flui::painting::styling::ShadowQuality
 impl Clone for flui::painting::styling::ShadowQuality
 impl Copy for flui::painting::styling::ShadowQuality
 impl Default for flui::painting::styling::ShadowQuality
@@ -11934,7 +11904,7 @@ impl<'de> serde_core::de::Deserialize<'de> for flui::painting::typography::FontF
 pub fn flui::painting::typography::FontFeature::disable(feature: impl Into<String>) -> Self
 pub fn flui::painting::typography::FontFeature::enable(feature: impl Into<String>) -> Self
 pub fn flui::painting::typography::FontFeature::new(feature: impl Into<String>, value: i32) -> Self
-pub enum flui::painting::typography::FontStyle
+#[non_exhaustive] pub enum flui::painting::typography::FontStyle
 impl Clone for flui::painting::typography::FontStyle
 impl Copy for flui::painting::typography::FontStyle
 impl Default for flui::painting::typography::FontStyle
@@ -12049,7 +12019,7 @@ pub fn flui::painting::typography::LineMetrics::range(&self) -> flui::painting::
 pub fn flui::painting::typography::LineMetrics::right(&self) -> f64
 pub fn flui::painting::typography::LineMetrics::top(&self) -> f64
 pub fn flui::painting::typography::LineMetrics::total_height(&self) -> f64
-pub enum flui::painting::typography::PlaceholderAlignment
+#[non_exhaustive] pub enum flui::painting::typography::PlaceholderAlignment
 impl Clone for flui::painting::typography::PlaceholderAlignment
 impl Copy for flui::painting::typography::PlaceholderAlignment
 impl Default for flui::painting::typography::PlaceholderAlignment
@@ -12137,7 +12107,7 @@ impl serde_core::ser::Serialize for flui::painting::typography::TextAffinity
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::typography::TextAffinity
 variant flui::painting::typography::TextAffinity::Downstream // at 1
 variant flui::painting::typography::TextAffinity::Upstream // at 0
-pub enum flui::painting::typography::TextAlign
+#[non_exhaustive] pub enum flui::painting::typography::TextAlign
 impl Clone for flui::painting::typography::TextAlign
 impl Copy for flui::painting::typography::TextAlign
 impl Default for flui::painting::typography::TextAlign
@@ -12159,7 +12129,7 @@ variant flui::painting::typography::TextAlign::Justify // at 3
 variant flui::painting::typography::TextAlign::Left // at 0
 variant flui::painting::typography::TextAlign::Right // at 1
 variant flui::painting::typography::TextAlign::Start // at 4
-pub enum flui::painting::typography::TextAlignVertical
+#[non_exhaustive] pub enum flui::painting::typography::TextAlignVertical
 impl Clone for flui::painting::typography::TextAlignVertical
 impl Copy for flui::painting::typography::TextAlignVertical
 impl Default for flui::painting::typography::TextAlignVertical
@@ -12285,7 +12255,7 @@ pub const flui::painting::typography::TextHeightBehavior::DISABLE_ALL: Self = _
 pub const flui::painting::typography::TextHeightBehavior::DISABLE_FIRST: Self = _
 pub const flui::painting::typography::TextHeightBehavior::DISABLE_LAST: Self = _
 pub fn flui::painting::typography::TextHeightBehavior::new(apply_to_first_ascent: bool, apply_to_last_descent: bool) -> Self
-pub enum flui::painting::typography::TextLeadingDistribution
+#[non_exhaustive] pub enum flui::painting::typography::TextLeadingDistribution
 impl Default for flui::painting::typography::TextLeadingDistribution
 impl core::fmt::Debug for flui::painting::typography::TextLeadingDistribution
 impl serde_core::ser::Serialize for flui::painting::typography::TextLeadingDistribution
@@ -12324,7 +12294,7 @@ impl serde_core::ser::Serialize for flui::painting::typography::TextLink
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::typography::TextLink
 pub fn flui::painting::typography::TextLink::as_str(&self) -> &str
 pub fn flui::painting::typography::TextLink::new(target: impl Into<alloc::rcs::arc::Arc<str>>) -> Self
-pub enum flui::painting::typography::TextOverflow
+#[non_exhaustive] pub enum flui::painting::typography::TextOverflow
 impl Default for flui::painting::typography::TextOverflow
 impl core::fmt::Debug for flui::painting::typography::TextOverflow
 impl serde_core::ser::Serialize for flui::painting::typography::TextOverflow
@@ -12450,7 +12420,7 @@ pub fn flui::painting::typography::TextStyle::with_letter_spacing(self, letter_s
 pub fn flui::painting::typography::TextStyle::with_shadow(self, shadow: flui::painting::styling::Shadow) -> Self
 pub fn flui::painting::typography::TextStyle::with_sizing(self, sizing: flui::foundation::TextSizingIntent) -> Self
 pub fn flui::painting::typography::TextStyle::with_word_spacing(self, word_spacing: f64) -> Self
-pub enum flui::painting::typography::TextWidthBasis
+#[non_exhaustive] pub enum flui::painting::typography::TextWidthBasis
 impl Clone for flui::painting::typography::TextWidthBasis
 impl Copy for flui::painting::typography::TextWidthBasis
 impl Default for flui::painting::typography::TextWidthBasis
@@ -15942,9 +15912,7 @@ impl<V: flui::prelude::IntoView> flui::prelude::AnimateExt for V
 pub trait flui::prelude::AnimatedView: flui::app::StatefulView
 fn flui::prelude::AnimatedView::listenable(&self) -> alloc::rcs::rc::Rc<dyn flui::foundation::Listenable>
 reexport flui::prelude::AppBar => flui::material::AppBar
-reexport flui::prelude::AppCapabilities => flui::AppCapabilities
 reexport flui::prelude::AppConfig => flui::AppConfig
-reexport flui::prelude::AppLaunch => flui::AppLaunch
 #[repr(u8)] pub enum flui::prelude::AppLifecycleState
 impl Clone for flui::prelude::AppLifecycleState
 impl Copy for flui::prelude::AppLifecycleState
@@ -15975,6 +15943,7 @@ variant flui::prelude::AppLifecycleState::Inactive = 1 // at 1
 variant flui::prelude::AppLifecycleState::Paused = 3 // at 3
 variant flui::prelude::AppLifecycleState::Resumed = 0 // at 0
 reexport flui::prelude::AppWindowError => flui::AppWindowError
+reexport flui::prelude::Application => flui::Application
 pub struct flui::prelude::AspectRatio { .. }
 impl Clone for flui::prelude::AspectRatio
 impl core::fmt::Debug for flui::prelude::AspectRatio
@@ -17282,7 +17251,7 @@ fn flui::prelude::ImageProvider::cached(&self, services: &flui::widgets::ImageSe
 fn flui::prelude::ImageProvider::decode_job(&self) -> Option<flui::widgets::DecodeJob> { .. }
 fn flui::prelude::ImageProvider::resolve(&self) -> Result<flui::painting::paint::Image, flui::widgets::ImageProviderError>
 fn flui::prelude::ImageProvider::resolve_async(&self, services: &flui::widgets::ImageServices) -> core::pin::Pin<Box<dyn core::future::future::Future<Output = Result<flui::painting::paint::Image, flui::widgets::ImageProviderError>> + Send + 'static>> { .. }
-pub enum flui::prelude::ImageRepeat
+#[non_exhaustive] pub enum flui::prelude::ImageRepeat
 impl Clone for flui::prelude::ImageRepeat
 impl Copy for flui::prelude::ImageRepeat
 impl Default for flui::prelude::ImageRepeat
@@ -22408,7 +22377,7 @@ variant flui::rendering::objects::VerticalDirection::Down // at 0
 variant flui::rendering::objects::VerticalDirection::Up // at 1
 reexport flui::rendering::objects::WrapAlignment => flui::prelude::WrapAlignment
 reexport flui::rendering::objects::WrapCrossAlignment => flui::prelude::WrapCrossAlignment
-pub fn flui::run_app<V>(root: V, launch: flui::AppLaunch) -> Result<(), flui::LaunchError> where V: flui::app::View + Clone + 'static
+pub fn flui::run_app<V>(root: V) -> Result<(), flui::LaunchError> where V: flui::app::View + Clone + 'static
 pub mod flui::semantics
 #[non_exhaustive] pub enum flui::semantics::AccessibilityFocusBlockType
 impl Clone for flui::semantics::AccessibilityFocusBlockType
@@ -23179,6 +23148,19 @@ pub fn flui::testing::Locator::role(role: flui::testing::Role) -> Self
 pub fn flui::testing::Locator::state(self, state: flui::testing::StateFilter) -> Self
 pub fn flui::testing::Locator::value(self, value: flui::testing::TextMatch) -> Self
 pub fn flui::testing::Locator::within(self, ancestor: flui::testing::Locator) -> Self
+pub struct flui::testing::LogicalPoint
+field flui::testing::LogicalPoint::x: f64 // at 0
+field flui::testing::LogicalPoint::y: f64 // at 1
+impl Clone for flui::testing::LogicalPoint
+impl Copy for flui::testing::LogicalPoint
+impl Default for flui::testing::LogicalPoint
+impl PartialEq for flui::testing::LogicalPoint
+impl core::fmt::Debug for flui::testing::LogicalPoint
+impl core::marker::StructuralPartialEq for flui::testing::LogicalPoint
+impl schemars::JsonSchema for flui::testing::LogicalPoint
+impl serde_core::ser::Serialize for flui::testing::LogicalPoint
+impl<'de> serde_core::de::Deserialize<'de> for flui::testing::LogicalPoint
+pub const fn flui::testing::LogicalPoint::new(x: f64, y: f64) -> Self
 pub struct flui::testing::LogicalRect
 field flui::testing::LogicalRect::height: f64 // at 3
 field flui::testing::LogicalRect::width: f64 // at 2
@@ -23194,7 +23176,7 @@ impl schemars::JsonSchema for flui::testing::LogicalRect
 impl serde_core::ser::Serialize for flui::testing::LogicalRect
 impl<'de> serde_core::de::Deserialize<'de> for flui::testing::LogicalRect
 pub const fn flui::testing::LogicalRect::new(x: f64, y: f64, width: f64, height: f64) -> Self
-pub fn flui::testing::LogicalRect::center(&self) -> flui_protocol::geometry::LogicalPoint
+pub fn flui::testing::LogicalRect::center(&self) -> flui::testing::LogicalPoint
 #[non_exhaustive] pub struct flui::testing::Match
 field flui::testing::Match::element: flui_protocol::tree::ElementRef // at 0
 field flui::testing::Match::node: flui::testing::Node // at 2
@@ -23358,6 +23340,7 @@ pub struct flui::testing::Tester { .. }
 impl core::fmt::Debug for flui::testing::Tester
 pub fn flui::testing::Tester::clock(&self) -> &flui::foundation::ManualClock
 pub fn flui::testing::Tester::drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration)
+pub fn flui::testing::Tester::drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration)
 pub fn flui::testing::Tester::enter_text(&mut self, locator: &flui::testing::Locator, text: &str)
 pub fn flui::testing::Tester::expect(&mut self, locator: flui::testing::Locator) -> flui::testing::Expectation<'_>
 pub fn flui::testing::Tester::find_all(&mut self, locator: &flui::testing::Locator) -> Vec<flui::testing::Match>
@@ -23374,6 +23357,7 @@ pub fn flui::testing::Tester::rect(&mut self, locator: &flui::testing::Locator) 
 pub fn flui::testing::Tester::semantics(&mut self) -> flui::testing::Tree
 pub fn flui::testing::Tester::tap(&mut self, locator: &flui::testing::Locator)
 pub fn flui::testing::Tester::try_drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
+pub fn flui::testing::Tester::try_drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_enter_text(&mut self, locator: &flui::testing::Locator, text: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_find_all(&mut self, locator: &flui::testing::Locator) -> Result<Vec<flui::testing::Match>, flui::testing::TestError>
 pub fn flui::testing::Tester::try_long_press(&mut self, locator: &flui::testing::Locator, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
@@ -26588,7 +26572,7 @@ impl PartialEq for flui::widgets::DiscreteEffect
 impl core::fmt::Debug for flui::widgets::DiscreteEffect
 impl core::marker::StructuralPartialEq for flui::widgets::DiscreteEffect
 pub fn flui::widgets::DiscreteEffect::on_change(self, value: u64) -> flui::widgets::SymbolEffect
-pub enum flui::widgets::DismissDirection
+#[non_exhaustive] pub enum flui::widgets::DismissDirection
 impl Clone for flui::widgets::DismissDirection
 impl Copy for flui::widgets::DismissDirection
 impl Eq for flui::widgets::DismissDirection
@@ -27544,7 +27528,7 @@ reexport flui::widgets::PageView => flui::prelude::PageView
 pub struct flui::widgets::PageViewState { .. }
 impl core::fmt::Debug for flui::widgets::PageViewState
 impl flui::prelude::ViewState<flui::prelude::PageView> for flui::widgets::PageViewState
-pub enum flui::widgets::PanAxis
+#[non_exhaustive] pub enum flui::widgets::PanAxis
 impl Clone for flui::widgets::PanAxis
 impl Copy for flui::widgets::PanAxis
 impl Default for flui::widgets::PanAxis
@@ -28646,7 +28630,7 @@ pub fn flui::widgets::ViewportFraction::get(self) -> f64
 pub fn flui::widgets::ViewportFraction::try_new(fraction: f64) -> Result<Self, flui::widgets::InvalidViewportFraction>
 reexport flui::widgets::Visibility => flui::prelude::Visibility
 reexport flui::widgets::VisibilityGate => flui::prelude::VisibilityGate
-pub enum flui::widgets::WheelScaleGate
+#[non_exhaustive] pub enum flui::widgets::WheelScaleGate
 impl Clone for flui::widgets::WheelScaleGate
 impl Copy for flui::widgets::WheelScaleGate
 impl Default for flui::widgets::WheelScaleGate
@@ -29947,7 +29931,7 @@ pub struct flui_interaction::drag::owner::DragHandle { .. }
 impl Clone for flui_interaction::drag::owner::DragHandle
 impl core::fmt::Debug for flui_interaction::drag::owner::DragHandle
 pub fn flui_interaction::drag::owner::DragHandle::start(&self, start: flui::interaction::drag::DragStart) -> Result<flui::interaction::drag::DragSession, flui::interaction::drag::DragError>
-pub enum flui_interaction::drag::owner::DragStage
+#[non_exhaustive] pub enum flui_interaction::drag::owner::DragStage
 impl Clone for flui_interaction::drag::owner::DragStage
 impl Copy for flui_interaction::drag::owner::DragStage
 impl Eq for flui_interaction::drag::owner::DragStage
@@ -31003,6 +30987,7 @@ impl Clone for flui_layer::scene::owner::ScenePublication
 impl core::fmt::Debug for flui_layer::scene::owner::ScenePublication
 pub struct flui_layer::scene::owner::SceneWriter<'a> { .. }
 impl<'a> core::fmt::Debug for flui_layer::scene::owner::SceneWriter<'a>
+pub fn flui_layer::scene::owner::SceneWriter::chunk(&mut self, owner: flui::foundation::RenderId, ordinal: u32, version: flui_layer::scene::id::ContentVersion, commands: &mut flui::painting::DisplayList) -> alloc::rcs::arc::Arc<flui_layer::scene::content::Chunk> // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::current(&self) -> &flui_layer::scene::version::SceneVersion // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::discard(&mut self, content: alloc::rcs::arc::Arc<flui_layer::scene::content::BoundaryContent>) // impl flui_layer::scene::owner::SceneWriter<'_>
 pub fn flui_layer::scene::owner::SceneWriter::mint_node(&mut self) -> flui_layer::scene::id::SceneNodeId // impl flui_layer::scene::owner::SceneWriter<'_>
@@ -31844,7 +31829,7 @@ pub struct flui_painting::text_layout::host::HostFonts { .. }
 impl core::fmt::Debug for flui_painting::text_layout::host::HostFonts
 pub fn flui_painting::text_layout::host::HostFonts::scan() -> Self
 pub fn flui_painting::text_layout::host::HostFonts::scan_with(ask: impl FnOnce(&str) -> flui_painting::text_layout::system_fallback::SystemFallback) -> Self
-pub enum flui_painting::text_layout::system_fallback::FaceRef
+#[non_exhaustive] pub enum flui_painting::text_layout::system_fallback::FaceRef
 impl Clone for flui_painting::text_layout::system_fallback::FaceRef
 impl Eq for flui_painting::text_layout::system_fallback::FaceRef
 impl PartialEq for flui_painting::text_layout::system_fallback::FaceRef
@@ -31979,7 +31964,7 @@ impl core::fmt::Debug for flui_painting::text_painter::sizing::TextSizingAdmissi
 pub fn flui_painting::text_painter::sizing::TextSizingAdmission::admit(&mut self, answers: impl IntoIterator<Item = (flui::foundation::TextSizeRequest, flui::foundation::TextSize)>) -> Result<(), flui_painting::text_painter::sizing::TextSizingAdmissionError>
 pub fn flui_painting::text_painter::sizing::TextSizingAdmission::set_warm_capacity(&mut self, capacity: usize)
 pub fn flui_painting::text_painter::sizing::TextSizingAdmission::source(&self) -> flui_painting::text_painter::sizing::TextSizingSource
-pub enum flui_painting::text_painter::sizing::TextSizingAdmissionError
+#[non_exhaustive] pub enum flui_painting::text_painter::sizing::TextSizingAdmissionError
 impl From<flui_painting::text_painter::sizing::TextSizingConflict> for flui_painting::text_painter::sizing::TextSizingAdmissionError
 impl core::error::Error for flui_painting::text_painter::sizing::TextSizingAdmissionError
 impl core::fmt::Debug for flui_painting::text_painter::sizing::TextSizingAdmissionError
@@ -32037,7 +32022,7 @@ pub fn flui_protocol::act::ActionRequest::set_value(element: flui_protocol::tree
 field flui_protocol::act::Actionability::attached: bool // at 0
 field flui_protocol::act::Actionability::covered_by: Option<String> // at 7
 field flui_protocol::act::Actionability::enabled: bool // at 4
-field flui_protocol::act::Actionability::point: Option<flui_protocol::geometry::LogicalPoint> // at 6
+field flui_protocol::act::Actionability::point: Option<flui::testing::LogicalPoint> // at 6
 field flui_protocol::act::Actionability::receives: bool // at 5
 field flui_protocol::act::Actionability::rect: Option<flui::testing::LogicalRect> // at 1
 field flui_protocol::act::Actionability::revision: flui_protocol::tree::TreeRevision // at 8
@@ -32404,19 +32389,6 @@ impl schemars::JsonSchema for flui_protocol::events::WindowEvent
 impl serde_core::ser::Serialize for flui_protocol::events::WindowEvent
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::events::WindowEvent
 pub const fn flui_protocol::events::WindowEvent::new(window: flui_protocol::tree::WindowId, opened: bool) -> Self
-pub struct flui_protocol::geometry::LogicalPoint
-field flui_protocol::geometry::LogicalPoint::x: f64 // at 0
-field flui_protocol::geometry::LogicalPoint::y: f64 // at 1
-impl Clone for flui_protocol::geometry::LogicalPoint
-impl Copy for flui_protocol::geometry::LogicalPoint
-impl Default for flui_protocol::geometry::LogicalPoint
-impl PartialEq for flui_protocol::geometry::LogicalPoint
-impl core::fmt::Debug for flui_protocol::geometry::LogicalPoint
-impl core::marker::StructuralPartialEq for flui_protocol::geometry::LogicalPoint
-impl schemars::JsonSchema for flui_protocol::geometry::LogicalPoint
-impl serde_core::ser::Serialize for flui_protocol::geometry::LogicalPoint
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::geometry::LogicalPoint
-pub const fn flui_protocol::geometry::LogicalPoint::new(x: f64, y: f64) -> Self
 #[non_exhaustive] pub enum flui_protocol::input::DeviceClass
 impl Clone for flui_protocol::input::DeviceClass
 impl Copy for flui_protocol::input::DeviceClass
@@ -32461,7 +32433,7 @@ variant flui_protocol::input::InputKind::PointerUp // at 2
 variant flui_protocol::input::InputKind::Scroll // at 4
 variant flui_protocol::input::InputKind::Text // at 8
 #[non_exhaustive] pub struct flui_protocol::input::JournalEntry
-field flui_protocol::input::JournalEntry::at: Option<flui_protocol::geometry::LogicalPoint> // at 3
+field flui_protocol::input::JournalEntry::at: Option<flui::testing::LogicalPoint> // at 3
 field flui_protocol::input::JournalEntry::device: flui_protocol::input::DeviceClass // at 1
 field flui_protocol::input::JournalEntry::injected: bool // at 5
 field flui_protocol::input::JournalEntry::kind: flui_protocol::input::InputKind // at 2
@@ -32476,7 +32448,7 @@ impl serde_core::ser::Serialize for flui_protocol::input::JournalEntry
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input::JournalEntry
 pub const fn flui_protocol::input::JournalEntry::new(seq: u64, device: flui_protocol::input::DeviceClass, kind: flui_protocol::input::InputKind, time_us: u64) -> Self
 pub const fn flui_protocol::input::JournalEntry::with_injected(self, injected: bool) -> Self
-pub const fn flui_protocol::input::JournalEntry::with_position(self, at: flui_protocol::geometry::LogicalPoint) -> Self
+pub const fn flui_protocol::input::JournalEntry::with_position(self, at: flui::testing::LogicalPoint) -> Self
 pub enum flui_protocol::input_recording::ActionData
 impl Clone for flui_protocol::input_recording::ActionData
 impl PartialEq for flui_protocol::input_recording::ActionData
@@ -33336,7 +33308,7 @@ impl serde_core::ser::Serialize for flui_protocol::locator::Target
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::locator::Target
 variant flui_protocol::locator::Target::Element(flui_protocol::tree::ElementRef) // at 0
 variant flui_protocol::locator::Target::Locator(flui::testing::Locator) // at 1
-variant flui_protocol::locator::Target::Point { window: flui_protocol::tree::WindowId, at: flui_protocol::geometry::LogicalPoint } // at 2
+variant flui_protocol::locator::Target::Point { window: flui_protocol::tree::WindowId, at: flui::testing::LogicalPoint } // at 2
 pub trait flui_protocol::method::Addressed
 fn flui_protocol::method::Addressed::holds_for(&self) -> core::time::Duration { .. }
 fn flui_protocol::method::Addressed::window(&self) -> Option<flui_protocol::tree::WindowId>
@@ -36771,8 +36743,8 @@ variant flui_semantics::owner::SemanticsDiagnostic::TextRunsWithheld(flui_semant
 pub struct flui_semantics::owner::SemanticsOwner { .. }
 impl Default for flui_semantics::owner::SemanticsOwner
 impl core::fmt::Debug for flui_semantics::owner::SemanticsOwner
-pub fn flui_semantics::owner::SemanticsOwner::actionability_point(&self, element: flui_protocol::tree::ElementRef, point: Option<flui_protocol::geometry::LogicalPoint>, placement: flui_semantics::agent::Placement) -> Result<Option<flui_protocol::geometry::LogicalPoint>, flui_semantics::agent::WireReadError>
-pub fn flui_semantics::owner::SemanticsOwner::actionability_wire(&self, element: flui_protocol::tree::ElementRef, point: Option<flui_protocol::geometry::LogicalPoint>, previous: Option<flui::testing::LogicalRect>, hit: &[flui::foundation::RenderId], placement: flui_semantics::agent::Placement) -> Result<flui_protocol::act::Actionability, flui_semantics::agent::WireReadError>
+pub fn flui_semantics::owner::SemanticsOwner::actionability_point(&self, element: flui_protocol::tree::ElementRef, point: Option<flui::testing::LogicalPoint>, placement: flui_semantics::agent::Placement) -> Result<Option<flui::testing::LogicalPoint>, flui_semantics::agent::WireReadError>
+pub fn flui_semantics::owner::SemanticsOwner::actionability_wire(&self, element: flui_protocol::tree::ElementRef, point: Option<flui::testing::LogicalPoint>, previous: Option<flui::testing::LogicalRect>, hit: &[flui::foundation::RenderId], placement: flui_semantics::agent::Placement) -> Result<flui_protocol::act::Actionability, flui_semantics::agent::WireReadError>
 pub fn flui_semantics::owner::SemanticsOwner::add_child(&mut self, parent_id: flui::foundation::SemanticsId, child_id: flui::foundation::SemanticsId)
 pub fn flui_semantics::owner::SemanticsOwner::announce(&mut self, message: &str, urgency: flui::prelude::Urgency) -> Result<(), flui::semantics::AnnounceError>
 pub fn flui_semantics::owner::SemanticsOwner::announcement_journal(&self, params: &flui_protocol::events::AnnouncementsParams) -> flui_protocol::events::AnnouncementJournal

@@ -493,6 +493,7 @@ macro_rules! declare_methods {
         $(
             $(#[$meta])*
             #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+            #[expect(clippy::exhaustive_enums, reason = "a method marker has no values")]
             pub enum $ty {}
 
             impl sealed::Sealed for $ty {}

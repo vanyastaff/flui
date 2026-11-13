@@ -1283,6 +1283,7 @@ impl flui_foundation::geometry::ApproxEq for Color {
 /// Error returned by [`Color::from_hex`] when parsing a hex color string
 /// fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ParseColorError {
     /// Invalid hex string format
     InvalidHex,

@@ -52,6 +52,7 @@ impl fmt::Display for ScriptCode {
 /// families the collection holds, so a platform that spells a family another
 /// way than the face's own name table does names nothing.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FaceRef {
     /// The face at `index` in the font file at `path`.
     File {

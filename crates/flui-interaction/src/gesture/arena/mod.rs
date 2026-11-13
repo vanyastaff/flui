@@ -211,6 +211,7 @@ use crate::gesture::observer::{
 
 /// Gesture disposition - how a recognizer voted in the arena.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(clippy::exhaustive_enums, reason = "a recognizer accepts or rejects")]
 pub enum GestureDisposition {
     /// Recognizer wants to handle this gesture.
     Accepted,
@@ -849,6 +850,7 @@ impl std::fmt::Debug for GestureArenaEntry {
 ///
 /// The model is immutable per arena, like the clock; every clone observes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SweepModel {
     /// A standalone recognizer owns the lifecycle of its private arena.
     SelfDriven,

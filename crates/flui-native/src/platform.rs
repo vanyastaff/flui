@@ -102,6 +102,10 @@ pub trait AppHandler: 'static {
 
 /// The application's answer to [`AppHandler::exit_policy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each host acts on each answer, and a `_` arm would end or keep the loop by accident"
+)]
 pub enum ExitAnswer {
     /// The loop may end.
     End,

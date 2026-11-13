@@ -1169,7 +1169,15 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main, and closes it after the next green one (`.github/actions/tracking-issue`, which `advisories.yml` shares) |
 
-The `Native xtask` checks are independent of the `ci` lane aggregator. The
+`expectations.yml` runs `cargo xtask expectations --body` on every pull request
+and again when its body is edited: it lists the expectations the diff edits
+(lines gone from `api/flui.txt`, a changed `*.stderr`, `*.snap` or protocol
+schema, a raised perf baseline, a grown allowlist, fewer tests, a new
+`#[ignore]`, a new `deny.toml` or `typos.toml` value) and fails unless the
+body's `## Expectations` section names each path with its reason (ADR-0331).
+Locally, `cargo xtask expectations` prints the list against `origin/main`, and
+`--worktree` adds uncommitted work. It is independent of the `ci` lane
+aggregator, as the `Native xtask` checks are. The
 other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
 event-driven, not per-PR gates. Release workflows build platform artifacts;
 they do not run native validation jobs. The native runtime suites run every

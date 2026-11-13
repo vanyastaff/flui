@@ -2006,6 +2006,10 @@ impl SurfaceTarget for IOSSurface {
 /// Owner-thread session notification. A connection carries explicit completion
 /// authority for renderer and tree installation; returning from the handler does
 /// not publish the attachment. Reconnect keeps the previously installed logical UI.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the runner handles each scene event, and a `_` arm would leave a session uninstalled or unreleased"
+)]
 pub enum IOSSceneEvent {
     /// A native attachment is ready for installation, with display ticks paused.
     Connected {

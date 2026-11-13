@@ -1,0 +1,69 @@
+name: Expectations
+
+# A pull request that edits an expectation (the API snapshot, a trybuild
+# `*.stderr`, a snapshot, a golden protocol schema, an allowlist entry, a test,
+# an exemption) names each path under `## Expectations` in its body, with the
+# reason (ADR-0331). The check reads the diff and the body and compiles only
+# xtask. It is a workflow of its own because editing the body has to re-run
+# it (`edited`), and must not re-run ci.yml.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The same values as ci.yml: rust-cache hashes them into its key, and this job
+# restores the `xtask` cache ci.yml's jobs save.
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTUP_HOME: ${{ github.workspace }}/../flui-rustup
+  CARGO_BUILD_WARNINGS: deny
+  RUSTDOCFLAGS: -D warnings
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  expectations:
+    name: expectations
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge base with the PR's base branch has to be in the clone.
+          fetch-depth: 0
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
+      - name: Rust cache (xtask)
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          shared-key: xtask
+          save-if: false
+
+      - name: Every edited expectation is named in the body
+        env:
+          # The body is the author's text: it reaches the shell only as an
+          # environment variable, and the check only as a file.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # The checkout is the PR merged into its base branch's current tip,
+          # its first parent (see ci.yml's `plan`).
+          if git rev-parse --verify --quiet HEAD^2 > /dev/null; then
+            BASE_SHA=$(git rev-parse HEAD^1)
+          fi
+          body="$RUNNER_TEMP/pr-body.md"
+          printf '%s\n' "$PR_BODY" > "$body"
+          cargo xtask expectations --base "$BASE_SHA" --body "$body" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"

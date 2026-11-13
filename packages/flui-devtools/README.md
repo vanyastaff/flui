@@ -89,7 +89,7 @@ keeps one threshold for every display.
 
 The contract between the two halves is a set of span names, pinned by
 `tests/frame_profile_end_to_end.rs`: it drives a real tree through
-`HeadlessBinding::pump_frame`, the same `drive_frame` every runner uses, and
+a headless UI runtime's frames, the same `drive_frame` every runner uses, and
 reads the profile back.
 
 ## Timeline
