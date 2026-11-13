@@ -53,8 +53,8 @@
   as its driver, and a later driver is refused `shutting_down`.
 - **The input recording's wire types are `flui_protocol::input_recording`** (ADR-0215 §2):
   `Header`, `Row` and what they nest, plain data a reader reads without the runtime.
-  `flui_runtime::{Privacy, WireError}` and `InputRecord::to_wire`/`from_wire` convert to and from
-  them; `flui_testing::recording` keeps its API (`RecordingClock` and `Privacy` are re-exports).
+  `flui-runtime` converts to and from them behind its hidden `__runtime` seam (`Privacy` is public);
+  `flui_testing::recording` keeps its API (`RecordingClock` and `Privacy` are re-exports).
 - **`InputTaps::install` adds a tap beside the registered ones** instead of replacing the
   registered tap (ADR-0215 §1): each registration is offered the rows admitted after it was
   installed and keeps its own `Gap` and `End` rows and lost-row count, so an application's
@@ -161,7 +161,7 @@
 - **`AgentWindow::record` and `AgentRecording`** (`flui-view`'s development-agent seam): the
   recording's header, its rows, a waker, and `stop`; dropping it ends the recording with no
   row. `flui_protocol::{RecordParams, Recording, RecordStopParams, RecordSummary, RecordEvent,
-  RecordLayer}`, `HandleKind::Recording`, `RecordingStart::to_wire` (`flui-runtime`) and
+  RecordLayer}`, `HandleKind::Recording` and
   `HeadlessHost::serve_window`, which hands a window it opened to a development agent.
 - **`flui record <file>`** writes a running app's input recording (the rows `flui-testing`
   replays) to a file or, with `-`, to stdout, until Ctrl-C or until the window closes.

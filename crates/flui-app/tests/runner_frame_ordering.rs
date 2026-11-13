@@ -25,6 +25,7 @@ const RUNNER_SOURCES: &[&str] = &[
     include_str!("../src/app/runner/desktop.rs"),
     include_str!("../src/app/runner/ios.rs"),
     include_str!("../src/app/runner/main_window.rs"),
+    include_str!("../src/app/runner/raster_host.rs"),
     include_str!("../src/app/runner/device_recovery.rs"),
     include_str!("../src/app/runner/frame_pacing.rs"),
     include_str!("../src/app/runner/frame_driver.rs"),
@@ -141,27 +142,29 @@ fn every_runner_frame_site_drives_the_ui_runtime_pump() {
         );
     }
 
-    // The native sites (desktop, Android, iOS) pump through the device-
-    // recovery wrapper; the wrapper and the web site call the pump with the
-    // wake's sampled clock. The wrapper's definition is spelled
-    // `pump_with_device_recovery<B>(`, so it is not counted as a call.
+    // The Android and iOS sites pump through the raster lane's device-
+    // recovery wrapper; the desktop site pumps into its window's raster slot,
+    // whose executor recovers the device. The wrapper, the desktop site and
+    // the web site call the pump with the wake's sampled clock. The
+    // wrapper's definition is spelled `pump_with_device_recovery<B>(`, so it
+    // is not counted as a call.
     let recovery_sites = code_lines
         .iter()
         .filter(|l| l.contains("pump_with_device_recovery("))
         .count();
     assert_eq!(
-        recovery_sites, 3,
-        "expected exactly three PRODUCTION `pump_with_device_recovery(` call sites (desktop, \
-         Android, iOS); found {recovery_sites}"
+        recovery_sites, 2,
+        "expected exactly two PRODUCTION `pump_with_device_recovery(` call sites (Android, \
+         iOS); found {recovery_sites}"
     );
     let direct_pump_sites = code_lines
         .iter()
         .filter(|l| l.contains(".pump(&mut SampledClock"))
         .count();
     assert_eq!(
-        direct_pump_sites, 2,
-        "expected exactly two PRODUCTION `.pump(&mut SampledClock` sites (the device-recovery \
-         wrapper and the web runner); found {direct_pump_sites}"
+        direct_pump_sites, 3,
+        "expected exactly three PRODUCTION `.pump(&mut SampledClock` sites (the device-recovery \
+         wrapper, the desktop raster slot and the web runner); found {direct_pump_sites}"
     );
 }
 
@@ -191,13 +194,13 @@ fn every_background_wake_calls_pump_background() {
     );
 }
 
-/// The native (desktop/Android/iOS) production frame paths must drive the
-/// raster mailbox — every frame crossing to the backend as an owned,
-/// stamped `SceneSnapshot` through `RasterLane` (ADR-0045's inline lane) —
-/// never the pre-mailbox direct sink. Only the web runner still pumps
-/// through a `DirectSink`, for a stated reason (its renderer arrives
-/// asynchronously and recovers across an `.await`, a shape the lane does
-/// not yet accommodate — see `DirectSink`'s doc in `raster_lane.rs`).
+/// The native production frame paths hand every frame to the backend as an
+/// owned, stamped `SceneSnapshot`, never through the direct sink: the
+/// desktop runner through its window's slot on the raster executor
+/// (ADR-0305), Android and iOS through `RasterLane` until they move to it.
+/// Only the web runner still pumps through a `DirectSink`, for a stated
+/// reason (its renderer arrives asynchronously and recovers across an
+/// `.await` — see `DirectSink`'s doc in `raster_lane.rs`).
 ///
 /// Red-check: revert any native bootstrap to `Arc<Mutex<Renderer>>` +
 /// `DirectSink` and the corresponding count here breaks.
@@ -216,10 +219,20 @@ fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend() {
         .filter(|l| l.contains("RasterLane::new("))
         .count();
     assert_eq!(
-        lane_constructions, 3,
-        "expected exactly three PRODUCTION `RasterLane::new(` sites (the desktop, Android and \
-         iOS bootstraps each wrap their renderer in the raster mailbox); found \
+        lane_constructions, 2,
+        "expected exactly two PRODUCTION `RasterLane::new(` sites (the Android and iOS \
+         bootstraps each wrap their renderer in the raster mailbox); found \
          {lane_constructions}"
+    );
+
+    let slot_sites = code_lines
+        .iter()
+        .filter(|l| l.contains("RasterCommand::Frame"))
+        .count();
+    assert_eq!(
+        slot_sites, 1,
+        "expected exactly one PRODUCTION `RasterCommand::Frame` site (the raster host's \
+         submit, through which every desktop window draws); found {slot_sites}"
     );
 
     let direct_sink_sites = code_lines

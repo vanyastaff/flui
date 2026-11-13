@@ -1,12 +1,11 @@
 //! Coalesced, loop-scoped owner turns. No user work crosses the sender boundary.
 //!
 //! The signal carries admission and scheduling state only; the owner-turn
-//! callback waits between turns in a [`TurnSlot`] passed to
-//! [`OwnerSignal::register_in`] and `OwnerSignal::drive_in`. A backend
-//! that keeps an `OwnerTurnSlot` (Windows only) in owner-only state therefore never has
-//! its callback dropped by whichever thread closes or drops the last
-//! `Arc<OwnerSignal>`. Backends not yet converted use the signal's own
-//! shared slot through [`OwnerSignal::register`] and [`OwnerSignal::drive`].
+//! callback waits between turns in the [`OwnerTurnSlot`] the host's loop keeps,
+//! passed to [`OwnerSignal::register_in`] and `OwnerTurn::drive_in`. The slot
+//! is owner-only state, so the callback is never `Send` and is dropped on the
+//! owner thread, never by whichever thread closes or drops the last
+//! `Arc<OwnerSignal>` (ADR-0327 §5).
 //!
 //! A posted turn is begun before the loop reads anything a wake asked it to
 //! read ([`OwnerSignal::begin_turn`]), and driven after: a wake that lands
@@ -23,77 +22,45 @@ use crate::{
 };
 use flui_foundation::{ClaimSlot, claim_slot, panic::FirstPanic};
 use parking_lot::Mutex;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
 type Notify = Arc<dyn Fn() -> Result<(), PlatformError> + Send + Sync>;
-type Callback = Box<dyn FnMut() + Send>;
+pub(crate) type Callback = Box<dyn FnMut()>;
 /// The owner thread's slot of the platform the signal asks through.
 type PlatformSlot = OwnerSlot<Weak<dyn Platform>>;
 
-/// Where the owner-turn callback waits between turns. Every method is
-/// called with the signal's state lock held and runs no user code.
-pub(crate) trait TurnSlot {
-    /// Installs `callback`, returning the one it replaces.
-    fn replace(&self, callback: Callback) -> Option<Callback>;
-    /// Leases the callback out for one turn.
-    fn take(&self) -> Option<Callback>;
-    /// Returns a leased callback unless a replacement was registered while
-    /// it was out; hands it back when it was superseded.
-    fn restore(&self, callback: Callback) -> Option<Callback>;
-}
-
-/// An owner-turn slot for owner-only state. `!Send` and `!Sync`, so the
-/// callback in it is dropped wherever the owner drops the slot, never by the
-/// thread that closes or drops the signal.
-#[cfg(target_os = "windows")]
+/// Where the owner-turn callback waits between turns: owner-only state the
+/// host's loop keeps, `!Send` and `!Sync`, so the callback in it is dropped on
+/// the owner thread, never by the thread that closes or drops the signal.
+/// The signal reaches it only with its state lock held, and runs no user code
+/// then.
 #[derive(Default)]
-pub(crate) struct OwnerTurnSlot(std::cell::RefCell<Option<Callback>>);
+pub(crate) struct OwnerTurnSlot(RefCell<Option<Callback>>);
 
-#[cfg(target_os = "windows")]
 impl OwnerTurnSlot {
     /// Drops the registered callback, if any, on the calling (owner) thread.
     pub(crate) fn clear(&self) {
         let callback = self.0.borrow_mut().take();
         contain_owner_callback(|| drop(callback));
     }
-}
 
-#[cfg(target_os = "windows")]
-impl TurnSlot for OwnerTurnSlot {
+    /// Installs `callback`, returning the one it replaces.
     fn replace(&self, callback: Callback) -> Option<Callback> {
         self.0.borrow_mut().replace(callback)
     }
+
+    /// Leases the callback out for one turn.
     fn take(&self) -> Option<Callback> {
         self.0.borrow_mut().take()
     }
+
+    /// Returns a leased callback unless a replacement was registered while
+    /// it was out; hands it back when it was superseded.
     fn restore(&self, callback: Callback) -> Option<Callback> {
         let mut slot = self.0.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(callback);
-            None
-        } else {
-            Some(callback)
-        }
-    }
-}
-
-/// The slot inside the signal itself, for backends whose owner-turn
-/// callback has not moved into owner-only state: whichever thread closes or
-/// drops the signal drops the callback.
-#[derive(Default)]
-struct SharedTurnSlot(Mutex<Option<Callback>>);
-
-impl TurnSlot for SharedTurnSlot {
-    fn replace(&self, callback: Callback) -> Option<Callback> {
-        self.0.lock().replace(callback)
-    }
-    fn take(&self) -> Option<Callback> {
-        self.0.lock().take()
-    }
-    fn restore(&self, callback: Callback) -> Option<Callback> {
-        let mut slot = self.0.lock();
         if slot.is_none() {
             *slot = Some(callback);
             None
@@ -154,7 +121,6 @@ pub(crate) struct OwnerSignal {
     state: Mutex<State>,
     notify: Notify,
     owner: Mutex<ThreadId>,
-    shared: SharedTurnSlot,
     /// The platform the owner opens the windows other threads ask for
     /// through, and asks the exit policy again through; `None` where the
     /// owner opens none for them. The platform itself is the owner thread's:
@@ -180,7 +146,6 @@ impl OwnerSignal {
             }),
             notify,
             owner: Mutex::new(std::thread::current().id()),
-            shared: SharedTurnSlot::default(),
             platform: Mutex::new(None),
         })
     }
@@ -345,14 +310,10 @@ impl OwnerSignal {
     pub(crate) fn owner(&self) -> ThreadId {
         *self.owner.lock()
     }
-    /// Registers into the signal's own shared slot.
-    pub(crate) fn register(&self, callback: Callback) -> Result<(), WakeRegistrationError> {
-        self.register_in(&self.shared, callback)
-    }
-    /// Registers into `slot`, which the caller's owner-side state holds.
+    /// Registers into `slot`, which the host's loop keeps.
     pub(crate) fn register_in(
         &self,
-        slot: &dyn TurnSlot,
+        slot: &OwnerTurnSlot,
         callback: Callback,
     ) -> Result<(), WakeRegistrationError> {
         debug_assert_eq!(self.owner(), std::thread::current().id());
@@ -492,15 +453,10 @@ impl OwnerSignal {
             driven: false,
         }
     }
-    /// One finite turn over the signal's own shared slot, begun and driven
-    /// at once: for a loop that reads nothing of its own first.
-    pub(crate) fn drive(&self) -> bool {
-        self.begin_turn().drive()
-    }
-    /// [`drive`](Self::drive) over `slot`. `true` asks the native owner to
-    /// perform its quit path.
-    #[cfg(target_os = "windows")]
-    pub(crate) fn drive_in(&self, slot: &dyn TurnSlot) -> bool {
+    /// One finite turn over `slot`, begun and driven at once: for a loop that
+    /// reads nothing of its own first. `true` asks the native owner to perform
+    /// its quit path.
+    pub(crate) fn drive_in(&self, slot: &OwnerTurnSlot) -> bool {
         self.begin_turn().drive_in(slot)
     }
     /// Post the turn that work still owed asks for; a failure is logged, the
@@ -510,14 +466,13 @@ impl OwnerSignal {
             contain_owner_callback(|| tracing::error!(%error, "owner turn could not be rearmed"));
         }
     }
-    /// Stops admission and scheduling, and drops the callback in the
-    /// signal's own shared slot. A slot held by owner-side state is the
-    /// owner's to clear.
+    /// Stops admission and scheduling. The callback in the host's turn slot is
+    /// the owner's to drop: [`close_in`](Self::close_in) does both.
     ///
     /// The window opens still queued are refused: each waiting requester
     /// hears `OwnerGone`.
     pub(crate) fn close(&self) {
-        let (callback, opens) = {
+        let opens = {
             let mut state = self.state.lock();
             state.accepting = false;
             state.running = false;
@@ -525,12 +480,17 @@ impl OwnerSignal {
             state.queued = false;
             state.quit = false;
             state.reevaluate_exit = false;
-            (self.shared.take(), std::mem::take(&mut state.opens))
+            std::mem::take(&mut state.opens)
         };
-        contain_owner_callback(|| drop(callback));
         for open in opens {
             contain_owner_callback(|| drop(open));
         }
+    }
+    /// [`close`](Self::close), then drops the callback in `slot` on this, the
+    /// owner, thread.
+    pub(crate) fn close_in(&self, slot: &OwnerTurnSlot) {
+        self.close();
+        slot.clear();
     }
 }
 /// Open the window `request` asks for on the owner thread. A factory that
@@ -580,15 +540,9 @@ pub(crate) struct OwnerTurn<'signal> {
 }
 
 impl OwnerTurn<'_> {
-    /// The application's turn over the signal's own shared slot. `true` asks
-    /// the native owner to perform its quit path.
-    pub(crate) fn drive(self) -> bool {
-        let shared = &self.signal.shared;
-        self.drive_in(shared)
-    }
-    /// The application's turn over `slot`, which the caller's owner-side
-    /// state holds. `true` asks the native owner to perform its quit path.
-    pub(crate) fn drive_in(mut self, slot: &dyn TurnSlot) -> bool {
+    /// The application's turn over `slot`, which the host's loop keeps.
+    /// `true` asks the native owner to perform its quit path.
+    pub(crate) fn drive_in(mut self, slot: &OwnerTurnSlot) -> bool {
         self.driven = true;
         let signal = self.signal;
         let mut callback = {

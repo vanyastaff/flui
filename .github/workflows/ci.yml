@@ -247,6 +247,7 @@ jobs:
       size_required: ${{ steps.scope.outputs.size_required }}
       send_positions_required: ${{ steps.scope.outputs.send_positions_required }}
       miri_required: ${{ steps.scope.outputs.miri_required }}
+      perf_required: ${{ steps.scope.outputs.perf_required }}
       features_required: ${{ steps.scope.outputs.features_required }}
       hack_args: ${{ steps.scope.outputs.hack_args }}
     steps:
@@ -833,13 +834,17 @@ jobs:
   # `--instructions --check` runs each `perf_scaling_` scenario on its small
   # and large tree under callgrind and fails when the large one costs more
   # than 5% over the small. The scenarios' own assertions (equal allocations
-  # on both sizes) run on every PR with flui-widgets' suite; callgrind and
-  # the baseline comparison are the slow half, so they run in `full` only.
+  # on both sizes) run on every PR with flui-widgets' suite. The baseline
+  # comparison runs in `full`, and on a pull request whose diff reaches code
+  # that runs for every node of a frame or the comparison's own inputs
+  # (`perf_required`, `change_scope::perf_scope`): one more allocation there
+  # is a rise in every scenario. Callgrind is the slow half and runs in
+  # `full` only.
   # ─────────────────────────────────────────────────────────────────────────
   perf-gates:
     name: perf-gates
     needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full'
+    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.perf_required == 'true')
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -864,6 +869,7 @@ jobs:
           tool: cargo-nextest@0.9
 
       - name: Install valgrind
+        if: needs.plan.outputs.lane == 'full'
         uses: ./.github/actions/apt-install
         with:
           packages: valgrind
@@ -872,6 +878,7 @@ jobs:
         run: cargo xtask perf --check
 
       - name: cargo xtask perf --instructions --check
+        if: needs.plan.outputs.lane == 'full'
         run: cargo xtask perf --instructions --check
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -1414,11 +1421,11 @@ jobs:
       #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
       #      full      wide + FULL_JOBS (additional Linux checks) + test-trybuild
-      #                + size + api-contracts + miri
+      #                + size + api-contracts + miri + perf-gates
       #    and a wide pull request adds test-trybuild when `trybuild_required`,
       #    size when `size_required`, feature-scope when `features_required`,
-      #    api-contracts when `send_positions_required` and miri when
-      #    `miri_required` (ON_DEMAND).
+      #    api-contracts when `send_positions_required`, miri when
+      #    `miri_required` and perf-gates when `perf_required` (ON_DEMAND).
       #    Every other job must skip. Any other skip (a drifted `if:`, a
       #    cancellation) or a job that ran where it should have skipped fails
       #    the aggregator. Each list must equal the jobs whose `if:` names its
@@ -1429,12 +1436,13 @@ jobs:
           HEAVY_JOBS: >-
             clippy wasm-check cross-typecheck test test-nested doc test-features public-api
           FULL_JOBS: >-
-            feature-matrix doc-test perf-gates
+            feature-matrix doc-test
           LANE: ${{ needs.plan.outputs.lane }}
           TRYBUILD_REQUIRED: ${{ needs.plan.outputs.trybuild_required }}
           SIZE_REQUIRED: ${{ needs.plan.outputs.size_required }}
           SEND_POSITIONS_REQUIRED: ${{ needs.plan.outputs.send_positions_required }}
           MIRI_REQUIRED: ${{ needs.plan.outputs.miri_required }}
+          PERF_REQUIRED: ${{ needs.plan.outputs.perf_required }}
           FEATURES_REQUIRED: ${{ needs.plan.outputs.features_required }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify

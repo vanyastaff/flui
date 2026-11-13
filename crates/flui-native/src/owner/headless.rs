@@ -160,6 +160,7 @@ pub(crate) trait TrackedWindows: OpenWindows {
 /// [`HeadlessPlatform`](crate::HeadlessPlatform) is its platform.
 pub struct HeadlessLoop {
     pub(crate) signal: Arc<crate::owner::signal::OwnerSignal>,
+    pub(crate) turn: std::rc::Rc<crate::owner::signal::OwnerTurnSlot>,
     wake_failure: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) state: std::rc::Rc<std::cell::RefCell<HeadlessState>>,
 }
@@ -224,6 +225,7 @@ pub(crate) struct HeadlessState {
     /// ([`HeadlessPlatform::with_os_drag`](crate::HeadlessPlatform::with_os_drag)).
     pub(crate) os_drag_start: Option<OsDragStart>,
     pub(crate) owner_signal: Weak<crate::owner::signal::OwnerSignal>,
+    pub(crate) owner_turn: std::rc::Weak<crate::owner::signal::OwnerTurnSlot>,
     /// What the platform delivers to the application's handler, which `run`
     /// binds.
     pub(crate) app: Arc<AppDelivery>,
@@ -352,6 +354,7 @@ impl HeadlessLoop {
             })),
             os_drag_start: None,
             owner_signal: Weak::new(),
+            owner_turn: std::rc::Weak::new(),
             notices: H::notices(&app),
             app,
             keyboard_layout_changed: None,
@@ -392,8 +395,13 @@ impl HeadlessLoop {
                 }
             })),
             state: std::rc::Rc::new(std::cell::RefCell::new(state)),
+            turn: std::rc::Rc::default(),
         };
-        platform.state.borrow_mut().owner_signal = Arc::downgrade(&platform.signal);
+        {
+            let mut state = platform.state.borrow_mut();
+            state.owner_signal = Arc::downgrade(&platform.signal);
+            state.owner_turn = std::rc::Rc::downgrade(&platform.turn);
+        }
         platform
     }
 
@@ -410,13 +418,22 @@ impl HeadlessLoop {
 /// delivery hears the quit once per run. The signal, when there is one,
 /// closes first.
 fn finish_quit(state: &std::cell::RefCell<HeadlessState>) {
-    let (signal, app) = {
+    let (signal, turn, app) = {
         let mut state = state.borrow_mut();
         state.is_running = false;
-        (state.owner_signal.upgrade(), Arc::clone(&state.app))
+        (
+            state.owner_signal.upgrade(),
+            state.owner_turn.upgrade(),
+            Arc::clone(&state.app),
+        )
     };
     if let Some(signal) = signal {
         signal.close();
+    }
+    // The application's wake callback is dropped with the state released:
+    // its captures' destructors may call back into this platform.
+    if let Some(turn) = turn {
+        turn.clear();
     }
     app.quit_requested().or_resume(());
 }
@@ -461,6 +478,7 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
             signal: Arc::downgrade(&owner.signal),
             wake_failure: Arc::downgrade(&owner.wake_failure),
             state: std::rc::Rc::downgrade(&owner.state),
+            turn: std::rc::Rc::downgrade(&owner.turn),
             owner_affinity: std::marker::PhantomData,
         }
     }
@@ -512,15 +530,21 @@ impl host::Loop for HeadlessLoop {
         let state_handle = std::rc::Rc::clone(&self.state);
         let signal = Arc::clone(&self.signal);
         signal.bind_owner();
-        struct BootstrapGuard(Option<Arc<crate::owner::signal::OwnerSignal>>);
+        struct BootstrapGuard(
+            Option<(
+                Arc<crate::owner::signal::OwnerSignal>,
+                std::rc::Rc<crate::owner::signal::OwnerTurnSlot>,
+            )>,
+        );
         impl Drop for BootstrapGuard {
             fn drop(&mut self) {
-                if let Some(signal) = self.0.take() {
-                    signal.close();
+                if let Some((signal, turn)) = self.0.take() {
+                    signal.close_in(&turn);
                 }
             }
         }
-        let mut bootstrap_guard = BootstrapGuard(Some(Arc::clone(&signal)));
+        let mut bootstrap_guard =
+            BootstrapGuard(Some((Arc::clone(&signal), std::rc::Rc::clone(&self.turn))));
 
         self.with_state(|state| {
             state.is_running = true;
@@ -542,12 +566,14 @@ impl host::Loop for HeadlessLoop {
             Rc::new(HeadlessDeferredOwnerHooks {
                 state: state_handle,
                 signal: Arc::clone(&signal),
+                turn: std::rc::Rc::clone(&self.turn),
                 owner_thread,
             })
         } else {
             Rc::new(DirectOwnerHooks::with_signal(
                 Arc::clone(&platform),
                 Arc::clone(&signal),
+                std::rc::Rc::clone(&self.turn),
             ))
         };
 
@@ -664,16 +690,14 @@ pub(crate) struct PendingOpen {
 
 struct HeadlessDeferredOwnerHooks {
     signal: Arc<crate::owner::signal::OwnerSignal>,
+    turn: std::rc::Rc<crate::owner::signal::OwnerTurnSlot>,
     state: std::rc::Rc<std::cell::RefCell<HeadlessState>>,
     owner_thread: ThreadId,
 }
 
 impl OwnerHooks for HeadlessDeferredOwnerHooks {
-    fn on_wake(
-        &self,
-        callback: Box<dyn FnMut() + Send>,
-    ) -> Result<(), crate::WakeRegistrationError> {
-        self.signal.register(callback)
+    fn on_wake(&self, callback: Box<dyn FnMut()>) -> Result<(), crate::WakeRegistrationError> {
+        self.signal.register_in(&self.turn, callback)
     }
 
     fn open_owner_window(
@@ -720,6 +744,7 @@ pub struct HeadlessOwnerTurns {
     wake_failure: Weak<std::sync::atomic::AtomicBool>,
     owner_affinity: std::marker::PhantomData<std::rc::Rc<()>>,
     signal: Weak<crate::owner::signal::OwnerSignal>,
+    turn: std::rc::Weak<crate::owner::signal::OwnerTurnSlot>,
     state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
 static_assertions::assert_not_impl_any!(HeadlessOwnerTurns: Send, Sync);
@@ -755,7 +780,10 @@ impl HeadlessOwnerTurns {
             thread::current().id(),
             "headless owner turn must run on its owner"
         );
-        if signal.drive() {
+        let Some(turn) = self.turn.upgrade() else {
+            return;
+        };
+        if signal.drive_in(&turn) {
             signal.close();
             if let Some(state) = self.state.upgrade() {
                 finish_quit(&state);

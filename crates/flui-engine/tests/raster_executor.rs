@@ -13,7 +13,7 @@ use std::{
 use flui_engine::{
     DeviceHealth, EngineError, ExecutorHealth, PresentDisposition, RasterCommand, RasterExecutor,
     RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
-    SlotId, SlotPhase, SlotSettlement, SlotTarget, SlotVisibility,
+    SlotId, SlotPhase, SlotSettlement, SlotTarget, SlotVisibility, SurfaceHold,
     raster_executor::LIFECYCLE_CAPACITY,
     testing::{ScriptedAnswer, ScriptedSlots, SlotCall},
 };
@@ -2032,15 +2032,19 @@ fn an_offscreen_slot_the_rebuilt_device_refuses_holds_why_and_asks_no_surface() 
         },
     );
     let _ = rig.executor.turn();
-    assert!(
-        !rig.sender.record(refused.slot).expect("held").wants_surface,
+    assert_eq!(
+        rig.sender.record(refused.slot).expect("held").surface.hold,
+        SurfaceHold::Held,
         "an offscreen slot takes no restore"
     );
     assert!(matches!(
         rig.sender.take_failure(refused.slot),
         Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
     ));
-    assert!(!rig.sender.record(kept.slot).expect("held").wants_surface);
+    assert_eq!(
+        rig.sender.record(kept.slot).expect("held").surface.hold,
+        SurfaceHold::Held
+    );
     let _ = rig
         .sender
         .send(frame(restamped(&rig, kept), 1))

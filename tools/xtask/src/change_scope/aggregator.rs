@@ -66,9 +66,11 @@ pub(super) struct OnDemand {
 /// packages that have features (main's `feature-matrix` runs it over the whole
 /// workspace), the API contracts when a changed line can change what
 /// `send-positions` reports (a pull request runs that half; `api-closure` stays
-/// on `main`), and `miri` when a changed file sits under a source it
-/// interprets whole.
-pub(super) const ON_DEMAND: [OnDemand; 5] = [
+/// on `main`), `miri` when a changed file sits under a source it
+/// interprets whole, and `perf-gates` when a changed file sits under a
+/// source that runs for every node of a frame (a pull request runs its
+/// baseline comparison; callgrind stays on `main`).
+pub(super) const ON_DEMAND: [OnDemand; 6] = [
     OnDemand {
         job: "test-trybuild",
         output: "trybuild_required",
@@ -92,6 +94,11 @@ pub(super) const ON_DEMAND: [OnDemand; 5] = [
     OnDemand {
         job: "miri",
         output: "miri_required",
+        in_full: true,
+    },
+    OnDemand {
+        job: "perf-gates",
+        output: "perf_required",
         in_full: true,
     },
 ];
@@ -575,6 +582,17 @@ mod tests {
             &run("wide"),
             &without(quiet.clone(), "miri"),
             "'miri': 'ran (success)",
+        );
+        let perf = Run {
+            asked: &["perf_required"],
+            ..run("wide")
+        };
+        green(&perf, &without(quiet.clone(), "perf-gates"));
+        red(&perf, &quiet, "'perf-gates': 'skipped");
+        red(
+            &run("wide"),
+            &without(quiet.clone(), "perf-gates"),
+            "'perf-gates': 'ran (success)",
         );
         let main = Run {
             event: "push",

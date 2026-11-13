@@ -79,9 +79,10 @@ use flui_sdk::painting::Color;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
-    Center, ConstrainedBox, IconTheme, IconThemeData, WidgetState, WidgetStateProperty,
-    WidgetStates, WidgetStatesController,
+    Center, ConstrainedBox, IconTheme, IconThemeData, SemanticsRole, WidgetState,
+    WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 
 use crate::button_style_button::PressCallback;
@@ -369,7 +370,10 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
             .child(center)
             .shape(shape)
             .overlay_color(overlay_color)
-            .states_controller(self.states.clone());
+            .states_controller(self.states.clone())
+            // Flutter's `RawMaterialButton` is `Semantics(button: true)`; the
+            // well's switch says whether it is enabled.
+            .description(Description::new(SemanticsRole::Button));
         if let Some(on_pressed) = view.on_pressed.clone() {
             ink_well = ink_well.on_tap(move |ctx| on_pressed(ctx));
         }

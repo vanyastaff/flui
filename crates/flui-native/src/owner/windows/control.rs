@@ -618,8 +618,8 @@ impl OwnerGate {
 
 /// The Win32 [`OwnerHooks`]: window creation and the proxy transport as
 /// [`DirectOwnerHooks`] provides them, with the owner-turn callback
-/// registered into the owner context's [`OwnerTurnSlot`] instead of the
-/// signal's shared slot.
+/// registered into the owner context's [`OwnerTurnSlot`] only while the owner
+/// window still holds that context.
 pub(crate) struct WindowsOwnerHooks {
     direct: DirectOwnerHooks,
     signal: Arc<OwnerSignal>,
@@ -629,7 +629,14 @@ pub(crate) struct WindowsOwnerHooks {
 impl WindowsOwnerHooks {
     pub(crate) fn new(platform: Arc<dyn Platform>, control: &OwnerControl) -> Self {
         Self {
-            direct: DirectOwnerHooks::with_signal(platform, Arc::clone(&control.signal)),
+            // The callback goes to the owner context's slot through the gate
+            // below; the direct hooks get a slot of their own, never
+            // registered into, so the context's slot dies with the context.
+            direct: DirectOwnerHooks::with_signal(
+                platform,
+                Arc::clone(&control.signal),
+                Rc::default(),
+            ),
             signal: Arc::clone(&control.signal),
             gate: control.gate(),
         }
@@ -637,20 +644,23 @@ impl WindowsOwnerHooks {
 }
 
 impl OwnerHooks for WindowsOwnerHooks {
-    fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
+    fn on_wake(&self, callback: Box<dyn FnMut()>) -> Result<(), WakeRegistrationError> {
         // `OwnerPlatform`, the only caller, is `!Send`, so this runs on the
         // owner thread; a refusal here means the owner window is gone.
         match self.gate.shares("on_wake") {
             Ok(shares) => {
-                self.signal.register_in(&*shares.turn, callback)?;
+                self.signal.register_in(&shares.turn, callback)?;
                 if shares.preferences.pending() {
                     let _ = self.signal.wake();
                 }
                 Ok(())
             }
             Err(reason) => {
-                tracing::debug!(?reason, "owner-turn registration refused");
-                drop(callback);
+                // A subscriber and the callback's captures are user code (ADR-0287).
+                contain_owner_callback(|| {
+                    tracing::debug!(?reason, "owner-turn registration refused");
+                });
+                contain_owner_callback(|| drop(callback));
                 Err(WakeRegistrationError::OwnerGone)
             }
         }
@@ -781,7 +791,7 @@ unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
         } else if message == WAKE && !pointer.is_null() {
             let signal = Arc::clone(&(*pointer).signal);
             let turn = Rc::clone(&(*pointer).turn);
-            if signal.drive_in(&*turn) {
+            if signal.drive_in(&turn) {
                 quit_owner_loop(&signal, &turn);
             }
             return LRESULT(0);

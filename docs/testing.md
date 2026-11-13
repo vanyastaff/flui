@@ -587,7 +587,8 @@ tree costs more than 5% over the small one: a frame that clears a table the
 mount grew or walks the whole tree for what a few nodes report is caught there,
 while every counter of its work stays put. The budget assertions run with
 flui-widgets' suite on every PR; the `perf-gates` job runs `perf --check` and
-`perf --instructions --check` in the `full` lane.
+`perf --instructions --check` in the `full` lane, and `perf --check` alone on a pull request
+whose diff reaches code that runs for every node of a frame (`perf_required`, below).
 
 `perf --size` measures what an application costs before it does anything,
 against `perf/size.toml`: the packages of the facade's default graph on Linux,
@@ -1055,7 +1056,7 @@ runs `checks`, `plan` and the `ci` aggregator:
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
 | `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `public-api`) over the whole workspace, and the on-demand jobs its diff asks for (below) |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test`, `perf-gates` (all Linux), and `test-trybuild`, `api-contracts` and `miri` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test` (both Linux), and `test-trybuild`, `api-contracts`, `miri` and `perf-gates` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
   job, in parallel, over the whole workspace. One serial job over the
@@ -1127,8 +1128,18 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
   or a change to its plan (`tools/xtask/src/tasks.rs`) or this rule
   (`tools/xtask/src/change_scope/miri_scope.rs`). A change that reaches only the job's narrower
   filters is left to main.
+- `perf-gates` runs its baseline comparison (`cargo xtask perf --check`) when `perf_required` is
+  set: a changed file under a source that runs for every node of a frame
+  (`crates/flui-view/src/tree/`, `crates/flui-view/src/owner/`, `crates/flui-rendering/src/storage/`,
+  `crates/flui-rendering/src/pipeline/`, `crates/flui-semantics/src/`), where one more
+  allocation is a rise in every scenario, or a change to the baseline
+  (`crates/flui-widgets/perf/baseline/`), the scenarios (`crates/flui-widgets/tests/perf.rs`),
+  what counts for them (`crates/flui-testing/src/heap.rs`, `crates/flui-testing/src/control_cost.rs`),
+  the task (`tools/xtask/src/perf.rs`) or this rule
+  (`tools/xtask/src/change_scope/perf_scope.rs`). A rise that comes from anywhere else, and the
+  callgrind half of the job, are left to main.
 
-A pull request that reaches none of them skips all four.
+A pull request that reaches none of them skips all of them.
 
 
 **Only `full` checks these**, so a pull request can merge green and still

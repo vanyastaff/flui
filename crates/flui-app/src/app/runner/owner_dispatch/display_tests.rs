@@ -624,9 +624,6 @@ fn window_display_observation_contract() {
 
 fn wake_deadlines() -> Arc<super::super::desktop::DesktopWakeDeadlines> {
     Arc::new(super::super::desktop::DesktopWakeDeadlines {
-        device_recovery_backoff: Arc::new(
-            super::super::device_recovery::new_device_recovery_backoff(),
-        ),
         fallback: Arc::new(super::super::frame_pacing::FallbackWake::new()),
         first_reveal: Arc::new(super::super::first_reveal::FirstReveal::new()),
     })

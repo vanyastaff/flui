@@ -162,7 +162,8 @@ impl Rig {
     /// Wait for the owner to be woken, then take the turn the wake asked for.
     fn wait_for_wake(&self) {
         wait_for("a wake", || self.wakes.load(Ordering::SeqCst) > 0);
-        self.signal.drive();
+        self.signal
+            .drive_in(&crate::owner::signal::OwnerTurnSlot::default());
     }
 }
 

@@ -183,11 +183,11 @@ documentation and type-checked:
    one change across every host, bounds only, with `cross-typecheck` green on every target before
    it merges;
 5. one PR per host moves `Arc`/`Mutex` to `Rc`/`RefCell` inside the loop and windows and deletes
-   its `unsafe impl Send/Sync`: headless, X11, Wayland, Windows, macOS, iOS, Android, web. With
-   the last of them `run_shared` takes `Rc<Self>` and the callbacks of `on_wake` and
-   `on_keyboard_layout_change` lose `Send`: until then the callbacks sit in the owner signal's
-   state, which other threads lock to wake the owner, and the owner-local turn slot each host gets
-   in its step is where they move;
+   its `unsafe impl Send/Sync`: headless, X11, Wayland, Windows, macOS, iOS, Android, web. Each
+   host keeps an owner-local turn slot, where the callback of `on_wake` waits between turns, so
+   that callback is not `Send` and other threads, which lock the owner signal to wake the owner,
+   never reach it. With the last of them `run_shared` takes `Rc<Self>` and the callbacks of
+   `on_keyboard_layout_change` lose `Send`;
 6. `flui-platform`'s five traits lose `Send + Sync` (ADR-0323 §4) and `WindowFacets` holds `Rc`;
 7. `OwnerSlot`, `OwnerCell` and `OwnerMap` are deleted.
 

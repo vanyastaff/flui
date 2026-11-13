@@ -380,7 +380,7 @@ pub(crate) struct AppRuntime {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    pub(super) window_renderers: super::runner::window_renderer::WindowRenderers,
+    pub(super) raster_host: super::runner::raster_host::SharedRasterHost,
     #[cfg(target_os = "ios")]
     pub(super) ios_controller: Option<super::runner::ios::IOSController>,
     #[cfg(target_os = "ios")]
@@ -577,7 +577,7 @@ impl AppRuntime {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            window_renderers: super::runner::window_renderer::WindowRenderers::default(),
+            raster_host: super::runner::raster_host::SharedRasterHost::default(),
             #[cfg(target_os = "ios")]
             ios_controller: None,
             #[cfg(target_os = "ios")]

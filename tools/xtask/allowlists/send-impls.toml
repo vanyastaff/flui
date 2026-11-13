@@ -60,11 +60,6 @@ traits = ["Send", "Sync"]
 
 [[allow]]
 crate = "flui-native"
-type = "WebLoop"
-traits = ["Send", "Sync"]
-
-[[allow]]
-crate = "flui-native"
 type = "WebSurface"
 traits = ["Send", "Sync"]
 

@@ -51,7 +51,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::owner::signal::OwnerSignal;
+use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class};
@@ -444,6 +444,8 @@ pub struct IOSLoop {
     /// The system preference source the table made.
     preferences: NativeOwner<Box<dyn UIKitPreferences>>,
     signal: Arc<OwnerSignal>,
+    /// The application's wake callback between owner turns.
+    turn: Rc<OwnerTurnSlot>,
     identity: Arc<()>,
     deadline: RefCell<Option<(Arc<()>, web_time::Instant)>>,
     /// The screens, as the table made them; shared with every window.
@@ -500,7 +502,7 @@ impl IOSLoop {
                     move || {
                         FluiAppDelegate::with_platform(|platform| {
                             if Arc::ptr_eq(&platform.identity, &identity) {
-                                let quitting = platform.signal.drive();
+                                let quitting = platform.signal.drive_in(&platform.turn);
                                 platform.poll_scene_installation();
                                 if quitting {
                                     platform.finish_quit();
@@ -539,6 +541,7 @@ impl IOSLoop {
             ),
             preferences: NativeOwner::new(H::preferences(&signal, marker), marker),
             signal,
+            turn: Rc::default(),
             identity,
             deadline: RefCell::new(None),
             displays,
@@ -641,7 +644,7 @@ impl IOSLoop {
         if !self.running.replace(false) {
             return;
         }
-        self.signal.close();
+        self.signal.close_in(&self.turn);
         self.deadline.borrow_mut().take();
         self.preferences
             .get(MainThreadMarker::new().expect("BUG: UIKit quit runs on main"))
@@ -900,6 +903,7 @@ fn run_pending_bootstrap() -> bool {
     let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
         Arc::clone(&owner_platform),
         Arc::clone(&platform.signal),
+        Rc::clone(&platform.turn),
     ));
     if !platform.signal.accepting() {
         crate::owner::panic_boundary::contain_owner_callback(|| drop(handler));
