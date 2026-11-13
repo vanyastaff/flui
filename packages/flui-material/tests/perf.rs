@@ -17,7 +17,9 @@
 //! process-global font system and installs the kit's counting global
 //! allocator.
 
-use flui_material::{Checkbox, ElevatedButton, InkWell, Radio, Switch, Theme, ThemeData};
+use flui_material::{
+    Checkbox, Chip, ElevatedButton, FilterChip, InkWell, Radio, Switch, Theme, ThemeData,
+};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::Text;
 use flui_testing::control_cost::{
@@ -137,4 +139,64 @@ fn perf_radio_alone() {
             .on_changed(|_ctx, _value| {})
             .boxed()
     });
+}
+
+/// What a pressable `Chip` adds to the `Text` it labels, under a theme: its
+/// composition (the chip, its border painter, `Material`, the well, padding,
+/// constraints, opacity and the label's row), with its button description on
+/// the well's node and no `Semantics` element of its own.
+#[test]
+fn perf_chip_over_text() {
+    let cost = held_to_baseline(
+        "chip_over_text",
+        control_over_text_under(
+            |column| Theme::new(ThemeData::light(), column).boxed(),
+            |row| {
+                Chip::new(Text::new(format!("Row {row}")))
+                    .on_pressed(|_ctx| {})
+                    .boxed()
+            },
+        ),
+    );
+    // The well's three and the chip's own composition; one semantics node,
+    // the well's.
+    assert!(
+        cost.elements <= 14,
+        "a chip adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 9,
+        "a chip adds {} render nodes",
+        cost.render_nodes
+    );
+}
+
+/// What a `FilterChip` adds to the `Text` it labels, under a theme, its
+/// selection on the well's node as the button's toggled state.
+#[test]
+fn perf_filter_chip_over_text() {
+    let cost = held_to_baseline(
+        "filter_chip_over_text",
+        control_over_text_under(
+            |column| Theme::new(ThemeData::light(), column).boxed(),
+            |row| {
+                FilterChip::new(Text::new(format!("Row {row}")))
+                    .selected(row % 2 == 0)
+                    .on_selected(|_ctx, _selected| {})
+                    .boxed()
+            },
+        ),
+    );
+    // A chip's composition and the slot of its checkmark.
+    assert!(
+        cost.elements <= 15,
+        "a filter chip adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 10,
+        "a filter chip adds {} render nodes",
+        cost.render_nodes
+    );
 }

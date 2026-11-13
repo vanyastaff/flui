@@ -45,19 +45,13 @@ fn themed(child: impl flui_sdk::view::IntoView) -> Theme {
     Theme::new(ThemeData::light(), child)
 }
 
-/// The mounted chip's overall container size — the outermost
-/// `RenderSemanticsAnnotations` node, which sizes to its `CustomPaint`/
-/// `Material`/content chain in full (mirrors `tests/checkbox.rs`'s own
-/// semantics-node-as-container-size assertion).
+/// The mounted chip's overall container size: its `Material` surface, which
+/// the chip's well fills.
 fn container_size(laid: &common::LaidOut) -> flui_sdk::geometry::Size {
-    // The wrapper node is the chip's own; its `GestureDetector`s add
-    // action-only annotations beneath it for assistive technology.
-    let semantics = laid
-        .find_semantics_wrappers()
-        .into_iter()
-        .next()
-        .expect("Chip/FilterChip must mount a Semantics wrapper");
-    laid.size(semantics)
+    let surface = laid
+        .try_find_by_render_type("RenderPhysicalShape")
+        .expect("Chip/FilterChip must compose a Material surface");
+    laid.size(surface)
 }
 
 /// The approximate on-screen center of the delete icon in a mounted chip

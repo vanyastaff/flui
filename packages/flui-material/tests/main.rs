@@ -335,8 +335,8 @@ fn selection_control_contracts() {
             checkbox::tristate_cycle_survives_a_rebuild_between_each_tap,
         ),
         (
-            "checkbox::toggles are one node with their state",
-            checkbox::toggles_are_one_node_with_their_state,
+            "checkbox::toggles and chips are one node with their state",
+            checkbox::toggles_and_chips_are_one_node_with_their_state,
         ),
         (
             "radio::a mounted radio announces as a radio button",

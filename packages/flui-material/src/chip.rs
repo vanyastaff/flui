@@ -147,6 +147,7 @@ use flui_sdk::painting::{Paint, Path};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::icon::IconData;
+use flui_sdk::widgets::interaction::node::Description;
 use flui_sdk::widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
     IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, SemanticsRole,
@@ -557,7 +558,16 @@ impl StatelessView for Chip {
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
         );
 
+        // Flutter's `Semantics(button: true, enabled: …)` around a pressable
+        // chip is the well's node, enabled while the well has its tap. A chip
+        // without `on_pressed` is no button: it keeps the plain node that
+        // names it and says whether it is enabled.
         let mut ink_well = InkWell::new().child(padded_content).shape(shape);
+        if self.on_pressed.is_some() {
+            ink_well = ink_well.description(
+                Description::new(SemanticsRole::Button).identifier(self.identifier.clone()),
+            );
+        }
         if self.is_pressable() {
             let on_pressed = self.on_pressed.clone();
             ink_well = ink_well.on_tap(move |ctx| {
@@ -570,15 +580,16 @@ impl StatelessView for Chip {
         let container = CustomPaint::new()
             .foreground_painter(ChipBorderPainter { side, shape })
             .child(Material::new(background_color).shape(shape).child(ink_well));
-
-        crate::button_style_button::identified(Semantics::new(), self.identifier.as_ref())
-            .role(if self.on_pressed.is_some() {
-                SemanticsRole::Button
-            } else {
-                SemanticsRole::None
-            })
-            .enabled(self.enabled)
-            .child(container)
+        if self.on_pressed.is_some() {
+            return container.boxed();
+        }
+        let mut semantics = Semantics::new()
+            .role(SemanticsRole::None)
+            .enabled(self.enabled);
+        if let Some(identifier) = &self.identifier {
+            semantics = semantics.identifier(std::sync::Arc::clone(identifier));
+        }
+        semantics.child(container).boxed()
     }
 }
 
@@ -845,7 +856,18 @@ impl StatelessView for FilterChip {
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
         );
 
-        let mut ink_well = InkWell::new().child(padded_content).shape(shape);
+        // A filter chip is a toggle button: ARIA carries its selection as the
+        // button's pressed state, which `aria-selected` on a button is not.
+        // Flutter's `Semantics(button: true, toggled: …, enabled: …)` around
+        // the chip is the well's node, enabled while the well has its tap.
+        let mut ink_well = InkWell::new()
+            .child(padded_content)
+            .shape(shape)
+            .description(
+                Description::new(SemanticsRole::Button)
+                    .identifier(self.identifier.clone())
+                    .toggled(Toggled::from_bool(selected)),
+            );
         if enabled {
             let on_selected = self.on_selected.clone();
             ink_well = ink_well.on_tap(move |ctx| {
@@ -855,17 +877,9 @@ impl StatelessView for FilterChip {
             });
         }
 
-        let container = CustomPaint::new()
+        CustomPaint::new()
             .foreground_painter(ChipBorderPainter { side, shape })
-            .child(Material::new(background_color).shape(shape).child(ink_well));
-
-        // A filter chip is a toggle button: ARIA carries its selection as the
-        // button's pressed state, which `aria-selected` on a button is not.
-        crate::button_style_button::identified(Semantics::new(), self.identifier.as_ref())
-            .role(SemanticsRole::Button)
-            .toggled(Toggled::from_bool(selected))
-            .enabled(enabled)
-            .child(container)
+            .child(Material::new(background_color).shape(shape).child(ink_well))
     }
 }
 
