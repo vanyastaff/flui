@@ -19,3 +19,8 @@
   constructors of `flui::foundation` ids; the safe constructors stay.
 - `flui_sdk::pipeline::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction}`: they are
   `flui_sdk::rendering::objects::*`, at the facade's path.
+
+### Changed
+
+- devtools' `Verdict` and `EventCategory` are `#[non_exhaustive]`, so a `match` on one needs a `_`
+  arm (ADR-0329).
