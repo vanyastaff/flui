@@ -592,6 +592,10 @@ enum Registration {
 /// Returns whether the collection changed: a source was registered, a
 /// generic bound, or a fallback list rewritten with a different order.
 #[tracing::instrument(skip_all, fields(sources = host.sources.len()))]
+#[expect(
+    clippy::disallowed_types,
+    reason = "keyed by names or paths that come from font files and font directories, so the table keeps SipHash's random seed against chosen collisions"
+)]
 fn feed_host_faces(
     collection: &mut parley::fontique::Collection,
     host: &HostFaces,

@@ -62,7 +62,7 @@
 //! `&self.gradient_bind_group_layout`. The pattern mirrors
 //! [`GpuResources`](crate::resources::GpuResources).
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use flui_painting::paint::BlendMode;
 
@@ -267,12 +267,12 @@ pub(crate) struct PipelineSet {
     image_isolation: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
     filtered_image_isolation: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
     pub(crate) image_filter_layout: wgpu::BindGroupLayout,
-    filtered_texture_composite_cache: HashMap<BlendMode, wgpu::RenderPipeline>,
+    filtered_texture_composite_cache: FxHashMap<BlendMode, wgpu::RenderPipeline>,
 
     /// Cache of premultiplied SSAA tile composite pipelines keyed by blend mode.
     ///
     /// Populated lazily on the first encounter of each tile-safe non-SrcOver mode.
-    texture_composite_cache: HashMap<BlendMode, wgpu::RenderPipeline>,
+    texture_composite_cache: FxHashMap<BlendMode, wgpu::RenderPipeline>,
 }
 
 impl PipelineSet {
@@ -500,8 +500,8 @@ impl PipelineSet {
             image_isolation: None,
             filtered_image_isolation: None,
             image_filter_layout: crate::image_source_filter::layout(device),
-            filtered_texture_composite_cache: HashMap::new(),
-            texture_composite_cache: HashMap::new(),
+            filtered_texture_composite_cache: FxHashMap::default(),
+            texture_composite_cache: FxHashMap::default(),
         }
     }
 
@@ -604,7 +604,7 @@ impl PipelineSet {
             return;
         }
 
-        // `HashMap::entry` does a single lookup on both miss and hit paths.
+        // `FxHashMap::entry` does a single lookup on both miss and hit paths.
         self.texture_composite_cache.entry(mode).or_insert_with(|| {
             let blend_state = blend_state_for(mode);
             create_instanced_texture_with_blend_state(

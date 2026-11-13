@@ -23,17 +23,18 @@
 //!   Load texture from disk        ← I/O overhead (once)
 //!   Decode PNG/JPEG               ← CPU overhead (once)
 //!   Upload to GPU                 ← GPU overhead (once)
-//!   Cache for reuse               ← HashMap insert
+//!   Cache for reuse               ← FxHashMap insert
 //!
 //! Frame N+1:
-//!   Lookup in cache               ← O(1) HashMap get
+//!   Lookup in cache               ← O(1) FxHashMap get
 //!   Reuse GPU texture             ← Zero overhead!
 //! ```
 //!
 //! **Result:** 100% reuse after first load, ~1000x faster for repeated
 //! textures!
 
-use std::{collections::HashMap, sync::Arc};
+use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
 use flui_foundation::memory::MemoryPressureLevel;
 
@@ -188,7 +189,7 @@ pub(crate) struct FrameMaintenance {
 // hold `wgpu` handles, whose lack of `Debug` is the whole reason it exists.
 pub(crate) struct TextureCache {
     /// Cached textures by ID
-    textures: HashMap<TextureKey, CachedTexture>,
+    textures: FxHashMap<TextureKey, CachedTexture>,
     /// Statistics
     cache_hits: usize,
     cache_misses: usize,
@@ -219,7 +220,7 @@ impl TextureCache {
     /// * `queue` - WGPU queue for uploading texture data (Arc for safe sharing)
     pub(crate) fn new(device: Arc<Device>, queue: Arc<Queue>) -> Self {
         Self {
-            textures: HashMap::new(),
+            textures: FxHashMap::default(),
             cache_hits: 0,
             cache_misses: 0,
             device,

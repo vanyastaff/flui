@@ -71,6 +71,8 @@
 #![warn(clippy::expect_used)]
 #![warn(clippy::panic)]
 #![expect(clippy::match_same_arms)]
+// No FLUI lock on the text path and no SipHash table (clippy.toml `disallowed-types`).
+#![warn(clippy::disallowed_types)]
 
 pub mod alignment;
 pub mod box_fit;

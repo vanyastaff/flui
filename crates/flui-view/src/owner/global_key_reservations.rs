@@ -73,7 +73,7 @@
 //! and only then records the report.
 
 use super::global_key_registry::OwnedGlobalKey;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use flui_foundation::{ElementId, ViewKey};
 
@@ -147,12 +147,12 @@ struct Displacement {
 #[derive(Default)]
 pub(crate) struct GlobalKeyReservations {
     parents: Vec<ElementId>,
-    by_parent: HashMap<ElementId, Vec<Reservation>>,
+    by_parent: FxHashMap<ElementId, Vec<Reservation>>,
     /// Parents robbed of a keyed child by someone else's graft, in the order
     /// they were robbed. Cleared for a parent the moment it rebuilds — see
     /// [`Displacement`].
     displaced_parents: Vec<ElementId>,
-    displaced: HashMap<ElementId, Vec<Displacement>>,
+    displaced: FxHashMap<ElementId, Vec<Displacement>>,
 }
 
 impl GlobalKeyReservations {
@@ -278,8 +278,12 @@ impl GlobalKeyReservations {
 /// decides membership, so two colliding-but-distinct keys are never
 /// conflated into a false duplicate report.
 #[derive(Default)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "indexed by view-key hashes, which an application-defined global key may derive from its own data, so the table keeps SipHash's random seed against chosen collisions"
+)]
 struct SeenKeys {
-    buckets: HashMap<u64, Vec<SeenKey>>,
+    buckets: std::collections::HashMap<u64, Vec<SeenKey>>,
 }
 
 /// One key already claimed during this verification pass, and by whom for

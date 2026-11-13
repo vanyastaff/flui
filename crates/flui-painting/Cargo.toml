@@ -51,6 +51,8 @@ icu_segmenter = { workspace = true }
 swash = { workspace = true }
 parley = { workspace = true }
 lru = { workspace = true }
+# Hash tables keyed by ids the process mints (fonts, glyphs, textures).
+rustc-hash = { workspace = true }
 # The canvas paint pool, inline for the few paints one recording holds.
 smallvec = { workspace = true }
 

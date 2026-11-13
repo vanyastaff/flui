@@ -35,7 +35,8 @@
 //!
 //! [`RenderSliverList`]: flui_objects::RenderSliverList
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use rustc_hash::FxHashMap;
+use std::{cell::RefCell, rc::Rc};
 
 use flui_foundation::RenderId;
 use flui_rendering::pipeline::PipelineCell;
@@ -53,7 +54,7 @@ use crate::{ElementOwner, tree::ElementTree};
 /// registry's borrow before calling `service`: the service call may register
 /// or unregister managers (`on_mount`/`on_unmount`) without a re-entrant
 /// borrow.
-pub(crate) type ChildManagerRegistry = RefCell<HashMap<RenderId, Rc<RefCell<dyn ChildManager>>>>;
+pub(crate) type ChildManagerRegistry = RefCell<FxHashMap<RenderId, Rc<RefCell<dyn ChildManager>>>>;
 
 /// Object-safe hook called by [`BuildOwner::service_child_requests`] after each
 /// layout pass to build missing lazy children and evict off-band ones.

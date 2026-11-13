@@ -127,7 +127,7 @@ impl ElementBuildContext {
     /// Reads the resolved inherited scope
     /// ([`ElementNode::inherited`](crate::tree::ElementNode)) instead of
     /// walking the ancestor chain, so the lookup is O(1). FLUI builds that map
-    /// at mount as an `Arc<HashMap>` shared by refcount down non-provider runs.
+    /// at mount as an `Arc<FxHashMap>` shared by refcount down non-provider runs.
     fn find_inherited_provider(&self, type_id: std::any::TypeId) -> Option<ElementId> {
         self.tree
             .borrow()
