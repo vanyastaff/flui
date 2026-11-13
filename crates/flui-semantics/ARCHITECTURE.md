@@ -164,11 +164,13 @@ and a successful detach followed by reattachment.
 `SemanticsRole`, interactive kinds included (`Button`, `CheckBox`, `RadioButton`, `Switch`,
 `Link`, `Slider`, `Image`, `Heading`, the text-input kinds), and typed `States`. Two
 configurations that each declare the same state form separate nodes, and so do two that each
-declare a role, unless the upper one is a control named by its contents (button, link,
-checkable control, menu item, tab, option, tree item) and the lower one is content (image,
-heading, text-level role, meter, progress bar): the control takes it and its name
+declare a role, unless the lower one names a control it is inside (button, link,
+checkable control, menu item, tab, option, tree item) and is content that carries only a name
+(image, heading, text-level role): the control's node takes it and its name, through any
+configuration between them that forms no node and has no role or such a role
 ([ADR-0332](../../docs/adr/ADR-0332-a-control-takes-the-content-roles-beneath-it.md),
-`can_absorb`, `can_absorb_both`). A state declared `false` counts, so a node's shape does not depend on
+`names_a_control`, `can_absorb`, `can_join`). A meter or a progress bar keeps its node: a
+control cannot publish its range. A state declared `false` counts, so a node's shape does not depend on
 its current values. A forced merge (`MergeSemantics`) cannot separate them and takes the role
 by `more_specific_role`: an authored structural role (tab, list item, dialog, …) over any
 interactive kind, then a checkable role, then `Button`, then link, text field, slider or other
@@ -207,7 +209,7 @@ carrying a `Radio` is one radio button, not a button, and a structural role (a n
 that is also tappable) stays structural. Outside a forced merge two controls are two nodes: a
 button configuration over a `Radio` publishes the button and the radio, so neither is lost.
 Content beneath a control is its name, not a second stop: a button over a labelled image is
-one button with that name, as in Flutter and as ARIA's presentational children. A read-only value ranks as content because it carries no action:
+one button with that name, as in Flutter. A read-only value ranks as content because it carries no action:
 a meter merged with a button would otherwise publish the button's actions under a role that
 announces none. A group mixed from two sources would publish a position from one scrollable
 against another's extents, an index in one set against another's count.

@@ -58,47 +58,69 @@ tree Flutter's author writes, keeps one role per node, and leaves two controls a
 
 A **control named by its contents** is one of `Button`, `Link`, `CheckBox`, `RadioButton`,
 `Switch`, `MenuItem`, `MenuItemCheckbox`, `MenuItemRadio`, `Tab`, `ListBoxOption`, `TreeItem`:
-the roles whose accessible name ARIA computes from content and whose children it treats as
-presentational.
+the roles whose accessible name ARIA computes from content.
 
-A **content role** is one of `Image`, `Heading`, `Paragraph`, `Caption`, `Code`, `Emphasis`,
-`Strong`, `Insertion`, `Deletion`, `Term`, `Definition`, `Time`, `Math`, `Meter`,
-`ProgressBar`: the roles that say what a piece of content is and offer no action. They are the
-lowest rank of ADR-0206's role precedence, and the precedence reads the same list.
+A **naming role** is one of `Image`, `Heading`, `Paragraph`, `Caption`, `Code`, `Emphasis`,
+`Strong`, `Insertion`, `Deletion`, `Term`, `Definition`, `Time`, `Math`: the roles that say
+what a piece of content is and carry nothing but its name. They are the content rank of
+ADR-0206's role precedence without its two read-only values: a `Meter` or a `ProgressBar`
+carries a numeric range, which a control's node cannot publish (the applicability table drops
+a range from a button), so it stays a node of its own beneath the control.
 
-### §2. Absorbing
+### §2. The scope of a control
+
+The rule is decided by the control whose node the content ends in, not by the configuration
+directly above the content: a hint, a gesture or a tooltip between a button and its icon forms
+no node and must not undo the rule. The assembly carries one fact down the tree:
 
 ```rust
 impl SemanticsConfiguration {
-    /// Whether the node `self` forms can take `descendant`, which forms none of its own.
-    pub fn can_absorb(&self, descendant: &SemanticsConfiguration) -> bool;
-    /// Whether `first` and `second`, both beneath the node `self` forms, can both be in it.
-    pub fn can_absorb_both(&self, first: &Self, second: &Self) -> bool;
+    /// Whether what is absorbed beneath this configuration names a control.
+    pub fn names_a_control(&self, forms_node: bool, enclosing: bool) -> bool;
+    /// Whether this configuration can take `descendant`, which forms no node of its own.
+    pub fn can_absorb(&self, descendant: &Self, names_a_control: bool) -> bool;
+    /// Whether this configuration and `sibling`, absorbed by one above them, can share its node.
+    pub fn can_join(&self, sibling: &Self, names_a_control: bool) -> bool;
 }
 ```
 
-Both apply the conflict rows of ADR-0206 decision 4 with one change to the role row:
+- A control named by its contents starts the scope.
+- A configuration that forms no node and has no role, or a naming role, passes on the scope
+  it is in (`enclosing`): what it absorbs travels up to the same control.
+- Every other configuration ends it: a node of another kind, a role that is neither.
 
-- `can_absorb`: two declared roles conflict, unless `self` is a control named by its contents
-  and `descendant` has a content role.
-- `can_absorb_both`: two declared roles conflict, unless `self` is a control named by its
-  contents and both have content roles (an icon and a heading in one button are one name).
+`SemanticsAssemblyContext` in `flui-rendering` holds the answer of the configuration above;
+`mark_configuration_conflicts` hands a configuration's own answer to the two predicates.
 
-Every other row is unchanged: a state both declare, a repeated action, competing values or
-ranges still form separate nodes, so a button over a progress bar that carries a value absorbs
-it only when the button has no value of its own. A configuration that scopes a route is never
-content, whatever its role.
+### §3. The role row inside a scope
+
+Outside a scope the predicates apply the conflict rows of ADR-0206 decision 4 unchanged.
+Inside one, the role row reads:
+
+- `can_absorb`: a descendant with a naming role is taken, whatever role the configuration
+  taking it has (a button over an image; a heading over an image inside a button). A
+  descendant with any other role is refused, also by a configuration that has no role: the
+  control above could not take it, so it forms its node where it stands instead of giving its
+  role to a wrapper.
+- `can_join`: two roles compete only when neither is a naming role. An icon and a heading in
+  one button are one name, and a check box beside an icon does not keep the icon from naming
+  the button around both.
+
+Every other row is unchanged in both: a state both declare, a repeated action, competing
+values or ranges still form separate nodes. A configuration that scopes a route never has a
+naming role, whatever role it declares.
 
 The rule is not symmetric: an image over a button is an image with a button in it. The
-symmetric predicate (`is_compatible_with`) is removed; node formation asks the two questions
-above, from the node's side.
+symmetric predicate (`is_compatible_with`) is removed.
 
-### §3. What the node is
+### §4. What the node is
 
 The absorbed configuration merges by the table of ADR-0206 decision 4. The role is settled by
 its precedence, in which a control outranks content, so the node keeps the control's role. The
 content's label and hint concatenate onto the control's in traversal order, which is what
-names the control.
+names the control. An identifier never crosses into another node (ADR-0240), so the
+identifier of absorbed content is not published; content a test must find by identifier forms
+its own node with `Semantics::container(true)`.
 
 ## Consequences
 
@@ -107,26 +129,37 @@ names the control.
 - Good, because content widgets say what they are everywhere: an icon can be an image in a
   paragraph and a name in a button without a parameter that chooses.
 - Bad, because an image inside a button is no longer reachable as an image: a screen reader
-  user cannot stop on it. This is ARIA's presentational-children rule and Flutter's behavior.
+  user cannot stop on it. This is Flutter's behavior, and ARIA's for the roles whose children
+  are presentational (button, checkbox, radio, switch, tab, option, the checkable menu items).
 - Bad, because a heading inside a tab or a list option loses its place in heading navigation.
   An author who needs both wraps the heading in `Semantics::container(true)`, which forms a
   node no rule absorbs.
+- Bad, because the scope is decided on the way down, before conflicts are known: a
+  configuration without a role inside a button that absorbs an image and a heading, and then
+  cannot join the button (it repeats the button's action), forms a node with the first one's
+  role and both names.
 - Neutral, because Flutter treats two images beneath one button as a conflict (the same flag
   twice) and forms two nodes; here they are one name. A typed role has no "same flag" case to
   preserve, and two icons in one button are one button.
 - Neutral, because a structural role (list, dialog, group, table cell) still keeps content as
   nodes beneath it: its name does not come from its contents.
+- Neutral, because a progress bar or an activity indicator inside a button is still a node
+  beneath it, as before this decision.
 
 ## Confirmation
 
 - `a_control_named_by_its_contents_takes_content_roles`
-  (`crates/flui-semantics/src/configuration.rs`): every pair of `SemanticsRole::ALL` against two
-  lists written out in the test, so a role added to either kind in the code without the test
-  fails; the merged role and name; siblings; a route scope.
+  (`crates/flui-semantics/src/configuration.rs`): every pair of `SemanticsRole::ALL` through
+  both predicates, inside a scope and outside, and every role through `names_a_control`,
+  against two lists written out in the test; the merged role and name; a route scope. A role
+  moved between kinds in the code without the test fails; a role added to `SemanticsRole` is
+  in neither kind until its author lists it.
 - `a_control_takes_the_content_roles_beneath_it_as_its_name` and
   `a_button_over_a_labelled_image_is_pressed_by_its_name`
   (`crates/flui-widgets/tests/semantics.rs`): the published AccessKit tree of a button over an
-  image, over an image and a heading, of a list over an image, and the click on the named node.
+  image; over an image and a heading; over a hint over both; over a heading over an image;
+  over an image beside a check box; over a progress bar; of a list over an image; and the
+  click on the named node.
 - `compatibility_rules_for_modeled_fields` keeps the rows that did not change.
 
 ## Pros and cons of the options
@@ -160,7 +193,7 @@ names the control.
 
 ## More information
 
-- Revisit §1 when a role is added to `SemanticsRole`: the test's lists make the author decide
-  its kind.
+- A role added to `SemanticsRole` is in neither kind of §1 until its author lists it; the
+  vocabulary change decides its kind.
 - `Slider`, `SpinButton`, the text inputs and `ComboBox` are named by a label beside them, not
   by their contents, and stay out of §1.

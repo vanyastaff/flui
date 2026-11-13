@@ -17878,8 +17878,8 @@ pub fn flui::prelude::SemanticsConfiguration::auto_complete(&self) -> Option<flu
 pub fn flui::prelude::SemanticsConfiguration::blocks_previous_siblings(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::blocks_user_actions(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::busy(&self) -> Option<bool>
-pub fn flui::prelude::SemanticsConfiguration::can_absorb(&self, descendant: &flui::prelude::SemanticsConfiguration) -> bool
-pub fn flui::prelude::SemanticsConfiguration::can_absorb_both(&self, first: &flui::prelude::SemanticsConfiguration, second: &flui::prelude::SemanticsConfiguration) -> bool
+pub fn flui::prelude::SemanticsConfiguration::can_absorb(&self, descendant: &flui::prelude::SemanticsConfiguration, names_a_control: bool) -> bool
+pub fn flui::prelude::SemanticsConfiguration::can_join(&self, sibling: &flui::prelude::SemanticsConfiguration, names_a_control: bool) -> bool
 pub fn flui::prelude::SemanticsConfiguration::cell_position(&self) -> Option<flui::semantics::CellPosition>
 pub fn flui::prelude::SemanticsConfiguration::clear_cell_position(&mut self)
 pub fn flui::prelude::SemanticsConfiguration::clear_position_in_set(&mut self)
@@ -17932,6 +17932,7 @@ pub fn flui::prelude::SemanticsConfiguration::live_region(&self) -> Option<flui:
 pub fn flui::prelude::SemanticsConfiguration::makes_document_selections(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::max_value_length(&self) -> Option<i32>
 pub fn flui::prelude::SemanticsConfiguration::multiselectable(&self) -> Option<bool>
+pub fn flui::prelude::SemanticsConfiguration::names_a_control(&self, forms_node: bool, enclosing: bool) -> bool
 pub fn flui::prelude::SemanticsConfiguration::names_route(&self) -> bool
 pub fn flui::prelude::SemanticsConfiguration::new() -> Self
 pub fn flui::prelude::SemanticsConfiguration::numeric_range(&self) -> Option<flui::prelude::NumericRange>

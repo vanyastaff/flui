@@ -3000,6 +3000,54 @@ fn a_control_takes_the_content_roles_beneath_it_as_its_name() {
         "a button over an image and a heading"
     );
 
+    // A configuration between the control and its contents that forms no
+    // node does not undo it: what it absorbs still ends in the button.
+    let wrapped = published(
+        node(SemanticsRole::Button).child(Semantics::new().hint("Opens the list").child(
+            flui_widgets::Column::new((image(), content(SemanticsRole::Heading, "Item"))),
+        )),
+    );
+    assert_eq!(
+        wrapped, "  Window\n  Button label=\"Add Item\"",
+        "a button over a hint over an image and a heading"
+    );
+
+    // Content inside content names the button too.
+    let nested = published(
+        node(SemanticsRole::Button).child(
+            Semantics::new()
+                .role(SemanticsRole::Heading)
+                .label("Item")
+                .child(image()),
+        ),
+    );
+    assert_eq!(
+        nested, "  Window\n  Button label=\"Item Add\"",
+        "a button over a heading over an image"
+    );
+
+    // A control beside the content is a node of its own and does not keep
+    // the content from naming the button around both.
+    let beside = published(
+        node(SemanticsRole::Button).child(flui_widgets::Column::new((
+            image(),
+            content(SemanticsRole::CheckBox, "Pin"),
+        ))),
+    );
+    assert_eq!(
+        beside, "  Window\n  Button label=\"Add\"\n  CheckBox label=\"Pin\"",
+        "a button over an image beside a check box"
+    );
+
+    // A progress bar keeps its node: a button cannot publish its range.
+    let progress = published(
+        node(SemanticsRole::Button).child(content(SemanticsRole::ProgressBar, "Loading")),
+    );
+    assert_eq!(
+        progress, "  Window\n  Button\n  ProgressIndicator label=\"Loading\"",
+        "a button over a progress bar"
+    );
+
     let list = published(node(SemanticsRole::List).child(image()));
     assert_eq!(
         list, "  Window\n  List\n  Image label=\"Add\"",
