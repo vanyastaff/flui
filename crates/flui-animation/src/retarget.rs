@@ -135,8 +135,25 @@ impl Default for MotionSpec {
 
 /// Below this configured duration a curve segment jumps straight to its
 /// target, and a reversal never shortens a segment below it: the Hermite
-/// term's `r = v0 − Δ·c'(0)/D` would grow without bound as `D → 0`.
+/// term's `r = v0 − Δ·c'(0)/D` would grow without bound as `D → 0`. The
+/// remainder a curve-only change runs ([`CurveLength::Remaining`]) is not
+/// floored: its span is what the interrupted segment had left to travel, so
+/// `Δ/D` stays bounded by that segment's speed.
 const MIN_CURVE_SECONDS: f64 = 1e-3;
+
+/// How long a curve segment runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CurveLength {
+    /// The configured duration times a factor clamped to `[0, 1]`: 1, or a
+    /// reversal's [`Reversal::shortening`]. The scaled segment never runs
+    /// below [`MIN_CURVE_SECONDS`]; a non-finite factor counts as 1.
+    Scaled(f64),
+    /// What is left of the interrupted segment's deadline, run as it is, so a
+    /// curve-only change arrives when the interrupted segment would have
+    /// (Flutter's `AnimationController.animateTo` likewise runs the remaining
+    /// fraction of its duration and settles at once only when none is left).
+    Remaining(Duration),
+}
 
 /// What a curve segment remembers so the next one can reverse faster (CSS
 /// Transitions, "Faster reversing of interrupted transitions"): the
@@ -262,7 +279,8 @@ pub(crate) struct CurveSegment {
     from: f64,
     to: f64,
     span: f64,
-    /// Seconds; at least [`MIN_CURVE_SECONDS`].
+    /// Seconds; positive, and at least [`MIN_CURVE_SECONDS`] unless it is a
+    /// [`CurveLength::Remaining`] remainder.
     duration: f64,
     /// Kept independently so a much larger natural rate cannot round it away.
     v0: f64,
@@ -420,15 +438,16 @@ impl Segment {
     /// The segment that starts at `x0` with velocity `v0` and moves to
     /// `target` as `motion` says.
     ///
-    /// `shortening` (in `(0, 1]`, clamped) scales a curve's duration; it is 1
-    /// except for a reversal. A non-finite `x0` or `target`, or a span that
-    /// overflows, is refused; a non-finite `v0` counts as zero.
+    /// `length` says how long a curve runs; a spring ignores it. A configured
+    /// curve duration below [`MIN_CURVE_SECONDS`], or no time remaining, jumps
+    /// to the target. A non-finite `x0` or `target`, or a span that overflows,
+    /// is refused; a non-finite `v0` counts as zero.
     pub(crate) fn start(
         x0: f64,
         v0: f64,
         target: f64,
         motion: &MotionSpec,
-        shortening: f64,
+        length: CurveLength,
         tolerance: Tolerance,
     ) -> Result<Self, SimulationError> {
         for position in [x0, target] {
@@ -458,18 +477,30 @@ impl Segment {
                 }
             }
             MotionSpec::Curve { duration, curve } => {
-                let scale = if shortening.is_finite() {
-                    shortening.clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
                 let full = duration.as_secs_f64();
                 if full < MIN_CURVE_SECONDS {
                     return Ok(Self::Rest(target));
                 }
-                // A reversal shortens, but never below the floor: the seam's
-                // value and velocity are kept however early it reverses.
-                let duration = (full * scale).max(MIN_CURVE_SECONDS);
+                let duration = match length {
+                    CurveLength::Scaled(factor) => {
+                        let scale = if factor.is_finite() {
+                            factor.clamp(0.0, 1.0)
+                        } else {
+                            1.0
+                        };
+                        // A reversal shortens, but never below the floor: the
+                        // seam's value and velocity are kept however early it
+                        // reverses.
+                        (full * scale).max(MIN_CURVE_SECONDS)
+                    }
+                    CurveLength::Remaining(remaining) => {
+                        let remaining = remaining.as_secs_f64();
+                        if remaining == 0.0 {
+                            return Ok(Self::Rest(target));
+                        }
+                        remaining
+                    }
+                };
                 let start_slope = curve.slope(0.0);
                 let end_slope = curve.slope(1.0);
                 if !(start_slope.is_finite() && end_slope.is_finite()) {

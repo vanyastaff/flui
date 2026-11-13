@@ -18,7 +18,7 @@ use flui_foundation::{Listenable, ListenerCallback};
 use smallvec::SmallVec;
 
 use crate::animation::{Retirement, StatusObserver, Terminal};
-use crate::retarget::{Reversal, Segment, eased_progress};
+use crate::retarget::{CurveLength, Reversal, Segment, eased_progress};
 use crate::simulation::Simulation;
 use crate::value_conversion::{AnimationVector, TwoWayConverter};
 use crate::{
@@ -528,6 +528,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         };
         let mut reversal = Reversal::from_start(sample.value);
         let mut segment_motion = Terminal::new(motion.get().clone());
+        // A curve-only change runs what is left of the interrupted segment's
+        // deadline, however little: flooring it would end a moving segment
+        // with a jump.
+        let mut remaining = None;
         if matches!(change, Change::Snap) {
             segment_motion = Terminal::new(MotionSpec::Curve {
                 duration: Duration::ZERO,
@@ -541,9 +545,8 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 && new == old
                 && !self.is_settled()
                 && let Some(deadline) = self.deadline
-                && let MotionSpec::Curve { duration, .. } = segment_motion.get_mut()
             {
-                *duration = deadline.saturating_sub(sample.elapsed);
+                remaining = Some(deadline.saturating_sub(sample.elapsed));
             }
         } else if let MotionSpec::Curve { curve, .. } = self.motion.get()
             && origin.is_none()
@@ -557,6 +560,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                         .map(|eased| (self.target_vector, eased))
                 });
         }
+        let length = remaining.map_or(
+            CurveLength::Scaled(reversal.shortening()),
+            CurveLength::Remaining,
+        );
         let thresholds = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
             T::rest_thresholds()
         } else {
@@ -591,7 +598,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                         velocity,
                         target,
                         &segment_motion,
-                        reversal.shortening(),
+                        length,
                         tolerance,
                     )
                     .map_err(|source| AnimationError::ComponentSimulation { component, source })

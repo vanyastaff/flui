@@ -314,7 +314,7 @@ the families ADR-0091 §1 flips, the edges that stay `Send` by design, and the `
 values that are data rather than callbacks — is kept with the `!Send` flip's row of
 [the architecture migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md).
 
-`FloatingActionButton::new(child).on_pressed(callback)` replaces the optional
+`FloatingActionButton::new().child(child).on_pressed(callback)` replaces the optional
 generic constructor callback: nested `Some(closure)` prevented higher-ranked
 inference. The ordinary setter accepts an unannotated inline signal closure,
 pinned by its mounted integration test. No new dependency or executor is needed.

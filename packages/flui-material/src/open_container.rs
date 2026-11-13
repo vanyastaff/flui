@@ -743,7 +743,9 @@ impl<T: 'static> ViewState<OpenContainer<T>> for OpenContainerState<T> {
         };
 
         let content = (view.closed)(ctx, &action);
-        let mut well = InkWell::new(content).shape(MaterialShape::RoundedRect(look.closed_radius));
+        let mut well = InkWell::new()
+            .child(content)
+            .shape(MaterialShape::RoundedRect(look.closed_radius));
         let mut semantics = Semantics::new().container(true);
         if let Some(label) = &view.semantic_label {
             semantics = semantics.label(label.clone());

@@ -569,7 +569,9 @@ fn build_destination(
     // at all — it still paints its hover/press overlay. Wiring `on_tap` only when a callback is present would leave
     // a callback-less-but-enabled destination reading as disabled to
     // `InkWell`, silently dropping its overlay.
-    let mut ink_well = InkWell::new(column).overlay_color(overlay_color.clone());
+    let mut ink_well = InkWell::new()
+        .child(column)
+        .overlay_color(overlay_color.clone());
     if enabled {
         let callback = on_destination_selected.cloned();
         ink_well = ink_well.on_tap(move |ctx| {

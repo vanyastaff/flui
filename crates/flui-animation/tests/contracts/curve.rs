@@ -921,6 +921,32 @@ fn cubic_slope_near_an_end_keeps_the_quadratic_term() {
     }
 }
 
+/// A control point on an end point (`ease-in`'s `(1, 1)`, `ease-out`'s
+/// `(0, 0)`) makes `x'` and `y'` vanish there together; the slope at that end
+/// is the limit along the middle control leg, `(y2 − y1) / (x2 − x1)`, the
+/// value the slope approaches from inside, not the rounding residue of `x'`.
+fn cubic_slope_at_a_degenerate_end_is_its_limit() {
+    for (name, curve, t, inside, want) in [
+        ("ease-in at 1", curves::EASE_IN, 1.0, 1.0 - 1e-9, 1.0 / 0.58),
+        ("ease-out at 0", curves::EASE_OUT, 0.0, 1e-9, 1.0 / 0.58),
+        (
+            "cubic-bezier(0.3, 0, 1, 1) at 1",
+            Cubic::new(0.3, 0.0, 1.0, 1.0),
+            1.0,
+            1.0 - 1e-9,
+            1.0 / 0.7,
+        ),
+    ] {
+        assert_close(name, curve.slope(t), want, 1e-12);
+        assert_close(
+            &format!("{name}, from inside"),
+            curve.slope(inside),
+            want,
+            1e-4,
+        );
+    }
+}
+
 fn default_difference_is_second_order() {
     // Exact for a quadratic, including the one-sided ends.
     for t in [0.0, 1e-5, 0.3, 1.0 - 1e-5, 1.0] {
@@ -1031,6 +1057,10 @@ fn curve_slope_is_the_derivative_of_transform() {
         (
             "cubic slope near an end keeps the quadratic term",
             cubic_slope_near_an_end_keeps_the_quadratic_term,
+        ),
+        (
+            "cubic slope at a degenerate end is its limit",
+            cubic_slope_at_a_degenerate_end_is_its_limit,
         ),
         (
             "default difference is second order",

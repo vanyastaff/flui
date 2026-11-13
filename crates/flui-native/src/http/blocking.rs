@@ -253,12 +253,14 @@ impl Exchange {
             state.stop = Some(why);
             (state.abort.take(), state.reader.take())
         };
-        self.room.notify_all();
         // Outside the lock: the abort calls into the stack, the waker into
-        // whoever reads.
+        // whoever reads. The abort lands before the request's thread wakes,
+        // so the thread never releases a connection the stop has not yet
+        // aborted.
         if let Some(abort) = abort {
             abort.abort();
         }
+        self.room.notify_all();
         if let Some(reader) = reader {
             reader.wake();
         }
