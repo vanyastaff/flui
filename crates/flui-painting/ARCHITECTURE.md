@@ -92,7 +92,8 @@ takes, so when a path is read never changes its elements, its equality or what
 `Path::lerp` accepts; how serde keeps the hint is stated with `Path` deserialization below.
 A clone
 taken before that read builds its own curves. Any other rounded rectangle, one with a
-coordinate beyond 1e9 (where rounding passes the curve tolerance), a rectangle and an oval
+coordinate beyond 1e9 (so the bounds' 1e-3 widening stays far above any rounding), a
+rectangle and an oval
 are built at once: they are drawn from their curves, so their clones share one build.
 `PathCommand` (`src/paint/path.rs:28`) is the element `Path::commands` yields
 (`src/paint/path.rs:781`), not the storage.
