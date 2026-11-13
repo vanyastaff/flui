@@ -85,6 +85,10 @@ use crate::theme_data::ThemeData;
 /// theme *selection* belongs to the design system that defines the tokens,
 /// not the application framework (ADR-0042 §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a theme follows the platform or picks one of its two brightnesses"
+)]
 pub enum ThemeMode {
     /// Follow the platform's light/dark preference, read from the ambient
     /// `MediaQueryData::platform_brightness`.

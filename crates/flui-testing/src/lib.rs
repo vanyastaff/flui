@@ -110,6 +110,10 @@
 //! assert!(fired.get());
 //! ```
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(
@@ -1238,6 +1242,11 @@ impl HeadlessBinding {
                         if let Some(frame) = painted {
                             *last_layer_tree = frame;
                             *painted_frame_count = painted_frame_count.saturating_add(1);
+                            // The window shows every frame it commits; the frame it
+                            // replaced is let go above, so its buffers come back.
+                            if let Some(tree_binding) = tree.as_mut() {
+                                tree_binding.scene.shown();
+                            }
                         }
 
                         // 7. Re-hit-test every stationary device against the

@@ -30,7 +30,6 @@ base64 = "0.23"
 caseless = "0.2"
 # The ADR-0080 wire vocabulary: `Role`, `ActionName`, `Checked`.
 flui-protocol = { workspace = true, features = ["serde", "schemars"] }
-image = { workspace = true }
 rmcp = { version = "3.4", features = ["server", "macros", "transport-io"] }
 schemars = { workspace = true }
 serde = { workspace = true }
@@ -47,6 +46,11 @@ tracing-subscriber = { workspace = true }
 # included) do not install.
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 enigo = "0.6"
+# The encoding of a capture; the tests encode on every host.
+image = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = { workspace = true }

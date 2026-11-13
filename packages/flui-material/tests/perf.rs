@@ -17,10 +17,14 @@
 //! process-global font system and installs the kit's counting global
 //! allocator.
 
-use flui_material::{ElevatedButton, InkWell, Theme, ThemeData};
+use flui_material::{
+    Checkbox, Chip, ElevatedButton, FilterChip, InkWell, Radio, Switch, Theme, ThemeData,
+};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::Text;
-use flui_testing::control_cost::{ControlCost, control_over_text, control_over_text_under};
+use flui_testing::control_cost::{
+    ControlCost, control_alone_under, control_over_text, control_over_text_under,
+};
 use flui_testing::heap::CountingAllocator;
 
 #[global_allocator]
@@ -82,6 +86,117 @@ fn perf_elevated_button_over_text() {
     assert!(
         cost.render_nodes <= 5,
         "a button adds {} render nodes",
+        cost.render_nodes
+    );
+}
+
+/// What a toggle costs in place of an empty box, under a theme: its own
+/// element, the well's three and its painter, less the box; its checked
+/// state rides on the well's node, with no `Semantics` element of its own.
+fn toggle_cost(scenario: &str, control: fn(usize) -> BoxedView) -> ControlCost {
+    let cost = held_to_baseline(
+        scenario,
+        control_alone_under(
+            |column| Theme::new(ThemeData::light(), column).boxed(),
+            control,
+        ),
+    );
+    assert!(
+        cost.elements <= 4,
+        "{scenario}: a toggle adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 2,
+        "{scenario}: a toggle adds {} render nodes",
+        cost.render_nodes
+    );
+    cost
+}
+
+#[test]
+fn perf_checkbox_alone() {
+    toggle_cost("checkbox_alone", |row| {
+        Checkbox::new(row % 2 == 0)
+            .on_changed(|_ctx, _value| {})
+            .boxed()
+    });
+}
+
+#[test]
+fn perf_switch_alone() {
+    toggle_cost("switch_alone", |row| {
+        Switch::new(row % 2 == 0)
+            .on_changed(|_ctx, _value| {})
+            .boxed()
+    });
+}
+
+#[test]
+fn perf_radio_alone() {
+    toggle_cost("radio_alone", |row| {
+        Radio::new(row % 3, Some(0))
+            .on_changed(|_ctx, _value| {})
+            .boxed()
+    });
+}
+
+/// What a pressable `Chip` adds to the `Text` it labels, under a theme: its
+/// composition (the chip, its border painter, `Material`, the well, padding,
+/// constraints, opacity and the label's row), and the `Semantics` that keeps
+/// the chip one node whether it has `on_pressed` or not.
+#[test]
+fn perf_chip_over_text() {
+    let cost = held_to_baseline(
+        "chip_over_text",
+        control_over_text_under(
+            |column| Theme::new(ThemeData::light(), column).boxed(),
+            |row| {
+                Chip::new(Text::new(format!("Row {row}")))
+                    .on_pressed(|_ctx| {})
+                    .boxed()
+            },
+        ),
+    );
+    // The well's three, the chip's own composition and its `Semantics`, which
+    // stays so that gaining or losing the handler keeps the subtree.
+    assert!(
+        cost.elements <= 15,
+        "a chip adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 10,
+        "a chip adds {} render nodes",
+        cost.render_nodes
+    );
+}
+
+/// What a `FilterChip` adds to the `Text` it labels, under a theme, its
+/// selection on the well's node as the button's toggled state.
+#[test]
+fn perf_filter_chip_over_text() {
+    let cost = held_to_baseline(
+        "filter_chip_over_text",
+        control_over_text_under(
+            |column| Theme::new(ThemeData::light(), column).boxed(),
+            |row| {
+                FilterChip::new(Text::new(format!("Row {row}")))
+                    .selected(row % 2 == 0)
+                    .on_selected(|_ctx, _selected| {})
+                    .boxed()
+            },
+        ),
+    );
+    // A chip's composition and the slot of its checkmark.
+    assert!(
+        cost.elements <= 15,
+        "a filter chip adds {} elements",
+        cost.elements
+    );
+    assert!(
+        cost.render_nodes <= 10,
+        "a filter chip adds {} render nodes",
         cost.render_nodes
     );
 }

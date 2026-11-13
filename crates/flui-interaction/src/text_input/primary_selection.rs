@@ -26,7 +26,7 @@ use super::shared_read::SharedRead;
 /// `ctx.capability::<PrimarySelectionCapability>()` hands out a
 /// [`PrimarySelectionHandle`].
 #[derive(Debug)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a capability marker has no values; it is only ever named"
 )]

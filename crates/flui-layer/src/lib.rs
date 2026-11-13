@@ -50,6 +50,10 @@
 //! assert_eq!(scene.tree().map(LayerTree::len), Some(2));
 //! ```
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(
@@ -90,8 +94,8 @@ pub use layer::{
 pub use link::{LayerLink, leader_origin, resolve_follower_transform};
 pub use scene::{
     Applied, BoundaryContent, Bounds, Chunk, ContentBuilder, ContentVersion, Entry, EntryAddress,
-    EntryIndex, Lineage, Placement, ReleasedContents, Scene, SceneContent, SceneError, SceneNode,
-    SceneNodeId, SceneNodeMarker, SceneOp, SceneOwner, ScenePublication, SceneVersion,
+    EntryIndex, Lineage, Placement, Reclaimed, ReleasedContents, Scene, SceneContent, SceneError,
+    SceneNode, SceneNodeId, SceneNodeMarker, SceneOp, SceneOwner, ScenePublication, SceneVersion,
     SceneVersionId, SceneWriter, SubtreeCull, SurfaceKey,
 };
 pub use scene_snapshot::{

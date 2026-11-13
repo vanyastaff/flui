@@ -915,11 +915,12 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
-  # licenses and sources against deny.toml, advisories against RustSec) and
-  # cargo-shear (a dependency no code uses, a test-only one declared as a
-  # normal one, a [workspace.dependencies] entry nothing inherits; only a
-  # warning when the dependency is optional or a feature names it). Nothing
-  # compiles but xtask. Two steps, split by what decides the result:
+  # licenses and sources against deny.toml, advisories against RustSec).
+  # Nothing compiles but xtask. A dependency no code uses, a test-only one
+  # declared as a normal one and a [workspace.dependencies] entry nothing
+  # inherits are cargo's `unused_dependencies` lint, which CARGO_BUILD_WARNINGS
+  # above makes fatal in every job that builds. Two steps, split by what
+  # decides the result:
   #   policy      the commit, and the std-replacement list cargo-deny fetches
   #               for [bans.std-replacements]: blocking in every lane. A new
   #               entry in that list can fail a commit that passed, but only
@@ -950,12 +951,10 @@ jobs:
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
 
-      - name: Install cargo-deny and cargo-shear
+      - name: Install cargo-deny
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          # cargo-shear 1.13: the newest this install-action release has a
-          # prebuilt binary for; a later pin falls back to compiling it.
-          tool: cargo-deny@0.20,cargo-shear@1.13
+          tool: cargo-deny@0.20
 
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

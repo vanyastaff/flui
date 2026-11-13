@@ -49,7 +49,7 @@ pub struct RenderInteractive {
     /// Out of line: a control mounted while its window collects no
     /// semantics has no part, and holds no room for one.
     semantics: Option<Box<RenderSemanticsAnnotations>>,
-    focus_ring: Option<FocusRingStyle>,
+    focus_ring: Option<Box<FocusRingStyle>>,
     /// Where the object publishes its identity while mounted.
     anchor: Option<SubtreeAnchor>,
     /// Kept so a semantics part set after the object attached is attached
@@ -144,15 +144,18 @@ impl RenderInteractive {
     /// The focus ring painted over the child, while one is shown.
     #[must_use]
     pub const fn focus_ring(&self) -> Option<FocusRingStyle> {
-        self.focus_ring
+        match &self.focus_ring {
+            Some(style) => Some(**style),
+            None => None,
+        }
     }
 
     /// Shows the focus ring in `style`, or hides it with `None`.
     pub fn set_focus_ring(&mut self, style: Option<FocusRingStyle>) -> RenderUpdateImpact {
-        if self.focus_ring == style {
+        if self.focus_ring.as_deref() == style.as_ref() {
             return RenderUpdateImpact::NONE;
         }
-        self.focus_ring = style;
+        self.focus_ring = style.map(Box::new);
         RenderUpdateImpact::PAINT
     }
 
@@ -245,7 +248,7 @@ impl RenderBox for RenderInteractive {
         if self.has_child {
             ctx.paint_child();
         }
-        if let Some(style) = &self.focus_ring {
+        if let Some(style) = self.focus_ring.as_deref() {
             let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
             style.paint_inside(ctx.canvas(), rect);
         }

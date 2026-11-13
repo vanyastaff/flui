@@ -13,6 +13,8 @@ error[E0631]: type mismatch in closure arguments
 note: required by a bound in `flui_view::WriterSource::write`
   --> src/reactive/writer.rs
    |
+   | impl WriterSource {
+...
    |     pub fn write<R>(&self, f: impl FnOnce(&mut EventContext<'_>) -> R) -> R {
    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `WriterSource::write`
 help: consider wrapping the function in a closure

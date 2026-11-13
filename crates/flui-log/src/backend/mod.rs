@@ -92,7 +92,7 @@ enum Sink<S> {
         dead_code,
         reason = "uninhabited by construction; it exists to carry `S` on targets whose sink does not"
     )]
-    Unreachable(core::convert::Infallible, PhantomData<fn(S)>),
+    Unreachable(!, PhantomData<fn(S)>),
 }
 
 /// Run `$body` against whichever sink variant is present.

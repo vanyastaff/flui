@@ -297,8 +297,7 @@ fn tile_node(laid: &LaidOut, tile: &str) -> Option<(NodeId, Vec<(String, i32)>)>
 /// The moves the tile named `tile` offers assistive technology, in order.
 fn offered(laid: &LaidOut, tile: &str) -> Vec<String> {
     tile_node(laid, tile)
-        .map(|(_, moves)| moves.into_iter().map(|(label, _)| label).collect())
-        .unwrap_or_default()
+        .map_or_default(|(_, moves)| moves.into_iter().map(|(label, _)| label).collect())
 }
 
 /// Invoke `label` on the tile named `tile`, as assistive technology does.

@@ -14,7 +14,7 @@ not a generated application).
 
 | Tool | Minimum version | Notes |
 |------|-----------------|-------|
-| Rust via `rustup` | 1.99 | The checkout pins 1.99.0 in `rust-toolchain.toml`; an application outside it needs its own toolchain selection (below). |
+| Rust via `rustup` | 1.100 | The checkout pins 1.100.0 in `rust-toolchain.toml`; an application outside it needs its own toolchain selection (below). |
 | Git | any recent | Used to clone FLUI and initialize the generated application. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android (only if targeting Android). |
 
@@ -34,7 +34,7 @@ cd flui
 cargo install --path crates/flui-cli --locked
 flui create my_app --local --path ../apps --no-check
 cd ../apps/my_app
-rustup override set 1.99.0
+rustup override set 1.100.0
 cargo check
 flui doctor
 flui run
@@ -90,7 +90,7 @@ warnings without blocking a desktop app. For a target-specific check, use
 | Symptom | Next step |
 |---------|-----------|
 | `flui` command not found after installation | Put Cargo's binary directory on `PATH` (`~/.cargo/bin`, or `%USERPROFILE%\.cargo\bin` on Windows), then open a new terminal. |
-| Rust version below 1.99 | Run `rustup override set 1.99.0` in the application directory, then retry `cargo check`. |
+| Rust version below 1.100 | Run `rustup override set 1.100.0` in the application directory, then retry `cargo check`. |
 | Windows cannot find or run `link.exe` | Install Visual Studio Build Tools with the Desktop development with C++ workload and Windows SDK. |
 | `flui::material` or `flui::cupertino` import is unresolved | Enable the corresponding facade feature in the application's `Cargo.toml`. |
 | Local FLUI dependency cannot be found | Keep the source checkout at its original location, or update its absolute path in the application's `Cargo.toml`. |

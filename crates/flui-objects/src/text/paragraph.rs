@@ -246,8 +246,7 @@ impl RenderParagraph {
         let text = self
             .painter
             .text()
-            .map(InlineSpan::to_plain_text)
-            .unwrap_or_default();
+            .map_or_default(InlineSpan::to_plain_text);
         let floor = |byte: usize| text_boundaries::grapheme_floor(&text, byte);
         let ends = [
             (
@@ -905,16 +904,14 @@ impl RenderBox for RenderParagraph {
         if !self.reads_by_regions() || !self.painter.has_layout() {
             return SemanticsRegions::default();
         }
-        let run_ranges: Vec<std::ops::Range<usize>> = self
-            .selectable_runs()
-            .map(|content| {
+        let run_ranges: Vec<std::ops::Range<usize>> =
+            self.selectable_runs().map_or_default(|content| {
                 content
                     .runs()
                     .iter()
                     .map(flui_rendering::semantics::TextRun::byte_range)
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         SemanticsRegions {
             before_children: self.runs.semantics_regions(
                 &self.painter,

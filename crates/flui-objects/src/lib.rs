@@ -29,6 +29,10 @@
 //! [`RenderSliver`]: flui_rendering::traits::RenderSliver
 
 // Every public item is documented; keep it that way.
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![deny(missing_docs)]
 // Crate-specific relaxations (same rationale as flui-rendering):
 #![expect(clippy::too_many_arguments)]

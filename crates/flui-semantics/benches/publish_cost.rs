@@ -150,7 +150,7 @@ fn publish_cost(c: &mut Criterion) {
             let target = owner.root().expect("the tree is rooted");
             let mut flip = false;
             b.iter(|| {
-                flip = !flip;
+                flip.toggle();
                 if let Some(node) = owner.get_mut(target) {
                     node.config_mut()
                         .set_label(if flip { "toggled on" } else { "toggled off" });
@@ -190,7 +190,7 @@ fn publish_cost(c: &mut Criterion) {
                 let target = owner.root().expect("the tree is rooted");
                 let mut flip = false;
                 b.iter(|| {
-                    flip = !flip;
+                    flip.toggle();
                     if let Some(node) = owner.get_mut(target) {
                         node.config_mut().set_label(if flip {
                             "toggled on"

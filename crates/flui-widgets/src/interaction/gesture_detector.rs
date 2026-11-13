@@ -903,20 +903,17 @@ impl LiveCallbacks {
             self.force_press.replace(
                 view.force_press
                     .as_ref()
-                    .map(|slot| slot.callbacks.clone())
-                    .unwrap_or_default(),
+                    .map_or_default(|slot| slot.callbacks.clone()),
             ),
             self.drag.replace(
                 view.drag
                     .as_ref()
-                    .map(|slot| slot.callbacks.clone())
-                    .unwrap_or_default(),
+                    .map_or_default(|slot| slot.callbacks.clone()),
             ),
             self.transform.replace(
                 view.transform
                     .as_ref()
-                    .map(|slot| slot.callbacks.clone())
-                    .unwrap_or_default(),
+                    .map_or_default(|slot| slot.callbacks.clone()),
             ),
             self.smart_zoom.replace(view.smart_zoom.clone()),
         );
@@ -1271,11 +1268,7 @@ impl PressLive for TapLive {
         let live = self.0.borrow();
         // Outside this module a source can only set the tap family and the
         // long press, the slots of the group the slot mounts.
-        let mut press = live
-            .tap
-            .as_deref()
-            .map(PressSource::callbacks)
-            .unwrap_or_default();
+        let mut press = live.tap.as_deref().map_or_default(PressSource::callbacks);
         press.pressed.clone_from(&live.pressed);
         PressRead::Owned(press)
     }

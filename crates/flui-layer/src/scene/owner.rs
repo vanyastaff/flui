@@ -8,13 +8,15 @@ use flui_foundation::SurfaceGeneration;
 use flui_foundation::generation::GenSlots;
 use flui_foundation::geometry::Offset;
 use flui_foundation::sequence::IdMint;
+use smallvec::SmallVec;
 
-use super::content::BoundaryContent;
+use super::content::{BoundaryContent, EntryIndex};
 use super::footprint::{self, FootprintCost};
 use super::id::{ContentVersion, Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::pending::{Contents, PendingLog};
 use super::table::{Table, TableCost};
-use super::version::{NodeRecord, SceneVersion, VersionInner};
+use super::version::{NodeRecord, SceneVersion, VersionInner, VersionSpares};
+use crate::layer::Layer;
 use crate::scene_snapshot::{DamageRegion, FullReason, NonFinite, ResyncReason};
 
 /// A node's offset in its parent's slot space; finite by construction.
@@ -131,12 +133,67 @@ pub struct ScenePublication {
 /// value among them, which is user code: a caller that holds the owner
 /// borrowed hands it to an `Outbox` (ADR-0287) so those destructors run after
 /// the borrow ends.
+///
+/// Once that borrow ends, [`Self::reclaim`] runs those destructors and keeps
+/// what the owner held alone, emptied, for [`SceneOwner::restock`] to take
+/// back (ADR-0304 §7); a plain drop lets everything go.
 #[must_use = "dropping it here runs the released contents' destructors while the owner is borrowed"]
 #[derive(Debug, Default)]
-#[expect(dead_code, reason = "the fields are held for their drop, never read")]
 pub struct ReleasedContents {
     contents: Contents,
-    version: Option<SceneVersion>,
+    /// Room for every retiring version and the one an apply pushes out.
+    versions: SmallVec<[SceneVersion; RETIRING + 1]>,
+    /// The owner's empty content, whose stream an emptied content takes.
+    empty: Option<Arc<BoundaryContent>>,
+}
+
+impl ReleasedContents {
+    /// Runs the destructors of what was released, as a drop does, and keeps
+    /// the versions and contents nobody else holds, emptied, for
+    /// [`SceneOwner::restock`]: the next applies and composited-layer updates
+    /// write into them instead of allocating. Call it with no borrow held.
+    #[must_use = "the emptied buffers go back to the owner through `restock`"]
+    pub fn reclaim(self) -> Reclaimed {
+        let Self {
+            contents,
+            versions,
+            empty,
+        } = self;
+        let mut reclaimed = Reclaimed::default();
+        // Versions first: a content a released version still names is held
+        // alone only once that version is taken apart.
+        for version in versions {
+            version.harvest(&mut reclaimed.versions);
+        }
+        for mut content in contents {
+            let (Some(empty), Some(held)) = (empty.as_deref(), Arc::get_mut(&mut content)) else {
+                continue;
+            };
+            held.scrub(empty);
+            // One without room for a layer saves a composited-layer update
+            // nothing but its `Arc`, and would hold a slot a roomier one needs.
+            if held.layer_room() > 0 && reclaimed.contents.len() < SPARE_CONTENTS {
+                reclaimed.contents.push(content);
+            }
+        }
+        reclaimed
+    }
+}
+
+/// The most versions an owner keeps after replacing them, waiting for every
+/// other holder to let go so their nodes can be reclaimed.
+const RETIRING: usize = 2;
+
+/// The most emptied contents an owner keeps for composited-layer updates.
+const SPARE_CONTENTS: usize = 4;
+
+/// What [`ReleasedContents::reclaim`] kept: emptied version records, table
+/// nodes and contents that hold no value of the scene, so dropping them runs
+/// no other code.
+#[derive(Debug, Default)]
+pub struct Reclaimed {
+    versions: VersionSpares,
+    contents: SmallVec<[Arc<BoundaryContent>; SPARE_CONTENTS]>,
 }
 
 /// An applied patch: the new version's id and what the owner let go of.
@@ -307,6 +364,11 @@ struct Scratch {
     added: Vec<(NodeKey, Arc<BoundaryContent>)>,
     /// The damage pass's working vectors.
     damage: footprint::DamageScratch,
+    /// Emptied version records and table nodes a patch writes into before
+    /// allocating, from versions nobody reads any more (ADR-0304 §7).
+    /// Boxed, once per owner: its inline stocks are 600 bytes an owner held by
+    /// value would otherwise carry.
+    spares: Box<VersionSpares>,
 }
 
 impl Scratch {
@@ -365,6 +427,13 @@ pub struct SceneOwner {
     /// The versions applied after `acked`.
     pending: PendingLog,
     cost: ApplyCost,
+    /// Versions the owner replaced that another holder still read, kept
+    /// until it holds them alone or newer ones push them out.
+    retiring: SmallVec<[SceneVersion; RETIRING]>,
+    /// Emptied contents the next composited-layer updates write into.
+    spare_contents: SmallVec<[Arc<BoundaryContent>; SPARE_CONTENTS]>,
+    /// The empty content whose stream an emptied content takes.
+    empty: Arc<BoundaryContent>,
 }
 
 impl Default for SceneOwner {
@@ -416,6 +485,9 @@ impl SceneOwner {
             acked: None,
             pending: PendingLog::default(),
             cost: ApplyCost::default(),
+            retiring: SmallVec::new(),
+            spare_contents: SmallVec::new(),
+            empty: Arc::new(BoundaryContent::default()),
         }
     }
 
@@ -505,19 +577,55 @@ impl SceneOwner {
     /// drops the entries at or below `rastered` and hands back, after the
     /// owner's state is committed, the contents they replaced.
     pub fn completed(&mut self, rastered: Option<SceneVersionId>) -> ReleasedContents {
-        let Some(rastered) = rastered else {
-            return ReleasedContents::default();
-        };
         let current = self.current.id();
-        let forward = self.acked.is_none_or(|acked| rastered.seq() > acked.seq());
-        if rastered.lineage() != self.lineage || rastered.seq() > current.seq() || !forward {
-            return ReleasedContents::default();
+        let contents = rastered
+            .filter(|rastered| {
+                let forward = self.acked.is_none_or(|acked| rastered.seq() > acked.seq());
+                rastered.lineage() == self.lineage && rastered.seq() <= current.seq() && forward
+            })
+            .map_or_default(|rastered| {
+                self.acked = Some(rastered);
+                self.pending.acknowledge(rastered)
+            });
+        self.released(contents)
+    }
+
+    /// Hands back `contents` with the retiring versions no other holder reads
+    /// any more.
+    fn released(&mut self, contents: Contents) -> ReleasedContents {
+        let mut versions = SmallVec::new();
+        let mut at = 0;
+        while at < self.retiring.len() {
+            if self.retiring[at].held_alone() {
+                versions.push(self.retiring.remove(at));
+            } else {
+                at += 1;
+            }
         }
-        self.acked = Some(rastered);
         ReleasedContents {
-            contents: self.pending.acknowledge(rastered),
-            version: None,
+            contents,
+            versions,
+            empty: Some(Arc::clone(&self.empty)),
         }
+    }
+
+    /// Takes back what [`ReleasedContents::reclaim`] kept, up to the owner's
+    /// caps; the rest is freed. Nothing it takes holds a value of the scene.
+    pub fn restock(&mut self, mut reclaimed: Reclaimed) {
+        self.scratch.spares.absorb(&mut reclaimed.versions);
+        while self.spare_contents.len() < SPARE_CONTENTS {
+            let Some(content) = reclaimed.contents.pop() else {
+                return;
+            };
+            self.spare_contents.push(content);
+        }
+    }
+
+    /// Emptied buffers the owner holds for its next applies, of every kind.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn spares_len(&self) -> usize {
+        self.scratch.spares.len() + self.spare_contents.len()
     }
 
     /// Starts over under a new lineage: the version holds an empty root, the
@@ -553,9 +661,13 @@ impl SceneOwner {
             SceneOp::Place { .. } | SceneOp::Retire { .. } => None,
         }));
         contents.extend(self.discarded.drain(..));
+        let mut versions: SmallVec<[SceneVersion; RETIRING + 1]> =
+            self.retiring.drain(..).collect();
+        versions.push(replaced);
         ReleasedContents {
             contents,
-            version: Some(replaced),
+            versions,
+            empty: Some(Arc::clone(&self.empty)),
         }
     }
 
@@ -738,19 +850,22 @@ impl SceneOwner {
         };
         self.surface = Some(surface);
         let folded = self.pending.push(id, self.patch_damage, replaced_contents);
-        let replaced = std::mem::replace(&mut self.current, SceneVersion::from_inner(next));
+        next.return_spares(&mut self.scratch.spares);
+        let next = self.scratch.spares.version(next);
+        let replaced = std::mem::replace(&mut self.current, next);
         // The contents this patch replaced live on in the log until a
-        // completion releases them; the version before and the contents a fold
-        // of the log let go are handed back, to drop once the owner is free.
+        // completion releases them. The version before waits among the
+        // retiring ones until no other holder reads it, so its nodes can be
+        // reclaimed; the oldest goes when there is no room. Those, and the
+        // contents a fold of the log let go, are handed back, to drop once
+        // the owner is free.
+        let evicted = (self.retiring.len() == RETIRING).then(|| self.retiring.remove(0));
+        self.retiring.push(replaced);
         ops.clear();
         self.ops = ops;
-        Ok(Applied {
-            id,
-            released: ReleasedContents {
-                contents: folded,
-                version: Some(replaced),
-            },
-        })
+        let mut released = self.released(folded);
+        released.versions.extend(evicted);
+        Ok(Applied { id, released })
     }
 }
 
@@ -790,6 +905,46 @@ impl SceneWriter<'_> {
     /// patch is applied.
     pub fn push(&mut self, op: SceneOp) {
         self.owner.ops.push(op);
+    }
+
+    /// `content`'s stream with the effects at the given entries replaced by
+    /// new layers, the stream shared: how a composited-layer update
+    /// republishes a boundary without repainting it. It costs the content's
+    /// effects, not its chunks, and is written into a content the owner
+    /// reclaimed when it holds one ([`SceneOwner::restock`]).
+    ///
+    /// # Errors
+    ///
+    /// The first index that names no effect, or names one a second time;
+    /// nothing is published. The owner keeps the layers it was handed and
+    /// drops them when the next patch opens, as it does what
+    /// [`Self::discard`] hands it: an annotation's `Drop` is user code.
+    pub fn with_effects(
+        &mut self,
+        content: &BoundaryContent,
+        replaced: impl IntoIterator<Item = (EntryIndex, Layer)>,
+    ) -> Result<Arc<BoundaryContent>, EntryIndex> {
+        let owner = &mut *self.owner;
+        // The spare with room for the layers, so the copy reuses its vector.
+        let roomy = owner
+            .spare_contents
+            .iter()
+            .position(|spare| spare.layer_room() >= content.layer_count());
+        let mut fresh = match roomy {
+            Some(at) => owner.spare_contents.swap_remove(at),
+            None => Arc::new(content.blank()),
+        };
+        let target =
+            Arc::get_mut(&mut fresh).expect("BUG: a spare content is held by its pool alone");
+        match content.effects_into(target, replaced) {
+            Ok(()) => Ok(fresh),
+            // The layers it was handed are user values: they drop with the
+            // painter's other discarded contents, when the next patch opens.
+            Err(index) => {
+                owner.discarded.push(fresh);
+                Err(index)
+            }
+        }
     }
 
     /// Hands the owner a content the painter recorded for a patch that was
@@ -842,12 +997,16 @@ impl<'a> Patch<'a> {
     ) -> Result<Built, SceneError> {
         scratch.reset();
         let base = current.inner();
+        // A refused patch drops `next` with the spares it took: they are
+        // empty nodes, freed and nothing more.
+        let mut next = base.clone();
+        next.lend_spares(&mut scratch.spares);
         let mut patch = Patch {
             lineage: base.id.lineage(),
             base,
             slots,
             scratch,
-            next: base.clone(),
+            next,
             cost: TableCost::default(),
             depth_updates: 0,
         };

@@ -7,6 +7,7 @@ pub type Result<T> = std::result::Result<T, AssetError>;
 
 /// Errors that can occur during asset operations.
 #[derive(Error, Debug, Clone)]
+#[non_exhaustive]
 pub enum AssetError {
     /// Asset was not found at the specified location.
     #[error("Asset not found: {path}")]

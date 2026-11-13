@@ -369,8 +369,9 @@ only by decision, recorded where a reader will find it.
 the two publish the same toggled state, and only `RadioButton` says the state is
 one-of-a-set rather than independent.
 
-**Choice:** `Radio::build` publishes `.radio(selected).enabled(interactive)`,
-which sets `SemanticsRole::RadioButton` and the toggled state together.
+**Choice:** `Radio::build` describes its well's node as a `SemanticsRole::RadioButton`
+with the toggled state (`Description::new(SemanticsRole::RadioButton).toggled(…)`),
+enabled while the well has its tap.
 
 Inside a real `ListTile` the tile's node and the radio's node conflict (each
 declares a role, and both declare `enabled`), so they stay **separate** nodes:
