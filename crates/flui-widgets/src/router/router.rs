@@ -5,7 +5,6 @@ use std::any::type_name;
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::BuildPhase;
@@ -328,7 +327,7 @@ impl<R: Routable> RouterState<R> {
             build_phase,
             announcer: StackAnnouncer::default(),
         });
-        let observer: Arc<dyn NavigatorObserver> = Arc::new(RouterObserver {
+        let observer: Rc<dyn NavigatorObserver> = Rc::new(RouterObserver {
             shared: Rc::downgrade(&shared),
         });
         RouterState {
@@ -343,7 +342,7 @@ impl<R: Routable> RouterState<R> {
 /// [`StatefulView::State`] names it.
 pub struct RouterState<R: Routable> {
     shared: Terminal<Rc<RouterShared<R>>>,
-    observer: Terminal<Arc<dyn NavigatorObserver>>,
+    observer: Terminal<Rc<dyn NavigatorObserver>>,
     /// Seeded in `init_state`, which receives no view.
     initial: Vec<R>,
 }
@@ -393,7 +392,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
         self.shared.mounted.set(true);
         self.shared
             .navigator
-            .add_observer(Arc::clone(&self.observer));
+            .add_observer(Rc::clone(&self.observer));
         self.seed_initial_pages();
         // The stack it opens on is not a change.
         let announcer = &self.shared.announcer;
@@ -737,6 +736,7 @@ impl<R: Routable> NavigatorObserver for RouterObserver<R> {
 
 #[cfg(test)]
 mod seed_tests {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;

@@ -3,9 +3,9 @@
 //! Every test here constructs a `RouteHistory` and nothing else. No element tree,
 //! no build owner, no render pipeline, no overlay.
 
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
-use parking_lot::Mutex;
+use std::cell::RefCell;
 
 use super::binding::RouteBinding;
 use super::history::RouteHistory;
@@ -31,7 +31,7 @@ enum Event {
     Dispose,
 }
 
-type Log = Arc<Mutex<Vec<Event>>>;
+type Log = Rc<RefCell<Vec<Event>>>;
 
 /// A route with an `i32` result and a full callback trace.
 struct Probe {
@@ -49,7 +49,7 @@ impl Probe {
     fn new(log: &Log) -> Self {
         Self {
             settings: RouteSettings::default(),
-            log: Arc::clone(log),
+            log: Rc::clone(log),
             current_result: None,
             consents_to_pop: true,
             push: PushCompletion::Immediate,
@@ -58,7 +58,7 @@ impl Probe {
     }
 
     fn record(&self, event: Event) {
-        self.log.lock().push(event);
+        self.log.borrow_mut().push(event);
     }
 }
 
@@ -160,7 +160,7 @@ fn double_pop_or_double_remove_does_not_double_complete() {
     assert_eq!(result.try_take(), None, "the future resolved exactly once");
 
     let completes = log
-        .lock()
+        .borrow_mut()
         .iter()
         .filter(|event| matches!(event, Event::DidComplete(_)))
         .count();
@@ -320,7 +320,7 @@ fn binding_for(
 /// `BUG:` assert existed.
 ///
 /// Red-check: make `RouteBinding::finalize` call `RouteHistory::finalize_route`
-/// directly — it deadlocks on the history mutex (a hang, not a panic), which is
+/// directly — it deadlocks on the history borrow (a hang, not a panic), which is
 /// exactly why the queue exists.
 fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
     let log: Log = Log::default();

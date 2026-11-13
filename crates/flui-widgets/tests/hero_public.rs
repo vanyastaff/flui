@@ -19,7 +19,7 @@
 //! of throwing.
 
 use std::time::Duration;
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc};
 
 use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::Vsync;
@@ -129,12 +129,12 @@ pub(crate) fn replacing_the_hero_observer_inside_its_builder_cancels_the_flight(
         let taps = Rc::new(Cell::new(0));
         let route = PageRoute::<i32>::new({
             let navigator = navigator.clone();
-            let replacement = Arc::clone(&replacement);
+            let replacement = Rc::clone(&replacement);
             let replaced = Rc::clone(&replaced);
             let taps = Rc::clone(&taps);
             move |_ctx, _primary, _secondary| {
                 let navigator = navigator.clone();
-                let replacement = Arc::clone(&replacement);
+                let replacement = Rc::clone(&replacement);
                 let replaced = Rc::clone(&replaced);
                 let taps = Rc::clone(&taps);
                 Center::new()

@@ -51,7 +51,6 @@
 // (ADR-0083 §4).
 
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use std::{fmt, marker::PhantomData};
 
@@ -128,14 +127,14 @@ struct TransitionInner {
 
     /// Set once the route is popped: a popped route is no longer active, which is
     /// the half that matters to the status handler's `ReverseSettled` guard.
-    popped: AtomicBool,
+    popped: Cell<bool>,
     /// Whether the pop has already been finalized.
-    pop_finalized: AtomicBool,
+    pop_finalized: Cell<bool>,
 
     /// Whether the route obscures the ones below **once its entrance transition
     /// completes**. `PageRoute` sets `true`, `PopupRoute` `false`. Defaults to
     /// `false`, the conservative value: nothing is skipped unless a route asks.
-    opaque: AtomicBool,
+    opaque: Cell<bool>,
 
     /// Fired in `dispose`. The route **below** listens on it to release its
     /// secondary proxy.
@@ -145,7 +144,7 @@ struct TransitionInner {
     /// `pop_finalized` guard is what keeps this at one, and nothing else observes
     /// it, since the `finalize` command is idempotent. Compiled into every build so the route has one
     /// layout whether or not the integration tests link it (ADR-0083 §4).
-    finalize_calls: AtomicUsize,
+    finalize_calls: Cell<usize>,
 }
 
 impl Drop for TransitionInner {
@@ -202,7 +201,7 @@ impl TransitionInner {
 
     /// Whether the route is still active (not yet popped).
     fn is_active(&self) -> bool {
-        !self.popped.load(Ordering::Acquire)
+        !self.popped.get()
     }
 
     /// React to an animation status change.
@@ -218,7 +217,7 @@ impl TransitionInner {
                 // `NavigatorShared::apply` awaiting the `AnimationRunFuture`
                 // `did_push` already handed the navigator (ADR-0064), not by
                 // this listener — which owns only the opaque flag.
-                binding.set_entry_opaque(self.opaque.load(Ordering::Relaxed));
+                binding.set_entry_opaque(self.opaque.get());
             }
             // A route in motion never occludes, because the routes beneath it show
             // through the transition.
@@ -228,9 +227,10 @@ impl TransitionInner {
             // A route may still be active if something else is controlling the
             // transition and hits the dismissed status.
             AnimationStatus::ReverseSettled
-                if !self.is_active() && !self.pop_finalized.swap(true, Ordering::AcqRel) =>
+                if !self.is_active() && !self.pop_finalized.replace(true) =>
             {
-                self.finalize_calls.fetch_add(1, Ordering::Relaxed);
+                self.finalize_calls
+                    .set(self.finalize_calls.get().saturating_add(1));
                 binding.finalize();
             }
             // A `dismissed` that fails the guard above: still an active route.
@@ -308,11 +308,11 @@ impl<T> TransitionRoute<T> {
                     unit_start_animation(),
                 ))),
                 secondary_parent: RefCell::new(SecondaryParent::Resting),
-                popped: AtomicBool::new(false),
-                pop_finalized: AtomicBool::new(false),
-                opaque: AtomicBool::new(false),
+                popped: Cell::new(false),
+                pop_finalized: Cell::new(false),
+                opaque: Cell::new(false),
                 completed: super::lifecycle::Terminal::new(Rc::new(CompletedSignal::default())),
-                finalize_calls: AtomicUsize::new(0),
+                finalize_calls: Cell::new(0),
             })),
             _output: PhantomData,
         }
@@ -385,14 +385,14 @@ impl<T> TransitionRoute<T> {
     /// Written to the route's overlay entry when the entrance transition
     /// completes, and cleared while it moves.
     pub(crate) fn opaque(self, opaque: bool) -> Self {
-        self.inner.opaque.store(opaque, Ordering::Relaxed);
+        self.inner.opaque.set(opaque);
         self
     }
 
     /// Whether the route covers the routes beneath it once its entrance
     /// completes.
     pub(crate) fn is_opaque(&self) -> bool {
-        self.inner.opaque.load(Ordering::Relaxed)
+        self.inner.opaque.get()
     }
 
     /// A cloneable view of the route's animation state, obtainable **before** the
@@ -592,13 +592,13 @@ impl TransitionHandle {
     /// Whether the pop has already been finalized.
     #[must_use]
     pub fn is_pop_finalized(&self) -> bool {
-        self.inner.pop_finalized.load(Ordering::Acquire)
+        self.inner.pop_finalized.get()
     }
 
     /// How many times the status listener raised `finalize()`.
     #[must_use]
     pub fn finalize_calls(&self) -> usize {
-        self.inner.finalize_calls.load(Ordering::Relaxed)
+        self.inner.finalize_calls.get()
     }
 
     /// Whether the secondary proxy rests at zero without a coordinated route above.
@@ -653,7 +653,7 @@ impl<T: 'static> Route for TransitionRoute<T> {
             .controller()
             .as_ref()
             .is_some_and(|controller| controller.status().is_reverse_settled());
-        dismissed && !self.inner.pop_finalized.load(Ordering::Acquire)
+        dismissed && !self.inner.pop_finalized.get()
     }
 
     /// Create the controller, attach the status listener, then let the overlay
@@ -678,7 +678,7 @@ impl<T: 'static> Route for TransitionRoute<T> {
         }
 
         let pending_statuses = Rc::clone(&self.inner.pending_statuses);
-        let status_wake = self.inner.status_wake.borrow_mut().clone();
+        let status_wake = self.inner.status_wake.borrow().clone();
         let subscription = controller.subscribe_status(std::rc::Rc::new(move |status| {
             pending_statuses.borrow_mut().push(status);
             if let Some(wake) = &status_wake {
@@ -713,7 +713,7 @@ impl<T: 'static> Route for TransitionRoute<T> {
             // A controller that installs already completed never fires a status
             // change, so the status listener would never write `opaque`.
             if controller.status().is_forward_settled() {
-                binding.set_entry_opaque(self.inner.opaque.load(Ordering::Relaxed));
+                binding.set_entry_opaque(self.inner.opaque.get());
             }
         }
 
@@ -759,7 +759,7 @@ impl<T: 'static> Route for TransitionRoute<T> {
     /// own duration/curve instead of the route's plain `reverse()`. No pacing
     /// published (the ordinary, programmatic pop) falls back to the plain reverse.
     fn did_pop(&mut self) -> bool {
-        self.inner.popped.store(true, Ordering::Release);
+        self.inner.popped.set(true);
         let pacing = self
             .inner
             .binding

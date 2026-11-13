@@ -69,9 +69,9 @@ pub(crate) fn transitions_of(builder: Rc<dyn PageTransitionBuilder>) -> RouteTra
 /// An ambient builder with its durations already read.
 ///
 /// A route adopts its ambient builder at install, inside the navigator's
-/// locked history flush, where user code must not run: a builder whose
-/// `duration` reaches the navigator would deadlock it. So the navigator reads
-/// the durations when it takes the hook, from a lifecycle hook with no lock
+/// history flush, under its borrow, where user code must not run: a builder whose
+/// `duration` reaches the navigator would find it borrowed. So the navigator reads
+/// the durations when it takes the hook, from a lifecycle hook with no borrow
 /// held, and install only copies them.
 #[derive(Clone)]
 pub(crate) struct AdoptedTransition {
@@ -122,7 +122,7 @@ pub(crate) struct PageTransitionHooks {
 
 impl PageTransitionHooks {
     /// Read each builder's durations. Runs user code: call it with no
-    /// navigator lock held.
+    /// navigator borrow held.
     pub(crate) fn adopt(self) -> AdoptedTransitions {
         use super::lifecycle::Terminal;
         // A panic in the first builder destroys the second during the unwind

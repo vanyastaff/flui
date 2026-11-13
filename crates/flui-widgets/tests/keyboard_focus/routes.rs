@@ -5,7 +5,6 @@
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
@@ -397,11 +396,11 @@ const ROWS: [&str; 12] = [
 
 /// Records the routes a navigator reports removed.
 #[derive(Default)]
-struct Removals(parking_lot::Mutex<Vec<RouteId>>);
+struct Removals(RefCell<Vec<RouteId>>);
 
 impl NavigatorObserver for Removals {
     fn did_remove(&self, route: RouteId, _previous: Option<RouteId>) {
-        self.0.lock().push(route);
+        self.0.borrow_mut().push(route);
     }
 }
 
@@ -425,8 +424,8 @@ pub(crate) fn a_panicking_restored_focus_listener_still_closes_the_route() {
             .into_view()
             .boxed()
     }));
-    let removals = Arc::new(Removals::default());
-    navigator.add_observer(Arc::clone(&removals) as Arc<dyn NavigatorObserver>);
+    let removals = Rc::new(Removals::default());
+    navigator.add_observer(Rc::clone(&removals) as Rc<dyn NavigatorObserver>);
     let mut harness = mount(Navigator::new(navigator.clone()));
     harness.tick();
     let manager = harness.focus_manager();
@@ -443,7 +442,11 @@ pub(crate) fn a_panicking_restored_focus_listener_still_closes_the_route() {
         payload.downcast_ref::<&str>(),
         Some(&"restored focus listener")
     );
-    assert_eq!(*removals.0.lock(), [dialog], "observers hear the removal");
+    assert_eq!(
+        *removals.0.borrow_mut(),
+        [dialog],
+        "observers hear the removal"
+    );
     settle(&mut harness);
     assert_eq!(navigator.route_ids().len(), 1);
     manager.unfocus();
@@ -519,7 +522,7 @@ pub(crate) fn a_panicking_observer_keeps_the_removal_failure_first() {
     }));
     settle(&mut harness);
     let route = *navigator.route_ids().last().expect("the route is on top");
-    navigator.add_observer(Arc::new(PanicsOnRemove));
+    navigator.add_observer(Rc::new(PanicsOnRemove));
     harness.swap_root(SizedBox::new(1.0, 1.0));
     settle(&mut harness);
 

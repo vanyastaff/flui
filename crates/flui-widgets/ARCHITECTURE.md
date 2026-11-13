@@ -1412,8 +1412,8 @@ its `Router`'s route type, and a value the page needs travels in that value.
 
 **Choice:** every caller-supplied result is either delivered to a route or
 reported exactly once, and dropped outside any guard. Its `Drop` is user code,
-and running user code under the history lock hangs the owner thread rather
-than failing a test. `warn` when there was no route to deliver to; `error`
+and user code that runs under the history borrow and re-enters the navigator
+panics on a second borrow. `warn` when there was no route to deliver to; `error`
 when a route received it and the type did not match its `Output`.
 
 The undelivered paths are not the edge cases a reader expects: an empty stack,
@@ -1714,7 +1714,7 @@ records the cross-crate design this decision consumes.
 **Choice:** `PushCompletion::Animating(AnimationRunFuture)` carries the future
 `AnimationController::forward()` (or an equivalent run-starting call) returns,
 but the continuation that awaits it is registered from `NavigatorShared::apply`
-— after the flush that produced the entry has released the history lock —
+— after the flush that produced the entry has released the history borrow —
 never from inside `RouteEntry::handle_push` itself. `RouteHistory::flush()`
 re-drains any `RouteCommand`s a route raised between its own passes, so a
 continuation registered mid-flush on an already-resolved future (a
@@ -2192,10 +2192,10 @@ route change on every navigation, with no app bar required.
 `Box<dyn Any>`: neither `T`, the value nor the result is `Send` (ADR-0330 §3).
 A value of another type pops the page and resolves to
 `RouteResultError::TypeMismatch`; the value is dropped and reported outside the
-history lock. Every exit resolves the result: a value, `Ok(None)` for a page
+history borrow. Every exit resolves the result: a value, `Ok(None)` for a page
 that leaves without one (a pop, a replace, a `go` that drops it), and
 `Ok(None)` for every result still pending when the navigator unmounts. Those
-last completions are prepared under the history lock and run, waking their
+last completions are prepared under the history borrow and run, waking their
 tasks, after it is released, each contained so that a panicking waker or
 observer leaves the rest to complete. Completion does not pop a route: a pop
 through a handle that outlived the navigator still runs the route's `did_pop`,
