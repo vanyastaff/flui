@@ -236,10 +236,9 @@ pub(crate) struct ButtonStyleButtonCoreState {
     states: WidgetStatesController,
     states_listener: Option<Subscription>,
     /// Seeded from the initial view in `create_state`; consumed once by
-    /// `init_state` (which has no `view` parameter — see `InkWellState`'s
-    /// identical `tap_slot` shape for why `create_state` is where a
-    /// `ViewState` impl captures anything it needs before its first
-    /// build).
+    /// `init_state`, which has no `view` parameter: `create_state` is where a
+    /// `ViewState` impl captures anything it needs before its first build, as
+    /// `InkWellState` seeds its handler there.
     initially_enabled: bool,
     /// Seeded the same way as `initially_enabled`.
     initially_selected: bool,
