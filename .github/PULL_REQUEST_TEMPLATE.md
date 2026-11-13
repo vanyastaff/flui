@@ -10,6 +10,11 @@ Describe the change and why it belongs in FLUI.
 - [ ] A cross-crate contract change is recorded (ADR), or not applicable
 - [ ] A consumer-visible change adds a `changelog.d/<branch-slug>.md` fragment, or not applicable
 
+## Expectations
+
+One line per path `cargo xtask expectations` lists: the path (or its directory, with the trailing
+`/`) and why the old expectation was wrong or the new one is right. "None" when it lists nothing.
+
 ## Architecture
 
 - [ ] No new `edge-exceptions`, `reach-exceptions` or allowlist entry without the ADR that removes it

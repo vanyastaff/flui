@@ -9,7 +9,8 @@
 //! The allowlists count exactly, so a count only goes down: an entry above
 //! the tree is a finding ("grew"), and so is one below it ("lower it"). What
 //! the gates cannot see is an entry added or raised in the same change as the
-//! code it excuses; that shows up only in the diff of the allowlist file.
+//! code it excuses; `cargo xtask expectations` lists that growth from the diff,
+//! and the pull request's body gives its reason (ADR-0331).
 
 use std::collections::BTreeSet;
 use std::path::Path;

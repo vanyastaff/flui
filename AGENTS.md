@@ -161,6 +161,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | Dependencies point down the tiers; an exception names the ADR that removes it | `xtask workspace`, `xtask reach` (ADR-0081) |
 | A Stable crate's public API names upstream types only as ADR-0089 §2 allows | `xtask api-closure` (CI `api-contracts` job, nightly rustdoc JSON) |
 | Every item the facade reaches is in `api/flui.txt`, so a pull request that changes the facade's API carries the diff (`--write` restates it) | `xtask public-api` (CI `public-api` job, nightly rustdoc JSON; ADR-0324) |
+| A pull request that edits an expectation (the API snapshot, a `*.stderr`, a `*.snap`, a protocol schema, a perf baseline, an allowlist, a test, a `deny.toml` or `typos.toml` value) names each path and its reason under `## Expectations` in its body | `xtask expectations --body` (`expectations.yml`, on every pull request and every edit of its body; ADR-0331) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
 | Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit handler, a closure handed to the OS) is a constant or one call of `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16) | `xtask panic-boundary` |
@@ -237,6 +238,12 @@ with an answer you can point to in the code; the reviewers ask the same ones.
 13. **Replaced forms.** What does the diff replace or reverse? Name the old form, `rg` it across
     code and documents, and point to zero users left, or to the deprecation and its
     `docs/gaps.md` entry. Does any new line use a form from the "Not" column of "Current forms"?
+14. **Expectations.** `cargo xtask expectations` lists what the diff edits of what the checks
+    compare against: lines gone from `api/flui.txt`, a changed `*.stderr`, `*.snap` or protocol
+    schema, a raised perf baseline, a grown allowlist, fewer tests, a new `#[ignore]`, a new
+    `deny.toml` or `typos.toml` value. For each, was the old expectation wrong, or is the code?
+    An expectation moved to turn a check green is the defect the check was there to find. The
+    pull request's body names each path under `## Expectations` with that answer (ADR-0331).
 
 ## Where to read next
 
@@ -251,7 +258,9 @@ with a concrete failure scenario, and code an experienced Rust developer would b
 by, with the better shape. What this repository keeps getting wrong:
 
 - a new `pub` item that no production path reaches, unless the PR names the follow-up;
-- a regenerated `*.snap` the PR doesn't explain;
+- an edited expectation (the list `cargo xtask expectations` prints) whose line under
+  `## Expectations` in the PR body does not say why the old one was wrong: a snapshot
+  regenerated, a test removed or a baseline raised because the check was red;
 - the "Recurring defects" above, checked at each failure point alone, two in competition, and
   the next operation after containment ([matrix](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/signal-unwind-contract.ru.md));
 - `SliverGeometry { ..SliverGeometry::ZERO }` (drops `layout_extent`, `visible`), geometry from a
