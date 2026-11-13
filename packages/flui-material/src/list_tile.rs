@@ -787,23 +787,33 @@ impl StatelessView for ListTile {
         // those roles do not carry. The well's node carries the description
         // and the tile's switch: a tile without a handler is enabled or not as
         // the tile says, and the node stays put when the handler comes or goes.
+        //
+        // A plain tile (no handler, not selectable) declares nothing while
+        // enabled, so its text folds into the node above it as Flutter's
+        // non-container `Semantics` lets it. Disabled, it is a node of its own
+        // that says so: Flutter folds `enabled: false` upward too, which would
+        // say an enclosing list or row is disabled.
         let role = if self.selectable {
-            SemanticsRole::ListBoxOption
+            Some(SemanticsRole::ListBoxOption)
         } else if self.on_tap.is_some() {
-            SemanticsRole::Button
+            Some(SemanticsRole::Button)
+        } else if !self.enabled {
+            Some(SemanticsRole::None)
         } else {
-            SemanticsRole::None
+            None
         };
-        let mut description = Description::new(role);
-        if self.selectable {
-            description = description.selected(self.selected);
-        }
 
         let mut ink_well = InkWell::new()
             .child(content)
             .shape(resolved.shape)
-            .enabled(self.enabled)
-            .description(description);
+            .enabled(self.enabled);
+        if let Some(role) = role {
+            let mut description = Description::new(role);
+            if self.selectable {
+                description = description.selected(self.selected);
+            }
+            ink_well = ink_well.description(description);
+        }
         if let Some(on_tap) = self.on_tap.clone() {
             ink_well = ink_well.on_tap(move |ctx| on_tap(ctx));
         }

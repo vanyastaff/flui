@@ -162,8 +162,10 @@ pub fn a_selectable_tile_is_an_option_whether_or_not_selected() {
 
 /// A tile is disabled only when it says so, and operable only with a
 /// handler as well: an enabled tile without one is not disabled, offers no
-/// click and takes no focus. A tile is one node of its own, so its state
-/// stays on it and never reaches the list it sits in.
+/// click and takes no focus. A tile that declares anything (a role, or that
+/// it is disabled) is a node of its own, so its state stays on it and never
+/// reaches the list it sits in; a plain enabled tile folds its text into the
+/// list, as Flutter's non-container `Semantics` does.
 ///
 /// Red-check: take the well's switch from its handler alone (the
 /// `ListTile`'s `enabled` ignored), and the enabled tile without a handler
@@ -201,10 +203,12 @@ pub fn a_tile_is_disabled_only_when_it_says_so_and_operable_with_a_handler() {
             let node = tree
                 .find_by_label("Inbox")
                 .unwrap_or_else(|error| panic!("{case}: {error}"));
-            assert_ne!(
-                node.role(),
-                Role::ListBox,
-                "{case}: the tile is its own node"
+            // A plain enabled tile declares nothing and its text folds into
+            // the list, as before; every other tile is a node of its own.
+            assert_eq!(
+                node.role() == Role::ListBox,
+                enabled && !handler,
+                "{case}: the tile folds into the list only when it declares nothing"
             );
             assert_eq!(node.is_disabled(), !enabled, "{case}: disabled");
             let operable = enabled && handler;
