@@ -317,14 +317,12 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
     fn outcome(mounted: &Mounted<M>) -> Outcome<M> {
         Outcome {
             model: (mounted.model)(),
-            announcements: tree(mounted)
-                .map(|tree| {
-                    tree.nodes()
-                        .filter(|node| node.live().is_some())
-                        .filter_map(|node| node.label().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            announcements: tree(mounted).map_or_default(|tree| {
+                tree.nodes()
+                    .filter(|node| node.live().is_some())
+                    .filter_map(|node| node.label().map(str::to_owned))
+                    .collect()
+            }),
         }
     }
 
@@ -889,14 +887,12 @@ fn is_menu_item(role: Role) -> bool {
 }
 
 fn buttons<M>(mounted: &Mounted<M>) -> Vec<String> {
-    tree(mounted)
-        .map(|tree| {
-            tree.nodes()
-                .filter(|node| node.role() == Role::Button)
-                .filter_map(|node| node.label().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
+    tree(mounted).map_or_default(|tree| {
+        tree.nodes()
+            .filter(|node| node.role() == Role::Button)
+            .filter_map(|node| node.label().map(str::to_owned))
+            .collect()
+    })
 }
 
 fn menu_item<M>(mounted: &Mounted<M>, label: &str) -> Option<crate::a11y::NodeId> {

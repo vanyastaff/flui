@@ -597,7 +597,7 @@ impl SemanticsTree {
             };
             return match crate::accesskit_translation::published_text(text.config().attributes()) {
                 Some((_, identities)) if self.regions_hold_runs(text, identities.len()) => {
-                    identities.get(runs).map(<[_]>::to_vec).unwrap_or_default()
+                    identities.get(runs).map_or_default(<[_]>::to_vec)
                 }
                 _ => Vec::new(),
             };

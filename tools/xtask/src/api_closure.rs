@@ -797,7 +797,7 @@ fn scan(
                             .iter()
                             .any(|exception| exception.krate == krate);
                     if by_exception {
-                        scan.used_exceptions.insert(krate.clone());
+                        scan.used_exceptions.insert(krate);
                     }
                     by_adr || by_exception
                 }

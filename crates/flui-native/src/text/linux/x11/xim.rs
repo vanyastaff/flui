@@ -203,8 +203,7 @@ async fn handshake(link: &mut Link) -> Option<(u16, Attributes, u32)> {
             values
                 .iter()
                 .find(|value| value.id == id)
-                .map(|value| styles_of(&value.value))
-                .unwrap_or_default()
+                .map_or_default(|value| styles_of(&value.value))
         }
         None => Vec::new(),
     };

@@ -512,8 +512,7 @@ impl Serve for method::SemanticsAnnouncements {
         Answer::Now(Ok(ctx.state.pipeline().with(|pipeline| {
             pipeline
                 .semantics_owner()
-                .map(|owner| owner.announcement_journal(&params))
-                .unwrap_or_default()
+                .map_or_default(|owner| owner.announcement_journal(&params))
         })))
     }
 }

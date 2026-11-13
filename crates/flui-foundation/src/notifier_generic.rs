@@ -184,8 +184,7 @@ impl<Arg> Drop for ListenerStorage<Arg> {
             .retiring
             .get_mut()
             .take()
-            .map(|retiring| *retiring)
-            .unwrap_or_default();
+            .map_or_default(|retiring| *retiring);
         callbacks.extend(std::mem::take(self.entries.get_mut()).into_callbacks());
         retire_callbacks(callbacks);
         drop(deferred);
