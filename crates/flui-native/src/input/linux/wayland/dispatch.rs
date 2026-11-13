@@ -882,8 +882,7 @@ impl Delivering {
                 let time = EventTime::from_nanos(event_timestamp_ns());
                 let released = self
                     .keymap_mut(seat)
-                    .map(|keymap| keymap.keyboard.leave(time))
-                    .unwrap_or_default();
+                    .map_or_default(|keymap| keymap.keyboard.leave(time));
                 let Some(left) = left else {
                     return Vec::new();
                 };
@@ -977,8 +976,7 @@ impl Delivering {
         let layout = self
             .keymap(seat)
             .and_then(|keymap| keymap.source.layout_name(keymap.keyboard.layout()))
-            .map(str::to_owned)
-            .unwrap_or_default();
+            .map_or_default(str::to_owned);
         if layout != self.layout {
             self.layout = layout;
             self.layout_changed = true;

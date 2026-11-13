@@ -237,6 +237,32 @@ pub(super) fn plans(
                 features.insert(format!("{name}/testing"));
             }
         }
+        // `--features X/testing` also turns on a selected package's optional
+        // dependency named X, without the feature of that package that names
+        // the dependency's code; cargo's `unused_dependencies` lint then
+        // reports the edge. Enable the owning feature with it.
+        let named: BTreeSet<String> = features
+            .iter()
+            .filter_map(|feature: &String| feature.split_once('/'))
+            .map(|(dependency, _)| dependency.to_owned())
+            .collect();
+        for name in &names {
+            let package = metadata
+                .workspace_packages()
+                .into_iter()
+                .find(|package| package.name.as_str() == name)
+                .expect("BUG: discovered package belongs to workspace metadata");
+            for (feature, enables) in &package.features {
+                let owns_named_dependency = enables.iter().any(|enable: &String| {
+                    enable
+                        .strip_prefix("dep:")
+                        .is_some_and(|dependency| named.contains(dependency))
+                });
+                if owns_named_dependency {
+                    features.insert(format!("{name}/{feature}"));
+                }
+            }
+        }
         cmd = cmd.args(["--all-targets", "--locked", "--target", target]);
         if feature_set == FeatureSet::All {
             cmd = cmd.args(["--all-features"]);

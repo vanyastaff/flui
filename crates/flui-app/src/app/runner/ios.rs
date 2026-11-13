@@ -156,8 +156,7 @@ fn drive_owner() {
                 slot.borrow()
                     .ios_controller
                     .as_ref()
-                    .map(SessionController::dispatchers)
-                    .unwrap_or_default()
+                    .map_or_default(SessionController::dispatchers)
             });
             for dispatcher in dispatchers {
                 let _ = dispatcher.runtime().background();

@@ -90,7 +90,7 @@ pub(crate) fn every_icon_draws_inside_its_box() {
         }
         assert_eq!(data.match_text_direction(), mirrors, "{name}");
         let ltr = points(data.clone(), 0.0, TextDirection::Ltr);
-        let rtl = points(data.clone(), 0.0, TextDirection::Rtl);
+        let rtl = points(data, 0.0, TextDirection::Rtl);
         let flipped: Vec<_> = ltr.iter().map(|p| Point::new(SIDE - p.x, p.y)).collect();
         let close = |a: &[Point<f64>], b: &[Point<f64>]| {
             a.len() == b.len()

@@ -77,7 +77,7 @@ fn a_seat_gone_in_a_dispatch_keeps_what_its_input_method_sent_first() {
             .expect("the seat's text input");
         texts.deliver(TextWire {
             input: input.clone(),
-            event: TextEvent::Enter(surface.clone()),
+            event: TextEvent::Enter(surface),
         });
 
         // One dispatch records the input method's commit, and then removes

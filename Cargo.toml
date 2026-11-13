@@ -165,7 +165,7 @@ forbid = ["flui-native", "flui-app", "flui-engine", "winit", "wgpu", "tokio"]
 [workspace.package]
 version = "0.2.0-dev"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.100"
 license = "MIT OR Apache-2.0"
 authors = ["Flui Contributors"]
 repository = "https://github.com/vanyastaff/flui"

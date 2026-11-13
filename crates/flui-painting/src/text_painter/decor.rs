@@ -50,7 +50,7 @@ impl SpanDecor {
         let mut decorations: Vec<Option<TextDecoration>> = Vec::with_capacity(spans.len());
         let mut shadows: Vec<Casting> = Vec::new();
         for (index, (_, style)) in spans.iter().enumerate() {
-            let paint = style.as_ref().map(SpanPaint::of).unwrap_or_default();
+            let paint = style.as_ref().map_or_default(SpanPaint::of);
             backgrounds.push(paint.background);
             decorations.push(paint.decoration.filter(|decoration| !decoration.is_none()));
             let Some(list) = paint.shadows.filter(|list| !list.is_empty()) else {

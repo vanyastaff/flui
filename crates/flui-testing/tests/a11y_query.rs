@@ -166,8 +166,7 @@ pub(crate) fn a_headless_frame_fails_on_an_attribute_its_role_does_not_support()
         let failure = failure.expect_err("the frame left `selected` out of a button");
         let message = failure
             .downcast_ref::<String>()
-            .map(String::as_str)
-            .unwrap_or_default();
+            .map_or_default(String::as_str);
         assert!(message.contains("attribute: Selected"), "{message}");
     };
     fails(None);

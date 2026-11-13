@@ -1235,26 +1235,22 @@ impl View for HandlesView {
 
 impl StatelessView for HandlesView {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let shown: Vec<BoxedView> = self
-            .handles
-            .upgrade()
-            .map(|handles| {
-                let sides: &[(HandleSide, usize)] = match handles.shown.get() {
-                    Some(Shown::Caret) => &[(HandleSide::Collapsed, 0)],
-                    Some(Shown::Selection) => &[(HandleSide::Start, 0), (HandleSide::End, 1)],
-                    Some(Shown::CaretToolbar) | None => &[],
-                };
-                let mut shown: Vec<BoxedView> = sides
-                    .iter()
-                    .filter_map(|&(side, link)| handle(&handles, side, link, ctx))
-                    .collect();
-                shown.extend(drag_magnifier(&handles, ctx));
-                if handles.menu.toolbar_shown() {
-                    shown.extend(toolbar(&handles));
-                }
-                shown
-            })
-            .unwrap_or_default();
+        let shown: Vec<BoxedView> = self.handles.upgrade().map_or_default(|handles| {
+            let sides: &[(HandleSide, usize)] = match handles.shown.get() {
+                Some(Shown::Caret) => &[(HandleSide::Collapsed, 0)],
+                Some(Shown::Selection) => &[(HandleSide::Start, 0), (HandleSide::End, 1)],
+                Some(Shown::CaretToolbar) | None => &[],
+            };
+            let mut shown: Vec<BoxedView> = sides
+                .iter()
+                .filter_map(|&(side, link)| handle(&handles, side, link, ctx))
+                .collect();
+            shown.extend(drag_magnifier(&handles, ctx));
+            if handles.menu.toolbar_shown() {
+                shown.extend(toolbar(&handles));
+            }
+            shown
+        });
         Stack::new(shown)
     }
 }

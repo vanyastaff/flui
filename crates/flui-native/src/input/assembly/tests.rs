@@ -997,7 +997,7 @@ fn an_undecodable_reading_cancels_its_contact_as_invalid_input() {
         let mut contacts = registry();
         decode(&mut contacts, &touch(1, PRESS, 1)).expect("valid");
         let error = decode(&mut contacts, &bad).expect_err("refused");
-        let inputs = error.clone().into_inputs();
+        let inputs = error.into_inputs();
         assert!(
             matches!(
                 single(&inputs),

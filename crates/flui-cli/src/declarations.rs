@@ -475,8 +475,7 @@ impl Declarations {
         let crate_dir = package
             .manifest_path
             .parent()
-            .map(|dir| dir.as_std_path().to_path_buf())
-            .unwrap_or_default();
+            .map_or_default(|dir| dir.as_std_path().to_path_buf());
         let parts = [
             ("dex", &android.dex, false, &mut self.android_dex),
             ("java", &android.java, true, &mut self.android_java),
