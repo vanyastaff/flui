@@ -1296,11 +1296,14 @@ pub(crate) fn serialized_factory_paths_preserve_their_shapes() {
         Path::rectangle(rect),
         Path::oval(rect),
         Path::from_rrect(RRect::from_rect_xy(rect, 4.0, 4.0)),
+        // Moved before its curves were built, by an offset whose sums round.
+        Path::from_rrect(RRect::from_rect_xy(rect, 4.0, 4.0)).translate(Offset::new(0.1, 0.2)),
     ] {
         let lossless_wire = serde_json::to_value(&original).expect("a factory path serializes");
         let lossless: Path =
             serde_json::from_value(lossless_wire).expect("factory path values deserialize");
         assert_eq!(lossless.rrect_hint(), original.rrect_hint());
+        assert_eq!(lossless, original);
         assert_eq!(
             lossless.commands().collect::<Vec<_>>(),
             original.commands().collect::<Vec<_>>()

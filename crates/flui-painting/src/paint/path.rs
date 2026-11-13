@@ -66,50 +66,43 @@ impl ShapeHint {
     }
 
     /// Whether a path of this shape may leave its curves unbuilt: no shape, or a rounded
-    /// rectangle, which the GPU draws from [`Path::rrect_hint`] without reading curves.
+    /// rectangle the GPU fills and shadows from [`Path::rrect_hint`] without reading curves.
     ///
-    /// Every coordinate is finite and small enough that no sum or product the builder forms
-    /// overflows, so the curves built later are finite, as the path's flag already says. The
-    /// rectangle runs left to right and top to bottom with radii that are not negative and
-    /// fit its sides, so its curves stay inside [`Self::bounds`].
+    /// That rectangle runs left to right and top to bottom, and each corner is circular with
+    /// a radius between zero and half its shorter side: the shapes `flui-engine`'s direct
+    /// rounded-rectangle fill accepts. Any other shape is drawn from its curves, so it builds
+    /// them at once and its clones share them. Every coordinate is within
+    /// `DEFERRED_LIMIT`, so the curves built later are finite, as the path's flag already
+    /// says, and stay inside [`Self::bounds`], whose widening is still above a coordinate's
+    /// rounding there.
     fn may_defer(self) -> bool {
-        /// Far beyond any coordinate a frame lays out, and far below where the builder's
-        /// sums and products of two coordinates overflow.
-        const DEFERRED_LIMIT: f64 = 1e150;
+        /// Far beyond any coordinate a frame lays out, and low enough that a coordinate's
+        /// rounding (about 1e-7 at this size) stays far below [`CURVE_TOLERANCE`].
+        const DEFERRED_LIMIT: f64 = 1e9;
         let small = |value: f64| value.is_finite() && value.abs() <= DEFERRED_LIMIT;
-        let rect = |rect: Rect<f64>| {
-            small(rect.left()) && small(rect.top()) && small(rect.right()) && small(rect.bottom())
-        };
         match self {
             Self::None => true,
-            // No analytic route draws them, so a clone recorded and drawn many times would
-            // build them once per clone: they are built at once and shared.
             Self::Rect(_) | Self::Oval(_) => false,
             Self::RRect(rrect) => {
                 let bounds = rrect.bounding_rect();
-                let (tl, tr, br, bl) = (
-                    rrect.top_left,
-                    rrect.top_right,
-                    rrect.bottom_right,
-                    rrect.bottom_left,
-                );
                 let (width, height) = (
                     bounds.right() - bounds.left(),
                     bounds.bottom() - bounds.top(),
                 );
-                rect(bounds)
-                    && [tl, tr, br, bl]
-                        .iter()
-                        .all(|radius| small(radius.x) && small(radius.y))
-                    && [tl, tr, br, bl]
-                        .iter()
-                        .all(|radius| radius.x >= 0.0 && radius.y >= 0.0)
+                let fits = width.min(height) * 0.5;
+                [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()]
+                    .into_iter()
+                    .all(small)
                     && width >= 0.0
                     && height >= 0.0
-                    && tl.x + tr.x <= width
-                    && bl.x + br.x <= width
-                    && tl.y + bl.y <= height
-                    && tr.y + br.y <= height
+                    && [
+                        rrect.top_left,
+                        rrect.top_right,
+                        rrect.bottom_right,
+                        rrect.bottom_left,
+                    ]
+                    .into_iter()
+                    .all(|radius| radius.x == radius.y && radius.x >= 0.0 && radius.x <= fits)
             }
         }
     }
@@ -133,13 +126,14 @@ impl ShapeHint {
 /// shares it, and the first mutation of a shared path copies it, so a path recorded into a
 /// display list or a clip is a pointer-sized handle, not a copy.
 ///
-/// A rounded rectangle made by its constructor, and an empty path, leave their curves
+/// A rounded rectangle made by its constructor that the GPU fills from its hint (circular
+/// corners that fit, see `ShapeHint::may_defer`), and an empty path, leave their curves
 /// unbuilt until something reads them ([`Self::commands`], [`Self::contains`], a stroke or
 /// an edit), and a [`Self::translate`] of such a path only records the move. Reading builds
 /// the curves an eager build would have laid down, moved the same way; a clone taken before
-/// that builds its own on its own read. A shape recorded, clipped, moved and drawn through
-/// its analytic route ([`Self::rrect_hint`]) never builds them at all. A rectangle or an
-/// oval, which no analytic route draws, builds at once so its clones share the curves.
+/// that builds its own on its own read. A shape recorded, moved and drawn through
+/// its analytic route ([`Self::rrect_hint`]) never builds them at all. Any other shape,
+/// which is drawn from its curves, builds at once so its clones share them.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(from = "PathRepr", into = "PathRepr"))]
@@ -172,8 +166,9 @@ pub struct Path {
 
 #[expect(
     clippy::missing_fields_in_debug,
-    reason = "the curves print built and the pending offset prints folded into the shape, \
-                  so a path reads alike whenever it is built"
+    reason = "Debug shows what equality compares: the curves print built, the pending offset \
+              prints folded into the shape, and the cached bounds, which equality leaves out, \
+              do not print"
 )]
 impl std::fmt::Debug for Path {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -181,7 +176,6 @@ impl std::fmt::Debug for Path {
             .field("geometry", self.geometry())
             .field("hint", &self.shape())
             .field("fill_type", &self.fill_type)
-            .field("bounds", &self.bounds)
             .field("finite", &self.finite)
             .finish()
     }
@@ -1312,13 +1306,17 @@ impl Default for Path {
     }
 }
 
-/// The serialized form of a [`Path`]: its elements, fill type and shape hint.
+/// The serialized form of a [`Path`]: its elements, fill type, the shape its constructor
+/// made and how far that shape was moved since (zero when absent, as from a writer that
+/// predates it).
 #[cfg(feature = "serde")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PathRepr {
     commands: Vec<PathCommand>,
     fill_type: PathFillType,
     hint: ShapeHint,
+    #[serde(default)]
+    offset: Offset<f64>,
 }
 
 #[cfg(feature = "serde")]
@@ -1327,7 +1325,8 @@ impl From<Path> for PathRepr {
         Self {
             commands: path.commands().collect(),
             fill_type: path.fill_type,
-            hint: path.shape(),
+            hint: path.hint,
+            offset: path.offset,
         }
     }
 }
@@ -1357,10 +1356,12 @@ impl From<PathRepr> for Path {
             ShapeHint::Oval(rect) => Some(Self::oval(rect)),
             ShapeHint::RRect(rrect) => Some(Self::from_rrect(rrect)),
         };
+        // Moved as the serialized path was, so its curves are the ones that path holds.
+        let hinted = hinted.map(|hinted| hinted.translate(repr.offset));
         if let Some(hinted) = hinted
             && path.geometry() == hinted.geometry()
         {
-            path.hint = hinted.hint;
+            path.hint = hinted.shape();
         }
         path
     }

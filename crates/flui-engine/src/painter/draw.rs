@@ -321,7 +321,8 @@ impl super::WgpuPainter {
         // creating a supersampled attachment, resolve and composite per card.
         // Elliptical corners stay on the path route: the direct shape shader
         // currently uses circular radii. Strokes and other Paint semantics
-        // likewise retain their existing path implementation.
+        // likewise retain their existing path implementation. `Path` leaves exactly the
+        // shapes this route accepts unbuilt (`ShapeHint::may_defer`): keep them in step.
         if paint.style == flui_painting::PaintStyle::Fill
             && paint.blend_mode == flui_painting::BlendMode::SrcOver
             && paint.anti_alias

@@ -2,7 +2,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Radius, Rect};
 use flui_painting::paint::{Path, PathCommand, PathFillType};
 
 fn close(actual: f64, expected: f64, tolerance: f64, what: &str) {
@@ -931,7 +931,21 @@ pub(crate) fn a_shape_reads_alike_before_and_after_its_curves_are_built() {
         copy.shares_commands_with(&first),
         "a clone shares the built curves"
     );
-    for drawn_from_curves in [Path::oval(rrect.rect), Path::rectangle(rrect.rect)] {
+    let wide = Rect::from_ltrb(0.0, 0.0, 10.0, 40.0);
+    for drawn_from_curves in [
+        Path::oval(rrect.rect),
+        Path::rectangle(rrect.rect),
+        // Elliptical corners, and a corner wider than half the shorter side, fill through
+        // the path route.
+        Path::from_rrect(RRect::from_rect_xy(rrect.rect, 8.0, 4.0)),
+        Path::from_rrect(RRect::from_rect_and_corners(
+            wide,
+            Radius::circular(0.0),
+            Radius::circular(8.0),
+            Radius::circular(0.0),
+            Radius::circular(0.0),
+        )),
+    ] {
         assert!(
             drawn_from_curves
                 .clone()
@@ -939,6 +953,17 @@ pub(crate) fn a_shape_reads_alike_before_and_after_its_curves_are_built() {
             "a shape no analytic route draws is built once for all its clones"
         );
     }
+
+    // Far from the origin a coordinate's rounding passes the curve tolerance, so such a
+    // shape is built at once and its bounds are its curves'.
+    let far = Path::from_rrect(RRect::from_rect_circular(
+        Rect::from_ltrb(0.0, 0.0, 3.3, 7.7),
+        1.0,
+    ))
+    .translate(Offset::new(1.1e14, -1.1e14));
+    let far_bounds = far.compute_bounds();
+    let built: Vec<_> = elements(&far);
+    assert_eq!(far_bounds, far.compute_bounds(), "far bounds: {built:?}");
     let _ = copy.bounds();
     assert!(copy == second, "cached bounds leave equality alone");
     assert_eq!(Path::new(), Path::new().translate(Offset::new(3.0, 4.0)));
