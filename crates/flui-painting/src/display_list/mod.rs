@@ -7,8 +7,10 @@
 //! - [`paragraph`] — [`ShapedParagraph`], the shaped text a
 //!   `DrawOp::Paragraph` carries.
 
-use std::ops::Index;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+
+use smallvec::SmallVec;
 
 use flui_foundation::geometry::{Matrix4, Rect};
 use flui_foundation::inspect::{Fields, Inspect, Unit};
@@ -32,15 +34,67 @@ pub(crate) use crate::paint::{
     image::{ColorFilter, ImageRepeat},
 };
 
+/// Which entry of its list's transform table an op was recorded under:
+/// `None` is the identity, which takes no entry, and `Some(n)` is
+/// `transforms[n - 1]`. Private to this module, so the ids of two lists can
+/// be neither compared nor mixed (ADR-0306 §1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TransformId(Option<NonZeroUsize>);
+
+impl TransformId {
+    const IDENTITY: Self = Self(None);
+
+    /// This id moved past `offset` entries of a receiving table.
+    #[expect(
+        clippy::expect_used,
+        reason = "each table holds at most isize::MAX / 128 entries, so two never overflow a usize"
+    )]
+    fn rebased(self, offset: usize) -> Self {
+        Self(self.0.map(|entry| {
+            entry
+                .checked_add(offset)
+                .expect("BUG: two transform tables fit in the address space")
+        }))
+    }
+}
+
+/// One stored command: its transform's id and the op.
+#[derive(Clone, Debug)]
+struct RecordedOp {
+    transform: TransformId,
+    op: DrawOp,
+}
+
+/// The identity a command recorded without a table entry yields: a promoted
+/// constant, so every such command yields the same reference.
+const IDENTITY: &Matrix4 = &Matrix4::IDENTITY;
+
+// A stored command is its op and one word for its transform. The sizes are
+// the measured ones, and they only go down: ADR-0306 §3 sets the op at 112
+// bytes and a stored command at 120 once its fat payloads are boxed.
+const _: () = assert!(size_of::<TransformId>() == size_of::<usize>());
+const _: () = assert!(size_of::<DrawOp>() <= 216);
+const _: () = assert!(size_of::<RecordedOp>() <= 224);
+
 /// A recorded sequence of drawing commands.
 ///
 /// The output of [`Canvas::finish`](crate::Canvas::finish) and the input to
-/// `PictureLayer`. Commands are read-only; recording, concatenation, and
-/// deserialization compute the cached [`bounds`](Self::bounds) from command geometry.
+/// `PictureLayer`. Commands are read-only; recording and concatenation
+/// compute the cached [`bounds`](Self::bounds) from command geometry.
+///
+/// Each distinct transform is stored once: an op holds a list-private id
+/// of its entry, the identity takes none, and [`Self::iter`] yields the
+/// transform and the op of each command (ADR-0306 §1, §5).
 #[derive(Debug, Clone)]
 pub struct DisplayList {
+    /// The transforms the commands were recorded under, each finite and none
+    /// of them the identity. The first is held inline, so a run under one
+    /// transform, the common case of a recorder that translates its canvas,
+    /// allocates no table.
+    transforms: SmallVec<[Matrix4; 1]>,
+
     /// Drawing commands in order.
-    pub(crate) commands: Vec<DrawCommand>,
+    commands: Vec<RecordedOp>,
 
     /// Cached union of every command that contributes bounds, or
     /// `None` while no command has contributed one yet.
@@ -115,6 +169,7 @@ impl DisplayList {
     /// An empty list.
     pub fn new() -> Self {
         Self {
+            transforms: SmallVec::new(),
             commands: Vec::new(),
             bounds: None,
             damage: None,
@@ -132,6 +187,7 @@ impl DisplayList {
         self.damage = None;
         self.volatile = None;
         self.non_finite = NonFiniteOps::default();
+        self.transforms.clear();
         self.commands.clear();
     }
 
@@ -154,14 +210,19 @@ impl DisplayList {
     }
 
     /// The commands, in recording order.
-    pub fn iter(&self) -> std::slice::Iter<'_, DrawCommand> {
-        self.commands.iter()
+    pub fn iter(&self) -> DrawCommands<'_> {
+        DrawCommands {
+            transforms: &self.transforms,
+            commands: self.commands.iter(),
+        }
     }
 
-    /// The commands as a slice.
+    /// The command at `index`, or `None` past the end.
     #[must_use]
-    pub fn commands(&self) -> &[DrawCommand] {
-        &self.commands
+    pub fn get(&self, index: usize) -> Option<DrawCommand<'_>> {
+        self.commands
+            .get(index)
+            .map(|recorded| view(&self.transforms, recorded))
     }
 
     /// The number of commands.
@@ -230,46 +291,48 @@ impl DisplayList {
         } else if !op.is_finite(paint_finite) {
             NonFinite::Geometry
         } else {
-            self.push(DrawCommand {
-                transform: *ctm,
-                op,
-            });
+            self.push(ctm, op);
             return;
         };
         // A replacement keeps a finite CTM; under a non-finite one it is
         // recorded under the identity, which only the replaced op's own
         // geometry would have needed.
         let transform = match reason {
-            NonFinite::Transform => Matrix4::IDENTITY,
-            NonFinite::Geometry => *ctm,
+            NonFinite::Transform => IDENTITY,
+            NonFinite::Geometry => ctm,
         };
         match finite::refusal(op) {
             Refused::Omitted => self.non_finite.count(reason),
             Refused::Replaced(op) => {
                 self.non_finite.count(reason);
-                self.push(DrawCommand { transform, op });
+                self.push(transform, op);
             }
-            Refused::Marker(op) => self.push(DrawCommand { transform, op }),
+            Refused::Marker(op) => self.push(transform, op),
         }
     }
 
-    fn push(&mut self, command: DrawCommand) {
-        self.account(&command);
-        self.commands.push(command);
-    }
-
-    /// Folds `command` into the cached bounds and extents, as recording it
-    /// does.
-    fn account(&mut self, command: &DrawCommand) {
-        if let Some(cmd_bounds) = command.bounds() {
-            accumulate_bounds(&mut self.bounds, cmd_bounds);
-        }
-        if let Some(extent) = command.damage_extent() {
-            accumulate_damage(&mut self.damage, extent);
-            if matches!(command.op, DrawOp::Texture { .. }) {
-                accumulate_damage(&mut self.volatile, extent);
+    /// Stores `op` under `ctm`, which is finite: the identity takes no
+    /// entry, a CTM equal to the last entry reuses it, and any other pushes
+    /// one. `Matrix4`'s `==` is exact and reflexive on finite values.
+    fn push(&mut self, ctm: &Matrix4, op: DrawOp) {
+        let transform = if *ctm == Matrix4::IDENTITY {
+            TransformId::IDENTITY
+        } else {
+            if self.transforms.last() != Some(ctm) {
+                self.transforms.push(*ctm);
             }
-        }
+            TransformId(NonZeroUsize::new(self.transforms.len()))
+        };
+        account(
+            &mut self.bounds,
+            &mut self.damage,
+            &mut self.volatile,
+            DrawCommand {
+                transform: ctm,
+                op: &op,
+            },
+        );
+        self.commands.push(RecordedOp { transform, op });
     }
 
     /// Moves every command of `other` onto the end of this list, unioning
@@ -283,12 +346,23 @@ impl DisplayList {
     pub fn append(&mut self, mut other: DisplayList) {
         self.non_finite = self.non_finite.saturating_add(other.non_finite);
         if self.commands.is_empty() {
+            std::mem::swap(&mut self.transforms, &mut other.transforms);
             std::mem::swap(&mut self.commands, &mut other.commands);
             self.bounds = other.bounds;
             self.damage = other.damage;
             self.volatile = other.volatile;
         } else if !other.commands.is_empty() {
-            self.commands.append(&mut other.commands);
+            let offset = self.transforms.len();
+            self.transforms.append(&mut other.transforms);
+            if offset == 0 {
+                self.commands.append(&mut other.commands);
+            } else {
+                self.commands
+                    .extend(other.commands.drain(..).map(|recorded| RecordedOp {
+                        transform: recorded.transform.rebased(offset),
+                        op: recorded.op,
+                    }));
+            }
             if let Some(other_bounds) = other.bounds {
                 accumulate_bounds(&mut self.bounds, other_bounds);
             }
@@ -318,7 +392,7 @@ impl DisplayList {
         if !other
             .commands
             .iter()
-            .any(|command| command.op.scopes_replay())
+            .any(|recorded| recorded.op.scopes_replay())
         {
             self.append(other);
             return;
@@ -326,18 +400,54 @@ impl DisplayList {
         if self.commands.is_empty() {
             // The first run is wrapped in its own buffer, which becomes this
             // list's: splicing it allocates nothing while the run has room
-            // for the two scope commands.
-            let save = DrawCommand::untransformed(DrawOp::Save);
-            other.account(&save);
-            other.commands.insert(0, save);
-            other.push(DrawCommand::untransformed(DrawOp::Restore));
+            // for the two scope commands. The markers hold no geometry, so
+            // they move no cached extent.
+            other.commands.insert(
+                0,
+                RecordedOp {
+                    transform: TransformId::IDENTITY,
+                    op: DrawOp::Save,
+                },
+            );
+            other.push(IDENTITY, DrawOp::Restore);
             other.non_finite = other.non_finite.saturating_add(self.non_finite);
             *self = other;
             return;
         }
-        self.push(DrawCommand::untransformed(DrawOp::Save));
+        self.push(IDENTITY, DrawOp::Save);
         self.append(other);
-        self.push(DrawCommand::untransformed(DrawOp::Restore));
+        self.push(IDENTITY, DrawOp::Restore);
+    }
+}
+
+/// Folds `command` into a list's cached bounds and extents, as recording it
+/// does.
+fn account(
+    bounds: &mut Option<Rect<f64>>,
+    damage: &mut Option<DamageExtent>,
+    volatile: &mut Option<DamageExtent>,
+    command: DrawCommand<'_>,
+) {
+    if let Some(cmd_bounds) = command.bounds() {
+        accumulate_bounds(bounds, cmd_bounds);
+    }
+    if let Some(extent) = command.damage_extent() {
+        accumulate_damage(damage, extent);
+        if matches!(command.op, DrawOp::Texture { .. }) {
+            accumulate_damage(volatile, extent);
+        }
+    }
+}
+
+/// The command `recorded` is, with its transform resolved in `transforms`.
+fn view<'a>(transforms: &'a [Matrix4], recorded: &'a RecordedOp) -> DrawCommand<'a> {
+    let transform = match recorded.transform.0 {
+        None => IDENTITY,
+        Some(entry) => &transforms[entry.get() - 1],
+    };
+    DrawCommand {
+        transform,
+        op: &recorded.op,
     }
 }
 
@@ -347,25 +457,54 @@ impl Default for DisplayList {
     }
 }
 
-impl AsRef<[DrawCommand]> for DisplayList {
-    fn as_ref(&self) -> &[DrawCommand] {
-        &self.commands
+/// The commands of a [`DisplayList`] in recording order: what
+/// [`DisplayList::iter`] returns.
+#[derive(Clone, Debug)]
+pub struct DrawCommands<'a> {
+    transforms: &'a [Matrix4],
+    commands: std::slice::Iter<'a, RecordedOp>,
+}
+
+impl<'a> Iterator for DrawCommands<'a> {
+    type Item = DrawCommand<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let transforms = self.transforms;
+        self.commands
+            .next()
+            .map(|recorded| view(transforms, recorded))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.commands.size_hint()
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        let transforms = self.transforms;
+        self.commands
+            .nth(n)
+            .map(|recorded| view(transforms, recorded))
     }
 }
+
+impl DoubleEndedIterator for DrawCommands<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let transforms = self.transforms;
+        self.commands
+            .next_back()
+            .map(|recorded| view(transforms, recorded))
+    }
+}
+
+impl ExactSizeIterator for DrawCommands<'_> {}
+
+impl std::iter::FusedIterator for DrawCommands<'_> {}
 
 impl<'a> IntoIterator for &'a DisplayList {
-    type Item = &'a DrawCommand;
-    type IntoIter = std::slice::Iter<'a, DrawCommand>;
+    type Item = DrawCommand<'a>;
+    type IntoIter = DrawCommands<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.commands.iter()
-    }
-}
-
-impl Index<usize> for DisplayList {
-    type Output = DrawCommand;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.commands[index]
+        self.iter()
     }
 }

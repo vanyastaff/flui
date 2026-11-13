@@ -18,31 +18,22 @@ use super::{BlurSigma, ShapedParagraph};
 use super::{ColorFilter, ImageRepeat};
 use crate::display_list::{BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId};
 
-/// One recorded paint operation: the canvas transform at recording time
-/// and the operation itself.
+/// One recorded paint operation as a [`DisplayList`](super::DisplayList)
+/// yields it: the transform it was recorded under and the operation.
 ///
-/// The transform is absolute (the full CTM), so every command is
-/// self-describing — its bounds, a damage query and a snapshot line all
-/// read one command without replaying state. Clips are the one thing that
-/// scope:
-/// [`DrawOp::Save`]/[`DrawOp::Restore`] bracket them.
-#[derive(Debug, Clone)]
-pub struct DrawCommand {
+/// The transform is absolute in the list's space (the full CTM at record),
+/// so every command is self-describing: its bounds, a damage query and a
+/// snapshot line all read one command without replaying state. Clips are
+/// the one thing that scope: [`DrawOp::Save`]/[`DrawOp::Restore`] bracket
+/// them. The list stores each distinct transform once, and the commands
+/// recorded under one entry yield the same reference (ADR-0306 §1, §5).
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct DrawCommand<'a> {
     /// The canvas transform at recording time.
-    pub transform: Matrix4,
+    pub transform: &'a Matrix4,
     /// The operation.
-    pub op: DrawOp,
-}
-
-impl DrawCommand {
-    /// A command recorded under the identity transform.
-    #[must_use]
-    pub const fn untransformed(op: DrawOp) -> Self {
-        Self {
-            transform: Matrix4::IDENTITY,
-            op,
-        }
-    }
+    pub op: &'a DrawOp,
 }
 
 /// The closed vocabulary of paint operations.

@@ -420,7 +420,7 @@ pub(crate) fn record_scene(
                     Step::Descend
                 }
                 Item::Chunk(commands) => {
-                    crate::dispatch::dispatch_commands(commands.commands(), self.backend);
+                    crate::dispatch::dispatch_commands(*commands, self.backend);
                     Step::Descend
                 }
             };

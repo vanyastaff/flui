@@ -33,11 +33,11 @@ use crate::command_renderer::CommandRenderer;
 /// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]
 pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
-    command: &DrawCommand,
+    command: DrawCommand<'_>,
     renderer: &mut R,
 ) {
-    let transform = &command.transform;
-    match &command.op {
+    let transform = command.transform;
+    match command.op {
         // === Drawing Commands ===
         DrawOp::Rect { rect, paint } => {
             renderer.render_rect(*rect, paint, transform);
@@ -280,7 +280,7 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
 #[inline]
 pub(crate) fn dispatch_commands<'a, I, R>(commands: I, renderer: &mut R)
 where
-    I: IntoIterator<Item = &'a DrawCommand>,
+    I: IntoIterator<Item = DrawCommand<'a>>,
     R: CommandRenderer + ?Sized,
 {
     renderer.save_state();

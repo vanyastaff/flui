@@ -548,6 +548,14 @@ fn recording_contract() {
                 recording::isolated_append_scopes_only_a_run_that_changes_replay_state,
             ),
             (
+                "ops_under_one_transform_share_its_entry",
+                recording::ops_under_one_transform_share_its_entry,
+            ),
+            (
+                "appended_commands_keep_their_transforms",
+                recording::appended_commands_keep_their_transforms,
+            ),
+            (
                 "interning_shares_arc_for_identical_paints",
                 recording::interning_shares_arc_for_identical_paints,
             ),

@@ -1635,14 +1635,17 @@ impl LaidOut {
     /// Every draw operation in the last submitted scene's picture layers, in
     /// layer order, each with its recorded transform: what a paint test
     /// samples at a virtual time.
-    pub fn draw_ops(&self) -> Vec<flui_painting::display_list::DrawCommand> {
+    pub fn draw_ops(&self) -> Vec<DrawnOp> {
         let Some(tree) = self.layer_tree() else {
             return Vec::new();
         };
         let mut ops = Vec::new();
         for (_, node) in tree.iter() {
             if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
-                ops.extend(picture.picture().iter().cloned());
+                ops.extend(picture.picture().iter().map(|command| DrawnOp {
+                    transform: *command.transform,
+                    op: command.op.clone(),
+                }));
             }
         }
         ops
@@ -2110,4 +2113,15 @@ pub fn rgba(color: flui_painting::styling::Color) -> flui_foundation::inspect::R
         Value::Color(rgba) => rgba,
         other => unreachable!("BUG: a Color describes itself as a colour, not {other:?}"),
     }
+}
+
+/// One draw operation of a submitted picture, owned so a test can keep it:
+/// what [`LaidOut::draw_ops`] returns.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct DrawnOp {
+    /// The transform the operation was recorded under, absolute in its layer.
+    pub transform: Matrix4,
+    /// The operation.
+    pub op: flui_painting::DrawOp,
 }

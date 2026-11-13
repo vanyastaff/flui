@@ -25,7 +25,7 @@ fn draw_mesh(painter: &mut WgpuPainter, colors: Option<&[Color]>, paint: &Paint,
         );
         let list = recording.finish();
         let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(painter);
-        for command in list.commands() {
+        for command in &list {
             crate::dispatch::dispatch_command(command, &mut dispatcher);
         }
     } else {
@@ -187,7 +187,7 @@ fn opaque_under_fractional_clip(supplied_colors: bool) {
         recording.restore();
         let list = recording.finish();
         let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(painter);
-        for command in list.commands() {
+        for command in &list {
             crate::dispatch::dispatch_command(command, &mut dispatcher);
         }
     });

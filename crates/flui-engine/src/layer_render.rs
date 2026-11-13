@@ -147,13 +147,13 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for CanvasLayer {
     fn render(&self, renderer: &mut R) {
-        dispatch_commands(self.display_list().commands(), renderer);
+        dispatch_commands(self.display_list(), renderer);
     }
 }
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PictureLayer {
     fn render(&self, renderer: &mut R) {
-        dispatch_commands(self.picture().commands(), renderer);
+        dispatch_commands(self.picture(), renderer);
     }
 }
 
@@ -409,7 +409,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Performan
     /// hard-edge rect clip is a scissor and opens no offscreen.
     fn render(&self, renderer: &mut R) {
         renderer.push_clip_rect(&self.bounds(), flui_painting::paint::Clip::HardEdge);
-        dispatch_commands(self.readout().commands(), renderer);
+        dispatch_commands(self.readout(), renderer);
         renderer.pop_clip();
     }
 }

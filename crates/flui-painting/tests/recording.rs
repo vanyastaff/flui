@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::thread;
 
-use flui_foundation::geometry::Rect;
+use flui_foundation::geometry::{Matrix4, Rect};
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp, NonFiniteOps, Paint};
 
@@ -69,7 +69,7 @@ pub(crate) fn isolated_append_preserves_bounds_and_scopes_the_run() {
     assert!(combined.is_empty());
     combined.append_isolated(run);
     assert_eq!(combined.bounds(), Some(rect));
-    let ops: Vec<&DrawOp> = combined.iter().map(|c| &c.op).collect();
+    let ops: Vec<&DrawOp> = combined.iter().map(|c| c.op).collect();
     assert!(matches!(
         ops.as_slice(),
         [
@@ -104,7 +104,7 @@ pub(crate) fn isolated_append_scopes_only_a_run_that_changes_replay_state() {
     combined.append_isolated(draws(first));
     combined.append_isolated(clips);
     combined.append_isolated(draws(last));
-    let ops: Vec<&DrawOp> = combined.iter().map(|c| &c.op).collect();
+    let ops: Vec<&DrawOp> = combined.iter().map(|c| c.op).collect();
     assert!(
         matches!(
             ops.as_slice(),
@@ -122,8 +122,8 @@ pub(crate) fn isolated_append_scopes_only_a_run_that_changes_replay_state() {
     assert_eq!(combined.bounds(), Some(first.union(&last)));
 }
 
-fn rect_paint(cmd: &DrawCommand) -> &Arc<Paint> {
-    match &cmd.op {
+fn rect_paint(cmd: DrawCommand<'_>) -> &Arc<Paint> {
+    match cmd.op {
         DrawOp::Rect { paint, .. } => paint,
         other => panic!("expected DrawRect, got {other:?}"),
     }
@@ -137,7 +137,7 @@ pub(crate) fn interning_shares_arc_for_identical_paints() {
     canvas.draw_rect(Rect::from_ltrb(20.0, 20.0, 30.0, 30.0), &paint);
 
     let dl = canvas.finish();
-    let cmds: Vec<&DrawCommand> = dl.commands().iter().collect();
+    let cmds: Vec<DrawCommand<'_>> = dl.iter().collect();
     assert_eq!(cmds.len(), 2);
     assert!(
         Arc::ptr_eq(rect_paint(cmds[0]), rect_paint(cmds[1])),
@@ -180,10 +180,8 @@ pub(crate) fn a_taken_recording_shares_its_plain_paints_with_the_next() {
         Some(rect),
         "the translation did not carry over"
     );
-    let (first, second): (Vec<&DrawCommand>, Vec<&DrawCommand>) = (
-        first.commands().iter().collect(),
-        second.commands().iter().collect(),
-    );
+    let (first, second): (Vec<DrawCommand<'_>>, Vec<DrawCommand<'_>>) =
+        (first.iter().collect(), second.iter().collect());
     assert!(
         Arc::ptr_eq(rect_paint(first[0]), rect_paint(second[0])),
         "a plain paint is interned across recordings"
@@ -235,11 +233,7 @@ pub(crate) fn a_canvas_records_into_a_buffer_it_was_handed() {
     canvas.record_into(buffer);
     canvas.draw_rect(rect, &Paint::fill(Color::BLUE));
     let recorded = canvas.take_recording();
-    assert_eq!(
-        recorded.commands().iter().count(),
-        1,
-        "the old ops are gone"
-    );
+    assert_eq!(recorded.iter().count(), 1, "the old ops are gone");
     assert!(
         recorded.room() >= room,
         "the recording kept the buffer's room"
@@ -249,7 +243,7 @@ pub(crate) fn a_canvas_records_into_a_buffer_it_was_handed() {
     touched.draw_rect(rect, &Paint::fill(Color::BLUE));
     touched.record_into(heavy());
     assert_eq!(
-        touched.take_recording().commands().iter().count(),
+        touched.take_recording().iter().count(),
         1,
         "a canvas that recorded keeps its ops"
     );
@@ -262,7 +256,7 @@ pub(crate) fn a_finished_display_list_is_sendable_to_another_thread() {
         canvas.draw_rect(rect, &Paint::fill(Color::RED));
     }
     let display_list = canvas.finish();
-    let executed = thread::spawn(move || display_list.commands().iter().count())
+    let executed = thread::spawn(move || display_list.iter().count())
         .join()
         .expect("the consumer thread must not panic");
     assert_eq!(executed, 100);
@@ -573,7 +567,7 @@ pub(crate) fn a_non_finite_op_is_refused_by_kind() {
             record(canvas);
             canvas.restore();
         });
-        let ops: Vec<&DrawOp> = list.iter().map(|command| &command.op).collect();
+        let ops: Vec<&DrawOp> = list.iter().map(|command| command.op).collect();
         let kept = match refusal {
             Refusal::Omitted => matches!(ops.as_slice(), [DrawOp::Save, DrawOp::Restore]),
             Refusal::EmptyClip => matches!(
@@ -618,7 +612,7 @@ pub(crate) fn a_non_finite_op_is_refused_by_kind() {
         canvas.restore();
         canvas.draw_rect(bounded, &Paint::fill(Color::BLUE));
     });
-    let ops: Vec<&DrawOp> = list.iter().map(|command| &command.op).collect();
+    let ops: Vec<&DrawOp> = list.iter().map(|command| command.op).collect();
     assert!(
         matches!(
             ops.as_slice(),
@@ -762,5 +756,126 @@ pub(crate) fn a_destructor_that_panics_during_reset_leaves_the_canvas_empty() {
         canvas.finish().bounds(),
         Some(rect),
         "the canvas records again"
+    );
+}
+
+/// The ops of one run share one transform entry: a reader gets the same
+/// reference for each, the identity is one shared constant, and a moved CTM
+/// takes an entry of its own (ADR-0306 §1, §5).
+pub(crate) fn ops_under_one_transform_share_its_entry() {
+    let paint = Paint::fill(Color::RED);
+    let rect = Rect::from_xywh(0.0, 0.0, 4.0, 4.0);
+    let list = flui_painting::testing::record(|canvas| {
+        canvas.draw_rect(rect, &paint);
+        canvas.translate(10.0, 0.0);
+        canvas.draw_rect(rect, &paint);
+        canvas.draw_rect(rect, &paint);
+        canvas.translate(0.0, 5.0);
+        canvas.draw_rect(rect, &paint);
+    });
+    let commands: Vec<DrawCommand<'_>> = list.iter().collect();
+    assert_eq!(commands.len(), 4);
+    assert_eq!(*commands[0].transform, Matrix4::IDENTITY);
+    assert!(
+        std::ptr::eq(
+            commands[0].transform,
+            list.get(0).expect("recorded").transform
+        ),
+        "the identity is one shared constant"
+    );
+    assert!(
+        std::ptr::eq(commands[1].transform, commands[2].transform),
+        "two ops under one CTM share its entry"
+    );
+    assert_eq!(*commands[1].transform, Matrix4::translation(10.0, 0.0, 0.0));
+    assert!(!std::ptr::eq(commands[2].transform, commands[3].transform));
+    assert_eq!(*commands[3].transform, Matrix4::translation(10.0, 5.0, 0.0));
+    assert_eq!(list.bounds(), Some(Rect::from_ltrb(0.0, 0.0, 14.0, 9.0)));
+    assert_eq!(list.iter().rev().count(), 4);
+    assert!(list.get(4).is_none());
+}
+
+/// Appending moves each op with the transform it was recorded under, into a
+/// receiver that already holds entries of its own, both by `append` and by
+/// `append_isolated`, and a receiver that was empty takes the run as it is.
+pub(crate) fn appended_commands_keep_their_transforms() {
+    let paint = Paint::fill(Color::RED);
+    let rect = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
+    let run = |dx: f64, clip: bool| {
+        flui_painting::testing::record(|canvas| {
+            canvas.translate(dx, 0.0);
+            if clip {
+                canvas.save();
+                canvas.clip_rect(rect);
+            }
+            canvas.draw_rect(rect, &paint);
+            canvas.translate(0.0, 1.0);
+            canvas.draw_rect(rect, &paint);
+            if clip {
+                canvas.restore();
+            }
+        })
+    };
+    let transforms = |list: &DisplayList| -> Vec<(Matrix4, &'static str)> {
+        list.iter()
+            .map(|command| {
+                let kind = match command.op {
+                    DrawOp::Rect { .. } => "rect",
+                    DrawOp::Save => "save",
+                    DrawOp::Restore => "restore",
+                    DrawOp::ClipRect { .. } => "clip",
+                    other => panic!("unexpected op {other:?}"),
+                };
+                (*command.transform, kind)
+            })
+            .collect()
+    };
+    let at = |dx: f64, dy: f64| Matrix4::translation(dx, dy, 0.0);
+
+    let mut appended = run(1.0, false);
+    appended.append(run(20.0, false));
+    assert_eq!(
+        transforms(&appended),
+        vec![
+            (at(1.0, 0.0), "rect"),
+            (at(1.0, 1.0), "rect"),
+            (at(20.0, 0.0), "rect"),
+            (at(20.0, 1.0), "rect"),
+        ],
+    );
+
+    let mut isolated = run(1.0, false);
+    isolated.append_isolated(run(30.0, true));
+    assert_eq!(
+        transforms(&isolated),
+        vec![
+            (at(1.0, 0.0), "rect"),
+            (at(1.0, 1.0), "rect"),
+            (Matrix4::IDENTITY, "save"),
+            (at(30.0, 0.0), "save"),
+            (at(30.0, 0.0), "clip"),
+            (at(30.0, 0.0), "rect"),
+            (at(30.0, 1.0), "rect"),
+            (at(30.0, 1.0), "restore"),
+            (Matrix4::IDENTITY, "restore"),
+        ],
+    );
+
+    let mut first = DisplayList::new();
+    first.append_isolated(run(40.0, true));
+    first.append(run(50.0, false));
+    assert_eq!(
+        transforms(&first),
+        vec![
+            (Matrix4::IDENTITY, "save"),
+            (at(40.0, 0.0), "save"),
+            (at(40.0, 0.0), "clip"),
+            (at(40.0, 0.0), "rect"),
+            (at(40.0, 1.0), "rect"),
+            (at(40.0, 1.0), "restore"),
+            (Matrix4::IDENTITY, "restore"),
+            (at(50.0, 0.0), "rect"),
+            (at(50.0, 1.0), "rect"),
+        ],
     );
 }

@@ -271,8 +271,13 @@ impl Headless {
                 flui_rendering::layer::Layer::Picture(picture) => Some(picture.picture().clone()),
                 _ => None,
             })
-            .flat_map(|picture| picture.iter().cloned().collect::<Vec<_>>())
-            .find_map(|command| match command.op {
+            .flat_map(|picture| {
+                picture
+                    .iter()
+                    .map(|command| command.op.clone())
+                    .collect::<Vec<_>>()
+            })
+            .find_map(|op| match op {
                 DrawOp::Rect { paint, .. } if paint.color != CHILD_FILL => Some(paint.color),
                 _ => None,
             })
