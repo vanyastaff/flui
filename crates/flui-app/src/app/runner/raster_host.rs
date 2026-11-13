@@ -78,6 +78,23 @@ struct Deferred {
     panic: RefCell<FirstPanic>,
 }
 
+/// Resume a deferred panic, or, on a thread already unwinding (a window
+/// dropped by another panic), say it before `FirstPanic` discards it.
+fn resume_deferred(caught: FirstPanic) {
+    if std::thread::panicking() {
+        if let Some(payload) = caught.into_payload() {
+            tracing::error!(
+                panic =
+                    flui_foundation::panic::payload_text(&*payload).unwrap_or("<non-text payload>"),
+                "raster host: a closed window's GPU panic met another panic's unwind"
+            );
+            flui_foundation::panic::discard_payload(payload);
+        }
+        return;
+    }
+    caught.resume();
+}
+
 impl Drop for Deferred {
     fn drop(&mut self) {
         // The run ended before a wake resumed it: said, not lost silently.
@@ -125,7 +142,7 @@ impl SharedRasterHost {
         }
         // A detach answers nothing, so the deferred work it ran resumes its
         // panic here: the window it closed may have been the last to wake.
-        self.take_deferred_panic().resume();
+        resume_deferred(self.take_deferred_panic());
     }
 
     /// Trim the GPU memory behind every slot now, or when the turn that
@@ -141,7 +158,7 @@ impl SharedRasterHost {
             return;
         }
         // A trim answers nothing, as a detach does.
-        self.take_deferred_panic().resume();
+        resume_deferred(self.take_deferred_panic());
     }
 
     /// Take the first panic of the work that met the host busy, for a
@@ -186,6 +203,9 @@ impl SharedRasterHost {
 pub(crate) struct RasterHost {
     factory: RasterFactory,
     placed: Option<Placed>,
+    /// Whether a window saw the device lost since the host last saw it
+    /// healthy.
+    saw_lost: bool,
 }
 
 struct Placed {
@@ -218,9 +238,9 @@ struct HostSlot {
     /// window shows nothing at it, and is not sent it again, until the
     /// platform announces another.
     refused_size: Option<DeviceSize>,
-    /// Whether the slot's last frame met a panic of its own commands: a
-    /// second in a row is not retried.
-    panicked: bool,
+    /// Whether the slot's next frame is the retry of a frame whose resize
+    /// or upload panicked: a stale surface it meets again is not retried.
+    retrying_panic: bool,
     /// The first panic of the slot's frames since the window last reported
     /// one to its UI runtime ([`RasterSlot::report_frame_panic`]).
     panic: flui_foundation::panic::FirstPanic,
@@ -253,6 +273,7 @@ impl RasterHost {
         Self {
             factory,
             placed: None,
+            saw_lost: false,
         }
     }
 
@@ -341,7 +362,7 @@ impl RasterHost {
                 display,
                 visibility: SlotVisibility::Shown,
                 refused_size: None,
-                panicked: false,
+                retrying_panic: false,
                 panic: caught,
             },
         );
@@ -547,6 +568,24 @@ impl RasterHost {
         std::mem::replace(&mut slot.panic, FirstPanic::new()).into_payload()
     }
 
+    /// Where the context's device stands, and why its last rebuild failed.
+    /// The host sees each recovery once, whichever window asks first: the
+    /// rebuilt device may take the sizes the lost one refused, so every
+    /// window's is forgotten then, and only then.
+    fn settle_health(&mut self) -> (DeviceHealth, Option<EngineError>) {
+        let health = self.device_health();
+        if health.is_lost() {
+            self.saw_lost = true;
+        } else if std::mem::take(&mut self.saw_lost) {
+            self.forget_refused_sizes();
+        }
+        let failure = self
+            .placed
+            .as_ref()
+            .and_then(|placed| placed.sender.take_device_failure());
+        (health, failure)
+    }
+
     /// Where the context's device stands.
     pub(crate) fn device_health(&self) -> DeviceHealth {
         self.placed
@@ -701,6 +740,12 @@ impl RasterHost {
             tracing::error!("BUG: raster host: a frame for a window with no executor");
             return SubmitVerdict::Failed;
         };
+        // Whatever this frame becomes, it is the only retry the last one
+        // asked for.
+        let retrying = placed
+            .slots
+            .get_mut(&address)
+            .is_some_and(|slot| std::mem::take(&mut slot.retrying_panic));
         let Some(generation) = Self::configure(placed, address, surface) else {
             // `configure` keeps a refused size only while the window is at
             // it: past the device's limit, a retry is refused the same way.
@@ -758,7 +803,6 @@ impl RasterHost {
             .iter()
             .find(|settlement| settlement.epoch == epoch)
             .map(|settlement| settlement.verdict);
-        let again = std::mem::replace(&mut slot.panicked, turned == SlotTurn::Panicked);
         if turned == SlotTurn::Panicked {
             let verdict = match settled {
                 // The render itself panicked, which the executor settles as
@@ -769,10 +813,15 @@ impl RasterHost {
                 // A command before the frame panicked (a resize, an upload)
                 // and the frame settled otherwise: what it became stands, so
                 // a stale surface is retried and applies what is still
-                // pending. Once: a retry that panics again is the size's or
-                // the driver's failure, not the moment's.
-                Some(_) if again => SubmitVerdict::Failed,
-                Some(verdict) => Self::verdict(&mut slot.base, verdict, shown, key),
+                // pending. Once: a retry whose resize panics again is the
+                // size's or the driver's failure, not the moment's; the
+                // window's next change tries it again.
+                Some(RasterVerdict::SurfaceStale) if retrying => SubmitVerdict::Failed,
+                Some(verdict) => {
+                    let verdict = Self::verdict(&mut slot.base, verdict, shown, key);
+                    slot.retrying_panic = matches!(verdict, SubmitVerdict::SurfaceStale);
+                    verdict
+                }
             };
             // The image may be torn or miss an upload: the next frame is
             // drawn in full.
@@ -947,14 +996,9 @@ impl RasterSlot {
     pub(crate) fn settle_device(&mut self, ui_runtime: &crate::app::ui_runtime::UiRuntime) -> bool {
         use flui_runtime::frame_failure::DeviceRecovery;
 
-        let Some((health, failure)) = self.host.try_read(|host| {
-            (
-                host.device_health(),
-                host.placed
-                    .as_ref()
-                    .and_then(|placed| placed.sender.take_device_failure()),
-            )
-        }) else {
+        // A host still turning up the stack leaves the device unseen, for the
+        // next settle to see.
+        let Some((health, failure)) = self.host.try_with(RasterHost::settle_health) else {
             return false;
         };
         if let Some(error) = failure {
@@ -964,18 +1008,6 @@ impl RasterSlot {
             return false;
         }
         let was_lost = self.device.is_lost();
-        if was_lost && health == DeviceHealth::Healthy {
-            // The rebuilt device may take what the lost one refused. A host
-            // still turning up the stack leaves the recovery unseen, for the
-            // next settle to see again.
-            if self
-                .host
-                .try_with(RasterHost::forget_refused_sizes)
-                .is_none()
-            {
-                return false;
-            }
-        }
         self.device = health;
         match health {
             DeviceHealth::Healthy => {

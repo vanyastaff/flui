@@ -959,6 +959,11 @@ pub(crate) fn a_panicking_frame_is_reported_and_the_window_draws_again() {
     started.renderer.panic_in_next_frames(8);
     observed.schedule_rebuild();
     started.run.run_owner_turn();
+    assert_eq!(
+        observed.frame_panics.load(Ordering::SeqCst),
+        1,
+        "the renderer's panic was reported to the frame-failure handler after its frame"
+    );
     let paints = observed.paints.load(Ordering::SeqCst);
     // The loop's own deadlines pass with nothing asked of the window: the
     // panicked frame is not retried into the same panic.
