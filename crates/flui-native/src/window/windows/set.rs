@@ -157,7 +157,11 @@ impl std::fmt::Debug for WindowSet {
         // The formatter's writer is code the set does not own, and it may
         // open or close a window: every borrow is released before it runs.
         // A set being changed is not there to count.
-        let windows = self.by_handle.try_borrow().map(|windows| windows.len()).ok();
+        let windows = self
+            .by_handle
+            .try_borrow()
+            .map(|windows| windows.len())
+            .ok();
         let ids = self.ids.try_borrow().map(|ids| format!("{:?}", *ids)).ok();
         let borrowed = format_args!("<borrowed>");
         let mut out = f.debug_struct("WindowSet");
@@ -169,8 +173,7 @@ impl std::fmt::Debug for WindowSet {
             Some(ids) => out.field("ids", &format_args!("{ids}")),
             None => out.field("ids", &borrowed),
         };
-        out
-            .field("config", &self.config)
+        out.field("config", &self.config)
             .field("positions", &self.positions)
             .field("material", &self.material)
             .field("presentation", &self.presentation)
