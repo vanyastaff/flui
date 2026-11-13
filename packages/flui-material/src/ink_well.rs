@@ -128,7 +128,7 @@ const PRESS_DEACTIVATION_DELAY: Duration = Duration::from_millis(100);
 /// clipped to its shape — see the module docs.
 #[derive(Clone, StatefulView)]
 pub struct InkWell {
-    child: BoxedView,
+    child: Option<BoxedView>,
     on_tap: Option<TapCallback>,
     overlay_color: WidgetStateProperty<Option<Color>>,
     shape: MaterialShape,
@@ -137,13 +137,20 @@ pub struct InkWell {
     focus_indicator: FocusIndicator,
 }
 
+impl Default for InkWell {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InkWell {
-    /// An `InkWell` around `child` with no tap handler (disabled), no
-    /// overlay color configured (paints nothing extra), and the plain
-    /// rectangle shape.
-    pub fn new(child: impl IntoView) -> Self {
+    /// An `InkWell` with no child, no tap handler (disabled), no overlay
+    /// color configured (paints nothing extra), and the plain rectangle
+    /// shape. Flutter's `InkWell.child` is nullable: a well without one
+    /// sizes to its constraints' smallest box and still takes hits.
+    pub fn new() -> Self {
         Self {
-            child: BoxedView::new(child.into_view()),
+            child: None,
             on_tap: None,
             overlay_color: WidgetStateProperty::all(None),
             shape: MaterialShape::default(),
@@ -151,6 +158,13 @@ impl InkWell {
             focus_node: None,
             focus_indicator: FocusIndicator::Ring,
         }
+    }
+
+    /// Sets the child the well paints its ink under.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Some(BoxedView::new(child.into_view()));
+        self
     }
 
     /// Sets the tap handler. Presence of a handler is what makes this
@@ -481,7 +495,9 @@ impl ViewState<InkWell> for InkWellState {
                 shape: view.shape,
             });
         }
-        let content = content.child(view.child.clone());
+        if let Some(child) = &view.child {
+            content = content.child(child.clone());
+        }
 
         // `_actionMap` around the focus node (`ink_well.dart` `:852-855`,
         // `:1386-1389`): Enter, Space and Select on the focused well reach

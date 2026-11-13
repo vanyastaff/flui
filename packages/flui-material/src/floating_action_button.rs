@@ -142,26 +142,42 @@ fn fab_shape() -> MaterialShape {
 /// use flui_material::FloatingActionButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _fab = FloatingActionButton::new(Text::new("+")).on_pressed(|_ctx| {});
-/// let _disabled = FloatingActionButton::new(Text::new("+"));
+/// let _fab = FloatingActionButton::new().child(Text::new("+")).on_pressed(|_ctx| {});
+/// let _disabled = FloatingActionButton::new().child(Text::new("+"));
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct FloatingActionButton {
     on_pressed: Option<PressCallback>,
-    child: BoxedView,
+    child: Option<BoxedView>,
+}
+
+impl Default for FloatingActionButton {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FloatingActionButton {
-    /// A regular floating action button around `child` (typically an
-    /// [`Icon`](flui_sdk::widgets::Icon)). Without [`Self::on_pressed`] the
-    /// button is disabled (see the module docs' elevation-chain
-    /// section for why that carries no visual indication here either).
+    /// A regular floating action button with no child. Without
+    /// [`Self::on_pressed`] the button is disabled (see the module docs'
+    /// elevation-chain section for why that carries no visual indication
+    /// here either). Flutter's `FloatingActionButton.child` is nullable: an
+    /// empty button is its 56×56 surface.
     #[must_use]
-    pub fn new(child: impl IntoView) -> Self {
+    pub fn new() -> Self {
         Self {
             on_pressed: None,
-            child: BoxedView::new(child.into_view()),
+            child: None,
         }
+    }
+
+    /// Sets the button's content, typically an
+    /// [`Icon`](flui_sdk::widgets::Icon), centered and themed with the
+    /// button's foreground color.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Some(BoxedView::new(child.into_view()));
+        self
     }
 
     /// Enables the button and sets its event handler.
@@ -337,17 +353,20 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
             pressed_hovered_overlay(states, overlay_base)
         });
 
-        let icon = IconTheme::new(
-            IconThemeData::default()
-                .color(foreground_color)
-                .size(FAB_ICON_SIZE),
-            view.child.clone(),
-        );
-
         // Center the icon within the FAB's tight 56×56 box; without it the
         // icon pins to the top-left of the constrained box instead of the
         // middle.
-        let mut ink_well = InkWell::new(Center::new().child(icon))
+        let mut center = Center::new();
+        if let Some(child) = &view.child {
+            center = center.child(IconTheme::new(
+                IconThemeData::default()
+                    .color(foreground_color)
+                    .size(FAB_ICON_SIZE),
+                child.clone(),
+            ));
+        }
+        let mut ink_well = InkWell::new()
+            .child(center)
             .shape(shape)
             .overlay_color(overlay_color)
             .states_controller(self.states.clone());

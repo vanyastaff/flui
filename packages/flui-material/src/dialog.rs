@@ -189,7 +189,7 @@ const INSET_PADDING_VERTICAL: f64 = 24.0;
 /// use flui_material::Dialog;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _dialog = Dialog::new(Text::new("Dialog content"));
+/// let _dialog = Dialog::new().child(Text::new("Dialog content"));
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct Dialog {
@@ -204,7 +204,7 @@ pub struct Dialog {
     role: SemanticsRole,
     /// The title naming the dialog, when [`AlertDialog`] has one.
     labelled_by: Option<SemanticsAnchor>,
-    child: BoxedView,
+    child: Option<BoxedView>,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -220,10 +220,18 @@ impl std::fmt::Debug for Dialog {
     }
 }
 
+impl Default for Dialog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Dialog {
-    /// A `Dialog` around `child`, with every visual property falling
+    /// A `Dialog` with no child, with every visual property falling
     /// through to `_DialogDefaultsM3` (see the module docs' token table).
-    pub fn new(child: impl IntoView) -> Self {
+    /// Flutter's `Dialog.child` is nullable: an empty dialog is its
+    /// surface at the minimum width.
+    pub fn new() -> Self {
         Self {
             color: None,
             elevation: None,
@@ -234,8 +242,15 @@ impl Dialog {
             constraints: None,
             role: SemanticsRole::Dialog,
             labelled_by: None,
-            child: BoxedView::new(child.into_view()),
+            child: None,
         }
+    }
+
+    /// Sets the content the dialog's surface holds.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Some(BoxedView::new(child.into_view()));
+        self
     }
 
     /// Overrides the dialog surface's background color.
@@ -353,18 +368,16 @@ impl StatelessView for Dialog {
         if let Some(title) = &self.labelled_by {
             semantics = semantics.labelled_by(title.clone());
         }
+        let mut material = Material::new(color)
+            .elevation(elevation)
+            .shape(shape)
+            .clip_behavior(self.clip_behavior.unwrap_or(Clip::None));
+        if let Some(child) = &self.child {
+            material = material.child(child.clone());
+        }
         Padding::new(inset_padding).child(
-            Align::new(self.alignment.unwrap_or(Alignment::CENTER)).child(
-                ConstrainedBox::new(constraints).child(
-                    semantics.child(
-                        Material::new(color)
-                            .elevation(elevation)
-                            .shape(shape)
-                            .clip_behavior(self.clip_behavior.unwrap_or(Clip::None))
-                            .child(self.child.clone()),
-                    ),
-                ),
-            ),
+            Align::new(self.alignment.unwrap_or(Alignment::CENTER))
+                .child(ConstrainedBox::new(constraints).child(semantics.child(material))),
         )
     }
 }
@@ -522,7 +535,7 @@ impl StatelessView for AlertDialog {
         Dialog {
             role: SemanticsRole::AlertDialog,
             labelled_by: title_anchor,
-            ..Dialog::new(
+            ..Dialog::new().child(
                 IntrinsicWidth::new().child(
                     Column::new(children)
                         .main_axis_size(MainAxisSize::Min)

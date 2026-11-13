@@ -146,7 +146,7 @@ amending ADR-0023), so it opens no write scope of its own. Pointer activation fo
 the gesture's context. Both paths retain pressed-state-before-callback
 ordering.
 
-`FloatingActionButton::new(child).on_pressed(callback)` uses the same disabled
+`FloatingActionButton::new().child(child).on_pressed(callback)` uses the same disabled
 default and setter shape as the other buttons. An optional generic callback
 in the constructor obstructed higher-ranked closure inference and forced
 type annotations even for a disabled button. The setter gives the closure

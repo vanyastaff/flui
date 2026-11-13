@@ -9,7 +9,7 @@ use super::{
     AnimationController, AnimationControllerInner, AnimationDirection, Opaque, RetiredSources,
     Retirement, RunStart, SampleIdentity, SimulationRun, TickSource, ValueChange,
 };
-use crate::retarget::{Reversal, Segment};
+use crate::retarget::{CurveLength, Reversal, Segment};
 use crate::{AnimationError, AnimationInput, AnimationRunFuture, MotionSpec, Simulation};
 
 struct Seam {
@@ -388,7 +388,7 @@ impl AnimationController {
                         velocity,
                         target,
                         motion,
-                        reversal.shortening(),
+                        CurveLength::Scaled(reversal.shortening()),
                         crate::simulation::Tolerance::DEFAULT,
                     )
                     .map_err(AnimationError::Simulation)?;
