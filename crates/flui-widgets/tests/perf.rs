@@ -827,8 +827,9 @@ fn round_of_presses() {
     }
 }
 
-/// A running animation: a controller ticked by the host's frames drives a transition's layer.
-fn round_of_a_running_transition() {
+/// A transition whose controller the round steps by hand: each value repaints the
+/// transition's layer. No frame drives this controller; the two fade rounds cover that.
+fn round_of_a_transition_stepped_by_hand() {
     use flui_animation::Animatable;
     use flui_animation::{Animation, AnimationController, Tween};
     use flui_objects::TranslationFraction;
@@ -858,17 +859,95 @@ fn round_of_a_running_transition() {
     }
 }
 
+/// A panel that fades out when `shown` turns false. `AnimatedOpacity` owns a controller
+/// registered with the presentation's vsync, so the host's frames run the fade.
+#[derive(Clone, StatefulView)]
+struct Fade {
+    shown: SharedSignal<bool>,
+}
+
+struct FadeState {
+    shown: SharedSignal<bool>,
+}
+
+impl StatefulView for Fade {
+    type State = FadeState;
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        FadeState {
+            shown: self.shown.clone(),
+        }
+    }
+}
+
+impl ViewState<Fade> for FadeState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.shown.bind(ctx);
+    }
+    fn build(&self, _view: &Fade, ctx: &dyn BuildContext) -> impl IntoView {
+        let opacity = if self.shown.get(ctx) { 1.0 } else { 0.0 };
+        flui_widgets::AnimatedOpacity::new(opacity).child(
+            SizedBox::new(WIDTH / 2.0, ROW_HEIGHT).child(ColoredBox::new(Color::rgb(40, 80, 120))),
+        )
+    }
+}
+
+/// Mounts [`Fade`] and starts its fade: the host that comes back has the run in flight.
+fn host_with_a_fade_started() -> HeadlessHost {
+    let shown = SharedSignal::new(true);
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(&Fade {
+        shown: shown.clone(),
+    })
+    .expect("a fresh host takes a root");
+    let _ = host.pump(FRAME);
+    shown.set(false);
+    for _ in 0..2 {
+        let _ = host.pump(FRAME);
+    }
+    assert!(
+        host.pump_until_settled(FRAME, 0).is_err(),
+        "two frames into a fade the host still has its run to drive"
+    );
+    host
+}
+
+/// An animation the host's frames run to its end: the controller registers with the vsync,
+/// is ticked frame after frame and settles before the application is dropped.
+fn round_of_an_animation_run_to_its_end() {
+    let mut host = host_with_a_fade_started();
+    host.pump_until_settled(FRAME, 60)
+        .expect("a fade ends within a second");
+}
+
+/// The same animation dropped in flight: the vsync registration, the ticker and the frame
+/// the run asked for are all still held when the application goes.
+fn round_of_an_animation_dropped_in_flight() {
+    drop(host_with_a_fade_started());
+}
+
 /// An application mounted, driven and dropped leaves the heap where the round before left it
 /// (`flui_testing::heap::assert_rounds_plateau`): an `Rc` cycle through an element, a state, a
 /// listener or a signal would leave one more tree behind each round, and nothing else reports
-/// it.
+/// it. A round that drops its application with work in flight holds the retirement path to
+/// the same level.
 #[test]
 fn an_app_mounted_driven_and_dropped_again_and_again_holds_no_more_heap() {
-    let rounds: [(&str, fn()); 4] = [
+    let rounds: [(&str, fn()); 6] = [
         ("eager rows under signals", round_of_eager_rows),
         ("a scrolled lazy list", round_of_a_scrolled_lazy_list),
         ("presses through the agent", round_of_presses),
-        ("a running transition", round_of_a_running_transition),
+        (
+            "a transition stepped by hand",
+            round_of_a_transition_stepped_by_hand,
+        ),
+        (
+            "an animation run to its end",
+            round_of_an_animation_run_to_its_end,
+        ),
+        (
+            "an animation dropped in flight",
+            round_of_an_animation_dropped_in_flight,
+        ),
     ];
     for (name, round) in rounds {
         eprintln!("round: {name}");
@@ -884,4 +963,12 @@ fn a_round_that_keeps_its_allocation_breaks_the_plateau() {
     assert_rounds_plateau(|| {
         std::hint::black_box(Box::leak(std::hint::black_box(Box::new([0_u8; 100]))));
     });
+}
+
+/// A round that allocates nothing on this thread is refused: its flat readings would pass
+/// for a plateau while measuring nothing.
+#[test]
+#[should_panic(expected = "no round allocated on this thread")]
+fn a_round_that_allocates_nothing_is_refused() {
+    assert_rounds_plateau(|| {});
 }

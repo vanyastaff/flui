@@ -13,9 +13,10 @@
 //! `FLUI_PERF_OUT=<dir>` writes each record to `<dir>/<scenario>.toml`
 //! before asserting, and a lower record is copied into the baseline by hand.
 //!
-//! The plateau test at the end holds the heap level: a Material application navigated and
+//! The plateau tests at the end hold the heap level: a Material application navigated and
 //! dropped again and again leaves no more bytes live each time
-//! (`flui_testing::heap::assert_rounds_plateau`).
+//! (`flui_testing::heap::assert_rounds_plateau`), and a leak they found that is not fixed yet
+//! is held by a test of its own.
 //!
 //! A target of its own, not a module of `tests/main.rs`: it pins the
 //! process-global font system and installs the kit's counting global
@@ -383,23 +384,89 @@ impl StatelessView for Message {
     }
 }
 
-/// A Material application with a Router: a page pushed for a result, a dialog over it, both
-/// popped, the awaiting task writing the answer back. Routes, overlays, transitions, ink and
-/// the async driver each hold `Rc`s to the others; a cycle among them would leave a page behind
-/// every round (`flui_testing::heap::assert_rounds_plateau`).
+/// The mail application, mounted for one round.
+fn mail() -> Tester {
+    let router = Router::new(Mail::Inbox, |route: &Mail, _ctx| match route {
+        Mail::Inbox => Inbox.boxed(),
+        Mail::Message { id } => Message { id: *id }.boxed(),
+    });
+    Tester::mount(MaterialApp::router(router))
+}
+
+/// A page pushed for a result, a dialog over it, both popped, the awaiting task writing the
+/// answer back: everything the round started has ended when the application is dropped.
+fn round_navigated_and_settled() {
+    let mut tester = mail();
+    tester.tap(&find::button("Open message 1"));
+    tester.expect(find::text("Message 1")).to_exist();
+    tester.tap(&find::button("Archive"));
+    tester.expect(find::button("Archive it")).to_exist();
+    tester.tap(&find::button("Archive it"));
+    tester.expect(find::text("Archived")).to_exist();
+    tester.pump_and_settle();
+}
+
+/// Dropped one frame into the push: the route's transition is running, the ink of the press
+/// is spreading and the inbox's task has just begun to await the page's result.
+fn round_dropped_with_a_page_coming_in() {
+    let mut tester = mail();
+    tester.tap(&find::button("Open message 1"));
+    tester.pump();
+    assert!(
+        tester.try_pump_and_settle(0).is_err(),
+        "one frame into a push the application still has its transition to run"
+    );
+}
+
+/// Dropped with the page open: the task awaiting its result is never answered.
+fn round_dropped_with_a_result_awaited() {
+    let mut tester = mail();
+    tester.tap(&find::button("Open message 1"));
+    tester.expect(find::text("Message 1")).to_exist();
+    tester.pump_and_settle();
+}
+
+/// Dropped with the dialog open over the page: a popup route, its barrier and its own
+/// unanswered result on top of the awaited one.
+fn round_dropped_with_a_dialog_open() {
+    let mut tester = mail();
+    tester.tap(&find::button("Open message 1"));
+    tester.expect(find::text("Message 1")).to_exist();
+    tester.tap(&find::button("Archive"));
+    tester.expect(find::button("Archive it")).to_exist();
+}
+
+/// A Material application with a Router, navigated and dropped again and again. Routes,
+/// overlays, transitions, ink and the async driver each hold `Rc`s to the others; a cycle
+/// among them would leave a page behind every round
+/// (`flui_testing::heap::assert_rounds_plateau`). Two of the rounds drop the application
+/// with work in flight, which is where an owner's retirement has to let go of what it accepted.
 #[test]
 fn a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap() {
-    assert_rounds_plateau(|| {
-        let router = Router::new(Mail::Inbox, |route: &Mail, _ctx| match route {
-            Mail::Inbox => Inbox.boxed(),
-            Mail::Message { id } => Message { id: *id }.boxed(),
-        });
-        let mut tester = Tester::mount(MaterialApp::router(router));
-        tester.tap(&find::button("Open message 1"));
-        tester.expect(find::text("Message 1")).to_exist();
-        tester.tap(&find::button("Archive"));
-        tester.expect(find::button("Archive it")).to_exist();
-        tester.tap(&find::button("Archive it"));
-        tester.expect(find::text("Archived")).to_exist();
-    });
+    let rounds: [(&str, fn()); 3] = [
+        ("navigated and settled", round_navigated_and_settled),
+        (
+            "dropped with a page coming in",
+            round_dropped_with_a_page_coming_in,
+        ),
+        (
+            "dropped with a result awaited",
+            round_dropped_with_a_result_awaited,
+        ),
+    ];
+    for (name, round) in rounds {
+        eprintln!("round: {name}");
+        assert_rounds_plateau(round);
+    }
+}
+
+/// A leak this target holds until it is fixed (`docs/gaps.md`, "A navigator unmounted with a
+/// dialog open is never freed"). The dialog's builder holds the message's `PageHandle`, the
+/// handle holds the navigator and the navigator's history holds the dialog's route, so an
+/// application dropped with the dialog open frees none of them. Once the navigator lets go,
+/// this test fails: its round then joins the table above.
+#[test]
+#[should_panic(expected = "more bytes live")]
+fn an_app_dropped_with_a_dialog_open_keeps_its_navigator() {
+    assert_rounds_plateau(round_dropped_with_a_dialog_open);
 }

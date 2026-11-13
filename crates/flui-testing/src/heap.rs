@@ -128,37 +128,45 @@ unsafe impl GlobalAlloc for CountingAllocator {
 const PLATEAU_WARM_UP: usize = 3;
 /// Rounds [`assert_rounds_plateau`] compares.
 const PLATEAU_ROUNDS: usize = 8;
+// The comparison is between the last warm-up round and the last compared one.
+const _: () = assert!(PLATEAU_WARM_UP >= 1 && PLATEAU_ROUNDS >= 1);
 
 /// Runs `round` again and again on this thread and panics when its live heap keeps growing:
 /// the last round has to leave no more bytes live than the last warm-up round did.
 ///
 /// A round mounts an application, drives it and drops it. Everything an owner thread holds is
 /// `Rc` (ADR-0323 §1), so a cycle between an element, its state, a listener and a signal frees
-/// nothing, and no tool reports it: each round leaves one more tree behind. The counters are
-/// per thread, so a round whose application frees on another thread what this one allocated
-/// reads as a fall, never as growth.
+/// nothing, and no tool reports it: each round leaves one more tree behind.
+///
+/// The counters are per thread: a block counts for the thread that allocated it and against
+/// the thread that freed it. The assertion therefore holds for a round that does its work on
+/// this thread, which is where an application's tree lives. A round that frees on another
+/// thread what this one allocated reads as growth and fails with nothing leaked; a round that
+/// frees here what another thread allocated reads as a fall, which hides a leak of that size.
 ///
 /// # Panics
 ///
-/// When the rounds leave more bytes live each time, and when no round allocated anything:
-/// the test target has not installed [`CountingAllocator`], and every reading is zero.
+/// When the rounds leave more bytes live each time, and when no round allocated anything on
+/// this thread: the test target has not installed [`CountingAllocator`], or the round does
+/// its work elsewhere, and a flat row of readings would say nothing.
 #[track_caller]
 pub fn assert_rounds_plateau(mut round: impl FnMut()) {
+    // An array, so the readings are no allocation of this function's own.
+    let mut live = [0_i64; PLATEAU_WARM_UP + PLATEAU_ROUNDS];
     let start = HeapCounts::now();
-    let live: Vec<i64> = (0..PLATEAU_WARM_UP + PLATEAU_ROUNDS)
-        .map(|_| {
-            round();
-            HeapCounts::now().since(start).live_bytes.cast_signed()
-        })
-        .collect();
+    for reading in &mut live {
+        round();
+        *reading = HeapCounts::now().since(start).live_bytes.cast_signed();
+    }
     assert!(
         HeapCounts::now().since(start).allocations > 0,
-        "no round allocated: the test target does not install `CountingAllocator`"
+        "no round allocated on this thread: the test target does not install \
+         `CountingAllocator`, or the round works on another thread"
     );
-    let settled = live.get(PLATEAU_WARM_UP - 1..).unwrap_or_default();
-    let (Some(first), Some(last)) = (settled.first(), settled.last()) else {
-        return;
-    };
+    let (first, last) = (
+        live[PLATEAU_WARM_UP - 1],
+        live[PLATEAU_WARM_UP + PLATEAU_ROUNDS - 1],
+    );
     assert!(
         last <= first,
         "the last {PLATEAU_ROUNDS} rounds left {} more bytes live; after each round, against \

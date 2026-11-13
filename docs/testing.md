@@ -596,14 +596,25 @@ runs a round (mount an application, drive it, drop it) again and again and
 fails when the test thread's live bytes keep growing. An owner thread holds
 its state in `Rc` (ADR-0323 §1), so a cycle through an element, a state, a
 listener or a signal frees nothing and no tool reports it; each round would
-leave one more tree behind.
+leave one more tree behind. The counters are per thread, so the assertion is
+for a round that works on the test thread: a block freed on another thread
+than the one that allocated it reads as growth on one and as a fall on the
+other. A round that allocates nothing on the test thread is refused.
 `an_app_mounted_driven_and_dropped_again_and_again_holds_no_more_heap`
 (flui-widgets) runs eager rows under signals, a scrolled lazy list, presses
-through the agent and a running transition;
+through the agent, a transition stepped by hand, an implicit animation the
+host's frames run to its end and the same animation dropped in flight;
 `a_material_app_navigated_and_dropped_again_and_again_holds_no_more_heap`
 (flui-material) pushes a page for a result, opens a dialog over it and pops
-both, with a task awaiting the result. A widget family that keeps state of a
-new kind (a controller, an overlay, a route) adds its round there.
+both, then drops the application one frame into the push, and with the
+result still awaited. A round that drops its application in the middle of an
+animation asserts first that the host still has the run to drive. A widget
+family that keeps state of a new kind (a controller, an overlay, a route)
+adds its rounds there, one settled and one dropped in flight. A leak a round
+finds and its change does not fix is held by a `#[should_panic]` test of its
+own, named in [`gaps.md`](gaps.md):
+`an_app_dropped_with_a_dialog_open_keeps_its_navigator` holds
+[a navigator unmounted with a dialog open](gaps.md#a-navigator-unmounted-with-a-dialog-open-is-never-freed).
 
 `perf --size` measures what an application costs before it does anything,
 against `perf/size.toml`: the packages of the facade's default graph on Linux,
