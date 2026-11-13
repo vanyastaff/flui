@@ -10988,6 +10988,7 @@ pub fn flui::painting::paint::Image::byte_count(&self) -> usize
 pub fn flui::painting::paint::Image::clone_handle(&self) -> Self
 pub fn flui::painting::paint::Image::data(&self) -> &[u8]
 pub fn flui::painting::paint::Image::data_ptr(&self) -> usize
+pub fn flui::painting::paint::Image::decode(bytes: &[u8]) -> Result<Self, flui::painting::paint::ImageDecodeError>
 pub fn flui::painting::paint::Image::from_rgba8(width: u32, height: u32, data: Vec<u8>) -> Self
 pub fn flui::painting::paint::Image::size(&self) -> flui::geometry::Size<f64>
 pub fn flui::painting::paint::Image::solid_color(width: u32, height: u32, color: flui::prelude::Color) -> Self
@@ -11020,6 +11021,16 @@ impl core::fmt::Display for flui::painting::paint::ImageDataError
 impl core::marker::StructuralPartialEq for flui::painting::paint::ImageDataError
 variant flui::painting::paint::ImageDataError::LengthMismatch { width: u32, height: u32, expected: usize, actual: usize } // at 1
 variant flui::painting::paint::ImageDataError::SizeOverflow { width: u32, height: u32 } // at 0
+#[non_exhaustive] pub enum flui::painting::paint::ImageDecodeError
+impl Clone for flui::painting::paint::ImageDecodeError
+impl Eq for flui::painting::paint::ImageDecodeError
+impl PartialEq for flui::painting::paint::ImageDecodeError
+impl core::error::Error for flui::painting::paint::ImageDecodeError
+impl core::fmt::Debug for flui::painting::paint::ImageDecodeError
+impl core::fmt::Display for flui::painting::paint::ImageDecodeError
+impl core::marker::StructuralPartialEq for flui::painting::paint::ImageDecodeError
+variant flui::painting::paint::ImageDecodeError::Malformed(String) // at 1
+variant flui::painting::paint::ImageDecodeError::TooLarge { requested: u64, limit: u64 } // at 0
 pub enum flui::painting::paint::ImageFilter
 impl Clone for flui::painting::paint::ImageFilter
 impl PartialEq for flui::painting::paint::ImageFilter
@@ -11099,6 +11110,8 @@ impl core::fmt::Display for flui::painting::paint::InvalidImageTransform
 impl core::marker::StructuralPartialEq for flui::painting::paint::InvalidImageTransform
 variant flui::painting::paint::InvalidImageTransform::NonFinite // at 0
 variant flui::painting::paint::InvalidImageTransform::Singular // at 1
+pub const flui::painting::paint::MAX_DECODED_IMAGE_BYTES: u64
+pub const flui::painting::paint::MAX_ENCODED_IMAGE_BYTES: u64
 pub struct flui::painting::paint::MaskFilter
 field flui::painting::paint::MaskFilter::sigma: f64 // at 1
 field flui::painting::paint::MaskFilter::style: flui::painting::paint::BlurStyle // at 0
@@ -11355,6 +11368,7 @@ reexport flui::painting::paint::image::Image => flui::painting::paint::Image
 reexport flui::painting::paint::image::ImageConfiguration => flui::painting::paint::ImageConfiguration
 reexport flui::painting::paint::image::ImageDataError => flui::painting::paint::ImageDataError
 reexport flui::painting::paint::image::ImageRepeat => flui::prelude::ImageRepeat
+reexport flui::painting::paint::image::MAX_ENCODED_IMAGE_BYTES => flui::painting::paint::MAX_ENCODED_IMAGE_BYTES
 pub mod flui::painting::paint::path
 reexport flui::painting::paint::path::Path => flui::painting::paint::Path
 reexport flui::painting::paint::path::PathCommand => flui::painting::paint::PathCommand
@@ -27086,7 +27100,6 @@ pub fn flui_assets::core::metadata::AssetMetadata::with_size(size_bytes: usize) 
 pub enum flui_assets::error::AssetError
 impl Clone for flui_assets::error::AssetError
 impl From<core::io::error::Error> for flui_assets::error::AssetError
-impl From<image::error::ImageError> for flui_assets::error::AssetError
 impl core::error::Error for flui_assets::error::AssetError
 impl core::fmt::Debug for flui_assets::error::AssetError
 impl core::fmt::Display for flui_assets::error::AssetError
