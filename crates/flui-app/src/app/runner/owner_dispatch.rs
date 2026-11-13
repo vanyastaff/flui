@@ -1033,7 +1033,7 @@ pub const EXIT_CODE_HUNG: i32 = 124;
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 pub(super) struct ExitWatchdog {
     // Dropped with the watchdog: its thread sees the channel close and ends.
-    _stop: std::sync::mpsc::Sender<std::convert::Infallible>,
+    _stop: std::sync::mpsc::Sender<!>,
     reached: std::sync::Arc<std::sync::Mutex<Option<TeardownStep>>>,
 }
 
@@ -1047,7 +1047,7 @@ impl ExitWatchdog {
                 .and_then(|state| state.flush_host.clone())
         });
         let reached = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let (stop, stopped) = std::sync::mpsc::channel::<std::convert::Infallible>();
+        let (stop, stopped) = std::sync::mpsc::channel::<!>();
         let watched = std::sync::Arc::clone(&reached);
         let spawned = std::thread::Builder::new()
             .name("flui-exit-watchdog".into())
