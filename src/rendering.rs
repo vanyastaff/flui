@@ -32,6 +32,9 @@ pub use flui_rendering::parent_data::{
 pub use flui_rendering::pipeline::{
     DirtySendError, RenderInvalidationHandle, TextContextMut, TextSource,
 };
+/// The render pipeline's owner and the owner-local handle to it that
+/// [`crate::view::LifecycleContext::pipeline_owner`] hands a lifecycle hook.
+pub use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 pub use flui_rendering::protocol::{
     BoxChildSize, BoxHitTest, BoxLayout, BoxProtocol, ChildLayout, ChildState, MainAxisPosition,
     Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition, SliverChildState,

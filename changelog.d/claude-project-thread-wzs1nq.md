@@ -61,8 +61,9 @@
   each public enum's closure at its declaration; `MacOSWindowLevel`, `AxisSource`, `ClockChoice`,
   `CodecError`, `ReplayError` and `AppCall` are `#[non_exhaustive]`.
 - `flui::app` is a curated module instead of the whole `flui-app` crate: the entry, its
-  configuration, background work, close requests, frame failures, window control and the input
-  tap. The bindings (`WidgetsBinding`, `RenderingBinding`, `GestureBinding`), `PipelineOwner`,
-  `UpdateScheduler`, the root render view, `embedder`, `native`, `testing`, `prelude` and the view
-  re-exports are no longer reachable through `flui::app`; widgets reach the presentation through
-  `BuildContext` and their lifecycle hooks.
+  configuration (`FrameLatency` included), background work, close requests, frame failures, window
+  control and the input tap. `WidgetsBinding`, `RenderingBinding`, the root render view,
+  `embedder`, `native`, `testing`, `prelude` and the view re-exports are no longer under
+  `flui::app`. The types public signatures name moved: `PipelineOwner` and `PipelineCell` to
+  `flui::rendering`, `UpdateScheduler` to `flui::view`, `GestureBinding` to
+  `flui::testing::harness`.

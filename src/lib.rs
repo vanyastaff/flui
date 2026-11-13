@@ -172,7 +172,7 @@ fn main() -> Result<(), flui::LaunchError> {
 //!
 //! # Layers
 //!
-//! Each re-exported module is one workspace crate; the layering (no upward
+//! Each module below re-exports one workspace crate, or a curated part of it; the layering (no upward
 //! edges) is documented in `docs/architecture.md`:
 //!
 //! | Module | Crate | Feature | Layer |
@@ -186,11 +186,11 @@ fn main() -> Result<(), flui::LaunchError> {
 //! | [`animation`] | `flui-animation` | — | curves, tweens, tickers |
 //! | `material` | `flui-material` | `material` | Material Design theming + widget catalog |
 //! | `cupertino` | `flui-cupertino` | `cupertino` | iOS-style theming + widget catalog |
-//! | [`app`] | `flui-app` | — | `run_app` + bindings |
+//! | [`app`] | `flui-app` | — | entry, configuration, background work, close requests, frame failures |
 //! | `native` | `flui-native`, through `flui-app` | `native` | one operating system's window extensions |
 //!
-//! [`painting`], [`rendering`], and [`interaction`] expose selected authoring
-//! contracts for custom drawing, render objects, and gestures. Arena storage,
+//! [`app`], [`painting`], [`rendering`], and [`interaction`] expose selected authoring
+//! contracts for applications, custom drawing, render objects, and gestures. Arena storage,
 //! the engine, and platform implementations remain outside this facade.
 //! Enable `testing` in a development dependency for deterministic headless tests.
 //! `flui::material` and `flui::cupertino` sit *above* [`widgets`] (ADR-0028's
@@ -329,6 +329,8 @@ pub use flui_widgets as widgets;
 /// use flui::view::__runtime;
 /// ```
 pub mod view {
+    /// The frame scheduler a [`PostFrameHandle`] is made from.
+    pub use flui_app::bindings::UpdateScheduler;
     pub use flui_view::*;
     #[expect(
         hidden_glob_reexports,

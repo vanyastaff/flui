@@ -2,7 +2,7 @@
 //! it runs off the frame, how its windows close, and what it does when a frame fails.
 //!
 //! An application starts from [`run_app`] or an [`Application`] built and run from a
-//! `#[flui::main]` function. The bindings, the pipeline owner, the root render view and the
+//! `#[flui::main]` function. The bindings, the root render view and the
 //! embedder are the runtime's composition roots and are not part of this module: a widget
 //! reaches the presentation through [`crate::view::BuildContext`] and its lifecycle hooks.
 
@@ -11,8 +11,8 @@ pub use flui_app::app::DevReload;
 pub use flui_app::run_direct;
 pub use flui_app::{
     AppConfig, AppId, AppIdentity, Application, BackendFailure, DiagnosticsProfile, EXIT_CODE_HUNG,
-    FontRegistrationError, GpuBackend, LaunchError, MotionOverride, PointerResampling,
-    UnsupportedSystem, main, register_font, run_app,
+    FontRegistrationError, FrameLatency, GpuBackend, LaunchError, MotionOverride,
+    PointerResampling, UnsupportedSystem, main, register_font, run_app,
 };
 
 /// The entry macro's seam: `#[flui::main]` expands to calls into it.

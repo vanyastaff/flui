@@ -13,7 +13,7 @@ field flui::AppConfig::exit_policy: flui::app::ExitPolicy // at 17
 field flui::AppConfig::frame: flui::platform::WindowFrame // at 10
 field flui::AppConfig::frame_failure_detail: flui::app::FrameFailureDetail // at 22
 field flui::AppConfig::frame_failure_handler: Option<flui::app::FrameFailureHandlerFactory> // at 19
-field flui::AppConfig::frame_latency: flui_engine::frame_latency::FrameLatency // at 13
+field flui::AppConfig::frame_latency: flui::app::FrameLatency // at 13
 field flui::AppConfig::input_latency: flui::platform::InputLatency // at 14
 field flui::AppConfig::input_tap: Option<flui::app::InputTapFactory> // at 20
 field flui::AppConfig::max_size: Option<flui::geometry::Size> // at 6
@@ -44,7 +44,7 @@ pub fn flui::AppConfig::exit_policy(self, policy: flui::app::ExitPolicy) -> Self
 pub fn flui::AppConfig::frame(self, frame: flui::platform::WindowFrame) -> Self
 pub fn flui::AppConfig::frame_failure_detail(self, detail: flui::app::FrameFailureDetail) -> Self
 pub fn flui::AppConfig::frame_failure_handler(self, factory: flui::app::FrameFailureHandlerFactory) -> Self
-pub fn flui::AppConfig::frame_latency(self, latency: flui_engine::frame_latency::FrameLatency) -> Self
+pub fn flui::AppConfig::frame_latency(self, latency: flui::app::FrameLatency) -> Self
 pub fn flui::AppConfig::input_latency(self, latency: flui::platform::InputLatency) -> Self
 pub fn flui::AppConfig::input_tap(self, factory: flui::app::InputTapFactory) -> Self
 pub fn flui::AppConfig::max_size(self, width: u32, height: u32) -> Self
@@ -1419,6 +1419,18 @@ field flui::app::FrameFailureReport::consecutive_failures: u32 // at 3
 field flui::app::FrameFailureReport::disposition: flui::app::FailureDisposition // at 2
 field flui::app::FrameFailureReport::kind: flui::app::FrameFailureKind // at 1
 impl core::fmt::Debug for flui::app::FrameFailureReport
+#[non_exhaustive] pub enum flui::app::FrameLatency
+impl Clone for flui::app::FrameLatency
+impl Copy for flui::app::FrameLatency
+impl Default for flui::app::FrameLatency
+impl Eq for flui::app::FrameLatency
+impl PartialEq for flui::app::FrameLatency
+impl core::fmt::Debug for flui::app::FrameLatency
+impl core::hash::Hash for flui::app::FrameLatency
+impl core::marker::StructuralPartialEq for flui::app::FrameLatency
+pub const fn flui::app::FrameLatency::frames(self) -> u32
+variant flui::app::FrameLatency::Balanced // at 0
+variant flui::app::FrameLatency::Low // at 1
 reexport flui::app::GpuBackend => flui::GpuBackend
 pub trait flui::app::HostComputePool: Send + Sync
 fn flui::app::HostComputePool::room(&self) -> flui::platform::executor::RoomFuture
@@ -15469,11 +15481,11 @@ pub fn flui::prelude::BuildOwner::reassemble(&mut self, tree: &mut flui::prelude
 pub fn flui::prelude::BuildOwner::register_global_key(&mut self, key: &dyn flui::foundation::ViewKey, element: flui::foundation::ElementId)
 pub fn flui::prelude::BuildOwner::register_layout_builder_for_test(&mut self, render_id: flui::foundation::RenderId, element: flui::foundation::ElementId) -> alloc::rcs::rc::Rc<flui::rendering::objects::LayoutConstraintsCell>
 pub fn flui::prelude::BuildOwner::remove_from_inactive(&mut self, id: flui::foundation::ElementId) -> Option<flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees>
-pub fn flui::prelude::BuildOwner::run_frame_with_layout_builders(&mut self, tree: &mut flui::prelude::ElementTree, pipeline: &flui_rendering::pipeline::owner::cell::PipelineCell, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>>
+pub fn flui::prelude::BuildOwner::run_frame_with_layout_builders(&mut self, tree: &mut flui::prelude::ElementTree, pipeline: &flui::rendering::PipelineCell, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>>
 pub fn flui::prelude::BuildOwner::schedule_build_for(&mut self, id: flui::foundation::ElementId, depth: usize, reason: flui::foundation::RebuildReason)
 pub fn flui::prelude::BuildOwner::scope_depth(&self) -> usize
-pub fn flui::prelude::BuildOwner::service_child_requests(&mut self, tree: &mut flui::prelude::ElementTree, pipeline: &flui_rendering::pipeline::owner::cell::PipelineCell) -> bool
-pub fn flui::prelude::BuildOwner::service_layout_builders(&mut self, tree: &mut flui::prelude::ElementTree, pipeline: &flui_rendering::pipeline::owner::cell::PipelineCell) -> bool
+pub fn flui::prelude::BuildOwner::service_child_requests(&mut self, tree: &mut flui::prelude::ElementTree, pipeline: &flui::rendering::PipelineCell) -> bool
+pub fn flui::prelude::BuildOwner::service_layout_builders(&mut self, tree: &mut flui::prelude::ElementTree, pipeline: &flui::rendering::PipelineCell) -> bool
 pub fn flui::prelude::BuildOwner::set_async_driver(&mut self, driver: flui::view::AsyncDriver)
 pub fn flui::prelude::BuildOwner::set_build_in_progress(&mut self, shared: flui::view::BuildInProgress)
 pub fn flui::prelude::BuildOwner::set_collects_semantics(&mut self, tree: &mut flui::prelude::ElementTree, collects: bool) -> bool
@@ -15485,7 +15497,7 @@ pub fn flui::prelude::BuildOwner::set_lazy_band_pass_budget_for_test(&mut self, 
 pub fn flui::prelude::BuildOwner::set_on_build_scheduled<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static
 pub fn flui::prelude::BuildOwner::set_post_frame_handle(&mut self, handle: flui::view::PostFrameHandle)
 pub fn flui::prelude::BuildOwner::set_tree_observer(&mut self, observer: alloc::rcs::arc::Arc<dyn flui::foundation::observe::TreeObserver>)
-pub fn flui::prelude::BuildOwner::settle_layout_with_builders(&mut self, tree: &mut flui::prelude::ElementTree, pipeline: &flui_rendering::pipeline::owner::cell::PipelineCell) -> Result<(), flui::foundation::TreeError<flui::rendering::RenderError>>
+pub fn flui::prelude::BuildOwner::settle_layout_with_builders(&mut self, tree: &mut flui::prelude::ElementTree, pipeline: &flui::rendering::PipelineCell) -> Result<(), flui::foundation::TreeError<flui::rendering::RenderError>>
 pub fn flui::prelude::BuildOwner::signal_graph(&self) -> &flui::view::Reactive
 pub fn flui::prelude::BuildOwner::take_global_key_diagnostics(&mut self) -> Vec<flui::view::DuplicateGlobalKey>
 pub fn flui::prelude::BuildOwner::take_global_key_for_reparent(&mut self, key: &dyn flui::foundation::ViewKey) -> Option<flui::foundation::ElementId>
@@ -16089,7 +16101,7 @@ pub fn flui::prelude::ElementTree::iter_nodes(&self) -> impl Iterator<Item = (fl
 pub fn flui::prelude::ElementTree::len(&self) -> usize
 pub fn flui::prelude::ElementTree::mark_needs_build(&mut self, id: flui::foundation::ElementId)
 pub fn flui::prelude::ElementTree::mount_root(&mut self, view: &dyn flui::prelude::View, owner: &mut flui::prelude::ElementOwner<'_>) -> flui::foundation::ElementId
-pub fn flui::prelude::ElementTree::mount_root_with_pipeline_owner(&mut self, view: &dyn flui::prelude::View, pipeline_owner: Option<flui_rendering::pipeline::owner::cell::PipelineCell>, owner: &mut flui::prelude::ElementOwner<'_>) -> flui::foundation::ElementId
+pub fn flui::prelude::ElementTree::mount_root_with_pipeline_owner(&mut self, view: &dyn flui::prelude::View, pipeline_owner: Option<flui::rendering::PipelineCell>, owner: &mut flui::prelude::ElementOwner<'_>) -> flui::foundation::ElementId
 pub fn flui::prelude::ElementTree::new() -> Self
 pub fn flui::prelude::ElementTree::remove(&mut self, id: flui::foundation::ElementId, owner: &mut flui::prelude::ElementOwner<'_>) -> Option<flui::prelude::ElementNode>
 pub fn flui::prelude::ElementTree::remove_finalized(&mut self, id: flui::foundation::ElementId, owner: &mut flui::prelude::ElementOwner<'_>) -> Option<flui::prelude::ElementNode>
@@ -16797,7 +16809,7 @@ fn flui::prelude::LifecycleContext::keep_alive_handle(&self) -> flui::view::owne
 fn flui::prelude::LifecycleContext::keep_alive_lease(&self) -> flui::view::owner::KeepAliveLease
 fn flui::prelude::LifecycleContext::lifecycle_handle(&self) -> Option<flui::view::LifecycleHandle> { .. }
 fn flui::prelude::LifecycleContext::on_unmount(&self, hook: Box<dyn FnOnce()>) -> flui::view::UnmountHook
-fn flui::prelude::LifecycleContext::pipeline_owner(&self) -> Option<flui_rendering::pipeline::owner::cell::PipelineCell>
+fn flui::prelude::LifecycleContext::pipeline_owner(&self) -> Option<flui::rendering::PipelineCell>
 fn flui::prelude::LifecycleContext::post_frame_handle(&self) -> Option<flui::view::PostFrameHandle>
 fn flui::prelude::LifecycleContext::rebuild_handle(&self) -> flui::prelude::RebuildHandle
 fn flui::prelude::LifecycleContext::text_input_handle(&self) -> Option<flui::interaction::TextInputHandle>
@@ -18913,19 +18925,19 @@ pub fn flui::prelude::WidgetsBinding::mark_ready_to_produce_frames(&self)
 pub fn flui::prelude::WidgetsBinding::new() -> Self
 pub fn flui::prelude::WidgetsBinding::observer_count(&self) -> usize
 pub fn flui::prelude::WidgetsBinding::perform_reassemble(&self)
-pub fn flui::prelude::WidgetsBinding::pipeline_owner(&self) -> Option<flui_rendering::pipeline::owner::cell::PipelineCell>
+pub fn flui::prelude::WidgetsBinding::pipeline_owner(&self) -> Option<flui::rendering::PipelineCell>
 pub fn flui::prelude::WidgetsBinding::rebuild_within_frame(&self)
 pub fn flui::prelude::WidgetsBinding::remove_observer(&self, observer: &alloc::rcs::arc::Arc<dyn flui::prelude::WidgetsBindingObserver>)
 pub fn flui::prelude::WidgetsBinding::remove_tree_observer(&self)
 pub fn flui::prelude::WidgetsBinding::root_element(&self) -> Option<flui::foundation::ElementId>
-pub fn flui::prelude::WidgetsBinding::run_frame_with_layout_builders(&self, pipeline: &flui_rendering::pipeline::owner::cell::PipelineCell, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>>
+pub fn flui::prelude::WidgetsBinding::run_frame_with_layout_builders(&self, pipeline: &flui::rendering::PipelineCell, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>>
 pub fn flui::prelude::WidgetsBinding::schedule_build(&self)
 pub fn flui::prelude::WidgetsBinding::schedule_root_rebuild(&self)
-pub fn flui::prelude::WidgetsBinding::service_child_requests(&self, pipeline: &flui_rendering::pipeline::owner::cell::PipelineCell)
+pub fn flui::prelude::WidgetsBinding::service_child_requests(&self, pipeline: &flui::rendering::PipelineCell)
 pub fn flui::prelude::WidgetsBinding::set_collects_semantics(&self, collects: bool)
 pub fn flui::prelude::WidgetsBinding::set_on_need_frame<F>(&self, callback: F) where F: Fn() + 'static
-pub fn flui::prelude::WidgetsBinding::set_pipeline_owner(&self, owner: flui_rendering::pipeline::owner::cell::PipelineCell)
-pub fn flui::prelude::WidgetsBinding::settle_layout_with_builders(&self, pipeline: &flui_rendering::pipeline::owner::cell::PipelineCell) -> Result<(), flui::foundation::TreeError<flui::rendering::RenderError>>
+pub fn flui::prelude::WidgetsBinding::set_pipeline_owner(&self, owner: flui::rendering::PipelineCell)
+pub fn flui::prelude::WidgetsBinding::settle_layout_with_builders(&self, pipeline: &flui::rendering::PipelineCell) -> Result<(), flui::foundation::TreeError<flui::rendering::RenderError>>
 pub fn flui::prelude::WidgetsBinding::take_recovered_panics(&self) -> Vec<flui::view::RecoveredPanic>
 pub fn flui::prelude::WidgetsBinding::with_build_owner<R>(&self, f: impl FnOnce(&flui::prelude::BuildOwner) -> R) -> R
 pub fn flui::prelude::WidgetsBinding::with_build_owner_mut<R>(&self, f: impl FnOnce(&mut flui::prelude::BuildOwner) -> R) -> R
@@ -19530,6 +19542,142 @@ impl core::hash::Hash for flui::rendering::PanZoomTarget
 impl core::marker::StructuralPartialEq for flui::rendering::PanZoomTarget
 pub trait flui::rendering::ParentData: core::fmt::Debug + downcast_rs::Downcast + dyn_clone::DynClone
 fn flui::rendering::ParentData::detach(&mut self) { .. }
+pub struct flui::rendering::PipelineCell(_)
+impl Clone for flui::rendering::PipelineCell
+impl core::fmt::Debug for flui::rendering::PipelineCell
+pub fn flui::rendering::PipelineCell::downgrade(&self) -> flui_rendering::pipeline::owner::cell::WeakPipelineCell
+pub fn flui::rendering::PipelineCell::downgrade_for_test(&self) -> flui_rendering::pipeline::owner::cell::WeakPipelineCell
+pub fn flui::rendering::PipelineCell::inspect_render(&self, query: flui::foundation::inspect::SnapshotQuery) -> Result<flui::foundation::inspect::SnapshotNode, flui::foundation::inspect::SnapshotError>
+pub fn flui::rendering::PipelineCell::is_free(&self) -> bool
+pub fn flui::rendering::PipelineCell::new(owner: flui::rendering::PipelineOwner) -> Self
+pub fn flui::rendering::PipelineCell::ptr_eq(&self, other: &Self) -> bool
+pub fn flui::rendering::PipelineCell::report_semantics_diagnostics(&self)
+pub fn flui::rendering::PipelineCell::run_frame(&self, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>>
+pub fn flui::rendering::PipelineCell::run_layout(&self) -> Result<(), flui::foundation::TreeError<flui::rendering::RenderError>>
+pub fn flui::rendering::PipelineCell::scene_applied(&self, version: &flui_layer::scene::version::SceneVersion)
+pub fn flui::rendering::PipelineCell::scene_frame_node(&self) -> Option<flui_layer::scene::id::SceneNodeId>
+pub fn flui::rendering::PipelineCell::try_with<R>(&self, f: impl FnOnce(&flui::rendering::PipelineOwner) -> R) -> Option<R>
+pub fn flui::rendering::PipelineCell::try_with_layout<R>(&self, f: impl FnOnce(&flui::rendering::PipelineOwner) -> R) -> Option<R>
+pub fn flui::rendering::PipelineCell::watch_leader(&self, link: flui_layer::link::LayerLink, lane: flui::view::PostFrameHandle) -> flui_rendering::pipeline::owner::leader_watch::LeaderWatch
+pub fn flui::rendering::PipelineCell::with<R>(&self, f: impl FnOnce(&flui::rendering::PipelineOwner) -> R) -> R
+pub fn flui::rendering::PipelineCell::with_mut<R>(&self, f: impl FnOnce(&mut flui::rendering::PipelineOwner) -> R) -> R
+pub struct flui::rendering::PipelineOwner<Phase: flui_rendering::pipeline::phase::PipelinePhase = flui_rendering::pipeline::phase::Idle> { .. }
+impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> core::fmt::Debug for flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::add_node_needing_layout(&mut self, node_id: flui::foundation::RenderId, depth: usize) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::adopt_render_child(&mut self, parent_id: flui::foundation::RenderId, child_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::announcements(&mut self) -> Option<flui_semantics::announce::Announcements> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::apply_font_change(&mut self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::apply_render_update_impact(&mut self, node_id: flui::foundation::RenderId, impact: flui::prelude::RenderUpdateImpact) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::attach_render_subtrees(&mut self, token: flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees) -> Result<(), flui_rendering::pipeline::owner::relocation::AttachRenderSubtreesFailure> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::boundary_record_count(&self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::boundary_scene_node(&self, id: flui::foundation::RenderId) -> Option<flui_layer::scene::id::SceneNodeId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::box_dry_baseline(&mut self, id: flui::foundation::RenderId, constraints: flui::prelude::BoxConstraints, baseline: flui::painting::TextBaseline) -> flui::rendering::RenderResult<Option<f64>> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::box_dry_layout(&mut self, id: flui::foundation::RenderId, constraints: flui::prelude::BoxConstraints) -> flui::rendering::RenderResult<flui::geometry::Size> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::box_intrinsic_dimension(&mut self, id: flui::foundation::RenderId, dimension: flui_rendering::storage::state::layout_cache::IntrinsicDimension, extent: f64) -> flui::rendering::RenderResult<f64> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::box_size(&self, id: flui::foundation::RenderId) -> Option<flui::geometry::Size> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::clear_all_dirty_nodes(&mut self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::counters(&self) -> flui_rendering::pipeline::owner::counters::PipelineCounters // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::debug_doing_any_phase(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::debug_doing_layout(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::debug_doing_paint(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::debug_doing_semantics(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::decode_semantics_action(&self, request: &accesskit::ActionRequest) -> Result<flui_semantics::action::SemanticsActionRequest, flui_semantics::action::ActionDecodeError> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::detach_render_subtrees(&mut self, root_ids: &[flui::foundation::RenderId]) -> Result<flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees, flui_rendering::pipeline::owner::relocation::DetachRenderSubtreesError> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::device_pixel_ratio(&self) -> f64 // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::dirty_node_count(&self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::drain_mid_layout_marks(&mut self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::drain_pending_dirty(&mut self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::drop_render_child(&mut self, parent_id: flui::foundation::RenderId, child_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::exhaust_semantics_identities(&mut self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::finish(self) -> flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Semantics>
+pub fn flui::rendering::PipelineOwner::global_to_local(&self, id: flui::foundation::RenderId, point: flui::geometry::Point, ancestor: Option<flui::foundation::RenderId>) -> Option<flui::geometry::Point> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::has_dirty_nodes(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::has_mid_layout_marks(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::has_pending_announcements(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::has_pending_invalidations(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::hit_test(&self, position: flui::geometry::Offset, kind: flui::interaction::PointerKind, result: &mut flui_interaction::pointer::hit_test::HitTestResult) -> bool where Phase: Sync // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::id(&self) -> u64 // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::input_regions(&self) -> Vec<flui::platform::input_regions::InputRegion> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::insert<P>(&mut self, render_object: Box<dyn flui::rendering::RenderObject<P>>) -> flui::foundation::RenderId where P: flui::rendering::Protocol, flui_rendering::storage::node::RenderNode: From<Box<dyn flui::rendering::RenderObject<P>>> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::insert_child_render_object(&mut self, parent_id: flui::foundation::RenderId, render_object: Box<dyn flui::rendering::RenderObject<flui::rendering::BoxProtocol>>) -> Option<flui::foundation::RenderId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::insert_render_node(&mut self, node: flui_rendering::storage::node::RenderNode) -> flui::foundation::RenderId // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::insert_sliver_child_render_object(&mut self, parent_id: flui::foundation::RenderId, render_object: Box<dyn flui::rendering::RenderObject<flui::rendering::SliverProtocol>>) -> Option<flui::foundation::RenderId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::inspect(&self) -> flui_rendering::inspect::RenderInspect<'_> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::into_compositing(self) -> flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Compositing> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Layout>
+pub fn flui::rendering::PipelineOwner::into_idle(self) -> flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Compositing>
+pub fn flui::rendering::PipelineOwner::into_idle(self) -> flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Layout>
+pub fn flui::rendering::PipelineOwner::into_idle(self) -> flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::PaintPhase>
+pub fn flui::rendering::PipelineOwner::into_layout(self) -> flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Layout> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::into_paint(self) -> flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::PaintPhase> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Compositing>
+pub fn flui::rendering::PipelineOwner::into_semantics(self) -> flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Semantics> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::PaintPhase>
+pub fn flui::rendering::PipelineOwner::is_layout_poisoned(&self, id: flui::foundation::RenderId) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::layout_dirty_root(&mut self, id: flui::foundation::RenderId, constraints: flui::prelude::BoxConstraints) -> flui::rendering::RenderResult<flui::geometry::Size> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Layout>
+pub fn flui::rendering::PipelineOwner::layout_roots_total(&self) -> u64 // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::layout_waits_for_input(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::local_render_invalidation_handle(&self, id: flui::foundation::RenderId) -> Option<flui_rendering::pipeline::local_invalidation::LocalRenderInvalidationHandle> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::local_to_global(&self, id: flui::foundation::RenderId, point: flui::geometry::Point, ancestor: Option<flui::foundation::RenderId>) -> Option<flui::geometry::Point> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::mark_needs_composited_layer_update(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::mark_needs_compositing_bits_update(&mut self, node_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::mark_needs_layout(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::mark_needs_paint(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::mark_needs_semantics(&mut self, node_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::move_assistive_focus(&mut self, node: Option<flui_semantics::identity::AccessibilityNodeId>) -> flui::semantics::AssistiveFocusChange // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::new(text: flui_rendering::pipeline::text_context::TextContextHandle) -> Self // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::new_with_capacity(dirty_channel_capacity: usize, text: flui_rendering::pipeline::text_context::TextContextHandle) -> Self // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::nodes_needing_compositing_bits_update(&self) -> &[flui_rendering::pipeline::dirty::DirtyNode] // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::nodes_needing_layout(&self) -> &[flui_rendering::pipeline::dirty::DirtyNode] // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::nodes_needing_paint(&self) -> &[flui_rendering::pipeline::dirty::PaintEntry] // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::nodes_needing_semantics(&self) -> &[flui_rendering::pipeline::dirty::DirtyNode] // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::note_render_children_reordered(&mut self, parent_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::presented_nodes(&self) -> Vec<flui_rendering::pipeline::owner::presented::PresentedNode> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::push_pending_child_request_for_test(&mut self, sliver_id: flui::foundation::RenderId, index: usize) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::reassemble(&mut self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::reassemble_idle(&mut self) // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::release_detached_render_subtrees_for_finalization(&mut self, token: flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees) -> Result<(), flui_rendering::pipeline::owner::relocation::ReleaseDetachedRenderSubtreesFailure> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::remove_render_object(&mut self, id: flui::foundation::RenderId) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::render_invalidation_handle(&self, id: flui::foundation::RenderId) -> Option<flui::rendering::RenderInvalidationHandle> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::render_tree(&self) -> &flui_rendering::storage::tree::RenderTree // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::render_tree_mut(&mut self) -> &mut flui_rendering::storage::tree::RenderTree // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::request_semantics_full_publish(&mut self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::request_visual_update(&self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::resolve_semantics_action(&self, request: flui_semantics::action::SemanticsActionRequest) -> Result<flui_semantics::owner::SemanticsActionInvocation, flui_semantics::owner::SemanticsActionError> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::restore_semantics_diagnostics(&mut self, unreported: Vec<flui_semantics::owner::SemanticsDiagnostic>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::root_constraints(&self) -> Option<flui::prelude::BoxConstraints> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::root_id(&self) -> Option<flui::foundation::RenderId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::run_compositing(&mut self) -> flui::rendering::RenderResult<()> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Compositing>
+pub fn flui::rendering::PipelineOwner::run_frame(self, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> (flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>, Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>>) // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::run_frame_in_place(&mut self, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::run_layout(&mut self) -> flui::rendering::RenderResult<()> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Layout>
+pub fn flui::rendering::PipelineOwner::run_paint(&mut self, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> flui::rendering::RenderResult<()> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::PaintPhase>
+pub fn flui::rendering::PipelineOwner::run_semantics(&mut self) -> flui::rendering::RenderResult<()> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Semantics>
+pub fn flui::rendering::PipelineOwner::scene_applied(&mut self, version: &flui_layer::scene::version::SceneVersion) -> Option<flui_layer::scene::version::SceneVersion> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::scene_frame_node(&self) -> Option<flui_layer::scene::id::SceneNodeId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::scene_staged(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::seed_parent_data(&mut self, child_id: flui::foundation::RenderId, seed: flui_rendering::testing::parent_data::ParentDataSeed) // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::rendering::PipelineOwner::semantics_enabled(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::semantics_owner(&self) -> Option<&flui_semantics::owner::SemanticsOwner> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_device_pixel_ratio(&mut self, dpr: f64) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_on_need_visual_update<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_on_semantics_owner_created<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_on_semantics_owner_disposed<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_root_constraints(&mut self, constraints: Option<flui::prelude::BoxConstraints>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_root_id(&mut self, id: Option<flui::foundation::RenderId>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_root_render_object(&mut self, render_object: Box<dyn flui::rendering::RenderObject<flui::rendering::BoxProtocol>>) -> flui::foundation::RenderId // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_semantics_enabled(&mut self, enabled: bool) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_semantics_owner(&mut self, owner: Option<flui_semantics::owner::SemanticsOwner>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_semantics_route_change_sink(&mut self, sink: Option<flui_semantics::platform::RouteChangeSink>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_semantics_update_callback(&mut self, callback: flui_semantics::owner::SemanticsUpdateCallback) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_text_sizing(&mut self, sizing: flui::painting::TextSizing) -> Option<flui_rendering::pipeline::notifier::DeferredVisualUpdate> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::sliver_layout(&self, id: flui::foundation::RenderId) -> Option<(flui::rendering::SliverConstraints, flui::rendering::SliverGeometry)> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::take_pending_child_requests(&mut self) -> Vec<(flui::foundation::RenderId, usize)> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::take_pending_retain_bands(&mut self) -> Vec<(flui::foundation::RenderId, usize, usize)> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::take_semantics_diagnostics(&mut self) -> Vec<flui_semantics::owner::SemanticsDiagnostic> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::take_unchecked_semantics_diagnostics(&mut self) -> Vec<flui_semantics::owner::SemanticsDiagnostic> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::text_context_for_test(&self) -> &flui_rendering::pipeline::text_context::TextContextHandle // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::text_measurer_count(&self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::text_sizing(&self) -> &flui::painting::TextSizing // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::transform_to(&self, descendant: flui::foundation::RenderId, ancestor: flui::foundation::RenderId) -> Option<flui::geometry::Matrix4> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::tree_context(&self, id: flui::foundation::RenderId) -> flui::foundation::TreeContext // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub struct flui::rendering::PointerTarget { .. }
 impl Clone for flui::rendering::PointerTarget
 impl Copy for flui::rendering::PointerTarget
@@ -22909,14 +23057,60 @@ pub fn flui::testing::harness::DropLedger::planted(&self) -> usize
 pub struct flui::testing::harness::DropSentinel { .. }
 impl Drop for flui::testing::harness::DropSentinel
 impl core::fmt::Debug for flui::testing::harness::DropSentinel
+pub struct flui::testing::harness::GestureBinding { .. }
+impl Default for flui::testing::harness::GestureBinding
+impl core::fmt::Debug for flui::testing::harness::GestureBinding
+pub fn flui::testing::harness::GestureBinding::active_pointer_count(&self) -> usize
+pub fn flui::testing::harness::GestureBinding::active_resampler_count(&self) -> usize
+pub fn flui::testing::harness::GestureBinding::arena(&self) -> &flui::interaction::GestureArena
+pub fn flui::testing::harness::GestureBinding::begin_contactless(&self, source: flui_interaction::binding::ContactlessSource) -> Result<flui_interaction::binding::ContactlessSequence, flui::foundation::IdExhausted>
+pub fn flui::testing::harness::GestureBinding::cancel_active_pointers(&self)
+pub fn flui::testing::harness::GestureBinding::cancel_all_pointer_sequences(&self)
+pub fn flui::testing::harness::GestureBinding::cancel_pointer_sequence(&self, pointer_id: flui::interaction::PointerId)
+pub fn flui::testing::harness::GestureBinding::close_arena(&self, pointer_id: flui::interaction::PointerId)
+pub fn flui::testing::harness::GestureBinding::default_profiles(&self) -> flui::interaction::GestureProfiles
+pub fn flui::testing::harness::GestureBinding::dispatch_contactless<R>(&self, sequence: flui::foundation::InputSequenceId, body: impl FnOnce() -> R) -> R
+pub fn flui::testing::harness::GestureBinding::dispatch_pointer_frame_on<F>(&self, surface: flui_interaction::ids::InputSurface, frame: &[flui::interaction::PointerEvent], hit_test_fn: F) -> smallvec::SmallVec<[flui_interaction::binding::DispatchOutcome; 4]> where F: FnMut(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
+pub fn flui::testing::harness::GestureBinding::dispatch_pointer_on<F>(&self, surface: flui_interaction::ids::InputSurface, event: &flui::interaction::PointerEvent, hit_test_fn: F) -> flui_interaction::binding::DispatchOutcome where F: FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
+pub fn flui::testing::harness::GestureBinding::drain_deferred_arena_resolutions(&self) -> usize
+pub fn flui::testing::harness::GestureBinding::embed_surface(&self) -> Result<flui_interaction::ids::InputSurface, flui_interaction::ids::SurfaceIdsExhausted>
+pub fn flui::testing::harness::GestureBinding::flush_pending_input(&self) -> usize
+pub fn flui::testing::harness::GestureBinding::flush_pending_moves(&self) -> usize
+pub fn flui::testing::harness::GestureBinding::flush_pending_moves_at(&self, sample_time: std::time::Instant, next_sample_time: std::time::Instant) -> Result<usize, flui_interaction::binding::InvalidSamplingWindow>
+pub fn flui::testing::harness::GestureBinding::handle_lifecycle_pause(&self)
+pub fn flui::testing::harness::GestureBinding::handle_pointer_event<F>(&self, event: &flui::interaction::PointerEvent, hit_test_fn: F) where F: FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
+pub fn flui::testing::harness::GestureBinding::handle_pointer_event_with_result(&self, event: &flui::interaction::PointerEvent, result: &flui_interaction::pointer::hit_test::HitTestResult)
+pub fn flui::testing::harness::GestureBinding::handle_pointer_left_window(&self)
+pub fn flui::testing::harness::GestureBinding::has_hit_test(&self, pointer_id: flui::interaction::PointerId) -> bool
+pub fn flui::testing::harness::GestureBinding::has_pending_deadlines(&self) -> bool
+pub fn flui::testing::harness::GestureBinding::has_pending_motion(&self) -> bool
+pub fn flui::testing::harness::GestureBinding::has_pending_pointer_samples(&self) -> bool
+pub fn flui::testing::harness::GestureBinding::is_hover_frozen(&self) -> bool
+pub fn flui::testing::harness::GestureBinding::is_resampling_enabled(&self) -> bool
+pub fn flui::testing::harness::GestureBinding::mouse_tracker(&self) -> &flui_interaction::pointer::mouse_tracker::MouseTracker
+pub fn flui::testing::harness::GestureBinding::new() -> Self
+pub fn flui::testing::harness::GestureBinding::next_deadline(&self) -> Option<flui::interaction::EventTime>
+pub fn flui::testing::harness::GestureBinding::pending_move_count(&self) -> usize
+pub fn flui::testing::harness::GestureBinding::pointer_frame<R>(&self, body: impl FnOnce() -> R) -> R
+pub fn flui::testing::harness::GestureBinding::pointer_router(&self) -> &flui_interaction::pointer::pointer_router::PointerRouter
+pub fn flui::testing::harness::GestureBinding::replace_default_profiles(&self, profiles: impl Into<flui::interaction::GestureProfiles>) -> bool
+pub fn flui::testing::harness::GestureBinding::sampling_clock(&self) -> flui_interaction::pointer::sampling_clock::SamplingClock
+pub fn flui::testing::harness::GestureBinding::set_resampling_enabled(&self, enabled: bool) -> Result<(), flui_interaction::binding::ResamplingModeChangeError>
+pub fn flui::testing::harness::GestureBinding::set_sampling_clock(&self, clock: flui_interaction::pointer::sampling_clock::SamplingClock)
+pub fn flui::testing::harness::GestureBinding::sweep_arena(&self, pointer_id: flui::interaction::PointerId)
+pub fn flui::testing::harness::GestureBinding::tick_deadlines(&self)
+pub fn flui::testing::harness::GestureBinding::with_clock(clock: alloc::rcs::arc::Arc<dyn flui::foundation::MonotonicClock>) -> Self
+pub fn flui::testing::harness::GestureBinding::with_sequences_after(self, last: u64) -> Self
+pub fn flui::testing::harness::GestureBinding::with_settings(settings: impl Into<flui::interaction::GestureProfiles>) -> Self
+pub fn flui::testing::harness::GestureBinding::with_settings_and_clock(settings: impl Into<flui::interaction::GestureProfiles>, clock: alloc::rcs::arc::Arc<dyn flui::foundation::MonotonicClock>) -> Self
 pub struct flui::testing::harness::HeadlessBinding { .. }
 impl Default for flui::testing::harness::HeadlessBinding
 impl core::fmt::Debug for flui::testing::harness::HeadlessBinding
 pub fn flui::testing::harness::HeadlessBinding::a11y_tree(&self) -> Option<flui::testing::harness::a11y::A11yTree>
 pub fn flui::testing::harness::HeadlessBinding::adopt_vsync(&mut self, vsync: flui::animation::Vsync)
 pub fn flui::testing::harness::HeadlessBinding::arena(&self) -> &flui::interaction::GestureArena
-pub fn flui::testing::harness::HeadlessBinding::bind_tree(&mut self, build_owner: flui::prelude::BuildOwner, tree: flui::prelude::ElementTree, pipeline_owner: flui_rendering::pipeline::owner::cell::PipelineCell)
-pub fn flui::testing::harness::HeadlessBinding::bind_tree_with_committed_layer_tree(&mut self, build_owner: flui::prelude::BuildOwner, tree: flui::prelude::ElementTree, pipeline_owner: flui_rendering::pipeline::owner::cell::PipelineCell, committed_layer_tree: Option<flui_layer::tree::layer_tree::LayerTree>)
+pub fn flui::testing::harness::HeadlessBinding::bind_tree(&mut self, build_owner: flui::prelude::BuildOwner, tree: flui::prelude::ElementTree, pipeline_owner: flui::rendering::PipelineCell)
+pub fn flui::testing::harness::HeadlessBinding::bind_tree_with_committed_layer_tree(&mut self, build_owner: flui::prelude::BuildOwner, tree: flui::prelude::ElementTree, pipeline_owner: flui::rendering::PipelineCell, committed_layer_tree: Option<flui_layer::tree::layer_tree::LayerTree>)
 pub fn flui::testing::harness::HeadlessBinding::build_owner_mut(&mut self) -> &mut flui::prelude::BuildOwner
 pub fn flui::testing::harness::HeadlessBinding::clock(&self) -> &flui::foundation::ManualClock
 pub fn flui::testing::harness::HeadlessBinding::close_lifecycle(&self)
@@ -22924,10 +23118,10 @@ pub fn flui::testing::harness::HeadlessBinding::did_paint_last_frame(&self) -> b
 pub fn flui::testing::harness::HeadlessBinding::dispatch_pointer(&self, event: &flui::interaction::PointerEvent, hit_test: impl FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult)
 pub fn flui::testing::harness::HeadlessBinding::enable_semantics(&mut self) -> Result<(), flui::testing::harness::a11y::NotTreeBound>
 pub fn flui::testing::harness::HeadlessBinding::enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R
-pub fn flui::testing::harness::HeadlessBinding::gestures(&self) -> &flui_interaction::binding::GestureBinding
+pub fn flui::testing::harness::HeadlessBinding::gestures(&self) -> &flui::testing::harness::GestureBinding
 pub fn flui::testing::harness::HeadlessBinding::hit_test(&self, position: flui::geometry::Offset<f64>, kind: flui::interaction::PointerKind) -> flui_interaction::pointer::hit_test::HitTestResult
 pub fn flui::testing::harness::HeadlessBinding::install_build_capabilities(&self, build_owner: &mut flui::prelude::BuildOwner)
-pub fn flui::testing::harness::HeadlessBinding::install_hit_test_capability(&self, build_owner: &mut flui::prelude::BuildOwner, pipeline_owner: &flui_rendering::pipeline::owner::cell::PipelineCell)
+pub fn flui::testing::harness::HeadlessBinding::install_hit_test_capability(&self, build_owner: &mut flui::prelude::BuildOwner, pipeline_owner: &flui::rendering::PipelineCell)
 pub fn flui::testing::harness::HeadlessBinding::install_presentation_clock(&mut self, id: flui::foundation::PresentationId) -> flui::animation::Vsync
 pub fn flui::testing::harness::HeadlessBinding::interaction_dispatch_handle(&self) -> flui_interaction::pointer::interaction_lane::InteractionDispatchHandle
 pub fn flui::testing::harness::HeadlessBinding::last_frame_report(&self) -> &flui_testing::FrameReport
@@ -22939,7 +23133,7 @@ pub fn flui::testing::harness::HeadlessBinding::mouse_tracker(&self) -> &flui_in
 pub fn flui::testing::harness::HeadlessBinding::new() -> Self
 pub fn flui::testing::harness::HeadlessBinding::painted_frame_count(&self) -> u64
 pub fn flui::testing::harness::HeadlessBinding::perform_reassemble(&mut self)
-pub fn flui::testing::harness::HeadlessBinding::pipeline_owner(&self) -> Option<&flui_rendering::pipeline::owner::cell::PipelineCell>
+pub fn flui::testing::harness::HeadlessBinding::pipeline_owner(&self) -> Option<&flui::rendering::PipelineCell>
 pub fn flui::testing::harness::HeadlessBinding::presentation_produced_count(&self, id: flui::foundation::PresentationId) -> u64
 pub fn flui::testing::harness::HeadlessBinding::presentation_vsync(&self, id: flui::foundation::PresentationId) -> Option<flui::animation::Vsync>
 pub fn flui::testing::harness::HeadlessBinding::pump_all(&self, dt: core::time::Duration)
@@ -22950,7 +23144,7 @@ pub fn flui::testing::harness::HeadlessBinding::reassemble_render_tree(&self)
 pub fn flui::testing::harness::HeadlessBinding::replay(&mut self, script: &flui::testing::harness::replay::PointerScript)
 pub fn flui::testing::harness::HeadlessBinding::replay_event(&mut self, event: flui::testing::harness::replay::ScriptedPointer)
 pub fn flui::testing::harness::HeadlessBinding::replay_with(&mut self, script: &flui::testing::harness::replay::PointerScript, hit_test: impl FnMut(&Self, flui::geometry::Offset<f64>, flui::interaction::PointerKind) -> flui_interaction::pointer::hit_test::HitTestResult)
-pub fn flui::testing::harness::HeadlessBinding::scheduler(&self) -> &flui_scheduler::scheduler::UpdateScheduler
+pub fn flui::testing::harness::HeadlessBinding::scheduler(&self) -> &flui::view::UpdateScheduler
 pub fn flui::testing::harness::HeadlessBinding::semantics_enabled(&self) -> bool
 pub fn flui::testing::harness::HeadlessBinding::set_lifecycle_state(&self, state: flui::prelude::AppLifecycleState) -> Result<(), flui::view::LifecycleClosed>
 pub fn flui::testing::harness::HeadlessBinding::set_presentation_min_produce_interval(&self, id: flui::foundation::PresentationId, interval: Option<core::time::Duration>)
@@ -22960,7 +23154,7 @@ pub fn flui::testing::harness::HeadlessBinding::tree_mut(&mut self) -> &mut flui
 pub fn flui::testing::harness::HeadlessBinding::try_new() -> Result<Self, flui_interaction::pointer::interaction_lane::InteractionDispatchError>
 pub fn flui::testing::harness::HeadlessBinding::vsync(&self) -> &flui::animation::Vsync
 pub fn flui::testing::harness::HeadlessBinding::with_presentation_motion_clock<R>(&mut self, id: flui::foundation::PresentationId, edit: impl FnOnce(&mut flui::animation::MotionClock) -> R) -> Option<R>
-pub fn flui::testing::harness::HeadlessBinding::with_tree(build_owner: flui::prelude::BuildOwner, tree: flui::prelude::ElementTree, pipeline_owner: flui_rendering::pipeline::owner::cell::PipelineCell) -> Self
+pub fn flui::testing::harness::HeadlessBinding::with_tree(build_owner: flui::prelude::BuildOwner, tree: flui::prelude::ElementTree, pipeline_owner: flui::rendering::PipelineCell) -> Self
 pub fn flui::testing::harness::HeadlessBinding::writer_source(&self) -> Option<flui::prelude::WriterSource>
 pub struct flui::testing::harness::MountOptions
 field flui::testing::harness::MountOptions::capabilities: flui::testing::harness::BuildCapabilities // at 1
@@ -22974,12 +23168,12 @@ pub fn flui::testing::harness::MountOptions::new(constraints: flui::prelude::Box
 pub fn flui::testing::harness::MountOptions::tight(width: f64, height: f64) -> Self
 pub struct flui::testing::harness::MountOwners
 field flui::testing::harness::MountOwners::build_owner: flui::prelude::BuildOwner // at 0
-field flui::testing::harness::MountOwners::pipeline_owner: flui_rendering::pipeline::owner::cell::PipelineCell // at 2
+field flui::testing::harness::MountOwners::pipeline_owner: flui::rendering::PipelineCell // at 2
 field flui::testing::harness::MountOwners::tree: flui::prelude::ElementTree // at 1
 impl Default for flui::testing::harness::MountOwners
 impl core::fmt::Debug for flui::testing::harness::MountOwners
 pub fn flui::testing::harness::MountOwners::fresh() -> Self
-pub fn flui::testing::harness::MountOwners::with_pipeline_owner(pipeline_owner: flui_rendering::pipeline::owner::cell::PipelineCell) -> Self
+pub fn flui::testing::harness::MountOwners::with_pipeline_owner(pipeline_owner: flui::rendering::PipelineCell) -> Self
 pub struct flui::testing::harness::Mounted
 field flui::testing::harness::Mounted::content_element: flui::foundation::ElementId // at 1
 field flui::testing::harness::Mounted::painted: bool // at 5
@@ -23087,7 +23281,7 @@ reexport flui::testing::harness::a11y::Role => accesskit::Role
 reexport flui::testing::harness::a11y::ScrollUnit => accesskit::ScrollUnit
 reexport flui::testing::harness::a11y::Toggled => accesskit::Toggled
 reexport flui::testing::harness::a11y::TreeId => accesskit::TreeId
-pub fn flui::testing::harness::render_snapshot<P: flui_rendering::pipeline::phase::PipelinePhase>(owner: &flui_rendering::pipeline::owner::PipelineOwner<P>) -> flui::foundation::inspect::SnapshotNode
+pub fn flui::testing::harness::render_snapshot<P: flui_rendering::pipeline::phase::PipelinePhase>(owner: &flui::rendering::PipelineOwner<P>) -> flui::foundation::inspect::SnapshotNode
 pub mod flui::testing::harness::replay
 pub struct flui::testing::harness::replay::MouseScript { .. }
 impl Clone for flui::testing::harness::replay::MouseScript
@@ -23319,7 +23513,7 @@ pub fn flui::testing::harness::widgets::LaidOut::a11y_tree(&self) -> Option<flui
 pub fn flui::testing::harness::widgets::LaidOut::absolute_offset(&self, id: flui::foundation::RenderId) -> flui::geometry::Offset
 pub fn flui::testing::harness::widgets::LaidOut::accessibility_action_listener(&self) -> Option<flui_semantics::platform::AccessibilityActionListener>
 pub fn flui::testing::harness::widgets::LaidOut::adopt_vsync(&mut self, vsync: flui::animation::Vsync) -> Result<(), flui::animation::VsyncRegistrationError>
-pub fn flui::testing::harness::widgets::LaidOut::binding_scheduler(&self) -> flui_scheduler::scheduler::UpdateScheduler
+pub fn flui::testing::harness::widgets::LaidOut::binding_scheduler(&self) -> flui::view::UpdateScheduler
 pub fn flui::testing::harness::widgets::LaidOut::child(&self, id: flui::foundation::RenderId, index: usize) -> flui::foundation::RenderId
 pub fn flui::testing::harness::widgets::LaidOut::children(&self, id: flui::foundation::RenderId) -> Vec<flui::foundation::RenderId>
 pub fn flui::testing::harness::widgets::LaidOut::clip_behavior(&self, id: flui::foundation::RenderId) -> flui::prelude::Clip
@@ -23386,7 +23580,7 @@ pub fn flui::testing::harness::widgets::LaidOut::painted_frame_count(&self) -> u
 pub fn flui::testing::harness::widgets::LaidOut::paragraph_first_line_left(&self, id: flui::foundation::RenderId) -> f64
 pub fn flui::testing::harness::widgets::LaidOut::pending_background(&self) -> usize
 pub fn flui::testing::harness::widgets::LaidOut::perform_reassemble(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::pipeline_owner(&self) -> flui_rendering::pipeline::owner::cell::PipelineCell
+pub fn flui::testing::harness::widgets::LaidOut::pipeline_owner(&self) -> flui::rendering::PipelineCell
 pub fn flui::testing::harness::widgets::LaidOut::post_frame_handle(&mut self) -> flui::view::PostFrameHandle
 pub fn flui::testing::harness::widgets::LaidOut::primary_selection(&self) -> flui_testing::primary_selection::ScriptedPrimarySelection
 pub fn flui::testing::harness::widgets::LaidOut::pump(&mut self)
@@ -23402,7 +23596,7 @@ pub fn flui::testing::harness::widgets::LaidOut::replay_with(&mut self, script: 
 pub fn flui::testing::harness::widgets::LaidOut::request_close(&self, reason: flui::app::CloseReason) -> bool
 pub fn flui::testing::harness::widgets::LaidOut::root(&self) -> flui::foundation::RenderId
 pub fn flui::testing::harness::widgets::LaidOut::run_background(&mut self) -> usize
-pub fn flui::testing::harness::widgets::LaidOut::scheduler(&self) -> flui_scheduler::scheduler::UpdateScheduler
+pub fn flui::testing::harness::widgets::LaidOut::scheduler(&self) -> flui::view::UpdateScheduler
 pub fn flui::testing::harness::widgets::LaidOut::set_motion_override(&self, preference: flui::animation::MotionOverride)
 pub fn flui::testing::harness::widgets::LaidOut::set_scale_factor(&mut self, scale_factor: f64)
 pub fn flui::testing::harness::widgets::LaidOut::set_system_preferences(&self, values: flui::platform::SystemPreferences)
@@ -23500,13 +23694,13 @@ pub fn flui::testing::harness::widgets::harness::Harness::ime_allowed_calls(&sel
 pub fn flui::testing::harness::widgets::harness::Harness::invoke_semantics_action(&self, request: accesskit::ActionRequest) -> Result<(), flui::testing::harness::a11y::InvokeActionError>
 pub fn flui::testing::harness::widgets::harness::Harness::only_child(&mut self, parent: flui::foundation::ElementId) -> flui::foundation::ElementId
 pub fn flui::testing::harness::widgets::harness::Harness::parent_of(&mut self, id: flui::foundation::ElementId) -> Option<flui::foundation::ElementId>
-pub fn flui::testing::harness::widgets::harness::Harness::pipeline_owner(&self) -> flui_rendering::pipeline::owner::cell::PipelineCell
+pub fn flui::testing::harness::widgets::harness::Harness::pipeline_owner(&self) -> flui::rendering::PipelineCell
 pub fn flui::testing::harness::widgets::harness::Harness::post_frame_handle(&mut self) -> flui::view::PostFrameHandle
 pub fn flui::testing::harness::widgets::harness::Harness::primary_selection(&self) -> flui_testing::primary_selection::ScriptedPrimarySelection
 pub fn flui::testing::harness::widgets::harness::Harness::pump_for(&mut self, dt: core::time::Duration)
 pub fn flui::testing::harness::widgets::harness::Harness::render_debug_names(&self) -> Vec<&'static str>
 pub fn flui::testing::harness::widgets::harness::Harness::root(&mut self) -> flui::foundation::ElementId
-pub fn flui::testing::harness::widgets::harness::Harness::scheduler(&self) -> &flui_scheduler::scheduler::UpdateScheduler
+pub fn flui::testing::harness::widgets::harness::Harness::scheduler(&self) -> &flui::view::UpdateScheduler
 pub fn flui::testing::harness::widgets::harness::Harness::set_system_preferences(&self, values: flui::platform::SystemPreferences)
 pub fn flui::testing::harness::widgets::harness::Harness::set_window_focused(&self, focused: bool)
 pub fn flui::testing::harness::widgets::harness::Harness::set_window_visible(&self, visible: bool)
@@ -23539,7 +23733,7 @@ fn flui::testing::rendering::BoxQueryRun::max_intrinsic_height(&mut self, id: fl
 fn flui::testing::rendering::BoxQueryRun::max_intrinsic_width(&mut self, id: flui::foundation::RenderId, height: f64) -> f64 { .. }
 fn flui::testing::rendering::BoxQueryRun::min_intrinsic_height(&mut self, id: flui::foundation::RenderId, width: f64) -> f64 { .. }
 fn flui::testing::rendering::BoxQueryRun::min_intrinsic_width(&mut self, id: flui::foundation::RenderId, height: f64) -> f64 { .. }
-fn flui::testing::rendering::BoxQueryRun::pipeline_mut(&mut self) -> &mut flui_rendering::pipeline::owner::PipelineOwner<<Self as flui::testing::rendering::BoxQueryRun>::Phase>
+fn flui::testing::rendering::BoxQueryRun::pipeline_mut(&mut self) -> &mut flui::rendering::PipelineOwner<<Self as flui::testing::rendering::BoxQueryRun>::Phase>
 type flui::testing::rendering::BoxQueryRun::Phase: flui_rendering::pipeline::phase::PipelinePhase + Sync
 pub struct flui::testing::rendering::DrawCommandSummary
 field flui::testing::rendering::DrawCommandSummary::kind: flui::testing::rendering::DrawKind // at 0
@@ -23583,8 +23777,8 @@ pub fn flui::testing::rendering::FrameRun::is_clean(&self) -> bool
 pub fn flui::testing::rendering::FrameRun::layer_tree(&self) -> Option<&flui_layer::tree::layer_tree::LayerTree>
 pub fn flui::testing::rendering::FrameRun::mark_needs_paint(&mut self, id: flui::foundation::RenderId)
 pub fn flui::testing::rendering::FrameRun::opacity_alpha(&self) -> Option<f64>
-pub fn flui::testing::rendering::FrameRun::owner(&self) -> &flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui::testing::rendering::FrameRun::owner_mut(&mut self) -> &mut flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::testing::rendering::FrameRun::owner(&self) -> &flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
+pub fn flui::testing::rendering::FrameRun::owner_mut(&mut self) -> &mut flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::testing::rendering::FrameRun::painted(&self) -> bool
 pub fn flui::testing::rendering::FrameRun::picture_bounds(&self) -> Option<flui::geometry::Rect>
 pub fn flui::testing::rendering::FrameRun::pump(&mut self) -> flui_rendering::testing::report::FrameReport
@@ -23605,8 +23799,8 @@ impl core::fmt::Debug for flui::testing::rendering::LayoutRun
 impl flui::testing::rendering::BoxQueryRun for flui::testing::rendering::LayoutRun { type Phase = flui_rendering::pipeline::phase::Layout; }
 impl flui::testing::rendering::Probe for flui::testing::rendering::LayoutRun { type Phase = flui_rendering::pipeline::phase::Layout; }
 pub fn flui::testing::rendering::LayoutRun::mark_needs_paint(&mut self, id: flui::foundation::RenderId)
-pub fn flui::testing::rendering::LayoutRun::owner(&self) -> &flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Layout>
-pub fn flui::testing::rendering::LayoutRun::owner_mut(&mut self) -> &mut flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Layout>
+pub fn flui::testing::rendering::LayoutRun::owner(&self) -> &flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Layout>
+pub fn flui::testing::rendering::LayoutRun::owner_mut(&mut self) -> &mut flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Layout>
 pub fn flui::testing::rendering::LayoutRun::relayout(&mut self)
 pub fn flui::testing::rendering::LayoutRun::root(&self) -> flui::foundation::RenderId
 pub fn flui::testing::rendering::LayoutRun::update<T: 'static>(&mut self, id: flui::foundation::RenderId, edit: impl FnOnce(&mut T))
@@ -23629,7 +23823,7 @@ fn flui::testing::rendering::Probe::hit_with_transforms(&self, x: f64, y: f64) -
 fn flui::testing::rendering::Probe::id(&self, label: &str) -> flui::foundation::RenderId { .. }
 fn flui::testing::rendering::Probe::node_snapshot(&self, id: flui::foundation::RenderId) -> flui::foundation::inspect::SnapshotNode { .. }
 fn flui::testing::rendering::Probe::offset(&self, id: flui::foundation::RenderId) -> flui::geometry::Offset { .. }
-fn flui::testing::rendering::Probe::pipeline(&self) -> &flui_rendering::pipeline::owner::PipelineOwner<<Self as flui::testing::rendering::Probe>::Phase>
+fn flui::testing::rendering::Probe::pipeline(&self) -> &flui::rendering::PipelineOwner<<Self as flui::testing::rendering::Probe>::Phase>
 fn flui::testing::rendering::Probe::registry(&self) -> &flui_rendering::testing::tree::RenderLabelRegistry
 fn flui::testing::rendering::Probe::render_snapshot(&self) -> flui::foundation::inspect::SnapshotNode { .. }
 fn flui::testing::rendering::Probe::sliver_geometry(&self, id: flui::foundation::RenderId) -> flui::rendering::SliverGeometry { .. }
@@ -23803,11 +23997,11 @@ fn flui::view::ElementBase::parent_data_debug_type_name(&self) -> Option<&'stati
 fn flui::view::ElementBase::parent_data_storage_type_name(&self) -> Option<&'static str> { .. }
 fn flui::view::ElementBase::parent_data_type_id(&self) -> Option<core::any::TypeId> { .. }
 fn flui::view::ElementBase::parent_data_typical_ancestor_description(&self) -> Option<&'static str> { .. }
-fn flui::view::ElementBase::pipeline_owner(&self) -> Option<flui_rendering::pipeline::owner::cell::PipelineCell> { .. }
+fn flui::view::ElementBase::pipeline_owner(&self) -> Option<flui::rendering::PipelineCell> { .. }
 fn flui::view::ElementBase::render_id(&self) -> Option<flui::foundation::RenderId> { .. }
 fn flui::view::ElementBase::set_depth(&mut self, depth: flui::view::ElementDepth)
 fn flui::view::ElementBase::set_parent_render_id(&mut self, _parent_id: Option<flui::foundation::RenderId>) { .. }
-fn flui::view::ElementBase::set_pipeline_owner(&mut self, _owner: flui_rendering::pipeline::owner::cell::PipelineCell) { .. }
+fn flui::view::ElementBase::set_pipeline_owner(&mut self, _owner: flui::rendering::PipelineCell) { .. }
 fn flui::view::ElementBase::set_self_id(&mut self, _id: flui::foundation::ElementId) { .. }
 fn flui::view::ElementBase::set_sliver_slot(&mut self, _slot: Option<flui::rendering::SliverSlot>) { .. }
 fn flui::view::ElementBase::sliver_slot(&self) -> Option<flui::rendering::SliverSlot> { .. }
@@ -24148,10 +24342,10 @@ pub fn flui::view::PendingClose::stay_open(self) -> Result<(), flui::view::Stale
 pub struct flui::view::PostFrameHandle { .. }
 impl Clone for flui::view::PostFrameHandle
 impl core::fmt::Debug for flui::view::PostFrameHandle
-pub fn flui::view::PostFrameHandle::new(scheduler: &flui_scheduler::scheduler::UpdateScheduler) -> Self
+pub fn flui::view::PostFrameHandle::new(scheduler: &flui::view::UpdateScheduler) -> Self
 pub fn flui::view::PostFrameHandle::schedule(&self, callback: impl FnOnce(&flui::view::FrameTiming) + 'static) -> Result<(), flui::view::PostFrameScheduleError>
 pub fn flui::view::PostFrameHandle::schedule_or_return<T: 'static>(&self, value: T, run: fn(_: T, _: &flui::view::FrameTiming)) -> Result<(), flui_scheduler::post_frame::PostFrameRejection<T>>
-pub fn flui::view::PostFrameHandle::targets_same_scheduler(&self, other: &flui_scheduler::scheduler::UpdateScheduler) -> bool
+pub fn flui::view::PostFrameHandle::targets_same_scheduler(&self, other: &flui::view::UpdateScheduler) -> bool
 #[non_exhaustive] pub enum flui::view::PostFrameScheduleError
 impl Clone for flui::view::PostFrameScheduleError
 impl Copy for flui::view::PostFrameScheduleError
@@ -24234,8 +24428,8 @@ reexport flui::view::RenderId => flui::foundation::RenderId
 reexport flui::view::RenderObjectContext => flui::prelude::RenderObjectContext
 reexport flui::view::RenderObjectContextError => flui::prelude::RenderObjectContextError
 pub trait flui::view::RenderTreeRootElement
-fn flui::view::RenderTreeRootElement::pipeline_owner(&self) -> Option<flui_rendering::pipeline::owner::cell::PipelineCell>
-fn flui::view::RenderTreeRootElement::set_pipeline_owner(&mut self, owner: flui_rendering::pipeline::owner::cell::PipelineCell)
+fn flui::view::RenderTreeRootElement::pipeline_owner(&self) -> Option<flui::rendering::PipelineCell>
+fn flui::view::RenderTreeRootElement::set_pipeline_owner(&mut self, owner: flui::rendering::PipelineCell)
 reexport flui::view::RenderUpdateImpact => flui::prelude::RenderUpdateImpact
 reexport flui::view::RenderView => flui::prelude::RenderView
 pub trait flui::view::RenderViewState<V: flui::view::StatefulRenderView>: 'static
@@ -24263,9 +24457,9 @@ impl<V: flui::prelude::View + Clone + 'static> flui::view::ElementBase for flui:
 impl<V: flui::prelude::View + Clone + 'static> flui::view::RenderTreeRootElement for flui::view::RootRenderElement<V>
 impl<V> flui::view::element::kind::RootElementBase for flui::view::RootRenderElement<V> where V: flui::prelude::View + Clone + 'static, flui::view::RootRenderElement<V>: flui::view::ElementBase
 pub fn flui::view::RootRenderElement::new(view: alloc::rcs::rc::Rc<flui::view::RootRenderView<V>>) -> Self // impl<V: flui::prelude::View + Clone + 'static> flui::view::RootRenderElement<V>
-pub fn flui::view::RootRenderElement::pipeline_owner(&self) -> Option<&flui_rendering::pipeline::owner::cell::PipelineCell> // impl<V: flui::prelude::View + Clone + 'static> flui::view::RootRenderElement<V>
+pub fn flui::view::RootRenderElement::pipeline_owner(&self) -> Option<&flui::rendering::PipelineCell> // impl<V: flui::prelude::View + Clone + 'static> flui::view::RootRenderElement<V>
 pub fn flui::view::RootRenderElement::render_id(&self) -> Option<flui::foundation::RenderId> // impl<V: flui::prelude::View + Clone + 'static> flui::view::RootRenderElement<V>
-pub fn flui::view::RootRenderElement::set_pipeline_owner(&mut self, owner: flui_rendering::pipeline::owner::cell::PipelineCell) // impl<V: flui::prelude::View + Clone + 'static> flui::view::RootRenderElement<V>
+pub fn flui::view::RootRenderElement::set_pipeline_owner(&mut self, owner: flui::rendering::PipelineCell) // impl<V: flui::prelude::View + Clone + 'static> flui::view::RootRenderElement<V>
 pub struct flui::view::RootRenderView<V: flui::prelude::View + Clone> { .. }
 impl<V: Clone + flui::prelude::View + Clone> Clone for flui::view::RootRenderView<V>
 impl<V: flui::prelude::View + Clone + 'static> flui::prelude::View for flui::view::RootRenderView<V>
@@ -24413,6 +24607,58 @@ pub struct flui::view::UnmountHook { .. }
 impl Drop for flui::view::UnmountHook
 impl core::fmt::Debug for flui::view::UnmountHook
 pub fn flui::view::UnmountHook::forget(self)
+pub struct flui::view::UpdateScheduler { .. }
+impl Clone for flui::view::UpdateScheduler
+impl Default for flui::view::UpdateScheduler
+impl core::fmt::Debug for flui::view::UpdateScheduler
+pub fn flui::view::UpdateScheduler::add_lifecycle_state_listener(&self, callback: flui_scheduler::frame::LifecycleStateCallback) -> flui_scheduler::id::CallbackId
+pub fn flui::view::UpdateScheduler::add_persistent_frame_callback(&self, callback: flui_scheduler::frame::RecurringFrameCallback)
+pub fn flui::view::UpdateScheduler::add_post_frame_callback(&self, callback: flui_scheduler::frame::PostFrameCallback)
+pub fn flui::view::UpdateScheduler::add_task(&self, priority: flui_scheduler::task::Priority, callback: impl FnOnce() + 'static)
+pub fn flui::view::UpdateScheduler::add_timings_callback(&self, callback: flui_scheduler::config::TimingsCallback)
+pub fn flui::view::UpdateScheduler::avg_fps(&self) -> f64
+pub fn flui::view::UpdateScheduler::budget_snapshot(&self) -> flui_scheduler::budget::FrameBudget
+pub fn flui::view::UpdateScheduler::cancel_frame_callback(&self, id: flui_scheduler::id::CallbackId) -> bool
+pub fn flui::view::UpdateScheduler::clear_jank_stats(&self)
+pub fn flui::view::UpdateScheduler::current_frame(&self) -> Option<flui::view::FrameTiming>
+pub fn flui::view::UpdateScheduler::current_system_frame_time_stamp(&self) -> std::time::Instant
+pub fn flui::view::UpdateScheduler::current_vsync_time(&self) -> Option<std::time::Instant>
+pub fn flui::view::UpdateScheduler::debug_assert_no_transient_callbacks(&self, _reason: &str) -> bool
+pub fn flui::view::UpdateScheduler::downgrade(&self) -> flui_scheduler::scheduler::WeakUpdateScheduler
+pub fn flui::view::UpdateScheduler::end_of_frame(&self) -> flui_scheduler::scheduler::FrameCompletionFuture
+pub fn flui::view::UpdateScheduler::ensure_visual_update(&self) -> bool
+pub fn flui::view::UpdateScheduler::frame_count(&self) -> u64
+pub fn flui::view::UpdateScheduler::frame_waker(&self) -> flui::view::FrameWaker
+pub fn flui::view::UpdateScheduler::frames_enabled(&self) -> bool
+pub fn flui::view::UpdateScheduler::handle_app_lifecycle_state_change(&self, new_state: flui::prelude::AppLifecycleState)
+pub fn flui::view::UpdateScheduler::is_deadline_near(&self) -> bool
+pub fn flui::view::UpdateScheduler::is_frame_scheduled(&self) -> bool
+pub fn flui::view::UpdateScheduler::is_in_frame(&self) -> bool
+pub fn flui::view::UpdateScheduler::is_janky(&self) -> bool
+pub fn flui::view::UpdateScheduler::is_over_budget(&self) -> bool
+pub fn flui::view::UpdateScheduler::is_same_instance(&self, other: &Self) -> bool
+pub fn flui::view::UpdateScheduler::jank_rate(&self) -> f64
+pub fn flui::view::UpdateScheduler::janky_frame_count(&self) -> u64
+pub fn flui::view::UpdateScheduler::lifecycle_state(&self) -> flui::prelude::AppLifecycleState
+pub fn flui::view::UpdateScheduler::new() -> Self
+pub fn flui::view::UpdateScheduler::phase(&self) -> flui_scheduler::frame::SchedulerPhase
+pub fn flui::view::UpdateScheduler::remaining_budget(&self) -> flui::view::Milliseconds
+pub fn flui::view::UpdateScheduler::remaining_budget_ms(&self) -> f64
+pub fn flui::view::UpdateScheduler::remove_lifecycle_state_listener(&self, id: flui_scheduler::id::CallbackId) -> bool
+pub fn flui::view::UpdateScheduler::remove_timings_callback(&self, callback: &flui_scheduler::config::TimingsCallback)
+pub fn flui::view::UpdateScheduler::report_timings(&self) -> usize
+pub fn flui::view::UpdateScheduler::request_frame(&self)
+pub fn flui::view::UpdateScheduler::schedule_forced_frame(&self)
+pub fn flui::view::UpdateScheduler::schedule_frame_callback(&self, callback: flui_scheduler::frame::OneShotFrameCallback) -> flui_scheduler::id::CallbackId
+pub fn flui::view::UpdateScheduler::schedule_frame_if_enabled(&self) -> bool
+pub fn flui::view::UpdateScheduler::schedule_microtask(&self, task: Box<dyn FnOnce()>)
+pub fn flui::view::UpdateScheduler::set_budget_frame_duration(&self, frame_duration: flui::view::FrameDuration)
+pub fn flui::view::UpdateScheduler::set_frames_enabled(&mut self, enabled: bool)
+pub fn flui::view::UpdateScheduler::set_on_frame_scheduled(&self, hook: Option<alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>>)
+pub fn flui::view::UpdateScheduler::should_schedule_frame(&self) -> bool
+pub fn flui::view::UpdateScheduler::take_late_visual_update(&self) -> bool
+pub fn flui::view::UpdateScheduler::time_since_last_timings_report(&self) -> core::time::Duration
+pub fn flui::view::UpdateScheduler::transient_callback_count(&self) -> usize
 reexport flui::view::ValueKey => flui::foundation::ValueKey
 reexport flui::view::View => flui::prelude::View
 reexport flui::view::ViewExt => flui::prelude::ViewExt
@@ -24619,7 +24865,7 @@ pub fn flui::view::element::Element::data(&self) -> &<V as flui::prelude::Inheri
 pub fn flui::view::element::Element::dependent(&self, dependent: flui::foundation::ElementId) -> Option<&flui::view::element::DependentEntry> // impl<V> flui::view::element::Element<V, flui::foundation::Single, flui::view::element::InheritedBehavior<V>> where V: flui::prelude::InheritedView
 pub fn flui::view::element::Element::new(view: alloc::rcs::rc::Rc<V>, behavior: B) -> Self // impl<V, A, B> flui::view::element::Element<V, A, B> where V: Clone + 'static, A: flui::view::element::ElementArity, B: flui::view::element::ElementBehavior<V, A>
 pub fn flui::view::element::Element::render_id(&self) -> Option<flui::foundation::RenderId> // impl<V> flui::view::element::Element<V, flui::foundation::Variable, flui::view::element::RenderBehavior<V>> where V: flui::prelude::RenderView, flui_rendering::storage::node::RenderNode: From<Box<dyn flui::rendering::RenderObject<<V as flui::prelude::RenderView>::Protocol>>>
-pub fn flui::view::element::Element::set_pipeline_owner(&mut self, owner: flui_rendering::pipeline::owner::cell::PipelineCell) // impl<V> flui::view::element::Element<V, flui::foundation::Variable, flui::view::element::RenderBehavior<V>> where V: flui::prelude::RenderView, flui_rendering::storage::node::RenderNode: From<Box<dyn flui::rendering::RenderObject<<V as flui::prelude::RenderView>::Protocol>>>
+pub fn flui::view::element::Element::set_pipeline_owner(&mut self, owner: flui::rendering::PipelineCell) // impl<V> flui::view::element::Element<V, flui::foundation::Variable, flui::view::element::RenderBehavior<V>> where V: flui::prelude::RenderView, flui_rendering::storage::node::RenderNode: From<Box<dyn flui::rendering::RenderObject<<V as flui::prelude::RenderView>::Protocol>>>
 pub fn flui::view::element::Element::state(&self) -> Option<&<V as flui::prelude::StatefulView>::State> // impl<V> flui::view::element::Element<V, flui::foundation::Single, flui::view::StatefulBehavior<V>> where V: flui::prelude::StatefulView
 pub fn flui::view::element::Element::state_mut(&mut self) -> Option<&mut <V as flui::prelude::StatefulView>::State> // impl<V> flui::view::element::Element<V, flui::foundation::Single, flui::view::StatefulBehavior<V>> where V: flui::prelude::StatefulView
 pub trait flui::view::element::ElementArity: flui::foundation::Arity
@@ -24664,10 +24910,10 @@ pub fn flui::view::element::ElementCore::mark_dirty(&mut self) // impl<V, A> flu
 pub fn flui::view::element::ElementCore::mount(&mut self, parent: Option<flui::foundation::ElementId>, _slot: usize, owner: &mut flui::prelude::ElementOwner<'_>) // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
 pub fn flui::view::element::ElementCore::new(view: alloc::rcs::rc::Rc<V>) -> Self // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
 pub fn flui::view::element::ElementCore::parent_render_id(&self) -> Option<flui::foundation::RenderId> // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
-pub fn flui::view::element::ElementCore::pipeline_owner(&self) -> Option<&flui_rendering::pipeline::owner::cell::PipelineCell> // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
+pub fn flui::view::element::ElementCore::pipeline_owner(&self) -> Option<&flui::rendering::PipelineCell> // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
 pub fn flui::view::element::ElementCore::rebuild_handle(&self) -> flui::prelude::RebuildHandle // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
 pub fn flui::view::element::ElementCore::set_parent_render_id(&mut self, parent_id: Option<flui::foundation::RenderId>) // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
-pub fn flui::view::element::ElementCore::set_pipeline_owner(&mut self, owner: flui_rendering::pipeline::owner::cell::PipelineCell) // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
+pub fn flui::view::element::ElementCore::set_pipeline_owner(&mut self, owner: flui::rendering::PipelineCell) // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
 pub fn flui::view::element::ElementCore::set_sliver_slot(&mut self, slot: Option<flui::rendering::SliverSlot>) // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
 pub fn flui::view::element::ElementCore::should_build(&self) -> bool // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
 pub fn flui::view::element::ElementCore::sliver_slot(&self) -> Option<flui::rendering::SliverSlot> // impl<V, A> flui::view::element::ElementCore<V, A> where V: Clone + 'static, A: flui::view::element::ElementArity
@@ -27122,7 +27368,7 @@ pub struct flui::widgets::PopupOrigin { .. }
 impl Clone for flui::widgets::PopupOrigin
 impl core::fmt::Debug for flui::widgets::PopupOrigin
 pub fn flui::widgets::PopupOrigin::anchor(&self) -> &flui::rendering::objects::SubtreeAnchor
-pub fn flui::widgets::PopupOrigin::owner(&self) -> Option<&flui_rendering::pipeline::owner::cell::PipelineCell>
+pub fn flui::widgets::PopupOrigin::owner(&self) -> Option<&flui::rendering::PipelineCell>
 reexport flui::widgets::PopupRoute => flui::prelude::PopupRoute
 reexport flui::widgets::Positioned => flui::prelude::Positioned
 pub struct flui::widgets::PositionedTransition { .. }
@@ -29354,18 +29600,6 @@ impl core::hash::Hash for flui_assets::types::key::AssetKey
 impl core::marker::StructuralPartialEq for flui_assets::types::key::AssetKey
 pub fn flui_assets::types::key::AssetKey::as_str(&self) -> &str
 pub fn flui_assets::types::key::AssetKey::new(name: &str) -> Self
-#[non_exhaustive] pub enum flui_engine::frame_latency::FrameLatency
-impl Clone for flui_engine::frame_latency::FrameLatency
-impl Copy for flui_engine::frame_latency::FrameLatency
-impl Default for flui_engine::frame_latency::FrameLatency
-impl Eq for flui_engine::frame_latency::FrameLatency
-impl PartialEq for flui_engine::frame_latency::FrameLatency
-impl core::fmt::Debug for flui_engine::frame_latency::FrameLatency
-impl core::hash::Hash for flui_engine::frame_latency::FrameLatency
-impl core::marker::StructuralPartialEq for flui_engine::frame_latency::FrameLatency
-pub const fn flui_engine::frame_latency::FrameLatency::frames(self) -> u32
-variant flui_engine::frame_latency::FrameLatency::Balanced // at 0
-variant flui_engine::frame_latency::FrameLatency::Low // at 1
 #[non_exhaustive] pub enum flui_engine::surface_color::SurfaceColor
 impl Clone for flui_engine::surface_color::SurfaceColor
 impl Copy for flui_engine::surface_color::SurfaceColor
@@ -29412,52 +29646,6 @@ impl PartialEq for flui_interaction::binding::DispatchOutcome
 impl core::fmt::Debug for flui_interaction::binding::DispatchOutcome
 impl core::marker::StructuralPartialEq for flui_interaction::binding::DispatchOutcome
 pub const fn flui_interaction::binding::DispatchOutcome::sequence(&self) -> Option<flui::foundation::InputSequenceId>
-pub struct flui_interaction::binding::GestureBinding { .. }
-impl Default for flui_interaction::binding::GestureBinding
-impl core::fmt::Debug for flui_interaction::binding::GestureBinding
-pub fn flui_interaction::binding::GestureBinding::active_pointer_count(&self) -> usize
-pub fn flui_interaction::binding::GestureBinding::active_resampler_count(&self) -> usize
-pub fn flui_interaction::binding::GestureBinding::arena(&self) -> &flui::interaction::GestureArena
-pub fn flui_interaction::binding::GestureBinding::begin_contactless(&self, source: flui_interaction::binding::ContactlessSource) -> Result<flui_interaction::binding::ContactlessSequence, flui::foundation::IdExhausted>
-pub fn flui_interaction::binding::GestureBinding::cancel_active_pointers(&self)
-pub fn flui_interaction::binding::GestureBinding::cancel_all_pointer_sequences(&self)
-pub fn flui_interaction::binding::GestureBinding::cancel_pointer_sequence(&self, pointer_id: flui::interaction::PointerId)
-pub fn flui_interaction::binding::GestureBinding::close_arena(&self, pointer_id: flui::interaction::PointerId)
-pub fn flui_interaction::binding::GestureBinding::default_profiles(&self) -> flui::interaction::GestureProfiles
-pub fn flui_interaction::binding::GestureBinding::dispatch_contactless<R>(&self, sequence: flui::foundation::InputSequenceId, body: impl FnOnce() -> R) -> R
-pub fn flui_interaction::binding::GestureBinding::dispatch_pointer_frame_on<F>(&self, surface: flui_interaction::ids::InputSurface, frame: &[flui::interaction::PointerEvent], hit_test_fn: F) -> smallvec::SmallVec<[flui_interaction::binding::DispatchOutcome; 4]> where F: FnMut(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
-pub fn flui_interaction::binding::GestureBinding::dispatch_pointer_on<F>(&self, surface: flui_interaction::ids::InputSurface, event: &flui::interaction::PointerEvent, hit_test_fn: F) -> flui_interaction::binding::DispatchOutcome where F: FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
-pub fn flui_interaction::binding::GestureBinding::drain_deferred_arena_resolutions(&self) -> usize
-pub fn flui_interaction::binding::GestureBinding::embed_surface(&self) -> Result<flui_interaction::ids::InputSurface, flui_interaction::ids::SurfaceIdsExhausted>
-pub fn flui_interaction::binding::GestureBinding::flush_pending_input(&self) -> usize
-pub fn flui_interaction::binding::GestureBinding::flush_pending_moves(&self) -> usize
-pub fn flui_interaction::binding::GestureBinding::flush_pending_moves_at(&self, sample_time: std::time::Instant, next_sample_time: std::time::Instant) -> Result<usize, flui_interaction::binding::InvalidSamplingWindow>
-pub fn flui_interaction::binding::GestureBinding::handle_lifecycle_pause(&self)
-pub fn flui_interaction::binding::GestureBinding::handle_pointer_event<F>(&self, event: &flui::interaction::PointerEvent, hit_test_fn: F) where F: FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
-pub fn flui_interaction::binding::GestureBinding::handle_pointer_event_with_result(&self, event: &flui::interaction::PointerEvent, result: &flui_interaction::pointer::hit_test::HitTestResult)
-pub fn flui_interaction::binding::GestureBinding::handle_pointer_left_window(&self)
-pub fn flui_interaction::binding::GestureBinding::has_hit_test(&self, pointer_id: flui::interaction::PointerId) -> bool
-pub fn flui_interaction::binding::GestureBinding::has_pending_deadlines(&self) -> bool
-pub fn flui_interaction::binding::GestureBinding::has_pending_motion(&self) -> bool
-pub fn flui_interaction::binding::GestureBinding::has_pending_pointer_samples(&self) -> bool
-pub fn flui_interaction::binding::GestureBinding::is_hover_frozen(&self) -> bool
-pub fn flui_interaction::binding::GestureBinding::is_resampling_enabled(&self) -> bool
-pub fn flui_interaction::binding::GestureBinding::mouse_tracker(&self) -> &flui_interaction::pointer::mouse_tracker::MouseTracker
-pub fn flui_interaction::binding::GestureBinding::new() -> Self
-pub fn flui_interaction::binding::GestureBinding::next_deadline(&self) -> Option<flui::interaction::EventTime>
-pub fn flui_interaction::binding::GestureBinding::pending_move_count(&self) -> usize
-pub fn flui_interaction::binding::GestureBinding::pointer_frame<R>(&self, body: impl FnOnce() -> R) -> R
-pub fn flui_interaction::binding::GestureBinding::pointer_router(&self) -> &flui_interaction::pointer::pointer_router::PointerRouter
-pub fn flui_interaction::binding::GestureBinding::replace_default_profiles(&self, profiles: impl Into<flui::interaction::GestureProfiles>) -> bool
-pub fn flui_interaction::binding::GestureBinding::sampling_clock(&self) -> flui_interaction::pointer::sampling_clock::SamplingClock
-pub fn flui_interaction::binding::GestureBinding::set_resampling_enabled(&self, enabled: bool) -> Result<(), flui_interaction::binding::ResamplingModeChangeError>
-pub fn flui_interaction::binding::GestureBinding::set_sampling_clock(&self, clock: flui_interaction::pointer::sampling_clock::SamplingClock)
-pub fn flui_interaction::binding::GestureBinding::sweep_arena(&self, pointer_id: flui::interaction::PointerId)
-pub fn flui_interaction::binding::GestureBinding::tick_deadlines(&self)
-pub fn flui_interaction::binding::GestureBinding::with_clock(clock: alloc::rcs::arc::Arc<dyn flui::foundation::MonotonicClock>) -> Self
-pub fn flui_interaction::binding::GestureBinding::with_sequences_after(self, last: u64) -> Self
-pub fn flui_interaction::binding::GestureBinding::with_settings(settings: impl Into<flui::interaction::GestureProfiles>) -> Self
-pub fn flui_interaction::binding::GestureBinding::with_settings_and_clock(settings: impl Into<flui::interaction::GestureProfiles>, clock: alloc::rcs::arc::Arc<dyn flui::foundation::MonotonicClock>) -> Self
 pub struct flui_interaction::binding::InvalidSamplingWindow;
 impl Clone for flui_interaction::binding::InvalidSamplingWindow
 impl Copy for flui_interaction::binding::InvalidSamplingWindow
@@ -33971,146 +34159,10 @@ pub struct flui_rendering::pipeline::notifier::DeferredVisualUpdate(_)
 impl core::fmt::Debug for flui_rendering::pipeline::notifier::DeferredVisualUpdate
 pub fn flui_rendering::pipeline::notifier::DeferredVisualUpdate::notify(self)
 pub fn flui_rendering::pipeline::notifier::DeferredVisualUpdate::notify_with(self, recovery: &mut flui::foundation::panic::RecoveryScope<'_>)
-pub struct flui_rendering::pipeline::owner::PipelineOwner<Phase: flui_rendering::pipeline::phase::PipelinePhase = flui_rendering::pipeline::phase::Idle> { .. }
-impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> core::fmt::Debug for flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::add_node_needing_layout(&mut self, node_id: flui::foundation::RenderId, depth: usize) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::adopt_render_child(&mut self, parent_id: flui::foundation::RenderId, child_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::announcements(&mut self) -> Option<flui_semantics::announce::Announcements> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::apply_font_change(&mut self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::apply_render_update_impact(&mut self, node_id: flui::foundation::RenderId, impact: flui::prelude::RenderUpdateImpact) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::attach_render_subtrees(&mut self, token: flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees) -> Result<(), flui_rendering::pipeline::owner::relocation::AttachRenderSubtreesFailure> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::boundary_record_count(&self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::boundary_scene_node(&self, id: flui::foundation::RenderId) -> Option<flui_layer::scene::id::SceneNodeId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::box_dry_baseline(&mut self, id: flui::foundation::RenderId, constraints: flui::prelude::BoxConstraints, baseline: flui::painting::TextBaseline) -> flui::rendering::RenderResult<Option<f64>> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::box_dry_layout(&mut self, id: flui::foundation::RenderId, constraints: flui::prelude::BoxConstraints) -> flui::rendering::RenderResult<flui::geometry::Size> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::box_intrinsic_dimension(&mut self, id: flui::foundation::RenderId, dimension: flui_rendering::storage::state::layout_cache::IntrinsicDimension, extent: f64) -> flui::rendering::RenderResult<f64> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::box_size(&self, id: flui::foundation::RenderId) -> Option<flui::geometry::Size> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::clear_all_dirty_nodes(&mut self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::counters(&self) -> flui_rendering::pipeline::owner::counters::PipelineCounters // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::debug_doing_any_phase(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::debug_doing_layout(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::debug_doing_paint(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::debug_doing_semantics(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::decode_semantics_action(&self, request: &accesskit::ActionRequest) -> Result<flui_semantics::action::SemanticsActionRequest, flui_semantics::action::ActionDecodeError> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::detach_render_subtrees(&mut self, root_ids: &[flui::foundation::RenderId]) -> Result<flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees, flui_rendering::pipeline::owner::relocation::DetachRenderSubtreesError> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::device_pixel_ratio(&self) -> f64 // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::dirty_node_count(&self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::drain_mid_layout_marks(&mut self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::drain_pending_dirty(&mut self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::drop_render_child(&mut self, parent_id: flui::foundation::RenderId, child_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::exhaust_semantics_identities(&mut self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::finish(self) -> flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Semantics>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::global_to_local(&self, id: flui::foundation::RenderId, point: flui::geometry::Point, ancestor: Option<flui::foundation::RenderId>) -> Option<flui::geometry::Point> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::has_dirty_nodes(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::has_mid_layout_marks(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::has_pending_announcements(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::has_pending_invalidations(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::hit_test(&self, position: flui::geometry::Offset, kind: flui::interaction::PointerKind, result: &mut flui_interaction::pointer::hit_test::HitTestResult) -> bool where Phase: Sync // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::id(&self) -> u64 // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::input_regions(&self) -> Vec<flui::platform::input_regions::InputRegion> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::insert<P>(&mut self, render_object: Box<dyn flui::rendering::RenderObject<P>>) -> flui::foundation::RenderId where P: flui::rendering::Protocol, flui_rendering::storage::node::RenderNode: From<Box<dyn flui::rendering::RenderObject<P>>> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::insert_child_render_object(&mut self, parent_id: flui::foundation::RenderId, render_object: Box<dyn flui::rendering::RenderObject<flui::rendering::BoxProtocol>>) -> Option<flui::foundation::RenderId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::insert_render_node(&mut self, node: flui_rendering::storage::node::RenderNode) -> flui::foundation::RenderId // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::insert_sliver_child_render_object(&mut self, parent_id: flui::foundation::RenderId, render_object: Box<dyn flui::rendering::RenderObject<flui::rendering::SliverProtocol>>) -> Option<flui::foundation::RenderId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::inspect(&self) -> flui_rendering::inspect::RenderInspect<'_> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::into_compositing(self) -> flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Compositing> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Layout>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::into_idle(self) -> flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Compositing>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::into_idle(self) -> flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Layout>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::into_idle(self) -> flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::PaintPhase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::into_layout(self) -> flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Layout> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::into_paint(self) -> flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::PaintPhase> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Compositing>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::into_semantics(self) -> flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Semantics> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::PaintPhase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::is_layout_poisoned(&self, id: flui::foundation::RenderId) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::layout_dirty_root(&mut self, id: flui::foundation::RenderId, constraints: flui::prelude::BoxConstraints) -> flui::rendering::RenderResult<flui::geometry::Size> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Layout>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::layout_roots_total(&self) -> u64 // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::layout_waits_for_input(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::local_render_invalidation_handle(&self, id: flui::foundation::RenderId) -> Option<flui_rendering::pipeline::local_invalidation::LocalRenderInvalidationHandle> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::local_to_global(&self, id: flui::foundation::RenderId, point: flui::geometry::Point, ancestor: Option<flui::foundation::RenderId>) -> Option<flui::geometry::Point> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::mark_needs_composited_layer_update(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::mark_needs_compositing_bits_update(&mut self, node_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::mark_needs_layout(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::mark_needs_paint(&mut self, id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::mark_needs_semantics(&mut self, node_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::move_assistive_focus(&mut self, node: Option<flui_semantics::identity::AccessibilityNodeId>) -> flui::semantics::AssistiveFocusChange // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::new(text: flui_rendering::pipeline::text_context::TextContextHandle) -> Self // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::new_with_capacity(dirty_channel_capacity: usize, text: flui_rendering::pipeline::text_context::TextContextHandle) -> Self // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::nodes_needing_compositing_bits_update(&self) -> &[flui_rendering::pipeline::dirty::DirtyNode] // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::nodes_needing_layout(&self) -> &[flui_rendering::pipeline::dirty::DirtyNode] // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::nodes_needing_paint(&self) -> &[flui_rendering::pipeline::dirty::PaintEntry] // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::nodes_needing_semantics(&self) -> &[flui_rendering::pipeline::dirty::DirtyNode] // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::note_render_children_reordered(&mut self, parent_id: flui::foundation::RenderId) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::presented_nodes(&self) -> Vec<flui_rendering::pipeline::owner::presented::PresentedNode> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::push_pending_child_request_for_test(&mut self, sliver_id: flui::foundation::RenderId, index: usize) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::reassemble(&mut self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::reassemble_idle(&mut self) // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::release_detached_render_subtrees_for_finalization(&mut self, token: flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees) -> Result<(), flui_rendering::pipeline::owner::relocation::ReleaseDetachedRenderSubtreesFailure> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::remove_render_object(&mut self, id: flui::foundation::RenderId) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::render_invalidation_handle(&self, id: flui::foundation::RenderId) -> Option<flui::rendering::RenderInvalidationHandle> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::render_tree(&self) -> &flui_rendering::storage::tree::RenderTree // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::render_tree_mut(&mut self) -> &mut flui_rendering::storage::tree::RenderTree // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::request_semantics_full_publish(&mut self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::request_visual_update(&self) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::resolve_semantics_action(&self, request: flui_semantics::action::SemanticsActionRequest) -> Result<flui_semantics::owner::SemanticsActionInvocation, flui_semantics::owner::SemanticsActionError> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::restore_semantics_diagnostics(&mut self, unreported: Vec<flui_semantics::owner::SemanticsDiagnostic>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::root_constraints(&self) -> Option<flui::prelude::BoxConstraints> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::root_id(&self) -> Option<flui::foundation::RenderId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::run_compositing(&mut self) -> flui::rendering::RenderResult<()> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Compositing>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::run_frame(self, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> (flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>, Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>>) // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::run_frame_in_place(&mut self, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::run_layout(&mut self) -> flui::rendering::RenderResult<()> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Layout>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::run_paint(&mut self, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> flui::rendering::RenderResult<()> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::PaintPhase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::run_semantics(&mut self) -> flui::rendering::RenderResult<()> // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Semantics>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::scene_applied(&mut self, version: &flui_layer::scene::version::SceneVersion) -> Option<flui_layer::scene::version::SceneVersion> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::scene_frame_node(&self) -> Option<flui_layer::scene::id::SceneNodeId> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::scene_staged(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::seed_parent_data(&mut self, child_id: flui::foundation::RenderId, seed: flui_rendering::testing::parent_data::ParentDataSeed) // impl flui_rendering::pipeline::owner::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::semantics_enabled(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::semantics_owner(&self) -> Option<&flui_semantics::owner::SemanticsOwner> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_device_pixel_ratio(&mut self, dpr: f64) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_on_need_visual_update<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_on_semantics_owner_created<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_on_semantics_owner_disposed<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_root_constraints(&mut self, constraints: Option<flui::prelude::BoxConstraints>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_root_id(&mut self, id: Option<flui::foundation::RenderId>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_root_render_object(&mut self, render_object: Box<dyn flui::rendering::RenderObject<flui::rendering::BoxProtocol>>) -> flui::foundation::RenderId // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_semantics_enabled(&mut self, enabled: bool) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_semantics_owner(&mut self, owner: Option<flui_semantics::owner::SemanticsOwner>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_semantics_route_change_sink(&mut self, sink: Option<flui_semantics::platform::RouteChangeSink>) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_semantics_update_callback(&mut self, callback: flui_semantics::owner::SemanticsUpdateCallback) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::set_text_sizing(&mut self, sizing: flui::painting::TextSizing) -> Option<flui_rendering::pipeline::notifier::DeferredVisualUpdate> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::sliver_layout(&self, id: flui::foundation::RenderId) -> Option<(flui::rendering::SliverConstraints, flui::rendering::SliverGeometry)> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::take_pending_child_requests(&mut self) -> Vec<(flui::foundation::RenderId, usize)> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::take_pending_retain_bands(&mut self) -> Vec<(flui::foundation::RenderId, usize, usize)> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::take_semantics_diagnostics(&mut self) -> Vec<flui_semantics::owner::SemanticsDiagnostic> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::take_unchecked_semantics_diagnostics(&mut self) -> Vec<flui_semantics::owner::SemanticsDiagnostic> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::text_context_for_test(&self) -> &flui_rendering::pipeline::text_context::TextContextHandle // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::text_measurer_count(&self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::text_sizing(&self) -> &flui::painting::TextSizing // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::transform_to(&self, descendant: flui::foundation::RenderId, ancestor: flui::foundation::RenderId) -> Option<flui::geometry::Matrix4> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub fn flui_rendering::pipeline::owner::PipelineOwner::tree_context(&self, id: flui::foundation::RenderId) -> flui::foundation::TreeContext // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui_rendering::pipeline::owner::PipelineOwner<Phase>
-pub struct flui_rendering::pipeline::owner::cell::PipelineCell(_)
-impl Clone for flui_rendering::pipeline::owner::cell::PipelineCell
-impl core::fmt::Debug for flui_rendering::pipeline::owner::cell::PipelineCell
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::downgrade(&self) -> flui_rendering::pipeline::owner::cell::WeakPipelineCell
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::downgrade_for_test(&self) -> flui_rendering::pipeline::owner::cell::WeakPipelineCell
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::inspect_render(&self, query: flui::foundation::inspect::SnapshotQuery) -> Result<flui::foundation::inspect::SnapshotNode, flui::foundation::inspect::SnapshotError>
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::is_free(&self) -> bool
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::new(owner: flui_rendering::pipeline::owner::PipelineOwner) -> Self
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::ptr_eq(&self, other: &Self) -> bool
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::report_semantics_diagnostics(&self)
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::run_frame(&self, writer: &mut flui_layer::scene::owner::SceneWriter<'_>) -> Result<bool, flui::foundation::TreeError<flui::rendering::RenderError>>
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::run_layout(&self) -> Result<(), flui::foundation::TreeError<flui::rendering::RenderError>>
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::scene_applied(&self, version: &flui_layer::scene::version::SceneVersion)
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::scene_frame_node(&self) -> Option<flui_layer::scene::id::SceneNodeId>
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::try_with<R>(&self, f: impl FnOnce(&flui_rendering::pipeline::owner::PipelineOwner) -> R) -> Option<R>
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::try_with_layout<R>(&self, f: impl FnOnce(&flui_rendering::pipeline::owner::PipelineOwner) -> R) -> Option<R>
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::watch_leader(&self, link: flui_layer::link::LayerLink, lane: flui::view::PostFrameHandle) -> flui_rendering::pipeline::owner::leader_watch::LeaderWatch
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::with<R>(&self, f: impl FnOnce(&flui_rendering::pipeline::owner::PipelineOwner) -> R) -> R
-pub fn flui_rendering::pipeline::owner::cell::PipelineCell::with_mut<R>(&self, f: impl FnOnce(&mut flui_rendering::pipeline::owner::PipelineOwner) -> R) -> R
 pub struct flui_rendering::pipeline::owner::cell::WeakPipelineCell(_)
 impl Clone for flui_rendering::pipeline::owner::cell::WeakPipelineCell
 impl core::fmt::Debug for flui_rendering::pipeline::owner::cell::WeakPipelineCell
-pub fn flui_rendering::pipeline::owner::cell::WeakPipelineCell::upgrade(&self) -> Option<flui_rendering::pipeline::owner::cell::PipelineCell>
+pub fn flui_rendering::pipeline::owner::cell::WeakPipelineCell::upgrade(&self) -> Option<flui::rendering::PipelineCell>
 #[non_exhaustive] pub struct flui_rendering::pipeline::owner::counters::PipelineCounters
 field flui_rendering::pipeline::owner::counters::PipelineCounters::frames_produced: u64 // at 10
 field flui_rendering::pipeline::owner::counters::PipelineCounters::layers_produced: u64 // at 6
@@ -35298,7 +35350,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::for_test() -> Self
 pub fn flui_runtime::ui_runtime::UiRuntime::for_test_with_text_input(platform_text_input: Option<alloc::rcs::arc::Arc<dyn flui::platform::PlatformTextInput>>) -> Self
 pub fn flui_runtime::ui_runtime::UiRuntime::for_test_with_window(window: alloc::rcs::rc::Rc<dyn flui::platform::PlatformWindow>) -> Self
 pub fn flui_runtime::ui_runtime::UiRuntime::frame_failure_detail_for_test(&self) -> flui::app::FrameFailureDetail
-pub fn flui_runtime::ui_runtime::UiRuntime::gestures(&self) -> &flui_interaction::binding::GestureBinding
+pub fn flui_runtime::ui_runtime::UiRuntime::gestures(&self) -> &flui::testing::harness::GestureBinding
 pub fn flui_runtime::ui_runtime::UiRuntime::handle_input_addressed(&self, presentation_id: flui::foundation::PresentationId, input: flui::platform::PlatformInput) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::handle_input_on(&self, presentation_id: flui::foundation::PresentationId, surface: flui_interaction::ids::InputSurface, input: flui::platform::PlatformInput) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::handle_window_hover_addressed(&self, presentation_id: flui::foundation::PresentationId, inside: bool)
@@ -35322,7 +35374,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::presentation_collects_semantics_for_
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_count(&self) -> usize
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_device_pixel_ratio_for_test(&self, id: flui::foundation::PresentationId) -> Option<f64>
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_factory(&self) -> flui_runtime::ui_runtime::presentation_factory::PresentationFactory
-pub fn flui_runtime::ui_runtime::UiRuntime::presentation_gestures_for_test(&self, id: flui::foundation::PresentationId) -> &flui_interaction::binding::GestureBinding
+pub fn flui_runtime::ui_runtime::UiRuntime::presentation_gestures_for_test(&self, id: flui::foundation::PresentationId) -> &flui::testing::harness::GestureBinding
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_hidden_for_test(&self, id: flui::foundation::PresentationId) -> Option<bool>
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_id(&self) -> flui::foundation::PresentationId
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_widgets_for_test(&self, id: flui::foundation::PresentationId) -> &flui::prelude::WidgetsBinding
@@ -35339,7 +35391,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::replace_gesture_profiles(&self, id: 
 pub fn flui_runtime::ui_runtime::UiRuntime::report_contained_panic(&self, address: flui::foundation::PresentationAddress, payload: &dyn core::any::Any + Send)
 pub fn flui_runtime::ui_runtime::UiRuntime::request_redraw(&self)
 pub fn flui_runtime::ui_runtime::UiRuntime::retry_render_device(&self) -> bool
-pub fn flui_runtime::ui_runtime::UiRuntime::scheduler(&self) -> &flui_scheduler::scheduler::UpdateScheduler
+pub fn flui_runtime::ui_runtime::UiRuntime::scheduler(&self) -> &flui::view::UpdateScheduler
 pub fn flui_runtime::ui_runtime::UiRuntime::service_text_sizing_source_for(&self, id: flui::foundation::PresentationId, source: &flui_painting::text_painter::sizing::TextSizingSource) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::set_device_pixel_ratio_for(&self, id: flui::foundation::PresentationId, device_pixel_ratio: f64) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::set_error_view_builder(&self, builder: Option<flui::view::ErrorViewBuilder>)
@@ -35714,7 +35766,7 @@ pub fn flui_scheduler::post_frame::OwnerFrame::pump_background(&self, prepare: i
 pub fn flui_scheduler::post_frame::OwnerFrame::ready_task_count(&self) -> usize
 pub fn flui_scheduler::post_frame::OwnerFrame::retire(&self) -> Option<Box<dyn core::any::Any + Send>>
 pub fn flui_scheduler::post_frame::OwnerFrame::set_trace_runtime(&self, id: u64)
-pub fn flui_scheduler::post_frame::OwnerFrame::try_new(scheduler: &flui_scheduler::scheduler::UpdateScheduler) -> Result<Self, flui_scheduler::post_frame::OwnerFrameError>
+pub fn flui_scheduler::post_frame::OwnerFrame::try_new(scheduler: &flui::view::UpdateScheduler) -> Result<Self, flui_scheduler::post_frame::OwnerFrameError>
 #[non_exhaustive] pub enum flui_scheduler::post_frame::OwnerFrameError
 impl Clone for flui_scheduler::post_frame::OwnerFrameError
 impl Copy for flui_scheduler::post_frame::OwnerFrameError
@@ -35758,62 +35810,10 @@ impl core::error::Error for flui_scheduler::scheduler::SchedulerClosed
 impl core::fmt::Debug for flui_scheduler::scheduler::SchedulerClosed
 impl core::fmt::Display for flui_scheduler::scheduler::SchedulerClosed
 impl core::marker::StructuralPartialEq for flui_scheduler::scheduler::SchedulerClosed
-pub struct flui_scheduler::scheduler::UpdateScheduler { .. }
-impl Clone for flui_scheduler::scheduler::UpdateScheduler
-impl Default for flui_scheduler::scheduler::UpdateScheduler
-impl core::fmt::Debug for flui_scheduler::scheduler::UpdateScheduler
-pub fn flui_scheduler::scheduler::UpdateScheduler::add_lifecycle_state_listener(&self, callback: flui_scheduler::frame::LifecycleStateCallback) -> flui_scheduler::id::CallbackId
-pub fn flui_scheduler::scheduler::UpdateScheduler::add_persistent_frame_callback(&self, callback: flui_scheduler::frame::RecurringFrameCallback)
-pub fn flui_scheduler::scheduler::UpdateScheduler::add_post_frame_callback(&self, callback: flui_scheduler::frame::PostFrameCallback)
-pub fn flui_scheduler::scheduler::UpdateScheduler::add_task(&self, priority: flui_scheduler::task::Priority, callback: impl FnOnce() + 'static)
-pub fn flui_scheduler::scheduler::UpdateScheduler::add_timings_callback(&self, callback: flui_scheduler::config::TimingsCallback)
-pub fn flui_scheduler::scheduler::UpdateScheduler::avg_fps(&self) -> f64
-pub fn flui_scheduler::scheduler::UpdateScheduler::budget_snapshot(&self) -> flui_scheduler::budget::FrameBudget
-pub fn flui_scheduler::scheduler::UpdateScheduler::cancel_frame_callback(&self, id: flui_scheduler::id::CallbackId) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::clear_jank_stats(&self)
-pub fn flui_scheduler::scheduler::UpdateScheduler::current_frame(&self) -> Option<flui::view::FrameTiming>
-pub fn flui_scheduler::scheduler::UpdateScheduler::current_system_frame_time_stamp(&self) -> std::time::Instant
-pub fn flui_scheduler::scheduler::UpdateScheduler::current_vsync_time(&self) -> Option<std::time::Instant>
-pub fn flui_scheduler::scheduler::UpdateScheduler::debug_assert_no_transient_callbacks(&self, _reason: &str) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::downgrade(&self) -> flui_scheduler::scheduler::WeakUpdateScheduler
-pub fn flui_scheduler::scheduler::UpdateScheduler::end_of_frame(&self) -> flui_scheduler::scheduler::FrameCompletionFuture
-pub fn flui_scheduler::scheduler::UpdateScheduler::ensure_visual_update(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::frame_count(&self) -> u64
-pub fn flui_scheduler::scheduler::UpdateScheduler::frame_waker(&self) -> flui::view::FrameWaker
-pub fn flui_scheduler::scheduler::UpdateScheduler::frames_enabled(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::handle_app_lifecycle_state_change(&self, new_state: flui::prelude::AppLifecycleState)
-pub fn flui_scheduler::scheduler::UpdateScheduler::is_deadline_near(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::is_frame_scheduled(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::is_in_frame(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::is_janky(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::is_over_budget(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::is_same_instance(&self, other: &Self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::jank_rate(&self) -> f64
-pub fn flui_scheduler::scheduler::UpdateScheduler::janky_frame_count(&self) -> u64
-pub fn flui_scheduler::scheduler::UpdateScheduler::lifecycle_state(&self) -> flui::prelude::AppLifecycleState
-pub fn flui_scheduler::scheduler::UpdateScheduler::new() -> Self
-pub fn flui_scheduler::scheduler::UpdateScheduler::phase(&self) -> flui_scheduler::frame::SchedulerPhase
-pub fn flui_scheduler::scheduler::UpdateScheduler::remaining_budget(&self) -> flui::view::Milliseconds
-pub fn flui_scheduler::scheduler::UpdateScheduler::remaining_budget_ms(&self) -> f64
-pub fn flui_scheduler::scheduler::UpdateScheduler::remove_lifecycle_state_listener(&self, id: flui_scheduler::id::CallbackId) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::remove_timings_callback(&self, callback: &flui_scheduler::config::TimingsCallback)
-pub fn flui_scheduler::scheduler::UpdateScheduler::report_timings(&self) -> usize
-pub fn flui_scheduler::scheduler::UpdateScheduler::request_frame(&self)
-pub fn flui_scheduler::scheduler::UpdateScheduler::schedule_forced_frame(&self)
-pub fn flui_scheduler::scheduler::UpdateScheduler::schedule_frame_callback(&self, callback: flui_scheduler::frame::OneShotFrameCallback) -> flui_scheduler::id::CallbackId
-pub fn flui_scheduler::scheduler::UpdateScheduler::schedule_frame_if_enabled(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::schedule_microtask(&self, task: Box<dyn FnOnce()>)
-pub fn flui_scheduler::scheduler::UpdateScheduler::set_budget_frame_duration(&self, frame_duration: flui::view::FrameDuration)
-pub fn flui_scheduler::scheduler::UpdateScheduler::set_frames_enabled(&mut self, enabled: bool)
-pub fn flui_scheduler::scheduler::UpdateScheduler::set_on_frame_scheduled(&self, hook: Option<alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>>)
-pub fn flui_scheduler::scheduler::UpdateScheduler::should_schedule_frame(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::take_late_visual_update(&self) -> bool
-pub fn flui_scheduler::scheduler::UpdateScheduler::time_since_last_timings_report(&self) -> core::time::Duration
-pub fn flui_scheduler::scheduler::UpdateScheduler::transient_callback_count(&self) -> usize
 pub struct flui_scheduler::scheduler::WeakUpdateScheduler { .. }
 impl Clone for flui_scheduler::scheduler::WeakUpdateScheduler
 impl core::fmt::Debug for flui_scheduler::scheduler::WeakUpdateScheduler
-pub fn flui_scheduler::scheduler::WeakUpdateScheduler::upgrade(&self) -> Option<flui_scheduler::scheduler::UpdateScheduler>
+pub fn flui_scheduler::scheduler::WeakUpdateScheduler::upgrade(&self) -> Option<flui::view::UpdateScheduler>
 #[non_exhaustive] pub enum flui_scheduler::scheduler::execution::ExecutionError
 impl Clone for flui_scheduler::scheduler::execution::ExecutionError
 impl Copy for flui_scheduler::scheduler::execution::ExecutionError
