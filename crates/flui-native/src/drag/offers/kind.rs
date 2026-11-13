@@ -77,7 +77,7 @@ impl Kind {
                 }
             }
             // A URI list's trailing NUL is dropped.
-            Self::Bytes(TransferFormat::UriList) => bytes.strip_suffix(&[0]).unwrap_or(bytes).len(),
+            Self::Bytes(TransferFormat::UriList) => bytes.trim_suffix(&[0]).len(),
             Self::Bytes(_) => bytes.len(),
         }
     }

@@ -810,7 +810,7 @@ fn the_pull_owner_keeps_working(owner: &Rc<TextInputOwner>, log: &Log) {
     // A client a row left attached is replaced, its composition completed
     // ahead of the next focus.
     let calls = log.borrow().clone();
-    let own = calls.strip_prefix(&["complete"][..]).unwrap_or(&calls[..]);
+    let own = calls.trim_prefix(&["complete"][..]);
     assert_eq!(own, ["focus", "complete", "unfocus"]);
     assert_eq!(
         raised(|| {
