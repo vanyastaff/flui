@@ -1208,6 +1208,44 @@ pub(crate) fn a_window_whose_new_surface_is_refused_waits_for_its_next_change() 
     join_ok_after_close(started);
 }
 
+/// A window whose new surface is configured at its old size, past a rebuilt
+/// device's lower limit, while the platform resizes it to a size that fits,
+/// draws at that size: the refusal of the old size is not its new size's.
+pub(crate) fn a_new_surface_refused_at_the_old_size_draws_at_the_new_one() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    started.window.simulate_resize(1000.0, 800.0);
+    started.run.run_owner_turn();
+    let presented = started.renderer.frames_presented();
+    started.renderer.drop_surfaces_on_rebuild();
+    started.renderer.lose_device();
+    started.renderer.limit_size(700);
+    started.window.simulate_resize(640.0, 480.0);
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.recovery_attempts() >= 1,
+        "the device was rebuilt"
+    );
+    assert!(
+        started.renderer.frames_presented() > presented,
+        "the window drew at the size that fits"
+    );
+    assert_eq!(
+        started.run.wake_deadline(),
+        None,
+        "nothing is left to retry"
+    );
+    // The size is the window's: its next frame draws at it too.
+    let drawn = started.renderer.frames_presented();
+    observed.schedule_rebuild();
+    started.run.run_owner_turn();
+    assert!(
+        started.renderer.frames_presented() > drawn,
+        "the window's next frame draws at the size that fits"
+    );
+    join_ok_after_close(started);
+}
+
 fn join_ok_after_close(started: Started) {
     close(&started, CloseRoute::User);
     assert!(!started.run.is_running(), "the close ended the loop");
@@ -1302,6 +1340,10 @@ fn runner_close() {
             (
                 "a_window_whose_new_surface_is_refused_waits_for_its_next_change",
                 a_window_whose_new_surface_is_refused_waits_for_its_next_change,
+            ),
+            (
+                "a_new_surface_refused_at_the_old_size_draws_at_the_new_one",
+                a_new_surface_refused_at_the_old_size_draws_at_the_new_one,
             ),
         ],
     );

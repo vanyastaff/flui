@@ -621,8 +621,8 @@ impl<B: SlotBackend> RasterExecutor<B> {
                 );
             }
             None => {
-                // The newest restore was not refused: the slot still wants
-                // a surface, and the owner's next one is asked for anew.
+                // The newest restore was not refused: it panicked, which the
+                // owner hears as the slot's held panic.
                 held.inbox.lock().surface_refused = false;
                 hold_panic(&held.inbox, caught, first);
             }

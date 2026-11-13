@@ -522,10 +522,17 @@ impl RasterHost {
         };
         let size_sent = std::mem::take(&mut slot.size_sent);
         let failure = placed.sender.take_failure(slot.slot);
-        let size_refused = matches!(
-            failure,
-            Some(SlotFailure::Refused(EngineError::InvalidTargetSize { .. }))
-        );
+        // A refusal of the size the window is at, not of an older one (a
+        // restore or a rebuild configured at the size the slot had).
+        let size_refused = match (&failure, slot.size) {
+            (
+                Some(SlotFailure::Refused(EngineError::InvalidTargetSize { width, height })),
+                Some(size),
+            ) => {
+                u32::try_from(size.width) == Ok(*width) && u32::try_from(size.height) == Ok(*height)
+            }
+            _ => false,
+        };
         if size_sent && failure.is_some() && !size_refused {
             // The failure held may hide a refusal of the size sent with it:
             // the next frame sends the size again and hears its own answer.
@@ -811,11 +818,6 @@ impl RasterHost {
             .iter()
             .find(|settlement| settlement.epoch == epoch)
             .map(|settlement| settlement.verdict);
-        if settled == Some(RasterVerdict::Presented) {
-            // A size refusal of this turn (a restore configured at the old
-            // size) did not stop the frame: the size it was drawn at is taken.
-            slot.refused_size = None;
-        }
         if turned == SlotTurn::Panicked {
             let verdict = match settled {
                 // The render itself panicked, which the executor settles as

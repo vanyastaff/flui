@@ -60,7 +60,25 @@ struct Window {
     id: WindowId,
     slot: Option<SlotId>,
     presented: u64,
+    /// The size the slot was last configured at.
+    size: Option<DeviceSize>,
     released: bool,
+}
+
+impl Device {
+    /// Whether the device can configure a surface at `size`.
+    fn fits(&self, size: DeviceSize) -> EngineResult<()> {
+        if self
+            .max_side
+            .is_some_and(|max| size.width > max || size.height > max)
+        {
+            return Err(EngineError::InvalidTargetSize {
+                width: size.width.unsigned_abs(),
+                height: size.height.unsigned_abs(),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl Shared {
@@ -214,12 +232,13 @@ impl SlotBackend for StandInBackend {
             id,
             slot: Some(slot),
             presented: 0,
+            size: None,
             released: false,
         });
         Ok(())
     }
 
-    fn resize(&mut self, _slot: SlotId, size: DeviceSize) -> EngineResult<()> {
+    fn resize(&mut self, slot: SlotId, size: DeviceSize) -> EngineResult<()> {
         let mut shared = self.shared.lock();
         if shared.device.panic_resizes > 0 {
             shared.device.panic_resizes -= 1;
@@ -227,26 +246,28 @@ impl SlotBackend for StandInBackend {
             // A fault the test asked for, not a broken invariant.
             std::panic::panic_any("injected panic in a stand-in resize");
         }
-        let max = shared.device.max_side;
-        drop(shared);
-        if max.is_some_and(|max| size.width > max || size.height > max) {
-            return Err(EngineError::InvalidTargetSize {
-                width: size.width.unsigned_abs(),
-                height: size.height.unsigned_abs(),
-            });
+        shared.device.fits(size)?;
+        if let Some(window) = shared.slot(slot) {
+            window.size = Some(size);
         }
         Ok(())
     }
 
     fn release(&mut self, _slot: SlotId) {}
 
-    fn restore(&mut self, _slot: SlotId, _surface: UnconfiguredSurface) -> EngineResult<()> {
-        let device = &mut self.shared.lock().device;
-        if device.refused_restores > 0 {
-            device.refused_restores -= 1;
+    /// Configured at the slot's size, as a GPU context's restore is: a size
+    /// past the device's limit keeps the surface, unconfigured.
+    fn restore(&mut self, slot: SlotId, _surface: UnconfiguredSurface) -> EngineResult<()> {
+        let shared = &mut *self.shared.lock();
+        if shared.device.refused_restores > 0 {
+            shared.device.refused_restores -= 1;
             return Err(EngineError::IncompatibleSurface);
         }
-        Ok(())
+        let size = shared.slot(slot).and_then(|window| window.size);
+        match size {
+            Some(size) => shared.device.fits(size),
+            None => Ok(()),
+        }
     }
 
     fn set_display_color(&mut self, _slot: SlotId, _color: DisplayColor) -> EngineResult<()> {
