@@ -130,7 +130,7 @@ impl PanZoomSequences {
         let Ok(id) = mint.next() else {
             // An exhausted binding refuses new sessions permanently; a
             // replaced Start's prior session still owes its retirements.
-            let retired = prior.map(|prior| prior.take_staged()).unwrap_or_default();
+            let retired = prior.map_or_default(|prior| prior.take_staged());
             return (PanZoomAdmission::Refused, retired);
         };
         let sequence = Rc::new(PanZoomSequence {

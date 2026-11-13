@@ -285,7 +285,7 @@ define_class!(
         #[unsafe(method(setMarkedText:selectedRange:))]
         fn set_marked_text(&self, marked: Option<&NSString>, selected: NSRange) {
             os_entry("FluiTextInputView setMarkedText:selectedRange:", (), AfterPanic::Answer(|()| ()), || {
-                let text = marked.map(NSString::to_string).unwrap_or_default();
+                let text = marked.map_or_default(NSString::to_string);
                 let end = selected.location.saturating_add(selected.length);
                 let selected = Utf16Range::try_new(Utf16Offset::new(selected.location), Utf16Offset::new(end))
                     .expect("BUG: a saturating end is never before its start");

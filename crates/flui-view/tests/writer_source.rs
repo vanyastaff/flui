@@ -9,8 +9,7 @@ use std::time::Duration;
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
-use flui_testing::HeadlessBinding;
-use flui_testing::bootstrap::{MountOptions, MountOwners};
+use flui_testing::widgets::{LaidOut, lay_out, tight};
 use flui_view::SignalError;
 use flui_view::prelude::*;
 
@@ -100,24 +99,18 @@ impl ViewState<Probe> for ProbeState {
     }
 }
 
-fn mount(write_in_build: bool) -> (HeadlessBinding, Rc<Seen>) {
+fn mount(write_in_build: bool) -> (LaidOut, Rc<Seen>) {
     let seen = Rc::new(Seen::default());
     let root = Probe {
         seen: Rc::clone(&seen),
         write_in_build,
     };
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(100.0, 100.0),
-    );
-    binding.pump_frame(FRAME);
-    (binding, seen)
+    let laid = lay_out(root, tight(100.0, 100.0));
+    (laid, seen)
 }
 
 pub(crate) fn writer_source_from_init_state_writes_and_rebuilds_the_reader() {
-    let (mut binding, seen) = mount(false);
+    let (mut laid, seen) = mount(false);
     assert_eq!(
         *seen.reads.borrow(),
         [0],
@@ -126,13 +119,13 @@ pub(crate) fn writer_source_from_init_state_writes_and_rebuilds_the_reader() {
     let (count, source) = seen.acquired.borrow().clone().expect("the probe built");
 
     assert_eq!(source.write(|ctx| count.set(ctx, 5)), Ok(()));
-    binding.pump_frame(FRAME);
+    laid.pump_for(FRAME);
 
     assert_eq!(
         *seen.reads.borrow(),
         [0, 5],
         "the write rebuilt the reader exactly once, and it read the new value"
     );
-    let report = binding.build_owner_mut().last_frame_build_report();
+    let report = laid.with_build_owner_mut(|owner| owner.last_frame_build_report());
     assert_eq!(report.count(RebuildReason::SignalChange), 1, "{report:?}");
 }

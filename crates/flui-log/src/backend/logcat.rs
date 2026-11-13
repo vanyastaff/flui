@@ -45,6 +45,10 @@ const FALLBACK_TAG: &str = "flui";
 /// `android_log_sys::LogPriority`'s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "one logcat priority per `tracing` level, and `tracing` has five"
+)]
 pub enum LogcatPriority {
     /// `TRACE` — logcat `V`.
     Verbose = 2,

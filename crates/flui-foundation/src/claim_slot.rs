@@ -363,6 +363,10 @@ impl<T> fmt::Debug for ClaimHandle<T> {
 /// diagram's terminal destinations; the fourth, `Abandoned`, is never
 /// reachable through this type (see the `Abandoned` note below).
 #[derive(Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each outcome is a different fact about the value a caller is owed, and a `_` arm would lose it"
+)]
 pub enum ClaimOutcome<T> {
     /// The owner delivered a value; this call/poll claims it.
     Delivered(T),

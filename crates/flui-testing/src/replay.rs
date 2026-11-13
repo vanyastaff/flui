@@ -64,6 +64,7 @@ use crate::HeadlessBinding;
 
 /// Which pointer phase a scripted event carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PointerPhase {
     /// A contact begins.
     Down,
@@ -250,6 +251,7 @@ pub struct ScriptedTrackpadAction {
 }
 
 /// Where a scripted trackpad pinch is.
+#[expect(clippy::exhaustive_enums, reason = "a pinch begins, updates and ends")]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PinchPhase {
     /// The pinch begins.

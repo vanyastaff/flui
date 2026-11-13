@@ -20,6 +20,7 @@ use flui_runtime::frame_failure::{FrameFailureDetail, FrameFailureHandlerFactory
 
 /// Default diagnostics policy for a managed application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DiagnosticsProfile {
     /// Developer-oriented diagnostics with framework debug events enabled.
     Development,

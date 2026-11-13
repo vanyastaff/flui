@@ -395,7 +395,7 @@ impl From<WindowAppearance> for crate::Brightness {
 /// and Liquid Glass on macOS) is reached through that system's extension
 /// (`flui::native::windows`, `flui::native::macos`).
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "every host maps every material: a new material is a change each host makes, not one it may skip"
 )]

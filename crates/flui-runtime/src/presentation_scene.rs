@@ -242,6 +242,19 @@ impl SceneSlot {
         Ok(scene.as_mut().ok_or(SceneLent)?.completed(rastered))
     }
 
+    /// Runs the destructors of what the scene's owner released, here with no
+    /// borrow held (an annotation's `Drop` is user code), and hands the owner
+    /// back what nobody else holds, for its next frames to write into
+    /// (ADR-0304 §7). While a frame holds the scene, what was kept is freed
+    /// instead.
+    pub(crate) fn restock(&self, released: ReleasedContents) {
+        let reclaimed = released.reclaim();
+        let mut scene = self.scene.borrow_mut();
+        if let Some(scene) = scene.as_mut() {
+            scene.owner.restock(reclaimed);
+        }
+    }
+
     /// Starts a new lineage now, or, while a frame holds the scene, when it
     /// returns: the renewal is owed, never dropped.
     #[cfg(feature = "hot-reload")]

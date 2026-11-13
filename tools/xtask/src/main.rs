@@ -86,7 +86,7 @@ enum Command {
     Ci(tasks::CiArgs),
     /// `ci` plus every heavy CI job this host can run.
     CiFull(tasks::CiFullArgs),
-    /// Check the dependency graph and the manifests (cargo-deny, cargo-shear).
+    /// Check the dependency graph (cargo-deny).
     Deps(tasks::DepsArgs),
     /// Clippy every feature on its own (cargo-hack).
     FeatureMatrix(tasks::FeatureMatrixArgs),

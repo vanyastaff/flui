@@ -87,10 +87,7 @@ impl Bidi {
         message.insert("params".into(), params);
         let mut answer = self.socket.request(message, deadline)?;
         if answer.get("type").and_then(Value::as_str) == Some("success") {
-            return Ok(answer
-                .get_mut("result")
-                .map(Value::take)
-                .unwrap_or_default());
+            return Ok(answer.get_mut("result").map_or_default(Value::take));
         }
         let error = answer
             .get("error")
@@ -103,10 +100,7 @@ impl Bidi {
     fn call_function(&mut self, params: Value) -> Result<Value, LinkError> {
         let mut evaluated = self.command("script.callFunction", params)?;
         if evaluated.get("type").and_then(Value::as_str) == Some("success") {
-            return Ok(evaluated
-                .get_mut("result")
-                .map(Value::take)
-                .unwrap_or_default());
+            return Ok(evaluated.get_mut("result").map_or_default(Value::take));
         }
         let text = evaluated
             .pointer("/exceptionDetails/text")

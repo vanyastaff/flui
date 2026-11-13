@@ -9,91 +9,94 @@
 
 use crate::common;
 
-use common::{lay_out, tight};
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use common::{lay_out, lay_out_animated, tight};
 use flui_material::{AppBar, Theme, ThemeData};
+use flui_sdk::animation::Vsync;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{Navigator, NavigatorHandle, SimpleRoute, Text};
+use flui_sdk::widgets::{PageHandle, Routable, Router, RouterHandle, Text};
 use flui_testing::a11y::Role;
 
-// ── Implied leading: a BackButton synthesized when the navigator can pop ──
+// ── Implied leading: a BackButton synthesized when the route can pop ──
 //
-// Mounted through a real `Navigator` (`flui_sdk::widgets::Navigator`/
-// `NavigatorHandle`), not a hand-built `BuildContext` — `resolve_leading`'s
-// navigator-consulting branches only run through `NavigatorHandle::maybe_of`,
-// which needs a live ancestor to find. `app_bar.rs`'s own unit tests cover
+// Mounted through a real `Router`, not a hand-built `BuildContext`:
+// `resolve_leading` asks the `PageHandle` of the route the app bar is on,
+// which only a mounted route provides. `app_bar.rs`'s own unit tests cover
 // the ctx-independent short-circuits (explicit `leading`,
-// `automatically_imply_leading: false`); these three prove the wiring this
-// module's docs describe end to end: no leading with one route on the
-// stack, a leading once a second route makes the stack poppable, and a tap
-// on that leading actually pops.
+// `automatically_imply_leading: false`); this one proves the wiring end to
+// end: the bottom page's app bar implies no leading even while a page above
+// it can pop, the top page's does, and a tap on it pops that page.
 
-fn home_route() -> SimpleRoute<()> {
-    SimpleRoute::new(|_ctx| {
-        MediaQuery::new(
-            MediaQueryData::default(),
-            Theme::new(ThemeData::light(), AppBar::new().title(Text::new("Home"))),
-        )
-        .boxed()
-    })
+#[derive(Routable, Clone, Debug, PartialEq)]
+enum Screen {
+    #[route("/")]
+    Home,
+    #[route("/details")]
+    Details,
 }
 
-fn details_route() -> SimpleRoute<()> {
-    SimpleRoute::new(|_ctx| {
-        MediaQuery::new(
-            MediaQueryData::default(),
-            Theme::new(
-                ThemeData::light(),
-                AppBar::new().title(Text::new("Details")),
-            ),
-        )
-        .boxed()
-    })
-}
-
-/// A leading `IconButton`'s own `Material` (`RenderPhysicalShape`) among
-/// every such node in the tree — one sized exactly 40×40 (its
-/// `_IconButtonDefaultsM3.minimumSize`, see `icon_button.rs`), distinct from
-/// an `AppBar`'s own full-size `Material`. More than one may match: this
-/// `Navigator` keeps a covered route mounted, and every mounted `AppBar` sees
-/// the same navigator-global `can_pop()` (see `app_bar.rs`'s "Implied
-/// leading" module docs), so two routes yield two leading buttons — any one
-/// of them taps the same underlying `NavigatorHandle`, so the first is as
-/// good as any.
-/// Panics with a diagnostic size list if none match at all.
-fn find_leading_icon_button_material(laid: &common::LaidOut) -> flui_sdk::foundation::RenderId {
-    let candidates = laid.find_all_by_render_type("RenderPhysicalShape");
+/// A leading `IconButton`'s own `Material` (`RenderPhysicalShape`): sized
+/// exactly 40×40 (its `_IconButtonDefaultsM3.minimumSize`, see
+/// `icon_button.rs`), distinct from an `AppBar`'s own full-size `Material`;
+/// an offstage covered page has no layout, so it contributes none.
+fn leading_icon_button_materials(laid: &common::LaidOut) -> Vec<flui_sdk::foundation::RenderId> {
     let leading_size = common::size(40.0, 40.0);
-    candidates
-        .iter()
-        .copied()
-        .find(|&id| laid.size(id) == leading_size)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected at least one 40x40 RenderPhysicalShape (a leading IconButton's Material) \
-                 among {} candidates: sizes = {:?}",
-                candidates.len(),
-                candidates
-                    .iter()
-                    .map(|&id| laid.size(id))
-                    .collect::<Vec<_>>(),
-            )
-        })
+    laid.find_all_by_render_type("RenderPhysicalShape")
+        .into_iter()
+        .filter(|&id| laid.try_size(id) == Some(leading_size))
+        .collect()
 }
 
 pub fn tapping_the_implied_back_button_pops_the_route() {
-    let handle = NavigatorHandle::new();
-    handle.seed_initial(home_route());
-    let _details = handle.push(details_route());
-    assert!(handle.can_pop());
+    let router: Rc<RefCell<Option<RouterHandle<Screen>>>> = Rc::default();
+    let home: Rc<RefCell<Option<PageHandle>>> = Rc::default();
+    let pages = {
+        let (router, home) = (Rc::clone(&router), Rc::clone(&home));
+        move |screen: &Screen, ctx: &dyn BuildContext| {
+            let title = match screen {
+                Screen::Home => {
+                    *router.borrow_mut() = Router::<Screen>::of(ctx).ok();
+                    *home.borrow_mut() = PageHandle::of(ctx);
+                    "Home"
+                }
+                Screen::Details => "Details",
+            };
+            MediaQuery::new(
+                MediaQueryData::default(),
+                Theme::new(ThemeData::light(), AppBar::new().title(Text::new(title))),
+            )
+            .boxed()
+        }
+    };
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Router::from_stack(vec![Screen::Home, Screen::Details], pages)
+                .expect("a non-empty stack"),
+        ),
+        tight(400.0, 800.0),
+        vsync,
+    );
+    for _ in 0..10 {
+        laid.pump_for(Duration::from_millis(50));
+    }
+    let router = router.borrow().clone().expect("the home page built");
+    let home = home.borrow().clone().expect("the home page is on a route");
+    assert!(!home.can_pop(), "nothing is below the bottom page");
 
-    let laid = lay_out(Navigator::new(handle.clone()), tight(400.0, 800.0));
-
-    // Both mounted routes' leadings sit at the same geometry (see
-    // `find_leading_icon_button_material`) — which one the tap lands on doesn't
-    // matter: either fires `NavigatorHandle::maybe_pop()` against the SAME
-    // `handle`, so either one popping is the behavior under test.
-    let leading = find_leading_icon_button_material(&laid);
+    let leadings = leading_icon_button_materials(&laid);
+    assert_eq!(
+        leadings.len(),
+        1,
+        "the top page's app bar implies one back button"
+    );
+    let leading = leadings[0];
     let leading_size = laid.size(leading);
     let leading_origin = laid.absolute_offset(leading);
     let tap_x = leading_origin.dx + leading_size.width / 2.0;
@@ -101,11 +104,19 @@ pub fn tapping_the_implied_back_button_pops_the_route() {
 
     laid.dispatch_pointer_down(tap_x, tap_y);
     laid.dispatch_pointer_up(tap_x, tap_y);
+    for _ in 0..10 {
+        laid.pump_for(Duration::from_millis(50));
+    }
 
+    assert_eq!(
+        router.stack(),
+        vec![Screen::Home],
+        "tapping the implied back button pops the page it is on through PageHandle::maybe_pop",
+    );
+    assert!(home.is_current());
     assert!(
-        !handle.can_pop(),
-        "tapping the implied back button must pop the pushed route via NavigatorHandle::maybe_pop, \
-         leaving only the seeded initial route on the stack",
+        leading_icon_button_materials(&laid).is_empty(),
+        "the home page alone implies no back button"
     );
 }
 

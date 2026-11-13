@@ -238,7 +238,7 @@ impl SemanticsConfiguration {
         for handler in actions.into_values() {
             recovery.retire(handler);
         }
-        for (_, handler) in rare.map(|rare| rare.custom_handlers).unwrap_or_default() {
+        for (_, handler) in rare.map_or_default(|rare| rare.custom_handlers) {
             recovery.retire(handler);
         }
         for handler in assistive_focus_handlers {

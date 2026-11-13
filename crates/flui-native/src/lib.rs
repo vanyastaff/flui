@@ -162,6 +162,10 @@
 //! delivered before the open returns, then as changes in order with the input
 //! around them.
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0329: this crate's public enums are not decided yet (docs/gaps.md)"
+)]
 #![cfg_attr(
     test,
     allow(

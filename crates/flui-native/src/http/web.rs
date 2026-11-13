@@ -334,7 +334,7 @@ fn failure(reason: JsValue) -> Rejection {
             Some(detail) => HttpError::Connect {
                 detail: detail.to_owned(),
             },
-            None => protocol(reason.strip_prefix("protocol:").unwrap_or(&reason)),
+            None => protocol(reason.trim_prefix("protocol:")),
         },
     })
 }

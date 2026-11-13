@@ -1484,7 +1484,8 @@ mod terminal_tests {
         );
         let from = HeroHandle::test_handle(&hero);
         let to = HeroHandle::test_handle(&hero);
-        let signal = NavigatorHandle::new().user_gesture_signal();
+        let signal =
+            NavigatorHandle::new(flui_foundation::BuildPhase::default()).user_gesture_signal();
         let inner = FlightInner {
             identity: HeroFlightIdentity::default(),
             seat: RefCell::new(None),
@@ -1560,7 +1561,9 @@ mod terminal_tests {
             rect_factory: Terminal::new(None),
             shuttle_builder: Terminal::new(None),
             is_user_gesture_transition: false,
-            gesture_signal: Terminal::new(NavigatorHandle::new().user_gesture_signal()),
+            gesture_signal: Terminal::new(
+                NavigatorHandle::new(flui_foundation::BuildPhase::default()).user_gesture_signal(),
+            ),
         };
         let manager = Rc::new(FlightManager::default());
         let exhausted = std::sync::atomic::AtomicU64::new(0);
@@ -1714,7 +1717,10 @@ mod terminal_tests {
                     rect_factory: Terminal::new(None),
                     shuttle_builder: Terminal::new(None),
                     is_user_gesture_transition: false,
-                    gesture_signal: Terminal::new(NavigatorHandle::new().user_gesture_signal()),
+                    gesture_signal: Terminal::new(
+                        NavigatorHandle::new(flui_foundation::BuildPhase::default())
+                            .user_gesture_signal(),
+                    ),
                 };
                 let mut recovery = flui_foundation::panic::PanicRecovery::new();
                 recovery.run_with(|recovery| {
@@ -1849,7 +1855,10 @@ mod terminal_tests {
                     rect_factory: Terminal::new(None),
                     shuttle_builder: Terminal::new(None),
                     is_user_gesture_transition: false,
-                    gesture_signal: Terminal::new(NavigatorHandle::new().user_gesture_signal()),
+                    gesture_signal: Terminal::new(
+                        NavigatorHandle::new(flui_foundation::BuildPhase::default())
+                            .user_gesture_signal(),
+                    ),
                 };
                 let mut recovery = flui_foundation::panic::PanicRecovery::new();
                 recovery.run_with(|recovery| {

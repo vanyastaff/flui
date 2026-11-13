@@ -47,3 +47,12 @@ xtask = "run --package xtask --locked --quiet --"
 # `Cargo.toml` (on for local development) and by `CARGO_INCREMENTAL=0` in CI. An
 # `[env]` entry here would not reach it: `[env]` feeds the processes Cargo runs,
 # not Cargo's own profile resolution.
+
+# The resolver passes over a crates.io version until it is 7 days old, the same
+# cooldown dependabot keeps (`.github/dependabot.yml`): a compromised or broken
+# release is usually yanked within that window. It changes resolution only
+# (`cargo update`, `cargo add`, a new dependency); a `--locked` build reads
+# `Cargo.lock` as it is. `cargo update` names the newer version it held back;
+# `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow` takes it for an urgent fix.
+[registry]
+global-min-publish-age = "7 days"

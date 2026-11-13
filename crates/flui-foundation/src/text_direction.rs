@@ -6,6 +6,10 @@
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(flui_foundation::inspect::Inspect)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "text runs left to right or right to left"
+)]
 pub enum TextDirection {
     /// Left-to-right text direction.
     #[default]

@@ -5,6 +5,7 @@ use flui_rendering::constraints::AxisDirection;
 /// The direction in which boxes flow vertically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, flui_foundation::inspect::Inspect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[expect(clippy::exhaustive_enums, reason = "boxes flow down or up")]
 pub enum VerticalDirection {
     /// Boxes flow from top to bottom.
     #[default]

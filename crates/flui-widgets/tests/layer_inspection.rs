@@ -7,7 +7,7 @@
 //! this constantly (`tester.layers`, and the `getLayers()` container-chain walk
 //! `fitted_box_test.dart` defines locally).
 //!
-//! The pipeline always produced the tree — `HeadlessBinding::pump_frame` simply
+//! The pipeline always produced the tree — the headless frame driver once simply
 //! dropped it on the floor, because headlessly there is no compositor to hand it
 //! to. These tests pin that it is kept and reachable.
 

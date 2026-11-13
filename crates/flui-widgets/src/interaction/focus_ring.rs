@@ -8,6 +8,7 @@
 //! is not marked, so a click does not leave a ring behind it.
 
 use std::fmt;
+use std::rc::Rc;
 
 use flui_painting::styling::BoxDecoration;
 use flui_view::impl_inherited_view;
@@ -97,7 +98,9 @@ impl StatelessView for FocusRing {
 /// same ring style — what a design system's theme installs.
 #[derive(Clone)]
 pub struct DefaultFocusRingStyle {
-    style: FocusRingStyle,
+    /// Shared with every control below that draws a ring, so each holds a
+    /// pointer to the style instead of a copy.
+    style: Rc<FocusRingStyle>,
     child: BoxedView,
 }
 
@@ -106,7 +109,7 @@ impl DefaultFocusRingStyle {
     #[must_use]
     pub fn new(style: FocusRingStyle, child: impl IntoView) -> Self {
         Self {
-            style,
+            style: Rc::new(style),
             child: child.into_view().boxed(),
         }
     }
@@ -116,8 +119,14 @@ impl DefaultFocusRingStyle {
     /// rebuilds when the provided style changes.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> FocusRingStyle {
-        ctx.depend_on::<Self, _>(|provider| provider.style)
-            .unwrap_or_default()
+        Self::shared(ctx).map_or(FocusRingStyle::BUILT_IN, |style| *style)
+    }
+
+    /// The nearest provided style, shared with its provider; `None` under
+    /// no provider, where a ring uses [`FocusRingStyle::BUILT_IN`].
+    /// Registers the dependency [`of`](Self::of) does.
+    pub(crate) fn shared(ctx: &dyn BuildContext) -> Option<Rc<FocusRingStyle>> {
+        ctx.depend_on::<Self, _>(|provider| Rc::clone(&provider.style))
     }
 }
 

@@ -1,12 +1,7 @@
-//! `HeadlessBinding::pump_frame` runs the shared async-driver step, and a
-//! UI runtime owns the tasks its widgets spawn.
-//!
-//! `flui-app` carries the mirror-image test for `UiRuntime::draw_frame`. Both
-//! poll the UI runtime's owner-local tasks in the frame's mid-frame slot; if either
-//! stopped, exactly one of the two would fail — which is the
-//! headless↔production divergence this pair exists to catch.
+//! A UI runtime polls the tasks its widgets spawn on the owner thread, in the
+//! frame, and owns them: its teardown retires them.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -15,77 +10,9 @@ use std::task::{Poll, Waker};
 use std::time::Duration;
 
 use flui_scheduler::{AsyncDriver, TaskToken};
-use flui_testing::HeadlessBinding;
 use flui_testing::widgets::{LaidOut, lay_out, loose};
 use flui_view::prelude::*;
 use parking_lot::Mutex;
-
-/// A future the test can complete from outside, exposing its waker.
-struct Signal {
-    done: Arc<AtomicBool>,
-    waker: Arc<Mutex<Option<Waker>>>,
-    polls: Arc<AtomicUsize>,
-}
-
-impl std::future::Future for Signal {
-    type Output = ();
-
-    fn poll(self: std::pin::Pin<&mut Self>, ctx: &mut std::task::Context<'_>) -> Poll<()> {
-        self.polls.fetch_add(1, Ordering::Relaxed);
-        if self.done.load(Ordering::Acquire) {
-            Poll::Ready(())
-        } else {
-            let _prev = self.waker.lock().replace(ctx.waker().clone());
-            Poll::Pending
-        }
-    }
-}
-
-/// A wake from a worker thread is picked up by the next frame, on the frame
-/// thread.
-pub(crate) fn headless_wake_from_another_thread_is_polled_on_the_frame_thread() {
-    let mut binding = HeadlessBinding::new();
-    let done = Arc::new(AtomicBool::new(false));
-    let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
-    let polls = Arc::new(AtomicUsize::new(0));
-    let polled_on = Arc::new(Mutex::new(Vec::new()));
-    let polled_on_for_task = Arc::clone(&polled_on);
-
-    let signal = Signal {
-        done: Arc::clone(&done),
-        waker: Arc::clone(&waker),
-        polls: Arc::clone(&polls),
-    };
-    let _token = binding.spawn_local(Box::pin(async move {
-        polled_on_for_task.lock().push(std::thread::current().id());
-        signal.await;
-    }));
-
-    binding.pump_frame(Duration::from_millis(16));
-    let waker = waker.lock().clone().expect("waker stored");
-    done.store(true, Ordering::Release);
-
-    let worker_id = std::thread::spawn(move || {
-        waker.wake_by_ref();
-        std::thread::current().id()
-    })
-    .join()
-    .expect("worker");
-
-    assert_eq!(polls.load(Ordering::Relaxed), 1, "no poll off-thread");
-
-    binding.pump_frame(Duration::from_millis(16));
-    assert_eq!(polls.load(Ordering::Relaxed), 2);
-
-    let main_id = std::thread::current().id();
-    let threads = polled_on.lock().clone();
-    assert!(threads.iter().all(|id| *id == main_id));
-    assert_ne!(worker_id, main_id);
-}
-
-// ---------------------------------------------------------------------------
-// Owner-local tasks: the ui_runtime owns them, widget handles only reach them
-// ---------------------------------------------------------------------------
 
 /// An owner-thread value whose destructor records the thread it ran on.
 struct Capture {
@@ -99,17 +26,20 @@ impl Drop for Capture {
 }
 
 /// A future a worker thread completes: `Pending` until `done`, keeping the
-/// last waker it was handed where the worker can reach it.
+/// last waker it was handed where the worker can reach it, and counting its
+/// polls.
 #[derive(Clone, Default)]
 struct WorkerGate {
     done: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<Waker>>>,
+    polls: Arc<AtomicUsize>,
 }
 
 impl WorkerGate {
     fn wait(&self) -> impl std::future::Future<Output = ()> + use<> {
         let gate = self.clone();
         std::future::poll_fn(move |ctx| {
+            gate.polls.fetch_add(1, Ordering::Relaxed);
             if gate.done.load(Ordering::Acquire) {
                 Poll::Ready(())
             } else {
@@ -134,27 +64,32 @@ impl WorkerGate {
     }
 }
 
-/// A future holding `Rc` state runs on the binding's driver, and a worker
-/// thread's wake completes it on the next frame.
+/// A future holding `Rc` state runs on the UI runtime's driver, and a worker
+/// thread's wake is polled by the next frame, on the owner thread, never on
+/// the worker.
 pub(crate) fn owner_local_future_completes_after_a_worker_wake() {
-    let mut binding = HeadlessBinding::new();
-    let gate = WorkerGate::default();
-    let completed = Rc::new(Cell::new(false));
-    let seen = Rc::clone(&completed);
-    let wait = gate.wait();
-    let _token = binding.spawn_local(Box::pin(async move {
-        wait.await;
-        seen.set(true);
-    }));
+    let (mut laid, view) = mount_task_owner(false);
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        view.gate.polls.load(Ordering::Relaxed),
+        1,
+        "polled once, then parked"
+    );
 
-    binding.pump_frame(Duration::from_millis(16));
-    assert!(!completed.get(), "the gate is still closed");
+    view.gate.complete_from_a_worker();
+    assert_eq!(
+        view.gate.polls.load(Ordering::Relaxed),
+        1,
+        "the worker's wake polls nothing off the owner thread"
+    );
+    assert!(view.drops.borrow().is_empty(), "the task is still pending");
 
-    gate.complete_from_a_worker();
-    binding.pump_frame(Duration::from_millis(16));
-    assert!(
-        completed.get(),
-        "the worker's wake is polled by the next frame, on the owner thread"
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(view.gate.polls.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        *view.drops.borrow(),
+        [std::thread::current().id()],
+        "the next frame completes the task on the owner thread"
     );
 }
 

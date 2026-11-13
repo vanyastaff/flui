@@ -6,7 +6,7 @@
 /// (platform OS preference) and `ThemeData` (app-level override).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[allow(
+#[expect(
     clippy::exhaustive_enums,
     reason = "a theme is light or dark; contrast and vibrancy are other settings"
 )]

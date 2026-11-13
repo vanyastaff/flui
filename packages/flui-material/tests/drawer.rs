@@ -1,12 +1,12 @@
 //! Mounted drawer behavior through public handles, pointer input and painting.
 //!
 //! [`themed_animated`] provides the same [`Vsync`] to the widget's ambient
-//! registry scope and the binding driven by [`common::lay_out_animated`].
+//! registry scope and the UI runtime driven by [`common::lay_out_animated`].
 //! This exercises actual settling, retained panel and scrim geometry,
 //! interruption, gesture recovery and registration release. [`themed`] is
 //! used for cases that need synchronous behavior without a bound clock.
 //!
-//! Pointer moves and cancellation use the binding's captured Down route.
+//! Pointer moves and cancellation use the runtime's captured Down route.
 //! Cancellation coverage below uses the ordinary edge width.
 
 use crate::common;
@@ -361,9 +361,9 @@ fn drawer_scene_sample(
 pub fn drawer_slides_without_rebuilding_per_frame() {
     use flui_sdk::geometry::Offset;
     use flui_sdk::painting::Color;
-    use flui_sdk::view::environment::{FocusTreeRoot, GestureArenaScope};
+
     use flui_sdk::widgets::{ColoredBox, app_root};
-    use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
+    use flui_testing::PointerScript;
 
     for (end, settling_frames, panel_tap, both) in [
         (false, 0, false, false),
@@ -374,7 +374,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
         (true, 8, true, false),
         (true, 8, true, true),
     ] {
-        let mut binding = HeadlessBinding::new();
+        let vsync = Vsync::new();
         let taps = Rc::new(std::cell::Cell::new(0));
         let tapped = Rc::clone(&taps);
         let marker = Color::rgb(17, 83, 149);
@@ -392,16 +392,15 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             Scaffold::new().drawer(drawer)
         }
         .drawer_scrim_color(scrim);
-        let root = GestureArenaScope::new(
-            binding.arena().clone(),
-            FocusTreeRoot::new(app_root(themed_animated(scaffold, binding.vsync()))),
+        let mut laid = lay_out_animated(
+            app_root(themed_animated(scaffold, &vsync)),
+            tight(400.0, 400.0),
+            vsync.clone(),
         );
-        let _ = binding.mount_root(
-            &root,
-            MountOwners::fresh(),
-            MountOptions::tight(400.0, 400.0),
-        );
-        binding.pump_frame(FRAME);
+        laid.pump_for(FRAME);
+        let built = |laid: &mut common::LaidOut| {
+            laid.with_build_owner_mut(|owner| owner.last_frame_build_report())
+        };
         let start = if end { 395.0 } else { 5.0 };
         let finish = start + if end { -80.0 } else { 80.0 };
         let drag = PointerScript::drag(
@@ -412,32 +411,29 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
         );
         let mut previous_at = Duration::ZERO;
         for (index, event) in drag.pointer_events().iter().enumerate() {
-            binding.pump_frame(event.at.saturating_sub(previous_at));
+            laid.pump_for(event.at.saturating_sub(previous_at));
             previous_at = event.at;
             // The early moves win the gesture arena and mount the panel.
             // Later moves update render geometry even across the open-state
             // threshold. Two slots additionally need one ordering update.
-            let before = (4..=5).contains(&index).then(|| {
-                drawer_scene_sample(binding.layer_tree().expect("dragging panel"), marker).0
-            });
-            binding.dispatch_pointer(&event.to_event(), |position| {
-                binding.hit_test(position, event.device)
-            });
+            let before = (4..=5)
+                .contains(&index)
+                .then(|| drawer_scene_sample(laid.layer_tree().expect("dragging panel"), marker).0);
+            laid.dispatch_pointer_event(&event.to_event());
             if let Some(before) = before {
-                binding.pump_frame(Duration::ZERO);
+                laid.pump_for(Duration::ZERO);
                 if !(both && index == 5) {
+                    let report = built(&mut laid);
                     assert_eq!(
-                        binding.last_frame_report().build.elements_built,
-                        0,
-                        "end {end}, move {index}, prior panel x {before}: an interior pointer move must not rebuild the drawer: {:?}",
-                        binding.last_frame_report().build
+                        report.elements_built, 0,
+                        "end {end}, move {index}, prior panel x {before}: an interior pointer move must not rebuild the drawer: {report:?}"
                     );
                 }
                 assert!(
-                    !binding.vsync().has_running(),
+                    !vsync.has_running(),
                     "drag geometry is observed before a settling run starts"
                 );
-                let scene = binding.layer_tree().expect("committed dragging panel");
+                let scene = laid.layer_tree().expect("committed dragging panel");
                 let x = drawer_scene_sample(scene, marker).0;
                 let directed_travel = (x - before) * if end { -1.0 } else { 1.0 };
                 assert!(
@@ -457,23 +453,21 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             }
         }
         assert!(
-            binding.vsync().has_running(),
+            vsync.has_running(),
             "the release must start a settling animation"
         );
         // Consume the status change that mounts the panel before measuring
-        // running frames. pump_frame never dirties the logical root itself.
-        binding.pump_frame(FRAME);
-        let mut previous =
-            drawer_scene_sample(binding.layer_tree().expect("mounted panel"), marker).0;
+        // running frames. a frame never dirties the logical root itself.
+        laid.pump_for(FRAME);
+        let mut previous = drawer_scene_sample(laid.layer_tree().expect("mounted panel"), marker).0;
         for _ in 0..settling_frames {
-            binding.pump_frame(FRAME);
-            let report = binding.last_frame_report();
+            laid.pump_for(FRAME);
+            let report = built(&mut laid);
             assert_eq!(
-                report.build.elements_built, 0,
-                "end {end}: running drawer rebuilt: {:?}",
-                report.build
+                report.elements_built, 0,
+                "end {end}: running drawer rebuilt: {report:?}"
             );
-            let scene = binding.layer_tree().expect("committed drawer scene");
+            let scene = laid.layer_tree().expect("committed drawer scene");
             let x = drawer_scene_sample(scene, marker).0;
             assert!(
                 (x - previous) * if end { -1.0 } else { 1.0 } > 0.0,
@@ -503,13 +497,13 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             );
         }
         if panel_tap {
-            binding.replay(&PointerScript::tap(Offset::new(
+            laid.replay(&PointerScript::tap(Offset::new(
                 if end { 380.0 } else { 20.0 },
                 200.0,
             )));
             assert_eq!(taps.get(), 1, "the visible panel receives its tap");
         }
-        binding.replay(&PointerScript::tap(Offset::new(
+        laid.replay(&PointerScript::tap(Offset::new(
             if both {
                 5.0
             } else if end {
@@ -519,18 +513,16 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             },
             200.0,
         )));
-        binding.pump_frame(FRAME);
-        let before_close =
-            drawer_scene_sample(binding.layer_tree().expect("closing panel"), marker).0;
-        binding.pump_frame(FRAME);
-        let after_close =
-            drawer_scene_sample(binding.layer_tree().expect("closing panel"), marker).0;
+        laid.pump_for(FRAME);
+        let before_close = drawer_scene_sample(laid.layer_tree().expect("closing panel"), marker).0;
+        laid.pump_for(FRAME);
+        let after_close = drawer_scene_sample(laid.layer_tree().expect("closing panel"), marker).0;
         assert!(
             (after_close - before_close) * if end { 1.0 } else { -1.0 } > 0.0,
             "scrim tap closes the panel"
         );
         assert_eq!(
-            binding.last_frame_report().build.elements_built,
+            built(&mut laid).elements_built,
             0,
             "closing value ticks do not rebuild"
         );

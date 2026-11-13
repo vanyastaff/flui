@@ -1851,8 +1851,7 @@ impl OrphanMarker {
         let following = scopes
             .first()
             .and_then(Weak::upgrade)
-            .map(|scope| following_candidates(scope.as_focus_node(), removed))
-            .unwrap_or_default();
+            .map_or_default(|scope| following_candidates(scope.as_focus_node(), removed));
         Self {
             scopes,
             unit,
