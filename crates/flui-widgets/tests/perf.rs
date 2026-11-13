@@ -327,21 +327,19 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     host.attach(&app).expect("a fresh host takes a root");
     host.enable_semantics();
     let visible_rows = ((HEIGHT - LABEL_HEIGHT) / ROW_HEIGHT) as u64;
-    // Two frames a screen: a lazy band lands a frame after the paint that
-    // first shows it. The third frame must cost what the fourth, idle one
-    // does and build no row, so no work of the scroll slips past the two it
-    // measures.
+    // One frame a screen: the runtime's frame transaction lands the lazy band
+    // in the frame that shows it. The frame after must cost what a later, idle
+    // one does and build no row, so no work of the scroll slips past the frame
+    // it measures.
     let rows_built = || ROWS_BUILT.with(std::cell::Cell::get);
     let mut scroll_to = |screen: u32| {
         writer.set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
         let before = rows_built();
         let ((), heap) = perf_measured(|| {
-            for _ in 0..2 {
-                let _ = host.pump(FRAME);
-            }
+            let _ = host.pump(FRAME);
         });
         let built = rows_built() - before;
-        let ((), third) = perf_measured(|| {
+        let ((), after) = perf_measured(|| {
             let _ = host.pump(FRAME);
         });
         let ((), idle) = perf_measured(|| {
@@ -349,10 +347,10 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
         });
         assert!(
             rows_built() - before == built
-                && third.allocations == idle.allocations
-                && third.allocated_bytes == idle.allocated_bytes,
-            "screen {screen}'s scroll did work after the two frames it measures: \
-             the third frame asked {third:?} of the heap against an idle {idle:?}"
+                && after.allocations == idle.allocations
+                && after.allocated_bytes == idle.allocated_bytes,
+            "screen {screen}'s scroll did work after the frame it measures: \
+             the next frame asked {after:?} of the heap against an idle {idle:?}"
         );
         (heap, built)
     };
