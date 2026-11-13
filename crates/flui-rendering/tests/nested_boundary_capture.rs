@@ -49,7 +49,7 @@ fn leaf() -> TreeNode {
 /// for the kinds the scenarios use.
 fn describe(layer: &Layer) -> String {
     match layer {
-        Layer::Picture(picture) => format!("Picture:{}", picture.picture().commands().len()),
+        Layer::Picture(picture) => format!("Picture:{}", picture.picture().len()),
         Layer::Offset(_) | Layer::Opacity(_) | Layer::Leader(_) => format!("{layer:?}"),
         other => other.kind_name().to_owned(),
     }

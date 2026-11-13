@@ -2843,7 +2843,6 @@ pub(crate) mod text_store {
             };
             if !picture
                 .picture()
-                .commands()
                 .iter()
                 .any(|command| matches!(command.op, DrawOp::Paragraph { .. }))
             {
@@ -3250,11 +3249,17 @@ fn painted_rect_colors(laid: &crate::common::LaidOut) -> Vec<flui_painting::styl
     let tree = laid.layer_tree().expect("a painted frame");
     tree.iter()
         .filter_map(|(_, node)| match node.layer() {
-            Layer::Picture(picture) => Some(picture.picture().commands().to_vec()),
+            Layer::Picture(picture) => Some(
+                picture
+                    .picture()
+                    .iter()
+                    .map(|command| command.op.clone())
+                    .collect::<Vec<_>>(),
+            ),
             _ => None,
         })
         .flatten()
-        .filter_map(|command| match command.op {
+        .filter_map(|op| match op {
             DrawOp::Rect { paint, .. } => Some(paint.color),
             _ => None,
         })

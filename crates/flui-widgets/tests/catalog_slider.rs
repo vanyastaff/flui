@@ -33,13 +33,7 @@ fn ops(laid: &LaidOut) -> Vec<DrawOp> {
     let mut ops = Vec::new();
     for (_, node) in laid.layer_tree().expect("mounted frame painted").iter() {
         if let Layer::Picture(picture) = node.layer() {
-            ops.extend(
-                picture
-                    .picture()
-                    .commands()
-                    .iter()
-                    .map(|command| command.op.clone()),
-            );
+            ops.extend(picture.picture().iter().map(|command| command.op.clone()));
         }
     }
     ops
