@@ -14,13 +14,12 @@
 use flui_animation::{Animation, AnimationStatus};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, SimpleRoute};
 use flui_widgets::__test_access::{
     NavigatorProbe as _, OverlayEntryProbe as _, RouteProbe as _, TransitionHandle,
 };
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, PageRoute, RouteAnimation, RouteId, SimpleRoute,
-};
+use flui_widgets::navigator::{PageRoute, RouteAnimation, RouteId};
 
 use crate::common::harness::{Harness, mount};
 

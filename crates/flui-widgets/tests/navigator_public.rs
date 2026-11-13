@@ -24,8 +24,9 @@ use flui_widgets::RouteParseError;
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path.
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorRoute, SimpleRoute};
 use flui_widgets::prelude::*;
-use flui_widgets::{NavigatorRoute, Route, RouteContentBuilder, RouteSettings};
+use flui_widgets::{Route, RouteContentBuilder, RouteSettings};
 
 /// A prefix parser failure in the public default producer destroys the routes
 /// it already accepted (ADR-0281), the parser's failure is the one raised, and

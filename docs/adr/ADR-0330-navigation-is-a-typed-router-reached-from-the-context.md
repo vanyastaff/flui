@@ -328,8 +328,8 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   `RouteResult` that it is not `Send`.
 - §4: `widgets_app_router_navigates_by_handle_and_the_url_follows` and
   `switching_widgets_app_from_home_to_router_releases_the_navigator`
-  (`crates/flui-widgets/tests/widgets_app_router.rs`), the compile-fail case
-  `router_app_takes_no_navigator`; Material's `page_transitions` suite and `OpenContainer`'s
+  (`crates/flui-widgets/tests/widgets_app_router.rs`) and `home_is_seeded_once_as_the_root_route`
+  (`crates/flui-widgets/tests/widgets_app.rs`); Material's `page_transitions` suite and `OpenContainer`'s
   `it_opens_under_a_router` run on `MaterialApp::router`; `api/flui.txt` (ADR-0324) lists no
   `Navigator`, `NavigatorHandle` or
   named-route item, and `cargo xtask send-positions` holds the navigator's rows at zero.

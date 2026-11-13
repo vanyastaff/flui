@@ -2527,30 +2527,28 @@ tap half, the painter's `a_combining_mark_is_one_hit_target` and
 `a_zwj_family_is_one_hit_target` rows of flui-painting's `caret_contract`;
 for the arrow keys, `the_editor_steps_the_graphemes_the_painter_snaps_to`.
 
-### 36. `WidgetsApp::router`: a bare Router as the routing subtree, and a form without navigator builders
+### 36. `WidgetsApp`: one page or a bare Router as the routing subtree
 
 **Choice:** `WidgetsApp::router(Router<R>)` keeps the Router as a
 `BoxedView` and mounts it bare, under the same `builder`, `DefaultTextStyle`
 and `Localizations` bands; each of its pages has its route's focus scope. The
 app has no navigator of its own: the Router's is its root navigator, and its
 facade refuses a stray page pushed through `NavigatorHandle::maybe_of_root`.
-A rebuilt app updates the boxed Router in place (same view type), so the
-stack and page state survive. The routing form is a type
-parameter, not a run-time assertion. `router` returns a
-`WidgetsApp<RouterForm>` and `new`/`with_builder` a
-`WidgetsApp<NavigatorForm>` (the default, so `WidgetsApp` alone still names
-it); only the navigator form has `navigator` and `observer`, so the
-configuration of a router app with a navigator key or observers does not compile. The two forms are two
-view types, so switching one to the other remounts the shell, and the
-navigator form's `dispose` releases its navigator and observers. Owning the
-presentation's URL waits for the URL owner of ADR-0330 §5 (`RouterScope`). **Tests:**
+`WidgetsApp::new(home)` makes a navigator holding the one home page, a
+`PageRoute` with its `PageScope`, on which popups open. No shell takes a
+navigator handle or observers (ADR-0330 §4), so there is no configuration
+that one form would ignore and no form type parameter. The shell is one view
+type: a rebuilt app updates the boxed Router in place, so the stack and page
+state survive, and an update between the home and router forms lets go of
+the home page's navigator or makes a fresh one. Owning the presentation's URL
+waits for the URL owner of ADR-0330 §5 (`RouterScope`). **Tests:**
 `tests/widgets_app_router.rs`
 (`switching_widgets_app_from_home_to_router_releases_the_navigator`,
-`widgets_app_router_navigates_by_handle_and_the_url_follows`);
-`tests/routable_ui/fail/router_app_takes_no_navigator.rs`. The Router's
-navigator as the app's root navigator, refusing a stray page; no focus scope
-above the Router; and a rebuilt app keeping its stack: **Unasserted:** no test
-pins this.
+`widgets_app_router_navigates_by_handle_and_the_url_follows`) and
+`tests/widgets_app.rs` (`home_is_seeded_once_as_the_root_route`). The
+Router's navigator as the app's root navigator, refusing a stray page; no
+focus scope above the Router; and a rebuilt app keeping its stack:
+**Unasserted:** no test pins this.
 
 ### 37. `PageView` reports page changes after the frame, in order
 

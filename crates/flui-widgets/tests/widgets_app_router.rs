@@ -5,13 +5,11 @@
 //! # Shape
 //!
 //! The router form mounts `Router` as the routing subtree, bare, below
-//! `Localizations` and the `builder` hook; only the navigator form wraps its
-//! `Navigator` in a `FocusScope`. The router form has no navigator key or
-//! observer builders (the `routable_ui` compile-fail suite).
+//! `Localizations` and the `builder` hook; the home form wraps its one page's
+//! navigator in a `FocusScope`.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::Vsync;
@@ -20,11 +18,14 @@ use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform::Locale;
 use flui_view::environment::VsyncScope;
+use flui_widgets::__test_access::NavigatorHandle;
+
+use crate::widgets_app::OnNavigator;
 use flui_widgets::interaction::Focus;
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    AppForm, ColoredBox, Directionality, FocusScope, Localizations, NavigatorHandle,
-    NavigatorObserver, RouterError, Row, SizedBox, Text, WidgetsApp,
+    ColoredBox, Directionality, FocusScope, Localizations, RouterError, Row, SizedBox, Text,
+    WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -126,7 +127,7 @@ fn router(probe: &Probe, version: u32, initial: &str) -> Router<AppRoute> {
     .expect("a known location")
 }
 
-fn mount<F: AppForm>(app: WidgetsApp<F>, vsync: &Vsync) -> LaidOut {
+fn mount(app: WidgetsApp, vsync: &Vsync) -> LaidOut {
     lay_out_animated(
         VsyncScope::new(vsync.clone(), app),
         tight(400.0, 400.0),
@@ -251,37 +252,15 @@ pub(crate) fn a_pushed_route_focuses_its_first_control_in_every_mount() {
     assert_eq!(second, first, "a later mount focuses the same control");
 }
 
-/// Counts attachments, the one observer callback this suite reads.
-#[derive(Debug, Default)]
-struct AttachCounter {
-    attaches: Mutex<u32>,
-}
-
-impl NavigatorObserver for AttachCounter {
-    fn did_attach(&self, _navigator: NavigatorHandle) {
-        *self.attaches.lock().expect("test mutex poisoned") += 1;
-    }
-}
-
-impl AttachCounter {
-    fn attaches(&self) -> u32 {
-        *self.attaches.lock().expect("test mutex poisoned")
-    }
-}
-
-// The two forms are two view types, so the switch remounts the shell: the
-// navigator form's state is disposed, releasing its navigator and observers.
+// The home and router forms are one view type, so the switch updates the
+// shell in place: its state lets go of the home page's navigator, and the
+// home form coming back makes a fresh one.
 pub(crate) fn switching_widgets_app_from_home_to_router_releases_the_navigator() {
-    let handle = NavigatorHandle::new();
-    let observer = Arc::new(AttachCounter::default());
     let vsync = Vsync::new();
-    let mut laid = mount(
-        WidgetsApp::new(SizedBox::shrink())
-            .navigator(handle.clone())
-            .observer(observer.clone()),
-        &vsync,
-    );
-    assert_eq!(observer.attaches(), 1);
+    let first = OnNavigator(Rc::default());
+    let mut laid = mount(WidgetsApp::new(first.clone()), &vsync);
+    let handle = first.handle();
+    assert!(handle.is_mounted());
 
     let probe = Probe::default();
     laid.pump_widget(VsyncScope::new(
@@ -298,31 +277,17 @@ pub(crate) fn switching_widgets_app_from_home_to_router_releases_the_navigator()
     let nearest = probe.nearest.borrow().clone().expect("a navigator");
     assert!(!nearest.is_same(&handle));
 
-    // The first shell let go of its navigator: switching back to the navigator
-    // form with another handle mounts that one, not the first.
-    let next = NavigatorHandle::new();
-    laid.pump_widget(VsyncScope::new(
-        vsync,
-        WidgetsApp::new(SizedBox::shrink()).navigator(next.clone()),
-    ));
+    let next = OnNavigator(Rc::default());
+    laid.pump_widget(VsyncScope::new(vsync, WidgetsApp::new(next.clone())));
     settle(&mut laid);
+    let again = next.handle();
     assert!(
-        next.is_mounted(),
-        "the new handle's navigator is in the tree"
+        again.is_mounted(),
+        "the home form's navigator is in the tree"
     );
-    assert!(!handle.is_mounted());
-    drop(laid);
-
-    // The shell's registration left the first handle with it: mounting that
-    // handle again, with no observer configured, attaches nobody.
-    let _again = mount(
-        WidgetsApp::new(SizedBox::shrink()).navigator(handle.clone()),
-        &Vsync::new(),
+    assert!(
+        !again.is_same(&handle),
+        "the home form made a fresh navigator"
     );
-    assert!(handle.is_mounted());
-    assert_eq!(
-        observer.attaches(),
-        1,
-        "a registration left behind would attach the observer again"
-    );
+    assert!(!nearest.is_mounted(), "the Router's navigator left with it");
 }

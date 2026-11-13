@@ -8,6 +8,7 @@ use flui_animation::Vsync;
 use flui_foundation::geometry::Rect;
 use flui_painting::styling::Color;
 use flui_view::environment::VsyncScope;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle};
 use flui_widgets::prelude::*;
 
 struct SampledHeroTrack {

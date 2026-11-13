@@ -25,10 +25,11 @@ use flui_testing::widgets::SharedSignal;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle};
 use flui_widgets::{
     Alternative, DecoratedBox, DefaultFocusRingStyle, FocusRingStyle, GestureAlternatives,
-    GestureCommand, MenuSpec, Navigator, NavigatorHandle, PageRoute, ReorderCause, ReorderIntent,
-    ReorderPreview, ReorderableList, SelectionArea, SingleActivator, SizedBox, Text, Urgency,
+    GestureCommand, MenuSpec, PageRoute, ReorderCause, ReorderIntent, ReorderPreview,
+    ReorderableList, SelectionArea, SingleActivator, SizedBox, Text, Urgency,
 };
 
 use crate::common::{LaidOut, lay_out, tight};

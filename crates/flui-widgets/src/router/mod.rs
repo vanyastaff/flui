@@ -3,10 +3,10 @@
 //!
 //! An application declares its locations as a [`Routable`] type — a value per
 //! screen, printed to and parsed from a [`RoutePath`] — and builds a
-//! `Router<R>` that places one page per value on a [`Navigator`]. A
-//! descendant acquires a [`RouterHandle`] in `init_state` and drives the stack
-//! with values (`push`, `replace`, `pop`) or with a location (`go`), and reads
-//! the location back.
+//! `Router<R>` that places one page per value on a navigator it owns. A
+//! descendant reaches a [`RouterHandle`] with `Router::of(ctx)` and drives the
+//! stack with values (`push`, `replace`, `pop`) or with a location (`go`), and
+//! reads the location back.
 //!
 //! The navigator stays the page stack underneath (ADR-0330 §4): transitions,
 //! heroes, `PopScope` and local history are properties of the pages the
@@ -16,8 +16,6 @@
 //!
 //! This module sits above `navigator` and below `app` (`cargo xtask
 //! module-dag`): it drives the navigator, and the app builds on it.
-//!
-//! [`Navigator`]: crate::Navigator
 
 mod handle;
 mod path;

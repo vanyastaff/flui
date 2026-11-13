@@ -24,10 +24,11 @@ use flui_testing::widgets::SharedSignal;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle};
 use flui_widgets::{
-    Align, Alternative, Directionality, GestureAlternatives, GestureCommand, MenuSpec, Navigator,
-    NavigatorHandle, PageRoute, ReorderCause, ReorderIntent, ReorderableGrid, SingleActivator,
-    SizedBox, SliverGridDelegateWithMaxCrossAxisExtent, Text, Urgency,
+    Align, Alternative, Directionality, GestureAlternatives, GestureCommand, MenuSpec, PageRoute,
+    ReorderCause, ReorderIntent, ReorderableGrid, SingleActivator, SizedBox,
+    SliverGridDelegateWithMaxCrossAxisExtent, Text, Urgency,
 };
 
 use crate::common::{LaidOut, lay_out, tight};

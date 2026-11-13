@@ -47,7 +47,7 @@
 //! # A popup over the page that opens it
 //!
 //! The open page is a [`PopupRoute`] the container pushes through its page's
-//! [`PageHandle`](flui_sdk::widgets::PageHandle), as a dialog is (ADR-0330 §2):
+//! [`PageHandle`], as a dialog is (ADR-0330 §2):
 //! it has no path, so a [`Router`](flui_sdk::widgets::Router) keeps it out of
 //! its stack and location. The page below stays in the tree while the open
 //! page covers it, as under any popup.

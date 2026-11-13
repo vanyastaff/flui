@@ -16,9 +16,8 @@ use flui_rendering::layer::Layer;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
-use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, PageRoute, PopupRoute, RouteAnimation, SimpleRoute,
-};
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, SimpleRoute};
+use flui_widgets::navigator::{PageRoute, PopupRoute, RouteAnimation};
 use flui_widgets::{ColoredBox, FadeTransition, PageTransitionBuilder, PageTransitions, SizedBox};
 
 use crate::common::{LaidOut, lay_out_animated, tight};

@@ -2,13 +2,15 @@
 //! localization and locale resolution, the routed and builder configurations,
 //! and observer bookkeeping across remounts.
 
+use std::cell::RefCell;
 use std::fmt;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use flui_view::prelude::*;
+use flui_widgets::__test_access::NavigatorHandle;
 use flui_widgets::SizedBox;
 use flui_widgets::app::WidgetsApp;
-use flui_widgets::navigator::{NavigatorHandle, NavigatorObserver, RouteId};
 
 use crate::common::harness::mount;
 
@@ -109,11 +111,31 @@ pub(crate) fn locale_override_removal_uses_the_nearest_current_preferences() {
     }
 }
 
+/// A home page that records the navigator it is built on.
+#[derive(Clone, StatelessView)]
+pub(crate) struct OnNavigator(pub(crate) Rc<RefCell<Option<NavigatorHandle>>>);
+
+impl StatelessView for OnNavigator {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        *self.0.borrow_mut() = NavigatorHandle::maybe_of(ctx);
+        SizedBox::shrink()
+    }
+}
+
+impl OnNavigator {
+    pub(crate) fn handle(&self) -> NavigatorHandle {
+        self.0
+            .borrow()
+            .clone()
+            .expect("the home page builds on the shell's navigator")
+    }
+}
+
 pub(crate) fn home_is_seeded_once_as_the_root_route() {
-    let handle = NavigatorHandle::new();
-    let (probe, captured) = capture(|_ctx| true);
-    let app = WidgetsApp::new(probe).navigator(handle.clone());
+    let home = OnNavigator(Rc::default());
+    let app = WidgetsApp::new(home.clone());
     let mut harness = mount(app.clone());
+    let handle = home.handle();
     assert!(handle.is_mounted(), "the navigator must be in the tree");
     assert_eq!(
         handle.route_ids().len(),
@@ -124,14 +146,14 @@ pub(crate) fn home_is_seeded_once_as_the_root_route() {
         !handle.can_pop(),
         "the home route is the bottom of the stack — nothing to pop"
     );
-    assert!(
-        captured_value(&captured).is_some(),
-        "the home content must build inside the navigator"
-    );
 
     // A rebuild of the same app must not re-seed: seeding lives in
     // `create_state`, which runs once per element lifetime.
     harness.swap_root(app);
+    assert!(
+        home.handle().is_same(&handle),
+        "the shell kept its navigator"
+    );
     assert_eq!(
         handle.route_ids().len(),
         1,
@@ -159,49 +181,5 @@ pub(crate) fn builder_only_app_receives_no_routing_and_supplies_the_subtree() {
     assert!(
         captured_value(&captured).is_some(),
         "the builder's subtree must mount"
-    );
-}
-
-/// Records the observer lifecycle a [`WidgetsApp`]-registered observer
-/// sees across mounts, updates, and unmounts.
-#[derive(Debug, Default)]
-struct RecordingObserver {
-    attaches: Mutex<u32>,
-    detaches: Mutex<u32>,
-    pushes: Mutex<Vec<RouteId>>,
-}
-
-impl RecordingObserver {
-    fn attaches(&self) -> u32 {
-        *self.attaches.lock().expect("test mutex poisoned")
-    }
-}
-
-impl NavigatorObserver for RecordingObserver {
-    fn did_attach(&self, _navigator: NavigatorHandle) {
-        *self.attaches.lock().expect("test mutex poisoned") += 1;
-    }
-
-    fn did_detach(&self) {
-        *self.detaches.lock().expect("test mutex poisoned") += 1;
-    }
-
-    fn did_push(&self, route: RouteId, _previous: Option<RouteId>) {
-        self.pushes.lock().expect("test mutex poisoned").push(route);
-    }
-}
-
-pub(crate) fn observers_attach_at_mount_and_see_the_home_route() {
-    let observer = Arc::new(RecordingObserver::default());
-    mount(WidgetsApp::new(SizedBox::shrink()).observer(observer.clone()));
-    assert_eq!(
-        observer.attaches(),
-        1,
-        "the observer must be attached exactly once when the navigator mounts"
-    );
-    assert_eq!(
-        observer.pushes.lock().expect("test mutex poisoned").len(),
-        1,
-        "the observer must see the seeded home route arrive"
     );
 }

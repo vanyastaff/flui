@@ -39,9 +39,9 @@ pub(crate) mod lifecycle;
 pub(crate) mod local_history;
 pub(crate) mod modal_route;
 #[expect(clippy::module_inception)]
-mod navigator;
-mod observer;
-mod overlay_route;
+pub(crate) mod navigator;
+pub(crate) mod observer;
+pub(crate) mod overlay_route;
 mod page_handle;
 mod page_route;
 mod page_transitions;
@@ -63,11 +63,10 @@ pub use flui_animation::{AnimationRunFuture, RunCanceled};
 pub use hero::{Hero, HeroMode};
 pub use hero_controller::{FlightDirection, HeroController};
 pub use hero_controller_scope::HeroControllerScope;
-pub use navigator::{Navigator, NavigatorHandle, NavigatorState};
-pub use observer::NavigatorObserver;
+pub(crate) use navigator::{Navigator, NavigatorHandle};
+pub(crate) use observer::NavigatorObserver;
 pub use overlay_route::{
-    NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
-    SimpleRoute,
+    RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
 };
 pub use page_handle::{PageError, PageHandle};
 pub use page_route::{PageRoute, PopupRoute};

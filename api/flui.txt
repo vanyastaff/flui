@@ -2730,7 +2730,6 @@ pub mod flui::cupertino::colors
 reexport flui::cupertino::colors::CupertinoColor => flui::cupertino::CupertinoColor
 reexport flui::cupertino::colors::CupertinoColors => flui::cupertino::CupertinoColors
 reexport flui::cupertino::colors::CupertinoDynamicColor => flui::cupertino::CupertinoDynamicColor
-pub fn flui::cupertino::cupertino_page_route<T, F>(builder: F) -> flui::prelude::PageRoute<T> where T: 'static, F: Fn(&dyn flui::app::BuildContext, &flui::widgets::RouteAnimation, &flui::widgets::RouteAnimation) -> flui::prelude::BoxedView + 'static
 pub mod flui::cupertino::nav_bar
 reexport flui::cupertino::nav_bar::CupertinoNavigationBar => flui::cupertino::CupertinoNavigationBar
 pub const flui::cupertino::nav_bar::HAIRLINE_BORDER_WIDTH: f64 = 1.0
@@ -2739,8 +2738,6 @@ pub mod flui::cupertino::page_control
 reexport flui::cupertino::page_control::CupertinoPageControl => flui::cupertino::CupertinoPageControl
 pub mod flui::cupertino::page_scaffold
 reexport flui::cupertino::page_scaffold::CupertinoPageScaffold => flui::cupertino::CupertinoPageScaffold
-pub mod flui::cupertino::route
-reexport flui::cupertino::route::cupertino_page_route => flui::cupertino::cupertino_page_route
 pub mod flui::cupertino::tab_scaffold
 reexport flui::cupertino::tab_scaffold::CupertinoTabController => flui::cupertino::CupertinoTabController
 reexport flui::cupertino::tab_scaffold::CupertinoTabScaffold => flui::cupertino::CupertinoTabScaffold
@@ -17117,7 +17114,7 @@ pub struct flui::prelude::HeroController { .. }
 impl Default for flui::prelude::HeroController
 impl Drop for flui::prelude::HeroController
 impl core::fmt::Debug for flui::prelude::HeroController
-impl flui::widgets::NavigatorObserver for flui::prelude::HeroController
+impl flui_widgets::navigator::observer::NavigatorObserver for flui::prelude::HeroController
 pub fn flui::prelude::HeroController::new() -> alloc::rcs::arc::Arc<Self>
 pub fn flui::prelude::HeroController::with_rect_tween<F, A>(factory: F) -> alloc::rcs::arc::Arc<Self> where F: Fn(flui::geometry::Rect, flui::geometry::Rect) -> A + 'static, A: flui::animation::Animatable<Value = flui::geometry::Rect> + 'static
 pub struct flui::prelude::HeroMode { .. }
@@ -17637,42 +17634,6 @@ fn flui::prelude::MultiChildLayoutDelegate::perform_layout(&self, context: &mut 
 fn flui::prelude::MultiChildLayoutDelegate::should_relayout(&self, old_delegate: &dyn flui::prelude::MultiChildLayoutDelegate) -> bool
 reexport flui::prelude::NavigationBar => flui::material::NavigationBar
 reexport flui::prelude::NavigationDestination => flui::material::NavigationDestination
-pub struct flui::prelude::Navigator { .. }
-impl Clone for flui::prelude::Navigator
-impl core::fmt::Debug for flui::prelude::Navigator
-impl flui::app::StatefulView for flui::prelude::Navigator { type State = flui::widgets::NavigatorState; }
-impl flui::app::View for flui::prelude::Navigator
-impl flui::prelude::ViewState<flui::prelude::Navigator> for flui::widgets::NavigatorState
-pub fn flui::prelude::Navigator::new(handle: flui::prelude::NavigatorHandle) -> Self
-pub struct flui::prelude::NavigatorHandle { .. }
-impl Clone for flui::prelude::NavigatorHandle
-impl Default for flui::prelude::NavigatorHandle
-impl core::fmt::Debug for flui::prelude::NavigatorHandle
-pub fn flui::prelude::NavigatorHandle::add_observer(&self, observer: alloc::rcs::arc::Arc<dyn flui::widgets::NavigatorObserver>)
-pub fn flui::prelude::NavigatorHandle::admits_pages(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::can_pop(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::current(&self) -> Option<flui::widgets::RouteId>
-pub fn flui::prelude::NavigatorHandle::did_start_user_gesture(&self)
-pub fn flui::prelude::NavigatorHandle::did_stop_user_gesture(&self)
-pub fn flui::prelude::NavigatorHandle::is_mounted(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::is_same(&self, other: &Self) -> bool
-pub fn flui::prelude::NavigatorHandle::maybe_of(ctx: &dyn flui::app::BuildContext) -> Option<Self>
-pub fn flui::prelude::NavigatorHandle::maybe_of_root(ctx: &dyn flui::app::BuildContext) -> Option<Self>
-pub fn flui::prelude::NavigatorHandle::maybe_pop(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::maybe_pop_with<T: 'static>(&self, result: T) -> bool
-pub fn flui::prelude::NavigatorHandle::new() -> Self
-pub fn flui::prelude::NavigatorHandle::pop(&self) -> bool
-pub fn flui::prelude::NavigatorHandle::pop_until(&self, keep: impl FnMut(flui::widgets::RouteId) -> bool)
-pub fn flui::prelude::NavigatorHandle::pop_with<T: 'static>(&self, result: T) -> bool
-pub fn flui::prelude::NavigatorHandle::push<R: flui::widgets::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::push_and_remove_until<R: flui::widgets::NavigatorRoute>(&self, route: R, keep: impl FnMut(flui::widgets::RouteId) -> bool) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::push_replacement<R: flui::widgets::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::push_replacement_with<R: flui::widgets::NavigatorRoute, T: 'static>(&self, route: R, result: T) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::remove_route(&self, id: flui::widgets::RouteId) -> bool
-pub fn flui::prelude::NavigatorHandle::remove_route_with<T: 'static>(&self, id: flui::widgets::RouteId, result: T) -> bool
-pub fn flui::prelude::NavigatorHandle::route_ids(&self) -> Vec<flui::widgets::RouteId>
-pub fn flui::prelude::NavigatorHandle::seed_initial<R: flui::widgets::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
-pub fn flui::prelude::NavigatorHandle::user_gesture_in_progress(&self) -> bool
 pub struct flui::prelude::NextFocusAction { .. }
 impl Clone for flui::prelude::NextFocusAction
 impl core::fmt::Debug for flui::prelude::NextFocusAction
@@ -17845,8 +17806,8 @@ pub fn flui::prelude::PageHandle::push_popup<T: 'static>(&self, popup: flui::pre
 pub fn flui::prelude::PageHandle::route(&self) -> flui::widgets::RouteId
 pub struct flui::prelude::PageRoute<T> { .. }
 impl<T: 'static> core::fmt::Debug for flui::prelude::PageRoute<T>
-impl<T: 'static> flui::widgets::NavigatorRoute for flui::prelude::PageRoute<T>
 impl<T: 'static> flui::widgets::Route for flui::prelude::PageRoute<T> { type Output = T; }
+impl<T: 'static> flui_widgets::navigator::overlay_route::NavigatorRoute for flui::prelude::PageRoute<T>
 pub fn flui::prelude::PageRoute::animates_route_below(self, animates: bool) -> Self // impl<T: 'static> flui::prelude::PageRoute<T>
 pub fn flui::prelude::PageRoute::back_gesture(self, enabled: bool) -> Self // impl<T: 'static> flui::prelude::PageRoute<T>
 pub fn flui::prelude::PageRoute::barrier_color(self, color: flui::prelude::Color) -> Self // impl<T: 'static> flui::prelude::PageRoute<T>
@@ -17936,8 +17897,8 @@ pub fn flui::prelude::PopScope::new(child: impl flui::prelude::IntoView) -> Self
 pub fn flui::prelude::PopScope::on_pop_invoked<R: flui::prelude::EventOutcome>(self, callback: impl Fn(&mut flui::prelude::EventContext<'_>, bool) -> R + 'static) -> Self
 pub struct flui::prelude::PopupRoute<T> { .. }
 impl<T: 'static> core::fmt::Debug for flui::prelude::PopupRoute<T>
-impl<T: 'static> flui::widgets::NavigatorRoute for flui::prelude::PopupRoute<T>
 impl<T: 'static> flui::widgets::Route for flui::prelude::PopupRoute<T> { type Output = T; }
+impl<T: 'static> flui_widgets::navigator::overlay_route::NavigatorRoute for flui::prelude::PopupRoute<T>
 pub fn flui::prelude::PopupRoute::barrier_color(self, color: flui::prelude::Color) -> Self // impl<T: 'static> flui::prelude::PopupRoute<T>
 pub fn flui::prelude::PopupRoute::barrier_dismissible(self, dismissible: bool) -> Self // impl<T: 'static> flui::prelude::PopupRoute<T>
 pub fn flui::prelude::PopupRoute::maintain_state(self, maintain_state: bool) -> Self // impl<T: 'static> flui::prelude::PopupRoute<T>
@@ -18816,14 +18777,6 @@ fn flui::prelude::SignalWriteExt::set<W: flui::view::WriteTarget + ?Sized>(self,
 fn flui::prelude::SignalWriteExt::set_if_changed<W: flui::view::WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<bool, flui::view::SignalError> where T: PartialEq
 fn flui::prelude::SignalWriteExt::update<W: flui::view::WriteTarget + ?Sized, R>(self, w: &W, f: impl FnMut(&mut T) -> R) -> Result<R, flui::view::SignalError>
 impl<T: 'static> flui::prelude::SignalWriteExt<T> for flui::prelude::Signal<T>
-pub struct flui::prelude::SimpleRoute<T> { .. }
-impl<T: 'static> flui::widgets::NavigatorRoute for flui::prelude::SimpleRoute<T>
-impl<T: 'static> flui::widgets::Route for flui::prelude::SimpleRoute<T> { type Output = T; }
-impl<T> Drop for flui::prelude::SimpleRoute<T>
-impl<T> core::fmt::Debug for flui::prelude::SimpleRoute<T>
-pub fn flui::prelude::SimpleRoute::named(self, name: impl Into<String>) -> Self // impl<T> flui::prelude::SimpleRoute<T>
-pub fn flui::prelude::SimpleRoute::new(builder: impl Fn(&dyn flui::app::BuildContext) -> flui::prelude::BoxedView + 'static) -> Self // impl<T> flui::prelude::SimpleRoute<T>
-pub fn flui::prelude::SimpleRoute::with_current_result(self, result: T) -> Self // impl<T> flui::prelude::SimpleRoute<T>
 pub struct flui::prelude::SingleActivator { .. }
 impl Clone for flui::prelude::SingleActivator
 impl Eq for flui::prelude::SingleActivator
@@ -19515,22 +19468,20 @@ pub fn flui::prelude::WidgetStatesController::is_same(&self, other: &Self) -> bo
 pub fn flui::prelude::WidgetStatesController::new(initial: flui::prelude::WidgetStates) -> Self
 pub fn flui::prelude::WidgetStatesController::update(&self, state: flui::prelude::WidgetState, add: bool)
 pub fn flui::prelude::WidgetStatesController::value(&self) -> flui::prelude::WidgetStates
-pub struct flui::prelude::WidgetsApp<F: flui::widgets::AppForm = flui::widgets::NavigatorForm> { .. }
-impl<F: Clone + flui::widgets::AppForm> Clone for flui::prelude::WidgetsApp<F>
-impl<F: flui::widgets::AppForm> core::fmt::Debug for flui::prelude::WidgetsApp<F>
-impl<F: flui::widgets::AppForm> flui::app::StatefulView for flui::prelude::WidgetsApp<F> { type State = flui::widgets::WidgetsAppState; }
-impl<F: flui::widgets::AppForm> flui::app::View for flui::prelude::WidgetsApp<F> where Self: flui::app::StatefulView
-impl<F: flui::widgets::AppForm> flui::prelude::ViewState<flui::prelude::WidgetsApp<F>> for flui::widgets::WidgetsAppState
-pub fn flui::prelude::WidgetsApp::builder(self, builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::locale(self, locale: flui::platform::Locale) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::localizations_delegates(self, delegates: Vec<flui::prelude::BoxedLocalizationsDelegate>) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::navigator(self, handle: flui::prelude::NavigatorHandle) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::NavigatorForm>
-pub fn flui::prelude::WidgetsApp::new(home: impl flui::prelude::IntoView) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::NavigatorForm>
-pub fn flui::prelude::WidgetsApp::observer(self, observer: alloc::rcs::arc::Arc<dyn flui::widgets::NavigatorObserver>) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::NavigatorForm>
-pub fn flui::prelude::WidgetsApp::router<R: flui::prelude::Routable>(router: flui::prelude::Router<R>) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::RouterForm>
-pub fn flui::prelude::WidgetsApp::supported_locales(self, locales: Vec<flui::platform::Locale>) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::text_style(self, style: flui::painting::typography::TextStyle) -> Self // impl<F: flui::widgets::AppForm> flui::prelude::WidgetsApp<F>
-pub fn flui::prelude::WidgetsApp::with_builder(builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self // impl flui::prelude::WidgetsApp<flui::widgets::NavigatorForm>
+pub struct flui::prelude::WidgetsApp { .. }
+impl Clone for flui::prelude::WidgetsApp
+impl core::fmt::Debug for flui::prelude::WidgetsApp
+impl flui::app::StatefulView for flui::prelude::WidgetsApp { type State = flui::widgets::WidgetsAppState; }
+impl flui::app::View for flui::prelude::WidgetsApp where Self: flui::app::StatefulView
+impl flui::prelude::ViewState<flui::prelude::WidgetsApp> for flui::widgets::WidgetsAppState
+pub fn flui::prelude::WidgetsApp::builder(self, builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self
+pub fn flui::prelude::WidgetsApp::locale(self, locale: flui::platform::Locale) -> Self
+pub fn flui::prelude::WidgetsApp::localizations_delegates(self, delegates: Vec<flui::prelude::BoxedLocalizationsDelegate>) -> Self
+pub fn flui::prelude::WidgetsApp::new(home: impl flui::prelude::IntoView) -> Self
+pub fn flui::prelude::WidgetsApp::router<R: flui::prelude::Routable>(router: flui::prelude::Router<R>) -> Self
+pub fn flui::prelude::WidgetsApp::supported_locales(self, locales: Vec<flui::platform::Locale>) -> Self
+pub fn flui::prelude::WidgetsApp::text_style(self, style: flui::painting::typography::TextStyle) -> Self
+pub fn flui::prelude::WidgetsApp::with_builder(builder: impl Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView + 'static) -> Self
 reexport flui::prelude::WidgetsBinding => flui::app::WidgetsBinding
 pub trait flui::prelude::WidgetsBindingObserver
 fn flui::prelude::WidgetsBindingObserver::did_change_app_lifecycle_state(&self, _state: flui::prelude::AppLifecycleState) { .. }
@@ -26267,7 +26218,6 @@ pub fn flui::widgets::AnnotatedRegion::new(value: T, child: impl flui::prelude::
 reexport flui::widgets::AnnounceError => flui::semantics::AnnounceError
 reexport flui::widgets::Announcer => flui::semantics::Announcer
 pub type flui::widgets::AppBuilder = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::app::BuildContext, Option<flui::prelude::BoxedView>) -> flui::prelude::BoxedView>
-pub trait flui::widgets::AppForm: flui_widgets::app::widgets_app::sealed::Sealed + Clone + core::fmt::Debug + 'static
 reexport flui::widgets::AspectRatio => flui::prelude::AspectRatio
 reexport flui::widgets::AspectRatioDelegate => flui::prelude::AspectRatioDelegate
 pub struct flui::widgets::AssetImage { .. }
@@ -27397,36 +27347,6 @@ reexport flui::widgets::MultiChildLayoutContext => flui::prelude::MultiChildLayo
 reexport flui::widgets::MultiChildLayoutDelegate => flui::prelude::MultiChildLayoutDelegate
 reexport flui::widgets::MultiTapCount => flui::interaction::MultiTapCount
 reexport flui::widgets::MultiTapCountError => flui::interaction::MultiTapCountError
-reexport flui::widgets::Navigator => flui::prelude::Navigator
-pub struct flui::widgets::NavigatorForm;
-impl Clone for flui::widgets::NavigatorForm
-impl Copy for flui::widgets::NavigatorForm
-impl Default for flui::widgets::NavigatorForm
-impl Eq for flui::widgets::NavigatorForm
-impl PartialEq for flui::widgets::NavigatorForm
-impl core::fmt::Debug for flui::widgets::NavigatorForm
-impl core::marker::StructuralPartialEq for flui::widgets::NavigatorForm
-impl flui::widgets::AppForm for flui::widgets::NavigatorForm
-impl flui_widgets::app::widgets_app::sealed::Sealed for flui::widgets::NavigatorForm
-reexport flui::widgets::NavigatorHandle => flui::prelude::NavigatorHandle
-pub trait flui::widgets::NavigatorObserver
-fn flui::widgets::NavigatorObserver::did_attach(&self, navigator: flui::prelude::NavigatorHandle) { .. }
-fn flui::widgets::NavigatorObserver::did_change_top(&self, top: flui::widgets::RouteId, previous_top: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_detach(&self) { .. }
-fn flui::widgets::NavigatorObserver::did_pop(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_push(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_remove(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_replace(&self, new_route: Option<flui::widgets::RouteId>, old_route: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_start_user_gesture(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
-fn flui::widgets::NavigatorObserver::did_stop_user_gesture(&self) { .. }
-fn flui::widgets::NavigatorObserver::observes_hero_flights(&self) -> bool { .. }
-pub trait flui::widgets::NavigatorRoute: flui::widgets::Route
-fn flui::widgets::NavigatorRoute::binding_slot(&self) -> Option<&flui::widgets::RouteBindingSlot> { .. }
-fn flui::widgets::NavigatorRoute::content_builder(&self) -> flui::widgets::RouteContentBuilder
-fn flui::widgets::NavigatorRoute::is_modal(&self) -> bool { .. }
-pub struct flui::widgets::NavigatorState { .. }
-impl core::fmt::Debug for flui::widgets::NavigatorState
-impl flui::prelude::ViewState<flui::prelude::Navigator> for flui::widgets::NavigatorState
 pub struct flui::widgets::NestedScroll { .. }
 impl Clone for flui::widgets::NestedScroll
 impl core::fmt::Debug for flui::widgets::NestedScroll
@@ -28011,16 +27931,6 @@ variant flui::widgets::RouterError::DuringBuild // at 4
 variant flui::widgets::RouterError::EmptyStack // at 3
 variant flui::widgets::RouterError::NoRouter { route_type: &'static str } // at 0
 variant flui::widgets::RouterError::Parse(flui::widgets::RouteParseError) // at 2
-pub struct flui::widgets::RouterForm;
-impl Clone for flui::widgets::RouterForm
-impl Copy for flui::widgets::RouterForm
-impl Default for flui::widgets::RouterForm
-impl Eq for flui::widgets::RouterForm
-impl PartialEq for flui::widgets::RouterForm
-impl core::fmt::Debug for flui::widgets::RouterForm
-impl core::marker::StructuralPartialEq for flui::widgets::RouterForm
-impl flui::widgets::AppForm for flui::widgets::RouterForm
-impl flui_widgets::app::widgets_app::sealed::Sealed for flui::widgets::RouterForm
 reexport flui::widgets::RouterHandle => flui::prelude::RouterHandle
 pub struct flui::widgets::RouterState<R: flui::prelude::Routable> { .. }
 impl<R: flui::prelude::Routable> Drop for flui::widgets::RouterState<R>
@@ -28322,7 +28232,6 @@ impl flui::prelude::Action<flui::widgets::ShowContextMenuIntent> for flui_widget
 impl flui::prelude::Intent for flui::widgets::ShowContextMenuIntent
 pub fn flui::widgets::ShowContextMenuIntent::default_keys(platform: flui::platform::TargetPlatform) -> Vec<flui::prelude::SingleActivator>
 reexport flui::widgets::ShrinkWrappingViewport => flui::prelude::ShrinkWrappingViewport
-reexport flui::widgets::SimpleRoute => flui::prelude::SimpleRoute
 reexport flui::widgets::SingleActivator => flui::prelude::SingleActivator
 reexport flui::widgets::SingleChildLayoutDelegate => flui::prelude::SingleChildLayoutDelegate
 reexport flui::widgets::SingleChildScrollView => flui::prelude::SingleChildScrollView
@@ -28717,7 +28626,7 @@ reexport flui::widgets::WidgetStatesController => flui::prelude::WidgetStatesCon
 reexport flui::widgets::WidgetsApp => flui::prelude::WidgetsApp
 pub struct flui::widgets::WidgetsAppState { .. }
 impl core::fmt::Debug for flui::widgets::WidgetsAppState
-impl<F: flui::widgets::AppForm> flui::prelude::ViewState<flui::prelude::WidgetsApp<F>> for flui::widgets::WidgetsAppState
+impl flui::prelude::ViewState<flui::prelude::WidgetsApp> for flui::widgets::WidgetsAppState
 reexport flui::widgets::WidgetsLocalizations => flui::prelude::WidgetsLocalizations
 pub struct flui::widgets::WindowCaptionButton { .. }
 impl Clone for flui::widgets::WindowCaptionButton
@@ -28804,10 +28713,7 @@ reexport flui::widgets::animated::TickerMode => flui::prelude::TickerMode
 reexport flui::widgets::animated::TickerModeState => flui::widgets::TickerModeState
 pub mod flui::widgets::app
 reexport flui::widgets::app::AppBuilder => flui::widgets::AppBuilder
-reexport flui::widgets::app::AppForm => flui::widgets::AppForm
 reexport flui::widgets::app::InheritedTheme => flui::prelude::InheritedTheme
-reexport flui::widgets::app::NavigatorForm => flui::widgets::NavigatorForm
-reexport flui::widgets::app::RouterForm => flui::widgets::RouterForm
 reexport flui::widgets::app::SafeArea => flui::prelude::SafeArea
 reexport flui::widgets::app::WidgetsApp => flui::prelude::WidgetsApp
 reexport flui::widgets::app::WidgetsAppState => flui::widgets::WidgetsAppState
@@ -29172,11 +29078,6 @@ reexport flui::widgets::navigator::Hero => flui::prelude::Hero
 reexport flui::widgets::navigator::HeroController => flui::prelude::HeroController
 reexport flui::widgets::navigator::HeroControllerScope => flui::widgets::HeroControllerScope
 reexport flui::widgets::navigator::HeroMode => flui::prelude::HeroMode
-reexport flui::widgets::navigator::Navigator => flui::prelude::Navigator
-reexport flui::widgets::navigator::NavigatorHandle => flui::prelude::NavigatorHandle
-reexport flui::widgets::navigator::NavigatorObserver => flui::widgets::NavigatorObserver
-reexport flui::widgets::navigator::NavigatorRoute => flui::widgets::NavigatorRoute
-reexport flui::widgets::navigator::NavigatorState => flui::widgets::NavigatorState
 reexport flui::widgets::navigator::PageError => flui::widgets::PageError
 reexport flui::widgets::navigator::PageHandle => flui::prelude::PageHandle
 reexport flui::widgets::navigator::PageRoute => flui::prelude::PageRoute
@@ -29198,7 +29099,6 @@ reexport flui::widgets::navigator::RouteResultError => flui::widgets::RouteResul
 reexport flui::widgets::navigator::RouteSettings => flui::widgets::RouteSettings
 reexport flui::widgets::navigator::RouteTransitionsBuilder => flui::widgets::RouteTransitionsBuilder
 reexport flui::widgets::navigator::RunCanceled => flui::animation::RunCanceled
-reexport flui::widgets::navigator::SimpleRoute => flui::prelude::SimpleRoute
 pub mod flui::widgets::paint
 reexport flui::widgets::paint::AnnotatedRegion => flui::widgets::AnnotatedRegion
 reexport flui::widgets::paint::BackdropFilter => flui::prelude::BackdropFilter
@@ -29388,8 +29288,6 @@ reexport flui::widgets::prelude::MotionBuilder => flui::prelude::MotionBuilder
 reexport flui::widgets::prelude::MouseRegion => flui::prelude::MouseRegion
 reexport flui::widgets::prelude::MultiChildLayoutContext => flui::prelude::MultiChildLayoutContext
 reexport flui::widgets::prelude::MultiChildLayoutDelegate => flui::prelude::MultiChildLayoutDelegate
-reexport flui::widgets::prelude::Navigator => flui::prelude::Navigator
-reexport flui::widgets::prelude::NavigatorHandle => flui::prelude::NavigatorHandle
 reexport flui::widgets::prelude::NextFocusAction => flui::prelude::NextFocusAction
 reexport flui::widgets::prelude::NextFocusIntent => flui::prelude::NextFocusIntent
 reexport flui::widgets::prelude::NotifiableElement => flui::prelude::NotifiableElement
@@ -29471,7 +29369,6 @@ reexport flui::widgets::prelude::Shortcuts => flui::prelude::Shortcuts
 reexport flui::widgets::prelude::ShrinkWrappingViewport => flui::prelude::ShrinkWrappingViewport
 reexport flui::widgets::prelude::Signal => flui::prelude::Signal
 reexport flui::widgets::prelude::SignalWriteExt => flui::prelude::SignalWriteExt
-reexport flui::widgets::prelude::SimpleRoute => flui::prelude::SimpleRoute
 reexport flui::widgets::prelude::SingleActivator => flui::prelude::SingleActivator
 reexport flui::widgets::prelude::SingleChildLayoutDelegate => flui::prelude::SingleChildLayoutDelegate
 reexport flui::widgets::prelude::SingleChildScrollView => flui::prelude::SingleChildScrollView
@@ -37115,7 +37012,6 @@ impl flui_view::reactive::writer::sealed::Sealed for ()
 impl<T> flui_view::reactive::writer::sealed::Sealed for Result<T, flui::prelude::EventContextError>
 impl<T> flui_view::reactive::writer::sealed::Sealed for Result<T, flui::prelude::EventError>
 impl<T> flui_view::reactive::writer::sealed::Sealed for Result<T, flui::view::SignalError>
-pub trait flui_widgets::app::widgets_app::sealed::Sealed
 pub struct flui_widgets::interaction::pan_claim_region::PanClaimRegionState { .. }
 impl core::fmt::Debug for flui_widgets::interaction::pan_claim_region::PanClaimRegionState
 impl flui::prelude::ViewState<flui::prelude::PanClaimRegion> for flui_widgets::interaction::pan_claim_region::PanClaimRegionState
@@ -37123,6 +37019,50 @@ pub struct flui_widgets::navigator::hero::HeroState { .. }
 impl Drop for flui_widgets::navigator::hero::HeroState
 impl core::fmt::Debug for flui_widgets::navigator::hero::HeroState
 impl flui::prelude::ViewState<flui::prelude::Hero> for flui_widgets::navigator::hero::HeroState
+pub struct flui_widgets::navigator::navigator::NavigatorHandle { .. }
+impl Clone for flui_widgets::navigator::navigator::NavigatorHandle
+impl Default for flui_widgets::navigator::navigator::NavigatorHandle
+impl core::fmt::Debug for flui_widgets::navigator::navigator::NavigatorHandle
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::add_observer(&self, observer: alloc::rcs::arc::Arc<dyn flui_widgets::navigator::observer::NavigatorObserver>)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::admits_pages(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::can_pop(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::current(&self) -> Option<flui::widgets::RouteId>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::did_start_user_gesture(&self)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::did_stop_user_gesture(&self)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::is_mounted(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::is_same(&self, other: &Self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_of(ctx: &dyn flui::app::BuildContext) -> Option<Self>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_of_root(ctx: &dyn flui::app::BuildContext) -> Option<Self>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_pop(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::maybe_pop_with<T: 'static>(&self, result: T) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::new() -> Self
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::pop(&self) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::pop_until(&self, keep: impl FnMut(flui::widgets::RouteId) -> bool)
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::pop_with<T: 'static>(&self, result: T) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::push<R: flui_widgets::navigator::overlay_route::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::push_and_remove_until<R: flui_widgets::navigator::overlay_route::NavigatorRoute>(&self, route: R, keep: impl FnMut(flui::widgets::RouteId) -> bool) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::push_replacement<R: flui_widgets::navigator::overlay_route::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::push_replacement_with<R: flui_widgets::navigator::overlay_route::NavigatorRoute, T: 'static>(&self, route: R, result: T) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::remove_route(&self, id: flui::widgets::RouteId) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::remove_route_with<T: 'static>(&self, id: flui::widgets::RouteId, result: T) -> bool
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::route_ids(&self) -> Vec<flui::widgets::RouteId>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::seed_initial<R: flui_widgets::navigator::overlay_route::NavigatorRoute>(&self, route: R) -> flui::widgets::RouteResult<<R as flui::widgets::Route>::Output>
+pub fn flui_widgets::navigator::navigator::NavigatorHandle::user_gesture_in_progress(&self) -> bool
+pub trait flui_widgets::navigator::observer::NavigatorObserver
+fn flui_widgets::navigator::observer::NavigatorObserver::did_attach(&self, navigator: flui_widgets::navigator::navigator::NavigatorHandle) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_change_top(&self, top: flui::widgets::RouteId, previous_top: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_detach(&self) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_pop(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_push(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_remove(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_replace(&self, new_route: Option<flui::widgets::RouteId>, old_route: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_start_user_gesture(&self, route: flui::widgets::RouteId, previous: Option<flui::widgets::RouteId>) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::did_stop_user_gesture(&self) { .. }
+fn flui_widgets::navigator::observer::NavigatorObserver::observes_hero_flights(&self) -> bool { .. }
+pub trait flui_widgets::navigator::overlay_route::NavigatorRoute: flui::widgets::Route
+fn flui_widgets::navigator::overlay_route::NavigatorRoute::binding_slot(&self) -> Option<&flui::widgets::RouteBindingSlot> { .. }
+fn flui_widgets::navigator::overlay_route::NavigatorRoute::content_builder(&self) -> flui::widgets::RouteContentBuilder
+fn flui_widgets::navigator::overlay_route::NavigatorRoute::is_modal(&self) -> bool { .. }
 pub struct flui_widgets::navigator::pop_scope::PopScopeState { .. }
 impl Drop for flui_widgets::navigator::pop_scope::PopScopeState
 impl core::fmt::Debug for flui_widgets::navigator::pop_scope::PopScopeState

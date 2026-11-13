@@ -25,6 +25,7 @@ use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::environment::VsyncScope;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle};
 use flui_widgets::prelude::*;
 
 const TRANSITION: Duration = Duration::from_millis(100);

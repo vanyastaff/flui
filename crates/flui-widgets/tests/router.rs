@@ -19,10 +19,11 @@ use flui_animation::Vsync;
 use flui_foundation::notifier::Listenable;
 use flui_painting::styling::Color;
 use flui_view::environment::VsyncScope;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PageError, PageHandle,
-    PopupRoute, RouteAnimation, RouteId, RouteParseError, RouteResultError, RouterError, Text,
+    ColoredBox, GestureDetector, PageError, PageHandle, PopupRoute, RouteAnimation, RouteId,
+    RouteParseError, RouteResultError, RouterError, Text,
 };
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -1000,7 +1001,7 @@ impl flui_widgets::Route for TerminalRoute {
         &self.settings
     }
 }
-impl flui_widgets::NavigatorRoute for TerminalRoute {
+impl flui_widgets::__test_access::NavigatorRoute for TerminalRoute {
     fn content_builder(&self) -> flui_widgets::RouteContentBuilder {
         Rc::new(|_| Text::new("terminal route").boxed())
     }

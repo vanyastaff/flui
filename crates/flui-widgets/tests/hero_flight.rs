@@ -20,9 +20,8 @@ use flui_widgets::__test_access::{
     HeroControllerProbe as _, HeroTag, NavigatorProbe as _, OverlayProbe as _, RouteProbe as _,
     TransitionHandle,
 };
-use flui_widgets::navigator::{
-    Hero, HeroController, Navigator, NavigatorHandle, NavigatorObserver, PageRoute, SimpleRoute,
-};
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
+use flui_widgets::navigator::{Hero, HeroController, PageRoute};
 use flui_widgets::{Center, SizedBox};
 
 use crate::common::harness::{Harness, mount};
@@ -307,26 +306,17 @@ pub(crate) fn a_nonlinear_hero_pop_retraces_the_airborne_push() {
 // Cleanup — retired flights are drained deterministically
 // ============================================================================
 
-/// **Removing the hero observer mid-flight ends the flight** (#1195). An app
-/// shell configured with a `HeroController` loses it from its configuration while
-/// a push flight is airborne: observer reconciliation deregisters the
-/// controller, which cancels the flight, so its shuttle's overlay entry leaves
-/// the overlay instead of being stranded there with nothing left to land it.
+/// **Removing the hero observer mid-flight ends the flight** (#1195). The
+/// navigator loses its `HeroController` while a push flight is airborne, as a
+/// Router's teardown deregisters its observer: the deregistration cancels the
+/// flight, so its shuttle's overlay entry leaves the overlay instead of being
+/// stranded there with nothing left to land it.
 ///
 /// Characterization: this holds on the code as it is.
 pub(crate) fn removing_the_observer_mid_flight_ends_the_flight() {
-    use flui_widgets::app::WidgetsApp;
-
-    let navigator = NavigatorHandle::new();
-    let controller = HeroController::new();
-    let app = |observer: Option<&Arc<HeroController>>| {
-        let app = WidgetsApp::new(SizedBox::new(10.0, 10.0)).navigator(navigator.clone());
-        match observer {
-            Some(observer) => app.observer(Arc::clone(observer) as Arc<dyn NavigatorObserver>),
-            None => app,
-        }
-    };
-    let mut harness = mount(app(Some(&controller)));
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
     let _transition = fly(
         &navigator,
         &mut harness,
@@ -342,7 +332,9 @@ pub(crate) fn removing_the_observer_mid_flight_ends_the_flight() {
         .entry_id();
     assert_eq!(navigator.overlay().entry_ids().last().copied(), shuttle);
 
-    harness.swap_root(app(None));
+    let observer: Arc<dyn NavigatorObserver> = controller.clone();
+    harness.enter_owner_scope(|| navigator.remove_observer(&observer));
+    harness.tick();
 
     assert!(
         controller.navigator().is_none(),

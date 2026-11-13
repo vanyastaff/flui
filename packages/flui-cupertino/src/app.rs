@@ -5,7 +5,9 @@
 //! knows nothing about this widget; this widget resolves the
 //! [`CupertinoThemeData`] and publishes it through [`CupertinoTheme`],
 //! **above** the `WidgetsApp` (unlike `MaterialApp`,
-//! which resolves inside the `WidgetsApp` builder).
+//! which resolves inside the `WidgetsApp` builder), and installs the iOS
+//! parallax slide, [`ParallaxPageTransition`], as the ambient page transition
+//! (ADR-0221), so a [`Router`]'s pages slide in as `CupertinoPage`s do.
 //!
 //! ## Brightness — Apple's model, no `ThemeMode` (ADR-0042 §2)
 //!
@@ -30,6 +32,10 @@
 //!   behavior lands with its scrollbar and overscroll indicator.
 //! - **`HeroControllerScope`** — FLUI's `Navigator` auto-installs a default
 //!   hero controller, so no explicit scope is needed here.
+//! - **`CupertinoPageRoute`'s route chrome** — the transition-only barrier
+//!   dim and the edge-swipe back gesture are options of a route, which the
+//!   ambient page transition does not carry, so a Router's pages here slide
+//!   but have neither ([gaps](../../../docs/gaps.md#a-router-page-carries-no-route-chrome)).
 //! - **`CupertinoLocalizations`** — FLUI ships no Cupertino resource set
 //!   yet; when one lands its delegate is appended here.
 //! - **`Title`/`color`, restoration, debug overlays**
@@ -42,7 +48,8 @@ use flui_sdk::platform::Locale;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    AppBuilder, AppForm, BoxedLocalizationsDelegate, Routable, Router, RouterForm, WidgetsApp,
+    AppBuilder, BoxedLocalizationsDelegate, PageTransitions, ParallaxPageTransition, Routable,
+    Router, WidgetsApp,
 };
 
 use crate::theme::{CupertinoTheme, CupertinoThemeData};
@@ -233,18 +240,16 @@ impl StatelessView for CupertinoApp {
             }
         };
 
-        // The published theme sits ABOVE the WidgetsApp.
+        // The published theme and the page transition sit ABOVE the
+        // WidgetsApp, so its navigator and a Router's read them.
+        let app = PageTransitions::new(app).page(Rc::new(ParallaxPageTransition::new()));
         CupertinoTheme::new(effective, app)
     }
 }
 
 impl CupertinoApp {
     /// The shell configuration every routing form shares.
-    fn configure<F: AppForm>(
-        &self,
-        app: WidgetsApp<F>,
-        text_style: flui_sdk::painting::TextStyle,
-    ) -> WidgetsApp<F> {
+    fn configure(&self, app: WidgetsApp, text_style: flui_sdk::painting::TextStyle) -> WidgetsApp {
         let app = match &self.builder {
             Some(builder) => {
                 let builder = Rc::clone(builder);
@@ -269,7 +274,7 @@ enum Routing {
     /// [`CupertinoApp::new`]: one home page.
     Home(BoxedView),
     /// [`CupertinoApp::router`]: the router shell, already built.
-    Router(Box<WidgetsApp<RouterForm>>),
+    Router(Box<WidgetsApp>),
     /// [`CupertinoApp::with_builder`]: no routing.
     Builder,
 }

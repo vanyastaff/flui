@@ -22,7 +22,7 @@
 //!   must not be reachable on its own.
 //!
 //! Not every entry is a read. Some drive state the navigator normally drives
-//! itself — `NavigatorProbe::pop_paced`, `ModalHandle::set_offstage` and
+//! itself — `NavigatorProbe::pop_paced` and `remove_observer`, `ModalHandle::set_offstage` and
 //! `set_maintain_state`, `HeroHandle::start_flight` and `end_flight`,
 //! `LocalHistoryHandle::add` — and a re-exported type brings all of its `pub`
 //! methods along. None of that is public API: a crate that imports this
@@ -35,6 +35,7 @@
 //! any other kind of `pub` item, so adding to the surface is a reviewed edit.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use std::time::Duration;
 
@@ -56,9 +57,15 @@ pub use crate::navigator::modal_route::{ModalHandle, ModalRoute};
 pub use crate::navigator::subtree::RouteSubtree;
 pub use crate::navigator::transition_route::{TransitionHandle, TransitionRoute};
 
+// The Router's internal page stack (ADR-0330 §4): the navigator suites
+// drive it directly, with the raw route types an application no longer names.
+pub use crate::navigator::navigator::{Navigator, NavigatorHandle};
+pub use crate::navigator::observer::NavigatorObserver;
+pub use crate::navigator::overlay_route::{NavigatorRoute, SimpleRoute};
+
 use crate::navigator::{
-    HeroController, NavigatorHandle, NavigatorRoute, PageRoute, PopupRoute, PushCompletion, Route,
-    RouteBindingSlot, RouteContentBuilder, RouteId, RouteSettings, SimpleRoute,
+    HeroController, PageRoute, PopupRoute, PushCompletion, Route, RouteBindingSlot,
+    RouteContentBuilder, RouteId, RouteSettings,
 };
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayEntryId, OverlayHandle};
 use crate::text::TextEditingController;
@@ -91,6 +98,8 @@ pub trait NavigatorProbe {
     fn post_frame_handle(&self) -> Option<PostFrameHandle>;
     /// The render tree the navigator is mounted in.
     fn render_tree(&self) -> Option<PipelineCell>;
+    /// Deregister `observer`, as a Router's teardown deregisters its own.
+    fn remove_observer(&self, observer: &Arc<dyn NavigatorObserver>);
     /// Whether `route` may start an edge-swipe-back gesture right now.
     fn pop_gesture_enabled(&self, route: RouteId) -> bool;
     /// Pop `route`, pacing its reverse transition with `duration` and `curve`.
@@ -133,6 +142,9 @@ impl NavigatorProbe for NavigatorHandle {
     }
     fn post_frame_handle(&self) -> Option<PostFrameHandle> {
         NavigatorHandle::post_frame_handle(self)
+    }
+    fn remove_observer(&self, observer: &Arc<dyn NavigatorObserver>) {
+        NavigatorHandle::remove_observer(self, observer);
     }
     fn render_tree(&self) -> Option<PipelineCell> {
         NavigatorHandle::render_tree(self)
@@ -411,7 +423,7 @@ mod tests {
     /// conformance suite (ADR-0330), the overlay entries once the overlay's
     /// entry list and entry flags have a public read, the text entry once the
     /// listener count is observable some other way.
-    const ENTRIES: [(&str, &str); 30] = [
+    const ENTRIES: [(&str, &str); 35] = [
         (
             "BackGestureController",
             "drives a release against a mounted navigator's route",
@@ -468,8 +480,24 @@ mod tests {
             "the private route PageRoute and PopupRoute are built on",
         ),
         (
+            "Navigator",
+            "the Router's internal page stack, mounted bare by the navigator suites",
+        ),
+        (
+            "NavigatorHandle",
+            "pushes and pops the navigator suites drive below the Router (ADR-0330 §4)",
+        ),
+        (
+            "NavigatorObserver",
+            "the observer seam hero flights and the Router's own observer attach to",
+        ),
+        (
             "NavigatorProbe",
             "route state, entries, subtrees and peers of a navigator",
+        ),
+        (
+            "NavigatorRoute",
+            "the route trait the navigator suites push custom routes through",
         ),
         ("OverlayEntryProbe", "an overlay entry's identity and flags"),
         (
@@ -486,6 +514,10 @@ mod tests {
             "the transition behind a PageRoute or PopupRoute",
         ),
         ("RouteSubtree", "where a route's page subtree lives"),
+        (
+            "SimpleRoute",
+            "a bare route the navigator suites push with no page around it",
+        ),
         (
             "SimpleRouteProbe",
             "pop refusal, modelling the deferred LocalHistoryRoute",
@@ -516,7 +548,7 @@ mod tests {
     /// The methods the probe traits and test types add, as `Owner::method`.
     /// The re-exported types carry their own `pub` methods, which are pinned
     /// at their definitions, not here.
-    const METHODS: [&str; 37] = [
+    const METHODS: [&str; 38] = [
         "HeroControllerProbe::flights",
         "HeroControllerProbe::manifests",
         "HeroControllerProbe::measurements",
@@ -526,6 +558,7 @@ mod tests {
         "NavigatorProbe::hero_observer_count",
         "NavigatorProbe::is_current",
         "NavigatorProbe::post_frame_handle",
+        "NavigatorProbe::remove_observer",
         "NavigatorProbe::overlay",
         "NavigatorProbe::pop_gesture_enabled",
         "NavigatorProbe::pop_paced",

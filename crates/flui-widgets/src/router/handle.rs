@@ -15,7 +15,7 @@ use crate::navigator::{RouteId, RouteResult};
 /// [`Router<R>`](super::Router), acquired with
 /// [`Router::of`](super::Router::of).
 ///
-/// Owner-affine (`!Send`), like [`NavigatorHandle`](crate::NavigatorHandle),
+/// Owner-affine (`!Send`), like [`PageHandle`](crate::PageHandle),
 /// and inert once the router unmounts: every edit then answers
 /// [`RouterError::Disposed`]. Each edit takes effect on the router's navigator
 /// at once; the pages it adds build on the next frame.

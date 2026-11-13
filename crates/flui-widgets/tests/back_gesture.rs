@@ -10,8 +10,9 @@ use std::time::Duration;
 use flui_animation::{Animation, AnimationController, AnimationStatus};
 use flui_view::prelude::*;
 use flui_widgets::__test_access::{BackGestureController, RouteProbe as _};
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, SimpleRoute};
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{Navigator, NavigatorHandle, PageRoute, RouteId, SimpleRoute};
+use flui_widgets::navigator::{PageRoute, RouteId};
 
 use crate::common::harness::{Harness, mount};
 

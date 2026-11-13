@@ -67,8 +67,8 @@ use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::{MediaQuery, PlatformConvention};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    AppBuilder, AppForm, BoxedLocalizationsDelegate, PageTransitions, RefreshIndicatorPhase,
-    RefreshIndicatorStyle, Routable, Router, RouterForm, SizedBox, WidgetsApp,
+    AppBuilder, BoxedLocalizationsDelegate, PageTransitions, RefreshIndicatorPhase,
+    RefreshIndicatorStyle, Routable, Router, SizedBox, WidgetsApp,
 };
 
 use crate::page_transitions::dialog_transition;
@@ -438,7 +438,7 @@ impl StatelessView for MaterialApp {
 
 impl MaterialApp {
     /// The shell configuration both routing forms share.
-    fn configure<F: AppForm>(&self, app: WidgetsApp<F>) -> WidgetsApp<F> {
+    fn configure(&self, app: WidgetsApp) -> WidgetsApp {
         let app = app
             .supported_locales(self.supported_locales.clone())
             .localizations_delegates(self.localizations_delegates.clone())
@@ -456,7 +456,7 @@ enum Routing {
     /// [`MaterialApp::new`]: one home page.
     Home(BoxedView),
     /// [`MaterialApp::router`]: the router shell, already built.
-    Router(Box<WidgetsApp<RouterForm>>),
+    Router(Box<WidgetsApp>),
     /// [`MaterialApp::with_builder`]: no routing.
     Builder,
 }

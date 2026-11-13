@@ -28,12 +28,10 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorRoute, SimpleRoute};
 use flui_widgets::__test_access::{NavigatorProbe as _, OverlayProbe as _};
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, NavigatorRoute, Route, RouteContentBuilder, RouteSettings,
-    SimpleRoute,
-};
+use flui_widgets::navigator::{Route, RouteContentBuilder, RouteSettings};
 
 use crate::common::harness::{Harness, mount};
 
@@ -270,7 +268,7 @@ pub(crate) mod local_history {
     use super::*;
     use flui_widgets::__test_access::{LocalHistoryEntry, LocalHistoryHandle};
 
-    use flui_widgets::navigator::NavigatorObserver;
+    use flui_widgets::__test_access::NavigatorObserver;
     use flui_widgets::navigator::PageRoute;
     use flui_widgets::navigator::RouteId;
 
@@ -802,11 +800,12 @@ pub(crate) fn closing_mid_transition_releases_the_route_overlay_and_hero() {
     use flui_foundation::ValueKey;
     use flui_view::CloseReason;
     use flui_view::environment::VsyncScope;
+    use flui_widgets::__test_access::NavigatorObserver;
     use flui_widgets::__test_access::{
         HeroControllerProbe as _, OverlayEntryProbe as _, RouteProbe as _,
     };
     use flui_widgets::Center;
-    use flui_widgets::navigator::{Hero, HeroController, NavigatorObserver, PageRoute};
+    use flui_widgets::navigator::{Hero, HeroController, PageRoute};
 
     use crate::common::{lay_out_animated, tight};
 

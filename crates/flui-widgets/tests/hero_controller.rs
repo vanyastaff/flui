@@ -14,10 +14,9 @@ use flui_view::ViewExt;
 use flui_view::prelude::*;
 
 use flui_widgets::__test_access::HeroControllerProbe as _;
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{
-    HeroController, Navigator, NavigatorHandle, NavigatorObserver, PageRoute, SimpleRoute,
-};
+use flui_widgets::navigator::{HeroController, PageRoute};
 
 use crate::common::harness::{Harness, mount};
 

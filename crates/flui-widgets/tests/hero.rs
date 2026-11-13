@@ -131,9 +131,8 @@ mod registry_reentry {
 
     fn fly(operation: &str) {
         use flui_view::environment::VsyncScope;
-        use flui_widgets::navigator::{
-            HeroController, Navigator, NavigatorHandle, NavigatorObserver, PageRoute,
-        };
+        use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver};
+        use flui_widgets::navigator::{HeroController, PageRoute};
         let page = || {
             PageRoute::<i32>::new(|_ctx, _primary, _secondary| {
                 Center::new()

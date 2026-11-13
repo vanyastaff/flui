@@ -17,10 +17,10 @@ use flui_platform::pointer::PointerButton;
 use flui_testing::MouseScript;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
+use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute};
 use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
 use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute, PageRoute, PopupRoute, Route,
-    RouteAnimation, RouteContentBuilder, RouteId, RouteSettings,
+    PageRoute, PopupRoute, Route, RouteAnimation, RouteContentBuilder, RouteId, RouteSettings,
 };
 use flui_widgets::{Align, AnimatedBuilder, Column, RawTextField, SizedBox, TextEditingController};
 
