@@ -336,6 +336,10 @@ pub(crate) struct AppRuntime {
     /// that function runs, for an application that set no
     /// `Application::declares`.
     pub(super) entry_declarations: Option<flui_view::navigation::LinkDeclarations>,
+    /// The URL scheme registration an unpackaged Windows run makes once its
+    /// main window shows its first frame, taken by that frame.
+    #[cfg(windows)]
+    pub(super) pending_registration: Option<super::runner::PendingRegistration>,
     /// The session end the host is answering: every presentation's subscribers
     /// hold their blocks on this one request, so the answer to the operating
     /// system is the aggregate. Kept from the query until the session end is
@@ -618,6 +622,8 @@ impl AppRuntime {
             #[cfg(target_os = "android")]
             android_entry: None,
             entry_declarations: None,
+            #[cfg(windows)]
+            pending_registration: None,
             session_end: None,
             session_end_current: None,
             session_end_refusals: Vec::new(),

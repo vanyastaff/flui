@@ -240,6 +240,12 @@ enum Commands {
         /// With `--device browser:… --agent`: start the browser without a window
         #[arg(long, requires = "agent")]
         headless: bool,
+
+        /// Register the application's URL schemes with Windows from this
+        /// development build, as a release build does by itself; an
+        /// uninstaller removes them with `<app>.exe --flui-unregister-links`
+        #[arg(long)]
+        register_links: bool,
     },
 
     /// Serve a running app to an AI agent over MCP (stdio)
@@ -780,6 +786,7 @@ fn main() {
             no_open,
             headless,
             agent,
+            register_links,
         } => {
             if scene {
                 // clap enforces both via `requires`; the unwraps document that.
@@ -802,6 +809,7 @@ fn main() {
                             headless,
                         },
                         agent,
+                        register_links,
                     },
                 )
             }

@@ -542,6 +542,10 @@ impl DesktopFrameDriver {
             && let Some(window) = reveal_window.upgrade()
         {
             window.reveal_after_first_frame();
+            // What the run registers with Windows waits for its first frame
+            // shown, so it never competes with the start.
+            #[cfg(windows)]
+            super::link_registration::start_pending();
         }
         if presented {
             fallback.record_present(pace_now);
