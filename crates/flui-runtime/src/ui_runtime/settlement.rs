@@ -86,15 +86,13 @@ impl VerdictTail {
 
 impl UiRuntime {
     /// Captures what `producer`'s frame of `shown` owes once its verdict is known, before the
-    /// frame is handed to its sink: the layer reads parked for the scene are read from it here,
-    /// and count against the parking bound until [`Self::land_pending_frame`].
+    /// frame is handed to its sink: the layer reads parked for the scene are read from it here.
     pub(super) fn capture_pending_frame(
         producer: &PresentationState,
         frame_time: Instant,
         scene: &flui_layer::SceneVersion,
     ) -> PendingFrame {
         let layer_reads = producer.stage_agent_layer_reads(scene);
-        producer.layer_reads_in_flight.set(layer_reads.len());
         PendingFrame {
             epoch: FrameEpoch::ZERO,
             frame_time,
@@ -106,12 +104,6 @@ impl UiRuntime {
             haptics: producer.haptics().frame_cut(),
             overlay_style: producer.overlay_style.take_staged(),
         }
-    }
-
-    /// The frame being handed to `producer`'s sink came back from the call: its layer reads are
-    /// counted where it goes next (its record, the parked list, or their replies).
-    pub(super) fn land_pending_frame(producer: &PresentationState) {
-        producer.layer_reads_in_flight.set(0);
     }
 
     /// The sink never answered (it panicked, or a subscriber stopped the submit before it was
@@ -482,30 +474,45 @@ impl UiRuntime {
                     // rebuilt device shows needs a full repaint whenever it
                     // comes; marked before the telemetry's subscriber can panic.
                     self.mark_needs_full_repaint_for(producer);
-                    // `Retain`, not `Drain`: the frame is tried again, and the
-                    // eventual real submit must still find the epochs that
-                    // arrived before this failure — see
-                    // `record_submit_telemetry`'s own doc.
-                    self.record_submit_telemetry(
-                        frame_time,
-                        segment,
-                        producer,
-                        submit_at,
-                        PresentOutcome::Errored,
-                        EpochDisposition::Retain,
-                    );
                     // Paced like any dropped frame (ADR-0267): a frame asked
                     // for at once would run again before the renderer's owner
                     // next rebuilds the device, and fail the same way. A
                     // given-up rebuild was reported when it was given up and
                     // holds the frames until a rebuild is asked for again.
-                    if !producer.device_abandoned() {
+                    // The report counts the failure into the streak the retry
+                    // is paced by, and the retry is armed before the failure
+                    // handler or the telemetry's subscriber, code the runtime
+                    // does not own, can panic.
+                    let report = (!producer.device_abandoned()).then(|| {
                         let recovery = producer.device_recovery().unwrap_or_default();
-                        self.report_frame_failure(
+                        let report = self.frame_failure_report(
                             producer,
                             FrameFailureKind::DeviceLost { recovery },
                         );
                         Self::arm_failure_retry(producer);
+                        report
+                    });
+                    // `Retain`, not `Drain`: the frame is tried again, and the
+                    // eventual real submit must still find the epochs that
+                    // arrived before this failure — see
+                    // `record_submit_telemetry`'s own doc. A subscriber's panic
+                    // there is held until the failure is reported.
+                    let mut telemetry = FirstPanic::new();
+                    telemetry.contain(|| {
+                        self.record_submit_telemetry(
+                            frame_time,
+                            segment,
+                            producer,
+                            submit_at,
+                            PresentOutcome::Errored,
+                            EpochDisposition::Retain,
+                        );
+                    });
+                    if let Some(report) = report {
+                        telemetry.contain(|| self.deliver_failure_report(report));
+                    }
+                    if let Some(payload) = telemetry.into_payload() {
+                        resume_unwind(payload);
                     }
                 }
                 SubmitVerdict::Failed => {

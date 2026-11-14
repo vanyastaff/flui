@@ -203,16 +203,13 @@ impl PresentationState {
         }
     }
 
-    /// How many layer reads the frame being submitted and the frames still pending hold, which
-    /// still owe a reply.
+    /// How many layer reads the frames still pending hold, which still owe a reply.
     fn staged_agent_layer_read_count(&self) -> usize {
-        self.layer_reads_in_flight.get()
-            + self
-                .pending_frames
-                .borrow()
-                .iter()
-                .map(PendingFrame::staged_layer_reads)
-                .sum::<usize>()
+        self.pending_frames
+            .borrow()
+            .iter()
+            .map(PendingFrame::staged_layer_reads)
+            .sum::<usize>()
     }
 
     /// The window closes: every read parked, or staged with a frame still pending, is answered

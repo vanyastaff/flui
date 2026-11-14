@@ -981,7 +981,6 @@ impl UiRuntime {
                 let epoch = self.next_frame_epoch();
                 submitted = Some((epoch, sink.submit(epoch, publication)));
             }));
-            Self::land_pending_frame(producer);
             let (epoch, render_verdict) = match (submitted, span_outcome) {
                 (Some(submitted), Ok(())) => submitted,
                 // The sink answered and only the subscriber failed: settle what the verdict owes,
@@ -1018,10 +1017,20 @@ impl UiRuntime {
                 // for that settlement, which arms whatever retry its verdict needs.
                 Self::queue_pending_frame(producer, epoch, pending);
             } else {
-                // A frame the sink answered inline supersedes every frame it queued before: what
-                // they read waits for a later scene, and a settlement of theirs that still
-                // arrives is stale, so it cannot commit an older tree or older input regions.
-                let superseded = std::mem::take(&mut *producer.pending_frames.borrow_mut());
+                // A frame the sink answered inline with a verdict that commits it supersedes every
+                // frame it queued before: what they read waits for a later scene, and a settlement
+                // of theirs that still arrives is stale, so it cannot commit an older tree or older
+                // input regions. A frame that commits nothing leaves them to their settlements,
+                // which may still show them.
+                let commits = matches!(
+                    render_verdict,
+                    SubmitVerdict::Presented | SubmitVerdict::NoPresent | SubmitVerdict::NotShown
+                );
+                let superseded = if commits {
+                    std::mem::take(&mut *producer.pending_frames.borrow_mut())
+                } else {
+                    std::collections::VecDeque::new()
+                };
                 for superseded in superseded {
                     Self::abandon_pending_frame(producer, superseded);
                 }

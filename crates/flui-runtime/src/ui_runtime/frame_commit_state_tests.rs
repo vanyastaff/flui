@@ -520,3 +520,67 @@ fn an_inline_frame_supersedes_the_frames_queued_before_it() {
     );
     assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Stale);
 }
+
+/// A lost device's retry is armed before code the runtime does not own runs: a subscriber that
+/// panics on the frame's telemetry leaves the paced retry in place.
+///
+/// Fails when the telemetry runs before the retry is armed.
+#[test]
+fn a_subscriber_that_panics_on_a_lost_devices_telemetry_keeps_its_retry() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let [epoch] = sink.epochs[..] else {
+        panic!("one frame was queued, got {:?}", sink.epochs);
+    };
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "frame telemetry",
+        },
+        || {
+            let _ = ui_runtime.settle_frame(FrameSettlement::new(
+                address,
+                epoch,
+                SubmitVerdict::DeviceLost,
+            ));
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert!(
+        ui_runtime
+            .presentations
+            .primary()
+            .failure_retry_at()
+            .is_some(),
+        "the paced retry is armed"
+    );
+}
+
+/// A frame the sink answers inline with a verdict that commits nothing leaves the frames it
+/// queued before to their own settlements: one that still shows commits its revision.
+#[test]
+fn a_frame_answered_inline_without_a_commit_leaves_queued_frames_to_their_settlements() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|call, _| {
+        if call == 0 {
+            SubmitVerdict::Queued
+        } else {
+            SubmitVerdict::Retry
+        }
+    });
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let queued_revision = ui_runtime.presentations.primary().tree_revision();
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(
+        !ui_runtime.render_frame(&mut sink),
+        "the second frame is refused"
+    );
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
+    assert_uncommitted_since(&ui_runtime, queued_revision.next());
+}
