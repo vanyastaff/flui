@@ -858,21 +858,26 @@ struct PendingSemanticsNode {
 }
 
 impl PendingSemanticsNode {
-    /// The node as published. It clips its children when each of them lies
-    /// under a paint clip its own rect covers: nothing under the node, at any
-    /// depth, is painted outside it, so a child wholly outside it is off
-    /// screen. That is a scrollable's content past its viewport, which
-    /// Flutter marks `isHidden`, and AccessKit's filter leaves it out of
-    /// navigation except the first child past each edge, which a reader moves
-    /// to in order to scroll it in.
+    /// The node as published. It clips its children when each child lies
+    /// under a paint clip its own rect covers, and a child AccessKit would
+    /// leave out holds nothing that reaches the node. That is a scrollable's
+    /// content past its viewport, which Flutter marks `isHidden`, and
+    /// AccessKit's filter leaves it out of navigation except the first child
+    /// past each edge, which a reader moves to in order to scroll it in.
     ///
-    /// The rule reads the clip, not where the children are: a descendant
-    /// translated past its parent is still inside the clip, so the flag
-    /// cannot hide content that is painted, and a move changes it only when
-    /// it carries a paint clip, which the re-placing walk refuses. A list
-    /// that fills only part of its viewport (under a header,
-    /// inside padding) has a rect smaller than the viewport's clip and keeps
-    /// the flag off ([gaps](../../../../../docs/gaps.md#a-list-that-fills-part-of-its-viewport-publishes-its-whole-cache-to-a-screen-reader)).
+    /// AccessKit leaves out the whole subtree of a child whose rect misses
+    /// the node's (see [`meets`]), so the rule reads two things. The clip:
+    /// nothing under the node, at any depth, is painted outside it. And the
+    /// subtree of each child that misses the node: content laid out in a row
+    /// past the edge but translated back into view is painted there, and a
+    /// node of it that reaches the node's rect keeps the flag off. A list
+    /// that fills only part of its viewport (under a header, inside padding)
+    /// has a rect smaller than the viewport's clip and keeps the flag off
+    /// ([gaps](../../../../../docs/gaps.md#a-list-that-fills-part-of-its-viewport-publishes-its-whole-cache-to-a-screen-reader)).
+    ///
+    /// A move changes the flag through a clip it carries, which the
+    /// re-placing walk refuses, or through where a re-formed child and its
+    /// subtree lie, which [`grafts_keep_clipping`] compares.
     ///
     /// A child with an empty or non-finite rect keeps the flag off: AccessKit
     /// counts a child with no area as outside its clipping parent and drops
@@ -880,10 +885,12 @@ impl PendingSemanticsNode {
     fn form(self) -> BuiltSemanticsNode {
         let clips_children = !self.children.is_empty()
             && self.children.iter().all(|child| {
-                has_area(&child.rect)
-                    && child
-                        .paint_clip
-                        .is_some_and(|clip| covers(&self.rect, &clip))
+                child
+                    .paint_clip
+                    .is_some_and(|clip| covers(&self.rect, &clip))
+                    && kept_or_unreaching(child.rect, &self.rect, || {
+                        built_subtree_reaches(child, &self.rect)
+                    })
             });
         BuiltSemanticsNode {
             source: self.source,
@@ -897,6 +904,153 @@ impl PendingSemanticsNode {
     }
 }
 
+/// The part of a clipping node's rule that follows where a child lies: the
+/// child has an area, and AccessKit keeps it under a node with rect
+/// `within`, or nothing below it reaches `within` (`reaches_below`).
+fn kept_or_unreaching(
+    rect: Rect<f64>,
+    within: &Rect<f64>,
+    reaches_below: impl FnOnce() -> bool,
+) -> bool {
+    has_area(&rect) && (meets(&rect, within) || !reaches_below())
+}
+
+/// Whether a node below `child` in the built tree reaches `within`.
+fn built_subtree_reaches(child: &BuiltSemanticsNode, within: &Rect<f64>) -> bool {
+    let mut pending: Vec<&BuiltSemanticsNode> = child.children.iter().collect();
+    while let Some(node) = pending.pop() {
+        if reaches(&node.rect, within) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// Whether a published node below `child` reaches `within`, with each
+/// grafted anchor's subtree read from its graft in place of the arena.
+fn published_subtree_reaches<'a>(
+    arena: &SemanticsTree,
+    child: flui_foundation::SemanticsId,
+    within: &Rect<f64>,
+    grafts: &'a [(flui_foundation::SemanticsId, BuiltSemanticsNode)],
+) -> bool {
+    enum Below<'a> {
+        Published(flui_foundation::SemanticsId),
+        Built(&'a BuiltSemanticsNode),
+    }
+    let graft_of = |id: flui_foundation::SemanticsId| -> Option<&'a BuiltSemanticsNode> {
+        grafts
+            .iter()
+            .find(|(anchor, _)| *anchor == id)
+            .map(|(_, built)| built)
+    };
+    let mut pending: Vec<Below<'a>> = arena
+        .children(child)
+        .unwrap_or_default()
+        .iter()
+        .map(|&id| graft_of(id).map_or(Below::Published(id), Below::Built))
+        .collect();
+    while let Some(below) = pending.pop() {
+        match below {
+            Below::Published(id) => {
+                let Some(node) = arena.get(id) else {
+                    continue;
+                };
+                if reaches(&node.rect(), within) {
+                    return true;
+                }
+                pending.extend(
+                    node.children()
+                        .iter()
+                        .map(|&id| graft_of(id).map_or(Below::Published(id), Below::Built)),
+                );
+            }
+            Below::Built(node) => {
+                if reaches(&node.rect, within) {
+                    return true;
+                }
+                pending.extend(node.children.iter().map(Below::Built));
+            }
+        }
+    }
+    false
+}
+
+/// Whether applying `grafts` leaves every published `clips_children` flag
+/// as a full assembly would set it. A graft re-forms its anchor and the
+/// nodes below it but not the nodes above, and each flag above reads where
+/// the anchor and its subtree lie: the anchor's own place against its
+/// parent, and, at each node further up that its parent's clip rule would
+/// leave out, whether its subtree reaches that parent. Every such reading
+/// must be the same before the grafts and after; the clips the rule also
+/// reads do not move in a graft, which the re-placing walk ensures.
+fn grafts_keep_clipping(
+    arena: &SemanticsTree,
+    grafts: &[(flui_foundation::SemanticsId, BuiltSemanticsNode)],
+) -> bool {
+    grafts.iter().all(|(anchor, built)| {
+        let (Some(old), Some(parent)) = (
+            arena.get(*anchor),
+            arena.parent(*anchor).and_then(|parent| arena.get(parent)),
+        ) else {
+            return true;
+        };
+        let within = parent.rect();
+        let before = kept_or_unreaching(old.rect(), &within, || {
+            published_subtree_reaches(arena, *anchor, &within, &[])
+        });
+        let after = kept_or_unreaching(built.rect, &within, || {
+            built_subtree_reaches(built, &within)
+        });
+        if before != after {
+            return false;
+        }
+        let mut child = old.parent();
+        while let Some(id) = child {
+            let Some(node) = arena.get(id) else {
+                break;
+            };
+            let Some(above) = node.parent().and_then(|above| arena.get(above)) else {
+                break;
+            };
+            let within = above.rect();
+            if has_area(&node.rect()) && !meets(&node.rect(), &within) {
+                let before = published_subtree_reaches(arena, id, &within, &[]);
+                let after = published_subtree_reaches(arena, id, &within, grafts);
+                if before != after {
+                    return false;
+                }
+            }
+            child = node.parent();
+        }
+        true
+    })
+}
+
+/// Whether AccessKit's filter keeps a node with rect `rect` under a
+/// clipping parent with rect `within`: their intersection has an area,
+/// computed as `accesskit::Rect::intersect` and `is_empty` compute it.
+fn meets(rect: &Rect<f64>, within: &Rect<f64>) -> bool {
+    let left = rect.left().max(within.left());
+    let top = rect.top().max(within.top());
+    let right = rect.right().min(within.right()).max(left);
+    let bottom = rect.bottom().min(within.bottom()).max(top);
+    [left, top, right, bottom]
+        .iter()
+        .all(|edge| edge.is_finite())
+        && (right - left) * (bottom - top) > 0.0
+}
+
+/// Whether a node with rect `rect` below a child AccessKit leaves out may
+/// be painted inside `within`: it meets it, or its rect is not finite.
+fn reaches(rect: &Rect<f64>, within: &Rect<f64>) -> bool {
+    ![rect.left(), rect.top(), rect.right(), rect.bottom()]
+        .iter()
+        .all(|edge| edge.is_finite())
+        || meets(rect, within)
+}
+
 /// Whether `rect` is finite and has an area.
 fn has_area(rect: &Rect<f64>) -> bool {
     let [left, top, right, bottom] = [rect.left(), rect.top(), rect.right(), rect.bottom()];
@@ -907,12 +1061,17 @@ fn has_area(rect: &Rect<f64>) -> bool {
         && bottom > top
 }
 
-/// Whether `outer` holds all of `inner`.
-fn covers(outer: &Rect<f64>, inner: &Rect<f64>) -> bool {
-    outer.left() <= inner.left()
-        && outer.top() <= inner.top()
-        && outer.right() >= inner.right()
-        && outer.bottom() >= inner.bottom()
+/// Whether a child lies under the paint clip `clip` that `outer` holds. A
+/// clip with no area paints nothing, wherever it sits, so `outer` holds it.
+fn covers(outer: &Rect<f64>, clip: &Rect<f64>) -> bool {
+    let finite = [clip.left(), clip.top(), clip.right(), clip.bottom()]
+        .iter()
+        .all(|edge| edge.is_finite());
+    (finite && (clip.right() <= clip.left() || clip.bottom() <= clip.top()))
+        || (outer.left() <= clip.left()
+            && outer.top() <= clip.top()
+            && outer.right() >= clip.right()
+            && outer.bottom() >= clip.bottom())
 }
 
 enum SemanticsFragment {
@@ -1907,11 +2066,13 @@ fn plan_graft_pass(
     // so a hash order would make a graft name a different host than a
     // rebuild of the same tree.
     survivors.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
-
-    survivors
+    let grafts = survivors
         .into_iter()
         .map(|(_, anchor)| plan_graft_anchor(tree, pipeline_root, owner, anchor, regions))
-        .collect()
+        .collect::<Option<Vec<_>>>()?;
+    // A flag above an anchor that the grafts would leave stale needs the
+    // node that holds it re-formed: the full rebuild.
+    grafts_keep_clipping(owner.tree(), &grafts).then_some(grafts)
 }
 
 /// Resolves a placement mark — a node whose subtree moved while no

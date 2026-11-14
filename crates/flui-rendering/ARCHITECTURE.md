@@ -231,10 +231,13 @@ their exclusion behavior; viewport paint clipping alone does not make a reveal
 target hidden in the native accessibility tree. Content past a viewport is off
 screen all the same, as Flutter marks it `isHidden`: a formed node whose rect
 covers the paint clip each of its children lies under publishes
-`clips_children`, AccessKit's form of that flag. AccessKit's filter then leaves
+`clips_children`, AccessKit's form of that flag, unless a child it would leave
+out holds a node that reaches the node's rect (content translated from a row
+past the edge back into view). AccessKit's filter then leaves
 a child wholly outside the node out of navigation, except the first one past
 each edge, which a reader moves to in order to reveal it, and the agent's
-`visible` check narrows by every such ancestor. A list that fills only part of its viewport
+`visible` check narrows by every such ancestor. A graft that would change the
+flag of a node above its anchor falls back to a full assembly. A list that fills only part of its viewport
 keeps the flag off ([gaps](../../docs/gaps.md#a-list-that-fills-part-of-its-viewport-publishes-its-whole-cache-to-a-screen-reader)); the root never publishes it. Assembly retains both clipped
 publication geometry and unclipped root-logical reveal geometry, paired with
 the ancestor's published scroll position. Callback snapshots leave the owner

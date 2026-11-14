@@ -5355,6 +5355,50 @@ pub(crate) fn a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in() {
     );
 }
 
+/// A row laid out past the edge whose content is painted back inside the
+/// viewport keeps the list from clipping its rows: AccessKit drops the whole
+/// subtree of a child that lies outside a clipping node, so the content a
+/// sighted user sees in view would be out of a screen reader's reach.
+pub(crate) fn content_painted_in_view_from_a_row_past_the_edge_stays_in_reach() {
+    use flui_widgets::{Center, ListView, Text, Transform};
+
+    fn row(index: usize) -> flui_view::BoxedView {
+        if index == 4 {
+            return flui_widgets::Semantics::new()
+                .container(true)
+                .label("slot 4")
+                .child(
+                    SizedBox::new(100.0, 50.0).child(
+                        Transform::translate(0.0, -175.0).child(
+                            flui_widgets::Semantics::new()
+                                .container(true)
+                                .label("row moved")
+                                .child(SizedBox::new(100.0, 20.0)),
+                        ),
+                    ),
+                )
+                .boxed();
+        }
+        SizedBox::new(100.0, 50.0)
+            .child(Text::new(format!("row {index}")))
+            .boxed()
+    }
+    let list = Center::new().child(SizedBox::new(100.0, 100.0).child(ListView::builder(
+        40,
+        50.0,
+        |i| (i < 40).then(|| row(i)),
+    )));
+    let mut laid = lay_out(list, tight(400.0, 400.0));
+    laid.enable_semantics();
+    laid.tick();
+
+    assert!(
+        rows_a_reader_reaches(&laid).contains(&"row moved".to_owned()),
+        "the content row 4 paints inside the viewport is reachable: {:?}",
+        rows_a_reader_reaches(&laid)
+    );
+}
+
 /// The rows of a list a screen reader reaches: what AccessKit's filter keeps
 /// of the published tree, by label.
 fn rows_a_reader_reaches(laid: &LaidOut) -> Vec<String> {

@@ -411,7 +411,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** desktop, iOS, Android, Web · **Who it hurts:** Screen-reader users: swiping through a list under a header or inside padding reaches rows the list keeps built past the viewport, as if they were on screen · **Parity:** [Accessibility](platform-parity.md#accessibility)
 
-- A node publishes AccessKit's `clips_children` when the paint clip each of its children lies under is inside its own rect (`PendingSemanticsNode::form` in `flui-rendering`), so a reader stops at the first row past each edge. A list that fills the viewport gets it (`a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in`).
+- A node publishes AccessKit's `clips_children` when the paint clip each of its children lies under is inside its own rect and no child it would leave out holds a node that reaches it (`PendingSemanticsNode::form` in `flui-rendering`), so a reader stops at the first row past each edge. A list that fills the viewport gets it (`a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in`).
 - A list under a header sliver or inside `SliverPadding` has a rect smaller than the viewport's clip, so it does not, and AccessKit's filter reads only the nearest filtered parent. The list's rows are still not `visible` to the agent and `Tester`: the actionability check narrows by every clipping ancestor, the scroll view included.
 - Reading where a child's descendants are painted instead of the clip would cover it, but a graft below a node would then have to re-form every clipping ancestor above it, which neither the re-placing walk nor incremental assembly does. It closes with a clip the viewport hands each sliver for its own extent, or with that re-forming.
 
