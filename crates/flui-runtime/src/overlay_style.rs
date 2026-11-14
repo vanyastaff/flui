@@ -2,8 +2,8 @@
 //!
 //! After each painted frame the presentation probes the composited scene at
 //! the top edge of its window for an annotated
-//! [`SystemUiOverlayStyle`]. The style is staged until that frame is on
-//! screen, so a refused, deferred or withheld frame announces nothing, and
+//! [`SystemUiOverlayStyle`]. The style travels with that frame to its sink and waits until it is on
+//! screen, so a refused, deferred or withheld frame announces nothing, and is
 //! delivered to the window's system chrome only when it differs from the last
 //! delivery.
 //! The native presentation detaching forgets the last delivery, so the next
@@ -35,12 +35,15 @@ impl OverlayStyleCoalescer {
         );
     }
 
-    /// Deliver the staged style to `window` if it changed since the last
-    /// delivery. Call once the probed frame is on screen.
-    pub(crate) fn deliver(&self, window: &dyn PlatformWindow) {
-        let Some(style) = self.staged.take() else {
-            return;
-        };
+    /// The style the last painted frame probed, taken when that frame is handed to its sink: it
+    /// travels with the frame's record and is delivered only if that frame is shown.
+    pub(crate) fn take_staged(&self) -> Option<SystemUiOverlayStyle> {
+        self.staged.take()
+    }
+
+    /// Deliver `style`, the style of a frame now on screen, to `window` if it changed since the
+    /// last delivery.
+    pub(crate) fn deliver(&self, window: &dyn PlatformWindow, style: SystemUiOverlayStyle) {
         if self.delivered.get() == Some(style) {
             return;
         }

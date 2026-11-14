@@ -183,7 +183,7 @@ pub use gesture::{
     ForcePressDetails, LongPressDetails, LongPressDownDetails, LongPressEndDetails,
     LongPressMoveUpdateDetails, LongPressStartDetails, TapDetails, TapDownDetails, TapUpDetails,
 };
-pub use haptics::{HapticObserver, HapticsHandle, HapticsHost, HapticsHostBuilder};
+pub use haptics::{HapticCut, HapticObserver, HapticsHandle, HapticsHost, HapticsHostBuilder};
 pub use text_input::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim, PrimaryClaimId,
     PrimaryClaims, PrimarySelectionBackend, PrimarySelectionCapability, PrimarySelectionHandle,

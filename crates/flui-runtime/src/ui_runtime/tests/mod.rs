@@ -507,6 +507,7 @@ fn frame_pacing_and_pump_matrix() {
             ("external_textures::unmounting_the_owner_retires_its_texture", external_textures::unmounting_the_owner_retires_its_texture as fn()),
             ("overlay_style::a_refused_frame_announces_nothing", overlay_style::a_refused_frame_announces_nothing as fn()),
             ("overlay_style::a_detached_presentation_resends_its_style", overlay_style::a_detached_presentation_resends_its_style as fn()),
+            ("overlay_style::a_queued_frame_announces_the_style_it_was_painted_with", overlay_style::a_queued_frame_announces_the_style_it_was_painted_with as fn()),
             ("overlay_style::a_panicking_chrome_is_retried_on_the_next_frame", overlay_style::a_panicking_chrome_is_retried_on_the_next_frame as fn()),
         ],
     );
@@ -539,6 +540,8 @@ fn frame_failure_containment_matrix() {
             ("super::frame_commit_state_tests::the_withheld_retry_is_bounded_and_then_parks", super::frame_commit_state_tests::the_withheld_retry_is_bounded_and_then_parks as fn()),
             ("super::frame_commit_state_tests::a_withheld_frame_takes_no_epoch", super::frame_commit_state_tests::a_withheld_frame_takes_no_epoch as fn()),
             ("super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime", super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime as fn()),
+            ("super::frame_commit_state_tests::a_settlement_commits_the_revision_its_frame_was_painted_from", super::frame_commit_state_tests::a_settlement_commits_the_revision_its_frame_was_painted_from as fn()),
+            ("super::frame_commit_state_tests::a_later_settlement_folds_the_frames_it_superseded", super::frame_commit_state_tests::a_later_settlement_folds_the_frames_it_superseded as fn()),
         ],
     );
 }

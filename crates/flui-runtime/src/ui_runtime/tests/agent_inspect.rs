@@ -565,7 +565,7 @@ fn a_layer_read_waits_for_a_scene_that_is_shown_not_one_the_surface_withheld() {
         1,
         "the read is parked again for the next scene"
     );
-    assert!(presentation.agent_layer_staged.borrow().is_empty());
+    assert!(presentation.pending_frames.borrow().is_empty());
 
     frame(&ui_runtime, &mut ScriptedSink::always_presents());
     parked
@@ -736,7 +736,7 @@ fn a_sink_that_panics_on_submit_leaves_the_layer_reads_parked_for_the_next_scene
         .expect("the primary presentation is open");
     assert!(parked.try_take().is_none(), "no scene was shown");
     assert_eq!(presentation.agent_layer_reads.borrow().len(), 1);
-    assert!(presentation.agent_layer_staged.borrow().is_empty());
+    assert!(presentation.pending_frames.borrow().is_empty());
 }
 
 /// Two things go wrong after a scene is shown: a layer read's receiver is gone and tracing its

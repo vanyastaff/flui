@@ -35507,9 +35507,29 @@ pub fn flui_runtime::runtime_services::RuntimeHostServices::with_data_transfer(s
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_flush_registry(self, registry: flui_view::flush_registry::FlushRegistry) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_preferences(self, preferences: flui_runtime::owner::preferences::SystemPreferencesSnapshot) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_process_nonce(self, nonce: flui::platform::drag::ProcessNonce) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
+#[non_exhaustive] pub struct flui_runtime::sink::FrameSettlement
+field flui_runtime::sink::FrameSettlement::address: flui::foundation::PresentationAddress // at 0
+field flui_runtime::sink::FrameSettlement::epoch: flui::foundation::FrameEpoch // at 1
+field flui_runtime::sink::FrameSettlement::verdict: flui_runtime::sink::SubmitVerdict // at 2
+impl Clone for flui_runtime::sink::FrameSettlement
+impl Copy for flui_runtime::sink::FrameSettlement
+impl Eq for flui_runtime::sink::FrameSettlement
+impl PartialEq for flui_runtime::sink::FrameSettlement
+impl core::fmt::Debug for flui_runtime::sink::FrameSettlement
+impl core::marker::StructuralPartialEq for flui_runtime::sink::FrameSettlement
+pub const fn flui_runtime::sink::FrameSettlement::new(address: flui::foundation::PresentationAddress, epoch: flui::foundation::FrameEpoch, verdict: flui_runtime::sink::SubmitVerdict) -> Self
 pub trait flui_runtime::sink::FrameSink
 fn flui_runtime::sink::FrameSink::submit(&mut self, epoch: flui::foundation::FrameEpoch, publication: flui_layer::scene::owner::ScenePublication) -> flui_runtime::sink::SubmitVerdict
 fn flui_runtime::sink::FrameSink::surface_size(&mut self) -> (u32, u32)
+pub enum flui_runtime::sink::Settled
+impl Clone for flui_runtime::sink::Settled
+impl Copy for flui_runtime::sink::Settled
+impl Eq for flui_runtime::sink::Settled
+impl PartialEq for flui_runtime::sink::Settled
+impl core::fmt::Debug for flui_runtime::sink::Settled
+impl core::marker::StructuralPartialEq for flui_runtime::sink::Settled
+variant flui_runtime::sink::Settled::Applied // at 0
+variant flui_runtime::sink::Settled::Stale // at 1
 pub enum flui_runtime::sink::SubmitVerdict
 impl Clone for flui_runtime::sink::SubmitVerdict
 impl Copy for flui_runtime::sink::SubmitVerdict
@@ -35522,6 +35542,7 @@ variant flui_runtime::sink::SubmitVerdict::Failed // at 6
 variant flui_runtime::sink::SubmitVerdict::NoPresent // at 1
 variant flui_runtime::sink::SubmitVerdict::NotShown // at 2
 variant flui_runtime::sink::SubmitVerdict::Presented // at 0
+variant flui_runtime::sink::SubmitVerdict::Queued // at 7
 variant flui_runtime::sink::SubmitVerdict::Retry // at 3
 variant flui_runtime::sink::SubmitVerdict::SurfaceStale // at 4
 #[non_exhaustive] pub struct flui_runtime::testing::SceneTotals
@@ -35621,6 +35642,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::set_page_origin(&self, origin: &str)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_performance_overlay(&self, enabled: bool)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_pointer_resampling(&self, id: flui::foundation::PresentationId, policy: flui::app::PointerResampling) -> Result<(), flui_runtime::presentation::PointerResamplingError>
 pub fn flui_runtime::ui_runtime::UiRuntime::settle_close_guards(&self) -> flui_runtime::ui_runtime::presentation_lifecycle::SettledCloses
+pub fn flui_runtime::ui_runtime::UiRuntime::settle_frame(&mut self, settlement: flui_runtime::sink::FrameSettlement) -> flui_runtime::sink::Settled
 pub fn flui_runtime::ui_runtime::UiRuntime::settle_text_sizing(&self, work: flui_runtime::ui_runtime::text_preparation::TextSizingWork, outcome: flui_runtime::ui_runtime::text_preparation::TextSizingSettlement) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::stop_presentation_for_test(&self, id: flui::foundation::PresentationId)
 pub fn flui_runtime::ui_runtime::UiRuntime::stop_presentations(&self)

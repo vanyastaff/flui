@@ -706,6 +706,19 @@ and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 `the_withheld_retry_is_bounded_and_then_parks`.
 
+A sink that cannot answer within the call (the threaded raster placement) answers `Queued`.
+The UI runtime then keeps a `PendingFrame` for the frame, captured when it was submitted: the
+tree revision it was painted from, its input regions, the layer reads parked for its scene, its
+haptic cut and its segment's span. The host later hands the raster side's
+`FrameSettlement { address, epoch, verdict }` to `UiRuntime::settle_frame`, which applies that
+verdict to the record its address and epoch name, by the same code an inline verdict runs, so
+the settlement commits the frame it names and not the tree as it is by then. Records queued
+before it fold into it (the raster side superseded those frames, and their layer reads wait for a
+later scene), and a settlement no record matches is `Settled::Stale` (ADR-0305 §4). Pinned by
+`a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored`,
+`a_settlement_commits_the_revision_its_frame_was_painted_from` and
+`a_later_settlement_folds_the_frames_it_superseded`.
+
 ### `Vsync` controllers tick at the frame's timestamp
 
 Playback/debug progression is [ADR-0176](../../docs/adr/ADR-0176-presentation-animation-playback.md).
@@ -1228,7 +1241,7 @@ failures in competition.
 Each presentation owns a `HapticsHost` (ADR-0210 §4) on its gesture clock,
 playing on its window's actuator through a weak reference, with the platform
 row's deadline factor and the window's current refresh period. A frame the sink
-reports `Presented` plays the queued requests whose deadline has not passed; a
+reports `Presented` plays the requests queued before it was submitted (its `HapticCut`) whose deadline has not passed; a
 frame that paints nothing, one the backend found no damage in (`NoPresent`: the
 screen keeps the previous frame) and one it could not show (`NotShown`) present
 nothing, so their requests wait for a later presented frame or resolve to

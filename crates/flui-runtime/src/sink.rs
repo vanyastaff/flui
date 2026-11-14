@@ -7,7 +7,7 @@
 //! not-shown handling (ADR-0068). The host implements the trait; this crate
 //! names no backend, surface or GPU type.
 
-use flui_foundation::FrameEpoch;
+use flui_foundation::{FrameEpoch, PresentationAddress};
 use flui_layer::ScenePublication;
 
 /// What one submitted frame did, as the UI runtime's frame transaction needs to
@@ -33,6 +33,7 @@ use flui_layer::ScenePublication;
 ///         SubmitVerdict::SurfaceStale => true,
 ///         SubmitVerdict::DeviceLost => true,
 ///         SubmitVerdict::Failed => false,
+///         SubmitVerdict::Queued => false,
 ///     }
 /// }
 ///
@@ -76,6 +77,56 @@ pub enum SubmitVerdict {
     /// The frame failed in a way no retry can fix this frame (a generic
     /// render error, or a refused submit). No retry is armed.
     Failed,
+    /// The sink took the frame and settles it later: the raster side answers with a
+    /// [`FrameSettlement`] naming the frame's address and epoch, which the host hands to
+    /// `UiRuntime::settle_frame`. Until then the runtime keeps what the frame commits, captured
+    /// when it was submitted (ADR-0305 §4). A settlement never carries this verdict.
+    Queued,
+}
+
+/// The verdict of a frame a sink answered [`SubmitVerdict::Queued`], named by the frame's stamp
+/// (ADR-0305 §4). The host drains it from the raster side and hands it to
+/// `UiRuntime::settle_frame` on the owner thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FrameSettlement {
+    /// The presentation whose frame settles.
+    pub address: PresentationAddress,
+    /// The epoch the frame was submitted with.
+    pub epoch: FrameEpoch,
+    /// What became of the frame: any verdict but [`SubmitVerdict::Queued`].
+    pub verdict: SubmitVerdict,
+}
+
+impl FrameSettlement {
+    /// The settlement of `address`'s frame stamped `epoch`.
+    #[must_use]
+    pub const fn new(
+        address: PresentationAddress,
+        epoch: FrameEpoch,
+        verdict: SubmitVerdict,
+    ) -> Self {
+        Self {
+            address,
+            epoch,
+            verdict,
+        }
+    }
+}
+
+/// What `UiRuntime::settle_frame` did with a [`FrameSettlement`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a settlement either names a pending frame or does not; there is no third answer"
+)]
+#[must_use = "a stale settlement is a host that drained another frame's answer"]
+pub enum Settled {
+    /// The settlement named a pending frame, which committed what its verdict owes.
+    Applied,
+    /// No pending frame has the settlement's address and epoch (another runtime's, an earlier
+    /// life's, one already settled): it was traced and ignored.
+    Stale,
 }
 
 /// The seam a UI runtime's frame transaction submits through: the surface size

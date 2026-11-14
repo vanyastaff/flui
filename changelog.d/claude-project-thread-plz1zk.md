@@ -12,9 +12,18 @@
   pointerless handle on Win32, AppKit, UIKit, Android and the web, none on headless), which the
   application's one GPU instance is made on
   ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §2).
+- **`flui-runtime`**: `SubmitVerdict::Queued`, `FrameSettlement` and `UiRuntime::settle_frame`
+  ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §4).
+  A sink that settles a frame later answers `Queued`; the runtime keeps what the frame commits,
+  captured at submit (its tree revision, input regions, layer reads and haptics), and the
+  settlement the host hands back commits that frame by its address and epoch. A settlement no
+  pending frame matches answers `Settled::Stale`.
 
 ### Changed
 
+- **`flui-interaction`**: `HapticsHost::frame_presented` takes the `HapticCut` that
+  `HapticsHost::frame_cut` gave when the frame was submitted, and plays only the requests queued
+  before it.
 - **`flui-runtime`**: `FrameSink::submit` takes the frame's `FrameEpoch` beside its publication. The
   UI runtime numbers the frames its presentations submit, and the host stamps each frame with
   that number instead of keeping a count of its own
