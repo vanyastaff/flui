@@ -1325,7 +1325,7 @@ pub(crate) fn a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild()
     run.pump();
 
     // Gamma stops contributing, so kappa and beta are contained. The graft
-    // is anchored at beta, below the holder.
+    // is anchored at kappa, gamma's published parent, below the holder.
     let gamma_leaf = leaf_mut(&mut run, gamma);
     gamma_leaf.label = None;
     run.owner_mut().mark_needs_semantics(gamma);
