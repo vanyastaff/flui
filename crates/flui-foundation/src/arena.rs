@@ -260,10 +260,15 @@ impl Default for FrameArena {
 
 impl fmt::Debug for FrameArena {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Read everything first: the writer is code the arena does not own, and it may allocate
+        // from this arena, which opens a chunk under `chunks.borrow_mut()`.
+        let chunks = self.chunks.borrow().len();
+        let capacity = self.capacity.get();
+        let used = self.used();
         f.debug_struct("FrameArena")
-            .field("chunks", &self.chunks.borrow().len())
-            .field("capacity", &self.capacity.get())
-            .field("used", &self.used())
+            .field("chunks", &chunks)
+            .field("capacity", &capacity)
+            .field("used", &used)
             .finish_non_exhaustive()
     }
 }
@@ -595,6 +600,23 @@ mod tests {
         bytes.shrink_to_fit();
         assert_eq!(arena.cursor.get(), 10);
         assert_eq!(bytes, [7; 10]);
+    }
+
+    /// A writer that allocates from the arena it formats opens a chunk while it writes.
+    #[test]
+    fn formatting_into_the_arena_it_describes_opens_a_chunk() {
+        struct Writer<'f>(FrameVec<'f, u8>);
+        impl fmt::Write for Writer<'_> {
+            fn write_str(&mut self, text: &str) -> fmt::Result {
+                self.0.extend_from_slice(text.as_bytes());
+                Ok(())
+            }
+        }
+        let arena = FrameArena::new();
+        let mut out = Writer(Vec::new_in(&arena));
+        fmt::write(&mut out, format_args!("{arena:?}")).expect("formatting succeeds");
+        assert!(out.0.starts_with(b"FrameArena { chunks: 0,"));
+        assert_eq!(chunk_count(&arena), 1);
     }
 
     /// The arena lives inline in every pipeline owner, so its window of recent peaks stays a
