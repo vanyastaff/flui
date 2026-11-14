@@ -380,36 +380,6 @@ pub type BoxChildIntrinsicCallback<'a> = &'a dyn Fn(
     f64,
 ) -> crate::error::RenderResult<f64>;
 
-/// Per-child geometry storage owned by the typed wrapper when bridging
-/// from an erased context.
-///
-/// When the `RenderBox`
-/// blanket impl constructs a `RawBoxLayoutContext::from_erased(...)` Proxy view
-/// of an `&mut dyn ErasedBoxLayoutContext`, the typed wrapper needs to honour
-/// the [`LayoutContextApi::child_geometry`] contract
-/// (`Option<&Size>` — borrow-returning). The erased trait can only hand
-/// out owned `Size` (no reference lifetime to bind to). The Proxy
-/// variant therefore caches child sizes in this dense `Vec<Option<Size>>`
-/// on `layout_child` calls (which already produce a `Size`
-/// synchronously), and `child_geometry` reads from the cache. This loses
-/// the strict "pre-existing geometry from a sibling's prior call"
-/// semantics that Direct mode provides, but matches the typical
-/// user-widget flow
-/// (`let s = ctx.layout_child(i, c); … ctx.child_geometry(i)`).
-///
-/// # Storage shape
-///
-/// Indexed by dense child index (`0..child_count`) so a hash map is
-/// strictly worse on every dimension: lookup is `O(log n)` ↔ `O(1)`
-/// indexed, allocation pattern is many small Hash buckets ↔ one
-/// contiguous Vec, and CPU prefetch favours the contiguous Vec on the
-/// hot layout path. `Option<Size>` is `Copy` and 12 bytes (Size +
-/// discriminant); `Vec::with_capacity(child_count)` from
-/// `erased.child_count()` pre-sizes the cache at Proxy construction
-/// (one allocation per `from_erased` call); subsequent `layout_child`
-/// writes are an in-place assignment with no reallocation.
-type ProxyChildSizeCache = Vec<Option<Size>>;
-
 /// The children reference allows `position_child` to store offsets that
 /// will be used during painting.
 ///
@@ -476,9 +446,6 @@ enum BoxLayoutContextStorage<'ctx, P: ParentData + Default> {
         /// reference-lifetime mismatch with the erased
         /// `fn constraints(&self) -> BoxConstraints` (owned).
         constraints: BoxConstraints,
-        /// Lazy cache of child sizes returned from
-        /// `erased.layout_child(idx, c)` — see [`ProxyChildSizeCache`].
-        child_sizes: ProxyChildSizeCache,
         /// The underlying erased context (typically a pipeline-side
         /// `RawBoxLayoutContext` in Direct mode).
         // Protocol-layout-erasure — sanctioned erased layout-context boundary
@@ -600,16 +567,9 @@ impl<'ctx, A: Arity, P: ParentData + Default> RawBoxLayoutContext<'ctx, A, P> {
             std::any::TypeId::of::<P>(),
             std::any::type_name::<P>(),
         );
-        // Pre-size the dense `Vec<Option<Size>>` cache to the erased
-        // ctx's child_count — one allocation per Proxy construction, no
-        // per-`layout_child` reallocation. Uses indexed `Vec<Option<Size>>`
-        // (O(1) access, contiguous) rather than `HashMap<usize, Size>`
-        // (sparse + hashing on the hot path).
-        let child_count = erased.child_count();
         Self {
             storage: BoxLayoutContextStorage::Proxy {
                 constraints,
-                child_sizes: vec![None; child_count],
                 erased,
             },
             _phantom: std::marker::PhantomData,
@@ -701,23 +661,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                 }
                 Ok(Size::ZERO)
             }
-            BoxLayoutContextStorage::Proxy {
-                erased,
-                child_sizes,
-                ..
-            } => {
-                let size = erased.layout_child(index, constraints)?;
-                // Indexed write — `child_sizes` is pre-sized to
-                // `erased.child_count()` at `from_erased` time. An
-                // out-of-bounds index (caller passed an `index >=
-                // child_count`) silently no-ops the cache write so
-                // `child_geometry(index)` returns `None` — matches
-                // Direct's behaviour where an out-of-range
-                // `children.get(index)` also returns None.
-                if let Some(slot) = child_sizes.get_mut(index) {
-                    *slot = Some(size);
-                }
-                Ok(size)
+            BoxLayoutContextStorage::Proxy { erased, .. } => {
+                erased.layout_child(index, constraints)
             }
         }
     }
@@ -744,12 +689,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
                 .as_ref()
                 .and_then(|c| c.get(index))
                 .map(|child| &child.size),
-            BoxLayoutContextStorage::Proxy { child_sizes, .. } => {
-                // Indexed access — out-of-range returns None (consistent
-                // with Direct's `children.get(index).map(...)`); in-range
-                // unfilled slot (Some(None)) also returns None.
-                child_sizes.get(index).and_then(Option::as_ref)
-            }
+            // The erased context keeps the size its `layout_child` returned.
+            BoxLayoutContextStorage::Proxy { erased, .. } => erased.child_size(index),
         }
     }
 
@@ -866,6 +807,10 @@ pub trait ErasedBoxLayoutContext {
         index: usize,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size>;
+
+    /// The size child `index` was laid out at, or `None` for an index out of range or a child
+    /// this context has not laid out.
+    fn child_size(&self, index: usize) -> Option<&Size>;
 
     /// Lays out a **sliver** child at `index` with the given
     /// [`SliverConstraints`]; returns the child's [`SliverGeometry`].
@@ -1045,6 +990,11 @@ impl<A: Arity, P: ParentData + Default> ErasedBoxLayoutContext for RawBoxLayoutC
     }
 
     #[inline]
+    fn child_size(&self, index: usize) -> Option<&Size> {
+        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::child_geometry(self, index)
+    }
+
+    #[inline]
     fn layout_sliver_child(
         &mut self,
         index: usize,
@@ -1204,8 +1154,8 @@ pub struct ErasedChildState {
     pub geometry_degraded: bool,
     /// Render ID of this child.
     pub id: flui_foundation::RenderId,
-    /// Computed size after layout.
-    pub size: Size,
+    /// The size this pass's `layout_child` gave the child; `None` until it lays the child out.
+    pub size: Option<Size>,
     /// Position offset set by parent.
     pub offset: Offset,
     /// Last constraints used to lay out this child when it is a sliver.
@@ -1236,7 +1186,7 @@ impl ErasedChildState {
         Self {
             geometry_degraded: false,
             id,
-            size: Size::ZERO,
+            size: None,
             offset: Offset::ZERO,
             sliver_constraints: None,
             sliver_geometry: None,
@@ -1397,9 +1347,13 @@ impl ErasedBoxLayoutContext for DriverBoxLayoutContext<'_> {
         let size = (self.layout_child_callback)(child_id, constraints)?;
         if let Some(slot) = self.children.get_mut(index) {
             slot.laid_out_this_pass = true;
-            slot.size = size;
+            slot.size = Some(size);
         }
         Ok(size)
+    }
+
+    fn child_size(&self, index: usize) -> Option<&Size> {
+        self.children.get(index)?.size.as_ref()
     }
 
     fn child_distance_to_actual_baseline(

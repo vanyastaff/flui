@@ -41,6 +41,8 @@ mod frame_unwind;
 #[path = "leader_watch.rs"]
 mod leader_watch;
 
+#[path = "child_geometry.rs"]
+mod child_geometry;
 #[path = "child_parent_data.rs"]
 mod child_parent_data;
 #[path = "layout_poison.rs"]
