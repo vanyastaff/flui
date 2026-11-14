@@ -492,11 +492,14 @@ pub use external_texture_registry::{
 };
 pub use raster::PresentDisposition;
 // The raster executor and its commands (ADR-0305).
+// The threaded placement's handle (ADR-0305 §10); the web turns inline.
+#[cfg(not(target_arch = "wasm32"))]
+pub use raster_executor::ExecutorHandle;
 pub use raster_executor::{
-    DeviceHealth, ExecutorHealth, RasterBackend, RasterCommand, RasterExecutor, RasterSendError,
-    RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId,
-    SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface, SlotTarget, SlotVisibility,
-    SurfaceHold, TurnOutcome,
+    DETACH_DEADLINE, DeviceHealth, ExecutorFailure, ExecutorHealth, RasterBackend, RasterCommand,
+    RasterExecutor, RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange,
+    SlotConfig, SlotFailure, SlotId, SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface,
+    SlotTarget, SlotVisibility, SurfaceHold, TurnOutcome,
 };
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;

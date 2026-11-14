@@ -297,6 +297,8 @@ pub struct ScriptedSink {
     /// How many times `submit` ran — the "did the scene actually leave the
     /// UI runtime" oracle most tests assert on.
     pub submit_calls: u32,
+    /// The epoch each submit was handed, in order.
+    pub epochs: Vec<flui_foundation::FrameEpoch>,
     /// What `surface_size` reports.
     size: (u32, u32),
 }
@@ -305,6 +307,7 @@ impl std::fmt::Debug for ScriptedSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScriptedSink")
             .field("submit_calls", &self.submit_calls)
+            .field("epochs", &self.epochs)
             .field("size", &self.size)
             .finish_non_exhaustive()
     }
@@ -319,6 +322,7 @@ impl ScriptedSink {
         Self {
             script: Box::new(script),
             submit_calls: 0,
+            epochs: Vec::new(),
             size: (800, 600),
         }
     }
@@ -365,9 +369,14 @@ impl FrameSink for ScriptedSink {
         self.size
     }
 
-    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict {
+    fn submit(
+        &mut self,
+        epoch: flui_foundation::FrameEpoch,
+        publication: ScenePublication,
+    ) -> SubmitVerdict {
         let call_index = self.submit_calls;
         self.submit_calls += 1;
+        self.epochs.push(epoch);
         (self.script)(call_index, &publication)
     }
 }

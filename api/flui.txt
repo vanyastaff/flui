@@ -35507,7 +35507,7 @@ pub fn flui_runtime::runtime_services::RuntimeHostServices::with_flush_registry(
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_preferences(self, preferences: flui_runtime::owner::preferences::SystemPreferencesSnapshot) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_process_nonce(self, nonce: flui::platform::drag::ProcessNonce) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
 pub trait flui_runtime::sink::FrameSink
-fn flui_runtime::sink::FrameSink::submit(&mut self, publication: flui_layer::scene::owner::ScenePublication) -> flui_runtime::sink::SubmitVerdict
+fn flui_runtime::sink::FrameSink::submit(&mut self, epoch: flui::foundation::FrameEpoch, publication: flui_layer::scene::owner::ScenePublication) -> flui_runtime::sink::SubmitVerdict
 fn flui_runtime::sink::FrameSink::surface_size(&mut self) -> (u32, u32)
 pub enum flui_runtime::sink::SubmitVerdict
 impl Clone for flui_runtime::sink::SubmitVerdict

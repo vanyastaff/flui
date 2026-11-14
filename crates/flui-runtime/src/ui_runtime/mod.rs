@@ -238,6 +238,10 @@ pub struct UiRuntime {
     /// The time the previous frame ran at, the floor a delivered vsync is held to so the frame
     /// clock never runs backwards (ADR-0257).
     last_frame_time: Cell<Option<web_time::Instant>>,
+    /// The epoch of the last frame a presentation of this runtime handed its
+    /// sink: each submit takes the next one, so a settlement names the frame
+    /// it settles (ADR-0305 §4).
+    frame_epoch: Cell<flui_foundation::FrameEpoch>,
     /// Whether a redraw has been requested since the last
     /// [`Self::mark_rendered`] — a clone of `AppRuntime`'s own
     /// `needs_redraw` flag (production; a fresh, unshared flag for the
