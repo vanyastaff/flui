@@ -115,9 +115,11 @@ Tests in `crates/flui-runtime/src/ui_runtime/frame_commit_state_tests.rs`:
 before the deadline `next_wake` reports, each retry submits once, the waits grow, and a presented
 frame ends the wait. In the same file,
 `a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff` pins that a `Failed` or
-`DeviceLost` frame whose platform wake panics keeps its backoff, and
+`DeviceLost` frame whose platform wake panics keeps its backoff and records its telemetry, and
 `a_refused_frame_waits_for_its_windows_next_change` pins §4: no wait, no frame, until the host
-asks again.
+asks again. `redraw_wake_routing::a_tail_panic_whose_wake_panics_keeps_its_report_and_backoff`
+(`crates/flui-runtime/src/ui_runtime/tests/`) pins the same order for a segment that panics in its
+tail.
 
 `crates/flui-app/tests/runner_close.rs` pins §4 through the raster host:
 `a_window_past_the_device_limit_waits_for_a_size_it_takes`,

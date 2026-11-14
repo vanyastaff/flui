@@ -219,7 +219,7 @@ re-exports the types):
   recovery. It does not by itself drop the surrounding frame or arm a retry.
 - `FrameFailureReport { address, kind, disposition, consecutive_failures }`
   carries the generational presentation address (#552). The streak counts
-  consecutive `FrameDropped` reports and `Failed` submits, which are retried without a report
+  consecutive `FrameDropped` reports and the `Failed` submits that are retried, without a report
   (ADR-0334). A `Contained` report exposes the current streak but neither increments nor resets
   it; a terminally clean attempt that painted nothing, or whose scene reached no sink, resets the
   streak after that attempt's contained reports have been delivered, and a painted one resets it
@@ -283,14 +283,15 @@ the supplied secondary config does not override either for existing siblings.
   revision through the current one. A deferred painted frame, `Errored`,
   `SurfaceStale`, `DeviceLost`, `Failed` and `Refused` remain uncommitted. `Idle` neither
   advances nor acknowledges a revision.
-- Submit verdicts have distinct retry effects. `SurfaceStale` and `DeviceLost`
-  retain input telemetry, arm a wake, and request a full repaint of the actual
-  producer. `Failed` drains telemetry and paints the tree again after the
-  dropped-frame backoff; `Refused` drains telemetry and waits for the window's next change
-  (ADR-0334). `Presented` drains
-  telemetry and commits; `NoPresent` commits without draining pending input
-  epochs because no backend present occurred. Segment failures arm only the
-  wake, except for the exact Tail/Scene repaint rule above.
+- Submit verdicts have distinct retry effects. `SurfaceStale` retains input telemetry, arms a
+  wake and requests a full repaint of the actual producer. `DeviceLost` retains input telemetry,
+  requests the full repaint and waits out the dropped-frame backoff (ADR-0267). `Failed` drains
+  telemetry and paints the tree again after that backoff, unless a pending frame shows the tree
+  or the device was given up; `Refused` drains telemetry and waits for the window's next change
+  (ADR-0334). `Presented` drains telemetry and commits; `NoPresent` commits without draining
+  pending input epochs because no backend present occurred. A segment failure waits out the
+  dropped-frame backoff (a text failure that waits for input arms nothing) and repaints only by
+  the exact Tail/Scene rule above.
 - A retry whose terminal failure consumed its dirty state may run a clean
   `Idle`, reset the failure streak, and clear the wake. It does **not** repair
   the absent commit: the presentation remains `Uncommitted` with the last-good

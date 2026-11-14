@@ -408,6 +408,7 @@ fn wake_debt_and_signal_write_matrix() {
             ("redraw_wake_routing::a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake", redraw_wake_routing::a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake as fn()),
             ("redraw_wake_routing::frame_waker_wakes_the_ui_runtime_from_a_worker", redraw_wake_routing::frame_waker_wakes_the_ui_runtime_from_a_worker as fn()),
             ("redraw_wake_routing::a_redraw_requested_after_its_segment_survives_the_frame", redraw_wake_routing::a_redraw_requested_after_its_segment_survives_the_frame as fn()),
+            ("redraw_wake_routing::a_tail_panic_whose_wake_panics_keeps_its_report_and_backoff", redraw_wake_routing::a_tail_panic_whose_wake_panics_keeps_its_report_and_backoff as fn()),
             ("redraw_wake_routing::a_mark_after_the_pipeline_requests_the_next_frame", redraw_wake_routing::a_mark_after_the_pipeline_requests_the_next_frame as fn()),
             ("redraw_wake_routing::many_frame_requests_before_a_frame_poke_the_window_once", redraw_wake_routing::many_frame_requests_before_a_frame_poke_the_window_once as fn()),
             ("redraw_wake_routing::a_secondary_presentation_is_laid_out_at_its_own_size", redraw_wake_routing::a_secondary_presentation_is_laid_out_at_its_own_size as fn()),

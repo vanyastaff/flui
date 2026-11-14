@@ -159,7 +159,8 @@ fn runtime_whose_wake_panics(panics: &Arc<AtomicBool>) -> UiRuntime {
 /// the frame's backoff armed: the frame waits for the deadline, neither tried at once nor
 /// forgotten.
 ///
-/// Fails when the repaint's wake runs before the streak and the wait are committed.
+/// Fails when the repaint's wake runs before the streak and the wait are committed, or before the
+/// dropped frame's telemetry is recorded.
 #[test]
 fn a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff() {
     for verdict in [SubmitVerdict::Failed, SubmitVerdict::DeviceLost] {
@@ -167,7 +168,9 @@ fn a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff() {
         let mut runtime = runtime_whose_wake_panics(&panics);
         let mut sink = Failing::new(verdict, 1);
         sink.panic_the_next_wake = Some(Arc::clone(&panics));
-        let turn = catch_unwind(AssertUnwindSafe(|| host_turn(&mut runtime, &mut sink)));
+        let (turn, log) = flui_testing::log_capture::capture(|| {
+            catch_unwind(AssertUnwindSafe(|| host_turn(&mut runtime, &mut sink)))
+        });
         panics.store(false, Ordering::SeqCst);
         assert!(
             turn.is_err(),
@@ -177,6 +180,14 @@ fn a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff() {
         assert!(
             runtime.failure_retry_deadline().is_some(),
             "{verdict:?}: the frame waits out the dropped-frame backoff"
+        );
+        assert!(
+            log.records().iter().any(|record| {
+                record.target == "flui.frame"
+                    && record.field("event") == Some("frame_telemetry")
+                    && record.field("present_outcome") == Some("errored")
+            }),
+            "{verdict:?}: the dropped frame's telemetry is recorded"
         );
     }
 }

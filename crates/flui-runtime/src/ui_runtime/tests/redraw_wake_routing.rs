@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering};
 
 use flui_rendering::constraints::BoxConstraints;
 
@@ -274,5 +274,89 @@ pub(crate) fn a_secondary_presentation_is_laid_out_at_its_own_size() {
     assert_eq!(
         constraints_of(ui_runtime.presentations.get(secondary).expect("secondary")),
         Some(BoxConstraints::tight(Size::new(300.0, 200.0)))
+    );
+}
+
+/// A segment that panics in its tail re-dirties its tree through the platform wake, which is user
+/// code: a wake that panics there leaves the dropped frame reported and its backoff armed
+/// (ADR-0334), so the frame is tried again at the deadline rather than at once or never.
+///
+/// Fails when the repaint's wake runs before the failure is counted, reported and armed.
+pub(crate) fn a_tail_panic_whose_wake_panics_keeps_its_report_and_backoff() {
+    let panics = Arc::new(AtomicBool::new(false));
+    let armed = Arc::clone(&panics);
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        assert!(
+            !armed.load(AtomicOrdering::SeqCst),
+            "platform wake — intentional test panic"
+        );
+    });
+    let (window, _calls) = counting_window(2);
+    let mut ui_runtime = UiRuntime::try_new(
+        window,
+        1.0,
+        crate::runtime_services::RuntimeHostServices::new(
+            wake,
+            Arc::new(AtomicBool::new(false)),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
+    )
+    .expect("ui_runtime constructs");
+    ui_runtime
+        .attach_root_widget(&SizedBox::square(10.0))
+        .expect("root attaches");
+    let mut sink = ScriptedSink::always_presents();
+    let _ = ui_runtime.pump(
+        &mut crate::pump::SampledClock(web_time::Instant::now()),
+        &mut sink,
+    );
+    let reports = Arc::new(AtomicU32::new(0));
+    let counted = Arc::clone(&reports);
+    ui_runtime.set_frame_failure_handler(Some(crate::frame_failure::FrameFailureHandler::new(
+        move |_| {
+            counted.fetch_add(1, AtomicOrdering::SeqCst);
+        },
+    )));
+    let probe_panics = Arc::clone(&panics);
+    let probe_armed = Rc::new(Cell::new(true));
+    let probe = Rc::clone(&probe_armed);
+    ui_runtime.presentations.primary().set_segment_probe(
+        SegmentPhase::Tail,
+        Some(Box::new(move |_| {
+            if probe.replace(false) {
+                probe_panics.store(true, AtomicOrdering::SeqCst);
+                panic!("segment tail — intentional test panic");
+            }
+        })),
+    );
+    ui_runtime.enter(|ui_runtime| {
+        ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    });
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test observes the wake's panic leaving the pump"
+    )]
+    let turn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ui_runtime.pump(
+            &mut crate::pump::SampledClock(web_time::Instant::now()),
+            &mut sink,
+        )
+    }));
+    panics.store(false, AtomicOrdering::SeqCst);
+    assert!(!probe_armed.get(), "the tail ran and panicked");
+    assert!(turn.is_err(), "the wake's panic reaches the host");
+    assert_eq!(
+        reports.load(AtomicOrdering::SeqCst),
+        1,
+        "the dropped frame is reported"
+    );
+    assert!(
+        ui_runtime
+            .presentations
+            .primary()
+            .failure_retry_at()
+            .is_some(),
+        "the dropped frame waits out its backoff"
     );
 }

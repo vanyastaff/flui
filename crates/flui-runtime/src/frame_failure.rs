@@ -525,7 +525,7 @@ pub struct FrameFailureReport {
     pub disposition: FailureDisposition,
     /// Consecutive dropped frames for this presentation: each
     /// [`FailureDisposition::FrameDropped`] report, and each submit that settles
-    /// `SubmitVerdict::Failed`, which is retried without a report (ADR-0334).
+    /// `SubmitVerdict::Failed` and is retried, without a report (ADR-0334).
     /// A [`FailureDisposition::Contained`] report exposes the
     /// current count but neither increments nor resets it. A clean attempt that
     /// paints nothing, or whose scene reaches no sink, resets the streak after
