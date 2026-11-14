@@ -192,6 +192,18 @@ fn update_scheduler_bounds_matrix() {
                 a_frame_budget_refuses_non_finite_samples as fn(),
             ),
             (
+                "a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs",
+                a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs as fn(),
+            ),
+            (
+                "a_frame_recorded_out_of_order_reaches_a_consumer_past_the_later_one",
+                a_frame_recorded_out_of_order_reaches_a_consumer_past_the_later_one as fn(),
+            ),
+            (
+                "an_evicted_cursor_resumes_in_recording_order_and_repeats_none",
+                an_evicted_cursor_resumes_in_recording_order_and_repeats_none as fn(),
+            ),
+            (
                 "a_late_frame_names_its_slowest_phase",
                 a_late_frame_names_its_slowest_phase as fn(),
             ),
@@ -406,6 +418,7 @@ fn a_late_frame_names_its_slowest_phase() {
     assert!(clock.poll(start).should_run_segment());
     let ms = Duration::from_millis;
     let snapshot = clock.record_frame(
+        clock.telemetry_cut(),
         address(),
         FrameTimes {
             clock_timestamp: start,
@@ -446,6 +459,7 @@ fn frame_pace_ignores_idle_gaps() {
             let begun = start + ms(at);
             assert!(clock.poll(begun).should_run_segment());
             clock.record_frame(
+                clock.telemetry_cut(),
                 address(),
                 FrameTimes {
                     clock_timestamp: begun,
@@ -462,4 +476,137 @@ fn frame_pace_ignores_idle_gaps() {
     let pace = frame_pace(&snapshots);
     assert!((pace.frames_per_second - 62.5).abs() < 1e-6, "{pace:?}");
     assert_eq!(pace.frame_work, ms(4));
+}
+
+/// A frame recorded after later frames were produced, as a queued frame is once its sink settles
+/// it, keeps the id of its own produce and takes only the inputs stamped before it was cut.
+fn a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs() {
+    let clock = FrameClock::new();
+    let start = Instant::now();
+    let times = FrameTimes {
+        clock_timestamp: start,
+        segment_start: start,
+        segment_end: start,
+        submit_at: start,
+        phases: FramePhaseDurations::default(),
+    };
+    let early = clock.stamp_input_epoch(start);
+    clock.mark_demand(DemandKind::Dirty);
+    assert!(clock.poll(start).should_run_segment());
+    let first = clock.telemetry_cut();
+    let late = clock.stamp_input_epoch(start);
+    clock.mark_demand(DemandKind::Dirty);
+    assert!(clock.poll(start).should_run_segment());
+    let second = clock.telemetry_cut();
+
+    let one = clock.record_frame(first, address(), times, PresentOutcome::Presented);
+    let two = clock.record_frame(second, address(), times, PresentOutcome::Presented);
+    assert!(
+        one.frame_id < two.frame_id,
+        "each frame keeps its own produce's id"
+    );
+    let ids = |snapshot: &flui_scheduler::FrameSnapshot| {
+        snapshot
+            .input_epochs
+            .iter()
+            .map(|epoch| epoch.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(&one),
+        [early],
+        "the first frame carries only the input before its cut"
+    );
+    assert_eq!(
+        ids(&two),
+        [late],
+        "the later input waited for the later frame"
+    );
+}
+
+/// A frame recorded after a later one, because its sink settled it later, still reaches a
+/// consumer whose cursor is the later frame: the cursor follows the order of recording.
+///
+/// Fails when the cursor filters by id.
+fn a_frame_recorded_out_of_order_reaches_a_consumer_past_the_later_one() {
+    let clock = FrameClock::new();
+    let start = Instant::now();
+    let times = FrameTimes {
+        clock_timestamp: start,
+        segment_start: start,
+        segment_end: start,
+        submit_at: start,
+        phases: FramePhaseDurations::default(),
+    };
+    clock.mark_demand(DemandKind::Dirty);
+    assert!(clock.poll(start).should_run_segment());
+    let queued = clock.telemetry_cut();
+    clock.mark_demand(DemandKind::Dirty);
+    assert!(clock.poll(start).should_run_segment());
+    let failed = clock.telemetry_cut();
+
+    let later = clock.record_frame(failed, address(), times, PresentOutcome::Errored);
+    let seen = clock.frames_since(None);
+    assert_eq!(
+        seen.last().map(|frame| frame.frame_id),
+        Some(later.frame_id)
+    );
+
+    let settled = clock.record_frame(queued, address(), times, PresentOutcome::Presented);
+    assert!(
+        settled.frame_id < later.frame_id,
+        "the queued frame was produced first"
+    );
+    let next = clock.frames_since(Some(later.frame_id));
+    assert_eq!(
+        next.iter().map(|frame| frame.frame_id).collect::<Vec<_>>(),
+        [settled.frame_id],
+        "the frame recorded after the cursor is delivered"
+    );
+}
+
+/// A consumer whose cursor left the history ring resumes in recording order: a frame recorded
+/// late, after a later one, is delivered once, and the next pull from the last snapshot it got
+/// repeats none.
+///
+/// Fails when the evicted cursor's pull is sorted by id.
+fn an_evicted_cursor_resumes_in_recording_order_and_repeats_none() {
+    let clock = FrameClock::new();
+    let start = Instant::now();
+    let times = FrameTimes {
+        clock_timestamp: start,
+        segment_start: start,
+        segment_end: start,
+        submit_at: start,
+        phases: FramePhaseDurations::default(),
+    };
+    let cut = || {
+        clock.mark_demand(DemandKind::Dirty);
+        assert!(clock.poll(start).should_run_segment());
+        clock.telemetry_cut()
+    };
+    let first = cut();
+    let cursor = clock
+        .record_frame(first, address(), times, PresentOutcome::Presented)
+        .frame_id;
+    let cuts = (0..=flui_scheduler::FRAME_HISTORY_CAPACITY)
+        .map(|_| cut())
+        .collect::<Vec<_>>();
+    let (late, rest) = cuts.split_first().expect("cuts were taken");
+    for each in rest {
+        let _ = clock.record_frame(*each, address(), times, PresentOutcome::Presented);
+    }
+    let late = clock.record_frame(*late, address(), times, PresentOutcome::Presented);
+
+    let pulled = clock.frames_since(Some(cursor));
+    assert_eq!(
+        pulled.last().map(|frame| frame.frame_id),
+        Some(late.frame_id),
+        "the late frame comes last, as it was recorded"
+    );
+    let next = pulled.last().map(|frame| frame.frame_id);
+    assert!(
+        clock.frames_since(next).is_empty(),
+        "a pull from the last snapshot received repeats none"
+    );
 }

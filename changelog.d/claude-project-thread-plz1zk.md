@@ -12,9 +12,28 @@
   pointerless handle on Win32, AppKit, UIKit, Android and the web, none on headless), which the
   application's one GPU instance is made on
   ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §2).
+- **`flui-runtime`**: `SubmitVerdict::Queued` and `QueuedReplacing`, `FrameSettlement` and
+  `UiRuntime::settle_frame`
+  ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §4).
+  A sink that settles a frame later answers `Queued`; the runtime keeps what the frame commits,
+  captured at submit (its tree revision, input regions, layer reads and haptics), and the
+  settlement the host hands back commits that frame by its address and epoch. A settlement no
+  pending frame matches answers `Settled::Stale`. A sink that replaces a queued frame it has not
+  started answers `QueuedReplacing` with that frame's stamp, and its record folds.
+- **`flui-engine`**: `SendReceipt::Replaced` names the stamp of the unrendered frame a new frame
+  replaced in its slot's inbox.
 
 ### Changed
 
+- **`flui-scheduler`**: `FrameClock::record_frame` and `record_frame_retaining_epochs` take the
+  `FrameTelemetryCut` that `FrameClock::telemetry_cut` gave when the frame was submitted, so a
+  frame recorded after it settles keeps its own frame id and only the inputs that came before it
+  (`FrameTelemetryCut::after` leaves out the inputs an earlier pending frame covers).
+  `FrameClock::frames_since` follows the order frames were recorded, so a frame recorded after a
+  later one still reaches a consumer whose cursor is the later frame.
+- **`flui-interaction`**: `HapticsHost::frame_presented` takes the `HapticCut` that
+  `HapticsHost::frame_cut` gave when the frame was submitted, and plays only the requests queued
+  before it.
 - **`flui-runtime`**: `FrameSink::submit` takes the frame's `FrameEpoch` beside its publication. The
   UI runtime numbers the frames its presentations submit, and the host stamps each frame with
   that number instead of keeping a count of its own

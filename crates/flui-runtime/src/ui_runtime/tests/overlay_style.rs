@@ -198,3 +198,54 @@ pub(crate) fn a_panicking_chrome_is_retried_on_the_next_frame() {
     ui_runtime.render_frame(&mut sink);
     assert_eq!(delivered(&chrome), [SystemUiOverlayStyle::Dark]);
 }
+
+/// A queued frame announces the style it was painted with when it settles shown, never the
+/// style of a frame painted after it, and a later frame that is never shown announces nothing.
+pub(crate) fn a_queued_frame_announces_the_style_it_was_painted_with() {
+    use crate::sink::{FrameSettlement, Settled, SubmitVerdict};
+    let Fixture {
+        mut ui_runtime,
+        chrome,
+        scene,
+        writer,
+        window: _window,
+    } = styled_runtime();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    ui_runtime.render_frame(&mut sink);
+    writer.write(|ctx| scene.set(ctx, 1)).expect("write");
+    ui_runtime.render_frame(&mut sink);
+    let [dark, light] = sink.epochs[..] else {
+        panic!("two frames were queued, got {:?}", sink.epochs);
+    };
+    assert_eq!(delivered(&chrome), [], "nothing is on screen yet");
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+    assert_eq!(
+        ui_runtime.settle_frame(FrameSettlement::new(
+            address,
+            dark,
+            SubmitVerdict::Presented
+        )),
+        Settled::Applied
+    );
+    assert_eq!(
+        delivered(&chrome),
+        [SystemUiOverlayStyle::Dark],
+        "the settled frame's own style"
+    );
+    assert_eq!(
+        ui_runtime.settle_frame(FrameSettlement::new(
+            address,
+            light,
+            SubmitVerdict::NotShown
+        )),
+        Settled::Applied
+    );
+    assert_eq!(
+        delivered(&chrome),
+        [SystemUiOverlayStyle::Dark],
+        "the light frame was never shown"
+    );
+}

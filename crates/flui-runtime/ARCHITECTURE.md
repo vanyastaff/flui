@@ -706,6 +706,37 @@ and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 `the_withheld_retry_is_bounded_and_then_parks`.
 
+A sink that cannot answer within the call (the threaded raster placement) answers `Queued`, or
+`QueuedReplacing` with the stamp of the unrendered frame the new one replaced in its inbox, whose
+record folds then, so a presentation keeps no more records pending than the sink holds frames.
+The UI runtime then keeps a `PendingFrame` for the frame, captured when it was submitted: the
+tree revision it was painted from, its input regions, the layer reads parked for its scene, its
+haptic cut and its segment's span. The host later hands the raster side's
+`FrameSettlement { address, epoch, verdict }` to `UiRuntime::settle_frame`, which applies that
+verdict to the record its address and epoch name, by the same code an inline verdict runs, so
+the settlement commits the frame it names and not the tree as it is by then. A frame the sink
+replaced in its inbox folds when the frame that replaced it is queued (`QueuedReplacing`), and
+records still queued before a settled one fold into it (the raster side settles a slot's frames
+in order, except that a render still running when its executor dies settles after the inbox frame
+the death settles `Failed`); their layer reads wait for a later scene. A settlement no record
+matches is `Settled::Stale` (ADR-0305 §4). The frame's
+telemetry is recorded against the `FrameTelemetryCut` taken at submit: its own frame id and only
+the inputs stamped before it; a frame that fails inline meanwhile takes only the inputs stamped
+since (`FrameTelemetryCut::after`).
+Pointer input held for a commit replays when the settled frame shows the current tree and the
+presentation is committed, the rule that held it; an older
+frame's settlement leaves it for the later frame, and asks for a repaint when no later frame is
+still pending. Pinned by
+`a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored`,
+`a_settlement_commits_the_revision_its_frame_was_painted_from`,
+`a_later_settlement_folds_the_frames_it_superseded`,
+`a_replaced_frame_folds_by_its_stamp_and_never_the_frame_being_rendered`,
+`held_input_waits_for_the_settlement_that_commits_the_tree`,
+`held_input_behind_a_failed_frame_asks_for_the_frame_that_shows_the_tree`,
+`a_settlement_leaves_input_held_while_the_presentation_is_not_committed`,
+`a_failed_frame_takes_the_inputs_stamped_since_the_queued_frame` and
+`a_failed_frame_leaves_a_queued_frames_inputs_to_its_settlement`.
+
 ### `Vsync` controllers tick at the frame's timestamp
 
 Playback/debug progression is [ADR-0176](../../docs/adr/ADR-0176-presentation-animation-playback.md).
@@ -1228,7 +1259,7 @@ failures in competition.
 Each presentation owns a `HapticsHost` (ADR-0210 §4) on its gesture clock,
 playing on its window's actuator through a weak reference, with the platform
 row's deadline factor and the window's current refresh period. A frame the sink
-reports `Presented` plays the queued requests whose deadline has not passed; a
+reports `Presented` plays the requests queued before it was submitted (its `HapticCut`) whose deadline has not passed; a
 frame that paints nothing, one the backend found no damage in (`NoPresent`: the
 screen keeps the previous frame) and one it could not show (`NotShown`) present
 nothing, so their requests wait for a later presented frame or resolve to

@@ -126,6 +126,7 @@ mod presentations;
 mod pump;
 mod recording;
 mod sampling;
+mod settlement;
 
 pub use crate::runtime_services::RuntimeHostServices;
 pub(crate) use agent::AgentError;
@@ -140,6 +141,7 @@ pub(crate) use agent_wait::PendingWait;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
 pub(crate) use presentations::start_os_drags;
+pub(crate) use settlement::PendingFrame;
 
 // ---------------------------------------------------------------------------
 // Errors
