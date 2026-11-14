@@ -1,6 +1,7 @@
 //! The file a `file:` URI names (RFC 8089): what a desktop launch's
 //! arguments carry for a file (a desktop entry's `%U`) and what AppKit and
-//! UIKit hand an application for a document, read the same way on every host.
+//! UIKit hand an application for a document, and an Android intent's `file:`
+//! data, read the same way on every host.
 
 use std::path::PathBuf;
 
@@ -20,7 +21,9 @@ pub(crate) enum PathConvention {
     x11_host,
     wayland_host,
     target_os = "macos",
-    target_os = "ios"
+    target_os = "ios",
+    target_os = "android",
+    test
 ))]
 impl PathConvention {
     /// The convention of the host this is built for.

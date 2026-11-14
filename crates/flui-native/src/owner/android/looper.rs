@@ -484,6 +484,18 @@ impl AndroidLoop {
         for entry in self.host_queue.take() {
             let event = match entry {
                 java_host::HostEntry::TrimMemory(level) => ActivityEvent::TrimMemory(level),
+                java_host::HostEntry::Intent(intent) => {
+                    let opened = super::intent::Opening::of(intent)
+                        .opened(|uri| self.host_queue.open_document(uri));
+                    if !opened.is_empty() {
+                        // Before `ready` the delivery holds it, and a cold
+                        // one joins the launch.
+                        self.app_delivery
+                            .opened(opened)
+                            .or_contain((), "what an intent opened");
+                    }
+                    continue;
+                }
             };
             self.activity_callbacks.react(event).deliver(self);
         }

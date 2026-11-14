@@ -112,8 +112,12 @@ impl Application {
     /// Called on the owner thread with the files the operating system opened
     /// the application with: a document opened with it from the file
     /// manager, or one another application shared, at launch or while it
-    /// runs, in the operating system's order. Without it, opened files are
-    /// logged and dropped. A panic in it ends the run, as one in the
+    /// runs, in the operating system's order. A document a provider serves
+    /// (Android's `content:`) is open already: its path names the descriptor,
+    /// readable while the callback keeps a clone of the file, and
+    /// [`OpenedFile::name`](flui_platform::OpenedFile::name) gives its name.
+    /// Without it, opened files are logged and dropped. A panic in it ends
+    /// the run, as one in the
     /// platform handler's other methods does (ADR-0258 §4), once the URLs
     /// that came with the files are opened.
     pub fn on_open_files(

@@ -18,16 +18,20 @@
 //! buffers until a platform binds its wake handle (an entry can arrive before
 //! `android_main` runs). Once bound, each entry wakes the owner (ADR-0249),
 //! which drains the queue on its own thread and reads each entry as a
-//! [`HostEntry`]. The Java side queues and wakes and never waits for the
-//! owner, and the owner never waits for the Java main thread.
+//! [`HostEntry`]; an intent the Activity receives waits in a second queue, as
+//! the record [`ReceivedIntent`](super::intent::ReceivedIntent) reads, and
+//! the same drain takes it as [`HostEntry::Intent`]. The Java side queues and
+//! wakes and never waits for the owner, and the owner never waits for the
+//! Java main thread.
 
+use super::intent::ReceivedIntent;
 use crate::PlatformError;
 
 /// The version of the contract between this library and the Java classes:
 /// the native methods and their signatures, the methods the library calls,
 /// the entries of the queue, and what each means. `FluiHost.PROTOCOL` states
 /// it on the Java side; the two are raised together.
-pub(crate) const PROTOCOL: i32 = 2;
+pub(crate) const PROTOCOL: i32 = 3;
 
 /// The binary name of the Activity class the manifest names.
 pub(crate) const ACTIVITY_CLASS: &str = "dev.flui.platform.FluiActivity";
@@ -183,10 +187,16 @@ pub(crate) fn load_class<'local>(
 const TRIM_MEMORY: i32 = 1;
 
 /// One entry of `FluiHost`'s queue, as the owner drains it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum HostEntry {
     /// `onTrimMemory(level)`, with the `ComponentCallbacks2` level.
     TrimMemory(i32),
+    /// An intent `onCreate` or `onNewIntent` received.
+    #[cfg_attr(
+        not(target_os = "android"),
+        expect(dead_code, reason = "only the Android queue drains intents")
+    )]
+    Intent(ReceivedIntent),
 }
 
 impl HostEntry {
@@ -219,18 +229,21 @@ pub(crate) use queue::HostQueue;
 
 #[cfg(target_os = "android")]
 mod queue {
+    use std::os::fd::{FromRawFd as _, OwnedFd};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Weak};
 
     use android_activity::AndroidApp;
-    use jni::objects::{JClass, JIntArray, JObject};
+    use flui_platform::OpenedFile;
+    use jni::objects::{JClass, JIntArray, JObject, JObjectArray, JString};
     use jni::refs::Global;
     use jni::sys::jlong;
     use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
     use parking_lot::Mutex;
 
-    use super::{HOST_CLASS, HostEntry, load_class};
+    use super::{HOST_CLASS, HostEntry, ReceivedIntent, load_class};
     use crate::owner::android::activity::with_activity;
+    use crate::owner::android::java_view::strings;
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::signal::OwnerSignal;
 
@@ -356,27 +369,82 @@ mod queue {
             }));
         }
 
-        /// Every entry queued since the last call, oldest first; empty, with
-        /// no JNI call, unless a wake came in between. Owner thread.
+        /// Every entry queued since the last call, oldest first, then every
+        /// intent; empty, with no JNI call, unless a wake came in between.
+        /// Owner thread.
         pub(crate) fn take(&self) -> Vec<HostEntry> {
             if !self.inbox.pending.swap(false, Ordering::AcqRel) {
                 return Vec::new();
             }
+            // Each queue is drained on its own: a failure leaves that queue's
+            // entries queued for the next turn and loses neither.
+            let pairs = self.drained("entries", drain);
+            let records = self.drained("intents", drain_opened);
+            let mut entries = HostEntry::from_pairs(&pairs.unwrap_or_default());
+            entries.extend(
+                records
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(ReceivedIntent::from_record)
+                    .map(HostEntry::Intent),
+            );
+            entries
+        }
+
+        /// The document `uri`, a `content:` URI an intent brought, opened for
+        /// reading through the Activity's content resolver and held by the
+        /// file the application hears, with the name its provider shows;
+        /// `None`, logged, when it cannot be opened. Owner thread: a provider
+        /// can take long, and the Java main thread stays free meanwhile.
+        pub(crate) fn open_document(&self, uri: &str) -> Option<OpenedFile> {
+            let opened = with_activity(&self.app, |env, activity| {
+                env.with_local_frame(8, |env| open_document(env, activity, uri))
+            });
+            let (descriptor, name) = match opened {
+                Ok(Some(opened)) => opened,
+                // `FluiHost.openDocument` logged the provider's refusal.
+                Ok(None) => return None,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "flui_native::android",
+                        %error,
+                        "a document an intent opened could not be read"
+                    );
+                    return None;
+                }
+            };
+            OpenedFile::try_from_descriptor(descriptor, name)
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        target: "flui_native::android",
+                        %error,
+                        "a document an intent opened could not be held"
+                    );
+                })
+                .ok()
+        }
+
+        /// One drain of `FluiHost`, or `None` when it failed: what it queued
+        /// stays queued, and the next turn tries again.
+        fn drained<T>(
+            &self,
+            queue: &'static str,
+            drain: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> jni::errors::Result<T>,
+        ) -> Option<T> {
             let drained = with_activity(&self.app, |env, activity| {
                 env.with_local_frame(8, |env| drain(env, activity))
             });
             match drained {
-                Ok(pairs) => HostEntry::from_pairs(&pairs),
+                Ok(drained) => Some(drained),
                 Err(error) => {
-                    // What was queued stays queued, and the next turn tries
-                    // again.
                     self.inbox.pending.store(true, Ordering::Release);
                     tracing::warn!(
                         target: "flui_native::android",
+                        queue,
                         %error,
                         "FluiHost's queue could not be drained"
                     );
-                    Vec::new()
+                    None
                 }
             }
         }
@@ -443,6 +511,78 @@ mod queue {
         let pairs = JIntArray::cast_local(env, pairs)?;
         let mut out = vec![0; pairs.len(env)?];
         pairs.get_region(env, 0, &mut out)?;
+        Ok(out)
+    }
+
+    /// `FluiHost.openDocument` and `FluiHost.documentName` for `uri`: the
+    /// descriptor this library then owns, and the name, or `None` when the
+    /// provider refused. A failure after the descriptor is taken closes it.
+    #[expect(unsafe_code, reason = "a detached descriptor becomes an OwnedFd")]
+    fn open_document(
+        env: &mut Env<'_>,
+        activity: &JObject<'_>,
+        uri: &str,
+    ) -> jni::errors::Result<Option<(OwnedFd, Option<String>)>> {
+        let class = host_class(env, activity)?;
+        let text = env.new_string(uri)?;
+        let raw = env
+            .call_static_method(
+                &class,
+                jni_str!("openDocument"),
+                jni_sig!("(Landroid/content/Context;Ljava/lang/String;)I"),
+                &[JValue::Object(activity), JValue::Object(&text)],
+            )?
+            .i()?;
+        if raw < 0 {
+            return Ok(None);
+        }
+        // SAFETY: `openDocument` answers `ParcelFileDescriptor.detachFd()`,
+        // which hands the descriptor over: no Java object owns or closes it
+        // any more, so this is its only owner.
+        let descriptor = unsafe { OwnedFd::from_raw_fd(raw) };
+        let name = env
+            .call_static_method(
+                &class,
+                jni_str!("documentName"),
+                jni_sig!("(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;"),
+                &[JValue::Object(activity), JValue::Object(&text)],
+            )?
+            .l()?;
+        let name = env.cast_local::<JString<'_>>(name)?;
+        let name = if name.is_null() {
+            None
+        } else {
+            Some(name.try_to_string(env)?)
+        };
+        Ok(Some((descriptor, name)))
+    }
+    /// Every intent's record `FluiHost` queued, oldest first, each read in a
+    /// frame of its own so that a full queue holds no more local references
+    /// than one record.
+    fn drain_opened(
+        env: &mut Env<'_>,
+        activity: &JObject<'_>,
+    ) -> jni::errors::Result<Vec<Vec<String>>> {
+        let class = host_class(env, activity)?;
+        let records = env
+            .call_static_method(
+                &class,
+                jni_str!("drainOpened"),
+                jni_sig!("()[[Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        let records = env.cast_local::<JObjectArray<'_>>(records)?;
+        let len = records.len(env)?;
+        let mut out = Vec::with_capacity(len);
+        for index in 0..len {
+            let record = env.with_local_frame(4, |env| {
+                let record = records.get_element(env, index)?;
+                let record = env.cast_local::<JObjectArray<'_>>(record)?;
+                strings(env, &record)
+            })?;
+            out.push(record);
+        }
         Ok(out)
     }
 
@@ -595,6 +735,36 @@ mod tests {
             [HostEntry::TrimMemory(15), HostEntry::TrimMemory(80)]
         );
         assert_eq!(HostEntry::from_pairs(&[]), []);
+
+        // An intent's record names its launch as the library reads it, from
+        // `onCreate` (cold) and `onNewIntent` (running), and the Activity
+        // reads the latest intent from then on.
+        for stated in [
+            format!(
+                "static final String COLD = \"{}\";",
+                super::super::intent::COLD
+            ),
+            format!(
+                "static final String RUNNING = \"{}\";",
+                super::super::intent::RUNNING
+            ),
+            format!(
+                "static final int MAX_OPENED = {};",
+                flui_platform::MAX_OPENED_ITEMS
+            ),
+            format!(
+                "static final int MAX_URI_LENGTH = {};",
+                flui_platform::MAX_OPENED_URL_LEN
+            ),
+        ] {
+            assert!(host.contains(&stated), "{stated:?} in\n{host}");
+        }
+        for forwarded in [
+            "FluiHost.opened(intent, true);",
+            "setIntent(intent);\n        FluiHost.opened(intent, false);",
+        ] {
+            assert!(activity.contains(forwarded), "{forwarded:?} in\n{activity}");
+        }
         assert_eq!(
             HostEntry::from_pairs(&[TRIM_MEMORY, 5, TRIM_MEMORY]),
             [HostEntry::TrimMemory(5)]
