@@ -2513,7 +2513,9 @@ fn apply_graft(
     // holds only the nodes that are not contained, so this reads it, not
     // the replaced subtree.
     uncontained.remove(&anchor_sid);
-    uncontained.retain(|id| owner.tree().contains(*id));
+    if !uncontained.is_empty() {
+        uncontained.retain(|id| owner.tree().contains(*id));
+    }
 
     if !built.contained {
         uncontained.insert(anchor_sid);
