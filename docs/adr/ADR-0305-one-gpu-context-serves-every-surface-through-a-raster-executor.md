@@ -272,7 +272,7 @@ pub enum RasterSendError { Full(RasterCommand), StaleSlot(RasterCommand), Gone(R
 
 ```rust
 // flui-runtime
-pub enum SubmitVerdict { Presented, NoPresent, NotShown, Retry, SurfaceStale, DeviceLost, Failed, Queued }
+pub enum SubmitVerdict { Presented, NoPresent, NotShown, Retry, SurfaceStale, DeviceLost, Failed, Queued, QueuedReplacing(FrameEpoch) }
 pub struct FrameSettlement { pub address: PresentationAddress, pub epoch: FrameEpoch, pub verdict: SubmitVerdict }
 pub enum Settled { Applied, Stale }
 pub trait FrameSink { fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict; }
@@ -280,20 +280,23 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
 ```
 
 - Inline (§10), `FrameSink::submit` runs the executor's turn and answers the frame's own verdict,
-  as today. Threaded, it answers `Queued` once the inbox has the frame; the UI runtime keeps the
+  as today. Threaded, it answers `Queued` once the inbox has the frame, or `QueuedReplacing` with
+  the stamp of the unrendered frame the new one replaced there; the UI runtime keeps the
   frame's post-submit work (the tree revision it commits, its input regions, its staged layer
   reads, its frame-aligned haptics, its presented timestamp) in a record keyed by the frame's
   address and epoch, captured at submit, so a settlement commits the frame it names and not the
   tree as it is when the answer arrives. Input regions publish when their frame settles
   `Presented`, so hit testing matches the pixels on screen; a frame that settles anything else
   leaves the regions of the last presented frame in force.
-- The executor writes each settlement into the slot's record, never `Queued`; the record holds
-  every undrained settlement in a ring of the placement's depth, and the executor starts no frame
-  of a slot whose ring is full, so none is overwritten. A frame superseded in the inbox gets no
-  settlement of its own: the settlement of the frame that superseded it settles it too, and the
-  UI runtime folds its record into that frame's. Then the executor calls the host's wake, with no lock held
-  and contained (`RasterExecutor::turn`); the owner drains the record on its own thread and
-  calls `settle_frame` after its own borrows are released (ADR-0287 §1).
+- The executor writes each settlement into the slot's record, never a queued verdict; the record
+  holds every undrained settlement in a ring of the placement's depth, and the executor starts no
+  frame of a slot whose ring is full, so none is overwritten. A frame superseded in the inbox gets
+  no settlement of its own: the settlement of the frame that superseded it settles it too, and
+  the UI runtime folds its record when the sink names its stamp in `QueuedReplacing` (from the
+  sender's `SendReceipt::Replaced`), so the records a presentation keeps pending stay within the
+  placement's depth and one. Then the executor calls the host's wake, with no lock held and
+  contained (`RasterExecutor::turn`); the owner drains the record on its own thread and calls
+  `settle_frame` after its own borrows are released (ADR-0287 §1).
 - A settlement whose address or epoch no pending record holds is `Stale`, traced and ignored:
   `FrameEpoch` counts within one runtime's life, and the address carries the runtime's
   generational id.

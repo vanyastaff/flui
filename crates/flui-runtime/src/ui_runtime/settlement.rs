@@ -19,16 +19,13 @@ use crate::frame_failure::FrameFailureKind;
 use crate::presentation::PresentationState;
 use crate::sink::{FrameSettlement, Settled, SubmitVerdict};
 
-/// The most frames one presentation keeps pending. A record leaves when a settlement names it or
-/// a later frame (ADR-0305 §4): a frame the raster side superseded in its inbox gets no
-/// settlement of its own and folds when the frame that replaced it settles. Until the frame
-/// clock's in-flight gate (§5) paces production, a raster side that renders one frame for long
-/// while the owner keeps producing piles superseded records behind it, and the bound stops the
-/// pile: a frame queued into a full ring replaces the newest record in the inbox, so that record
-/// is the one folded. That holds while the host delivers settlements before it pumps the next
-/// frame: the pile forms behind one frame rendering, which is older than all of it, and once
-/// that frame settles the ring holds fewer than eight, so a full ring's newest record is the
-/// one waiting in the inbox, never the one the executor took.
+/// The most frames one presentation keeps pending. A record leaves when a settlement names it, a
+/// later frame's settlement folds it, or the sink reports that a later frame replaced it in its
+/// inbox ([`SubmitVerdict::QueuedReplacing`]), which folds it by its stamp (ADR-0305 §4). So a
+/// sink's own depth bounds the ring: the engine's raster executor holds at most its depth of
+/// frames rendering or settled and not yet delivered, and one in its inbox. A sink that answers
+/// `Queued` past this bound broke that contract; the newest record, the frame it most likely
+/// replaced, folds so the ring stays bounded.
 pub(super) const MAX_PENDING_FRAMES: usize = 8;
 
 /// What a frame commits once its sink's verdict is known, captured when the frame is handed to
@@ -158,33 +155,44 @@ impl UiRuntime {
     }
 
     /// The sink queued `frame`, stamped `epoch`: its record waits for the settlement that names
-    /// it. Into a presentation already holding [`MAX_PENDING_FRAMES`], `frame` replaces the newest
-    /// record in the raster inbox, which folds, so the reads it holds wait for a later scene.
-    /// Returns the first panic of that fold, for the caller to resume after the frame's tail.
+    /// it. A frame queued in place of the frame stamped `replaces` folds that frame's record,
+    /// found by its stamp, so the reads it holds wait for a later scene; a stamp no record has
+    /// (an inline verdict or a failure folded it first) folds nothing. Into a presentation that
+    /// still holds [`MAX_PENDING_FRAMES`], the sink broke its bound and the newest record folds.
+    /// Returns the first panic of a fold, for the caller to resume after the frame's tail.
     pub(super) fn queue_pending_frame(
         producer: &PresentationState,
         epoch: FrameEpoch,
         mut frame: PendingFrame,
+        replaces: Option<FrameEpoch>,
     ) -> FirstPanic {
         frame.epoch = epoch;
-        let folded = {
+        let (replaced, overflow) = {
             let mut pending = producer.pending_frames.borrow_mut();
-            let folded = (pending.len() >= MAX_PENDING_FRAMES)
+            let replaced = replaces
+                .and_then(|replaced| pending.iter().rposition(|record| record.epoch == replaced))
+                .and_then(|index| pending.remove(index));
+            let overflow = (pending.len() >= MAX_PENDING_FRAMES)
                 .then(|| pending.pop_back())
                 .flatten();
             pending.push_back(frame);
-            folded
+            (replaced, overflow)
         };
+        // The reads wait again before a subscriber hears of it, and each step runs contained.
         let mut held = FirstPanic::new();
-        if let Some(folded) = folded {
-            let epoch = folded.epoch.get();
-            // The reads wait again before a subscriber hears of it, and each step runs contained.
-            held.contain(|| Self::abandon_pending_frame(producer, folded));
+        if let Some(replaced) = replaced {
+            held.contain(|| Self::abandon_pending_frame(producer, replaced));
+        }
+        if let Some(overflow) = overflow {
+            let epoch = overflow.epoch.get();
+            held.contain(|| Self::abandon_pending_frame(producer, overflow));
             held.contain(|| {
-                tracing::debug!(
+                tracing::error!(
                     target: "flui.frame",
                     epoch,
-                    "a frame queued into a full settlement ring superseded the newest record; it folds"
+                    limit = MAX_PENDING_FRAMES,
+                    "a sink queued more frames than a presentation keeps pending without naming \
+                     the one it replaced; the newest record folds"
                 );
             });
         }
@@ -222,8 +230,11 @@ impl UiRuntime {
             );
             Settled::Stale
         };
-        if verdict == SubmitVerdict::Queued {
-            return stale("a settlement never carries Queued");
+        if matches!(
+            verdict,
+            SubmitVerdict::Queued | SubmitVerdict::QueuedReplacing(_)
+        ) {
+            return stale("a settlement never carries a queued verdict");
         }
         if address.ui_runtime_id != self.id {
             return stale("another runtime's frame");
@@ -502,7 +513,7 @@ impl UiRuntime {
                         // permanent disable: the next real event gets a full
                         // budget again.
                         producer.clear_not_shown_streak();
-                        tracing::trace!(
+                        tracing::warn!(
                             frame = frame_number,
                             streak,
                             "Frame withheld by the surface for {} consecutive attempts; \
@@ -601,7 +612,7 @@ impl UiRuntime {
                     // level consequence.
                     tracing::error!("Render error (non-recoverable this frame)");
                 }
-                SubmitVerdict::Queued => {
+                SubmitVerdict::Queued | SubmitVerdict::QueuedReplacing(_) => {
                     unreachable!("BUG: a queued frame is applied only by its settlement")
                 }
             }

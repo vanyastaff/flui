@@ -661,10 +661,62 @@ fn a_queued_frame_keeps_its_record_until_a_settlement_reaches_it() {
     assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
 }
 
-/// A raster side that renders one frame for long piles superseded frames behind it. A frame
-/// queued into a full ring replaces the newest record in the inbox, which folds; the oldest,
-/// the one the executor renders, keeps its record. A subscriber that panics on the fold's trace
-/// leaves the frame to finish: it settles as rendered before the panic continues.
+/// Queues one frame through a sink that answers `verdict`, and returns the frame's stamp.
+fn queue_one(ui_runtime: &UiRuntime, verdict: SubmitVerdict) -> flui_foundation::FrameEpoch {
+    let mut sink = ScriptedSink::new(move |_, _| verdict);
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(!ui_runtime.render_frame(&mut sink));
+    *sink.epochs.last().expect("the frame was submitted")
+}
+
+/// A raster side that renders one frame for long while the owner keeps producing replaces each
+/// unrendered frame in its inbox and names it: that record folds by its stamp, so the ring stays
+/// at the frame rendering and the one waiting. When the rendering frame settles undelivered and
+/// the executor takes the waiting one, the next frame queues beside them and folds nothing: the
+/// frame on the GPU keeps its record and settles `Applied`.
+///
+/// Fails when a replaced frame's record waits for a later settlement, or when a frame queued
+/// into a long pile folds the one the executor took.
+#[test]
+fn a_replaced_frame_folds_by_its_stamp_and_never_the_frame_being_rendered() {
+    let mut ui_runtime = mount_box();
+    let rendering = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    let mut waiting = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    let mut replaced = Vec::new();
+    for _ in 0..super::settlement::MAX_PENDING_FRAMES {
+        replaced.push(waiting);
+        waiting = queue_one(&ui_runtime, SubmitVerdict::QueuedReplacing(waiting));
+    }
+    let pending = || {
+        ui_runtime
+            .presentations
+            .primary()
+            .pending_frames
+            .borrow()
+            .len()
+    };
+    assert_eq!(pending(), 2, "the frame rendering and the one waiting");
+    // The executor took the waiting frame; the next one finds the inbox empty.
+    let next = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    assert_eq!(pending(), 3);
+
+    assert_eq!(settle(&mut ui_runtime, rendering), Settled::Applied);
+    for replaced in replaced {
+        assert_eq!(settle(&mut ui_runtime, replaced), Settled::Stale);
+    }
+    assert_eq!(
+        settle(&mut ui_runtime, waiting),
+        Settled::Applied,
+        "the frame the executor took keeps its record"
+    );
+    assert_eq!(settle(&mut ui_runtime, next), Settled::Applied);
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+}
+
+/// A sink that answers `Queued` past the ring's bound without naming the frame it replaced
+/// broke its contract: the newest record, the frame it most likely replaced, folds, and the
+/// oldest keeps its record. A subscriber that panics on the fold's error leaves the frame to
+/// finish: it settles as rendered before the panic continues.
 ///
 /// Fails when the fold drops the frame being rendered, or when its panic leaves the frame
 /// before its tail.
@@ -683,7 +735,7 @@ fn a_subscriber_that_panics_on_a_folded_frame_leaves_the_frame_finished() {
 
     let panicked = render_under(
         PanicsOnEvent {
-            needle: "settlement ring",
+            needle: "the newest record folds",
         },
         || {
             let _ = ui_runtime.render_frame(&mut sink);

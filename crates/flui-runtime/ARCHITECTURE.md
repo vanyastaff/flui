@@ -706,7 +706,9 @@ and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 `the_withheld_retry_is_bounded_and_then_parks`.
 
-A sink that cannot answer within the call (the threaded raster placement) answers `Queued`.
+A sink that cannot answer within the call (the threaded raster placement) answers `Queued`, or
+`QueuedReplacing` with the stamp of the unrendered frame the new one replaced in its inbox, whose
+record folds then, so a presentation keeps no more records pending than the sink holds frames.
 The UI runtime then keeps a `PendingFrame` for the frame, captured when it was submitted: the
 tree revision it was painted from, its input regions, the layer reads parked for its scene, its
 haptic cut and its segment's span. The host later hands the raster side's

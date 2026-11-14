@@ -34,6 +34,7 @@ use flui_layer::ScenePublication;
 ///         SubmitVerdict::DeviceLost => true,
 ///         SubmitVerdict::Failed => false,
 ///         SubmitVerdict::Queued => false,
+///         SubmitVerdict::QueuedReplacing(_) => false,
 ///     }
 /// }
 ///
@@ -82,9 +83,17 @@ pub enum SubmitVerdict {
     /// `UiRuntime::settle_frame`. Until then the runtime keeps what the frame commits, captured
     /// when it was submitted (ADR-0305 §4). A settlement never carries this verdict.
     Queued,
+    /// The sink took the frame in place of the frame stamped with this epoch, which it had
+    /// queued and not started: that frame never renders and no settlement names it, so its
+    /// record folds now, its input into this frame and its layer reads to a later scene
+    /// (ADR-0305 §4). A sink that replaces a queued frame answers this, never
+    /// [`SubmitVerdict::Queued`], so the frames a presentation keeps pending stay within what the
+    /// sink holds. Otherwise like `Queued`, and a settlement never carries it either.
+    QueuedReplacing(FrameEpoch),
 }
 
-/// The verdict of a frame a sink answered [`SubmitVerdict::Queued`], named by the frame's stamp
+/// The verdict of a frame a sink answered [`SubmitVerdict::Queued`] or
+/// [`SubmitVerdict::QueuedReplacing`], named by the frame's stamp
 /// (ADR-0305 §4). The host drains it from the raster side and hands it to
 /// `UiRuntime::settle_frame` on the owner thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +103,8 @@ pub struct FrameSettlement {
     pub address: PresentationAddress,
     /// The epoch the frame was submitted with.
     pub epoch: FrameEpoch,
-    /// What became of the frame: any verdict but [`SubmitVerdict::Queued`].
+    /// What became of the frame: any verdict but [`SubmitVerdict::Queued`] and
+    /// [`SubmitVerdict::QueuedReplacing`].
     pub verdict: SubmitVerdict,
 }
 

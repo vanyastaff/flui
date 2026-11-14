@@ -12,12 +12,16 @@
   pointerless handle on Win32, AppKit, UIKit, Android and the web, none on headless), which the
   application's one GPU instance is made on
   ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §2).
-- **`flui-runtime`**: `SubmitVerdict::Queued`, `FrameSettlement` and `UiRuntime::settle_frame`
+- **`flui-runtime`**: `SubmitVerdict::Queued` and `QueuedReplacing`, `FrameSettlement` and
+  `UiRuntime::settle_frame`
   ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §4).
   A sink that settles a frame later answers `Queued`; the runtime keeps what the frame commits,
   captured at submit (its tree revision, input regions, layer reads and haptics), and the
   settlement the host hands back commits that frame by its address and epoch. A settlement no
-  pending frame matches answers `Settled::Stale`.
+  pending frame matches answers `Settled::Stale`. A sink that replaces a queued frame it has not
+  started answers `QueuedReplacing` with that frame's stamp, and its record folds.
+- **`flui-engine`**: `SendReceipt::Replaced` names the stamp of the unrendered frame a new frame
+  replaced in its slot's inbox.
 
 ### Changed
 

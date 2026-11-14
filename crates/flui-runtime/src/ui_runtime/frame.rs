@@ -1015,10 +1015,23 @@ impl UiRuntime {
                     unreachable!("BUG: the submit closure returns only after the sink answered")
                 }
             };
-            if render_verdict == SubmitVerdict::Queued {
+            let queued = match render_verdict {
+                SubmitVerdict::Queued => Some(None),
+                SubmitVerdict::QueuedReplacing(replaced) => Some(Some(replaced)),
+                SubmitVerdict::Presented
+                | SubmitVerdict::NoPresent
+                | SubmitVerdict::NotShown
+                | SubmitVerdict::Retry
+                | SubmitVerdict::SurfaceStale
+                | SubmitVerdict::DeviceLost
+                | SubmitVerdict::Failed => None,
+            };
+            if let Some(replaces) = queued {
                 // The sink took the frame and settles it later, by its stamp: the record waits
                 // for that settlement, which arms whatever retry its verdict needs.
-                hover_panic.absorb(Self::queue_pending_frame(producer, epoch, pending));
+                hover_panic.absorb(Self::queue_pending_frame(
+                    producer, epoch, pending, replaces,
+                ));
             } else {
                 // A frame the sink answered inline with a verdict that commits it supersedes every
                 // frame it queued before: what they read waits for a later scene, and a settlement
