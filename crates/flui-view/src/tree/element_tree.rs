@@ -70,6 +70,10 @@ fn append_sparse_sliver_children<A: std::alloc::Allocator + Copy>(
         else {
             continue;
         };
+        if sparse_children.capacity() == 0 {
+            // Reserved before the sparse list, so in an arena the sparse list frees as the last block.
+            desired_children.reserve(parent_node.children().len());
+        }
         let desired = desired_membership.get_or_insert_with(|| {
             let mut desired = flui_foundation::SlotSet::new();
             for &child in desired_children.iter() {

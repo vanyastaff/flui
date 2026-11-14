@@ -531,8 +531,7 @@ pub struct BuildOwner {
     /// long service call.
     pub(crate) child_manager_registry: ChildManagerRegistry,
 
-    /// Scratch memory a build-phase walk lists into while it runs, reset as the next walk that
-    /// uses it begins (ADR-0328 §3). The render-edge sync after a build takes its lists from it.
+    /// The build phase's scratch lists (ADR-0328 §3), reset as the render-edge sync begins.
     frame_arena: flui_foundation::arena::FrameArena,
 
     /// Registry of live build-during-layout nodes, one per
@@ -2106,15 +2105,13 @@ impl BuildOwner {
             }
         }
 
-        // `capped_leftover`'s `Drop` flushes whatever this drain capped back
-        // into the real inbox here, on this normal-return path exactly like
-        // it would on an unwind through the loop above — see
-        // `CappedLeftoverGuard`'s doc.
+        // `capped_leftover`'s `Drop` flushes whatever this drain capped back into the real
+        // inbox here, on this normal-return path exactly like it would on an unwind through the
+        // loop above — see `CappedLeftoverGuard`'s doc.
 
-        // The build drained: every render child has attached. Settle each
-        // render parent's children into element-slot order (no-op unless an
-        // insert flagged a possible drift), so a render sibling that attached
-        // before a component-deferred sibling does not invert their layout.
+        // The build drained: every render child has attached. Settle each render parent's
+        // children into element-slot order (no-op unless an insert flagged a possible drift), so
+        // a render sibling attached before a component-deferred one does not invert their layout.
         tree.reorder_render_children_after_build(
             &self.child_manager_registry,
             &mut self.frame_arena,
