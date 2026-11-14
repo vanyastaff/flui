@@ -1150,3 +1150,58 @@ pub(crate) fn a_command_describes_itself_wherever_its_payload_sits() {
         assert_eq!(format!("{:?}", owned.command()), text);
     }
 }
+
+/// A list's fingerprint follows what its commands draw: the same drawing
+/// reads alike wherever the list keeps its payloads, and a change of any value
+/// a command draws with, a payload's content included, reads apart.
+pub(crate) fn a_fingerprint_reads_what_the_commands_draw() {
+    use flui_painting::paint::Image;
+
+    let (card, curve) = sample_paths();
+    let pixel = |red: u8| Image::from_rgba8(1, 1, vec![red, 0, 0, 255]);
+    let drawing = |path: &Path, color: Color, dx: f64, red: u8| {
+        flui_painting::testing::record(|canvas| {
+            canvas.draw_shadow(path, Color::BLACK, 4.0);
+            canvas.draw_path(path, &Paint::fill(color));
+            canvas.translate(dx, 0.0);
+            canvas.draw_image(pixel(red), Rect::from_ltrb(0.0, 0.0, 1.0, 1.0), None);
+        })
+    };
+    let base = drawing(&card, Color::BLUE, 5.0, 10);
+
+    // The shadow and the fill share one entry here, and keep one each when
+    // the fill comes from a list appended after the shadow's.
+    let mut split = flui_painting::testing::record(|canvas| {
+        canvas.draw_shadow(&card, Color::BLACK, 4.0);
+    });
+    split.append(flui_painting::testing::record(|canvas| {
+        canvas.draw_path(&card, &Paint::fill(Color::BLUE));
+        canvas.translate(5.0, 0.0);
+        canvas.draw_image(pixel(10), Rect::from_ltrb(0.0, 0.0, 1.0, 1.0), None);
+    }));
+    assert_eq!(
+        base.fingerprint(),
+        drawing(&card, Color::BLUE, 5.0, 10).fingerprint(),
+        "the same drawing reads alike"
+    );
+    assert_eq!(
+        base.fingerprint(),
+        split.fingerprint(),
+        "a payload is read by content, not by position"
+    );
+
+    let changed = [
+        ("the path's curves", drawing(&curve, Color::BLUE, 5.0, 10)),
+        ("the paint", drawing(&card, Color::RED, 5.0, 10)),
+        ("the transform", drawing(&card, Color::BLUE, 6.0, 10)),
+        ("the image's pixels", drawing(&card, Color::BLUE, 5.0, 11)),
+    ];
+    for (what, list) in changed {
+        assert_eq!(list.len(), base.len());
+        assert_ne!(
+            list.fingerprint(),
+            base.fingerprint(),
+            "a change of {what} reads apart"
+        );
+    }
+}
