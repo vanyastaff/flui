@@ -3264,6 +3264,14 @@ fn flui::foundation::WithKey::with_view_key(self, key: impl flui::foundation::Vi
 impl<T> flui::foundation::WithKey for T
 pub mod flui::foundation::affinity
 reexport flui::foundation::affinity::OwnerAffinity => flui::foundation::OwnerAffinity
+pub mod flui::foundation::arena
+pub struct flui::foundation::arena::FrameArena { .. }
+impl Default for flui::foundation::arena::FrameArena
+impl core::alloc::Allocator for &flui::foundation::arena::FrameArena
+impl core::fmt::Debug for flui::foundation::arena::FrameArena
+pub const fn flui::foundation::arena::FrameArena::new() -> Self
+pub fn flui::foundation::arena::FrameArena::reset(&mut self)
+pub type flui::foundation::arena::FrameVec<'f, T> = Vec<T, &'f flui::foundation::arena::FrameArena>
 pub mod flui::foundation::arity
 reexport flui::foundation::arity::Arity => flui::foundation::Arity
 reexport flui::foundation::arity::AtLeast => flui::foundation::AtLeast

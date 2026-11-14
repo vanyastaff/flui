@@ -10,6 +10,9 @@ mod notifier;
 #[path = "claim_slot.rs"]
 mod claim_slot;
 
+#[path = "frame_arena.rs"]
+mod frame_arena;
+
 #[path = "generation.rs"]
 mod generation;
 
