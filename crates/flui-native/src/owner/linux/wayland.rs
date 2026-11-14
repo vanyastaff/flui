@@ -2062,6 +2062,13 @@ mod event_loop {
                 return;
             };
             for forwarded in instance.take() {
+                // An application without a window (one that outlives its
+                // last) is asked to reopen, as a Dock click asks on macOS.
+                if self.windows.is_empty() {
+                    self.app
+                        .reopen()
+                        .or_contain((), "a launch another instance forwarded");
+                }
                 let opened = forwarded.opened();
                 if !opened.is_empty() {
                     self.app

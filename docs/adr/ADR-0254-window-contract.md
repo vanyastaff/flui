@@ -372,19 +372,22 @@ route is; what `ready` leaves is reported first after it, on every exit.
 **One instance.** A desktop host started with `CurrentHost::start_single(executor, app_id)` keeps
 one instance of the application per user session, named by its reverse-DNS app id. The first
 process owns the name; a later one hands it what its own launch opens, with the activation token
-its launcher gave it, and ends (`HostStart::Forwarded`, and `Application::run` returns `Ok(())`).
-The first hears the launch as `opened` with `Launch::Running` and `OpenTarget::Application`, and
-its host brings the window activated last forward with the token, without a command from above
-(Wayland `xdg_activation_v1`; on X11 at the time the startup id names). On Linux the name is owned
-on the session bus, and only there, where the first process serves `org.freedesktop.Application`
-(`Activate`, `Open`, `ActivateAction`) as GApplication does; files travel as absolute `file:` URIs
-and a call's URIs are bounded as `Opened`'s are. On Windows the first process holds a mutex and
-serves a named pipe, both named with the user's session id; the pipe admits the current user alone
-and rejects remote clients, and its frame is bounded and read as untrusted input. An app id outside
-reverse DNS, or a session without a bus, is warned about and the process runs as an instance of its
-own, so no launch is lost. macOS, iOS and Android keep one instance themselves and each Web page is
-an application of its own: `start_single` starts their host as `start_with` does. `flui-app` asks
-for one instance when the application declares a URL scheme or calls
+its launcher gave it, and ends once the first has taken the launch (`HostStart::Forwarded`, and
+`Application::run` returns `Ok(())`). A launch the first refuses or never takes (it holds sixteen
+waiting already, or it ends first) leaves the later process running as an instance of its own, as
+does a launch carrying a URI longer than the first would keep, so no launch is lost. The first hears
+the launch as `opened` with `Launch::Running` and `OpenTarget::Application`, after `reopen` when it
+holds no window, and its host brings the window activated last forward with the token, without a
+command from above (Wayland `xdg_activation_v1`; on X11 at the time the startup id names). On Linux
+the name is owned on the session bus, and only there, where the first process serves
+`org.freedesktop.Application` (`Activate`, `Open`, `ActivateAction`) as GApplication does; files
+travel as absolute `file:` URIs and a call's URIs are bounded as `Opened`'s are. On Windows the
+first process holds a mutex and serves a named pipe, both named with the user's session id; the
+pipe admits the current user alone and rejects remote clients, and its frame is bounded and read as
+untrusted input. An app id outside reverse DNS, or a session without a bus, is warned about and the
+process runs as an instance of its own. macOS, iOS and Android keep one instance themselves and
+each Web page is an application of its own: `start_single` starts their host as `start_with` does.
+`flui-app` asks for one instance when the application declares a URL scheme or calls
 `Application::single_instance(true)`, and `single_instance(false)` turns it off.
 
 System preferences are not a registration:

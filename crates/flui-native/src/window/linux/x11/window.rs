@@ -1675,6 +1675,9 @@ pub struct X11Windows {
     frame_inset: Arc<FrameInset>,
     support: Cell<WindowManagerSupport>,
     appearance: Cell<WindowAppearance>,
+    /// The window that had the focus last, whether or not it still has: the
+    /// one a forwarded launch brings forward.
+    last_focused: Cell<Option<WindowId>>,
 }
 // Owner-local (ADR-0327 §5): the table is the owner thread's alone.
 static_assertions::assert_not_impl_any!(X11Windows: Send, Sync);
@@ -1717,6 +1720,7 @@ impl X11Windows {
             frame_inset: Arc::new(FrameInset::default()),
             support: Cell::new(WindowManagerSupport::default()),
             appearance: Cell::new(WindowAppearance::Light),
+            last_focused: Cell::new(None),
             connection,
         };
         windows.read_support();
@@ -1999,6 +2003,9 @@ impl X11Windows {
             _ => return,
         };
         if let Some(window) = self.window_of(xid) {
+            if matches!(event, Event::FocusIn(_)) {
+                self.last_focused.set(Some(window.id));
+            }
             window.handle(event);
         }
     }
@@ -2148,13 +2155,17 @@ impl LoopWindows for X11Windows {
         }
     }
 
-    /// The window that has the focus comes forward, else any open one.
+    /// The window that had the focus last comes forward, the one the
+    /// runner routes the launch's links to; once it closed, any open one.
     fn activate_forwarded(&self, token: Option<&str>) {
         let windows = self.open_windows();
+        let open = |window: &&Rc<X11Window>| !window.closed.get();
+        let last = self.last_focused.get();
         let window = windows
             .iter()
-            .find(|window| !window.closed.get() && PlatformWindow::state(&***window).focused)
-            .or_else(|| windows.iter().find(|window| !window.closed.get()));
+            .filter(open)
+            .find(|window| Some(window.id) == last)
+            .or_else(|| windows.iter().find(open));
         if let Some(window) = window {
             let time = token
                 .and_then(crate::owner::linux::single_instance::startup_time)

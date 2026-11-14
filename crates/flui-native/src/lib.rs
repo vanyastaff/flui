@@ -667,6 +667,13 @@ impl CurrentHost {
                     std::env::var_os("DESKTOP_STARTUP_ID"),
                 ),
             );
+            if !launch.fits() {
+                tracing::warn!(
+                    bus_name,
+                    "a path this launch opens is too long to hand over: it runs on its own"
+                );
+                return self.launch(executor, None).map(HostStart::Started);
+            }
             return match single_instance::claim(&executor, None, bus_name, launch) {
                 Ok(Claim::First(instance)) => self
                     .launch(executor, Some(instance))
