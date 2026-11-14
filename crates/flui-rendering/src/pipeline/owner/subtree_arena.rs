@@ -73,7 +73,7 @@ use crate::{
     storage::{ErasedConstraints, RenderEntry, RenderNode, RenderTree},
 };
 
-use super::buffer_pool::BufferPool;
+use super::buffer_pool::{BufferPool, Pooled};
 use super::poison::{LayoutFailureKind, LayoutPoison};
 
 /// The child lists a layout walk checks out for each node it lays out, kept
@@ -83,6 +83,113 @@ pub(super) struct LayoutBuffers {
     child_ids: BufferPool<RenderId>,
     box_children: BufferPool<crate::protocol::ErasedChildState>,
     sliver_children: BufferPool<crate::protocol::ErasedSliverChildState>,
+}
+
+// ============================================================================
+// Lent parent data
+// ============================================================================
+
+/// A layout walk's state for one child, which holds that child's parent data while its parent
+/// lays it out.
+trait HoldsChildParentData {
+    fn child(&self) -> RenderId;
+    fn parent_data_slot(&mut self) -> &mut Option<Box<dyn ParentData>>;
+}
+
+impl HoldsChildParentData for crate::protocol::ErasedChildState {
+    fn child(&self) -> RenderId {
+        self.id
+    }
+
+    fn parent_data_slot(&mut self) -> &mut Option<Box<dyn ParentData>> {
+        &mut self.parent_data
+    }
+}
+
+impl HoldsChildParentData for crate::protocol::ErasedSliverChildState {
+    fn child(&self) -> RenderId {
+        self.id
+    }
+
+    fn parent_data_slot(&mut self) -> &mut Option<Box<dyn ParentData>> {
+        &mut self.parent_data
+    }
+}
+
+/// The child states of one layout frame, holding the parent data the frame borrowed from its
+/// children.
+///
+/// [`Self::lend`] moves a child's parent data out of its node into the child's state, so the
+/// parent reads and writes it there without a copy; dropping this value moves it back, on every
+/// exit of the frame: success, an error and an unwind. What the parent wrote during its layout
+/// (a sliver's `layout_offset`, a default it created on first access) is what the child keeps,
+/// which is the parent data's contract: the parent owns it.
+///
+/// The render tree cannot change while the walk runs (the lease holds its `&mut RenderTree`, and
+/// child builds are deferred until the walk ends), so every lent value goes back to the node it
+/// came from.
+struct LentChildren<'a, 'tree, T: HoldsChildParentData> {
+    arena: &'a SubtreeArena<'tree>,
+    states: Pooled<'a, T>,
+}
+
+impl<'a, 'tree, T: HoldsChildParentData> LentChildren<'a, 'tree, T> {
+    fn new(arena: &'a SubtreeArena<'tree>, states: Pooled<'a, T>) -> Self {
+        Self { arena, states }
+    }
+
+    /// Moves `node`'s parent data into `state`, the state of the child `node` is.
+    fn lend(state: &mut T, node: &mut RenderNode) {
+        *state.parent_data_slot() = node.take_parent_data();
+    }
+}
+
+impl<T: HoldsChildParentData> std::ops::Deref for LentChildren<'_, '_, T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Vec<T> {
+        &self.states
+    }
+}
+
+impl<T: HoldsChildParentData> std::ops::DerefMut for LentChildren<'_, '_, T> {
+    fn deref_mut(&mut self) -> &mut Vec<T> {
+        &mut self.states
+    }
+}
+
+impl<T: HoldsChildParentData> Drop for LentChildren<'_, '_, T> {
+    fn drop(&mut self) {
+        for state in self.states.iter_mut() {
+            let child = state.child();
+            // An in-flight child was never lent (its `&mut` is live on an ancestor frame), so
+            // whatever its state holds is the parent's own default and dies with the state.
+            if self.arena.is_in_flight(child) {
+                continue;
+            }
+            // A harness seed stands in for the node's parent data and was never lent either.
+            #[cfg(any(test, feature = "testing"))]
+            if self.arena.parent_data_seeds.contains_key(&child) {
+                continue;
+            }
+            let Some(data) = state.parent_data_slot().take() else {
+                continue;
+            };
+            let Some(NodePtr(ptr)) = self.arena.get(child) else {
+                continue;
+            };
+            // SAFETY: `child` is not in flight (guard above), and this frame's own Phase 2+3
+            // block, the only other holder of a `&mut` this frame derived, has ended, so this is
+            // the only live reference to the slot; the pointer is allocation-stable for the
+            // lease's lifetime (`NodePtr`).
+            let node: &mut RenderNode = unsafe { &mut *ptr };
+            // A child listed twice was lent once; its second state never holds the original,
+            // so it must not replace what the first one returned.
+            if node.parent_data().is_none() {
+                node.set_parent_data(data);
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -292,15 +399,32 @@ impl<'tree> SubtreeArena<'tree> {
         }
     }
 
+    /// Puts the harness seed for `child_id` in `slot`, and says whether there was one.
     #[cfg(any(test, feature = "testing"))]
     pub(super) fn seed_child_parent_data(
         &self,
         child_id: RenderId,
         slot: &mut Option<Box<dyn crate::parent_data::ParentData>>,
-    ) {
-        if let Some(seed) = self.parent_data_seeds.get(&child_id) {
-            *slot = Some(seed.to_box());
-        }
+    ) -> bool {
+        let Some(seed) = self.parent_data_seeds.get(&child_id) else {
+            return false;
+        };
+        *slot = Some(seed.to_box());
+        true
+    }
+
+    /// A build without the harness seeds none.
+    #[cfg(not(any(test, feature = "testing")))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the twin of the testing build's seed lookup, so both walks read alike"
+    )]
+    pub(super) fn seed_child_parent_data(
+        &self,
+        _child_id: RenderId,
+        _slot: &mut Option<Box<dyn crate::parent_data::ParentData>>,
+    ) -> bool {
+        false
     }
 
     /// Returns the [`NodePtr`] for `id`, or `None` for a stale or vacant id.
@@ -1109,7 +1233,8 @@ unsafe fn layout_subtree_borrowed_impl(
     // the child AFTER opening the parent's &mut.  Seeding here, while only
     // the `LayoutCycleGuard` (not any &mut) is live, removes the race.
     // -----------------------------------------------------------------------
-    let mut child_states = arena.buffers.box_children.checkout(child_ids.len());
+    let mut child_states =
+        LentChildren::new(arena, arena.buffers.box_children.checkout(child_ids.len()));
     child_states.extend(
         child_ids
             .iter()
@@ -1146,21 +1271,25 @@ unsafe fn layout_subtree_borrowed_impl(
             if arena.is_in_flight(cs.id) {
                 continue;
             }
+            let seeded = arena.seed_child_parent_data(cs.id, &mut cs.parent_data);
             if let Some(child_ptr) = arena.get(cs.id) {
-                // SAFETY: child `cs.id` is NOT in-flight (guard above).
-                let child_node: &RenderNode = unsafe { &*child_ptr.0 };
+                // SAFETY: child `cs.id` is NOT in-flight (guard above), so it is not `id`, which
+                // the cycle guard marked in flight, and no ancestor frame holds its `&mut`;
+                // `parent_shared` has dropped. This is the only live reference to the slot.
+                let child_node: &mut RenderNode = unsafe { &mut *child_ptr.0 };
                 cs.offset = child_node.offset();
                 cs.needs_layout = child_node.needs_layout();
                 cs.geometry_degraded = child_node.geometry_degraded();
-                // Seed parent data from the child's persistent RenderState.
-                cs.parent_data = child_node.parent_data().map(dyn_clone::clone_box);
                 if let Some(sliver_entry) = child_node.as_sliver() {
                     cs.sliver_constraints = sliver_entry.state().constraints().copied();
                     cs.sliver_geometry = sliver_entry.state().geometry();
                 }
+                // The child's parent data moves into its state for this layout and back when
+                // `child_states` drops; a harness seed stands in for it unlent.
+                if !seeded {
+                    LentChildren::lend(cs, child_node);
+                }
             }
-            #[cfg(any(test, feature = "testing"))]
-            arena.seed_child_parent_data(cs.id, &mut cs.parent_data);
         }
         // All shared child reads complete; no borrow of any slot is live.
     }
@@ -1922,7 +2051,10 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // `DriverSliverLayoutContext` path is always taken for slivers so that the
     // context's `pending_child_requests` / `pending_retain_bands` sinks are
     // wired in — even when the current child list is empty.
-    let mut child_states = arena.buffers.sliver_children.checkout(child_ids.len());
+    let mut child_states = LentChildren::new(
+        arena,
+        arena.buffers.sliver_children.checkout(child_ids.len()),
+    );
     child_states.extend(
         child_ids
             .iter()
@@ -1944,12 +2076,12 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // tag is live is UB.  We detect such ids via `is_in_flight` and skip them.
     //
     // Parent-data: `ErasedSliverChildState.parent_data` starts as `None`;
-    // seed from persisted state so lazy sliver consumers (e.g.
+    // it is filled from persisted state so lazy sliver consumers (e.g.
     // `RenderSliverList`) can read the logical index the element tree
     // stamped on insertion (`stamp_sliver_logical_index` in
     // `flui-view/src/element/behavior_commons.rs`) on a previous frame.
-    // `ParentData: DynClone` makes this a cheap heap clone (one `Box` per
-    // attached child; K is bounded by viewport/cache band, not by item count).
+    // The parent data is lent, not copied: it moves into the child's state and
+    // back when `child_states` drops (`LentChildren`).
     //
     // SAFETY: for children NOT in-flight, Phase 1's `parent_shared` has been
     // dropped, each `child_ptr` addresses a DISTINCT slab slot from `id`'s
@@ -1960,16 +2092,17 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         if arena.is_in_flight(cs.id) {
             continue;
         }
+        let seeded = arena.seed_child_parent_data(cs.id, &mut cs.parent_data);
         if let Some(child_ptr) = arena.get(cs.id) {
-            // SAFETY: child `cs.id` is NOT in-flight (guard above).
-            let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
+            // SAFETY: as in the box walk's Phase 1b: child `cs.id` is NOT in-flight (guard
+            // above), so it is neither `id` nor an ancestor, and this is the only live reference
+            // to its slot.
+            let child_node: &mut RenderNode = unsafe { &mut *child_ptr.0 };
             cs.offset = child_node.offset();
-            if let Some(pd) = child_node.parent_data() {
-                cs.parent_data = Some(dyn_clone::clone_box(pd));
+            if !seeded {
+                LentChildren::lend(cs, child_node);
             }
         }
-        #[cfg(any(test, feature = "testing"))]
-        arena.seed_child_parent_data(cs.id, &mut cs.parent_data);
     }
     // All shared child reads complete; no borrow of any slot is live.
 
