@@ -370,6 +370,7 @@ where
         // backend only if the slot is empty, so an application that
         // configured its own subscriber first keeps it.
         let _installation = super::logging::init_managed_logging(&config);
+        let opening = opening.or_entry_declarations();
         // Android's `AndroidApp` before anything is installed, so a run with
         // no entry leaves nothing behind.
         #[cfg(target_os = "android")]
@@ -389,6 +390,31 @@ where
         let started = run_web(root, config, opening);
         started.inspect_err(|_| discard_capabilities())
     }
+}
+
+/// Record what the entry function `#[flui::main]` marks declares it opens,
+/// for the runs it starts on this thread, and hand back what was recorded
+/// before; refused while this thread's loop state is borrowed, which only an
+/// entry called from inside a run's own callback finds.
+pub(in crate::app) fn swap_entry_declarations(
+    declarations: Option<flui_view::navigation::LinkDeclarations>,
+) -> Result<Option<flui_view::navigation::LinkDeclarations>, std::cell::BorrowMutError> {
+    host::APP_RUNTIME.with(|slot| {
+        let mut state = slot.try_borrow_mut()?;
+        Ok(std::mem::replace(
+            &mut state.entry_declarations,
+            declarations,
+        ))
+    })
+}
+
+/// What [`swap_entry_declarations`] recorded, while its entry runs.
+pub(in crate::app) fn entry_declarations() -> Option<flui_view::navigation::LinkDeclarations> {
+    host::APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .and_then(|state| state.entry_declarations)
+    })
 }
 
 /// Keep `app` for the run the `#[flui::main]` entry starts on this thread.

@@ -331,6 +331,11 @@ pub(crate) struct AppRuntime {
     /// entry and the run carries it.
     #[cfg(target_os = "android")]
     pub(crate) android_entry: Option<android_activity::AndroidApp>,
+    /// What the entry function `#[flui::main]` marks declares it opens, read
+    /// from its crate's `[package.metadata.flui.declares]` and recorded while
+    /// that function runs, for an application that set no
+    /// `Application::declares`.
+    pub(super) entry_declarations: Option<flui_view::navigation::LinkDeclarations>,
     /// The session end the host is answering: every presentation's subscribers
     /// hold their blocks on this one request, so the answer to the operating
     /// system is the aggregate. Kept from the query until the session end is
@@ -614,6 +619,7 @@ impl AppRuntime {
             native_windows: std::cell::RefCell::default(),
             #[cfg(target_os = "android")]
             android_entry: None,
+            entry_declarations: None,
             session_end: None,
             session_end_current: None,
             session_end_refusals: Vec::new(),

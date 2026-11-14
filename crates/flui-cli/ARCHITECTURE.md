@@ -95,7 +95,10 @@ one for the domains' `https` links (`the_activity_filters_what_the_application_o
 keys both Apple bundles' `Info.plist` take from `build/apple_opening.rs`: `CFBundleURLTypes`, and
 per file type an exported uniform type under the bundle identifier that the bundle opens as its
 owner (`a_bundle_registers_what_the_application_opens`). The macOS bundle's XML plist renders the
-same keys (`the_keys_render_as_xml_property_list_entries`).
+same keys (`the_keys_render_as_xml_property_list_entries`). Schemes and domains are the
+application's own: a crate another crate of the build links by a normal or build edge is refused
+when it declares them (`only_the_application_declares_the_links_it_opens`), since the run admits
+what `#[flui::main]` reads from the crate it marks.
 
 `flui doctor` reads the same declarations for a manifest the CLI does not write
 (`declarations/verify.rs`, `commands/doctor/project.rs`): the project's hand-written Android

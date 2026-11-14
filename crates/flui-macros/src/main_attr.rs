@@ -1,12 +1,15 @@
 //! `#[flui::main]`: the function an application starts from, on every
-//! platform.
+//! platform, carrying what its crate's manifest declares the application
+//! opens.
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::ItemFn;
 use syn::spanned::Spanned;
 
 use crate::runtime_path::Runtime;
+
+mod declares;
 
 /// Expand `#[main]` on `item`, with `args` the attribute's own tokens.
 pub(crate) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
@@ -24,9 +27,36 @@ pub(crate) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     })?;
     check_signature(&function)?;
     let app = Runtime::App.resolve(function.sig.ident.span())?;
-    let name = &function.sig.ident;
+    let name = function.sig.ident.clone();
+    let manifest =
+        declares::manifest_path().map_err(|error| syn::Error::new(Span::call_site(), error))?;
+    let text = std::fs::read_to_string(&manifest).map_err(|error| {
+        syn::Error::new(
+            Span::call_site(),
+            format!("`#[flui::main]` reads {}: {error}", manifest.display()),
+        )
+    })?;
+    let opens = declares::Opens::parse(&text).map_err(|error| {
+        syn::Error::new(
+            Span::call_site(),
+            format!(
+                "`#[flui::main]` reads what the application opens from {}: {error}",
+                manifest.display()
+            ),
+        )
+    })?;
+    let declared = opens.statement(&app)?;
+    let manifest = manifest.to_string_lossy().into_owned();
+    let mut function = function;
+    if let Some(declared) = declared {
+        function.block.stmts.insert(0, declared);
+    }
     Ok(quote! {
         #function
+
+        // The manifest the declarations come from: naming it makes Cargo
+        // compile the crate again when it changes.
+        const _: &[u8] = include_bytes!(#manifest);
 
         // What the function returns is one an entry may: checked on every
         // target, so a signature Android would refuse fails on the desktop too.

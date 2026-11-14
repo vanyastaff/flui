@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display, Formatter};
 use std::path::{Path, PathBuf};
 
-use cargo_metadata::{Metadata, Package, PackageId};
+use cargo_metadata::{DependencyKind, Metadata, Package, PackageId};
 use serde::Deserialize;
 
 use crate::build::error::{BuildError, BuildResult};
@@ -40,6 +40,18 @@ pub(crate) const SCHEMA: u32 = 3;
 /// The key under `[package.metadata.flui]` that holds a crate's
 /// declarations.
 const KEY: &str = "declares";
+
+/// Whether a crate is an application of the graph or a dependency of one.
+/// The URLs an application opens are the application's own: `#[flui::main]`
+/// carries the crate's lists into the run, which opens only those, so a
+/// dependency that declared a scheme would register a link the run refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CrateRole {
+    /// Nothing in the build depends on the crate.
+    Application,
+    /// Another crate of the build depends on it.
+    Dependency,
+}
 
 /// An Android permission a crate needs, such as
 /// `android.permission.INTERNET`: two or more `.`-separated labels, each an
@@ -424,6 +436,20 @@ impl Declarations {
             .iter()
             .map(|package| (&package.id, package))
             .collect();
+        // A crate the build links into another, by a normal or build edge: a
+        // test crate that depends on the application leaves it an application.
+        let dependencies: BTreeSet<&PackageId> = resolve
+            .nodes
+            .iter()
+            .flat_map(|node| &node.deps)
+            .filter(|dependency| {
+                dependency
+                    .dep_kinds
+                    .iter()
+                    .any(|kind| kind.kind != DependencyKind::Development)
+            })
+            .map(|dependency| &dependency.pkg)
+            .collect();
         let mut joined = Self::default();
         for node in &resolve.nodes {
             let package = packages.get(&node.id).ok_or_else(|| {
@@ -434,24 +460,35 @@ impl Declarations {
                 .iter()
                 .map(|feature| feature.as_str())
                 .collect();
-            joined.add(package, &features)?;
+            let role = if dependencies.contains(&node.id) {
+                CrateRole::Dependency
+            } else {
+                CrateRole::Application
+            };
+            joined.add(package, &features, role)?;
         }
         Ok(joined)
     }
 
-    /// What `package` alone declares, with `features` enabled.
+    /// What `package` alone declares, with `features` enabled, as a crate of
+    /// `role`.
     ///
     /// # Errors
     ///
     /// As [`Declarations::collect`], for this one crate's table.
-    pub(crate) fn of_package(package: &Package, features: &[&str]) -> BuildResult<Self> {
+    pub(crate) fn of_package(
+        package: &Package,
+        features: &[&str],
+        role: CrateRole,
+    ) -> BuildResult<Self> {
         let mut declarations = Self::default();
-        declarations.add(package, features)?;
+        declarations.add(package, features, role)?;
         Ok(declarations)
     }
 
-    /// Add what `package` declares, with `features` enabled.
-    fn add(&mut self, package: &Package, features: &[&str]) -> BuildResult<()> {
+    /// Add what `package`, a crate of `role`, declares, with `features`
+    /// enabled.
+    fn add(&mut self, package: &Package, features: &[&str], role: CrateRole) -> BuildResult<()> {
         let Some(table) = package.metadata.get("flui").and_then(|flui| flui.get(KEY)) else {
             return Ok(());
         };
@@ -473,6 +510,18 @@ impl Declarations {
         {
             return Err(refused(format!(
                 "declares for feature `{unknown}`, which {name} does not have"
+            )));
+        }
+        if role == CrateRole::Dependency
+            && std::iter::once(Opening::of_declares(&declares))
+                .chain(declares.features.values().map(Opening::of_part))
+                .any(|opening| {
+                    !opening.url_schemes.is_empty() || !opening.associated_domains.is_empty()
+                })
+        {
+            return Err(refused(format!(
+                "declares `url-schemes` or `associated-domains`, and other crates of the \
+                 build depend on {name}: the application declares the links it opens"
             )));
         }
         self.add_android(package, declares.schema, &declares.android)?;
@@ -911,7 +960,7 @@ mod tests {
                     "[workspace]\n[dependencies]\nviewer = { path = \"../viewer\", features = \
                      [\"notes\"] }\n\
                      [package.metadata.flui.declares]\nschema = 3\n\
-                     url-schemes = [\"Notes\", \"notes-beta\"]\n\
+                     url-schemes = [\"Notes\", \"notes\", \"notes-beta\"]\n\
                      associated-domains = [\"notes.example.com\"]\n",
                 ),
             ),
@@ -920,7 +969,7 @@ mod tests {
                 &manifest(
                     "viewer",
                     "[features]\nnotes = []\nsketch = []\n\
-                     [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n\
+                     [package.metadata.flui.declares]\nschema = 3\n\
                      [[package.metadata.flui.declares.features.notes.file-types]]\n\
                      extension = \"note\"\nmime = \"application/x-notes-note\"\nname = \"Note\"\n\
                      [[package.metadata.flui.declares.features.sketch.file-types]]\n\
@@ -937,10 +986,7 @@ mod tests {
         assert_eq!(
             schemes,
             [
-                (
-                    "notes".to_owned(),
-                    vec!["app".to_owned(), "viewer".to_owned()]
-                ),
+                ("notes".to_owned(), vec!["app".to_owned()]),
                 ("notes-beta".to_owned(), vec!["app".to_owned()]),
             ],
             "a scheme compares without regard to case"
@@ -950,14 +996,85 @@ mod tests {
             .map(|(domain, _)| domain.to_string())
             .collect();
         assert_eq!(domains, ["notes.example.com"]);
-        let file_types: Vec<(&str, &str)> = declarations
+        let file_types: Vec<(&str, &str, Vec<String>)> = declarations
             .file_types()
-            .map(|(file_type, _)| (file_type.extension(), file_type.mime()))
+            .map(|(file_type, crates)| {
+                (
+                    file_type.extension(),
+                    file_type.mime(),
+                    crates.iter().cloned().collect(),
+                )
+            })
             .collect();
         assert_eq!(
             file_types,
-            [("note", "application/x-notes-note")],
-            "only the enabled feature's file type"
+            [(
+                "note",
+                "application/x-notes-note",
+                vec!["viewer".to_owned()]
+            )],
+            "a dependency's file type, and only the enabled feature's"
+        );
+    }
+
+    /// The links an application opens are declared by the application, the
+    /// crate nothing in the build links: `#[flui::main]` carries its lists
+    /// into the run, which opens only those. A dependency that declares a
+    /// scheme, even under a feature the build leaves off, is refused by name;
+    /// an application another crate reaches only as a dev-dependency is still
+    /// the application.
+    #[test]
+    fn only_the_application_declares_the_links_it_opens() {
+        let dependency = fixture(&[
+            (
+                "app",
+                &manifest(
+                    "app",
+                    "[workspace]\n[dependencies]\nviewer = { path = \"../viewer\" }\n",
+                ),
+            ),
+            (
+                "viewer",
+                &manifest(
+                    "viewer",
+                    "[features]\nlinks = []\n\
+                     [package.metadata.flui.declares]\nschema = 3\n\
+                     [package.metadata.flui.declares.features.links]\n\
+                     associated-domains = [\"viewer.example.com\"]\n",
+                ),
+            ),
+        ]);
+        let refused = collect(&dependency.path().join("app"), "aarch64-linux-android")
+            .expect_err("a dependency's link declarations are refused");
+        assert!(
+            refused.contains("viewer's") && refused.contains("depend on viewer"),
+            "{refused}"
+        );
+
+        let tested = fixture(&[
+            (
+                "checks",
+                &manifest(
+                    "checks",
+                    "[workspace]\n[dev-dependencies]\napp = { path = \"../app\" }\n",
+                ),
+            ),
+            (
+                "app",
+                &manifest(
+                    "app",
+                    "[package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n",
+                ),
+            ),
+        ]);
+        let declarations = collect(&tested.path().join("checks"), "aarch64-linux-android")
+            .expect("an application a test crate depends on declares its links");
+        assert_eq!(
+            declarations
+                .url_schemes()
+                .map(|(scheme, _)| scheme.to_string())
+                .collect::<Vec<String>>(),
+            ["notes"]
         );
     }
 

@@ -118,9 +118,12 @@ proguard = "android/proguard-rules.pro"
   Each value is checked before a manifest carries it, so none can break out of its attribute. Two
   crates that give one extension two MIME types are refused, since the system opens a file as one
   type. Without these keys the operating system never hands the application its links or files,
-  so a crate that uses them states `schema = 3`. `#[flui::main]` reads the same `url-schemes` and
-  `associated-domains` of the application's own crate, so the URLs the application admits
-  (ADR-0330 §5) are the ones its manifests register.
+  so a crate that uses them states `schema = 3`. The links are the application's own: `url-schemes`
+  and `associated-domains` (its own or a feature's) in a crate another crate of the build links,
+  by a normal or build edge, are refused by name. `#[flui::main]` reads the same `url-schemes` and
+  `associated-domains` of the crate it marks as it compiles, a feature's under `cfg!`, and the run
+  that function starts admits them unless the application gives `Application::declares`, so the
+  URLs the application admits (ADR-0330 §5) are the ones its manifests register.
 
 ```toml
 [package.metadata.flui.declares]
@@ -271,12 +274,17 @@ a key arrives with its first consumer.
 - What the application opens: `declarations::opening::tests::what_an_application_opens_is_checked_before_a_manifest_carries_it`
   (schemes, domains, extensions, MIME types and names, each refused when malformed);
   `declarations::tests::what_the_application_opens_is_joined_over_the_graph` (case folded, a
-  feature's file type only while it is on); the malformed cases include a version-3 key under
+  feature's file type only while it is on); `declarations::tests::only_the_application_declares_the_links_it_opens`
+  (a dependency's domain under a feature refused, an application a test crate reaches as a
+  dev-dependency kept); the malformed cases include a version-3 key under
   `schema = 2`, a web scheme, a URL given as a domain and one extension with two MIME types;
   `android_manifest::tests::the_activity_filters_what_the_application_opens`;
   `apple_opening::tests::a_bundle_registers_what_the_application_opens` and
   `the_keys_render_as_xml_property_list_entries`; `ios_package::tests::publication_contract` ("the
-  info plist registers what the application opens").
+  info plist registers what the application opens"); `main_attr::declares::tests::the_entry_carries_what_the_manifest_declares_it_opens`
+  (flui-macros), `runner_open::the_entry_functions_manifest_declares_what_a_run_opens` (flui-app)
+  and `cli_create::generated_basic_project_compiles` (an entry whose manifest and feature declare
+  links compiles with the feature off and on).
 
 ## Pros and cons of the options
 

@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4; AC5 без чтения `[package.metadata.flui.declares]` в `#[flui::main]`. AC11 частично: ключи schema 3, AndroidManifest и `Info.plist`. В работе: —; следующие остаток AC5, остаток AC11.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5. AC11 частично: ключи schema 3, AndroidManifest и `Info.plist`. В работе: —; следующие остаток AC11, AC6–AC9.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -52,6 +52,15 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   слиты по порядку, другой адресат и работающее приложение слышатся после `ready`) и
   `opened_reports_waiting_for_ready_are_bounded`. Холодный тест падает без
   `OwnerPlatform::take_launch_opened` (строится `initial`).
+- **AC5 (объявления из манифеста).** `the_entry_carries_what_the_manifest_declares_it_opens`
+  (`flui-macros`: списки крейта и фич, встроенные таблицы, отказ не-строки и не-таблицы),
+  строка `runner_open::the_entry_functions_manifest_declares_what_a_run_opens` (то, что пишет
+  `#[flui::main]`: схема манифеста открывается, схема фичи — только при включённой фиче,
+  `Application::declares` заменяет манифест, после выхода из функции объявлений нет; падает без
+  `OpenSettings::or_entry_declarations` в `into_run`), `generated_basic_project_compiles` (вход
+  проекта, чей манифест и фича объявляют ссылки, компилируется с фичей и без),
+  `only_the_application_declares_the_links_it_opens` (схема или домен зависимости отказаны по
+  имени, приложение под dev-зависимостью остаётся приложением).
 - **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`
   (схемы, домены, расширения, MIME, имена), `what_the_application_opens_is_joined_over_the_graph`
   (регистр, файл фичи только при включённой фиче), строки `a_malformed_declaration_is_refused_by_crate`
