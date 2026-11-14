@@ -165,9 +165,9 @@ impl Default for LatencyHistogram {
 /// Build a [`LatencyHistogram`] of frame-to-frame intervals — consecutive
 /// [`FrameSnapshot::clock_timestamp`] deltas — from a `frames_since`-pulled
 /// slice. `snapshots` need not already be sorted by `frame_id`: this sorts
-/// a local index list rather than assuming the caller already has (even
-/// though `FrameHistory::since`'s own contract already returns them oldest
-/// first).
+/// a local index list rather than assuming the caller already has:
+/// `FrameHistory::since` returns them in the order they were recorded, which a
+/// frame settled late breaks).
 #[must_use]
 pub fn frame_interval_histogram(snapshots: &[FrameSnapshot]) -> LatencyHistogram {
     let mut ordered: Vec<&FrameSnapshot> = snapshots.iter().collect();

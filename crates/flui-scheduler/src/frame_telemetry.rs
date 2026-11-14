@@ -406,38 +406,29 @@ impl FrameHistory {
     /// later is recorded after frames submitted behind it, so its id can be lower than theirs:
     /// the cursor is the order of recording, not the order of ids, so a consumer that saw the
     /// later frame still receives the earlier one. A cursor whose snapshot the ring no longer
-    /// holds returns every retained snapshot with a greater id. Allocates a `Vec` — this is the
-    /// consumer-side pull, never the frame-production path.
+    /// holds returns every retained snapshot with a greater id, in recording order. Allocates a
+    /// `Vec` — this is the consumer-side pull, never the frame-production path.
     pub(crate) fn since(&self, since: Option<FrameId>) -> Vec<FrameSnapshot> {
         let capacity = self.slots.len();
-        let recorded = (0..capacity)
+        let mut recorded: Vec<FrameSnapshot> = (0..capacity)
             .filter_map(|offset| self.slots[(self.next + offset) % capacity].as_ref())
-            .copied();
+            .copied()
+            .collect();
         let Some(since_id) = since else {
-            return recorded.collect();
+            return recorded;
         };
-        let mut after_cursor = false;
-        let mut cursor_held = false;
-        let mut collected: Vec<FrameSnapshot> = Vec::new();
-        for snapshot in recorded {
-            if after_cursor {
-                collected.push(snapshot);
-            } else if snapshot.frame_id == since_id {
-                after_cursor = true;
-                cursor_held = true;
+        match recorded
+            .iter()
+            .position(|snapshot| snapshot.frame_id == since_id)
+        {
+            Some(cursor) => {
+                recorded.drain(..=cursor);
             }
+            // The cursor's snapshot left the ring: what is newer by id, still in recording
+            // order, so a pull from the last one returned resumes after it and repeats none.
+            None => recorded.retain(|snapshot| snapshot.frame_id > since_id),
         }
-        if !cursor_held {
-            collected = self
-                .slots
-                .iter()
-                .filter_map(Option::as_ref)
-                .copied()
-                .filter(|snapshot| snapshot.frame_id > since_id)
-                .collect();
-            collected.sort_by_key(|snapshot| snapshot.frame_id);
-        }
-        collected
+        recorded
     }
 }
 
