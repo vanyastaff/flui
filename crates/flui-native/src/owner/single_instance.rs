@@ -6,17 +6,18 @@
 //! (`owner::windows::single_instance`, whose frame the `frame` module writes and reads).
 //!
 //! A launch is accepted work: its process waits for the answer and ends only
-//! once the owner took the launch. Every launch posted here is either taken
-//! and answered, or handed back to its process, which then runs as an
-//! instance of its own: when the inbox is full, when the owner's loop has
-//! ended, or when the owner does not take it within the hold.
+//! once the application holds the launch. Every launch posted here is either
+//! taken, handed to the application and answered, or handed back to its
+//! process, which then runs as an instance of its own: when the inbox is
+//! full, when the owner's loop has ended, when the owner does not take it
+//! within the hold, or when the application cannot hold it.
 
 #[cfg(windows)]
 pub(crate) use inbox::MAX_WAITING;
 #[cfg(any(x11_host, wayland_host))]
 pub(crate) use inbox::Refused;
 #[cfg(any(x11_host, wayland_host, windows))]
-pub(crate) use inbox::{HOLD, Inbox, OwnerWake};
+pub(crate) use inbox::{Delivery, HOLD, Inbox, OwnerWake, Posted, hand_on};
 
 #[cfg(any(windows, test))]
 pub(crate) mod frame;
@@ -50,6 +51,10 @@ mod inbox {
 
     use parking_lot::Mutex;
     use tokio::sync::oneshot;
+
+    use flui_platform::Opened;
+
+    use crate::owner::app_delivery::AppDelivery;
 
     /// How many launches wait for the owner at once; a later one is refused.
     pub(crate) const MAX_WAITING: usize = 16;
@@ -86,8 +91,50 @@ mod inbox {
         }
     }
 
-    /// A launch waiting for the owner, and the answer its caller waits for.
-    type Waiting<T> = (T, oneshot::Sender<()>);
+    /// A launch waiting for the owner, and the claim its caller waits for.
+    type Waiting<T> = (T, oneshot::Sender<oneshot::Receiver<()>>);
+
+    /// What the caller of [`Inbox::post`] waits on: the owner's claim of
+    /// the launch, which carries the owner's answer to come.
+    pub(crate) struct Posted(oneshot::Receiver<oneshot::Receiver<()>>);
+
+    /// The owner's answer to a launch it took: [`Self::delivered`] once the
+    /// application holds what the launch opens; dropped, the launch is
+    /// refused to its caller, which then runs as an instance of its own.
+    #[must_use = "a delivery dropped refuses its launch"]
+    pub(crate) struct Delivery(oneshot::Sender<()>);
+
+    impl Delivery {
+        /// The application holds the launch: its caller hears it was taken.
+        pub(crate) fn delivered(self) {
+            // A caller that stopped waiting (its process ended) hears
+            // nothing; the launch is delivered all the same.
+            let _ = self.0.send(());
+        }
+    }
+
+    /// Hand what a launch the owner took opens to the application, and
+    /// answer its caller as taken once the application holds it, before its
+    /// handler runs. `false` when the application holds as many opened
+    /// launches as it keeps waiting (a handler in a modal loop while
+    /// launches come): the launch is refused to its caller, which runs as an
+    /// instance of its own, so it is neither lost nor opened twice.
+    pub(crate) fn hand_on(app: &AppDelivery, opened: Opened, delivery: Delivery) -> bool {
+        match app.try_opened(opened, move || delivery.delivered()) {
+            Ok(called) => {
+                called.or_contain((), "a launch another instance forwarded");
+                true
+            }
+            Err(refused) => {
+                drop(refused);
+                tracing::warn!(
+                    "the application holds as many opened launches as it keeps waiting; a \
+                     forwarded launch is refused and runs as an instance of its own"
+                );
+                false
+            }
+        }
+    }
 
     /// The launches waiting for the owner, and the way to wake it.
     pub(crate) struct Inbox<T> {
@@ -128,9 +175,8 @@ mod inbox {
             }
         }
 
-        /// Queue `launch` and wake the owner, once it is attached: the
-        /// receiver resolves once the owner takes it, and fails if the owner
-        /// ends first.
+        /// Queue `launch` and wake the owner, once it is attached; its caller
+        /// waits on what this returns with [`Self::answer`].
         ///
         /// # Errors
         ///
@@ -138,14 +184,14 @@ mod inbox {
         /// the owner's loop has ended: the launching process hears the
         /// refusal and runs as an instance of its own, so the launch is not
         /// lost.
-        pub(crate) fn post(&self, launch: T) -> Result<oneshot::Receiver<()>, Refused> {
-            let (taken, answer) = oneshot::channel();
+        pub(crate) fn post(&self, launch: T) -> Result<Posted, Refused> {
+            let (claim, claimed) = oneshot::channel();
             let refused = {
                 let mut queue = self.queue.lock();
                 if queue.len() >= MAX_WAITING {
                     Some(launch)
                 } else {
-                    queue.push_back((launch, taken));
+                    queue.push_back((launch, claim));
                     None
                 }
             };
@@ -157,7 +203,7 @@ mod inbox {
                 return Err(Refused::Full);
             }
             if self.wake() {
-                return Ok(answer);
+                return Ok(Posted(claimed));
             }
             // The owner's loop ended: what waits is never taken, and each
             // waiting caller hears it as its sender drops.
@@ -169,18 +215,24 @@ mod inbox {
             Err(Refused::Ending)
         }
 
-        /// The waiting launches, oldest first, each caller told its launch
-        /// was taken. A launch whose caller stopped waiting (it was handed
-        /// back and, if its process still runs, runs on its own) is not
-        /// taken.
-        pub(crate) fn take(&self) -> Vec<T> {
+        /// The waiting launches, oldest first, each with the answer its
+        /// caller now waits for past the hold. A launch whose caller stopped
+        /// waiting (it was handed back and, if its process still runs, runs
+        /// on its own) is not taken.
+        pub(crate) fn take(&self) -> Vec<(T, Delivery)> {
             let mut queue = self.queue.lock();
-            // Answered under the lock a withdrawing caller takes: a oneshot's
+            // Claimed under the lock a withdrawing caller takes: a oneshot's
             // send wakes only the caller's task, no application code.
             queue
                 .drain(..)
-                .filter_map(|(launch, taken)| taken.send(()).is_ok().then_some(launch))
-                .collect()
+                .filter_map(|(launch, claim)| {
+                    let (answer, heard) = oneshot::channel();
+                    claim
+                        .send(heard)
+                        .is_ok()
+                        .then(|| (launch, Delivery(answer)))
+                })
+                .collect::<Vec<(T, Delivery)>>()
         }
 
         /// Refuse every waiting launch to its caller: the owner ends without
@@ -200,44 +252,55 @@ mod inbox {
             self.queue.lock().len()
         }
 
-        /// Wait until the owner takes the launch whose `answer`
-        /// [`post`](Self::post) returned, at most the inbox's hold; past it
-        /// the launch is withdrawn and refused, so its process runs on its
-        /// own and the owner never takes it.
+        /// Wait for the answer to the launch [`post`](Self::post) queued.
+        /// The owner takes it within the inbox's hold, or it is withdrawn
+        /// and refused, so its process runs on its own and the owner never
+        /// takes it; once taken, the owner's answer is awaited, which comes
+        /// once the application holds the launch or refuses it.
         ///
         /// # Errors
         ///
-        /// Why the launch was refused: the owner ended before taking it, or
-        /// held it past the hold.
-        pub(crate) async fn answer(
-            &self,
-            mut answer: oneshot::Receiver<()>,
-        ) -> Result<(), &'static str> {
+        /// Why the launch was refused: the owner ended before taking it, held
+        /// it past the hold, or could not deliver it.
+        pub(crate) async fn answer(&self, posted: Posted) -> Result<(), &'static str> {
             const ENDED: &str = "the running instance ended before it took the launch";
+            let Posted(mut claimed) = posted;
             // The timer is made on its runtime, not on the transport's executor.
             let hold = self.hold;
             let mut held = self
                 .timers
                 .spawn(async move { tokio::time::sleep(hold).await });
-            // The answer first, so a launch taken as the hold ends counts as
+            // The claim first, so a launch taken as the hold ends counts as
             // taken.
-            let taken = std::future::poll_fn(|ctx| {
-                if let Poll::Ready(taken) = Pin::new(&mut answer).poll(ctx) {
-                    return Poll::Ready(Some(taken));
+            let claim = std::future::poll_fn(|ctx| {
+                if let Poll::Ready(claim) = Pin::new(&mut claimed).poll(ctx) {
+                    return Poll::Ready(Some(claim));
                 }
                 Pin::new(&mut held).poll(ctx).map(|_| None)
             })
             .await;
             held.abort();
-            if let Some(taken) = taken {
-                return taken.map_err(|_| ENDED);
-            }
-            let taken = {
+            let claim = match claim {
+                Some(claim) => claim.map_err(|_| ENDED)?,
+                None => self.withdraw(claimed)?,
+            };
+            claim
+                .await
+                .map_err(|_| "the running instance could not deliver the launch")
+        }
+
+        /// Withdraw a launch held past the hold, unless the owner took it
+        /// just now: then the owner's answer to it.
+        fn withdraw(
+            &self,
+            mut claimed: oneshot::Receiver<oneshot::Receiver<()>>,
+        ) -> Result<oneshot::Receiver<()>, &'static str> {
+            let claim = {
                 let mut queue = self.queue.lock();
-                let taken = answer.try_recv();
-                // Closing the answer withdraws the launch: `take` skips it,
+                let claim = claimed.try_recv();
+                // Closing the claim withdraws the launch: `take` skips it,
                 // and it leaves the queue now.
-                drop(answer);
+                drop(claimed);
                 let (kept, withdrawn): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut *queue)
                     .into_iter()
                     .partition(|(_, waiting)| !waiting.is_closed());
@@ -245,11 +308,13 @@ mod inbox {
                 drop(queue);
                 // A withdrawn launch is dropped with the queue released.
                 drop(withdrawn);
-                taken
+                claim
             };
-            match taken {
-                Ok(()) => Ok(()),
-                Err(oneshot::error::TryRecvError::Closed) => Err(ENDED),
+            match claim {
+                Ok(claim) => Ok(claim),
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    Err("the running instance ended before it took the launch")
+                }
                 Err(oneshot::error::TryRecvError::Empty) => {
                     Err("the running instance did not take the launch in time")
                 }
@@ -272,7 +337,7 @@ mod inbox {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::time::Duration;
 
-        use super::{Inbox, MAX_WAITING, OwnerWake, Refused};
+        use super::{Delivery, Inbox, MAX_WAITING, OwnerWake, Posted, Refused};
 
         /// A runtime whose timer measures an inbox's hold.
         fn timers() -> tokio::runtime::Runtime {
@@ -297,12 +362,12 @@ mod inbox {
         }
 
         /// At most sixteen launches wait for an owner that takes none; the
-        /// next is refused, and the ones taken are answered.
+        /// next is refused, and the ones taken and delivered are answered.
         #[test]
         fn launches_waiting_for_the_owner_are_bounded() {
             let runtime = timers();
             let inbox = Inbox::new(Duration::from_secs(15), runtime.handle().clone());
-            let mut answers: Vec<_> = (0..MAX_WAITING)
+            let posted: Vec<Posted> = (0..MAX_WAITING)
                 .map(|at| inbox.post(at).expect("room to wait"))
                 .collect();
             assert_eq!(
@@ -310,10 +375,20 @@ mod inbox {
                 Some(Refused::Full),
                 "past the bound"
             );
-            assert_eq!(inbox.take(), (0..MAX_WAITING).collect::<Vec<usize>>());
-            for answer in &mut answers {
+            let taken = inbox.take();
+            assert_eq!(
+                taken
+                    .iter()
+                    .map(|(launch, _)| *launch)
+                    .collect::<Vec<usize>>(),
+                (0..MAX_WAITING).collect::<Vec<usize>>()
+            );
+            for (_, delivery) in taken {
+                delivery.delivered();
+            }
+            for posted in posted {
                 assert_eq!(
-                    answer.try_recv(),
+                    runtime.block_on(inbox.answer(posted)),
                     Ok(()),
                     "each caller hears its launch was taken"
                 );
@@ -338,8 +413,49 @@ mod inbox {
             assert_eq!(inbox.waiting(), 0, "nor kept waiting");
 
             let posted = inbox.post("flui:b").expect("room to wait");
-            assert_eq!(inbox.take(), ["flui:b"]);
+            let [(launch, delivery)] = <[(&str, Delivery); 1]>::try_from(inbox.take())
+                .ok()
+                .expect("the one launch is taken");
+            assert_eq!(launch, "flui:b");
+            delivery.delivered();
             assert_eq!(runtime.block_on(inbox.answer(posted)), Ok(()));
+        }
+
+        /// A launch the owner took is answered by the owner, not by the hold:
+        /// as taken once the application holds it, even past the hold, and
+        /// refused when the owner cannot hand it on (the application's queue
+        /// is full), so its process runs on its own and the launch is not
+        /// lost.
+        #[test]
+        fn a_taken_launch_is_answered_by_its_delivery() {
+            let runtime = timers();
+            let inbox = Arc::new(Inbox::new(
+                Duration::from_millis(20),
+                runtime.handle().clone(),
+            ));
+            let posted = inbox.post("flui:held").expect("room to wait");
+            let [(_, delivery)] = <[(&str, Delivery); 1]>::try_from(inbox.take())
+                .ok()
+                .expect("the one launch is taken");
+            let answering = runtime.spawn({
+                let inbox = Arc::clone(&inbox);
+                async move { inbox.answer(posted).await }
+            });
+            runtime.block_on(async { tokio::time::sleep(Duration::from_millis(80)).await });
+            assert!(
+                !answering.is_finished(),
+                "a taken launch waits for its delivery past the hold"
+            );
+            delivery.delivered();
+            assert_eq!(runtime.block_on(answering).expect("the answer ran"), Ok(()));
+
+            let posted = inbox.post("flui:undelivered").expect("room to wait");
+            drop(inbox.take());
+            assert_eq!(
+                runtime.block_on(inbox.answer(posted)),
+                Err("the running instance could not deliver the launch"),
+                "a launch the owner could not deliver is refused to its caller"
+            );
         }
 
         /// A launch that came before the owner attached wakes it as it
@@ -371,8 +487,8 @@ mod inbox {
             );
             for answer in [&mut early, &mut waiting] {
                 assert_eq!(
-                    answer.try_recv(),
-                    Err(tokio::sync::oneshot::error::TryRecvError::Closed),
+                    answer.0.try_recv().err(),
+                    Some(tokio::sync::oneshot::error::TryRecvError::Closed),
                     "each waiting caller hears the refusal"
                 );
             }

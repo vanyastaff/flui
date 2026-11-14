@@ -51,6 +51,16 @@ use crate::platform::{AppHandler, ExitAnswer, Platform};
 /// can hold in the queue, and a later one is dropped with a warning.
 const MAX_PENDING_OPENED: usize = 16;
 
+/// What follows an accepted report.
+enum Next {
+    /// Deliver the queue now: this call set `delivering`.
+    Drain,
+    /// Ask the owner for a turn: the report came from another thread.
+    OwnerTurn,
+    /// Nothing: the run's `ready` or the delivery under way reaches it.
+    Wait,
+}
+
 /// What the platform reports to the application, accepted in order.
 #[derive(Debug, Clone, PartialEq)]
 enum Report {
@@ -423,47 +433,105 @@ impl AppDelivery {
 
     /// Accept `report` and deliver it unless it has to wait.
     fn report(&self, report: Report) -> Called<()> {
-        {
-            let mut state = self.state.lock();
-            if matches!(report, Report::Quit) {
-                if state.quit_accepted {
-                    return Called::Vacant;
-                }
-                state.quit_accepted = true;
-            }
-            if matches!(report, Report::Opened(_))
-                && state
-                    .pending
-                    .iter()
-                    .filter(|queued| matches!(queued, Report::Opened(_)))
-                    .count()
-                    == MAX_PENDING_OPENED
-            {
-                drop(state);
+        match self.admit(report) {
+            Ok(next) => self.proceed(next),
+            Err(Some(dropped)) => {
+                drop(dropped);
                 tracing::warn!(
                     max = MAX_PENDING_OPENED,
                     "the operating system opened more while the application could not hear it \
                      than it keeps waiting; the newest is dropped"
                 );
-                return Called::Vacant;
+                Called::Vacant
             }
-            state.pending.push_back(report);
-            if !state.on_owner() {
-                // Before the run binds a handler, the queue waits for its
-                // `ready`; on another thread, for an owner turn.
-                let bound = state.binding.is_some();
-                drop(state);
-                if bound {
-                    self.ask_owner_turn();
-                }
-                return Called::Vacant;
-            }
-            if state.delivering {
-                return Called::Vacant;
-            }
-            state.delivering = true;
+            Err(None) => Called::Vacant,
         }
-        self.drain()
+    }
+
+    /// `opened`, queued for the handler, or handed back when
+    /// [`MAX_PENDING_OPENED`] reports wait already. `admitted` runs once it
+    /// is queued, before the handler hears it: a host that answers whoever
+    /// handed it the launch answers there, so a launch is answered as taken
+    /// only once it cannot be dropped.
+    ///
+    /// # Errors
+    ///
+    /// `opened` itself, when the queue is full; `admitted` has not run.
+    #[cfg_attr(
+        not(any(windows, linux_host, test)),
+        expect(
+            dead_code,
+            reason = "only the hosts that keep one instance answer a launch"
+        )
+    )]
+    pub(crate) fn try_opened(
+        &self,
+        opened: Opened,
+        admitted: impl FnOnce(),
+    ) -> Result<Called<()>, Opened> {
+        if opened.is_empty() {
+            admitted();
+            return Ok(Called::Vacant);
+        }
+        match self.admit(Report::Opened(opened)) {
+            Ok(next) => {
+                admitted();
+                Ok(self.proceed(next))
+            }
+            Err(Some(Report::Opened(opened))) => Err(opened),
+            Err(_) => unreachable!("BUG: only a full queue refuses an opened report"),
+        }
+    }
+
+    /// Queue `report` and say what follows: `Err(None)` for a quit accepted
+    /// before, `Err(Some(report))` for an opened report past
+    /// [`MAX_PENDING_OPENED`], handed back with the lock released.
+    fn admit(&self, report: Report) -> Result<Next, Option<Report>> {
+        let mut state = self.state.lock();
+        if matches!(report, Report::Quit) {
+            if state.quit_accepted {
+                return Err(None);
+            }
+            state.quit_accepted = true;
+        }
+        if matches!(report, Report::Opened(_))
+            && state
+                .pending
+                .iter()
+                .filter(|queued| matches!(queued, Report::Opened(_)))
+                .count()
+                == MAX_PENDING_OPENED
+        {
+            drop(state);
+            return Err(Some(report));
+        }
+        state.pending.push_back(report);
+        if !state.on_owner() {
+            // Before the run binds a handler, the queue waits for its
+            // `ready`; on another thread, for an owner turn.
+            return Ok(if state.binding.is_some() {
+                Next::OwnerTurn
+            } else {
+                Next::Wait
+            });
+        }
+        if state.delivering {
+            return Ok(Next::Wait);
+        }
+        state.delivering = true;
+        Ok(Next::Drain)
+    }
+
+    /// Do what [`Self::admit`] said follows, with the lock released.
+    fn proceed(&self, next: Next) -> Called<()> {
+        match next {
+            Next::Drain => self.drain(),
+            Next::OwnerTurn => {
+                self.ask_owner_turn();
+                Called::Vacant
+            }
+            Next::Wait => Called::Vacant,
+        }
     }
 
     /// Ask the owner for a turn that delivers what another thread reported.

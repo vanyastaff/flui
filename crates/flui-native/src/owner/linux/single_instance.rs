@@ -154,7 +154,6 @@ mod bus {
     use std::time::Duration;
 
     use futures_util::StreamExt as _;
-    use tokio::sync::oneshot;
     use zbus::fdo::{RequestNameFlags, RequestNameReply};
     use zbus::{OwnedVariant as OwnedValue, Variant as Value};
 
@@ -162,7 +161,7 @@ mod bus {
     use crate::executor::NativeExecutor;
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::OwnerSignal;
-    use crate::owner::single_instance::{HOLD, OwnerWake, Refused};
+    use crate::owner::single_instance::{Delivery, HOLD, OwnerWake, Posted, Refused};
 
     /// The launches waiting for the owner.
     type Inbox = crate::owner::single_instance::Inbox<Forwarded>;
@@ -227,7 +226,7 @@ mod bus {
         /// Answer at once, with no value.
         Nothing,
         /// Answer once the owner takes the launch the call posted.
-        Launch(oneshot::Receiver<()>),
+        Launch(Posted),
     }
 
     /// Serve `org.freedesktop.Application` at `path` from `calls` until the
@@ -355,7 +354,7 @@ mod bus {
         Launch {
             /// The answers, unless the caller asked for none.
             replies: Option<Box<Replies>>,
-            taken: oneshot::Receiver<()>,
+            taken: Posted,
         },
     }
 
@@ -494,8 +493,9 @@ mod bus {
         }
 
         /// The launches forwarded since the last call, oldest first; each
-        /// caller is answered that its launch was taken.
-        pub(crate) fn take(&self) -> Vec<Forwarded> {
+        /// with the answer its caller waits for: taken once the application
+        /// holds the launch, refused when it is dropped.
+        pub(crate) fn take(&self) -> Vec<(Forwarded, Delivery)> {
             self.inbox.take()
         }
 
@@ -784,6 +784,7 @@ mod bus_tests {
     use super::{Claim, FirstInstance, Forwarded, claim};
     use crate::executor::NativeExecutor;
     use crate::owner::signal::OwnerSignal;
+    use crate::owner::single_instance::Delivery;
 
     /// A private session bus, stopped when dropped.
     struct PrivateBus {
@@ -823,6 +824,18 @@ mod bus_tests {
         }
     }
 
+    /// The launches `taken`, each answered as the application's owner
+    /// answers one it handed on.
+    fn delivered(taken: Vec<(Forwarded, Delivery)>) -> Vec<Forwarded> {
+        taken
+            .into_iter()
+            .map(|(launch, delivery)| {
+                delivery.delivered();
+                launch
+            })
+            .collect::<Vec<Forwarded>>()
+    }
+
     /// Claim with `launch` from another thread, as a later process does,
     /// while this thread, the owner, takes what arrives: the claim's answer
     /// and what the owner took.
@@ -836,10 +849,10 @@ mod bus_tests {
             let claiming = scope.spawn(|| claim(executor, Some(address), NAME, launch));
             let mut taken = Vec::new();
             while !claiming.is_finished() {
-                taken.extend(first.take());
+                taken.extend(delivered(first.take()));
                 std::thread::sleep(Duration::from_millis(2));
             }
-            taken.extend(first.take());
+            taken.extend(delivered(first.take()));
             (claiming.join().expect("the claim does not panic"), taken)
         })
     }
@@ -1084,7 +1097,7 @@ mod bus_tests {
                     tokio::time::sleep(Duration::from_millis(2)).await;
                 }
             });
-            assert_eq!(first.take(), std::slice::from_ref(&later));
+            assert_eq!(delivered(first.take()), std::slice::from_ref(&later));
             drop(first);
             host.block_on(async {
                 while !forwarding.is_finished() {
@@ -1193,7 +1206,7 @@ mod bus_tests {
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut taken = Vec::new();
         let status = loop {
-            taken.extend(first.take());
+            taken.extend(delivered(first.take()));
             if let Some(status) = second.try_wait().expect("the second process is waited on") {
                 break status;
             }
