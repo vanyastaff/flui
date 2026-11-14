@@ -51,12 +51,24 @@ fn declarations_check(dir: &Path) -> Check {
                 .apple_accessed_apis()
                 .map(|(_, reasons)| reasons.len())
                 .sum();
+            let schemes = declarations.url_schemes().count();
+            let domains = declarations.associated_domains().count();
+            let file_types = declarations.file_types().count();
+            let opens = if schemes + domains + file_types == 0 {
+                String::new()
+            } else {
+                format!(
+                    "; the application opens {schemes} URL scheme(s), {domains} associated \
+                     domain(s), {file_types} file type(s)"
+                )
+            };
             Check::ok(
                 ID,
                 SECTION,
                 TITLE,
                 format!(
-                    "{permissions} Android permission(s), {reasons} Apple accessed-API reason(s)"
+                    "{permissions} Android permission(s), {reasons} Apple accessed-API \
+                     reason(s){opens}"
                 ),
             )
         }

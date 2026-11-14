@@ -237,4 +237,42 @@ mod tests {
             entries.contains("    <key>LSSupportsOpeningDocumentsInPlace</key>\n    <false/>\n")
         );
     }
+
+    /// `flui doctor` reads back what the bundle writes: an `Info.plist`
+    /// carrying these keys lacks nothing the application opens, and one
+    /// without them lacks each scheme and file type.
+    #[test]
+    fn the_doctor_finds_what_the_bundle_writes() {
+        use crate::declarations::verify::{Manifest, ManifestKind};
+
+        let plist = |entries: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n    \
+                 <key>CFBundleIdentifier</key>\n    <string>com.example.notes</string>\n\
+                 {entries}</dict>\n</plist>\n"
+            )
+        };
+        let declarations = notes();
+        for platform in [ApplePlatform::Ios, ApplePlatform::Macos] {
+            let keys = info_plist_keys("com.example.notes", &declarations, platform);
+            let written = Manifest::parse(plist(&plist_xml_entries(&keys, 1)).as_bytes())
+                .expect("the plist reads back");
+            assert_eq!(written.kind(), ManifestKind::AppleInfo);
+            assert_eq!(written.missing(&declarations), [], "{platform:?}");
+        }
+        let bare = Manifest::parse(plist("").as_bytes()).expect("a bare plist reads");
+        let entries: Vec<String> = bare
+            .missing(&declarations)
+            .into_iter()
+            .map(|missing| missing.entry)
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                "URL scheme notes",
+                "URL scheme notes-beta",
+                "file type .note (application/x-notes-note)",
+            ]
+        );
+    }
 }

@@ -176,7 +176,12 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   `LSSupportsOpeningDocumentsInPlace` `false`, so the application gets a copy of a handed file.
   The associated domains are the entitlement `com.apple.developer.associated-domains`
   (`applinks:<domain>`), which a signed build carries.
-- **Linux and Windows.** The `.desktop` entry an installed Linux application ships carries
+- **Linux and Windows.** When the application opens a URL scheme or a file type, `flui build linux`
+  writes, beside the executable, the desktop entry
+  `share/applications/<id>.desktop` (`<id>` the application id; `Exec=<executable> %U`, so a file
+  arrives as a `file:` URI) and,
+  for file types, the shared-mime-info package `share/mime/packages/<id>.xml` giving each MIME type
+  its extension, at the paths a package installs them to below its prefix; the entry carries
   `MimeType=x-scheme-handler/<scheme>;` and each file type's MIME type. An unpackaged Windows
   application registers its schemes and extensions under `HKCU\Software\Classes`, and an MSIX
   package declares them as `uap:Protocol` and `uap:FileTypeAssociation`.
@@ -192,14 +197,19 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
 - **Manifests the CLI does not write.** `flui doctor` reads the same declarations. In a FLUI
   project, `project.declarations` fails on a table `flui build` would refuse, and
   `project.android-manifest` fails on a hand-written Android manifest, listing what it lacks.
-  `flui doctor --manifest <PATH>`, repeatable, checks an `AndroidManifest.xml` or an XML
-  `PrivacyInfo.xcprivacy` the CLI does not write, such as an embedding project's, against the
+  `flui doctor --manifest <PATH>`, repeatable, checks an `AndroidManifest.xml`, an XML
+  `PrivacyInfo.xcprivacy` or an XML `Info.plist` (a property list naming `CFBundleIdentifier`) the
+  CLI does not write, such as an embedding project's, against the
   graph of the project in the current directory for that manifest's targets: one
   `project.manifest` check per path, each missing entry named with the crates that declare it and
   the line to add. The ids are stable, for `--json` readers. An Android file is read as written:
   Gradle's manifest merger is not run, so a file that is not the merged manifest carries a note
   saying entries library manifests merge in are not seen. A `uses-permission` marked
-  `tools:node="remove"` counts as absent.
+  `tools:node="remove"` counts as absent, as does an intent filter so marked. What the application
+  opens is checked in both: an Android `VIEW` filter's `mimeType`, a `BROWSABLE` one's schemes and
+  a verified one's `https` hosts, an `Info.plist`'s `CFBundleURLTypes` schemes and the extensions of
+  the types its `CFBundleDocumentTypes` list; the associated domains of an Apple bundle are an
+  entitlement the property list does not carry.
 
 ### 5. `flui add` links a capability crate, which states its plugin
 
@@ -257,7 +267,14 @@ a key arrives with its first consumer.
 - `cli_doctor::doctor_lists_what_a_manifest_lacks_of_the_crates_declarations` (the project's
   declarations and hand-written Android manifest; `--manifest` files lacking an entry, one removing
   it with `tools:node`, complete ones, a merged one without the note, privacy manifests, a binary
-  property list).
+  property list); `cli_doctor::doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`
+  (intent filters lacking a scheme, an unverified domain filter, a filter removed by the merger, an
+  `Info.plist` lacking a scheme and a document type, complete files),
+  `android_manifest::tests::the_doctor_finds_what_the_manifest_carries` and
+  `apple_opening::tests::the_doctor_finds_what_the_bundle_writes` (what the build writes reads back
+  complete);
+  `linux_desktop::tests::a_linux_desktop_registers_what_the_application_opens` and
+  `desktop_entry_values_are_escaped`.
 - `cli_add::add_links_a_capability_and_shows_its_registration` (a facade feature enabled, a second
   run, a crate without a plugin undone with its lockfile, an unknown name, a crate added from the
   checkout); `commands::add::tests::a_feature_joins_the_facade_dependency_in_any_shape`;

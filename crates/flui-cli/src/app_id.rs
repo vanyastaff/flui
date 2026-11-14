@@ -155,6 +155,15 @@ impl AppId {
     pub(crate) fn apple_bundle_id(&self) -> String {
         self.0.replace('_', "-")
     }
+
+    /// The freedesktop identity (the desktop-file ID and the D-Bus name the
+    /// desktop entry is installed under): the identifier itself, whose
+    /// package grammar (dot-separated labels of letters, digits and `_`, none
+    /// led by a digit) is within the D-Bus well-known-name grammar.
+    #[must_use]
+    pub(crate) fn desktop_entry_id(&self) -> String {
+        self.0.clone()
+    }
 }
 
 /// Whether `label` is a name Windows reserves for a device in every
