@@ -105,9 +105,11 @@ fn arcs(laid: &LaidOut, color: Color) -> Vec<(f64, f64)> {
 fn paths(laid: &LaidOut, color: Color) -> Vec<Vec<Point<f64>>> {
     laid.draw_ops()
         .into_iter()
-        .filter_map(|command| match command.op {
+        .filter_map(|command| match &command.op {
             DrawOp::Path { path, paint } if paint.color == color => Some(
-                path.commands()
+                command
+                    .payload(*path)
+                    .commands()
                     .filter_map(|command| match command {
                         PathCommand::MoveTo(p) | PathCommand::LineTo(p) => Some(p),
                         _ => None,
@@ -621,9 +623,11 @@ pub fn huge_layouts_stay_bounded() {
 fn outlines(laid: &LaidOut, color: Color) -> Vec<Vec<Point<f64>>> {
     laid.draw_ops()
         .into_iter()
-        .filter_map(|command| match command.op {
+        .filter_map(|command| match &command.op {
             DrawOp::Path { path, paint } if paint.color == color => Some(
-                path.commands()
+                command
+                    .payload(*path)
+                    .commands()
                     .filter_map(|command| match command {
                         PathCommand::MoveTo(p)
                         | PathCommand::LineTo(p)

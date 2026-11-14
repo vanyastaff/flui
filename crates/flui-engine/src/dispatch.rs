@@ -59,7 +59,7 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
             renderer.render_oval(*rect, paint, transform);
         }
         DrawOp::Path { path, paint } => {
-            renderer.render_path(path, paint, transform);
+            renderer.render_path(command.payload(*path), paint, transform);
         }
         DrawOp::Paragraph {
             paragraph,
@@ -78,20 +78,17 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
         }
         DrawOp::ImageRegion {
             image,
-            src,
-            dst,
-            tile,
-            repeat,
-            filter,
+            region,
             paint,
         } => {
+            let region = command.payload(*region);
             renderer.render_image_region(
                 image,
-                *src,
-                *dst,
-                *tile,
-                *repeat,
-                *filter,
+                region.src,
+                region.dst,
+                region.tile,
+                region.repeat,
+                region.filter,
                 paint.as_deref(),
                 transform,
             );
@@ -120,7 +117,7 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
             color,
             elevation,
         } => {
-            renderer.render_shadow(path, *color, *elevation as f32, transform);
+            renderer.render_shadow(command.payload(*path), *color, *elevation as f32, transform);
         }
         DrawOp::Arc {
             rect,
@@ -138,12 +135,9 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
                 transform,
             );
         }
-        DrawOp::DRRect {
-            outer,
-            inner,
-            paint,
-        } => {
-            renderer.render_drrect(*outer, *inner, paint, transform);
+        DrawOp::DRRect { rrects, paint } => {
+            let rrects = command.payload(*rrects);
+            renderer.render_drrect(rrects.outer, rrects.inner, paint, transform);
         }
         DrawOp::Points {
             mode,
@@ -220,7 +214,7 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
             clip_op,
             clip_behavior,
         } => {
-            renderer.clip_path(path, *clip_op, *clip_behavior, transform);
+            renderer.clip_path(command.payload(*path), *clip_op, *clip_behavior, transform);
         }
         // === Image Extensions ===
         DrawOp::ImageRepeat {
@@ -251,7 +245,13 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
             filter,
             paint,
         } => {
-            renderer.render_image_filtered(image, *dst, *filter, paint.as_deref(), transform);
+            renderer.render_image_filtered(
+                image,
+                *dst,
+                *command.payload(*filter),
+                paint.as_deref(),
+                transform,
+            );
         }
 
         // === Layer Commands ===

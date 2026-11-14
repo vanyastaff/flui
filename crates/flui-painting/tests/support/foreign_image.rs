@@ -16,14 +16,35 @@ use flui_painting::paint::{Image, ImageDecodeError, MAX_DECODED_IMAGE_BYTES};
 // nothing to its reading.
 thread_local! {
     static LARGEST: Cell<usize> = const { Cell::new(0) };
+    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// The global allocator of a binary that holds the property: it forwards to
-/// [`System`] and keeps, per thread, the largest block asked for.
+/// [`System`] and keeps, per thread, the largest block asked for and how many
+/// blocks were asked for, a reallocation counting as one.
 pub(crate) struct LargestAllocation;
 
 fn note(size: usize) {
     let _ = LARGEST.try_with(|largest| largest.set(largest.get().max(size)));
+    let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+}
+
+/// How many blocks `work` asked for on this thread, with what it returned.
+/// Panics when the binary does not install [`LargestAllocation`].
+#[allow(
+    dead_code,
+    reason = "the fuzz target includes this file and counts no allocations"
+)]
+pub(crate) fn allocations_during<R>(work: impl FnOnce() -> R) -> (u64, R) {
+    let before = ALLOCATIONS.with(Cell::get);
+    drop(std::hint::black_box(Vec::<u8>::with_capacity(16)));
+    let probed = ALLOCATIONS.with(Cell::get);
+    assert!(
+        probed > before,
+        "the binary does not install `LargestAllocation` as its global allocator"
+    );
+    let result = work();
+    (ALLOCATIONS.with(Cell::get) - probed, result)
 }
 
 #[expect(

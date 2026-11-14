@@ -70,8 +70,11 @@ impl Canvas {
 
     /// Clips to a path with an explicit operation and behaviour.
     pub fn clip_path_ext(&mut self, path: &Path, clip_op: ClipOp, clip_behavior: Clip) {
-        self.push_clip(clip_behavior, || DrawOp::ClipPath {
-            path: path.clone(),
+        if clip_behavior == Clip::None {
+            return;
+        }
+        self.record_with(path.clone(), |path| DrawOp::ClipPath {
+            path,
             clip_op,
             clip_behavior,
         });

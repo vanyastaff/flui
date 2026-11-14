@@ -12,7 +12,10 @@ pub use flui_painting::{
     Alignment, AlignmentDirectional, AlignmentGeometry, BoxFit, BoxShape, FittedSizes,
     TextBaseline, TextSizing,
 };
-pub use flui_painting::{BlurSigma, Canvas, DisplayList, DrawCommand, DrawCommands, DrawOp};
+pub use flui_painting::{
+    BlurSigma, Canvas, DisplayList, DrawCommand, DrawCommandBuf, DrawCommands, DrawOp,
+    ImageRegionPlacement, NestedRRects, Payload, PayloadId,
+};
 /// Paint, style and text values: paths, shaders, colours, borders, decorations, text styles.
 pub use flui_painting::{paint, styling, typography};
 pub use flui_rendering::delegates::CustomPainter;

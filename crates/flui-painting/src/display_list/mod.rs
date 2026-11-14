@@ -20,14 +20,17 @@ pub mod command;
 pub mod command_ops;
 mod finite;
 pub mod paragraph;
+mod payload;
 
 pub use blur::BlurSigma;
-pub use command::{DrawCommand, DrawOp};
+pub use command::{DrawCommand, DrawCommandBuf, DrawOp};
 pub use command_ops::DamageExtent;
 pub use finite::NonFiniteOps;
 pub(crate) use finite::paint_finite;
-use finite::{NonFinite, Refused, matrix_finite};
+use finite::{NonFinite, Refused, matrix_finite, payload_finite};
 pub use paragraph::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph, ShapedRun};
+use payload::StoredPayload;
+pub use payload::{ImageRegionPlacement, NestedRRects, Payload, PayloadId};
 // The paint vocabulary the commands carry; defined in `crate::paint`.
 pub(crate) use crate::paint::{
     BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId,
@@ -69,12 +72,11 @@ struct RecordedOp {
 /// constant, so every such command yields the same reference.
 const IDENTITY: &Matrix4 = &Matrix4::IDENTITY;
 
-// A stored command is its op and one word for its transform. The sizes are
-// the measured ones, and they only go down: ADR-0306 §3 sets the op at 112
-// bytes and a stored command at 120 once its fat payloads are boxed.
+// A stored command is its op and one word for its transform, and an op that
+// carries a payload larger than the others holds its id (ADR-0333).
 const _: () = assert!(size_of::<TransformId>() == size_of::<usize>());
-const _: () = assert!(size_of::<DrawOp>() <= 216);
-const _: () = assert!(size_of::<RecordedOp>() <= 224);
+const _: () = assert!(size_of::<DrawOp>() <= 112);
+const _: () = assert!(size_of::<RecordedOp>() <= 120);
 
 /// A recorded sequence of drawing commands.
 ///
@@ -96,6 +98,10 @@ pub struct DisplayList {
 
     /// Drawing commands in order.
     commands: Vec<RecordedOp>,
+
+    /// The payloads the commands name by [`PayloadId`], in the order they
+    /// were recorded (ADR-0333).
+    payloads: Vec<StoredPayload>,
 
     /// Cached union of every command that contributes bounds, or
     /// `None` while no command has contributed one yet.
@@ -172,6 +178,7 @@ impl DisplayList {
         Self {
             transforms: SmallVec::new(),
             commands: Vec::new(),
+            payloads: Vec::new(),
             bounds: None,
             damage: None,
             volatile: None,
@@ -180,15 +187,17 @@ impl DisplayList {
     }
 
     /// Empties the list and keeps its room, so a buffer a scene let go of is
-    /// recorded into again without allocating. The commands drop last, once
-    /// the empty state is committed, so a destructor that panics leaves an
-    /// empty list (ADR-0306 §7).
+    /// recorded into again without allocating. The payloads, which run no
+    /// user code, drop first and the commands last, once the empty state is
+    /// committed, so a destructor that panics leaves an empty list
+    /// (ADR-0306 §7).
     pub fn clear(&mut self) {
         self.bounds = None;
         self.damage = None;
         self.volatile = None;
         self.non_finite = NonFiniteOps::default();
         self.transforms.clear();
+        self.payloads.clear();
         self.commands.clear();
     }
 
@@ -214,6 +223,7 @@ impl DisplayList {
     pub fn iter(&self) -> DrawCommands<'_> {
         DrawCommands {
             transforms: &self.transforms,
+            payloads: &self.payloads,
             commands: self.commands.iter(),
         }
     }
@@ -223,7 +233,7 @@ impl DisplayList {
     pub fn get(&self, index: usize) -> Option<DrawCommand<'_>> {
         self.commands
             .get(index)
-            .map(|recorded| view(&self.transforms, recorded))
+            .map(|recorded| view(&self.transforms, &self.payloads, recorded))
     }
 
     /// The number of commands.
@@ -287,17 +297,56 @@ impl DisplayList {
         op: DrawOp,
         paint_finite: impl Fn(&Arc<Paint>) -> bool,
     ) {
+        self.record_parts(ctm, op, None, paint_finite);
+    }
+
+    /// Records the op `op` builds around `payload`'s id under `ctm`, as
+    /// [`Self::record`] does; the payload is kept only when the op is. A
+    /// payload known to equal the last one stored is not stored again: the
+    /// op names that entry, so a shape shadowed and then filled is kept once.
+    pub(crate) fn record_with<T: Payload>(
+        &mut self,
+        ctm: &Matrix4,
+        payload: T,
+        op: impl FnOnce(PayloadId<T>) -> DrawOp,
+        paint_finite: impl Fn(&Arc<Paint>) -> bool,
+    ) {
+        let stored = payload.into_stored();
+        match self.payloads.last() {
+            // The stored entry passed the finite check when its op was kept.
+            Some(last) if last.known_equal(&stored) => {
+                let op = op(PayloadId::at(self.payloads.len() - 1));
+                self.record_parts(ctm, op, None, paint_finite);
+            }
+            _ => {
+                let op = op(PayloadId::at(self.payloads.len()));
+                self.record_parts(ctm, op, Some(stored), paint_finite);
+            }
+        }
+    }
+
+    /// Records `op` under `ctm`, its payload, when it names one, pushed
+    /// first: the entry its id was built for.
+    fn record_parts(
+        &mut self,
+        ctm: &Matrix4,
+        op: DrawOp,
+        payload: Option<StoredPayload>,
+        paint_finite: impl Fn(&Arc<Paint>) -> bool,
+    ) {
         let reason = if !matrix_finite(ctm) {
             NonFinite::Transform
-        } else if !op.is_finite(paint_finite) {
+        } else if !op.is_finite(paint_finite) || !payload.as_ref().is_none_or(payload_finite) {
             NonFinite::Geometry
         } else {
+            self.payloads.extend(payload);
             self.push(ctm, op);
             return;
         };
         // A replacement keeps a finite CTM; under a non-finite one it is
         // recorded under the identity, which only the replaced op's own
-        // geometry would have needed.
+        // geometry would have needed. No replacement names a payload, so the
+        // refused op's is dropped.
         let transform = match reason {
             NonFinite::Transform => IDENTITY,
             NonFinite::Geometry => ctm,
@@ -331,6 +380,7 @@ impl DisplayList {
             DrawCommand {
                 transform: ctm,
                 op: &op,
+                payloads: &self.payloads,
             },
         );
         self.commands.push(RecordedOp { transform, op });
@@ -349,19 +399,25 @@ impl DisplayList {
         if self.commands.is_empty() {
             std::mem::swap(&mut self.transforms, &mut other.transforms);
             std::mem::swap(&mut self.commands, &mut other.commands);
+            std::mem::swap(&mut self.payloads, &mut other.payloads);
             self.bounds = other.bounds;
             self.damage = other.damage;
             self.volatile = other.volatile;
         } else if !other.commands.is_empty() {
             let offset = self.transforms.len();
+            let payload_offset = self.payloads.len();
             self.transforms.append(&mut other.transforms);
-            if offset == 0 {
+            self.payloads.append(&mut other.payloads);
+            if offset == 0 && payload_offset == 0 {
                 self.commands.append(&mut other.commands);
             } else {
                 self.commands
-                    .extend(other.commands.drain(..).map(|recorded| RecordedOp {
-                        transform: recorded.transform.rebased(offset),
-                        op: recorded.op,
+                    .extend(other.commands.drain(..).map(|mut recorded| {
+                        recorded.op.map_payloads(|index| index + payload_offset);
+                        RecordedOp {
+                            transform: recorded.transform.rebased(offset),
+                            op: recorded.op,
+                        }
                     }));
             }
             if let Some(other_bounds) = other.bounds {
@@ -441,7 +497,11 @@ fn account(
 }
 
 /// The command `recorded` is, with its transform resolved in `transforms`.
-fn view<'a>(transforms: &'a [Matrix4], recorded: &'a RecordedOp) -> DrawCommand<'a> {
+fn view<'a>(
+    transforms: &'a [Matrix4],
+    payloads: &'a [StoredPayload],
+    recorded: &'a RecordedOp,
+) -> DrawCommand<'a> {
     let transform = match recorded.transform.0 {
         None => IDENTITY,
         Some(entry) => &transforms[entry.get() - 1],
@@ -449,6 +509,7 @@ fn view<'a>(transforms: &'a [Matrix4], recorded: &'a RecordedOp) -> DrawCommand<
     DrawCommand {
         transform,
         op: &recorded.op,
+        payloads,
     }
 }
 
@@ -463,6 +524,7 @@ impl Default for DisplayList {
 #[derive(Clone, Debug)]
 pub struct DrawCommands<'a> {
     transforms: &'a [Matrix4],
+    payloads: &'a [StoredPayload],
     commands: std::slice::Iter<'a, RecordedOp>,
 }
 
@@ -470,10 +532,10 @@ impl<'a> Iterator for DrawCommands<'a> {
     type Item = DrawCommand<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let transforms = self.transforms;
+        let (transforms, payloads) = (self.transforms, self.payloads);
         self.commands
             .next()
-            .map(|recorded| view(transforms, recorded))
+            .map(|recorded| view(transforms, payloads, recorded))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -481,19 +543,19 @@ impl<'a> Iterator for DrawCommands<'a> {
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        let transforms = self.transforms;
+        let (transforms, payloads) = (self.transforms, self.payloads);
         self.commands
             .nth(n)
-            .map(|recorded| view(transforms, recorded))
+            .map(|recorded| view(transforms, payloads, recorded))
     }
 }
 
 impl DoubleEndedIterator for DrawCommands<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        let transforms = self.transforms;
+        let (transforms, payloads) = (self.transforms, self.payloads);
         self.commands
             .next_back()
-            .map(|recorded| view(transforms, recorded))
+            .map(|recorded| view(transforms, payloads, recorded))
     }
 }
 
