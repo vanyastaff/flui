@@ -1,5 +1,6 @@
-//! A frame arena gives each level of a recursive walk its own list, and each list drops its own
-//! elements, so a value held in scratch is dropped once whatever the arena does.
+//! A recursive walk lists into a frame arena through the public API: each level's list lives
+//! beside the ones above it, and each list drops its own elements. The arena's own rules (reuse,
+//! release, in-place growth) are pinned by `arena::tests`, which miri runs.
 
 use std::rc::Rc;
 
@@ -35,4 +36,3 @@ fn each_level_of_a_walk_has_its_own_list_and_drops_its_own_elements() {
         arena.reset();
     }
 }
-

@@ -15,7 +15,7 @@
 ## Context and problem statement
 
 `cargo xtask perf` counts what a frame asks of the heap. A run with a probe that tracks each
-allocation's lifetime (Linux x86_64, dev profile, `main` after #2480) shows that most of a busy
+allocation's lifetime (Linux x86_64, dev profile, `main` of 2026-11-12) shows that most of a busy
 frame's allocations do not outlive the frame:
 
 | Scenario | Allocations | Freed inside the frame |
@@ -88,10 +88,12 @@ unsafe impl Allocator for &FrameArena { /* bump; free and grow the last block in
   reverse order of allocation reuses its memory within the frame.
 - The arena records the most bytes it had handed out at once since the last reset (its peak).
   `reset` keeps the newest chunk when it holds that peak and is at most four times the largest
-  peak of the last 120 resets, and releases every other chunk. `reset` never allocates: when it
-  keeps no chunk, the next allocation opens one sized for the largest recent peak. So a steady
-  frame bumps through one kept chunk, an idle frame touches the global allocator not at all, and
-  a chunk a spike grew is released once 120 resets have passed without needing it.
+  peak of the last 120 resets that followed an allocation, and releases every other chunk. A
+  reset that follows no allocation changes nothing, so passes with no scratch to list neither age
+  the recent peaks nor release the chunk they sized. `reset` never allocates: when it keeps no
+  chunk, the next allocation opens one sized for the largest recent peak. So a steady frame bumps
+  through one kept chunk, an idle frame touches the global allocator not at all, and a chunk a
+  spike grew is released once 120 busy resets have passed without needing it.
 - `FrameArena` is `!Send` and `!Sync` (it holds `Cell`s and pointers); no `unsafe impl` changes
   that. It holds no `static` and no thread-local.
 
@@ -153,8 +155,8 @@ pure Rust performance gain and changes nothing an author writes.
 ### Confirmation
 
 - `flui-foundation`'s `arena::tests`, under miri: a frame of the same shape reuses the one kept
-  chunk, a frame that frees in order keeps its chunk, a reset never allocates, a spike's chunk is
-  released after the window, the last block frees, grows and shrinks in place, and zero-size and
+  chunk, a frame that frees in order keeps its chunk, a reset never allocates, idle resets keep
+  the chunk busy frames need, a spike's chunk is released after the window, the last block frees, grows and shrinks in place, and zero-size and
   over-aligned layouts are honoured.
 - A `compile_fail` doctest on `FrameArena`: a `FrameVec` alive across `reset` is error E0502.
 - `cargo xtask perf`: each moving pull request lowers `allocations` in the scenarios it touches,

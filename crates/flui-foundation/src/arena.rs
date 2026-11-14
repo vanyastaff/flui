@@ -108,7 +108,7 @@ pub struct FrameArena {
     /// The most bytes handed out at once since the last reset: a frame that frees its scratch
     /// in reverse order ends with the cursor back at zero, and still needed this much.
     peak: Cell<usize>,
-    /// The peak of each of the last [`RECENT_RESETS`] frames.
+    /// The peak of each of the last [`RECENT_RESETS`] resets that followed some allocation.
     recent: [usize; RECENT_RESETS],
     /// Where the next reset writes in `recent`.
     next_recent: usize,
@@ -140,10 +140,17 @@ impl FrameArena {
     /// Keeps the newest chunk when it holds the most this frame had handed out at once, so the
     /// next frame of the same shape allocates nothing from the global allocator; releases the
     /// others, and a chunk larger than [`RELEASE_FACTOR`] times the most any of the last
-    /// [`RECENT_RESETS`] frames needed. A reset never allocates: when it keeps no chunk, the next
-    /// allocation opens one sized for the recent frames.
+    /// [`RECENT_RESETS`] frames that used the arena needed. A frame that handed out nothing
+    /// changes nothing. A reset never allocates: when it keeps no chunk, the next allocation
+    /// opens one sized for the recent frames.
     pub fn reset(&mut self) {
         let used = self.peak.get();
+        if used == 0 {
+            // Nothing was handed out since the last reset: a pass with no scratch to list says
+            // nothing about how much the next busy one needs, so it neither counts as a recent
+            // frame nor releases the chunk those frames sized.
+            return;
+        }
         self.recent[self.next_recent] = used;
         self.next_recent = (self.next_recent + 1) % RECENT_RESETS;
         let recent_most = self.recent.iter().copied().max().unwrap_or(0);
@@ -500,26 +507,68 @@ mod tests {
         );
     }
 
-    /// A reset releases what it does not keep and allocates nothing itself.
+    /// A reset releases a chunk that did not hold the frame alone and opens none itself: the next
+    /// allocation opens one sized for the whole frame.
     #[test]
     fn a_reset_never_allocates() {
         let mut arena = FrameArena::new();
         {
-            let mut grown: FrameVec<'_, u8> = Vec::new_in(&arena);
-            let _first: FrameVec<'_, u8> = Vec::with_capacity_in(1, &arena);
-            // Grown in steps, so the list outgrows each chunk it is not alone in.
-            for _ in 0..3 {
-                grown.extend(std::iter::repeat_n(0, MIN_CHUNK));
-            }
-            assert_eq!(grown.len(), 3 * MIN_CHUNK);
+            // Fills the first chunk exactly, then a block that fills most of the second, so the
+            // newest chunk is smaller than the frame's peak.
+            let _first: FrameVec<'_, u8> = Vec::with_capacity_in(MIN_CHUNK, &arena);
+            assert_eq!(arena.capacity.get(), 2 * MIN_CHUNK);
+            let _second: FrameVec<'_, u8> = Vec::with_capacity_in(MIN_CHUNK, &arena);
+            let _third: FrameVec<'_, u8> = Vec::with_capacity_in(4 * MIN_CHUNK - 16, &arena);
+            assert_eq!(chunk_count(&arena), 2);
         }
-        assert!(chunk_count(&arena) > 1);
         let peak = arena.peak.get();
-        arena.reset();
-        assert!(chunk_count(&arena) <= 1, "the older chunks are released");
         assert!(
-            arena.capacity.get().max(arena.next_chunk) >= peak,
-            "the kept chunk, or the next one opened, holds the whole frame",
+            peak > arena.capacity.get(),
+            "the newest chunk cannot hold the frame"
+        );
+        arena.reset();
+        assert_eq!(
+            chunk_count(&arena),
+            0,
+            "the reset keeps no chunk and opens none"
+        );
+        assert_eq!(arena.capacity.get(), 0);
+        assert!(
+            arena.next_chunk >= peak,
+            "the next chunk will hold the frame"
+        );
+
+        let _next: FrameVec<'_, u8> = Vec::with_capacity_in(1, &arena);
+        assert!(
+            arena.capacity.get() >= peak,
+            "and the next allocation opens it"
+        );
+    }
+
+    /// Passes that hand out nothing neither age the recent peaks nor release the chunk they sized.
+    #[test]
+    fn idle_resets_keep_the_chunk_busy_frames_need() {
+        let mut arena = FrameArena::new();
+        {
+            let _busy: FrameVec<'_, u8> = Vec::with_capacity_in(10 * MIN_CHUNK, &arena);
+        }
+        arena.reset();
+        let base = arena.base.get();
+        for _ in 0..2 * RECENT_RESETS {
+            arena.reset();
+        }
+        assert_eq!(
+            arena.base.get(),
+            base,
+            "the busy frames' chunk is still held"
+        );
+        {
+            let _busy: FrameVec<'_, u8> = Vec::with_capacity_in(10 * MIN_CHUNK, &arena);
+        }
+        assert_eq!(
+            arena.base.get(),
+            base,
+            "and the next busy frame bumps through it"
         );
     }
 

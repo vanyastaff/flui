@@ -84,9 +84,10 @@ chunks taken from the global allocator (ADR-0328). A block is handed out at most
 resets, because the bump cursor moves back only over the last block when that block is freed or
 shrunk; a block stays valid while the `&FrameArena` that handed it out lives, because only `reset`
 (`&mut self`) and the arena's drop free a chunk. A `FrameVec` alive across `reset` is a borrow
-error, pinned by the `compile_fail` doctest on `FrameArena`. `reset` never allocates, so an idle
-frame that resets its arena asks nothing of the heap (`a_reset_never_allocates`). Miri runs
-`arena::tests` with the crate's other unit tests.
+error, pinned by the `compile_fail` doctest on `FrameArena`. `reset` never allocates
+(`a_reset_never_allocates`), and a reset that follows no allocation changes nothing, so idle
+passes keep the chunk busy frames sized (`idle_resets_keep_the_chunk_busy_frames_need`). Miri
+runs `arena::tests` with the crate's other unit tests.
 
 ## The geometry values (`geometry`)
 
