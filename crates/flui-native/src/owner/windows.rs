@@ -233,6 +233,11 @@ pub(crate) trait WindowInputs {
 /// source, the notice channel, the lifecycle and the drag-and-drop transport
 /// the loop holds. The owner dispatches through them and names no feature.
 pub(crate) trait WindowsHost: 'static {
+    /// The arguments the application was launched with, without its own
+    /// name: what a registered scheme or file type hands it (`"%1"`,
+    /// [`launch_arguments`](crate::owner::launch_arguments)).
+    fn launch_arguments() -> Vec<std::ffi::OsString>;
+
     /// FLUI's window class on an owner thread: its hooks, whose procedure is
     /// `window_proc::<Self>`, and their input. Made once per thread an owner
     /// of this host opens on ([`window_class`]).
@@ -946,6 +951,11 @@ impl WindowsLoop {
         let drag = drag();
         let displays = H::displays();
         let app = Arc::new(AppDelivery::new());
+        // What launched the application waits for its `ready`.
+        app.opened(crate::owner::launch_arguments::launched_by(
+            H::launch_arguments(),
+        ))
+        .or_contain((), "the launch's arguments");
         let notices = H::notices(&app);
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as _);
         let owner_control = control::OwnerControl::try_new::<H>(

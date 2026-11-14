@@ -54,6 +54,10 @@ impl Host for Windows {
 }
 
 impl WindowsHost for Windows {
+    fn launch_arguments() -> Vec<std::ffi::OsString> {
+        crate::owner::launch_arguments::process_arguments()
+    }
+
     /// The text services, which hear a window's moves before its procedure
     /// answers them and answer nothing themselves; the window's own messages;
     /// its input (the mouse, pointers, wheel, keyboard and keyboard layout,

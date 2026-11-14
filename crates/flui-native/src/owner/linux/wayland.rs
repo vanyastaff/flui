@@ -432,6 +432,11 @@ mod event_loop {
     /// of the host's notices. The loop reaches each through the hook here
     /// and names no feature.
     pub(crate) trait WaylandHost: 'static {
+        /// The arguments the application was launched with, without its own
+        /// name: what a registered scheme or file type hands it
+        /// ([`launch_arguments`](crate::owner::launch_arguments)).
+        fn launch_arguments() -> Vec<std::ffi::OsString>;
+
         /// The displays: the compositor's outputs, read on a connection of
         /// their own.
         fn displays() -> Arc<dyn WaylandDisplays>;
@@ -1705,6 +1710,11 @@ mod event_loop {
                 )
             };
             let app = Arc::new(AppDelivery::new());
+            // What launched the application waits for its `ready`.
+            app.opened(crate::owner::launch_arguments::launched_by(
+                H::launch_arguments(),
+            ))
+            .or_contain((), "the launch's arguments");
             Ok(Self {
                 protocol: WaylandProtocol {
                     connection: connection.clone(),

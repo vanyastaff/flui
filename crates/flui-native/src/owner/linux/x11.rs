@@ -201,6 +201,11 @@ impl Doorbell {
 /// sources of the host's notices. The loop holds each in a field typed by a
 /// hook declared here, and names no feature.
 pub(crate) trait X11Host: 'static {
+    /// The arguments the application was launched with, without its own
+    /// name: what a registered scheme or file type hands it
+    /// ([`launch_arguments`](crate::owner::launch_arguments)).
+    fn launch_arguments() -> Vec<std::ffi::OsString>;
+
     /// The displays: the X server's outputs, read on a connection of their own.
     fn displays() -> Arc<dyn HostDisplays>;
 
@@ -628,6 +633,11 @@ impl X11Loop {
         let rung = doorbell.clone();
         let signal = OwnerSignal::new(Arc::new(move || rung.ring()));
         let app = Arc::new(AppDelivery::new());
+        // What launched the application waits for its `ready`.
+        app.opened(crate::owner::launch_arguments::launched_by(
+            H::launch_arguments(),
+        ))
+        .or_contain((), "the launch's arguments");
         let notices = H::notices(&app);
         let displays = H::displays();
         let background_executor = executor;
