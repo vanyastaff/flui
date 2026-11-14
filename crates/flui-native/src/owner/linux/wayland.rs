@@ -2061,7 +2061,11 @@ mod event_loop {
             let Some(instance) = &self.instance else {
                 return;
             };
-            for (forwarded, delivery) in instance.take() {
+            // One launch at a time, each claimed only once the reopen before
+            // it ran: one waiting behind a handler that blocks stays
+            // withdrawable, so its caller never runs on its own while this
+            // instance opens it.
+            while instance.has_waiting() {
                 // An application without a window (one that outlives its
                 // last) is asked to reopen, as a Dock click asks on macOS.
                 if self.windows.is_empty() {
@@ -2069,6 +2073,9 @@ mod event_loop {
                         .reopen()
                         .or_contain((), "a launch another instance forwarded");
                 }
+                let Some((forwarded, delivery)) = instance.take_next() else {
+                    break;
+                };
                 if crate::owner::single_instance::hand_on(&self.app, forwarded.opened(), delivery) {
                     self.windows
                         .activate_forwarded(forwarded.token.map(ActivationToken::new));

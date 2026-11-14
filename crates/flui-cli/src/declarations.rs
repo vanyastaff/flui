@@ -46,6 +46,59 @@ const KEY: &str = "declares";
 /// or file it was started with (ADR-0254 §4).
 const ONE_INSTANCE: (&str, &str) = ("flui-native", "single-instance");
 
+/// Whether the normal build of `package` (else the workspace's default
+/// members) at `app_dir` for `target`, with `features`, links
+/// [`ONE_INSTANCE`]'s crate with its feature: `cargo tree` over normal and
+/// build edges resolves features as `cargo build` does, without the ones only
+/// a dev-dependency turns on.
+///
+/// # Errors
+///
+/// The failure of `cargo tree`.
+fn links_one_instance(
+    app_dir: &Path,
+    target: &str,
+    features: &[String],
+    package: Option<&str>,
+) -> BuildResult<bool> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = std::process::Command::new(cargo);
+    command.current_dir(app_dir).args([
+        "tree",
+        "--target",
+        target,
+        "--edges",
+        "normal,build",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}|{f}",
+    ]);
+    if let Some(package) = package {
+        command.args(["--package", package]);
+    }
+    if !features.is_empty() {
+        command.args(["--features", &features.join(",")]);
+    }
+    let output = command
+        .output()
+        .map_err(|error| BuildError::Other(format!("cargo tree for {target}: {error}")))?;
+    if !output.status.success() {
+        return Err(BuildError::Other(format!(
+            "cargo tree for {target}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let (crate_name, feature) = ONE_INSTANCE;
+    Ok(String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+        line.split_once('|').is_some_and(|(id, enabled)| {
+            id.split_once(' ')
+                .is_some_and(|(name, _)| name == crate_name)
+                && enabled.split(',').any(|enabled| enabled.trim() == feature)
+        })
+    }))
+}
+
 /// Whether a crate is an application of the graph or a dependency of one.
 /// The URLs an application opens are the application's own: `#[flui::main]`
 /// carries the crate's lists into the run, which opens only those, so a
@@ -429,7 +482,16 @@ impl Declarations {
                 .map_err(|error| {
                     BuildError::Other(format!("cargo metadata for {target}: {error}"))
                 })?;
-            joined.join(Self::of_graph(&metadata)?);
+            let mut graph = Self::of_graph(&metadata)?;
+            // The metadata's features count what dev-dependencies turn on;
+            // whether the build links one instance is read from the graph
+            // the build itself resolves, only when it matters.
+            if graph.one_instance && (!graph.url_schemes.is_empty() || !graph.file_types.is_empty())
+            {
+                let package = metadata.root_package().map(|package| package.name.as_str());
+                graph.one_instance = links_one_instance(app_dir, target, features, package)?;
+            }
+            joined.join(graph);
         }
         Ok(joined)
     }
@@ -1005,9 +1067,10 @@ mod tests {
     }
 
     /// A Linux or Windows build of an application that opens a scheme or a
-    /// file type is refused unless the graph links `flui-native` with
-    /// `single-instance`; an application that opens nothing, and every other
-    /// target, builds.
+    /// file type is refused unless the build's own graph links `flui-native`
+    /// with `single-instance` (a dev-dependency that turns it on does not
+    /// count); an application that opens nothing, and every other target,
+    /// builds.
     #[test]
     fn a_desktop_that_opens_links_needs_one_instance() {
         let project = fixture(&[
@@ -1020,6 +1083,16 @@ mod tests {
                      [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n\
                      [[package.metadata.flui.declares.file-types]]\n\
                      extension = \"note\"\nmime = \"application/x-notes-note\"\nname = \"Note\"\n",
+                ),
+            ),
+            (
+                "tested",
+                &manifest(
+                    "tested",
+                    "[workspace]\n[dependencies]\nflui = { path = \"../flui\" }\n\
+                     [dev-dependencies]\n\
+                     flui = { path = \"../flui\", features = [\"single-instance\"] }\n\
+                     [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n",
                 ),
             ),
             (
@@ -1070,6 +1143,14 @@ mod tests {
                 .require_one_instance(target);
             if on.is_err() {
                 failures.push(format!("{target} with the feature: {on:?}"));
+            }
+            let tested = Declarations::collect(&project.path().join("tested"), &[target])
+                .expect("declarations")
+                .require_one_instance(target);
+            if tested.is_err() != desktop {
+                failures.push(format!(
+                    "{target} with the feature on a dev-dependency only: {tested:?}"
+                ));
             }
             let quiet = Declarations::collect(&project.path().join("quiet"), &[target])
                 .expect("declarations")

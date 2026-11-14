@@ -179,7 +179,12 @@ mod off {
         }
 
         /// Unreachable: no value exists.
-        pub(crate) fn take(&self) -> Vec<(Forwarded, Delivery)> {
+        pub(crate) fn take_next(&self) -> Option<(Forwarded, Delivery)> {
+            match *self {}
+        }
+
+        /// Unreachable: no value exists.
+        pub(crate) fn has_waiting(&self) -> bool {
             match *self {}
         }
     }
@@ -530,11 +535,17 @@ mod bus {
                 .attach(Arc::new(SignalWake(Arc::downgrade(signal))) as Arc<dyn OwnerWake>);
         }
 
-        /// The launches forwarded since the last call, oldest first; each
-        /// with the answer its caller waits for: taken once the application
-        /// holds the launch, refused when it is dropped.
-        pub(crate) fn take(&self) -> Vec<(Forwarded, Delivery)> {
-            self.inbox.take()
+        /// The oldest launch forwarded and not yet taken, with the answer its
+        /// caller waits for: taken once the application holds the launch,
+        /// refused when it is dropped. One at a time, so the ones behind it
+        /// stay withdrawable while the application handles it.
+        pub(crate) fn take_next(&self) -> Option<(Forwarded, Delivery)> {
+            self.inbox.take_next()
+        }
+
+        /// Whether a forwarded launch waits to be taken.
+        pub(crate) fn has_waiting(&self) -> bool {
+            self.inbox.has_waiting()
         }
 
         /// How many launches wait for the owner.
@@ -822,7 +833,6 @@ mod bus_tests {
     use super::{Claim, FirstInstance, Forwarded, claim};
     use crate::executor::NativeExecutor;
     use crate::owner::signal::OwnerSignal;
-    use crate::owner::single_instance::Delivery;
 
     /// A private session bus, stopped when dropped.
     struct PrivateBus {
@@ -862,11 +872,10 @@ mod bus_tests {
         }
     }
 
-    /// The launches `taken`, each answered as the application's owner
-    /// answers one it handed on.
-    fn delivered(taken: Vec<(Forwarded, Delivery)>) -> Vec<Forwarded> {
-        taken
-            .into_iter()
+    /// Every launch `first` holds, taken one at a time and each answered as
+    /// the application's owner answers one it handed on.
+    fn delivered(first: &FirstInstance) -> Vec<Forwarded> {
+        std::iter::from_fn(|| first.take_next())
             .map(|(launch, delivery)| {
                 delivery.delivered();
                 launch
@@ -887,10 +896,10 @@ mod bus_tests {
             let claiming = scope.spawn(|| claim(executor, Some(address), NAME, launch));
             let mut taken = Vec::new();
             while !claiming.is_finished() {
-                taken.extend(delivered(first.take()));
+                taken.extend(delivered(first));
                 std::thread::sleep(Duration::from_millis(2));
             }
-            taken.extend(delivered(first.take()));
+            taken.extend(delivered(first));
             (claiming.join().expect("the claim does not panic"), taken)
         })
     }
@@ -1101,7 +1110,10 @@ mod bus_tests {
             Err(other) => panic!("not a refusal: {other}"),
             Ok(_) => panic!("a launch nobody took is refused"),
         }
-        assert!(first.take().is_empty(), "a launch handed back is not taken");
+        assert!(
+            first.take_next().is_none(),
+            "a launch handed back is not taken"
+        );
     }
 
     /// A launch the owner took as the instance ends is answered as taken: its
@@ -1135,7 +1147,7 @@ mod bus_tests {
                     tokio::time::sleep(Duration::from_millis(2)).await;
                 }
             });
-            assert_eq!(delivered(first.take()), std::slice::from_ref(&later));
+            assert_eq!(delivered(&first), std::slice::from_ref(&later));
             drop(first);
             host.block_on(async {
                 while !forwarding.is_finished() {
@@ -1244,7 +1256,7 @@ mod bus_tests {
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut taken = Vec::new();
         let status = loop {
-            taken.extend(delivered(first.take()));
+            taken.extend(delivered(&first));
             if let Some(status) = second.try_wait().expect("the second process is waited on") {
                 break status;
             }

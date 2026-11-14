@@ -227,24 +227,31 @@ mod inbox {
             Err(Refused::Ending)
         }
 
-        /// The waiting launches, oldest first, each with the answer its
-        /// caller now waits for past the hold. A launch whose caller stopped
-        /// waiting (it was handed back and, if its process still runs, runs
-        /// on its own) is not taken.
-        pub(crate) fn take(&self) -> Vec<(T, Delivery)> {
+        /// The oldest waiting launch, with the answer its caller now waits
+        /// for past the hold. A launch whose caller stopped waiting (it was
+        /// handed back and, if its process still runs, runs on its own) is
+        /// not taken.
+        ///
+        /// One at a time: the owner hands each to the application before it
+        /// takes the next, so a launch behind one whose handler blocks stays
+        /// withdrawable by its hold, and a caller that gives up never sees
+        /// its launch opened here as well.
+        pub(crate) fn take_next(&self) -> Option<(T, Delivery)> {
             let mut queue = self.queue.lock();
             // Claimed under the lock a withdrawing caller takes: a oneshot's
             // send wakes only the caller's task, no application code.
-            queue
-                .drain(..)
-                .filter_map(|(launch, claim)| {
-                    let (answer, heard) = oneshot::channel();
-                    claim
-                        .send(heard)
-                        .is_ok()
-                        .then(|| (launch, Delivery(answer)))
-                })
-                .collect::<Vec<(T, Delivery)>>()
+            while let Some((launch, claim)) = queue.pop_front() {
+                let (answer, heard) = oneshot::channel();
+                if claim.send(heard).is_ok() {
+                    return Some((launch, Delivery(answer)));
+                }
+            }
+            None
+        }
+
+        /// Whether a launch waits for the owner.
+        pub(crate) fn has_waiting(&self) -> bool {
+            !self.queue.lock().is_empty()
         }
 
         /// Refuse every waiting launch to its caller: the owner ends without
@@ -387,7 +394,7 @@ mod inbox {
                 Some(Refused::Full),
                 "past the bound"
             );
-            let taken = inbox.take();
+            let taken: Vec<(usize, Delivery)> = std::iter::from_fn(|| inbox.take_next()).collect();
             assert_eq!(
                 taken
                     .iter()
@@ -419,15 +426,13 @@ mod inbox {
             let handed_back = runtime.block_on(inbox.answer(posted));
             assert!(handed_back.is_err(), "the caller hears the refusal");
             assert!(
-                inbox.take().is_empty(),
+                inbox.take_next().is_none(),
                 "a launch handed back is not delivered as well"
             );
             assert_eq!(inbox.waiting(), 0, "nor kept waiting");
 
             let posted = inbox.post("flui:b").expect("room to wait");
-            let [(launch, delivery)] = <[(&str, Delivery); 1]>::try_from(inbox.take())
-                .ok()
-                .expect("the one launch is taken");
+            let (launch, delivery) = inbox.take_next().expect("the one launch is taken");
             assert_eq!(launch, "flui:b");
             delivery.delivered();
             assert_eq!(runtime.block_on(inbox.answer(posted)), Ok(()));
@@ -446,9 +451,7 @@ mod inbox {
                 runtime.handle().clone(),
             ));
             let posted = inbox.post("flui:held").expect("room to wait");
-            let [(_, delivery)] = <[(&str, Delivery); 1]>::try_from(inbox.take())
-                .ok()
-                .expect("the one launch is taken");
+            let (_, delivery) = inbox.take_next().expect("the one launch is taken");
             let answering = runtime.spawn({
                 let inbox = Arc::clone(&inbox);
                 async move { inbox.answer(posted).await }
@@ -462,11 +465,36 @@ mod inbox {
             assert_eq!(runtime.block_on(answering).expect("the answer ran"), Ok(()));
 
             let posted = inbox.post("flui:undelivered").expect("room to wait");
-            drop(inbox.take());
+            drop(inbox.take_next());
             assert_eq!(
                 runtime.block_on(inbox.answer(posted)),
                 Err("the running instance could not deliver the launch"),
                 "a launch the owner could not deliver is refused to its caller"
+            );
+        }
+
+        /// A launch waiting behind one the owner took is not claimed with
+        /// it: while the application handles the first past the hold, the
+        /// second is handed back to its caller, which runs on its own, and
+        /// the owner does not take it afterwards.
+        #[test]
+        fn a_launch_behind_a_taken_one_is_still_handed_back() {
+            let runtime = timers();
+            let inbox = Inbox::new(Duration::from_millis(20), runtime.handle().clone());
+            let first = inbox.post("flui:first").expect("room to wait");
+            let second = inbox.post("flui:second").expect("room to wait");
+            let (launch, delivery) = inbox.take_next().expect("the first launch is taken");
+            assert_eq!(launch, "flui:first");
+            assert_eq!(
+                runtime.block_on(inbox.answer(second)),
+                Err("the running instance did not take the launch in time"),
+                "the launch behind is handed back while the first is handled"
+            );
+            delivery.delivered();
+            assert_eq!(runtime.block_on(inbox.answer(first)), Ok(()));
+            assert!(
+                inbox.take_next().is_none(),
+                "a launch handed back is not delivered as well"
             );
         }
 

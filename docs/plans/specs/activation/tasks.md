@@ -139,9 +139,11 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   строка parity `single-instance-forward-arguments`.
   Запуск отвечается «взят», только когда приложение его приняло (`AppDelivery::try_opened`, на обоих
   хостах): `a_taken_launch_is_answered_by_its_delivery`, `opened_reports_waiting_for_ready_are_bounded`
-  (переполненная очередь отчётов возвращает запуск его процессу).
+  (переполненная очередь отчётов возвращает запуск его процессу); запуски берутся по одному, и стоящий
+  за заблокированным обработчиком всё ещё возвращается по сроку: `a_launch_behind_a_taken_one_is_still_handed_back`.
 - **Фича `single-instance`.** Выключена по умолчанию; `a_desktop_that_opens_links_needs_one_instance`
-  (Linux и Windows без фичи отказ с названием схемы, типа и фичи, с фичей и без объявлений сборка,
+  (Linux и Windows без фичи отказ с названием схемы, типа и фичи, фича только у dev-зависимости не
+  считается: её читает `cargo tree` по рёбрам normal и build; с фичей и без объявлений сборка,
   Android, macOS и wasm не затронуты), `a_desktop_run_that_opens_links_needs_one_instance` (`flui run`
   отказывает до сборки), проверка `project.single-instance` в
   `doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`; clippy `flui-native` и

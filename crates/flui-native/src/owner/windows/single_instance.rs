@@ -148,7 +148,10 @@ impl LaunchHook {
         let (Some(app), Some(windows)) = (owner.app(), owner.windows()) else {
             return;
         };
-        for (forwarded, delivery) in self.instance.inbox.take() {
+        // One launch at a time, each claimed only once the reopen before it
+        // ran: one waiting behind a handler that blocks stays withdrawable,
+        // so its caller never runs on its own while this instance opens it.
+        while self.instance.inbox.has_waiting() {
             // An application that shows no window (one that outlives its
             // last, or hid it) is asked to reopen, as a Dock click asks on
             // macOS; the window it shows comes forward with the right.
@@ -156,6 +159,9 @@ impl LaunchHook {
                 app.reopen()
                     .or_contain((), "a launch another instance forwarded");
             }
+            let Some((forwarded, delivery)) = self.instance.inbox.take_next() else {
+                break;
+            };
             if hand_on(&app, forwarded.opened(), delivery) {
                 windows.activate_forwarded();
             }
