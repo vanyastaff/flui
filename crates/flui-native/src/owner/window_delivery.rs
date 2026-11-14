@@ -326,7 +326,7 @@ impl WindowDelivery {
     /// native delivery on (UIKit's: a display-link frame, a touch batch)
     /// asks for its wake deadline again there, since the run may have left
     /// a new one. `hook` runs no user code: it may run while a panic unwinds.
-    #[cfg(any(target_os = "ios", test))]
+    #[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
     #[must_use]
     pub(crate) fn after_each_run(mut self, hook: fn()) -> Self {
         self.after_run = Some(hook);
