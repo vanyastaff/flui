@@ -2,8 +2,8 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [full_reassemble]
-allocated_bytes = 371641
-allocations = 1435
+allocated_bytes = 366781
+allocations = 1263
 builds_run = 278
 damage_full = 0
 damage_rects = 1
