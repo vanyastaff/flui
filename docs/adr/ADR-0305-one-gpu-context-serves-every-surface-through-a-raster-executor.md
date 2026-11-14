@@ -272,7 +272,7 @@ pub enum RasterSendError { Full(RasterCommand), StaleSlot(RasterCommand), Gone(R
 
 ```rust
 // flui-runtime
-pub enum SubmitVerdict { Presented, NoPresent, NotShown, Retry, SurfaceStale, DeviceLost, Failed, Queued, QueuedReplacing(FrameEpoch) }
+pub enum SubmitVerdict { Presented, NoPresent, NotShown, Retry, SurfaceStale, DeviceLost, Failed, Refused, Queued, QueuedReplacing(FrameEpoch) }
 pub struct FrameSettlement { pub address: PresentationAddress, pub epoch: FrameEpoch, pub verdict: SubmitVerdict }
 pub enum Settled { Applied, Stale }
 pub trait FrameSink { fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict; }

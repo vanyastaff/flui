@@ -35543,8 +35543,9 @@ variant flui_runtime::sink::SubmitVerdict::Failed // at 6
 variant flui_runtime::sink::SubmitVerdict::NoPresent // at 1
 variant flui_runtime::sink::SubmitVerdict::NotShown // at 2
 variant flui_runtime::sink::SubmitVerdict::Presented // at 0
-variant flui_runtime::sink::SubmitVerdict::Queued // at 7
-variant flui_runtime::sink::SubmitVerdict::QueuedReplacing(flui::foundation::FrameEpoch) // at 8
+variant flui_runtime::sink::SubmitVerdict::Refused // at 7
+variant flui_runtime::sink::SubmitVerdict::Queued // at 8
+variant flui_runtime::sink::SubmitVerdict::QueuedReplacing(flui::foundation::FrameEpoch) // at 9
 variant flui_runtime::sink::SubmitVerdict::Retry // at 3
 variant flui_runtime::sink::SubmitVerdict::SurfaceStale // at 4
 #[non_exhaustive] pub struct flui_runtime::testing::SceneTotals

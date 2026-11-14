@@ -227,8 +227,13 @@ impl UiRuntime {
                 Ok(Ok(outcome)) => {
                     super::text_preparation::finish(presentation);
                     // A terminal clean result resets only after every
-                    // contained report from this attempt was delivered.
-                    presentation.reset_frame_failure_streak();
+                    // contained report from this attempt was delivered. A
+                    // painted scene is not through yet: its sink's verdict
+                    // resets the streak once the frame commits, so frames
+                    // that fail at submit back off like any dropped frame.
+                    if !matches!(outcome, FramePaintOutcome::Painted(_)) {
+                        presentation.reset_frame_failure_streak();
+                    }
                     outcome
                 }
                 Ok(Err(error)) => {
@@ -274,15 +279,11 @@ impl UiRuntime {
                     // The payload may contain several panicking destructors.
                     // Retain it before any recovery operation or diagnostics.
                     flui_foundation::panic::discard_payload(payload);
-                    if matches!(failed_phase, SegmentPhase::Tail | SegmentPhase::Scene) {
-                        // The pipeline already consumed this presentation's
-                        // paint dirtiness before either post-pipeline segment
-                        // began. Re-dirty the exact failed presentation here,
-                        // while its identity is still local to this catch;
-                        // a later clean sibling must not steal attribution.
-                        self.mark_needs_full_repaint_for(presentation);
-                    }
-                    self.report_frame_failure(
+                    // The report counts the failure into the streak the retry
+                    // is paced by, and the retry is armed before the platform
+                    // wake or the failure handler, code the runtime does not
+                    // own, can unwind.
+                    let report = self.frame_failure_report(
                         presentation,
                         FrameFailureKind::SegmentPanic {
                             message,
@@ -291,6 +292,19 @@ impl UiRuntime {
                         },
                     );
                     Self::arm_failure_retry(presentation);
+                    let mut held = FirstPanic::new();
+                    if matches!(failed_phase, SegmentPhase::Tail | SegmentPhase::Scene) {
+                        // The pipeline already consumed this presentation's
+                        // paint dirtiness before either post-pipeline segment
+                        // began. Re-dirty the exact failed presentation here,
+                        // while its identity is still local to this catch;
+                        // a later clean sibling must not steal attribution.
+                        held.contain(|| self.mark_needs_full_repaint_for(presentation));
+                    }
+                    held.contain(|| self.deliver_failure_report(report));
+                    if let Some(payload) = held.into_payload() {
+                        resume_unwind(payload);
+                    }
                     FramePaintOutcome::Errored { retry: true }
                 }
             };
@@ -337,6 +351,14 @@ impl UiRuntime {
                 && presentation.failure_retry_at().is_none()
             {
                 any_retry_needed = true;
+            }
+            // The scene this segment's outcome replaces is never submitted (one sink, the last
+            // scene goes), so no verdict resets its presentation's streak: its clean segment
+            // does, as for a segment that painted nothing.
+            if matches!(last_outcome, FramePaintOutcome::Painted(_))
+                && let Some(dropped) = self.presentations.get(producer)
+            {
+                dropped.reset_frame_failure_streak();
             }
             last_outcome = result;
             producer = presentation.id();
@@ -968,6 +990,10 @@ impl UiRuntime {
         // The first panic of a layer read's reply, resumed with the rest of this tail's panics.
         let mut hover_panic = FirstPanic::new();
         use crate::sink::SubmitVerdict;
+        // A withheld scene gets no verdict to reset the streak: its clean segment does.
+        if !should_send && matches!(outcome, FramePaintOutcome::Painted(_)) {
+            producer.reset_frame_failure_streak();
+        }
         if should_send && let FramePaintOutcome::Painted(publication) = outcome {
             // What the frame commits once its verdict is known, captured before the sink sees it:
             // the layer reads parked for this scene read it now, and are answered once a verdict
@@ -1024,7 +1050,8 @@ impl UiRuntime {
                 | SubmitVerdict::Retry
                 | SubmitVerdict::SurfaceStale
                 | SubmitVerdict::DeviceLost
-                | SubmitVerdict::Failed => None,
+                | SubmitVerdict::Failed
+                | SubmitVerdict::Refused => None,
             };
             if let Some(replaces) = queued {
                 // The sink took the frame and settles it later, by its stamp: the record waits

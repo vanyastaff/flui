@@ -602,11 +602,14 @@ pub struct PresentationState {
     /// Consecutive dropped-frame count for this presentation — the
     /// `consecutive_failures` field of every
     /// [`FrameFailureReport`](super::frame_failure::FrameFailureReport)
-    /// this presentation produces. A terminal pipeline error or escaped
-    /// segment panic increments it. A contained lifecycle recovery reports
-    /// the current value but neither increments nor resets it. The next
-    /// segment that completes without a terminal failure resets it only after
-    /// that attempt's contained reports are delivered. Presentation-local on
+    /// this presentation produces. A terminal pipeline error, an escaped
+    /// segment panic or a submit that settles `Failed` increments it. A
+    /// contained lifecycle recovery reports the current value but neither
+    /// increments nor resets it. A segment that completes without a terminal
+    /// failure and paints nothing, or whose scene reaches no sink, resets it,
+    /// after that attempt's contained reports are delivered; a painted
+    /// scene resets it once its verdict
+    /// commits the current tree (ADR-0334 §2). Presentation-local on
     /// purpose: one window's streak must never color a sibling's reports.
     frame_failure_streak: Cell<u32>,
     /// When this presentation may next try a frame it dropped, and whether a
@@ -1911,8 +1914,8 @@ impl PresentationState {
         self.frame_failure_streak.get()
     }
 
-    /// A segment completed without a terminal failure; the next dropped frame
-    /// starts a fresh streak. See [`Self::frame_failure_streak`]'s field doc.
+    /// A frame showed the current tree, or a segment painted nothing or a scene no sink took;
+    /// the next dropped frame starts a fresh streak. See [`Self::frame_failure_streak`]'s field doc.
     pub(crate) fn reset_frame_failure_streak(&self) {
         self.frame_failure_streak.set(0);
         self.failure_retry.set(FailureRetry::default());
