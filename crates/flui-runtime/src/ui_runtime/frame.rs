@@ -951,6 +951,8 @@ impl UiRuntime {
             // The version the sink is handed, acknowledged once it is shown so
             // the next publication's damage starts from it (ADR-0304 §7).
             let shown = publication.scene.id();
+            // The stamp the sink settles this frame by, in its presentation's sequence.
+            let epoch = producer.next_frame_epoch();
             // The layer reads parked for this scene read it now and are answered once the sink
             // shows it. A sink that panics leaves them parked, with a repaint owed.
             producer.stage_agent_layer_reads(&publication.scene);
@@ -964,7 +966,7 @@ impl UiRuntime {
             let span_outcome = catch_unwind(AssertUnwindSafe(|| {
                 let _presentation = presentation_span(producer.id()).entered();
                 let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
-                submitted = Some(sink.submit(publication));
+                submitted = Some(sink.submit(epoch, publication));
             }));
             let render_verdict = match (submitted, span_outcome) {
                 (Some(verdict), Ok(())) => verdict,

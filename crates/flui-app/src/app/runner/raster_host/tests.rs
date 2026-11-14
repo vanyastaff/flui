@@ -86,6 +86,8 @@ fn ten_by_ten_chunk(
 struct TestScene {
     owner: flui_layer::SceneOwner,
     child: flui_layer::SceneNodeId,
+    /// The epoch of the frame last submitted, as the UI runtime mints it.
+    epoch: flui_foundation::FrameEpoch,
 }
 
 const PRODUCER_SURFACE: flui_layer::SurfaceKey = flui_layer::SurfaceKey {
@@ -121,7 +123,11 @@ impl TestScene {
             });
         }
         owner.apply(PRODUCER_SURFACE).expect("the first version");
-        Self { owner, child }
+        Self {
+            owner,
+            child,
+            epoch: flui_foundation::FrameEpoch::ZERO,
+        }
     }
 
     fn publication(&self) -> ScenePublication {
@@ -157,11 +163,17 @@ impl TestScene {
         self.owner.apply(PRODUCER_SURFACE).expect("an empty patch");
     }
 
+    /// The epoch of the next frame submitted.
+    fn next_epoch(&mut self) -> flui_foundation::FrameEpoch {
+        self.epoch = self.epoch.next();
+        self.epoch
+    }
+
     /// Submit the newest version and acknowledge it once shown.
     fn submit(&mut self, host: &mut RasterHost) -> SubmitVerdict {
         let publication = self.publication();
         let id = publication.scene.id();
-        let verdict = host.submit(address(), SIZE, publication);
+        let verdict = host.submit(address(), SIZE, self.next_epoch(), publication);
         if matches!(verdict, SubmitVerdict::Presented | SubmitVerdict::NoPresent) {
             self.acknowledge(id);
         }
@@ -271,7 +283,7 @@ fn a_base_mismatch_renders_full() {
         "the owner's damage is a patch"
     );
     assert_eq!(
-        host.submit(address(), SIZE, publication),
+        host.submit(address(), SIZE, scene.next_epoch(), publication),
         SubmitVerdict::Presented
     );
     let renders = renders(&slots);
@@ -627,7 +639,7 @@ fn a_surface_is_paced_only_for_a_shown_window_at_a_size_the_device_takes() {
         height: over.1,
     }));
     scene.republish_child(AT, 11);
-    let _ = host.submit(address(), over, scene.publication());
+    let _ = host.submit(address(), over, scene.next_epoch(), scene.publication());
     let _ = host.set_surface(address(), false);
     slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
     // The frame that follows is stamped with the instant before the refusal,
@@ -643,7 +655,7 @@ fn a_surface_is_paced_only_for_a_shown_window_at_a_size_the_device_takes() {
 
     // The window's frames ask for a size the device takes.
     scene.republish_child(AT, 12);
-    let _ = host.submit(address(), SIZE, scene.publication());
+    let _ = host.submit(address(), SIZE, scene.next_epoch(), scene.publication());
     assert!(
         owed_surface(&host).is_some(),
         "a surface at the new size is owed on the window's pace"
@@ -816,8 +828,8 @@ pub(in crate::app::runner) fn owe_a_surface(
                 None,
             )
             .expect("the scripted backend attaches any window");
-            let scene = TestScene::new(AT);
-            let _ = host.submit(at, SIZE, scene.publication());
+            let mut scene = TestScene::new(AT);
+            let _ = host.submit(at, SIZE, scene.next_epoch(), scene.publication());
             let _ = host.set_surface(at, false);
             slots.script_restore(ScriptedAnswer::Fail(EngineError::IncompatibleSurface));
             assert!(!host.set_surface(at, true));

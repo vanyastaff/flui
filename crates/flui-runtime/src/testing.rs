@@ -365,7 +365,11 @@ impl FrameSink for ScriptedSink {
         self.size
     }
 
-    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict {
+    fn submit(
+        &mut self,
+        _epoch: flui_foundation::FrameEpoch,
+        publication: ScenePublication,
+    ) -> SubmitVerdict {
         let call_index = self.submit_calls;
         self.submit_calls += 1;
         (self.script)(call_index, &publication)

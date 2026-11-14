@@ -597,6 +597,10 @@ pub struct PresentationState {
     tree_revision: Cell<TreeRevision>,
     /// Latest tree revision acknowledged by a successful submit verdict.
     presented_revision: Cell<TreeRevision>,
+    /// The epoch of the last frame this presentation handed its sink: each
+    /// submit takes the next one, so a settlement names the frame it settles
+    /// (ADR-0305 §4).
+    frame_epoch: Cell<flui_foundation::FrameEpoch>,
     /// Consecutive dropped-frame count for this presentation — the
     /// `consecutive_failures` field of every
     /// [`FrameFailureReport`](super::frame_failure::FrameFailureReport)
@@ -1137,6 +1141,7 @@ impl PresentationState {
             segment_phases: Cell::new(FramePhaseDurations::default()),
             tree_revision: Cell::new(TreeRevision::ZERO),
             presented_revision: Cell::new(TreeRevision::ZERO),
+            frame_epoch: Cell::new(flui_foundation::FrameEpoch::ZERO),
             frame_failure_streak: Cell::new(0),
             failure_retry: Cell::new(FailureRetry::default()),
             device_recovery: Cell::new(None),
@@ -1284,6 +1289,7 @@ impl PresentationState {
             segment_phases: Cell::new(FramePhaseDurations::default()),
             tree_revision: Cell::new(TreeRevision::ZERO),
             presented_revision: Cell::new(TreeRevision::ZERO),
+            frame_epoch: Cell::new(flui_foundation::FrameEpoch::ZERO),
             frame_failure_streak: Cell::new(0),
             failure_retry: Cell::new(FailureRetry::default()),
             device_recovery: Cell::new(None),
@@ -2018,6 +2024,14 @@ impl PresentationState {
         let tree_revision = self.tree_revision.get().next();
         self.tree_revision.set(tree_revision);
         tree_revision
+    }
+
+    /// The epoch of the frame about to be handed to the sink: the one after
+    /// the last frame this presentation submitted.
+    pub(crate) fn next_frame_epoch(&self) -> flui_foundation::FrameEpoch {
+        let epoch = self.frame_epoch.get().next();
+        self.frame_epoch.set(epoch);
+        epoch
     }
 
     /// Acknowledge every terminal tree revision through the current one.

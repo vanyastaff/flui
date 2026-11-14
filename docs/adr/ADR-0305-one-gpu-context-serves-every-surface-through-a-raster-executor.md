@@ -275,6 +275,7 @@ pub enum RasterSendError { Full(RasterCommand), StaleSlot(RasterCommand), Gone(R
 pub enum SubmitVerdict { Presented, NoPresent, NotShown, Retry, SurfaceStale, DeviceLost, Failed, Queued }
 pub struct FrameSettlement { pub address: PresentationAddress, pub epoch: FrameEpoch, pub verdict: SubmitVerdict }
 pub enum Settled { Applied, Stale }
+pub trait FrameSink { fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict; }
 impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> Settled; }
 ```
 

@@ -15,6 +15,10 @@
 
 ### Changed
 
+- **`flui-runtime`**: `FrameSink::submit` takes the frame's `FrameEpoch` beside its publication. The
+  UI runtime numbers the frames each presentation submits, and the host stamps each frame with
+  that number instead of keeping a count of its own
+  ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §4).
 - **`flui-engine`**: `HeadlessRenderer` is a GPU context with one offscreen slot
   ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)):
   captures reuse one device, one pipeline set and one glyph atlas, and a capture of a new size
