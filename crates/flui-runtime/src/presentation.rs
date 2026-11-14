@@ -1637,9 +1637,8 @@ impl PresentationState {
     /// The regions are committed before the backend runs, and no borrow is held while it
     /// does: a backend that panics or reenters leaves them committed for the next move.
     pub(crate) fn publish_input_regions(&self) {
-        // The staged slice stays staged: the next frame compares its regions
-        // with it, and a scene that reaches the sink without a new stage hands
-        // the same regions again.
+        // The staged slice stays staged, for the next frame to compare its
+        // regions with.
         let regions = Rc::clone(&self.staged_input_regions.borrow());
         *self.published_input_regions.borrow_mut() = Rc::clone(&regions);
         self.hand_input_regions(&regions);
