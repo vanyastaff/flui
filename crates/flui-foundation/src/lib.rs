@@ -154,6 +154,11 @@ extern crate self as flui_foundation;
 mod test_cases;
 
 pub mod affinity;
+#[expect(
+    unsafe_code,
+    reason = "ADR-0328: the frame arena implements `Allocator`, an unsafe trait"
+)]
+pub mod arena;
 // Compile-time child-count markers the render protocol attaches to nodes.
 pub mod arity;
 pub mod async_snapshot;
