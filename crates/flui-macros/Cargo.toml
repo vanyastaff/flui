@@ -24,6 +24,9 @@ proc-macro-crate = "3.5"
 proc-macro2 = { workspace = true }
 quote = "1"
 syn = { workspace = true, features = ["full", "visit"] }
+# `#[flui::main]` reads the crate's `[package.metadata.flui.declares]`; the
+# same parser `proc-macro-crate` already brings.
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
 [features]
 default = []

@@ -190,6 +190,10 @@ fn runner_open() {
                 runner_open::a_panic_in_the_first_urls_navigation_does_not_lose_the_second
                     as fn(),
             ),
+            (
+                "runner_open::the_entry_functions_manifest_declares_what_a_run_opens",
+                runner_open::the_entry_functions_manifest_declares_what_a_run_opens as fn(),
+            ),
         ],
     );
 }

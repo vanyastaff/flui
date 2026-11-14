@@ -357,8 +357,9 @@ launched the application, which the runner takes in `ready` before the first win
 held for it, bounded, and opened in its UI runtime before its root mounts, so its first Router
 opens on them; held URLs whose window never opens are refused in the log when the run ends. Each
 URL is opened alone under `FirstPanic` (ADR-0281), so a panic in one URL's navigation does not lose
-the next. Files go to `Application::on_open_files`, and the declarations are
-`Application::declares`.
+the next. Files go to `Application::on_open_files`. The declarations are the ones `#[flui::main]`
+reads from the application's manifest (ADR-0307 §2) for the runs the function it marks starts, or
+`Application::declares`, which replaces them.
 
 The sources of an intent are on the owner thread already: the URLs the platform opens reach
 `AppHandler` (ADR-0254), the development agent's window methods arrive through

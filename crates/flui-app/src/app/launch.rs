@@ -100,10 +100,12 @@ impl Application {
     /// is associated with, the ones its `[package.metadata.flui.declares]`
     /// registers with the operating system (ADR-0307). A URL the operating
     /// system opens the application with is opened in the `Router` of the
-    /// window it addresses only when it is declared here; the default
-    /// declares nothing, so an application opens no URL.
+    /// window it addresses only when it is declared. Without this call a run
+    /// declares what `#[flui::main]` read from the manifest of the crate whose
+    /// entry function starts it, else nothing, so an application without
+    /// either opens no URL; declarations given here replace the manifest's.
     pub fn declares(mut self, declarations: flui_view::navigation::LinkDeclarations) -> Self {
-        self.opening.declarations = declarations;
+        self.opening.declarations = Some(declarations);
         self
     }
 

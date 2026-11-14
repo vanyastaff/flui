@@ -19,8 +19,8 @@ use std::process::Command;
 use cargo_metadata::{DependencyKind, Metadata, MetadataCommand, Package};
 use serde::Serialize;
 
-use crate::declarations::Declarations;
 use crate::declarations::capability::{PluginPath, plugin_of, plugin_of_manifest};
+use crate::declarations::{CrateRole, Declarations};
 use crate::error::{CliError, CliResult, ResultExt};
 use crate::ui;
 
@@ -420,8 +420,8 @@ fn describe(dir: &Path, target: &Target) -> CliResult<(PluginPath, Declarations)
         .iter()
         .map(|feature| feature.as_str())
         .collect();
-    let declarations =
-        Declarations::of_package(package, &features).map_err(|error| refused(error.to_string()))?;
+    let declarations = Declarations::of_package(package, &features, CrateRole::Dependency)
+        .map_err(|error| refused(error.to_string()))?;
     Ok((plugin, declarations))
 }
 
