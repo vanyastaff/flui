@@ -756,22 +756,22 @@ impl RasterSender {
             return Err(RasterSendError::stale_slot(RasterCommand::Release { slot }));
         };
         // Released before the send, so a restore answered before the release
-        // is applied does not read as a surface the owner wants.
-        let hold = {
-            let mut state = inbox.lock();
-            if !state.phase.takes_commands() {
-                drop(state);
-                return Err(self.refusal(RasterCommand::Release { slot }));
-            }
-            let hold = state.surface.hold;
-            state.surface = state.surface.on(SurfaceEvent::ReleaseSent);
-            hold
-        };
+        // is applied does not read as a surface the owner wants. The record
+        // stays locked across the send, which runs no user code and never
+        // waits: a raster thread's surface change cannot land between the
+        // speculative release and its withdrawal and be undone by it.
+        let mut state = inbox.lock();
+        if !state.phase.takes_commands() {
+            drop(state);
+            return Err(self.refusal(RasterCommand::Release { slot }));
+        }
+        let hold = state.surface.hold;
+        state.surface = state.surface.on(SurfaceEvent::ReleaseSent);
         let sent = self.shared.send_lifecycle(Lifecycle::Release { slot });
         if sent.is_err() {
-            let mut state = inbox.lock();
             state.surface = state.surface.on(SurfaceEvent::ReleaseWithdrawn(hold));
         }
+        drop(state);
         sent.map(|()| SendReceipt::Accepted)
     }
 
@@ -787,37 +787,37 @@ impl RasterSender {
             }));
         };
         // Minted before the send, so the owner stamps its next frame with it,
-        // and taken back if the send fails, unless something minted since.
-        let (previous, generation, hold) = {
-            let mut state = inbox.lock();
-            if !state.phase.takes_commands() {
-                drop(state);
-                return Err(self.refusal(RasterCommand::Restore { slot, surface }));
-            }
-            let previous = state.generation;
-            let hold = state.surface.hold;
-            state.surface = state.surface.on(SurfaceEvent::RestoreSent);
-            if previous != SurfaceGeneration::ZERO {
-                state.generation = previous.next();
-            }
-            (previous, state.generation, hold)
-        };
+        // and taken back if the send fails. The record stays locked across
+        // the send, as in `release`: no surface change or rebuild's mint of
+        // the raster thread lands between the speculation and its withdrawal.
+        let mut state = inbox.lock();
+        if !state.phase.takes_commands() {
+            drop(state);
+            return Err(self.refusal(RasterCommand::Restore { slot, surface }));
+        }
+        let previous = state.generation;
+        let hold = state.surface.hold;
+        state.surface = state.surface.on(SurfaceEvent::RestoreSent);
+        if previous != SurfaceGeneration::ZERO {
+            state.generation = previous.next();
+        }
+        let generation = state.generation;
         let sent = self.shared.send_lifecycle(Lifecycle::Restore {
             slot,
             surface,
             generation,
         });
+        if sent.is_err() {
+            state.generation = previous;
+            state.surface = state.surface.on(SurfaceEvent::RestoreWithdrawn(hold));
+        }
+        // A refused restore hands its surface back inside the error, dropped
+        // by the caller with no lock held.
+        drop(state);
         match sent {
             Ok(()) if generation == SurfaceGeneration::ZERO => Ok(SendReceipt::Unconfigured),
             Ok(()) => Ok(SendReceipt::Configured(generation)),
-            Err(error) => {
-                let mut state = inbox.lock();
-                if state.generation == generation {
-                    state.generation = previous;
-                }
-                state.surface = state.surface.on(SurfaceEvent::RestoreWithdrawn(hold));
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 
