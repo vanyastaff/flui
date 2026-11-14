@@ -97,6 +97,7 @@ struct Script {
     kept: Vec<(SlotId, TextureId, flui_painting::paint::Image)>,
     rebuilds: VecDeque<ScriptedAnswer>,
     reclaims: VecDeque<ScriptedAnswer>,
+    detaches: VecDeque<ScriptedAnswer>,
     /// The slots the next successful rebuild cannot present to.
     rebuild_refusals: Vec<(SlotId, EngineError)>,
     device_lost: bool,
@@ -228,6 +229,13 @@ impl ScriptedSlots {
         self.script.lock().rebuild_takes = Some((clock.clone(), took));
     }
 
+    /// Answer the next unanswered detach with `answer`: a
+    /// [`ScriptedAnswer::Panic`] panics once the slot is forgotten, any
+    /// other answer detaches.
+    pub fn script_detach(&self, answer: ScriptedAnswer) {
+        self.script.lock().detaches.push_back(answer);
+    }
+
     /// Answer the next unanswered reclaim with `answer`: a
     /// [`ScriptedAnswer::Panic`] panics, any other answer frees nothing.
     pub fn script_reclaim(&self, answer: ScriptedAnswer) {
@@ -277,10 +285,8 @@ impl ScriptedSlots {
             SlotCall::Textures(_) => script.texture_answers.pop_front(),
             SlotCall::Resize(..) => script.resizes.pop_front(),
             SlotCall::Restore(_) => script.restores.pop_front(),
-            SlotCall::Release(_)
-            | SlotCall::DisplayColor(..)
-            | SlotCall::Latency(..)
-            | SlotCall::Detach(_) => None,
+            SlotCall::Release(_) | SlotCall::DisplayColor(..) | SlotCall::Latency(..) => None,
+            SlotCall::Detach(_) => script.detaches.pop_front(),
             SlotCall::Reclaim(_) => script.reclaims.pop_front(),
             SlotCall::RebuildDevice => script.rebuilds.pop_front(),
         }
@@ -416,11 +422,14 @@ impl RasterBackend for ScriptedSlots {
     }
 
     fn detach(&mut self, slot: SlotId) {
-        let _none = self.answer(SlotCall::Detach(slot));
+        let answer = self.answer(SlotCall::Detach(slot));
         self.script
             .lock()
             .kept
             .retain(|(kept_slot, _, _)| *kept_slot != slot);
+        if let Some(ScriptedAnswer::Panic) = answer {
+            panic!("scripted detach panic");
+        }
     }
 
     fn kept_textures(&self, slot: SlotId) -> TextureUpdates {

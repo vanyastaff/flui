@@ -525,3 +525,25 @@ fn a_held_panic_does_not_hide_the_executors_death() {
     drop(handle);
     hold.release();
 }
+
+/// A panic while the thread stops (here a slot's detach) settles nothing, yet
+/// wakes the owner, and reaches it as the turns' panics do.
+///
+/// Red-check: without the wake on the stop path the owner is never woken for
+/// it.
+#[test]
+fn a_panic_in_the_stop_wakes_the_owner_and_reaches_it() {
+    let mut thread = spawn();
+    let _at = attach(&thread.sender);
+    thread.backend.script_detach(ScriptedAnswer::Panic);
+    assert_eq!(thread.handle.shut_down(DETACH_DEADLINE), Ok(()));
+    thread
+        .woken
+        .recv_timeout(PATIENCE)
+        .expect("the owner is woken for the stop's panic");
+    let failure = thread.sender.take_executor_failure();
+    let Some(ExecutorFailure::TurnPanicked { message }) = failure else {
+        panic!("the detach's panic is reported: {failure:?}");
+    };
+    assert!(message.contains("scripted detach panic"), "{message}");
+}

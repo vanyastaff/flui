@@ -151,7 +151,9 @@ fn serve<B: RasterBackend>(
     let mut caught = FirstPanic::new();
     caught.contain(|| executor.shut_down());
     caught.contain(|| drop(executor));
-    if hand_over(caught, shared) {
+    // A failure owed from before a stop that came ahead of the first turn is
+    // woken for here.
+    if hand_over(caught, shared) || owed {
         wake_owner(wake, shared);
     }
     shared.note_turn();
