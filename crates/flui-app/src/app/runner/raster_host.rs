@@ -29,9 +29,7 @@ use flui_engine::{
 };
 use flui_foundation::geometry::DeviceSize;
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::{
-    FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, SurfaceGeneration,
-};
+use flui_foundation::{FrameEpoch, FrameStamp, PresentationAddress, SurfaceGeneration};
 use flui_layer::{DamageMode, RasterBase, ScenePublication, SceneSnapshot, SurfaceKey};
 use flui_platform::{DisplayColor, PlatformWindow, SurfaceTarget};
 use flui_runtime::pump::SampledClock;
@@ -1424,7 +1422,7 @@ impl RasterHost {
             size: surface,
             generation,
         };
-        let stamp = FrameStamp::new(address, epoch, generation, GpuResourceGeneration::ZERO);
+        let stamp = FrameStamp::new(address, epoch, generation);
         let damage = slot.base.damage_for(&publication, key);
         let shown = publication.scene.id();
         let mut snapshot =
