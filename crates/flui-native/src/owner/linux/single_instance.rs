@@ -313,17 +313,14 @@ mod bus {
         ///
         /// # Errors
         ///
-        /// `Failed` when the owner ended before taking the launch or held it
-        /// past the hold.
+        /// Why the launch was refused, which its caller hears as D-Bus's
+        /// `Failed`: the owner ended before taking it, or held it past the
+        /// hold.
         pub(super) async fn answer(
             &self,
             mut answer: oneshot::Receiver<()>,
-        ) -> zbus::fdo::Result<()> {
-            let ended = || {
-                zbus::fdo::Error::Failed(
-                    "the running instance ended before it took the launch".to_owned(),
-                )
-            };
+        ) -> Result<(), &'static str> {
+            const ENDED: &str = "the running instance ended before it took the launch";
             // The timer is made on its runtime, not on the bus library's executor.
             let hold = self.hold;
             let mut held = self
@@ -336,7 +333,7 @@ mod bus {
             };
             held.abort();
             if let Some(taken) = taken {
-                return taken.map_err(|_| ended());
+                return taken.map_err(|_| ENDED);
             }
             let taken = {
                 let mut queue = self.queue.lock();
@@ -349,10 +346,10 @@ mod bus {
             };
             match taken {
                 Ok(()) => Ok(()),
-                Err(oneshot::error::TryRecvError::Closed) => Err(ended()),
-                Err(oneshot::error::TryRecvError::Empty) => Err(zbus::fdo::Error::Failed(
-                    "the running instance did not take the launch in time".to_owned(),
-                )),
+                Err(oneshot::error::TryRecvError::Closed) => Err(ENDED),
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    Err("the running instance did not take the launch in time")
+                }
             }
         }
 
@@ -403,12 +400,8 @@ mod bus {
                 call = calls.next() => match call {
                     Some(Ok(call)) => {
                         let asked = ask(&inbox, &path, &call);
-                        answering.push(respond(
-                            connection.clone(),
-                            Arc::clone(&inbox),
-                            call,
-                            asked,
-                        ));
+                        let answer = Answer::of(call, asked);
+                        answering.push(respond(connection.clone(), Arc::clone(&inbox), answer));
                     }
                     Some(Err(error)) => {
                         tracing::debug!(%error, "an unreadable call to the running instance");
@@ -488,32 +481,93 @@ mod bus {
         inbox.post(forwarded).map(Asked::Launch)
     }
 
-    /// Answer `call` with what it `asked` once that is known: a launch once
-    /// the owner took it or the inbox handed it back. A call that expects no
-    /// answer gets none.
-    async fn respond(
-        connection: zbus::Connection,
-        inbox: Arc<Inbox>,
-        call: zbus::Message,
-        asked: zbus::fdo::Result<Asked>,
-    ) {
-        let answered = match asked {
-            Ok(Asked::Launch(taken)) => inbox.answer(taken).await,
-            Ok(Asked::Nothing) => Ok(()),
-            Err(refused) => Err(refused),
-        };
-        let header = call.header();
-        if header
-            .primary()
-            .flags()
-            .contains(zbus::message::Flags::NO_REPLY_EXPECTED)
-        {
-            return;
+    /// A call's answer, until it is sent.
+    enum Answer {
+        /// Sent at once, with the call it answers.
+        Now(zbus::Message, zbus::fdo::Result<()>),
+        /// Sent once the owner takes the launch or the inbox hands it back.
+        /// The answers are addressed when the call is read and the call is
+        /// not kept: a launch can wait the whole hold, and its body, however
+        /// large, does not wait with it.
+        Launch {
+            /// The answers, unless the caller asked for none.
+            replies: Option<Box<Replies>>,
+            taken: oneshot::Receiver<()>,
+        },
+    }
+
+    /// A launch's two possible answers, addressed to its caller.
+    struct Replies {
+        taken: zbus::message::Builder<'static>,
+        refused: zbus::message::Builder<'static>,
+    }
+
+    impl Answer {
+        /// The answer to `call`, which `asked` what is in it.
+        fn of(call: zbus::Message, asked: zbus::fdo::Result<Asked>) -> Self {
+            match asked {
+                Ok(Asked::Launch(taken)) => {
+                    let header = call.header();
+                    let expects_answer = !header
+                        .primary()
+                        .flags()
+                        .contains(zbus::message::Flags::NO_REPLY_EXPECTED);
+                    let replies = expects_answer.then(|| {
+                        Box::new(Replies {
+                            taken: zbus::Message::method_return(&header),
+                            refused: zbus::Message::error(
+                                &header,
+                                "org.freedesktop.DBus.Error.Failed",
+                            ),
+                        })
+                    });
+                    Self::Launch { replies, taken }
+                }
+                Ok(Asked::Nothing) => Self::Now(call, Ok(())),
+                Err(refused) => Self::Now(call, Err(refused)),
+            }
         }
-        let sent = match answered {
-            Ok(()) => connection.reply(&header, &()).await,
-            Err(refused) => connection.reply_dbus_error(&header, refused).await,
-        };
+    }
+
+    /// Send `answer` once it is known: a launch's once the owner took it or
+    /// the inbox handed it back. A call that expects no answer gets none.
+    async fn respond(connection: zbus::Connection, inbox: Arc<Inbox>, answer: Answer) {
+        match answer {
+            Answer::Now(call, answered) => {
+                let header = call.header();
+                if header
+                    .primary()
+                    .flags()
+                    .contains(zbus::message::Flags::NO_REPLY_EXPECTED)
+                {
+                    return;
+                }
+                report(match answered {
+                    Ok(()) => connection.reply(&header, &()).await,
+                    Err(refused) => connection.reply_dbus_error(&header, refused).await,
+                });
+            }
+            Answer::Launch { replies, taken } => {
+                let answered = inbox.answer(taken).await;
+                let Some(replies) = replies else {
+                    return;
+                };
+                let built = match answered {
+                    Ok(()) => replies.taken.build(&()),
+                    Err(reason) => replies.refused.build(&(reason,)),
+                };
+                match built {
+                    Ok(message) => report(connection.send(&message).await),
+                    Err(error) => {
+                        tracing::debug!(%error, "a later launch's answer was not built");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Log an answer the caller did not get.
+    fn report(sent: zbus::Result<()>) {
         if let Err(error) = sent {
             tracing::debug!(%error, "a later launch was not answered: its caller left");
         }
@@ -605,6 +659,17 @@ mod bus {
         bus_name: &str,
         launch: Forwarded,
     ) -> zbus::Result<Claim> {
+        claim_holding(executor, address, bus_name, launch, HOLD)
+    }
+
+    /// [`claim`], with a first instance that holds a launch for `hold`.
+    pub(super) fn claim_holding(
+        executor: &NativeExecutor,
+        address: Option<&str>,
+        bus_name: &str,
+        launch: Forwarded,
+        hold: Duration,
+    ) -> zbus::Result<Claim> {
         let host = executor.handle();
         // The claim waits on a thread and a runtime of its own, not on the
         // host's: the caller may be inside the host's runtime (a
@@ -624,7 +689,7 @@ mod bus {
                                 "no runtime to claim the bus name on: {error}"
                             ))
                         })?
-                        .block_on(claim_on(&host, address, bus_name, launch))
+                        .block_on(claim_on(&host, address, bus_name, launch, hold))
                 })
                 .map_err(|error| {
                     zbus::Error::Failure(format!("no thread to claim the bus name on: {error}"))
@@ -645,6 +710,7 @@ mod bus {
         address: Option<&str>,
         bus_name: &str,
         launch: Forwarded,
+        hold: Duration,
     ) -> zbus::Result<Claim> {
         let path = object_path(bus_name);
         let (connection, calls, reply) = tokio::time::timeout(CONNECT_TIMEOUT, async {
@@ -672,7 +738,7 @@ mod bus {
         .map_err(late)??;
         match reply {
             Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {
-                let inbox = Arc::new(Inbox::new(HOLD, host.clone()));
+                let inbox = Arc::new(Inbox::new(hold, host.clone()));
                 let serving = host.spawn(serve(connection, path, Arc::clone(&inbox), calls));
                 Ok(Claim::First(FirstInstance { serving, inbox }))
             }
@@ -1090,6 +1156,50 @@ mod bus_tests {
             matches!(claimed, Ok(Claim::First(_))),
             "the first launch owns the name"
         );
+    }
+
+    /// A launch the first instance does not take within its hold is refused
+    /// to its caller as D-Bus's `Failed`, with the reason, after the call was
+    /// released; the first instance does not take it later.
+    #[test]
+    fn a_launch_not_taken_in_time_is_refused_to_its_caller() {
+        let Some(bus) = PrivateBus::start() else {
+            eprintln!("skipped: no dbus-daemon");
+            return;
+        };
+        let executor = NativeExecutor::own();
+        let address = bus.address.as_str();
+        let Claim::First(first) = super::bus::claim_holding(
+            &executor,
+            Some(address),
+            NAME,
+            launch(&[], None),
+            Duration::from_millis(50),
+        )
+        .expect("the bus answers") else {
+            panic!("the first launch owns the name");
+        };
+        let refused = claim(
+            &executor,
+            Some(address),
+            NAME,
+            launch(&["notes:///x"], None),
+        );
+        match refused {
+            Err(zbus::Error::FDO(refused)) => {
+                assert_eq!(
+                    zbus::DBusError::name(&*refused).as_str(),
+                    "org.freedesktop.DBus.Error.Failed"
+                );
+                assert_eq!(
+                    zbus::DBusError::description(&*refused),
+                    Some("the running instance did not take the launch in time")
+                );
+            }
+            Err(other) => panic!("not a refusal: {other}"),
+            Ok(_) => panic!("a launch nobody took is refused"),
+        }
+        assert!(first.take().is_empty(), "a launch handed back is not taken");
     }
 
     /// A claim made inside a current-thread runtime the application lends
