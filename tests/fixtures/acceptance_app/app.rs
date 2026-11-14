@@ -196,10 +196,13 @@ pub type Planter = Rc<dyn Fn(Kept) -> Box<dyn Any>>;
 /// composes.
 pub type EditCounter = Rc<Cell<u32>>;
 
-/// What the first loaded frame shows: the routes it built screens for, the
-/// screens made before that frame's post-frame callbacks run, so a page pushed
-/// on a later frame is not one, and the draft and the list's offset as that
-/// frame laid them out, so a value restored a frame late is not one either.
+/// What the application gave the first loaded frame: the routes it built
+/// screens for, the screens made before that frame's post-frame callbacks run,
+/// so a page pushed on a later frame is not one, and the draft and the list's
+/// offset its controllers held when that frame ended, so a value the
+/// application restores on a later frame is not one either. It reads the
+/// controllers, not the render tree: whether the field and the list show what
+/// their controllers hold on their first frame is theirs to test.
 #[derive(Debug, Default)]
 pub struct FirstScreens {
     routes: RefCell<Vec<Route>>,
@@ -215,12 +218,12 @@ impl FirstScreens {
         self.routes.borrow().clone()
     }
 
-    /// The draft's text at the end of the first loaded frame.
+    /// The draft controller's text when the first loaded frame ended.
     pub fn draft(&self) -> Option<String> {
         self.draft.borrow().clone()
     }
 
-    /// The list's offset at the end of the first loaded frame.
+    /// The list controller's offset when the first loaded frame ended.
     pub fn offset(&self) -> Option<f64> {
         self.offset.get()
     }
