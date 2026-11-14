@@ -942,7 +942,6 @@ pub(crate) fn install_owner_platform(
     let data_transfer = owner.data_transfer();
     // The outgoing loop's raster host, whose GPU context retires below,
     // outside the composition-root borrow.
-    #[cfg(not(target_arch = "wasm32"))]
     let mut previous_raster_host = None;
     let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
         APP_RUNTIME.with(|slot| {
@@ -976,7 +975,6 @@ pub(crate) fn install_owner_platform(
                     Arc::new(std::sync::atomic::AtomicUsize::new(0));
             }
             // A loop that wants other renderers says so after this install.
-            #[cfg(not(target_arch = "wasm32"))]
             {
                 previous_raster_host = Some(std::mem::take(&mut state.raster_host));
             }
@@ -1008,7 +1006,6 @@ pub(crate) fn install_owner_platform(
     });
     first.contain(|| previous_host.shutdown());
     first.contain(|| drop(previous_host));
-    #[cfg(not(target_arch = "wasm32"))]
     first.contain(|| drop(previous_raster_host));
     first.contain(|| drop(previous_owner_turn_wake));
     first.contain(|| drop(previous_clipboard));
@@ -1412,7 +1409,13 @@ pub(super) fn install_wake_deadline_hook() {
 }
 
 /// The earliest armed source; an absent source contributes no deadline.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        dead_code,
+        reason = "the browser's animation frames wake the page; no deadline does"
+    )
+)]
 pub(super) fn merge_wake_deadlines(
     a: Option<web_time::Instant>,
     b: Option<web_time::Instant>,
@@ -1586,7 +1589,6 @@ impl Drop for OwnerHostClearGuard {
         // The loop's GPU context retires with the loop, before the platform
         // whose display it was created on, and never in the thread's
         // teardown, where the GPU driver's own thread-locals are gone.
-        #[cfg(not(target_arch = "wasm32"))]
         if removed.is_some() {
             let raster_host =
                 APP_RUNTIME.with(|slot| std::mem::take(&mut slot.borrow_mut().raster_host));

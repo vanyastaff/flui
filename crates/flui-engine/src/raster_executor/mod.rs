@@ -42,7 +42,7 @@ use flui_foundation::{
 };
 use flui_layer::{DamageRegion, FullReason, ResyncReason, SceneSnapshot};
 
-pub use backend::SlotBackend;
+pub use backend::RasterBackend;
 pub use command::{
     ExecutorHealth, LIFECYCLE_CAPACITY, RasterCommand, RasterSendError, RasterVerdict, SendReceipt,
     SlotChange, SlotConfig, SlotSettlement, SlotTarget, SlotVisibility,
@@ -101,7 +101,7 @@ struct ExecSlot {
 ///
 /// Inline: the owner runs [`turn`](RasterExecutor::turn) after it sends. Dropping the
 /// executor shuts it down.
-pub struct RasterExecutor<B: SlotBackend = crate::GpuContext> {
+pub struct RasterExecutor<B: RasterBackend = crate::GpuContext> {
     backend: B,
     shared: Arc<Shared>,
     /// The lifecycle queue; dropped once the executor stopped and drained it.
@@ -121,7 +121,7 @@ pub struct RasterExecutor<B: SlotBackend = crate::GpuContext> {
     slots: Vec<Option<ExecSlot>>,
 }
 
-impl<B: SlotBackend> std::fmt::Debug for RasterExecutor<B> {
+impl<B: RasterBackend> std::fmt::Debug for RasterExecutor<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RasterExecutor")
             .field("health", &self.shared.health())
@@ -131,7 +131,7 @@ impl<B: SlotBackend> std::fmt::Debug for RasterExecutor<B> {
     }
 }
 
-impl<B: SlotBackend> RasterExecutor<B> {
+impl<B: RasterBackend> RasterExecutor<B> {
     /// An inline executor over `backend`, and the owner's sender for it.
     ///
     /// `clock` paces the rebuilds of a lost device; `wake` is the host's: the
@@ -916,7 +916,7 @@ impl ExecSlot {
     }
 }
 
-impl<B: SlotBackend> Drop for RasterExecutor<B> {
+impl<B: RasterBackend> Drop for RasterExecutor<B> {
     fn drop(&mut self) {
         self.shut_down();
     }
@@ -924,7 +924,7 @@ impl<B: SlotBackend> Drop for RasterExecutor<B> {
 
 /// Render `frame` into `slot`: its verdict, the slot failure it raised,
 /// what it did to the surface, and what to report once the frame settled.
-fn render<B: SlotBackend>(
+fn render<B: RasterBackend>(
     backend: &mut B,
     slot: &mut ExecSlot,
     frame: &SceneSnapshot,

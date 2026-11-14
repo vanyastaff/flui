@@ -852,3 +852,49 @@ pub(in crate::app::runner) fn attach_a_window(
 fn owed_surface(host: &RasterHost) -> Option<web_time::Instant> {
     host.wake_deadline(|_| true)
 }
+
+/// Each verdict the executor settles a frame with reaches the UI runtime as
+/// its own submit verdict, and the base keeps the shown image only when the
+/// frame reached the screen or left it as it was: a stale surface or a lost
+/// device takes the image with it, so the next frame draws in full.
+#[test]
+fn every_settled_verdict_maps_to_its_submit_verdict() {
+    use flui_engine::RasterVerdict;
+    let earlier = TestScene::new(AT).publication().scene.id();
+    let version = TestScene::new(AT).publication().scene.id();
+    let rows = [
+        (
+            RasterVerdict::Presented,
+            SubmitVerdict::Presented,
+            Some(version),
+        ),
+        (
+            RasterVerdict::NoPresent,
+            SubmitVerdict::NoPresent,
+            Some(version),
+        ),
+        (
+            RasterVerdict::NotShown,
+            SubmitVerdict::NotShown,
+            Some(earlier),
+        ),
+        (RasterVerdict::Retry, SubmitVerdict::Retry, Some(earlier)),
+        (
+            RasterVerdict::SurfaceStale,
+            SubmitVerdict::SurfaceStale,
+            None,
+        ),
+        (RasterVerdict::DeviceLost, SubmitVerdict::DeviceLost, None),
+        (RasterVerdict::Failed, SubmitVerdict::Failed, Some(earlier)),
+    ];
+    for (settled, submitted, kept) in rows {
+        let mut base = flui_layer::RasterBase::new(DamageMode::Off);
+        base.shown(earlier, PRODUCER_SURFACE);
+        assert_eq!(
+            RasterHost::verdict(&mut base, settled, version, PRODUCER_SURFACE),
+            submitted,
+            "{settled:?}"
+        );
+        assert_eq!(base.shown_version(), kept, "{settled:?}");
+    }
+}

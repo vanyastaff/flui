@@ -1370,7 +1370,7 @@ impl Drop for MintsOnDrop {
 /// A backend whose attach panics with a [`MintsOnDrop`] payload.
 struct PanicsAtAttach;
 
-impl flui_engine::SlotBackend for PanicsAtAttach {
+impl flui_engine::RasterBackend for PanicsAtAttach {
     fn attach(&mut self, _: SlotId, _: SlotTarget, _: SlotConfig) -> flui_engine::EngineResult<()> {
         std::panic::panic_any(MintsOnDrop)
     }

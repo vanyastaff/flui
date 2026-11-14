@@ -213,20 +213,18 @@ fn close_refuses_async_publication_without_cancelling_the_accepted_frame() {
     let dispatcher = installation.dispatcher();
     let scenes = Arc::new(AtomicUsize::new(0));
     let authority = Rc::new(RefCell::new(None::<super::FrameLiveness>));
-    let published = Rc::new(parking_lot::Mutex::new(None));
     let results = Rc::new(RefCell::new(None));
     let frame = installed_driver(
         installation,
         counting_sink(Arc::clone(&scenes)),
         Some(Box::new({
             let authority = Rc::clone(&authority);
-            let published = Rc::clone(&published);
             let results = Rc::clone(&results);
             move || {
                 let authority = authority.borrow().clone().expect("registered authority");
-                let before = authority.publish(&published, 1);
+                let before = authority.is_live();
                 close_this_window(dispatcher);
-                let after = authority.publish(&published, 2);
+                let after = authority.is_live();
                 *results.borrow_mut() = Some((before, after));
             }
         })),
@@ -237,11 +235,10 @@ fn close_refuses_async_publication_without_cancelling_the_accepted_frame() {
         RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
     )
     .expect("accepted frame completes before close");
-    assert_eq!(*results.borrow(), Some((Ok(None), Err(2))));
     assert_eq!(
-        *published.lock(),
-        Some(1),
-        "late result did not replace resources"
+        *results.borrow(),
+        Some((true, false)),
+        "an async result is admitted before the close and refused after it"
     );
     assert_eq!(
         scenes.load(Ordering::SeqCst),
@@ -313,11 +310,9 @@ fn native_terminal_callbacks_refuse_late_publication() {
                 RuntimeTask::Frame(frame.binding, flui_native::frame_request_now()),
             )
             .expect("already accepted frame finishes");
-            let resource = parking_lot::Mutex::new(None);
-            assert_eq!(
-                frame.liveness.publish(&resource, 42),
-                Err(42),
-                "quit={quit}"
+            assert!(
+                !frame.liveness.is_live(),
+                "an async result is refused once the window is gone: quit={quit}"
             );
             assert_eq!(scenes.load(Ordering::SeqCst), 1, "quit={quit}");
             teardown_platform_ui_runtime();

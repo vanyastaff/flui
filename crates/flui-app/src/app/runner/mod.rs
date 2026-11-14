@@ -49,7 +49,6 @@ mod window_install;
 pub(in crate::app) mod window_routes;
 
 mod owner_dispatch;
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) mod raster_host;
 mod secondary_window;
 #[cfg(any(

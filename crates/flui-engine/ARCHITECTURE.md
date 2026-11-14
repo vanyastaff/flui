@@ -10,7 +10,7 @@ Skia, a software path) is planned, and nothing here exists to make one
 pluggable: the crate re-exports the exact `wgpu` it links against
 (`flui_engine::wgpu`), its modules sit at the crate root, and the one trait
 that abstracts over "a thing that renders a scene" ([`RasterBackend`]) is a
-GPU-free test seam for the application frame loop, not a plugin point.
+GPU-free test seam for the raster executor, not a plugin point.
 
 The contract for the widget-facing behaviour is what a layer means and in what
 order it paints; the reference for everything below the `Scene` is wgpu itself.
@@ -18,7 +18,7 @@ Cross-crate contracts carry an ADR; crate-local shapes are recorded under
 [Mapping decisions](#mapping-decisions).
 
 [`flui_layer::Scene`]: ../flui-layer/src/scene/mod.rs
-[`RasterBackend`]: src/raster.rs
+[`RasterBackend`]: src/raster_executor/backend.rs
 
 ---
 
@@ -64,9 +64,9 @@ oversized radii against the same public path commands without a shape hint.
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
-| Raster protocol | `raster_executor/`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn, and `SlotBackend`, its GPU-free seam; the deprecated per-window `RasterBackend` the web's direct sink draws through until it moves to slots; frame timers |
+| Raster protocol | `raster_executor/`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn, and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers |
 | Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The dirty-rect accumulator behind `render_scene`'s scissor (ADR-0061), `plan_frame` (where a frame renders), `begin_partial` (the scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
-| Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `SlotBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
+| Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `RasterBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
 `wgsl_bindgen` generates the uniform-layout wrappers for the filter shaders
 into `OUT_DIR` from `build.rs`; each `<filter>/generated.rs` is the committed
@@ -641,12 +641,14 @@ local. Each names the test that pins it.
 
 ### 1. wgpu is the engine; the crate is flat
 
-No `wgpu` module, no `wgpu-backend` feature, no `RasterBackend` impl for a
-boxed backend. `flui_engine::wgpu` names the linked wgpu crate so an
-embedder that hands over a device or reads a surface format names the same
-version without a second dependency line (the `egui-wgpu` / `iced_wgpu`
-convention). `RasterBackend` survives as the test seam flui-app's frame loop
-is driven through with a fake, and is documented as that. A trait or
+No `wgpu` module, no `wgpu-backend` feature. `flui_engine::wgpu` names the
+linked wgpu crate so an embedder that hands over a device or reads a surface
+format names the same version without a second dependency line (the
+`egui-wgpu` / `iced_wgpu` convention). `RasterBackend` is the raster
+executor's seam: `GpuContext` implements it, and the testing kit's
+`ScriptedSlots` drives the executor and flui-app's raster host without a GPU.
+Its `Box<dyn RasterBackend>` impl lets the host pick the stand-in in tests
+without making the executor generic up the stack. A trait or
 feature whose only justification is a backend swap is deleted, not kept
 warm.
 
@@ -655,7 +657,8 @@ warm.
 `LayerRender<R: CommandRenderer + ?Sized>` has one arm per `Layer` variant
 and is generic over the renderer, so adding a variant is a compile error in
 both crates rather than a silently-ignored layer, and the hot path pays no
-vtable. The one `dyn` on the frame path is the `PrePresentHook` closure.
+vtable. The one `dyn` on the frame path is flui-app's `Box<dyn RasterBackend>`,
+called once per slot operation, never per layer.
 
 ### 3. `Renderer::new` owns its surface target — [ADR-0063](../../docs/adr/ADR-0063-the-renderer-owns-its-surface-target.md)
 
@@ -1068,11 +1071,11 @@ stays: with the correct previous frame outside the damage, it bounds a
 straddling shape's out-of-damage slice to one frame. The full clear and the
 partial clear paint one constant, `frame_protocol::BACKGROUND`.
 
-`Renderer::render_frame` renders the damage the tracker holds and has two
-production callers: `RasterBackend::render_scene`, reached by the web's
-`DirectSink`, which forces a full repaint first, and the public
-`Renderer::render_scene`, which renders in full; so no production caller applies
-a partial region to a `Renderer` now. Native slots draw through `SlotBackend`.
+`Renderer::render_frame` renders the damage the tracker holds; its production
+caller is the public `Renderer::render_scene`, which renders in full, so no
+production caller applies a partial region to a `Renderer`. Every window, the
+web's canvas included, draws through a slot of the raster executor
+(`RasterBackend`).
 `Renderer::render_scene` is the
 entry point for a frame no producer accounted for (direct mode, a hot-reload
 plugin's scene): it renders in full, invalidates the target and makes the

@@ -56,8 +56,8 @@ pub enum SubmitVerdict {
     /// surface, or one its owner had released). Also no vsync block, but
     /// unlike [`Self::NoPresent`] the work was CONSUMED and never reached
     /// the screen — so the caller retains the frame rather than counting it
-    /// as done. The engine's `RasterBackend::render_scene` draws the same
-    /// distinction at the backend boundary with its `PresentDisposition`.
+    /// as done. The engine's raster executor draws the same
+    /// distinction at the slot boundary with its `PresentDisposition`.
     NotShown,
     /// Rendering was temporarily deferred. Retry on the ordinary paced frame
     /// wake, retaining input epochs; no surface restamp or device rebuild is owed.

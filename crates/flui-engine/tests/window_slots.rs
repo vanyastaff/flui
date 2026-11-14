@@ -370,7 +370,7 @@ struct ReentersOwner {
     resizes: std::rc::Rc<std::cell::RefCell<Vec<(RasterSender, SlotChange)>>>,
 }
 
-impl flui_engine::SlotBackend for ReentersOwner {
+impl flui_engine::RasterBackend for ReentersOwner {
     fn attach(
         &mut self,
         slot: SlotId,

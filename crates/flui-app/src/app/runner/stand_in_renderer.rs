@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use flui_engine::{
-    EngineError, EngineResult, FrameLatency, PresentDisposition, SlotBackend, SlotConfig, SlotId,
+    EngineError, EngineResult, FrameLatency, PresentDisposition, RasterBackend, SlotConfig, SlotId,
     SlotTarget, UnconfiguredSurface,
 };
 use flui_foundation::geometry::DeviceSize;
@@ -213,7 +213,7 @@ pub(super) struct StandInBackend {
     shared: Arc<Mutex<Shared>>,
 }
 
-impl SlotBackend for StandInBackend {
+impl RasterBackend for StandInBackend {
     fn attach(
         &mut self,
         slot: SlotId,

@@ -1,9 +1,5 @@
 //! Public capture witnesses for target-aware layer traversal.
 
-#![expect(
-    deprecated,
-    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-)]
 use crate::headless::HeadlessRenderer;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 use flui_layer::{
@@ -420,7 +416,7 @@ fn fractional_dpr_clip_and_mask(renderer: &HeadlessRenderer) {
     }
 }
 fn partial_mask_matches_public_capture(renderer: &HeadlessRenderer) {
-    use crate::{damage::FramePlan, raster::RasterBackend};
+    use crate::damage::FramePlan;
     let mut tree = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::GREEN));
     let mask = tree.push_child(
         tree.root(),
@@ -876,7 +872,7 @@ fn arbitrary_affine_terminal_shader_matches_direct_paint(renderer: &HeadlessRend
 }
 
 fn partial_backdrop_reconstructs_halo_before_later_sibling(renderer: &HeadlessRenderer) {
-    use crate::{damage::FramePlan, raster::RasterBackend};
+    use crate::damage::FramePlan;
     let build = |color| {
         let mut tree = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::BLACK));
         tree.push_child(

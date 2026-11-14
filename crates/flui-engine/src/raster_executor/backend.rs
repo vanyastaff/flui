@@ -21,7 +21,7 @@ use crate::{
 /// time on its one mutator, so an implementation shares its caches between
 /// slots without a lock. It is not `Send`: only a threaded placement asks
 /// for that.
-pub trait SlotBackend {
+pub trait RasterBackend {
     /// Give `slot` its target, configured as `config` asks.
     ///
     /// # Errors
@@ -135,7 +135,7 @@ pub trait SlotBackend {
 
 /// A boxed backend is one, so a host that picks its backend at run time (a
 /// GPU context, or a testing stand-in) keeps one executor type.
-impl<B: SlotBackend + ?Sized> SlotBackend for Box<B> {
+impl<B: RasterBackend + ?Sized> RasterBackend for Box<B> {
     fn attach(&mut self, slot: SlotId, target: SlotTarget, config: SlotConfig) -> EngineResult<()> {
         (**self).attach(slot, target, config)
     }

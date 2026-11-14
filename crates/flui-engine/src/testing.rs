@@ -1,5 +1,5 @@
 //! Test support for code that drives the raster executor without a GPU
-//! (ADR-0243: the fake sits beside its contract, [`SlotBackend`]).
+//! (ADR-0243: the fake sits beside its contract, [`RasterBackend`]).
 
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
@@ -12,7 +12,7 @@ use crate::{
     FrameLatency, UnconfiguredSurface,
     error::{EngineError, EngineResult},
     raster::PresentDisposition,
-    raster_executor::{SlotBackend, SlotConfig, SlotId, SlotTarget},
+    raster_executor::{RasterBackend, SlotConfig, SlotId, SlotTarget},
 };
 
 /// What a [`ScriptedSlots`] backend does on its next call of one kind.
@@ -100,7 +100,7 @@ struct Script {
     rebuild_takes: Option<(ManualClock, Duration)>,
 }
 
-/// A [`SlotBackend`] with no GPU: it logs every call and answers from a
+/// A [`RasterBackend`] with no GPU: it logs every call and answers from a
 /// script, presenting and succeeding once the script is spent.
 ///
 /// Clones share one script, so a test keeps a clone after handing one to the
@@ -254,7 +254,7 @@ impl ScriptedSlots {
     }
 }
 
-impl SlotBackend for ScriptedSlots {
+impl RasterBackend for ScriptedSlots {
     fn attach(
         &mut self,
         slot: SlotId,

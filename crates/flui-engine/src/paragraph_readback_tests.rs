@@ -1,11 +1,6 @@
 //! The engine rasterises the paragraph it is handed and never shapes one
 //! itself (ADR-0065).
 
-#![expect(
-    deprecated,
-    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-)]
-
 use flui_foundation::geometry::Offset;
 use flui_layer::SceneBuilder;
 use flui_painting::FontCollection;
@@ -646,7 +641,7 @@ enum FontTransition {
 }
 
 fn check_font_transition(renderer: &crate::headless::HeadlessRenderer, transition: FontTransition) {
-    use crate::raster::{PresentDisposition, RasterBackend};
+    use crate::raster::PresentDisposition;
 
     let before = colliding_font_scene("?", "Roboto");
     let after = colliding_font_scene("w", "Material Icons");

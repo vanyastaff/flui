@@ -229,11 +229,10 @@ the dispatch layer moves there too.
   of the refused window's native identity by the next installation.
 - **The engine stays here.** The UI runtime renders through a
   `flui_runtime::sink::FrameSink` and names no engine type. This crate's
-  sinks are a native window's `RasterSlot` frame (ADR-0305) and `DirectSink`
-  (the web runner).
+  one sink is a window's `RasterSlot` frame (ADR-0305), the web's canvas
+  included.
   The raster host maps a slot's `RasterVerdict` to its `SubmitVerdict` one to
-  one; `DirectSink` maps `EngineError`s for the web runner; the UI runtime's own
-  tests script verdicts and never reach either.
+  one; the UI runtime's own tests script verdicts and never reach it.
 - **Every native window is a slot on one GPU context.** The loop's
   `RasterHost` (`runner/raster_host.rs`) sits in the composition root as
   `Rc<RefCell<_>>`. The first window to attach bootstraps the context on the
@@ -285,8 +284,8 @@ the dispatch layer moves there too.
 - **Transient render failure retains demand.** Both sinks distinguish `Retry`
   from terminal `Failed` and device recovery. The raster completion publishes
   retry debt reliably even when telemetry acks are full; the UI runtime retains epochs
-  and requests a paced full repaint (ADR-0101). Pinned for `DirectSink` by
-  `every_render_answer_maps_to_its_verdict`, and for a slot by flui-engine's
+  and requests a paced full repaint (ADR-0101). Pinned for the host by
+  `every_settled_verdict_maps_to_its_submit_verdict`, and for a slot by flui-engine's
   `window_slots` table.
 - **A frame carries the surface generation it was laid out for.** The host
   stamps each frame with the generation the executor's record requires when it
@@ -355,14 +354,17 @@ the dispatch layer moves there too.
   answered `Retry` before it touches damage history, and work that must not
   be lost (a detach, a surface change, a memory trim) is deferred to the end
   of the turn that holds the host. The runtime and frame-driver execution
-  leases remain in force: reentrant owner operations join the FIFO. Web uses
-  its borrowed renderer slot across the pump; its resize operations are
-  queued and its recovery future runs after the frame callback returns.
-- **Web runs no frame before its renderer exists.** The web renderer arrives
-  asynchronously; until it does, a render wake returns without pumping, so no
-  begin, draw or post-frame callback runs, and the UI runtime stays dirty for the
-  first animation frame after it arrives. wasm-only: CI's `wasm-check` and
-  `wasm-test` compile it; nothing on this host runs it.
+  leases remain in force: reentrant owner operations join the FIFO.
+- **Web runs no frame before its canvas has a slot.** The web awaits its GPU
+  context (`GpuContext::bootstrap` in a spawned future) and then attaches the
+  canvas's slot on the raster host (`RasterHost::attach_bootstrapped`); until
+  it has, a render wake returns without pumping, so no begin, draw or
+  post-frame callback runs, and the UI runtime stays dirty for the first
+  animation frame after it arrives. A lost device or WebGL context retires the
+  executor with its slot before the next context is asked for, so no two
+  contexts present to the canvas, and the slot attached on the new one starts
+  healthy and draws in full. wasm-only: CI's `wasm-check` and `wasm-test`
+  compile it; nothing on this host runs it.
 - **A window reaches a UI runtime with its bridge.** `runner::presentation_window`
   reads a host window's accessibility bridge once and pairs it with the
   window in a `PresentationWindow`.

@@ -419,7 +419,9 @@ executor runs each command under its own catch, in both placements.
   becomes `SlotSize::Refused` until a resize fits, as an offscreen slot's does. Each slot redraws in full
   and re-uploads its external textures from the newest image of each that it keeps
   (ADR-0233).
-- On the web the rebuild is a future the owner spawns; frames settle `DeviceLost` until it ends.
+- On the web the rebuild is a future the owner spawns: the lost context is retired with its slots
+  first, so no two contexts present to one canvas, and no frame runs until the new context has
+  attached the canvas's slot.
 
 §9. **Teardown is bounded and the executor's health is typed.** ADR-0045 decision 7 stands per
 executor and slot.
@@ -485,7 +487,7 @@ GPU drive a `FrameSink` (`crates/flui-runtime/src/sink.rs:96`;
 `crates/flui-runtime/src/testing.rs:356`). `RasterBackend` stays in `flui-engine` as the
 executor's GPU-free seam, as ARCHITECTURE.md describes it: `GpuContext` and the testing stand-in
 implement it, its methods name the `SlotId` they act on, and it loses its `Send` supertrait
-(`crates/flui-engine/src/raster.rs:103`); only `spawn` asks for `Send`.
+(`crates/flui-engine/src/raster_executor/backend.rs`); only `spawn` asks for `Send`.
 
 §12. **The lane holds no lock, and nothing reaches past the commands.** `Arc<Mutex<RasterLane>>`
 (`desktop.rs:245-252`) and `LaneStamp`'s mutex (`raster_lane.rs:72-81`) are removed with their
@@ -494,7 +496,7 @@ bound (`window_routes.rs:185-237`, `window_install.rs:269`). The owner side is a
 `RasterHost` holding the factory, the placement and each slot's handle, in an `Rc<RefCell<_>>`; a
 re-entrant frame dispatch that finds it borrowed answers `SubmitVerdict::Retry`, as the
 `try_lock` does today (`raster_lane.rs:486-490`). On the web, `Arc<Mutex<Option<Renderer>>>`
-(`crates/flui-app/src/app/runner/web.rs:79`) and `DirectSink` (`raster_lane.rs:513`, `web.rs:325`)
+(`crates/flui-app/src/app/runner/web.rs:79`) and its direct sink (`raster_lane.rs:513`, `web.rs:325`)
 are removed for the inline executor. No `unsafe impl Send` is added and no `Send` position joins
 the facade. Every production use of `with_backend` becomes:
 
@@ -637,7 +639,7 @@ the facade. Every production use of `with_backend` becomes:
 The code moves in this order, each a change of its own and the inline placement first, because it is
 the shipping one on every platform: the context and the executor inline, with the headless
 renderer on offscreen slots; the desktop, Android and iOS runners on slots, with `with_backend`,
-the lane's lock and the hook closure removed; the web on the inline executor, with `DirectSink`
+the lane's lock and the hook closure removed; the web on the inline executor, with its direct sink
 removed; the settlement path in the UI runtime; then the threaded placement on Linux and Win32, each
 when its run meets the budget.
 

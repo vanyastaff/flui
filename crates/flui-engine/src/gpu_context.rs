@@ -33,7 +33,7 @@ use crate::{
     painter::WgpuPainter,
     pipeline_set::PipelineLibrary,
     raster::PresentDisposition,
-    raster_executor::{SlotBackend, SlotConfig, SlotId, SlotTarget},
+    raster_executor::{RasterBackend, SlotConfig, SlotId, SlotTarget},
     surface_factory::{SurfaceFactory, UnconfiguredSurface, checked_target, instance_descriptor},
     window_slot::{Gpu, WindowSlot},
 };
@@ -1272,7 +1272,7 @@ fn install_device_diagnostics(domain: &Arc<DeviceDomain>) {
 /// The context as the raster executor's backend. An offscreen slot renders in
 /// full each frame and counts as presented once submitted; a window slot
 /// renders its damage and presents.
-impl SlotBackend for GpuContext {
+impl RasterBackend for GpuContext {
     fn attach(&mut self, slot: SlotId, target: SlotTarget, config: SlotConfig) -> EngineResult<()> {
         match target {
             SlotTarget::Window(surface) => self.attach_window(slot, surface, config),
@@ -2379,7 +2379,7 @@ mod tests {
     fn a_window_its_adapter_cannot_present_to_is_refused_at_attach() {
         use std::sync::Arc;
 
-        use crate::raster_executor::SlotBackend;
+        use crate::raster_executor::RasterBackend;
         use crate::testing::{FakeDisplay, FakeWindow};
 
         let display: Arc<dyn flui_platform::DisplayConnection> = Arc::new(FakeDisplay);
