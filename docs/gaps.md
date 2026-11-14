@@ -560,8 +560,8 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** all · **Who it hurts:** Application authors who find two ways to test in `flui::testing` · **Parity:** none (API shape)
 
-- `flui::testing::Tester` is the application test API; the harnesses the facade exported before it sit under the deprecated `flui::testing::harness` (`src/testing.rs`). Their last users are the facade's consumer fixtures, `tests/fixtures/facade_extensions.rs` and `tests/fixtures/acceptance_app/`, whose rows need verbs `Tester` lacks: a teardown ledger and a gesture-only clock with no tree.
-- `Tester` gains those two, both fixtures move to it, and `harness` is deleted whole. The module does not ship in a release: the application test API is ready only once it is gone.
+- `flui::testing::Tester` is the application test API; the harnesses the facade exported before it sit under the deprecated `flui::testing::harness` (`src/testing.rs`). Their last user is the facade's consumer fixture `tests/fixtures/facade_extensions.rs`, whose rows need what `Tester` lacks: a gesture-only clock with no tree (`HeadlessBinding`, `ScriptedPointer`), a widget laid out under loose constraints with its scene read back (`lay_out`, `lay_out_animated`, `LaidOut::draw_ops`), and a root mounted over owners a row builds itself and then detached (`HeadlessBinding::mount_root`, `MountOwners`, `MountOptions`, `set_lifecycle_state`).
+- `Tester`, or the public `flui::testing::rendering` kit, gains those, the fixture moves to them, and `harness` is deleted whole. The module does not ship in a release: the application test API is ready only once it is gone.
 - The check is `rg 'testing::harness' tests src` finding nothing and the module deleted.
 
 ### No widget hot reload on Android and the Web

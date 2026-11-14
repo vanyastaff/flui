@@ -925,6 +925,26 @@ impl Tester {
         relaunch(config)
     }
 
+    /// The process is killed and the application opened again over the same
+    /// storage: no composition is committed, no close is asked and nothing
+    /// more is written, so a write the run accepted and had not carried out
+    /// is lost. The old run is dropped as a host drops its UI runtime: its
+    /// states are disposed and its observers see it detach, which a real kill
+    /// never runs. The old tree is gone before the new one mounts.
+    /// [`Self::restart`] is the quit that writes.
+    ///
+    /// # Panics
+    ///
+    /// When code the old run's teardown runs panics, or when the new run's
+    /// first frame fails.
+    #[must_use]
+    pub fn relaunch_after_kill(self) -> Self {
+        let relaunch = Rc::clone(&self.relaunch);
+        let config = self.config.clone();
+        drop(self);
+        relaunch(config)
+    }
+
     /// The user closes the window. The window's close guard is asked first:
     /// a close it refuses is recorded, nothing is torn down, and the frame
     /// after its last hold is released carries the close out. `true` when the
@@ -952,6 +972,14 @@ impl Tester {
     /// what any document still owes then is lost.
     pub fn end_session(&mut self) {
         self.host.end_session_now();
+    }
+
+    /// The window becomes hidden (`false`) or shown again (`true`), as when
+    /// the user minimizes it or switches away on a phone; then the frame that
+    /// reports it runs.
+    pub fn set_window_visible(&mut self, visible: bool) {
+        self.host.set_window_visible(visible);
+        self.run_due_now();
     }
 
     /// The window loses (`false`) or regains (`true`) the operating system's

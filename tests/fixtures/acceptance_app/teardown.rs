@@ -4,8 +4,7 @@
 use std::rc::Rc;
 
 use flui::platform::StorageError;
-use flui::testing::harness::DropLedger;
-use flui::view::ErrorView;
+use flui::testing::DropLedger;
 
 use crate::app::{AcceptanceApp, Fault, Faults, Kept, Planter};
 use crate::testing::AppRun;
@@ -69,7 +68,7 @@ fn a_panicking_note_build_shows_error_view_and_other_screens_work() {
     let mut run = AppRun::start(AcceptanceApp::new(Faults::from(Fault::Build)));
     run.tap("Note 1");
     assert!(
-        run.laid().count_elements_by_view_type::<ErrorView>() > 0,
+        run.count_views("ErrorView") > 0,
         "the failed editor shows an error view"
     );
     assert!(!run.shows("Editing note 1"));
@@ -77,7 +76,7 @@ fn a_panicking_note_build_shows_error_view_and_other_screens_work() {
     run.tap("Back");
     assert!(run.shows("Note 2"), "Home is back");
     assert_eq!(
-        run.laid().count_elements_by_view_type::<ErrorView>(),
+        run.count_views("ErrorView"),
         0,
         "the error view left with its page"
     );

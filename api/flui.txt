@@ -22720,6 +22720,17 @@ pub fn flui::testing::CommitBarrier::commit(self)
 pub struct flui::testing::CopyHold { .. }
 impl Drop for flui::testing::CopyHold
 impl core::fmt::Debug for flui::testing::CopyHold
+pub struct flui::testing::DropLedger { .. }
+impl Clone for flui::testing::DropLedger
+impl Default for flui::testing::DropLedger
+impl core::fmt::Debug for flui::testing::DropLedger
+pub fn flui::testing::DropLedger::live(&self) -> usize
+pub fn flui::testing::DropLedger::new() -> Self
+pub fn flui::testing::DropLedger::plant(&self) -> flui::testing::DropSentinel
+pub fn flui::testing::DropLedger::planted(&self) -> usize
+pub struct flui::testing::DropSentinel { .. }
+impl Drop for flui::testing::DropSentinel
+impl core::fmt::Debug for flui::testing::DropSentinel
 pub struct flui::testing::Expectation<'t> { .. }
 impl core::fmt::Debug for flui::testing::Expectation<'_>
 pub fn flui::testing::Expectation::to_be_checked(self) // impl flui::testing::Expectation<'_>
@@ -23064,10 +23075,12 @@ pub fn flui::testing::Tester::pump_and_settle(&mut self) -> usize
 pub fn flui::testing::Tester::pump_for(&mut self, duration: core::time::Duration)
 pub fn flui::testing::Tester::read(&mut self, locator: &flui::testing::Locator) -> flui::testing::Node
 pub fn flui::testing::Tester::rect(&mut self, locator: &flui::testing::Locator) -> flui::testing::LogicalRect
+pub fn flui::testing::Tester::relaunch_after_kill(self) -> Self
 pub fn flui::testing::Tester::request_close(&mut self) -> bool
 pub fn flui::testing::Tester::restart(self) -> Self
 pub fn flui::testing::Tester::semantics(&mut self) -> flui::testing::Tree
 pub fn flui::testing::Tester::set_window_focused(&mut self, focused: bool)
+pub fn flui::testing::Tester::set_window_visible(&mut self, visible: bool)
 pub fn flui::testing::Tester::storage(&self) -> Option<&flui::testing::MemoryStorage>
 pub fn flui::testing::Tester::tap(&mut self, locator: &flui::testing::Locator)
 pub fn flui::testing::Tester::try_cancel_composition(&mut self) -> Result<(), flui::testing::TestError>
@@ -23142,17 +23155,6 @@ impl core::fmt::Debug for flui::testing::harness::BuildCapabilities
 impl core::marker::StructuralPartialEq for flui::testing::harness::BuildCapabilities
 variant flui::testing::harness::BuildCapabilities::AsyncDriverOnly // at 1
 variant flui::testing::harness::BuildCapabilities::Installed // at 0
-pub struct flui::testing::harness::DropLedger { .. }
-impl Clone for flui::testing::harness::DropLedger
-impl Default for flui::testing::harness::DropLedger
-impl core::fmt::Debug for flui::testing::harness::DropLedger
-pub fn flui::testing::harness::DropLedger::live(&self) -> usize
-pub fn flui::testing::harness::DropLedger::new() -> Self
-pub fn flui::testing::harness::DropLedger::plant(&self) -> flui::testing::harness::DropSentinel
-pub fn flui::testing::harness::DropLedger::planted(&self) -> usize
-pub struct flui::testing::harness::DropSentinel { .. }
-impl Drop for flui::testing::harness::DropSentinel
-impl core::fmt::Debug for flui::testing::harness::DropSentinel
 pub struct flui::testing::harness::GestureBinding { .. }
 impl Default for flui::testing::harness::GestureBinding
 impl core::fmt::Debug for flui::testing::harness::GestureBinding
@@ -31469,6 +31471,8 @@ pub fn flui_painting::text_painter::measurement::TextMeasurement::layout(&mut se
 pub fn flui_painting::text_painter::measurement::TextMeasurement::max_intrinsic_width(&mut self, painter: &flui_painting::text_painter::TextPainter) -> Result<f64, flui_painting::text_painter::sizing::TextMeasurementError> // impl<'a> flui_painting::text_painter::measurement::TextMeasurement<'a>
 pub fn flui_painting::text_painter::measurement::TextMeasurement::min_intrinsic_width(&mut self, painter: &flui_painting::text_painter::TextPainter) -> Result<f64, flui_painting::text_painter::sizing::TextMeasurementError> // impl<'a> flui_painting::text_painter::measurement::TextMeasurement<'a>
 pub fn flui_painting::text_painter::measurement::TextMeasurement::new(context: &'a mut flui_painting::text_layout::context::TextContext, sizing: &'a flui::painting::TextSizing) -> Self // impl<'a> flui_painting::text_painter::measurement::TextMeasurement<'a>
+pub struct flui_painting::text_painter::sizing::RetiredTextSizingCohort(_)
+impl core::fmt::Debug for flui_painting::text_painter::sizing::RetiredTextSizingCohort
 pub enum flui_painting::text_painter::sizing::TextMeasurementError
 impl From<flui_painting::text_layout::error::TextLayoutError> for flui_painting::text_painter::sizing::TextMeasurementError
 impl From<flui_painting::text_painter::sizing::TextPreparationPending> for flui_painting::text_painter::sizing::TextMeasurementError
@@ -31477,8 +31481,6 @@ impl core::fmt::Debug for flui_painting::text_painter::sizing::TextMeasurementEr
 impl core::fmt::Display for flui_painting::text_painter::sizing::TextMeasurementError
 variant flui_painting::text_painter::sizing::TextMeasurementError::Layout(flui_painting::text_layout::error::TextLayoutError) // at 0
 variant flui_painting::text_painter::sizing::TextMeasurementError::Pending(flui_painting::text_painter::sizing::TextPreparationPending) // at 1
-pub struct flui_painting::text_painter::sizing::RetiredTextSizingCohort(_)
-impl core::fmt::Debug for flui_painting::text_painter::sizing::RetiredTextSizingCohort
 pub struct flui_painting::text_painter::sizing::TextPreparationPending
 field flui_painting::text_painter::sizing::TextPreparationPending::policy_source: flui_painting::text_painter::sizing::TextSizingSource // at 0
 field flui_painting::text_painter::sizing::TextPreparationPending::requests: Vec<flui::foundation::TextSizeRequest> // at 1

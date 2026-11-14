@@ -777,6 +777,26 @@ fn the_window_losing_focus_makes_the_application_inactive() {
     assert_eq!(opened.borrow().lifecycle, [Inactive, Resumed]);
 }
 
+#[test]
+fn hiding_the_window_hides_the_application_and_showing_it_resumes() {
+    use flui_view::AppLifecycleState::{Hidden, Inactive, Resumed};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    opened.borrow_mut().lifecycle.clear();
+    t.set_window_visible(false);
+    assert_eq!(opened.borrow().lifecycle.last(), Some(&Hidden));
+    t.set_window_visible(true);
+    assert!(
+        opened
+            .borrow()
+            .lifecycle
+            .ends_with(&[Hidden, Inactive, Resumed]),
+        "shown again, the window climbs back through Inactive: {:?}",
+        opened.borrow().lifecycle
+    );
+}
+
 /// A restart is the user quitting and opening the application again: a write
 /// the run accepted and had not yet carried out still reaches the storage.
 #[test]
@@ -791,6 +811,22 @@ fn a_restart_writes_what_the_run_accepted_before_it_stops() {
     let mut t = t.restart();
     let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
     assert_eq!(*loaded, Note("unsaved".to_owned()));
+}
+
+/// A kill is the process ending with nothing more run: a write the run
+/// accepted and had not carried out never reaches the storage.
+#[test]
+fn a_relaunch_after_a_kill_loses_what_the_run_had_not_written() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    note(&opened)
+        .set(Note("unsaved".to_owned()))
+        .expect("a loaded note takes a value");
+
+    let mut t = t.relaunch_after_kill();
+    let loaded = settle(&mut t, note(&opened).load()).expect("the empty storage loads");
+    assert_ne!(*loaded, Note("unsaved".to_owned()));
 }
 
 /// A value set twice before the restart is written as its latest: the first
