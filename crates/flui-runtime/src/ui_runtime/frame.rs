@@ -723,6 +723,14 @@ impl UiRuntime {
         primary() != before
     }
 
+    /// The epoch of the frame about to be handed to a sink: the one after the
+    /// last frame any presentation of this runtime submitted.
+    pub(crate) fn next_frame_epoch(&self) -> flui_foundation::FrameEpoch {
+        let epoch = self.frame_epoch.get().next();
+        self.frame_epoch.set(epoch);
+        epoch
+    }
+
     /// Commit a painted presentation after the sink accepts its scene.
     ///
     /// Returns the first panic a tracing subscriber raised for the `commit` span, for the caller to
@@ -964,7 +972,9 @@ impl UiRuntime {
             let span_outcome = catch_unwind(AssertUnwindSafe(|| {
                 let _presentation = presentation_span(producer.id()).entered();
                 let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
-                submitted = Some(sink.submit(publication));
+                // The stamp the sink settles this frame by, taken only once the sink is
+                // reached: a frame a subscriber stopped first takes no epoch.
+                submitted = Some(sink.submit(self.next_frame_epoch(), publication));
             }));
             let render_verdict = match (submitted, span_outcome) {
                 (Some(verdict), Ok(())) => verdict,
