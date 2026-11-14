@@ -47,7 +47,7 @@ use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
 
 use crate::host::KitStorage;
-use crate::storage::{MemoryStorage, RunId};
+use crate::storage::{MemoryStorage, RunLease};
 use crate::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 
 /// One frame at 60 Hz: what [`Tester::pump`] advances and what an action or
@@ -271,9 +271,9 @@ pub struct Tester {
     /// The keys [`Tester::key_down`] holds, which a chord neither presses
     /// nor releases.
     held_keys: Vec<String>,
-    /// This run of the application over its storage, whose held writes a
-    /// kill discards.
-    run: Option<RunId>,
+    /// This run of the application over its storage, live until the host
+    /// above is dropped; a kill discards its held writes.
+    run: Option<RunLease>,
     /// Mounts the same view again in a window: what [`Tester::restart`] runs.
     relaunch: Rc<dyn Fn(TestWindow) -> Tester>,
 }
@@ -330,11 +330,10 @@ impl Tester {
         }
         let windows = Arc::new(Mutex::new(Vec::new()));
         let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
-        let run_storage = storage.as_ref().map(MemoryStorage::for_run);
-        let run = run_storage.as_ref().map(|(_, run)| *run);
+        let (run_storage, run) = storage.as_ref().map(MemoryStorage::for_run).unzip();
         let mut host = HeadlessHost::with_storage(
             headless,
-            run_storage.map(|(storage, _)| KitStorage {
+            run_storage.map(|storage| KitStorage {
                 host: Arc::new(storage),
                 provided: None,
             }),
@@ -914,7 +913,8 @@ impl Tester {
     /// same storage, as when the application quits and is opened again: the
     /// window commits its composition and closes past every hold, what the
     /// documents published is written (a write the storage holds is not
-    /// waited for: the storage decides it when its hold ends, and what a
+    /// waited for: the storage decides it when its hold ends, a newer value
+    /// the next run publishes replacing it, and what a
     /// document still owes then is lost with the run), and the old
     /// tree, its states and its runtime are gone before the new one mounts.
     ///
@@ -936,8 +936,7 @@ impl Tester {
     /// more is written, so a write the run accepted and had not carried out
     /// is lost, a write the storage holds unstarted or uncommitted included;
     /// another run's write over the same storage is kept, and so is the
-    /// test's own. The old run is
-    /// dropped as a host drops its UI runtime: its
+    /// test's own. The old run is dropped as a host drops its UI runtime: its
     /// states are disposed and its observers see it detach, which a real kill
     /// never runs. The old tree is gone before the new one mounts.
     /// [`Self::restart`] is the quit that writes.
@@ -945,17 +944,32 @@ impl Tester {
     /// # Panics
     ///
     /// When code the old run's teardown runs panics, or when the new run's
-    /// first frame fails.
+    /// first frame fails. A teardown panic still discards the run's held
+    /// writes before it propagates.
     #[must_use]
     pub fn relaunch_after_kill(self) -> Self {
+        /// Discards the killed run's held writes on every exit of its
+        /// teardown, an unwinding one included, so a panic in a detach
+        /// observer cannot let them reach the storage.
+        struct DiscardRunWrites(Option<(MemoryStorage, crate::storage::RunId)>);
+
+        impl Drop for DiscardRunWrites {
+            fn drop(&mut self) {
+                if let Some((storage, run)) = &self.0 {
+                    storage.discard_writes_of(*run);
+                }
+            }
+        }
+
         let relaunch = Rc::clone(&self.relaunch);
         let config = self.config.clone();
-        let storage = self.storage().cloned();
-        let run = self.run;
+        let discard = DiscardRunWrites(
+            self.run
+                .as_ref()
+                .map(|lease| (lease.storage().clone(), lease.run())),
+        );
         drop(self);
-        if let (Some(storage), Some(run)) = (storage, run) {
-            storage.discard_writes_of(run);
-        }
+        drop(discard);
         relaunch(config)
     }
 
