@@ -86,6 +86,8 @@ mod sliver_hit_direction_matrix;
 mod sliver_to_box_adapter;
 #[path = "structural_invalidation.rs"]
 mod structural_invalidation;
+#[path = "subtree_removal.rs"]
+mod subtree_removal;
 #[path = "text_context.rs"]
 mod text_context;
 #[path = "transform_to.rs"]

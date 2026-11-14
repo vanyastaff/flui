@@ -1011,10 +1011,6 @@ impl RenderTree {
 //
 // See `crates/flui-rendering/ARCHITECTURE.md` for the rationale.
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 /// The live ids of one subtree, as one walk of [`RenderTree::collect_subtree`] found them: in
 /// pre-order, each once, and the same ids as a set.
 #[derive(Debug, Default)]
@@ -1034,6 +1030,10 @@ impl SubtreeIds {
         &self.members
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -1204,12 +1204,24 @@ mod tests {
     // collect_subtree_ids
     // ========================================================================
 
-    /// A subtree walk lists each live id once, in pre-order, and its set holds exactly those ids,
-    /// whether the tree is whole, cyclic, lists a child twice or names a removed node. Removing the
-    /// subtree then takes every node it listed and leaves the slab empty.
+    /// The set a subtree walk returns holds exactly the ids it lists, whether the tree is whole,
+    /// cyclic, lists a child twice or names a removed node; the order and the removal are pinned
+    /// through the public API in `tests/subtree_removal.rs`.
     #[test]
-    fn a_subtree_walk_lists_each_live_id_once_in_pre_order() {
-        for shape in ["whole", "cycle", "duplicate child", "stale child"] {
+    fn a_subtree_walk_sets_exactly_the_ids_it_lists() {
+        #[derive(Clone, Copy, Debug)]
+        enum Shape {
+            Whole,
+            Cycle,
+            DuplicateChild,
+            StaleChild,
+        }
+        for shape in [
+            Shape::Whole,
+            Shape::Cycle,
+            Shape::DuplicateChild,
+            Shape::StaleChild,
+        ] {
             let mut tree = RenderTree::new();
             let root = tree.insert_box(make_leaf());
             let a = tree
@@ -1220,35 +1232,25 @@ mod tests {
                 .insert_box_child(root, make_leaf())
                 .expect("live parent");
             match shape {
-                "cycle" => tree.append_unlinked_child(a1, root),
-                "duplicate child" => tree.append_unlinked_child(root, b),
-                "stale child" => {
+                Shape::Whole => {}
+                Shape::Cycle => tree.append_unlinked_child(a1, root),
+                Shape::DuplicateChild => tree.append_unlinked_child(root, b),
+                Shape::StaleChild => {
                     let gone = tree.insert_box_child(a, make_leaf()).expect("live parent");
                     assert_eq!(tree.remove_recursive(gone), 1);
                     tree.append_unlinked_child(a, gone);
                 }
-                _ => {}
             }
 
             let subtree = tree.collect_subtree(root);
-            assert_eq!(subtree.ids(), [root, a, a1, b], "{shape}: the order");
+            assert_eq!(subtree.ids(), [root, a, a1, b], "{shape:?}");
             assert_eq!(
                 *subtree.members(),
-                subtree
-                    .ids()
-                    .iter()
-                    .copied()
+                [root, a, a1, b]
+                    .into_iter()
                     .collect::<rustc_hash::FxHashSet<RenderId>>(),
-                "{shape}: the set holds the listed ids and no other",
+                "{shape:?}: the set holds the listed ids and no other",
             );
-            assert_eq!(tree.collect_subtree_ids(root), subtree.ids(), "{shape}");
-
-            assert_eq!(
-                tree.take_subtree(subtree).len(),
-                4,
-                "{shape}: every listed node"
-            );
-            assert_eq!(tree.len(), 0, "{shape}: nothing left in the slab");
         }
     }
 
