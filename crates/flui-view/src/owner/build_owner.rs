@@ -531,6 +531,10 @@ pub struct BuildOwner {
     /// long service call.
     pub(crate) child_manager_registry: ChildManagerRegistry,
 
+    /// Scratch memory a build-phase walk lists into while it runs, reset as the next walk that
+    /// uses it begins (ADR-0328 §3). The render-edge sync after a build takes its lists from it.
+    frame_arena: flui_foundation::arena::FrameArena,
+
     /// Registry of live build-during-layout nodes, one per
     /// mounted layout-builder element, keyed by its render object's `RenderId`.
     /// Drained every layout pass by
@@ -752,6 +756,7 @@ impl BuildOwner {
             built_this_frame: SlotSet::new(),
             frame_builds: Box::default(),
             child_manager_registry: RefCell::new(FxHashMap::default()),
+            frame_arena: flui_foundation::arena::FrameArena::new(),
             layout_builder_registry: LayoutBuilderRegistry::default(),
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
             build_scope_queues: None,
@@ -2110,7 +2115,10 @@ impl BuildOwner {
         // render parent's children into element-slot order (no-op unless an
         // insert flagged a possible drift), so a render sibling that attached
         // before a component-deferred sibling does not invert their layout.
-        tree.reorder_render_children_after_build(&self.child_manager_registry);
+        tree.reorder_render_children_after_build(
+            &self.child_manager_registry,
+            &mut self.frame_arena,
+        );
 
         // Record onto whichever span is current — `build_scope`'s own "build"
         // span and `service_layout_builders`'s `during_layout` "build" span

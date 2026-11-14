@@ -128,8 +128,9 @@ as its first fragment takes over that node's child list: a chain of absorbed nod
 siblings hands one list up without copying it, and a level with fragments after it moves the list
 once, as it would copy it into a new one. The built arena's peak is the built tree, plus a failed graft's partial nodes when
 the pass falls back to a rebuild. Resetting at the start of a walk needs no frame-end hook, and a walk that
-unwound has dropped its collections before the next one resets. `flui-view`'s build phase gets
-an arena of its own on the `BuildOwner` under the same rules when its first site moves.
+unwound has dropped its collections before the next one resets. `flui-view`'s build phase has an
+arena of its own on the `BuildOwner` under the same rules: the render-edge sync after a build
+resets it and takes its walk stack, its edge lists and each parent's desired child list from it.
 
 A render object's `perform_layout` and `paint` never see the arena. What they hand the pipeline
 (a size, painted commands) is the pipeline's to store, and it stores retained data outside the
