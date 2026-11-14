@@ -186,9 +186,10 @@ SurfaceAttached/Suspended ──close──▶ Closing ──teardown ack──�
 
 Resume returns a `Suspended` presentation to `SurfaceAttached` at once. The
 raster host makes the window's surface again on its own pace and sends the slot
-its `Restore`; until that lands the slot answers each frame `NotShown` without
-rendering, and its first frame after the restore redraws in full, so no frame
-is shown on a stale surface.
+its `Restore`; until the restore is sent the host answers each frame `NotShown`
+without sending it to the slot. The executor applies the restore before the
+frames of the same turn, and the slot's first frame after it redraws in full, so
+no frame is shown on a stale surface.
 
 ### 10. Platform callbacks are owned and cancellable
 

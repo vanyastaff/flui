@@ -107,7 +107,7 @@ Parallel layout within one UI runtime is not a goal, and the barrier is named: `
 
 `GpuContext` holds the instance, adapter, device, queue, `wgpu::PipelineCache`, the closed effect
 catalogue with its pre-warm, and the atlases. There is one per application. It is owned by the
-runtime host and handed once to the raster executor, which owns it and lends it to each slot; it is never a
+runtime host and handed once to the raster executor, which owns it; the context holds every slot and lends each the device as it draws; it is never a
 `static` and never reached ambiently ([ADR-0097](ADR-0097-no-process-global-state-gate.md) gates
 that). This is what distinguishes it from the process-global resource ADR-0045 rejected: sharing
 is a constructor decision, as ADR-0027 §1 already describes `SharedEngineServices`.

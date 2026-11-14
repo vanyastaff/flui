@@ -10,7 +10,8 @@
   thread-affinity table) and §9's items on the public API's thread affinity and the
   cross-thread vocabulary: one record states what stays on the owner thread and what crosses.
 - **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) for
-  §5's raster protocol and §7 steps 3 and 4: a slot of the one raster executor settles each frame.
+  §4's shutdown-completion and frame-telemetry rows, §5's raster protocol and §7 steps 3 and 4: a
+  slot of the one raster executor settles each frame.
 - **Date:** 2026-07-11
 - **Revised:** 2026-11-03 — the title no longer calls FLUI a multi-threaded runtime: one owner
   thread hosts every UI runtime (ADR-0266), and the parallelism is outside the UI transaction.
@@ -165,11 +166,10 @@ preparation; asset I/O; heavy user computation.
 
 | Lane | Guarantee | Mechanism | When full |
 |---|---|---|---|
-| Control / shutdown completion | exactly once | one-shot channel per handshake | cannot fill |
+| Raster lifecycle commands (attach, release, restore, detach, device retry) | in order, bounded | the executor's bounded channel (`LIFECYCLE_CAPACITY`), drained before each turn's frames | typed `RasterSendError::Full` returning the command |
 | Owner inbox: worker results, framework commands | bounded, typed backpressure | bounded channel (256 default), bounded drain pass per batch | `try_send` → typed `ChannelFull` returning the rejected command |
 | Coalesced invalidations (redraw/rebuild/repaint) | idempotent, latest state | atomic flag / set-dedup inbox | n/a |
-| Frame snapshots | latest frame wins | single-slot mailbox; replacing an unstarted frame acks `Dropped{Superseded}` | never full |
-| Frame telemetry acks | explicitly lossy | bounded `try_send`; drops traced | lossy by contract |
+| Frame snapshots | latest frame wins, each settled once | each slot's single-frame inbox; a frame superseded before it renders is settled by the verdict of the frame that replaced it | never full |
 | Input | causal order, never coalesced or reordered | direct dispatch + the reentrancy FIFO (§3) | n/a |
 
 No unbounded channels on runtime paths, no `Arc<Mutex<Vec<_>>>` mailboxes, no public generic
@@ -180,12 +180,12 @@ No unbounded channels on runtime paths, no `Arc<Mutex<Vec<_>>>` mailboxes, no pu
 Compositing produces an owned, immutable `SceneSnapshot` per presentation per frame:
 
 ```rust
-pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
-    pub ui_runtime_id: UiRuntimeId,
-    pub epoch: FrameEpoch,
-    pub surface_generation: SurfaceGeneration,
+pub struct SceneSnapshot {           // Send + Sync; moves by value; never Arc<Scene>
+    pub stamp: FrameStamp,           // presentation, epoch, surface and GPU-resource generation
     pub damage: DamageRegion,
+    pub base: Option<SceneVersionId>,
     pub scene: Scene,
+    pub textures: TextureUpdates,
 }
 ```
 

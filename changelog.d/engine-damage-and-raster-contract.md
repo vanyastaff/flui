@@ -25,7 +25,7 @@
   `LayerNode::with_boundary(render_id, content_token)`; `DamageRegion` gains the `Partial` and
   `Unchanged` variants, so a match on it needs arms for them or a wildcard.
 - **`flui-engine`**: `Renderer::render_scene` is now the entry point for a scene drawn outside an
-  executor slot (the web's direct sink, a hot-reload plugin's scene): it always renders in full and
+  executor slot (the web's direct sink, direct mode): it always renders in full and
   makes the next frame full too.
 - **`flui-engine`**: the performance overlay clips its readouts to its bounds; an overlay
   narrower or shorter than its text no longer draws past them.
