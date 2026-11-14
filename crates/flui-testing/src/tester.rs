@@ -940,7 +940,8 @@ impl Tester {
     /// test's own. The old run is dropped as a host drops its UI runtime: its
     /// states are disposed and its observers see it detach, which a real kill
     /// never runs. The old tree is gone before the new one mounts.
-    /// [`Self::restart`] is the quit that writes.
+    /// [`Self::restart`] is the quit that writes; dropping a `Tester` ends the
+    /// run without either, its held writes left to the storage.
     ///
     /// # Panics
     ///
@@ -965,6 +966,11 @@ impl Tester {
         let relaunch = Rc::clone(&self.relaunch);
         let config = self.config.clone();
         let discard = DiscardRunWrites(self.storage().cloned().zip(self.run));
+        // Before the teardown too: a hold the old run's state owns and
+        // releases as it drops would otherwise start the writes first.
+        if let Some((storage, run)) = &discard.0 {
+            storage.discard_writes_of(*run);
+        }
         drop(self);
         drop(discard);
         relaunch(config)

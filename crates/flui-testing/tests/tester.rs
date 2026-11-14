@@ -960,6 +960,33 @@ fn a_relaunch_after_a_kill_whose_teardown_panics_loses_the_held_write() {
     );
 }
 
+/// A run's newer value does not replace a value the test published that is
+/// still waiting at a hold: the run never read it, so the test's value lands
+/// first and the run's, based on the storage without it, conflicts.
+#[test]
+fn a_runs_value_does_not_replace_the_tests_held_write() {
+    use flui_platform::{Storage as _, WriteMode};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t
+        .storage()
+        .cloned()
+        .expect("a mounted window has a storage");
+    let name = <Note as flui_view::persist::Document>::NAME;
+    let hold = storage.hold_writes();
+    let own = storage.publish(&name, b"the test's".to_vec(), WriteMode::Replace);
+    note(&opened)
+        .set(Note("the run's".to_owned()))
+        .expect("a loaded note takes a value");
+    t.pump_for(Duration::from_secs(1));
+    drop(hold);
+    t.pump_for(Duration::from_secs(1));
+    assert_eq!(storage.contents(&name).as_deref(), Some(&b"the test's"[..]));
+    drop(own);
+}
+
 /// A quit write the storage holds lands when the hold ends, ahead of the next
 /// run's newer value, which was based on the storage without it and so
 /// conflicts: what a disk that had not finished the quit write gives, and
