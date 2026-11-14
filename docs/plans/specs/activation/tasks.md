@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5. AC11 частично: ключи schema 3, AndroidManifest и `Info.plist`. В работе: —; следующие остаток AC11, AC6–AC9.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest`. В работе: —; следующие остаток AC11 (entitlement, Windows вместе с AC9/AC10, проверка файлов доменов), AC6–AC9.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -67,5 +67,8 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   (ключ версии 3 при `schema = 2`, веб-схема, URL вместо домена, одно расширение с двумя MIME),
   `the_activity_filters_what_the_application_opens`, `a_bundle_registers_what_the_application_opens`,
   `the_keys_render_as_xml_property_list_entries`, строка «the info plist registers what the
-  application opens» `ios_package::tests::publication_contract`. Остаток: entitlement доменов,
-  `.desktop`, регистрация Windows, проверки `flui doctor`.
+  application opens» `ios_package::tests::publication_contract`; `doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`
+  (фильтр без схемы, домен без `autoVerify`, фильтр с `tools:node="remove"`, `Info.plist` без схемы и
+  без типа документа, полные файлы), `a_linux_desktop_registers_what_the_application_opens` и
+  `desktop_entry_values_are_escaped`. Остаток: entitlement доменов,
+  регистрация Windows, проверка `apple-app-site-association` и `assetlinks.json` в `flui doctor`.

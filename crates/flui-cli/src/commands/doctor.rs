@@ -39,7 +39,7 @@ pub(crate) struct DoctorOptions {
     /// re-check.
     pub(crate) fix: bool,
     /// Manifests FLUI does not write (an embedding project's
-    /// `AndroidManifest.xml` or `PrivacyInfo.xcprivacy`) to check against what
+    /// `AndroidManifest.xml`, `PrivacyInfo.xcprivacy` or `Info.plist`) to check against what
     /// the crates of the project in the current directory declare.
     pub(crate) manifests: Vec<PathBuf>,
 }

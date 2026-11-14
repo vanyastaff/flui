@@ -301,18 +301,28 @@ fn run(target: BuildTarget, options: BuildOptions, output: Option<PathBuf>) -> C
 /// degrading to a bare binary.
 fn macos_bundle() -> CliResult<AppBundle> {
     let root = std::env::current_dir().context("failed to resolve application directory")?;
-    macos_bundle_at(&root)
+    bundle_at(&root, crate::app_id::AppId::apple_bundle_id)
 }
 
-fn macos_bundle_at(root: &std::path::Path) -> CliResult<AppBundle> {
+/// The application's identity for a Linux build, as `macos_bundle` resolves
+/// it: the name its desktop entry shows and the identifier the entry and its
+/// MIME types are installed under.
+fn linux_bundle() -> CliResult<AppBundle> {
+    let root = std::env::current_dir().context("failed to resolve application directory")?;
+    bundle_at(&root, crate::app_id::AppId::desktop_entry_id)
+}
+
+/// The application at `root`, named by `flui.toml` (or its directory), with
+/// `identifier` deriving the platform's identifier from its id.
+fn bundle_at(
+    root: &std::path::Path,
+    identifier: fn(&crate::app_id::AppId) -> String,
+) -> CliResult<AppBundle> {
     let manifest = root.join("flui.toml");
     match std::fs::symlink_metadata(&manifest) {
         Ok(_) => {
             let config = crate::config::FluiConfig::load_from(&manifest)?;
-            Ok(AppBundle::new(
-                &config.app.name,
-                config.app.id.apple_bundle_id(),
-            ))
+            Ok(AppBundle::new(&config.app.name, identifier(&config.app.id)))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let name = root
@@ -325,7 +335,7 @@ fn macos_bundle_at(root: &std::path::Path) -> CliResult<AppBundle> {
                 })?;
             Ok(AppBundle::new(
                 name,
-                crate::app_id::AppId::unconfigured(name).apple_bundle_id(),
+                identifier(&crate::app_id::AppId::unconfigured(name)),
             ))
         }
         Err(error) => Err(crate::error::CliError::context(
@@ -559,8 +569,12 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     {
         builder = builder.bundle(macos_bundle()?);
     }
+    #[cfg(target_os = "linux")]
+    {
+        builder = builder.bundle(linux_bundle()?);
+    }
 
-    // Placed after the macOS bundle-metadata resolution above (not before
+    // Placed after the bundle-metadata resolution above (not before
     // it): an invalid `flui.toml` is a more specific diagnosis than a
     // missing `Cargo.toml`, and must still win when both are absent/invalid.
     ensure_flui_project(&workspace_root)?;
@@ -638,6 +652,9 @@ fn build_specific_platform(
 
     if target == BuildTarget::Macos {
         builder = builder.bundle(macos_bundle()?);
+    }
+    if target == BuildTarget::Linux {
+        builder = builder.bundle(linux_bundle()?);
     }
 
     // See the matching comment in `build_desktop`: bundle-metadata parse

@@ -383,7 +383,7 @@ enum Commands {
         fix: bool,
 
         /// Check a manifest FLUI does not write (an embedding project's
-        /// AndroidManifest.xml or PrivacyInfo.xcprivacy) against what the
+        /// AndroidManifest.xml, PrivacyInfo.xcprivacy or Info.plist) against what the
         /// crates of the project in the current directory declare; repeatable
         #[arg(long = "manifest", value_name = "PATH")]
         manifests: Vec<std::path::PathBuf>,

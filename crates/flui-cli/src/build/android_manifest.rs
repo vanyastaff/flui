@@ -416,4 +416,39 @@ mod tests {
             hand_written
         );
     }
+
+    /// `flui doctor` reads back what the build writes: the manifest it
+    /// renders lacks nothing the crates declare, and one rendered without
+    /// what the application opens lacks each scheme, domain and file type.
+    #[test]
+    fn the_doctor_finds_what_the_manifest_carries() {
+        use crate::declarations::verify::Manifest;
+
+        let declarations = Declarations::of_table(
+            "notes",
+            "schema = 3\nurl-schemes = [\"notes\"]\n\
+             associated-domains = [\"notes.example.com\", \"example.org\"]\n\
+             [[file-types]]\nextension = \"note\"\nmime = \"application/x-notes-note\"\n\
+             name = \"Note\"\n",
+        );
+        let written = Manifest::parse(render(&FACTS, &declarations).as_bytes())
+            .expect("the manifest reads back");
+        assert_eq!(written.missing(&declarations), []);
+        let bare = Manifest::parse(render(&FACTS, &Declarations::default()).as_bytes())
+            .expect("a bare manifest reads back");
+        let entries: Vec<String> = bare
+            .missing(&declarations)
+            .into_iter()
+            .map(|missing| missing.entry)
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                "URL scheme notes",
+                "associated domain example.org",
+                "associated domain notes.example.com",
+                "file type .note (application/x-notes-note)",
+            ]
+        );
+    }
 }

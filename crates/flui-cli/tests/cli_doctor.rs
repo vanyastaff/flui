@@ -235,3 +235,214 @@ fn doctor_lists_what_a_manifest_lacks_of_the_crates_declarations() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// An Android manifest whose activity carries `filters`.
+fn android_opening(filters: &str) -> String {
+    format!(
+        r#"<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools" package="a.b">
+    <application>
+        <activity android:name="Main">
+{filters}
+        </activity>
+    </application>
+</manifest>
+"#
+    )
+}
+
+const SCHEME_FILTER: &str = r#"            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="Notes" />
+            </intent-filter>"#;
+
+const FILE_FILTER: &str = r#"            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/x-notes-note" />
+            </intent-filter>"#;
+
+/// A domain filter, verified when `verified`, marked for removal when
+/// `removed`.
+fn domain_filter(verified: bool, removed: bool) -> String {
+    format!(
+        r#"            <intent-filter{}{}>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="notes.example.com" />
+            </intent-filter>"#,
+        if verified {
+            r#" android:autoVerify="true""#
+        } else {
+            ""
+        },
+        if removed {
+            r#" tools:node="remove""#
+        } else {
+            ""
+        },
+    )
+}
+
+/// An `Info.plist` with `entries` in its top-level dictionary.
+fn info_plist(entries: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.example.notes</string>
+{entries}
+</dict>
+</plist>
+"#
+    )
+}
+
+const INFO_SCHEMES: &str = r"    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array><string>notes</string></array>
+        </dict>
+    </array>";
+
+const INFO_DOCUMENTS: &str = r"    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.example.notes.note</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>note</string></array>
+            </dict>
+        </dict>
+    </array>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>LSItemContentTypes</key>
+            <array><string>com.example.notes.note</string></array>
+        </dict>
+    </array>";
+
+/// What the application opens is checked in a manifest FLUI does not write:
+/// an Android manifest needs a browsable filter per scheme, a verified
+/// `https` filter per domain and a `VIEW` filter per MIME type, a filter the
+/// merger removes counting as absent; an `Info.plist` needs each scheme in
+/// its URL types and each extension in a document type, and is not asked
+/// for the domains, which are an entitlement.
+#[test]
+fn doctor_lists_what_a_manifest_lacks_of_what_the_application_opens() {
+    let all_android = android_opening(&format!(
+        "{SCHEME_FILTER}\n{}\n{FILE_FILTER}",
+        domain_filter(true, false)
+    ));
+    let unverified = android_opening(&format!(
+        "{SCHEME_FILTER}\n{}\n{FILE_FILTER}",
+        domain_filter(false, false)
+    ));
+    let removed = android_opening(&format!(
+        "{SCHEME_FILTER}\n{}\n{FILE_FILTER}",
+        domain_filter(true, true)
+    ));
+    let no_scheme = android_opening(&format!("{}\n{FILE_FILTER}", domain_filter(true, false)));
+    let all_info = info_plist(&format!("{INFO_SCHEMES}\n{INFO_DOCUMENTS}"));
+    let no_documents = info_plist(INFO_SCHEMES);
+    let no_schemes = info_plist(INFO_DOCUMENTS);
+    let dir = project(&[
+        (
+            "Cargo.toml",
+            b"[package]\nname = \"notes\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n\
+              [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n\
+              associated-domains = [\"notes.example.com\"]\n\
+              [[package.metadata.flui.declares.file-types]]\nextension = \"note\"\n\
+              mime = \"application/x-notes-note\"\nname = \"Note\"\n",
+        ),
+        ("src/lib.rs", b""),
+        ("flui.toml", b""),
+        ("host/all.xml", all_android.as_bytes()),
+        ("host/unverified.xml", unverified.as_bytes()),
+        ("host/removed.xml", removed.as_bytes()),
+        ("host/no-scheme.xml", no_scheme.as_bytes()),
+        ("host/all.plist", all_info.as_bytes()),
+        ("host/no-documents.plist", no_documents.as_bytes()),
+        ("host/no-schemes.plist", no_schemes.as_bytes()),
+    ]);
+    // (path, status, a detail or fix fragment)
+    let expected: [(&str, &str, &str); 7] = [
+        ("host/all.xml", "ok", "declares everything"),
+        (
+            "host/unverified.xml",
+            "error",
+            "associated domain notes.example.com (notes)",
+        ),
+        (
+            "host/removed.xml",
+            "error",
+            r#"<intent-filter android:autoVerify="true">"#,
+        ),
+        (
+            "host/no-scheme.xml",
+            "error",
+            r#"<data android:scheme="notes" />"#,
+        ),
+        ("host/all.plist", "ok", "declares everything"),
+        (
+            "host/no-documents.plist",
+            "error",
+            "file type .note (application/x-notes-note) (notes)",
+        ),
+        (
+            "host/no-schemes.plist",
+            "error",
+            "notes in a CFBundleURLTypes entry's CFBundleURLSchemes",
+        ),
+    ];
+    let mut command = flui();
+    command
+        .current_dir(dir.path())
+        .args(["--json", "doctor", "--web"]);
+    for (manifest, _, _) in expected {
+        command.args(["--manifest", manifest]);
+    }
+    let output = command.output().expect("flui doctor");
+    let checks = checks(&output.stdout);
+    let declarations: Vec<&serde_json::Value> = checks
+        .iter()
+        .filter(|check| check["id"] == "project.declarations")
+        .collect();
+    assert_eq!(
+        declarations
+            .first()
+            .and_then(|check| check["detail"].as_str()),
+        Some(
+            "0 Android permission(s), 0 Apple accessed-API reason(s); the application opens 1 \
+             URL scheme(s), 1 associated domain(s), 1 file type(s)"
+        ),
+        "{checks:#?}"
+    );
+    let manifests: Vec<&serde_json::Value> = checks
+        .iter()
+        .filter(|check| check["id"] == "project.manifest")
+        .collect();
+    assert_eq!(manifests.len(), expected.len(), "{checks:#?}");
+    let mut failures = Vec::new();
+    for ((path, status, fragment), check) in expected.into_iter().zip(&manifests) {
+        let text = format!(
+            "{} {}",
+            check["detail"].as_str().unwrap_or_default(),
+            check["fix"].as_str().unwrap_or_default()
+        );
+        if check["path"] != path || check["status"] != status || !text.contains(fragment) {
+            failures.push(format!("{path}: {check}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

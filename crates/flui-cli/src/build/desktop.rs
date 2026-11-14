@@ -1,9 +1,6 @@
 // Only the macOS bundle staging below takes a `Path`; on other hosts the
 // import would be unused and trip `-D warnings`.
 #[cfg(target_os = "macos")]
-// Only the macOS bundle staging below takes a `Path`; on other hosts the
-// import would be unused and trip `-D warnings`.
-#[cfg(target_os = "macos")]
 use std::path::Path;
 
 use crate::build::error::{BuildError, BuildResult};
@@ -161,6 +158,22 @@ impl DesktopBuilder {
             output_binary.display()
         ));
 
+        // A Linux desktop learns what the application opens from its desktop
+        // entry and MIME package, staged beside the executable.
+        if let (Some(triple), Some(bundle)) = (Self::linux_target(ctx)?, &ctx.bundle) {
+            let declarations =
+                crate::declarations::Declarations::collect(&ctx.workspace_root, &[&triple])?;
+            let executable_name = file_name.to_string_lossy();
+            for path in crate::build::linux_desktop::stage(
+                &ctx.output_dir,
+                bundle,
+                &executable_name,
+                &declarations,
+            )? {
+                crate::ui::debug(format!("Desktop registration written: {}", path.display()));
+            }
+        }
+
         Ok(FinalArtifacts {
             app_binary: output_binary,
             size_bytes,
@@ -169,6 +182,24 @@ impl DesktopBuilder {
 }
 
 impl DesktopBuilder {
+    /// The Linux triple `ctx` builds for: its named target when that is a
+    /// Linux one, else the host's when the build names none and runs on
+    /// Linux; `None` for any other desktop.
+    fn linux_target(ctx: &BuilderContext) -> BuildResult<Option<String>> {
+        let is_linux = |triple: &str| triple.contains("-linux-") && !triple.contains("android");
+        match &ctx.platform {
+            crate::build::platform::Platform::Desktop {
+                target: Some(target),
+            } => Ok(is_linux(target).then(|| target.clone())),
+            crate::build::platform::Platform::Desktop { target: None }
+                if cfg!(target_os = "linux") =>
+            {
+                Self::detect_host_target().map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Stage a built executable into a minimal, well-formed macOS `.app`.
     ///
     /// The bundle is what makes the app a real application: `Info.plist` names

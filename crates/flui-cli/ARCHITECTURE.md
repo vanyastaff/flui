@@ -98,12 +98,19 @@ owner (`a_bundle_registers_what_the_application_opens`). The macOS bundle's XML 
 same keys (`the_keys_render_as_xml_property_list_entries`). Schemes and domains are the
 application's own: a crate another crate of the build links by a normal or build edge is refused
 when it declares them (`only_the_application_declares_the_links_it_opens`), since the run admits
-what `#[flui::main]` reads from the crate it marks.
+what `#[flui::main]` reads from the crate it marks. A Linux build writes the desktop entry and the
+shared-mime-info package beside the executable (`build/linux_desktop.rs`,
+`a_linux_desktop_registers_what_the_application_opens`).
 
 `flui doctor` reads the same declarations for a manifest the CLI does not write
 (`declarations/verify.rs`, `commands/doctor/project.rs`): the project's hand-written Android
-manifest and each `--manifest` path, an `AndroidManifest.xml` or an XML `PrivacyInfo.xcprivacy`,
-named by its root element. Each missing entry is listed with the crates that declare it and the
+manifest and each `--manifest` path, an `AndroidManifest.xml` or an XML `PrivacyInfo.xcprivacy` or
+`Info.plist`, named by its root element and, for a property list, by whether it names a
+`CFBundleIdentifier`. An Android manifest is read for its permissions and the intent filters of
+what the application opens (a `VIEW` filter's MIME types, a `BROWSABLE` one's schemes, a verified
+one's `https` hosts), an `Info.plist` for its `CFBundleURLTypes` schemes and the extensions its
+document types open (`doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`).
+Each missing entry is listed with the crates that declare it and the
 line to add, under the stable ids `project.declarations`, `project.android-manifest` and
 `project.manifest`. The merger is not run: an Android file that is not Gradle's merged manifest
 carries a note saying so (`doctor_lists_what_a_manifest_lacks_of_the_crates_declarations`).
