@@ -648,20 +648,46 @@ impl RevealFixture {
 }
 
 fn reveal_stale_snapshot_is_refused_and_fresh_replacement_recovers() {
-    for replace_target in [true, false] {
+    // Every way the tree hands out a changed node ends the memberships a held
+    // reveal captured: a replacement, a mutable borrow, a mutable walk and a
+    // root change.
+    for edit in [
+        "replace target",
+        "replace inner",
+        "borrow target",
+        "walk",
+        "root",
+    ] {
         let mut fixture = RevealFixture::new(false);
         let held = fixture.resolve();
-        let id = if replace_target {
-            fixture.target
-        } else {
-            fixture.inner
-        };
-        let replacement = fixture.owner.get(id).expect("live node").clone();
-        assert!(fixture.owner.tree_mut().replace_node(id, replacement));
+        match edit {
+            "replace target" | "replace inner" => {
+                let id = if edit == "replace target" {
+                    fixture.target
+                } else {
+                    fixture.inner
+                };
+                let replacement = fixture.owner.get(id).expect("live node").clone();
+                assert!(fixture.owner.tree_mut().replace_node(id, replacement));
+            }
+            "borrow target" => {
+                let target = fixture.target;
+                assert!(fixture.owner.tree_mut().get_mut(target).is_some());
+            }
+            "walk" => {
+                assert!(fixture.owner.tree_mut().iter_mut().count() > 0);
+            }
+            _ => {
+                let tree = fixture.owner.tree_mut();
+                let root = tree.root();
+                tree.set_root(None);
+                tree.set_root(root);
+            }
+        }
         held.invoke();
         assert!(
             fixture.calls.lock().is_empty(),
-            "replaced membership is stale"
+            "{edit}: the changed membership is stale"
         );
         fixture.resolve().invoke();
         assert_eq!(*fixture.calls.lock(), ["inner", "outer"]);
