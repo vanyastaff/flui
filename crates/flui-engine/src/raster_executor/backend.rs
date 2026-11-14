@@ -103,6 +103,13 @@ pub trait RasterBackend {
     /// Take `slot` down; a slot the backend does not hold is ignored.
     fn detach(&mut self, slot: SlotId);
 
+    /// The newest image of each external texture `slot` keeps, shared rather
+    /// than copied: what the owner gives the slot it attaches for the same
+    /// presentation on the backend that replaces this one (the web, whose
+    /// owner replaces a lost context, ADR-0305 §8). Empty for a slot the
+    /// backend does not hold.
+    fn kept_textures(&self, slot: SlotId) -> TextureUpdates;
+
     /// Give back memory the next frames can rebuild.
     fn reclaim(&mut self, level: MemoryPressureLevel);
 
@@ -184,6 +191,10 @@ impl<B: RasterBackend + ?Sized> RasterBackend for Box<B> {
 
     fn detach(&mut self, slot: SlotId) {
         (**self).detach(slot);
+    }
+
+    fn kept_textures(&self, slot: SlotId) -> TextureUpdates {
+        (**self).kept_textures(slot)
     }
 
     fn reclaim(&mut self, level: MemoryPressureLevel) {

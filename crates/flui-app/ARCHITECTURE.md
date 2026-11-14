@@ -363,7 +363,10 @@ the dispatch layer moves there too.
   animation frame after it arrives. A lost device or WebGL context retires the
   executor with its slot before the next context is asked for, so no two
   contexts present to the canvas, and the slot attached on the new one starts
-  healthy and draws in full. wasm-only: CI's `wasm-check` and `wasm-test`
+  healthy and draws in full; its texture images come from the slot it
+  replaces. Builds that keep failing for `GIVE_UP_AFTER` (`runner/gpu_loss.rs`)
+  report the device abandoned once, and `retry_render_device` or a restored
+  context asks again. wasm-only: CI's `wasm-check` and `wasm-test`
   compile it; nothing on this host runs it.
 - **A window reaches a UI runtime with its bridge.** `runner::presentation_window`
   reads a host window's accessibility bridge once and pairs it with the

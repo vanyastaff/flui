@@ -1427,6 +1427,10 @@ impl flui_engine::RasterBackend for PanicsAtAttach {
 
     fn detach(&mut self, _: SlotId) {}
 
+    fn kept_textures(&self, _: SlotId) -> flui_layer::TextureUpdates {
+        flui_layer::TextureUpdates::default()
+    }
+
     fn reclaim(&mut self, _: MemoryPressureLevel) {}
 
     fn device_lost(&self) -> bool {

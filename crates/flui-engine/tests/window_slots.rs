@@ -450,6 +450,10 @@ impl flui_engine::RasterBackend for ReentersOwner {
         self.inner.detach(slot);
     }
 
+    fn kept_textures(&self, slot: SlotId) -> flui_layer::TextureUpdates {
+        self.inner.kept_textures(slot)
+    }
+
     fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
         self.inner.reclaim(level);
     }

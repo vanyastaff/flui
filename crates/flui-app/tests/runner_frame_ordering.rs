@@ -219,11 +219,11 @@ fn frame_sites_drive_the_raster_executor() {
 
     let slot_sites = code_lines
         .iter()
-        .filter(|l| l.contains("RasterCommand::Frame"))
+        .filter(|l| l.contains(".send(RasterCommand::Frame"))
         .count();
     assert_eq!(
         slot_sites, 1,
-        "expected exactly one PRODUCTION `RasterCommand::Frame` site (the raster host's \
+        "expected exactly one PRODUCTION send of a `RasterCommand::Frame` (the raster host's \
          submit, through which every window draws); found {slot_sites}"
     );
 }

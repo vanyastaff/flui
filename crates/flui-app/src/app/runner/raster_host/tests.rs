@@ -898,3 +898,99 @@ fn every_settled_verdict_maps_to_its_submit_verdict() {
         assert_eq!(base.shown_version(), kept, "{settled:?}");
     }
 }
+
+/// An executor its owner retires (the web, replacing a lost context) hands
+/// each window the texture images its slot kept, so the slot attached for
+/// the window next draws them although the registry handed each frame over
+/// once; that slot draws its first frame in full, and a window that closes
+/// before it is attached again leaves nothing behind.
+///
+/// Red-check: drop the `kept_textures` read from
+/// `RasterHost::retire_executor` and the new slot is given no texture.
+#[test]
+fn a_retired_executor_hands_its_windows_textures_to_their_next_slots() {
+    let slots = ScriptedSlots::new();
+    let mut host = RasterHost::new(RasterFactory::Scripted(slots.clone()));
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("a texture id");
+    texture.submit_frame(flui_painting::paint::Image::from_rgba8(
+        1,
+        1,
+        vec![255, 0, 0, 255],
+    ));
+    let attach = |host: &mut RasterHost| {
+        host.attach_target(
+            Arc::new(FakeWindow::new(1)),
+            address(),
+            &crate::app::AppConfig::default(),
+            Some(registry.clone()),
+            None,
+        )
+        .expect("the scripted backend attaches any window");
+    };
+    attach(&mut host);
+    let mut scene = TestScene::new(AT);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    assert_eq!(slots.textures().len(), 1, "the frame took the texture");
+
+    host.retire_executor();
+    assert!(host.placed.is_none(), "the executor is gone");
+    assert!(!host.has_slot(address()));
+    attach(&mut host);
+    scene.republish_child(AT, 20);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    let applied = slots.textures();
+    assert_eq!(applied.len(), 2, "{applied:?}");
+    assert_eq!(
+        applied[1].frames,
+        vec![texture.id()],
+        "the kept image came along"
+    );
+    assert!(
+        matches!(renders(&slots).last(), Some(DamageRegion::Full(_))),
+        "a new slot holds no image to patch"
+    );
+
+    // A window closed between the retire and its next slot.
+    host.retire_executor();
+    host.detach(address());
+    attach(&mut host);
+    scene.republish_child(AT, 30);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    assert_eq!(
+        slots.textures().len(),
+        2,
+        "the closed window's images went with it"
+    );
+}
+
+/// A backend that cannot rebuild where the executor runs is replaced by its
+/// owner: the host reports its device lost as soon as the backend says so,
+/// before any turn, and the executor's give-up as the rebuild the owner owes,
+/// so the application is never told the device was abandoned.
+///
+/// Red-check: answer the sender's health alone from
+/// `RasterHost::device_health` and it reads healthy before the turn and given
+/// up after it.
+#[test]
+fn an_owner_replaced_device_is_never_given_up_to_the_application() {
+    let (mut host, slots) = host();
+    let mut scene = TestScene::new(AT);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    slots.cannot_rebuild_inline();
+    slots.lose_device();
+    assert_eq!(
+        host.device_health(),
+        DeviceHealth::Rebuilding { attempts: 0 },
+        "lost before a turn has seen it"
+    );
+    host.service(address());
+    assert!(matches!(
+        host.placed.as_ref().expect("placed").sender.device_health(),
+        DeviceHealth::GivenUp { .. }
+    ));
+    assert_eq!(
+        host.device_health(),
+        DeviceHealth::Rebuilding { attempts: 0 }
+    );
+}

@@ -130,9 +130,9 @@ where
         let agent_window = super::dev_agents::vend(&ui_runtime, ui_runtime.presentation_id());
         // The browser takes a canvas's WebGL context away whenever it reclaims
         // GPU memory, often from a tab nobody sees, where no animation frame
-        // would notice. The loss wakes the owner, whose next turn rebuilds the
-        // renderer; the same ledger takes a lost WebGPU device (the renderer
-        // reports it).
+        // would notice. The loss wakes the owner, whose next turn retires the
+        // GPU context and asks for another; the same ledger takes a lost WebGPU
+        // device, whose driver report wakes the owner too (`on_device_lost`).
         let gpu_loss = Arc::new(GpuLossLedger::default());
         let wake = ui_runtime.wake_handle();
         {
@@ -264,8 +264,21 @@ impl WebFrameDriver {
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         liveness: super::frame_driver::FrameLiveness,
     ) {
-        // Before the dirty gate: a lost device or context needs no frame to be
-        // noticed, and a hidden tab runs none.
+        // A rebuild given up after its builds kept failing is the
+        // application's to ask for again (ADR-0267): it is told once, and its
+        // `retry_render_device` takes the presentation off `Abandoned`, which
+        // owes the rebuild again here.
+        use flui_runtime::frame_failure::DeviceRecovery;
+        if let Some(attempts) = self.gpu_loss.take_given_up() {
+            ui_runtime.note_primary_device_recovery(Some(DeviceRecovery::Abandoned { attempts }));
+        } else if !ui_runtime
+            .primary_device_recovery()
+            .is_some_and(DeviceRecovery::is_abandoned)
+        {
+            let _asked_again = self.gpu_loss.retry();
+        }
+        // Before the dirty gate: a lost device or context needs no animation
+        // frame of new content to be acted on.
         self.start_rebuild_if_owed(&liveness);
         let gpu_loss = &self.gpu_loss;
         let action = ui_runtime.enter(|ui_runtime| {
@@ -438,7 +451,7 @@ impl WebFrameDriver {
             if !authority.is_live() {
                 return;
             }
-            let bootstrap = match built {
+            let mut bootstrap = match built {
                 Ok(bootstrap) => bootstrap,
                 Err(error) => {
                     if let Some(unsupported) = crate::app::UnsupportedSystem::from_renderer(&error)
@@ -452,11 +465,16 @@ impl WebFrameDriver {
                         return;
                     }
                     log_failed_build(&error);
+                    claim.fail(web_time::Instant::now());
                     // No frame comes unasked, and the retry runs in one.
                     window.request_redraw();
                     return;
                 }
             };
+            // A lost WebGPU device is acted on without waiting for new content:
+            // the wake asks for the next animation frame, which retires the
+            // context; a visible tab runs it at once, a hidden one when shown.
+            bootstrap.context.on_device_lost(Arc::clone(&wake));
             // Read now: the page's screen may have changed while the device
             // was asked for.
             let display = super::host::display_color_of(window.as_ref());
@@ -477,6 +495,7 @@ impl WebFrameDriver {
                 .unwrap_or_else(|| Err(super::raster_host::host_busy()));
             if let Err(error) = attached {
                 log_failed_build(&error);
+                claim.fail(web_time::Instant::now());
                 window.request_redraw();
                 return;
             }

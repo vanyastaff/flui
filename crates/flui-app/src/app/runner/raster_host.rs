@@ -267,6 +267,9 @@ impl SharedRasterHost {
 pub(crate) struct RasterHost {
     factory: RasterFactory,
     placed: Option<Placed>,
+    /// The textures each window's slot kept on an executor its owner
+    /// retired, for the slot attached for it next (the web, ADR-0305 §8).
+    carried: rustc_hash::FxHashMap<PresentationAddress, flui_layer::TextureUpdates>,
 }
 
 struct Placed {
@@ -298,6 +301,9 @@ struct HostSlot {
     /// not give it one.
     restore: RestorePace,
     textures: Option<flui_layer::TextureRegistry>,
+    /// The newest image of each texture the context this slot replaced
+    /// kept, given to the slot with its first frame.
+    carried: flui_layer::TextureUpdates,
     display: Option<DisplayColor>,
     visibility: SlotVisibility,
     /// The size the window's frames last asked for: a surface owed at a
@@ -408,6 +414,7 @@ impl RasterHost {
         Self {
             factory,
             placed: None,
+            carried: rustc_hash::FxHashMap::default(),
         }
     }
 
@@ -579,6 +586,7 @@ impl RasterHost {
             caught.resume();
             return Err(error);
         }
+        let carried = self.carried.remove(&address).unwrap_or_default();
         let mut base = RasterBase::default();
         base.set_mode(damage_mode());
         placed.slots.insert(
@@ -589,6 +597,7 @@ impl RasterHost {
                 epoch: FrameEpoch::ZERO,
                 base,
                 textures,
+                carried,
                 display,
                 visibility: SlotVisibility::Shown,
                 wanted: None,
@@ -692,7 +701,7 @@ impl RasterHost {
     /// over the canvas again (ADR-0305 §8). A panic of the slots' detach or
     /// of the context's `Drop` is resumed once the executor is gone.
     #[cfg_attr(
-        not(target_arch = "wasm32"),
+        not(any(target_arch = "wasm32", all(test, feature = "testing"))),
         expect(
             dead_code,
             reason = "only the web bootstraps its context again; a native device is rebuilt in place"
@@ -704,6 +713,19 @@ impl RasterHost {
             .placed
             .as_ref()
             .map_or_else(Vec::new, |placed| placed.slots.keys().copied().collect());
+        if let Some(placed) = self.placed.as_mut() {
+            // A frame still waiting in a slot's inbox hands its texture
+            // frames to the backend in this turn, so they are kept below.
+            let _turned = caught.contain(|| placed.executor.turn());
+            // The registry hands a frame over once, so the images the context
+            // kept are what the next one draws until their producers submit
+            // again; images carried here that no frame took yet are newer.
+            for (address, slot) in &mut placed.slots {
+                let mut kept = placed.executor.backend().kept_textures(slot.slot);
+                kept.merge(std::mem::take(&mut slot.carried));
+                self.carried.insert(*address, kept);
+            }
+        }
         for address in addresses {
             self.detach_held(address, &mut caught);
         }
@@ -714,7 +736,7 @@ impl RasterHost {
 
     /// Whether `address`'s window has a slot.
     #[cfg_attr(
-        not(target_arch = "wasm32"),
+        not(any(target_arch = "wasm32", all(test, feature = "testing"))),
         expect(
             dead_code,
             reason = "only the web attaches after its context arrives and asks whether it has"
@@ -795,6 +817,8 @@ impl RasterHost {
 
     /// Release `address`'s slot and its GPU target.
     pub(crate) fn detach(&mut self, address: PresentationAddress) {
+        // A window that closes before its next slot is attached draws nothing.
+        drop(self.carried.remove(&address));
         let mut caught = FirstPanic::new();
         self.detach_held(address, &mut caught);
         // Reached from a window's `Drop`, which may run during an unwind.
@@ -898,12 +922,22 @@ impl RasterHost {
     }
 
     /// Where the context's device stands.
+    ///
+    /// A backend that cannot rebuild where the executor runs (the web) is
+    /// replaced by its owner, which retires the executor (ADR-0305 §8): the
+    /// executor's give-up is then the rebuild the owner owes, not one the
+    /// application must ask for, and a device the backend reports lost is
+    /// lost before any turn has seen it.
     pub(crate) fn device_health(&self) -> DeviceHealth {
-        self.placed
-            .as_ref()
-            .map_or(DeviceHealth::Healthy, |placed| {
-                placed.sender.device_health()
-            })
+        let Some(placed) = self.placed.as_ref() else {
+            return DeviceHealth::Healthy;
+        };
+        let health = placed.sender.device_health();
+        let backend = placed.executor.backend();
+        if backend.rebuilds_inline() || !(health.is_lost() || backend.device_lost()) {
+            return health;
+        }
+        DeviceHealth::Rebuilding { attempts: 0 }
     }
 
     /// When the executor next rebuilds a lost device, for the loop's wake.
@@ -1395,8 +1429,14 @@ impl RasterHost {
         let shown = publication.scene.id();
         let mut snapshot =
             SceneSnapshot::of_version(stamp, publication.base, damage, publication.scene);
+        // The images a replaced context kept go first, so the registry's
+        // newer frames replace them.
+        let mut updates = std::mem::take(&mut slot.carried);
         if let Some(textures) = &slot.textures {
-            snapshot = snapshot.textures(textures.take_updates());
+            updates.merge(textures.take_updates());
+        }
+        if !updates.is_empty() {
+            snapshot = snapshot.textures(updates);
         }
         let id = slot.slot;
         if let Err(error) = placed
@@ -1404,6 +1444,11 @@ impl RasterHost {
             .send(RasterCommand::Frame { slot: id, snapshot })
         {
             tracing::error!(%error, "raster host: a frame was refused");
+            // The texture frames it took from the registry and the carry
+            // reached no backend: the window's next frame takes them.
+            if let RasterCommand::Frame { snapshot, .. } = error.into_command() {
+                slot.carried = snapshot.textures;
+            }
             return SubmitVerdict::Failed;
         }
         // The turn runs code that is not ours; its settlements are drained

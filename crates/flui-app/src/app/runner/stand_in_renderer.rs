@@ -327,6 +327,11 @@ impl RasterBackend for StandInBackend {
         }
     }
 
+    fn kept_textures(&self, _slot: SlotId) -> TextureUpdates {
+        // The stand-in draws no texture.
+        TextureUpdates::default()
+    }
+
     fn reclaim(&mut self, _level: MemoryPressureLevel) {}
 
     fn device_lost(&self) -> bool {

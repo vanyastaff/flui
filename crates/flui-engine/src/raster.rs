@@ -1,7 +1,7 @@
 //! What a frame became once a backend drew it.
 //!
 //! [`PresentDisposition`] is the answer a window slot of the raster executor
-//! ([`RasterExecutor`](crate::RasterExecutor)) and the renderer of a scene
+//! ([`crate::RasterExecutor`]) and the renderer of a scene
 //! drawn outside one (`Renderer::render_scene`) give for each frame.
 
 /// What a backend did with the frame it was handed.

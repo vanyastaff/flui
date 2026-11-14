@@ -12,3 +12,10 @@
 - The per-window `flui_engine::RasterBackend` trait that `Renderer` implemented, with
   `PrePresentHook` and `Renderer::set_pre_present_hook`: a slot calls its surface target's
   `pre_present_notify` itself. `PresentDisposition` stays.
+
+### Added
+
+- `RasterBackend::kept_textures` answers the newest image of each external texture a slot keeps,
+  which the web hands to the slot it attaches on the context that replaces a lost one.
+- `GpuContext::on_device_lost` wakes an owner when the driver reports the device lost, with no
+  frame needed to find it.
