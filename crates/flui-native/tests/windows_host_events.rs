@@ -41,12 +41,6 @@ struct Hosted {
 /// The case waiting for the owner turn it runs in.
 type Case = Box<dyn FnOnce(&Hosted)>;
 
-thread_local! {
-    /// The running case's host and the case, handed from the bootstrap to the
-    /// owner turn on the same thread.
-    static RUNNING: RefCell<Option<(Hosted, Case)>> = const { RefCell::new(None) };
-}
-
 /// Run a Win32 platform whose handler answers a session end with `answer`,
 /// and run `case` in an owner turn of its loop, where what the receiver
 /// reports reaches the handler at once; the loop then quits.
@@ -57,11 +51,15 @@ fn hosted(
     let log = AppLog::new();
     log.answer_session_end_with(answer);
     let kept = Rc::downgrade(&log);
+    // The bootstrap hands the host and the case to the owner turn it wakes.
+    let running: Rc<RefCell<Option<(Hosted, Case)>>> = Rc::default();
+    let pending = Rc::clone(&running);
     log.bootstrap(move |owner| {
         let proxy = owner.proxy();
         let quit = owner.proxy();
         owner.on_wake(Box::new(move || {
-            if let Some((host, case)) = RUNNING.with(|running| running.borrow_mut().take()) {
+            let next = running.borrow_mut().take();
+            if let Some((host, case)) = next {
                 case(&host);
                 drop(host);
                 quit.request_quit().expect("the loop takes a quit");
@@ -72,7 +70,7 @@ fn hosted(
             receiver: receiver_of_this_thread(),
             log: kept.upgrade().expect("the log runs its bootstrap"),
         };
-        RUNNING.with(|running| *running.borrow_mut() = Some((host, Box::new(case))));
+        *pending.borrow_mut() = Some((host, Box::new(case)));
         proxy.wake().map_err(|error| error.to_string())?;
         Ok(())
     });

@@ -627,7 +627,7 @@ pub(crate) struct WindowsOwnerHooks {
 }
 
 impl WindowsOwnerHooks {
-    pub(crate) fn new(platform: Arc<dyn Platform>, control: &OwnerControl) -> Self {
+    pub(crate) fn new(platform: Rc<dyn Platform>, control: &OwnerControl) -> Self {
         Self {
             // The callback goes to the owner context's slot through the gate
             // below; the direct hooks get a slot of their own, never

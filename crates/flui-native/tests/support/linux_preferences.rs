@@ -6,6 +6,7 @@
 pub mod linux {
     use flui_native::{Platform, PlatformProxy, X11Platform};
     use flui_platform::{MotionPreference, WindowAppearance};
+    use std::rc::{Rc, Weak};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -123,32 +124,17 @@ pub mod linux {
         "text-scale-out-of-range",
     ];
 
-    std::thread_local! {
-        /// The platform the owner thread reads from inside its wake callback: the
-        /// callback is `Send`, the platform is not, so the callback finds it here.
-        static OWNER_PLATFORM: std::cell::RefCell<std::sync::Weak<X11Platform>> =
-            const { std::cell::RefCell::new(std::sync::Weak::new()) };
-    }
-
-    /// Makes `platform` what [`owner_preferences`] reads on this thread.
-    fn read_on_owner(platform: &Arc<X11Platform>) {
-        OWNER_PLATFORM.with(|slot| *slot.borrow_mut() = Arc::downgrade(platform));
-    }
-
     /// The X11 platform on the harness's X server, shared as `run_shared` takes it.
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "ADR-0327 §1: `run_shared` takes `Rc<Self>` once every host is owner-local (§5)"
-    )]
-    fn x11_platform() -> Arc<X11Platform> {
-        Arc::new(X11Platform::try_new().expect("the X11 platform on the harness's X server"))
+    fn x11_platform() -> Rc<X11Platform> {
+        Rc::new(X11Platform::try_new().expect("the X11 platform on the harness's X server"))
     }
 
-    /// The preferences the owner thread's platform observes now.
-    fn owner_preferences() -> flui_platform::SystemPreferences {
-        let platform = OWNER_PLATFORM
-            .with(|slot| slot.borrow().upgrade())
-            .expect("the wake runs on the owner thread while its platform lives");
+    /// The preferences the owner thread's platform observes now: the wake
+    /// callback, owner-local, holds the platform weakly.
+    fn owner_preferences(platform: &Weak<X11Platform>) -> flui_platform::SystemPreferences {
+        let platform = platform
+            .upgrade()
+            .expect("the wake runs while its platform lives");
         platform.preferences().expect("live owner observation")
     }
 
@@ -387,7 +373,7 @@ pub mod linux {
             std::process::exit(2);
         });
         let platform = x11_platform();
-        read_on_owner(&platform);
+        let reader = Rc::downgrade(&platform);
         let changed = Arc::new(AtomicBool::new(false));
         let witness = Arc::clone(&changed);
         let after = after.observation();
@@ -401,7 +387,7 @@ pub mod linux {
                 assert_environment_languages(&initial);
                 let proxy = owner.proxy();
                 owner.on_wake(Box::new(move || {
-                    let current = owner_preferences();
+                    let current = owner_preferences(&reader);
                     if after.observed(&current) {
                         witness.store(true, Ordering::SeqCst);
                         proxy.request_quit().expect("value owner quit");
@@ -464,13 +450,15 @@ pub mod linux {
     /// retired.
     struct RetireCheck {
         refused: Arc<AtomicBool>,
+        platform: Weak<X11Platform>,
     }
 
     impl Drop for RetireCheck {
         fn drop(&mut self) {
-            let platform = OWNER_PLATFORM
-                .with(|slot| slot.borrow().upgrade())
-                .expect("the callback retires on the owner thread while its platform lives");
+            let platform = self
+                .platform
+                .upgrade()
+                .expect("the callback retires while its platform lives");
             self.refused
                 .store(platform.preferences().is_err(), Ordering::SeqCst);
         }
@@ -549,8 +537,8 @@ pub mod linux {
             })
             .expect("isolated portal service");
         let platform = x11_platform();
-        let stopped = Arc::clone(&platform);
-        read_on_owner(&platform);
+        let stopped = Rc::clone(&platform);
+        let reader = Rc::downgrade(&platform);
         let (start, begin) = tokio::sync::oneshot::channel::<PlatformProxy>();
         let (late_send, late_receive) = tokio::sync::oneshot::channel::<PlatformProxy>();
         let late_proxy = case == "late-proxy";
@@ -626,6 +614,7 @@ pub mod linux {
         let callback_failed = Arc::clone(&delivery_failed);
         let capture = RetireCheck {
             refused: Arc::clone(&refused),
+            platform: Rc::downgrade(&platform),
         };
         platform
             .run_shared(crate::app::on_ready(move |owner| {
@@ -681,7 +670,7 @@ pub mod linux {
                     let mut phase = Live::Seed;
                     owner.on_wake(Box::new(move || {
                         let _ = &capture;
-                        let motion = owner_preferences().motion();
+                        let motion = owner_preferences(&reader).motion();
                         let fail = |expected: MotionPreference| {
                             eprintln!(
                                 "owner delivered {motion:?} in {phase:?}; expected {expected:?}"

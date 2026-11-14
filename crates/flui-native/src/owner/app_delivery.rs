@@ -32,7 +32,7 @@
 
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak as RcWeak};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use parking_lot::Mutex;
@@ -73,7 +73,7 @@ struct Binding {
 #[derive(Clone)]
 struct Owned {
     handler: Rc<dyn AppHandler>,
-    platform: Weak<dyn Platform>,
+    platform: RcWeak<dyn Platform>,
     hooks: RcWeak<dyn OwnerHooks>,
 }
 
@@ -202,14 +202,14 @@ impl AppDelivery {
     pub(crate) fn bind(
         &self,
         handler: Rc<dyn AppHandler>,
-        platform: &Arc<dyn Platform>,
+        platform: &Rc<dyn Platform>,
         hooks: &Rc<dyn OwnerHooks>,
     ) {
         let slot = OwnerSlot::new();
         let refused = slot
             .replace(Owned {
                 handler,
-                platform: Arc::downgrade(platform),
+                platform: Rc::downgrade(platform),
                 hooks: Rc::downgrade(hooks),
             })
             .err();

@@ -1507,7 +1507,7 @@ impl crate::host::Input<AndroidLoop> for AndroidLoop {
         String::new()
     }
 
-    fn on_keyboard_layout_change(_: &AndroidLoop, callback: Box<dyn FnMut() + Send>) {
+    fn on_keyboard_layout_change(_: &AndroidLoop, callback: Box<dyn FnMut()>) {
         // Nothing signals a layout change, so the callback is never called.
         drop(callback);
     }

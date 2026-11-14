@@ -702,7 +702,7 @@ mod event_loop {
         fn keyboard_layout(&self) -> String;
 
         /// Call `callback` on the owner thread each time the layout changes.
-        fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
+        fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>);
 
         /// The seats the input holds now, which the clipboard keeps a data
         /// device on.
@@ -2144,8 +2144,8 @@ mod event_loop {
 
     impl host::Loop for WaylandLoop {
         fn run(
-            self: Arc<Self>,
-            platform: Arc<dyn Platform>,
+            self: Rc<Self>,
+            platform: Rc<dyn Platform>,
             handler: Rc<dyn AppHandler>,
         ) -> Result<(), PlatformError> {
             if std::thread::current().id() != self.owner_thread {
@@ -2163,7 +2163,7 @@ mod event_loop {
             tracing::info!("starting the Wayland loop");
             self.signal.bind_owner();
             let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
-                Arc::clone(&platform),
+                Rc::clone(&platform),
                 Arc::clone(&self.signal),
                 Rc::clone(&self.turn),
             ));
@@ -2299,7 +2299,7 @@ mod event_loop {
             owner.input.keyboard_layout()
         }
 
-        fn on_keyboard_layout_change(owner: &WaylandLoop, callback: Box<dyn FnMut() + Send>) {
+        fn on_keyboard_layout_change(owner: &WaylandLoop, callback: Box<dyn FnMut()>) {
             owner.input.on_keyboard_layout_change(callback);
         }
     }

@@ -230,7 +230,7 @@ pub(crate) struct HeadlessState {
     /// binds.
     pub(crate) app: Arc<AppDelivery>,
     /// Called when a test changes the keyboard layout.
-    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
+    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut()>>,
     pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     is_running: bool,
     /// The windows the platform tracks: the window feature's.
@@ -521,8 +521,8 @@ impl std::fmt::Debug for HeadlessLoop {
 
 impl host::Loop for HeadlessLoop {
     fn run(
-        self: Arc<Self>,
-        platform: Arc<dyn Platform>,
+        self: Rc<Self>,
+        platform: Rc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting headless platform (no event loop)");
@@ -571,7 +571,7 @@ impl host::Loop for HeadlessLoop {
             })
         } else {
             Rc::new(DirectOwnerHooks::with_signal(
-                Arc::clone(&platform),
+                Rc::clone(&platform),
                 Arc::clone(&signal),
                 std::rc::Rc::clone(&self.turn),
             ))

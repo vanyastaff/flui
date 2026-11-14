@@ -24,13 +24,14 @@ use flui_foundation::{ClaimSlot, claim_slot, panic::FirstPanic};
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
 type Notify = Arc<dyn Fn() -> Result<(), PlatformError> + Send + Sync>;
 pub(crate) type Callback = Box<dyn FnMut()>;
 /// The owner thread's slot of the platform the signal asks through.
-type PlatformSlot = OwnerSlot<Weak<dyn Platform>>;
+type PlatformSlot = OwnerSlot<std::rc::Weak<dyn Platform>>;
 
 /// Where the owner-turn callback waits between turns: owner-only state the
 /// host's loop keeps, `!Send` and `!Sync`, so the callback in it is dropped on
@@ -153,9 +154,9 @@ impl OwnerSignal {
     /// asks
     /// ([`PlatformProxy::request_exit_policy_reevaluation`](crate::PlatformProxy::request_exit_policy_reevaluation)).
     /// Called on the owner thread, whose table keeps the platform.
-    pub(crate) fn serve_platform(&self, platform: &Arc<dyn Platform>) {
+    pub(crate) fn serve_platform(&self, platform: &Rc<dyn Platform>) {
         let slot = OwnerSlot::new();
-        if slot.replace(Arc::downgrade(platform)).is_err() {
+        if slot.replace(Rc::downgrade(platform)).is_err() {
             tracing::error!("the owner's platform has no slot: owner slots are exhausted");
             return;
         }
@@ -168,12 +169,12 @@ impl OwnerSignal {
     /// ([`PlatformProxy::open_window`](crate::PlatformProxy::open_window))
     /// through `platform`, whose loop keeps each until it closes, as it keeps
     /// the windows the owner opens itself.
-    pub(crate) fn open_windows_through(&self, platform: &Arc<dyn Platform>) {
+    pub(crate) fn open_windows_through(&self, platform: &Rc<dyn Platform>) {
         self.serve_platform(platform);
         self.state.lock().opens_windows = true;
     }
     /// The owner's platform, on the owner thread while it lives.
-    fn owner_platform(&self) -> Option<Arc<dyn Platform>> {
+    fn owner_platform(&self) -> Option<Rc<dyn Platform>> {
         // The slot is read outside the lock: reading it first drops what
         // slots dropped on other threads left with this one, and a
         // destructor there may ask this signal again.

@@ -157,7 +157,7 @@ use signal::{OwnerSignal, OwnerTurnSlot, SignalTransport};
 /// assert_send::<flui_native::OwnerPlatform>();
 /// ```
 pub struct OwnerPlatform {
-    platform: Arc<dyn Platform>,
+    platform: Rc<dyn Platform>,
     hooks: Rc<dyn OwnerHooks>,
     // `_owner_affine` makes the type `!Send + !Sync`, so owner-thread state stays
     // on the thread that created it; the fields stay private so a caller cannot
@@ -178,7 +178,7 @@ impl OwnerPlatform {
     /// owner thread may create directly outside callbacks) at any later
     /// point on that same thread. `pub(crate)`: not part of the public
     /// constructor surface (see the module docs' crate-seal note).
-    pub(crate) fn new(platform: Arc<dyn Platform>, hooks: Rc<dyn OwnerHooks>) -> Self {
+    pub(crate) fn new(platform: Rc<dyn Platform>, hooks: Rc<dyn OwnerHooks>) -> Self {
         Self {
             platform,
             hooks,
@@ -942,7 +942,7 @@ pub(crate) struct DirectOwnerHooks {
     signal: Arc<OwnerSignal>,
     /// The loop's owner-turn slot, where `on_wake` installs the callback.
     turn: Rc<OwnerTurnSlot>,
-    platform: Arc<dyn Platform>,
+    platform: Rc<dyn Platform>,
 }
 
 impl DirectOwnerHooks {
@@ -951,7 +951,7 @@ impl DirectOwnerHooks {
     /// on the owner thread, which keeps the windows other threads open.
     /// `turn` is the slot the loop drives its turns over.
     pub(crate) fn with_signal(
-        platform: Arc<dyn Platform>,
+        platform: Rc<dyn Platform>,
         signal: Arc<OwnerSignal>,
         turn: Rc<OwnerTurnSlot>,
     ) -> Self {

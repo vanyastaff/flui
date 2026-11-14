@@ -142,8 +142,8 @@ pub trait Loop: Sized + 'static {
     /// # Errors
     /// What [`Platform::run`] reports.
     fn run(
-        self: Arc<Self>,
-        platform: Arc<dyn Platform>,
+        self: Rc<Self>,
+        platform: Rc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError>;
 
@@ -376,7 +376,7 @@ pub trait Input<O> {
     fn keyboard_layout(owner: &O) -> String;
 
     /// [`Platform::on_keyboard_layout_change`].
-    fn on_keyboard_layout_change(owner: &O, callback: Box<dyn FnMut() + Send>);
+    fn on_keyboard_layout_change(owner: &O, callback: Box<dyn FnMut()>);
 }
 
 /// The clipboard position.
@@ -548,7 +548,7 @@ impl<O> Input<O> for Absent<position::Input> {
         String::new()
     }
 
-    fn on_keyboard_layout_change(_: &O, callback: Box<dyn FnMut() + Send>) {
+    fn on_keyboard_layout_change(_: &O, callback: Box<dyn FnMut()>) {
         drop(callback);
     }
 }

@@ -342,8 +342,8 @@ impl MacOSLoop {
 
 impl host::Loop for MacOSLoop {
     fn run(
-        self: Arc<Self>,
-        platform: Arc<dyn Platform>,
+        self: Rc<Self>,
+        platform: Rc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         // Idempotent when `MacOSPlatform::try_new` already bound on this thread; trips
@@ -359,7 +359,7 @@ impl host::Loop for MacOSLoop {
         // this frame, past the ownership guard that tells the handler of the
         // quit as it drops.
         let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
-            Arc::clone(&platform),
+            Rc::clone(&platform),
             Arc::clone(&self.loop_control.owner_signal),
             self.loop_control.turn(main),
         ));
@@ -371,7 +371,7 @@ impl host::Loop for MacOSLoop {
         self.app_delivery
             .resume_through_signal(&self.loop_control.owner_signal);
         self.app_delivery
-            .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)))
+            .ready(OwnerPlatform::new(Rc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
         // The handler is bound: the pump may ask it for its deadline.
         self.wake_pump.arm();

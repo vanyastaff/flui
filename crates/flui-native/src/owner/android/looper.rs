@@ -635,8 +635,8 @@ impl ActivityTarget for AndroidLoop {
 
 impl host::Loop for AndroidLoop {
     fn run(
-        self: Arc<Self>,
-        platform: Arc<dyn Platform>,
+        self: Rc<Self>,
+        platform: Rc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting Android platform event loop");
@@ -670,7 +670,7 @@ impl host::Loop for AndroidLoop {
         // No owner lane on this backend: every `OwnerPlatform::open_window`
         // call creates directly and is always `Ready`.
         let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
-            Arc::clone(&platform),
+            Rc::clone(&platform),
             Arc::clone(&self.owner_signal),
             Rc::clone(&self.turn),
         ));
@@ -998,7 +998,7 @@ impl host::Loop for AndroidLoop {
                 self.app_delivery.resume_through_signal(&self.owner_signal);
                 let ready = self
                     .app_delivery
-                    .ready(OwnerPlatform::new(Arc::clone(&platform), Rc::clone(&hooks)));
+                    .ready(OwnerPlatform::new(Rc::clone(&platform), Rc::clone(&hooks)));
                 if let Err(error) = ready {
                     tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
                     bootstrap_error = Some(error);

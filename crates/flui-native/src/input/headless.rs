@@ -53,7 +53,7 @@ impl host::Input<HeadlessLoop> for HeadlessInputDevices {
         owner.with_state(|state| state.keyboard_layout.clone())
     }
 
-    fn on_keyboard_layout_change(owner: &HeadlessLoop, callback: Box<dyn FnMut() + Send>) {
+    fn on_keyboard_layout_change(owner: &HeadlessLoop, callback: Box<dyn FnMut()>) {
         install(
             &Field::new(&*owner.state, |state| &mut state.keyboard_layout_changed),
             callback,

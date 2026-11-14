@@ -374,7 +374,7 @@ pub trait Platform: sealed::Sealed + 'static {
     /// Register a callback for keyboard layout changes
     ///
     /// A host that does not read the layout never calls it.
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>);
 
     /// Tell the platform the application is done holding a session end it
     /// answered [`SessionEndAnswer::Block`] to, so the session may go on: the
@@ -479,7 +479,7 @@ impl Default for PathPromptOptions {
 /// Built by the host's constructor in `hosts/`; the public names
 /// (`WindowsPlatform`, `HeadlessPlatform`, …) are this type over each table.
 pub struct HostPlatform<H: Host> {
-    owner: Arc<H::Loop>,
+    owner: Rc<H::Loop>,
     window_shared: Arc<WindowShared<H>>,
     host: PhantomData<fn() -> H>,
     /// What the platform answers the application's reads of the system with,
@@ -506,7 +506,7 @@ impl<H: Host> HostPlatform<H> {
     ) -> Self {
         let window_shared = Arc::new(window_shared(WindowPositions::of::<H>()));
         Self {
-            owner: Arc::new(owner(&window_shared)),
+            owner: Rc::new(owner(&window_shared)),
             window_shared,
             host: PhantomData,
             #[cfg(all(debug_assertions, feature = "native-capture"))]
@@ -534,7 +534,7 @@ impl<H: Host> HostPlatform<H> {
     ) -> Result<Self, E> {
         let window_shared = Arc::new(window_shared(WindowPositions::of::<H>()));
         Ok(Self {
-            owner: Arc::new(owner(&window_shared)?),
+            owner: Rc::new(owner(&window_shared)?),
             window_shared,
             host: PhantomData,
             #[cfg(all(debug_assertions, feature = "native-capture"))]
@@ -557,21 +557,16 @@ impl<H: Host> HostPlatform<H> {
     }
 
     /// Run the loop as [`Platform::run`] does, on a platform the caller keeps
-    /// a handle on, to read the system or quit through it while the loop runs:
-    /// from a handler on the owner thread, or from another thread where the
-    /// host is still `Send + Sync` (ADR-0327 §5 takes that away host by host).
+    /// a handle on, to read the system or quit through it from a handler on
+    /// the owner thread while the loop runs; another thread reaches the loop
+    /// through its [`PlatformProxy`](crate::PlatformProxy) (ADR-0327 §5).
     ///
     /// # Errors
     /// Same contract as [`Platform::run`].
-    pub fn run_shared(self: Arc<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError> {
-        let owner = self.shared_owner();
-        let platform: Arc<dyn Platform> = self;
+    pub fn run_shared(self: Rc<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError> {
+        let owner = Rc::clone(&self.owner);
+        let platform: Rc<dyn Platform> = self;
         owner.run(platform, handler)
-    }
-
-    /// A handle on the host's loop, for a host whose loop runs as an `Arc`.
-    pub(crate) fn shared_owner(&self) -> Arc<H::Loop> {
-        Arc::clone(&self.owner)
     }
 }
 
@@ -592,7 +587,7 @@ impl<H: Host> sealed::Sealed for HostPlatform<H> {}
 
 impl<H: Host> Platform for HostPlatform<H> {
     fn run(self: Box<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError> {
-        Arc::<Self>::from(self).run_shared(handler)
+        Rc::<Self>::from(self).run_shared(handler)
     }
 
     fn quit(&self) {
@@ -684,7 +679,7 @@ impl<H: Host> Platform for HostPlatform<H> {
         H::Input::keyboard_layout(&self.owner)
     }
 
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
         H::Input::on_keyboard_layout_change(&self.owner, callback);
     }
 

@@ -513,7 +513,7 @@ struct PageLoop {
     /// The state of the loop that entered: a hook finds the entry of its own
     /// loop's state and no other.
     state: Weak<Mutex<WebState>>,
-    owner: Weak<WebLoop>,
+    owner: std::rc::Weak<WebLoop>,
 }
 
 thread_local! {
@@ -525,10 +525,10 @@ impl PageLoop {
     /// entries of loops that are gone are dropped here, so the list holds the
     /// loops alive at the last `enter` and any that died since: a dead entry
     /// finds nothing, as its loop cannot be upgraded.
-    fn enter(owner: &Arc<WebLoop>) {
+    fn enter(owner: &Rc<WebLoop>) {
         let entered = PageLoop {
             state: Arc::downgrade(&owner.state),
-            owner: Arc::downgrade(owner),
+            owner: Rc::downgrade(owner),
         };
         // The entries hold weak handles only: dropping one runs no loop code.
         PAGE_LOOPS.with_borrow_mut(|loops| {
@@ -538,7 +538,7 @@ impl PageLoop {
     }
 
     /// The loop whose state is `state`, if it entered and is still alive.
-    fn of(state: &Weak<Mutex<WebState>>) -> Option<Arc<WebLoop>> {
+    fn of(state: &Weak<Mutex<WebState>>) -> Option<Rc<WebLoop>> {
         PAGE_LOOPS.with_borrow(|loops| {
             loops
                 .iter()
@@ -772,8 +772,8 @@ impl flui_platform::RedrawRequester for FrameRequests {
 
 impl host::Loop for WebLoop {
     fn run(
-        self: Arc<Self>,
-        platform: Arc<dyn Platform>,
+        self: Rc<Self>,
+        platform: Rc<dyn Platform>,
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Starting web platform");
@@ -802,7 +802,7 @@ impl host::Loop for WebLoop {
         // Window creation is direct and always Ready. Wake and quit use the
         // shared owner signal, posted to the browser microtask queue.
         let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
-            Arc::clone(&platform),
+            Rc::clone(&platform),
             Arc::clone(&self.signal),
             Rc::clone(&self.turn),
         ));
@@ -816,7 +816,7 @@ impl host::Loop for WebLoop {
         self.app.bind(handler, &platform, &hooks);
         self.app.resume_through_signal(&self.signal);
         self.app
-            .ready(OwnerPlatform::new(Arc::clone(&platform), hooks))
+            .ready(OwnerPlatform::new(Rc::clone(&platform), hooks))
             .inspect_err(|_| self.quit())
             .map_err(PlatformError::bootstrap)?;
 

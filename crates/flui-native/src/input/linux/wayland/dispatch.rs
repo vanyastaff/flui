@@ -339,7 +339,7 @@ struct Shared {
     objects: OwnerCell<Objects>,
     windows: OwnerCell<Vec<Attached>>,
     delivering: OwnerCell<Option<Delivering>>,
-    layout_callbacks: OwnerCell<Vec<Box<dyn FnMut() + Send>>>,
+    layout_callbacks: OwnerCell<Vec<Box<dyn FnMut()>>>,
     /// The last device label minted.
     labels: AtomicU64,
     /// The last seat key minted.
@@ -1306,7 +1306,7 @@ impl WaylandInput for SeatInput {
             .unwrap_or_default()
     }
 
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
         let held = self
             .shared
             .layout_callbacks

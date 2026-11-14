@@ -15,27 +15,23 @@ use crate::platform::{AppHandler, Platform};
 /// the platform and owner hooks the delivery holds weakly.
 pub(crate) struct Bound {
     pub(crate) delivery: Arc<AppDelivery>,
-    pub(crate) platform: Arc<dyn Platform>,
+    pub(crate) platform: Rc<dyn Platform>,
     pub(crate) hooks: Rc<dyn OwnerHooks>,
 }
 
 impl Bound {
     /// The owner capability `ready` is handed.
     pub(crate) fn owner(&self) -> OwnerPlatform {
-        OwnerPlatform::new(Arc::clone(&self.platform), Rc::clone(&self.hooks))
+        OwnerPlatform::new(Rc::clone(&self.platform), Rc::clone(&self.hooks))
     }
 }
 
 /// `delivery` bound to `handler` on this thread, over a headless platform.
 pub(crate) fn bind(delivery: Arc<AppDelivery>, handler: Rc<dyn AppHandler>) -> Bound {
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "ADR-0327 §1: a platform is shared as `Rc` once every host is owner-local (§5)"
-    )]
-    let platform: Arc<dyn Platform> = Arc::new(crate::HeadlessPlatform::new());
+    let platform: Rc<dyn Platform> = Rc::new(crate::HeadlessPlatform::new());
     let signal = OwnerSignal::new(Arc::new(|| Ok(())));
     let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
-        Arc::clone(&platform),
+        Rc::clone(&platform),
         signal,
         Rc::default(),
     ));

@@ -2,7 +2,6 @@
 //! left out is a compile error, never an inert default.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::rc::Rc;
 
 use flui_native::host::{Absent, Host, Loop, Services, position};
@@ -15,8 +14,8 @@ struct Idle;
 
 impl Loop for Idle {
     fn run(
-        self: Arc<Self>,
-        _: Arc<dyn Platform>,
+        self: Rc<Self>,
+        _: Rc<dyn Platform>,
         _: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         Ok(())
