@@ -238,7 +238,7 @@ impl WakeDebt {
         // the wake that acknowledges a newer ticket.
         let previous = self
             .requested
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
             .expect("BUG: a runtime requests fewer than 2^64 wakes");
         WakeTicket(previous + 1)
     }
