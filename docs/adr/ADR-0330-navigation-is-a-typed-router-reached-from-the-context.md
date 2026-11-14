@@ -280,10 +280,11 @@ pub trait UrlOwner: 'static { // !Send: owner-thread state
 pub enum NavigationRefused { NoPresentation, NoUrlOwner, NoMatch(RoutePath), NothingToPop, Busy }
 
 // flui-view, the URLs the platform opens
-pub struct OpenedUrl { /* scheme, host, path: RoutePath */ }
+pub struct OpenedUrl { /* scheme, host, port, path: RoutePath */ }
 impl OpenedUrl {
     pub const MAX_LEN: usize = 8192;
     pub fn parse(url: &str) -> Result<Self, OpenUrlRefused>;
+    pub fn same_origin(&self, other: &Self) -> bool;
 }
 #[derive(Clone, Copy, Default)]
 pub struct LinkDeclarations { /* url_schemes, associated_domains: &'static [&'static str] */ }
@@ -300,6 +301,7 @@ impl UiRuntime {
         -> Result<(), NavigationRefused>;
     pub fn open_url(&self, presentation: PresentationId, url: &str) -> Result<(), OpenUrlRefused>;
     pub fn set_link_declarations(&self, declarations: LinkDeclarations);
+    pub fn set_page_origin(&self, origin: &str) -> Result<(), OpenUrlRefused>;
 }
 ```
 
@@ -337,7 +339,13 @@ B does, and its path is the URL's path, as Flutter and go_router read `uri.path`
 fragment is dropped. The URL is then admitted by the application's `LinkDeclarations`, the
 `url-schemes` and `associated-domains` its `[package.metadata.flui.declares]` lists (ADR-0307): an
 `http` or `https` URL by its host, compared whole and without regard to case, any other by its
-scheme; a UI runtime declares nothing until its runner sets them, so it opens nothing. An admitted
+scheme; a UI runtime declares nothing until its runner sets them, so it opens nothing. On the web
+the page's own address opens it: the web host reports `location.href` as the cold link the
+application launched with, as Flutter's web engine reads its initial route from the location, and
+the runner sets the page's `location.origin` on each UI runtime (`set_page_origin`), whose URLs
+are admitted beside the declarations. Only that origin is, compared whole as a browser compares
+two (`OpenedUrl::same_origin`: scheme, host and port, a web URL naming none on its scheme's): a
+subdomain, another port or another scheme is admitted by the declarations alone. An admitted
 URL is applied as a `Go`, so the pages it shares with the stack stay.
 
 A URL that arrives before the presentation's first frame (a cold start) finds no Router yet. The
@@ -449,7 +457,11 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   and `a_cold_url_no_router_took_is_dropped_after_the_first_frame` (the warning, `NoUrlOwner`, a
   Router mounted later opens on its own stack); `opened_urls_split_into_scheme_host_and_route_location`
   (the path without its authority, an empty path, case, escapes and the query, the length
-  bound, the declarations). Through the application runner, `flui-app`'s `runner_open` table:
+  bound, the declarations, the port and the origin), `a_page_opens_the_urls_of_its_own_origin`
+  (before the origin is set and for another domain, a subdomain, port or scheme the URL is
+  refused; the page's origin opens), and on Node `web_the_page_address_is_the_link_it_launched_with`
+  (`crates/flui-native/tests/wasm32/page_address.rs`: the address is one cold link heard after
+  `ready`, and the page answers its origin). Through the application runner, `flui-app`'s `runner_open` table:
   `a_link_that_launched_the_app_opens_its_first_router_on_it` (the initial page never built),
   `a_link_goes_to_the_window_focused_last`, `an_undeclared_scheme_opens_nothing`,
   `opened_files_reach_on_open_files` and

@@ -25324,6 +25324,8 @@ pub const flui::view::navigation::OpenedUrl::MAX_LEN: usize = flui_platform::MAX
 pub fn flui::view::navigation::OpenedUrl::host(&self) -> Option<&str>
 pub fn flui::view::navigation::OpenedUrl::parse(url: &str) -> Result<Self, flui::view::navigation::OpenUrlRefused>
 pub fn flui::view::navigation::OpenedUrl::path(&self) -> &flui::prelude::RoutePath
+pub fn flui::view::navigation::OpenedUrl::port(&self) -> Option<u16>
+pub fn flui::view::navigation::OpenedUrl::same_origin(&self, other: &Self) -> bool
 pub fn flui::view::navigation::OpenedUrl::scheme(&self) -> &str
 reexport flui::view::navigation::RouteParseError => flui::widgets::RouteParseError
 reexport flui::view::navigation::RoutePath => flui::prelude::RoutePath
@@ -35566,6 +35568,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::set_frame_failure_handler(&self, han
 pub fn flui_runtime::ui_runtime::UiRuntime::set_link_declarations(&self, declarations: flui::view::navigation::LinkDeclarations)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_motion_override(&self, preference: flui::animation::MotionOverride)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_now_secs_for_test(&self, secs: f64)
+pub fn flui_runtime::ui_runtime::UiRuntime::set_page_origin(&self, origin: &str) -> Result<(), flui::view::navigation::OpenUrlRefused>
 pub fn flui_runtime::ui_runtime::UiRuntime::set_performance_overlay(&self, enabled: bool)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_pointer_resampling(&self, id: flui::foundation::PresentationId, policy: flui::app::PointerResampling) -> Result<(), flui_runtime::presentation::PointerResamplingError>
 pub fn flui_runtime::ui_runtime::UiRuntime::settle_close_guards(&self) -> flui_runtime::ui_runtime::presentation_lifecycle::SettledCloses

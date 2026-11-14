@@ -659,6 +659,49 @@ fn a_url_over_the_bound_is_refused_unread() {
         })
     );
 }
+fn the_port_is_read_and_checked() {
+    let port = |url: &str| OpenedUrl::parse(url).expect("a URL").port();
+    assert_eq!(port("https://example.com:8443/a"), Some(8443));
+    assert_eq!(port("https://user:pw@example.com/a"), None);
+    assert_eq!(
+        port("https://example.com:/a"),
+        None,
+        "an empty port names none"
+    );
+    assert_eq!(port("https://[::1]:8080/x"), Some(8080));
+    assert_eq!(port("https://[::1]/x"), None);
+    malformed_url("https://example.com:80a/");
+    malformed_url("https://example.com:65536/");
+}
+fn an_origin_is_scheme_host_and_port() {
+    let url = |text: &str| OpenedUrl::parse(text).expect("a URL");
+    let page = url("https://app.example.com");
+    assert!(page.same_origin(&url("https://APP.example.com/note/3?q=1")));
+    assert!(
+        page.same_origin(&url("https://app.example.com:443/")),
+        "443 is https's own port"
+    );
+    assert!(
+        !page.same_origin(&url("http://app.example.com/")),
+        "another scheme"
+    );
+    assert!(
+        !page.same_origin(&url("https://app.example.com:8443/")),
+        "another port"
+    );
+    assert!(
+        !page.same_origin(&url("https://www.app.example.com/")),
+        "a subdomain"
+    );
+    assert!(
+        !page.same_origin(&url("https://example.com/")),
+        "the parent domain"
+    );
+    assert!(
+        !url("myapp:///a").same_origin(&url("myapp:///a")),
+        "no host, no origin"
+    );
+}
 fn declarations_admit_by_scheme_and_by_domain() {
     let declared = LinkDeclarations::new()
         .url_schemes(&["myapp", "https"])
@@ -713,6 +756,8 @@ fn opened_urls_split_into_scheme_host_and_route_location() {
             ("no scheme", text_without_a_scheme_is_refused),
             ("no location", a_path_that_is_no_location_is_refused),
             ("length bound", a_url_over_the_bound_is_refused_unread),
+            ("port", the_port_is_read_and_checked),
+            ("origin", an_origin_is_scheme_host_and_port),
             ("declarations", declarations_admit_by_scheme_and_by_domain),
         ],
     );
@@ -795,6 +840,60 @@ pub(crate) fn an_opened_url_navigates_only_when_declared() {
         )),
         "a closed window"
     );
+}
+
+/// A page opens the URLs of its own origin, as a web application is opened
+/// by its address, without declaring its domain; another scheme, port,
+/// subdomain or domain is still admitted by the declarations alone.
+pub(crate) fn a_page_opens_the_urls_of_its_own_origin() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(400, 400));
+    let window = host.primary_window();
+    let captured = Captured::default();
+    host.attach(&router(AppRoute::Home, &captured))
+        .expect("a fresh window");
+    settle(&mut host);
+    assert_eq!(
+        host.open_url(window, "https://app.example.com/note/3"),
+        Err(OpenUrlRefused::UndeclaredDomain {
+            host: Some("app.example.com".to_owned())
+        }),
+        "before the page's origin is set, its domain is undeclared"
+    );
+    assert_eq!(
+        host.set_page_origin("myapp:"),
+        Err(OpenUrlRefused::UndeclaredDomain { host: None }),
+        "an origin names a host"
+    );
+
+    host.set_page_origin("https://app.example.com")
+        .expect("an origin");
+    assert_eq!(
+        host.open_url(window, "https://app.example.com/note/3"),
+        Ok(())
+    );
+    settle(&mut host);
+    assert_eq!(stack(&captured), [AppRoute::Home, AppRoute::Note { id: 3 }]);
+
+    for url in [
+        "https://other.example/note/4",
+        "https://www.app.example.com/note/4",
+        "https://app.example.com:8443/note/4",
+        "http://app.example.com/note/4",
+    ] {
+        assert!(
+            matches!(
+                host.open_url(window, url),
+                Err(OpenUrlRefused::UndeclaredDomain { .. })
+            ),
+            "{url:?} is not the page's origin"
+        );
+        settle(&mut host);
+        assert_eq!(
+            stack(&captured),
+            [AppRoute::Home, AppRoute::Note { id: 3 }],
+            "{url:?} leaves the stack"
+        );
+    }
 }
 
 /// What a Router built pages for, in order.

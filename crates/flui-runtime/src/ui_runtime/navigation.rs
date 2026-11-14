@@ -57,7 +57,14 @@ impl UiRuntime {
     /// first frame). A refused URL leaves the stack unchanged.
     pub fn open_url(&self, presentation: PresentationId, url: &str) -> Result<(), OpenUrlRefused> {
         let url = OpenedUrl::parse(url)?;
-        self.link_declarations.get().admit(&url)?;
+        let on_the_page = self
+            .page_origin
+            .borrow()
+            .as_ref()
+            .is_some_and(|origin| origin.same_origin(&url));
+        if !on_the_page {
+            self.link_declarations.get().admit(&url)?;
+        }
         let slot = self
             .presentations
             .get(presentation)
@@ -73,5 +80,27 @@ impl UiRuntime {
     /// before the platform delivers the first URL.
     pub fn set_link_declarations(&self, declarations: LinkDeclarations) {
         self.link_declarations.set(declarations);
+    }
+
+    /// Admit, from then on, the URLs of `origin`, the page the application
+    /// runs in on the web (`location.origin`: scheme, host and port), beside
+    /// the declarations: a web application's own address opens it without
+    /// naming its domain among the associated ones. Only that origin is
+    /// admitted, compared whole ([`OpenedUrl::same_origin`]): another
+    /// scheme, port or subdomain is still admitted by the declarations
+    /// alone. The runner sets it from the web platform before the platform
+    /// delivers the page's address.
+    ///
+    /// # Errors
+    ///
+    /// What [`OpenedUrl::parse`] refuses `origin` with; nothing is admitted
+    /// then.
+    pub fn set_page_origin(&self, origin: &str) -> Result<(), OpenUrlRefused> {
+        let origin = OpenedUrl::parse(origin)?;
+        if origin.host().is_none() {
+            return Err(OpenUrlRefused::UndeclaredDomain { host: None });
+        }
+        *self.page_origin.borrow_mut() = Some(origin);
+        Ok(())
     }
 }

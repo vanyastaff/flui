@@ -1716,6 +1716,20 @@ impl HeadlessHost {
         self.ui_runtime.set_link_declarations(declarations);
     }
 
+    /// Run as a page of `origin` (`https://app.example.com`), as the web
+    /// platform's runner sets it: [`open_url`](Self::open_url) admits that
+    /// origin's URLs beside the declarations ([`UiRuntime::set_page_origin`]).
+    ///
+    /// # Errors
+    ///
+    /// What [`UiRuntime::set_page_origin`] refuses `origin` with.
+    pub fn set_page_origin(
+        &self,
+        origin: &str,
+    ) -> Result<(), flui_view::navigation::OpenUrlRefused> {
+        self.ui_runtime.set_page_origin(origin)
+    }
+
     /// Attach assistive technology to `window`; see
     /// [`enable_semantics`](Self::enable_semantics).
     ///
