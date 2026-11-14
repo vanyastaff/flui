@@ -835,22 +835,35 @@ fn queue_then_answer_inline(ui_runtime: &UiRuntime, later: SubmitVerdict) -> Scr
     sink
 }
 
-/// Input held while an older frame settles, after the later frame was answered without a
-/// commit, is not stranded: the settlement asks for the frame that shows the current tree, and
-/// that frame's commit replays it.
+/// Input held while an older frame settles, after the later frame failed inline, is not
+/// stranded: the failed frame armed its paced retry, the older frame's commit leaves it standing,
+/// and the retried frame's commit replays the input.
 ///
-/// Fails when an older frame's settlement leaves held input with no frame owed.
+/// Fails when the failed frame arms no retry, or when the older frame's commit clears it.
 #[test]
 fn held_input_behind_a_failed_frame_asks_for_the_frame_that_shows_the_tree() {
     let mut ui_runtime = mount_box();
-    let sink = queue_then_answer_inline(&ui_runtime, SubmitVerdict::Failed);
+    let mut sink = ScriptedSink::new(|call, _| {
+        if call == 0 {
+            SubmitVerdict::Queued
+        } else {
+            SubmitVerdict::Failed
+        }
+    });
+    assert!(!ui_runtime.render_frame(&mut sink));
+    // Pressed before the later frame fails, so the press ends no wait.
     press_primary(&ui_runtime);
     assert_eq!(
         held_pointer_count(&ui_runtime),
         1,
         "the Down waits for a commit"
     );
-    assert!(!ui_runtime.needs_redraw(), "a failed frame arms no retry");
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(!ui_runtime.render_frame(&mut sink));
+    assert!(
+        failure_retry_armed(&ui_runtime),
+        "the failed frame is tried again after the backoff"
+    );
 
     assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
     assert_eq!(
@@ -859,15 +872,54 @@ fn held_input_behind_a_failed_frame_asks_for_the_frame_that_shows_the_tree() {
         "the older frame does not show the tree the Down was aimed at"
     );
     assert!(
-        ui_runtime.needs_redraw(),
-        "the settlement asks for the frame the Down waits for"
+        failure_retry_armed(&ui_runtime),
+        "the older frame's commit leaves the retry standing"
     );
+    assert!(ui_runtime.wait_out_failure_retry_for_test());
     assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
     assert_eq!(
         held_pointer_count(&ui_runtime),
         0,
         "that frame's commit replays it"
     );
+}
+
+/// A frame that fails inline with nothing queued is painted again after the dropped-frame
+/// backoff, which doubles while the frames keep failing, and a frame that presents resets it.
+/// Without the retry the app would keep its last frame until an unrelated one.
+///
+/// Fails when a failed frame arms no retry, or when its clean segment resets the streak the
+/// backoff grows by.
+#[test]
+fn a_failed_frame_is_painted_again_after_a_growing_backoff() {
+    let ui_runtime = mount_box();
+    let mut failing = ScriptedSink::new(|_, _| SubmitVerdict::Failed);
+    let presentation = || ui_runtime.presentations.primary();
+    let mut delays = Vec::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            assert!(ui_runtime.wait_out_failure_retry_for_test());
+        }
+        assert!(!ui_runtime.render_frame(&mut failing));
+        assert_eq!(
+            failing.submit_calls,
+            attempt + 1,
+            "each attempt paints and submits the tree again"
+        );
+        let at = presentation()
+            .failure_retry_at()
+            .expect("a failed frame arms its retry");
+        delays.push(at.saturating_duration_since(presentation().clock().now()));
+    }
+    assert!(
+        delays[0] < delays[1] && delays[1] < delays[2],
+        "the backoff doubles while frames keep failing: {delays:?}"
+    );
+
+    assert!(ui_runtime.wait_out_failure_retry_for_test());
+    assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
+    assert_eq!(presentation().failure_retry_at(), None);
+    assert_eq!(presentation().frame_failure_streak(), 0);
 }
 
 /// The inputs a queued frame was cut after are that frame's to report: a frame answered inline
@@ -1006,7 +1058,8 @@ fn a_failed_frame_takes_the_inputs_stamped_since_the_queued_frame() {
     ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
     assert!(!ui_runtime.render_frame(&mut sink));
     assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
-    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    // The failed frame waits out its backoff before the tree is painted again.
+    assert!(ui_runtime.wait_out_failure_retry_for_test());
     assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
 
     let frames = ui_runtime
@@ -1051,13 +1104,13 @@ fn a_subscriber_that_panics_on_a_lost_frames_cleanup_leaves_the_repaint_armed() 
     );
 }
 
-/// A withheld frame that settles after its retry budget is spent parks: it asks for no repaint,
-/// not even for pointer input held for a later tree, since a repaint the surface still withholds
-/// would open a new retry burst and the park would never hold.
+/// A withheld frame that settles after its retry budget is spent parks and asks for no repaint of
+/// its own, but it settles an older tree: the paced retry a later failed frame armed for the
+/// current tree still stands, and so does the pointer input held for that tree.
 ///
-/// Fails when a parked settlement owes a repaint for held input.
+/// Fails when the older frame's settlement clears the failed frame's retry.
 #[test]
-fn a_parked_withheld_settlement_asks_for_no_repaint_for_held_input() {
+fn a_parked_withheld_settlement_leaves_the_failed_frames_retry() {
     let budget = super::MAX_NOT_SHOWN_RETRIES;
     let mut ui_runtime = mount_box();
     let mut sink = ScriptedSink::new(move |call, _| match call {
@@ -1076,18 +1129,22 @@ fn a_parked_withheld_settlement_asks_for_no_repaint_for_held_input() {
         "the next frame is queued"
     );
     let queued = *sink.epochs.last().expect("a frame was queued");
-    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
-    assert!(
-        !ui_runtime.render_frame(&mut sink),
-        "a later frame fails inline"
-    );
+    // Pressed before the later frame fails, so the press ends no wait.
     press_primary(&ui_runtime);
     assert_eq!(
         held_pointer_count(&ui_runtime),
         1,
         "the Down waits for a commit"
     );
-    assert!(!ui_runtime.needs_redraw());
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(
+        !ui_runtime.render_frame(&mut sink),
+        "a later frame fails inline"
+    );
+    assert!(
+        failure_retry_armed(&ui_runtime),
+        "the failed frame is tried again after the backoff"
+    );
 
     let address = flui_foundation::PresentationAddress {
         ui_runtime_id: ui_runtime.id(),
@@ -1102,8 +1159,17 @@ fn a_parked_withheld_settlement_asks_for_no_repaint_for_held_input() {
         Settled::Applied
     );
     assert!(
-        !ui_runtime.needs_redraw(),
-        "the parked frame asks for no repaint"
+        failure_retry_armed(&ui_runtime),
+        "the parked frame leaves the failed frame's retry standing"
     );
     assert_eq!(held_pointer_count(&ui_runtime), 1);
+}
+
+/// Whether the primary presentation waits out a dropped frame's backoff.
+fn failure_retry_armed(ui_runtime: &UiRuntime) -> bool {
+    ui_runtime
+        .presentations
+        .primary()
+        .failure_retry_at()
+        .is_some()
 }

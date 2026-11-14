@@ -6,7 +6,9 @@
   part: the remaining-element disposal policy, during a terminal presentation
   close that holds a failure or runs inside an unwind;
   [ADR-0199](ADR-0199-presentation-sampling-recovery.md), in part: the exclusion
-  of animation and gesture-deadline sampling before the segment.
+  of animation and gesture-deadline sampling before the segment;
+  [ADR-0334](ADR-0334-a-failed-frame-is-painted-again-after-the-dropped-frame-backoff.md), in
+  part: the `Failed` verdict's retry and the streak's reset after a painted segment.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime topology
   is a sanctioned leapfrog zone); [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md)
   (`PresentationState` bundles the trees this boundary scopes);
@@ -219,8 +221,8 @@ re-exports the types):
   carries the generational presentation address (#552). The streak counts
   consecutive `FrameDropped` reports only. A `Contained` report exposes the
   current streak but neither increments nor resets it; a terminally clean
-  attempt resets the streak after that attempt's contained reports have been
-  delivered.
+  attempt that painted nothing resets the streak after that attempt's contained reports have been
+  delivered, and a painted one resets it once its verdict commits the current tree (ADR-0334).
 
 Disposition is derived privately from `FrameFailureKind`, so an impossible
 kind/disposition pair cannot enter the delivery path. Each report is traced
@@ -282,7 +284,8 @@ the supplied secondary config does not override either for existing siblings.
   advances nor acknowledges a revision.
 - Submit verdicts have distinct retry effects. `SurfaceStale` and `DeviceLost`
   retain input telemetry, arm a wake, and request a full repaint of the actual
-  producer. `Failed` drains telemetry and does not retry. `Presented` drains
+  producer. `Failed` drains telemetry and paints the tree again after the
+  dropped-frame backoff (ADR-0334). `Presented` drains
   telemetry and commits; `NoPresent` commits without draining pending input
   epochs because no backend present occurred. Segment failures arm only the
   wake, except for the exact Tail/Scene repaint rule above.

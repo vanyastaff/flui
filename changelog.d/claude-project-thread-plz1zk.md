@@ -56,3 +56,8 @@
   corners: the clip mask skips the cross of both arms, not one arm, so a window-sized clip at
   sixteen leaves samples 8,188 mask pixels instead of 69,500 and fits a software adapter's
   readback deadline.
+- **`flui-runtime`**: a frame whose sink answers `SubmitVerdict::Failed` is painted again after the
+  dropped-frame backoff instead of leaving the application on its last frame with its pointer input
+  held ([ADR-0334](/docs/adr/ADR-0334-a-failed-frame-is-painted-again-after-the-dropped-frame-backoff.md)).
+  The backoff doubles while frames keep failing at submit, and a frame that commits the current
+  tree resets it.

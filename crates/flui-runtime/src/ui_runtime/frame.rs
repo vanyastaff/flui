@@ -227,8 +227,13 @@ impl UiRuntime {
                 Ok(Ok(outcome)) => {
                     super::text_preparation::finish(presentation);
                     // A terminal clean result resets only after every
-                    // contained report from this attempt was delivered.
-                    presentation.reset_frame_failure_streak();
+                    // contained report from this attempt was delivered. A
+                    // painted scene is not through yet: its sink's verdict
+                    // resets the streak once the frame commits, so frames
+                    // that fail at submit back off like any dropped frame.
+                    if !matches!(outcome, FramePaintOutcome::Painted(_)) {
+                        presentation.reset_frame_failure_streak();
+                    }
                     outcome
                 }
                 Ok(Err(error)) => {

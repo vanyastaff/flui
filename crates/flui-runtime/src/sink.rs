@@ -76,7 +76,9 @@ pub enum SubmitVerdict {
     /// epochs (ADR-0267).
     DeviceLost,
     /// The frame failed in a way no retry can fix this frame (a generic
-    /// render error, or a refused submit). No retry is armed.
+    /// render error, or a refused submit). Its tree is still not shown, so
+    /// the caller paints it again after the dropped-frame backoff (ADR-0267),
+    /// unless a frame it queued from that tree or a later one is pending.
     Failed,
     /// The sink took the frame and settles it later: the raster side answers with a
     /// [`FrameSettlement`] naming the frame's address and epoch, which the host hands to
