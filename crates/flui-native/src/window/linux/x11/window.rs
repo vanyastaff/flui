@@ -833,6 +833,12 @@ impl X11Window {
         record.reveal_pending || !record.shown
     }
 
+    /// Whether the window is open and the application wants it shown,
+    /// mapped or waiting for its first frame to be.
+    fn shown(&self) -> bool {
+        !self.closed.get() && self.record.borrow().shown
+    }
+
     /// Write `mode` into `_NET_WM_STATE` of the unmapped window, when the
     /// window manager supports it: it reads the mode there as it maps the
     /// window, and ignores a request about a window it does not manage.
@@ -2155,11 +2161,17 @@ impl LoopWindows for X11Windows {
         }
     }
 
+    fn shows_any(&self) -> bool {
+        self.open_windows().iter().any(|window| window.shown())
+    }
+
     /// The window that had the focus last comes forward, the one the
-    /// runner routes the launch's links to; once it closed, any open one.
+    /// runner routes the launch's links to; once it closed or was hidden,
+    /// any shown one. Activating a withdrawn window would not map it: the
+    /// application shows it, if it will, from the reopen it was asked.
     fn activate_forwarded(&self, token: Option<&str>) {
         let windows = self.open_windows();
-        let open = |window: &&Rc<X11Window>| !window.closed.get();
+        let open = |window: &&Rc<X11Window>| window.shown();
         let last = self.last_focused.get();
         let window = windows
             .iter()

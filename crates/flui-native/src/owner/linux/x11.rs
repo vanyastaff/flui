@@ -578,8 +578,13 @@ pub(crate) trait LoopWindows: OpenWindows {
     /// destroyed once its handler is.
     fn release(&self);
 
+    /// Whether a window is open and shown. A later launch made while none is
+    /// asks the application to reopen; a window the application hid stays
+    /// hidden until it shows the window itself.
+    fn shows_any(&self) -> bool;
+
     /// Another instance of the application was launched and handed its
-    /// launch over: bring a window forward, at the time `token`, the
+    /// launch over: bring a shown window forward, at the time `token`, the
     /// launcher's startup id, names, else now.
     fn activate_forwarded(&self, token: Option<&str>);
 }
@@ -853,9 +858,10 @@ impl X11Loop {
             return;
         };
         for forwarded in instance.take() {
-            // An application without a window (one that outlives its last)
-            // is asked to reopen, as a Dock click asks on macOS.
-            if self.windows.is_empty() {
+            // An application that shows no window (one that outlives its
+            // last, or hid it) is asked to reopen, as a Dock click asks on
+            // macOS.
+            if !self.windows.shows_any() {
                 self.app
                     .reopen()
                     .or_contain((), "a launch another instance forwarded");

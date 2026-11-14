@@ -437,13 +437,27 @@ mod bus {
         launch: Forwarded,
     ) -> zbus::Result<Claim> {
         let runtime = executor.handle();
-        runtime.block_on(async {
+        let claimed = async {
             tokio::time::timeout(
                 CONNECT_TIMEOUT + FORWARD_TIMEOUT,
                 claim_on(address, bus_name, launch),
             )
             .await
             .map_err(|_| zbus::Error::Failure("the session bus did not answer in time".into()))?
+        };
+        // The caller may itself be inside the runtime's asynchronous context
+        // (a `#[tokio::main]` entry that lends its runtime), where
+        // `Handle::block_on` panics: the claim waits on a thread of its own.
+        std::thread::scope(|scope| {
+            let waiting = std::thread::Builder::new()
+                .name("flui-single-instance".into())
+                .spawn_scoped(scope, || runtime.block_on(claimed))
+                .map_err(|error| {
+                    zbus::Error::Failure(format!("no thread to claim the bus name on: {error}"))
+                })?;
+            waiting
+                .join()
+                .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
         })
     }
 
@@ -796,6 +810,32 @@ mod bus_tests {
                 }
             }
         }
+    }
+
+    /// An application whose entry runs inside the runtime it lends the host
+    /// (`#[tokio::main]`) claims its name from that runtime's asynchronous
+    /// context, where `Handle::block_on` panics: the claim waits on a thread
+    /// of its own.
+    #[test]
+    fn a_claim_made_inside_the_lent_runtime_answers() {
+        let Some(bus) = PrivateBus::start() else {
+            eprintln!("skipped: no dbus-daemon");
+            return;
+        };
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        let address = bus.address.as_str();
+        let claimed = runtime.block_on(async {
+            let executor = NativeExecutor::from_tokio(tokio::runtime::Handle::current());
+            claim(&executor, Some(address), NAME, launch(&[], None))
+        });
+        assert!(
+            matches!(claimed, Ok(Claim::First(_))),
+            "the first launch owns the name"
+        );
     }
 
     /// At most sixteen launches wait for an owner that takes none; the next

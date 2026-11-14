@@ -377,8 +377,9 @@ its launcher gave it, and ends once the first has taken the launch (`HostStart::
 waiting already, or it ends first) leaves the later process running as an instance of its own, as
 does a launch carrying a URI longer than the first would keep, so no launch is lost. The first hears
 the launch as `opened` with `Launch::Running` and `OpenTarget::Application`, after `reopen` when it
-holds no window, and its host brings the window activated last forward with the token, without a
-command from above (Wayland `xdg_activation_v1`; on X11 at the time the startup id names). On Linux
+shows no window (none is open, or each is hidden), and its host brings the shown window activated
+last forward with the token, without a command from above (Wayland `xdg_activation_v1`; on X11 at
+the time the startup id names). On Linux
 the name is owned on the session bus, and only there, where the first process serves
 `org.freedesktop.Application` (`Activate`, `Open`, `ActivateAction`) as GApplication does; files
 travel as absolute `file:` URIs and a call's URIs are bounded as `Opened`'s are. On Windows the

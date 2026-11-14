@@ -69,7 +69,8 @@ pub trait AppHandler: 'static {
 
     /// The user reopened the application: a click on its Dock icon (AppKit),
     /// or, on Linux, a later launch of one that keeps one instance, made while
-    /// it holds no window.
+    /// it shows no window: none is open, or (on X11, where an application can
+    /// hide one) each one is hidden.
     fn reopen(&self, owner: &OwnerPlatform);
 
     /// The operating system opened URLs or files with the application: a
