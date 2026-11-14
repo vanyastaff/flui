@@ -713,14 +713,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         );
 
         let former_parent = self.render_tree.parent(id);
-        let subtree = self.render_tree.collect_subtree_ids(id);
-        if subtree.is_empty() {
+        let subtree = self.render_tree.collect_subtree(id);
+        if subtree.ids().is_empty() {
             return 0;
         }
 
         // Withdraw the entire subtree before any user-owned parent data or
         // detach hook can submit through a saved peer handle (ADR-0190).
-        for &subtree_id in &subtree {
+        for &subtree_id in subtree.ids() {
             if let Some(node) = self.render_tree.get_mut(subtree_id) {
                 let _ = node.begin_detachment();
             }
@@ -728,32 +728,31 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         // ADR-0013: detach every node before eviction so attach-time
         // subscriptions can unsubscribe while their storage still exists.
-        for &subtree_id in &subtree {
+        for &subtree_id in subtree.ids() {
             if let Some(node) = self.render_tree.get_mut(subtree_id) {
                 let _ = node.clear_parent_data();
                 let _ = node.detach();
             }
         }
 
-        let removed: rustc_hash::FxHashSet<RenderId> = subtree.iter().copied().collect();
-        self.scheduler.evict(&removed);
+        self.scheduler.evict(subtree.members());
         // Layout-poison records for the removed subtree die here too, so
         // the map does not accumulate entries for nodes that no longer
         // exist.
-        self.layout_poison.evict(&removed);
+        self.layout_poison.evict(subtree.members());
         // So do boundary records. A stale entry can never be SERVED to a
         // different node — `RenderId` is generational, so a recycled slab slot
         // misses the map — but without this the map grows for the lifetime of
         // the owner as boundaries come and go. Their nodes are retired by the
         // paint that republishes the parent naming them.
-        for id in &removed {
+        for id in subtree.members() {
             if let Some(record) = self.boundary_records.remove(id) {
                 self.follower_boundaries.remove(id);
                 self.orphaned_nodes.push(record.node());
             }
         }
 
-        let removed_nodes = self.render_tree.take_subtree(id);
+        let removed_nodes = self.render_tree.take_subtree(subtree);
         let count = removed_nodes.len();
         if self.root_id == Some(id) {
             self.root_id = None;

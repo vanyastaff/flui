@@ -628,19 +628,21 @@ impl RenderTree {
         self.nodes.remove(id)
     }
 
-    /// Takes `id` and every descendant out of the tree, children before
-    /// their parent, and returns the nodes for the caller to drop after its
-    /// own bookkeeping. Every id of the subtree is stale when this returns,
-    /// and no render object's destructor has run.
-    pub(crate) fn take_subtree(&mut self, id: RenderId) -> Vec<RenderNode> {
-        // Iterative: collect the subtree up front (explicit-stack
-        // pre-order with cycle protection), then remove in REVERSE
+    /// Takes the nodes of `subtree` out of the tree, children before their parent, and returns
+    /// them for the caller to drop after its own bookkeeping. Every id of the subtree is stale when
+    /// this returns, and no render object's destructor has run.
+    ///
+    /// Only [`Self::collect_subtree`] makes a [`SubtreeIds`], so the order this relies on is the
+    /// walk's, never a caller's; taking it by value spends it, so a stale list cannot be reused.
+    pub(crate) fn take_subtree(&mut self, subtree: SubtreeIds) -> Vec<RenderNode> {
+        let subtree = subtree.order;
+        // Iterative: the subtree comes collected up front (explicit-stack
+        // pre-order with cycle protection), and is removed in REVERSE
         // collection order — in reversed pre-order every child comes
         // before its parent, which preserves the recursive version's
         // child-first removal. Plain recursion here overflowed the
         // 1 MiB Windows main-thread stack on deep chains (the same
         // crash class the pipeline walks hit at ~1000 levels).
-        let subtree = self.collect_subtree_ids(id);
         let mut nodes = Vec::with_capacity(subtree.len());
         for &node_id in subtree.iter().rev() {
             nodes.extend(self.remove_shallow(node_id));
@@ -655,7 +657,7 @@ impl RenderTree {
     /// their parent's; a destructor that panics leaves the rest to drop
     /// during the unwind, as std drops a `Vec`.
     pub fn remove_recursive(&mut self, id: RenderId) -> usize {
-        let nodes = self.take_subtree(id);
+        let nodes = self.take_subtree(self.collect_subtree(id));
         let count = nodes.len();
         drop(nodes);
         count
@@ -754,40 +756,52 @@ impl RenderTree {
     /// # Complexity
     ///
     /// O(N) where N is the subtree node count. Single pass; each
-    /// node's `children()` slice is borrowed once. `visited` is a
-    /// `HashSet<RenderId>` — O(1) amortised lookup + insert per id.
+    /// node's `children()` slice is borrowed once. `visited` is an
+    /// `FxHashSet<RenderId>` — O(1) amortised lookup + insert per id.
     pub fn collect_subtree_ids(&self, root_id: RenderId) -> Vec<RenderId> {
+        self.collect_subtree(root_id).order
+    }
+
+    /// [`Self::collect_subtree_ids`], with the same ids as a set for a caller that also asks
+    /// membership of them, from one walk.
+    pub(crate) fn collect_subtree(&self, root_id: RenderId) -> SubtreeIds {
         let mut out = Vec::new();
         // If the root doesn't exist, return empty to mirror other
         // tree-walk methods (e.g., `depth()` returns None) — callers
         // should check before doing further work with the result.
         if self.get(root_id).is_none() {
-            return out;
+            return SubtreeIds::default();
         }
         let mut stack: Vec<RenderId> = vec![root_id];
         // The visited-set short-circuits on repeated ids so a cyclic
         // tree terminates instead of hanging / OOMing. Pre-sized to a
         // conservative guess (small trees are the common case; HashSet
         // grows by power-of-two doubling otherwise).
-        let mut visited: std::collections::HashSet<RenderId> =
-            std::collections::HashSet::with_capacity(16);
+        let mut visited: rustc_hash::FxHashSet<RenderId> =
+            rustc_hash::FxHashSet::with_capacity_and_hasher(16, rustc_hash::FxBuildHasher);
         while let Some(id) = stack.pop() {
+            // A stale id pushes no children, so it cannot loop and stays out
+            // of the set, which then holds exactly the ids of `out`.
+            let Some(node) = self.get(id) else {
+                continue;
+            };
             // Skip ids already visited — preserves uniqueness in `out`
             // and breaks cycles. Without this, a parent/child cycle
             // (A → B → A) re-pushes A onto stack forever.
             if !visited.insert(id) {
                 continue;
             }
-            if let Some(node) = self.get(id) {
-                out.push(id);
-                // Reverse-push so the leftmost child pops first,
-                // preserving pre-order with children-in-stored-order.
-                for &child_id in node.children().iter().rev() {
-                    stack.push(child_id);
-                }
+            out.push(id);
+            // Reverse-push so the leftmost child pops first,
+            // preserving pre-order with children-in-stored-order.
+            for &child_id in node.children().iter().rev() {
+                stack.push(child_id);
             }
         }
-        out
+        SubtreeIds {
+            order: out,
+            members: visited,
+        }
     }
 
     /// Checks if `ancestor` is an ancestor of `descendant`.
@@ -997,6 +1011,26 @@ impl RenderTree {
 //
 // See `crates/flui-rendering/ARCHITECTURE.md` for the rationale.
 
+/// The live ids of one subtree, as one walk of [`RenderTree::collect_subtree`] found them: in
+/// pre-order, each once, and the same ids as a set.
+#[derive(Debug, Default)]
+pub(crate) struct SubtreeIds {
+    order: Vec<RenderId>,
+    members: rustc_hash::FxHashSet<RenderId>,
+}
+
+impl SubtreeIds {
+    /// The ids in pre-order, children in their stored order.
+    pub(crate) fn ids(&self) -> &[RenderId] {
+        &self.order
+    }
+
+    /// The same ids, for a membership question.
+    pub(crate) fn members(&self) -> &rustc_hash::FxHashSet<RenderId> {
+        &self.members
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1169,6 +1203,56 @@ mod tests {
     // ========================================================================
     // collect_subtree_ids
     // ========================================================================
+
+    /// The set a subtree walk returns holds exactly the ids it lists, whether the tree is whole,
+    /// cyclic, lists a child twice or names a removed node; the order and the removal are pinned
+    /// through the public API in `tests/subtree_removal.rs`.
+    #[test]
+    fn a_subtree_walk_sets_exactly_the_ids_it_lists() {
+        #[derive(Clone, Copy, Debug)]
+        enum Shape {
+            Whole,
+            Cycle,
+            DuplicateChild,
+            StaleChild,
+        }
+        for shape in [
+            Shape::Whole,
+            Shape::Cycle,
+            Shape::DuplicateChild,
+            Shape::StaleChild,
+        ] {
+            let mut tree = RenderTree::new();
+            let root = tree.insert_box(make_leaf());
+            let a = tree
+                .insert_box_child(root, make_leaf())
+                .expect("live parent");
+            let a1 = tree.insert_box_child(a, make_leaf()).expect("live parent");
+            let b = tree
+                .insert_box_child(root, make_leaf())
+                .expect("live parent");
+            match shape {
+                Shape::Whole => {}
+                Shape::Cycle => tree.append_unlinked_child(a1, root),
+                Shape::DuplicateChild => tree.append_unlinked_child(root, b),
+                Shape::StaleChild => {
+                    let gone = tree.insert_box_child(a, make_leaf()).expect("live parent");
+                    assert_eq!(tree.remove_recursive(gone), 1);
+                    tree.append_unlinked_child(a, gone);
+                }
+            }
+
+            let subtree = tree.collect_subtree(root);
+            assert_eq!(subtree.ids(), [root, a, a1, b], "{shape:?}");
+            assert_eq!(
+                *subtree.members(),
+                [root, a, a1, b]
+                    .into_iter()
+                    .collect::<rustc_hash::FxHashSet<RenderId>>(),
+                "{shape:?}: the set holds the listed ids and no other",
+            );
+        }
+    }
 
     // ========================================================================
     // adopt_child / drop_child
