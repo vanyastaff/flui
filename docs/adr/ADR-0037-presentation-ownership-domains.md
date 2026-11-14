@@ -90,7 +90,8 @@ channels or dedicated one-shot completions — never UI closures or a generic
 - every routable message carries, or is structurally bound to, its exact
   `PresentationAddress`;
 - every queue is bounded per ADR-0027's reliability classes;
-- shutdown completion uses a dedicated one-shot, never a lane that can be full;
+- a shutdown never waits on a lane that can be full: the executor's stop settles every pending
+  frame `Failed` itself;
 - no payload contains `dyn Any`, an opaque native window, `Box<dyn FnOnce()>`
   or an executor job;
 - when lanes are co-located, dispatch may be a direct call, but it consumes the
@@ -183,8 +184,11 @@ SurfaceAttached/Suspended ──close──▶ Closing ──teardown ack──�
 | `Closing` | no new input or frames; mapping removed, callbacks cancelled, IME disabled, owner jobs cancelled, raster shutdown awaited |
 | `Closed` | terminal; capabilities fail with `OwnerGone`; the slot is recycled only with a new generation |
 
-Resume does not claim `SurfaceAttached` until the executor slot acknowledges a
-valid generation.
+Resume returns a `Suspended` presentation to `SurfaceAttached` at once. The
+raster host makes the window's surface again on its own pace and sends the slot
+its `Restore`; until that lands the slot answers each frame `NotShown` without
+rendering, and its first frame after the restore redraws in full, so no frame
+is shown on a stale surface.
 
 ### 10. Platform callbacks are owned and cancellable
 

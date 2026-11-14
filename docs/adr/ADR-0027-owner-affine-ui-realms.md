@@ -9,6 +9,8 @@
 - **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) for §2 (the
   thread-affinity table) and §9's items on the public API's thread affinity and the
   cross-thread vocabulary: one record states what stays on the owner thread and what crosses.
+- **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) for
+  §5's raster protocol and §7 steps 3 and 4: a slot of the one raster executor settles each frame.
 - **Date:** 2026-07-11
 - **Revised:** 2026-11-03 — the title no longer calls FLUI a multi-threaded runtime: one owner
   thread hosts every UI runtime (ADR-0266), and the parallelism is outside the UI transaction.
@@ -187,8 +189,8 @@ pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
 }
 ```
 
-- The presentation's slot of the `RasterExecutor` (`flui-engine`) solely owns the renderer
-  (surface, device, queue).
+- The presentation's slot of the `RasterExecutor` (`flui-engine`) owns its surface and frame
+  protocol; the executor owns the one `GpuContext` (device, queue, shared painter) the slots draw with.
 - A slot is bound to one presentation and is the `SurfaceGeneration` authority: a
   reconfigure/resize bumps the generation before the next frame is accepted, and a frame whose
   generation mismatches is refused before rendering with the verdict `SurfaceStale`.

@@ -16,6 +16,9 @@
     `Renderer::recreate_surface` as the window's entry points).
   - [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 1's delivery only
     (the pre-present hook installed through `RasterBackend::set_pre_present_hook`).
+  - [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §5's raster protocol and §7 steps 3 and 4 only
+    (acknowledgements on a lossy telemetry lane, the one-shot shutdown completion, a raster owner
+    per presentation): a slot of the one executor settles each frame with a verdict.
 - **Amends:** [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §3, §4 and §7
   (their shape: the executor owns the context, and a slot per presentation holds what §4 calls
   its raster owner state and §7's external textures);

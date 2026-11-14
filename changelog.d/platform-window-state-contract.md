@@ -49,7 +49,7 @@
   rebuildable memory, and `panic::FirstPanic` to run a list of callbacks and raise the first panic
   afterwards; `MemoryPressureLevel` now lives in `flui_foundation::memory`. On
   `HostNotice::MemoryPressure` the host reclaims its application receivers (`AssetRegistry` and
-  others) and the raster thread's pools once, and each UI runtime its text service, before any
+  others) and the raster executor's pools once, and each UI runtime its text service, before any
   subscriber hears the notice; `Critical` also evicts every pooled GPU buffer and resets the glyph
   atlas. `AssetRegistry` implements `ReclaimMemory`.
 - **`flui-testing`**: `window_conformance`, the checks every window backend runs against its

@@ -107,7 +107,7 @@ Parallel layout within one UI runtime is not a goal, and the barrier is named: `
 
 `GpuContext` holds the instance, adapter, device, queue, `wgpu::PipelineCache`, the closed effect
 catalogue with its pre-warm, and the atlases. There is one per application. It is owned by the
-runtime host and handed to each presentation's executor slot at construction; it is never a
+runtime host and handed once to the raster executor, which owns it and lends it to each slot; it is never a
 `static` and never reached ambiently ([ADR-0097](ADR-0097-no-process-global-state-gate.md) gates
 that). This is what distinguishes it from the process-global resource ADR-0045 rejected: sharing
 is a constructor decision, as ADR-0027 §1 already describes `SharedEngineServices`.
@@ -134,7 +134,7 @@ contention counter as its metric.
 
 ADR-0045's single criterion becomes a table. A platform is threaded when surface acquisition and
 present run on the raster thread and the ADR-0045 pacing budget (median, p90 and max
-inter-present interval against the display period) holds on that platform. No platform is threaded today: every window draws through the inline executor (ADR-0305), so the Lane column is the target a threaded placement has to meet.
+inter-present interval against the display period) holds on that platform. No platform is threaded today: every native window draws through the inline executor (ADR-0305), so the Lane column is the target a threaded placement has to meet.
 
 | Platform | Lane | Reason recorded |
 |---|---|---|
@@ -144,9 +144,9 @@ inter-present interval against the display period) holds on that platform. No pl
 | wasm | inline | no raster thread; web moves onto the lane protocol and `DirectSink` is deleted |
 | Android, iOS | inline until measured | no platform reason is recorded against threading; the lane is threaded once a device run meets the budget |
 
-### 6. The raster executor stays in `flui-engine`
+### 6. The raster owner stays in `flui-engine`
 
-The raster executor moves into the runtime only after [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)
+The raster owner moves into the runtime only after [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)
 has moved `RasterBackend`, `PresentDisposition` and a wgpu-free `RasterError` into `flui-layer`,
 so the runtime can hold it without reaching wgpu. The move is optional and not part of H0.
 

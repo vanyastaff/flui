@@ -583,7 +583,7 @@ impl UiRuntime {
         self.presentations.primary().focus_manager()
     }
 
-    /// Presentation `id`'s external-texture registry, which its raster lane
+    /// Presentation `id`'s external-texture registry, which its host
     /// drains before each frame renders. `None` for an unknown presentation.
     #[must_use]
     pub fn texture_registry(&self, id: PresentationId) -> Option<flui_layer::TextureRegistry> {

@@ -395,7 +395,7 @@ pub struct PresentationState {
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// The retained scene its frames patch and its sink draws (ADR-0304 §8).
     pub(crate) scene: crate::presentation_scene::SceneSlot,
-    /// External textures its widgets register; the raster lane drains it.
+    /// External textures its widgets register; the host drains it before each frame renders.
     textures: flui_layer::TextureRegistry,
     lifecycle: Cell<PresentationLifecycle>,
     close_mode: Cell<flui_interaction::__runtime::CloseMode>,
