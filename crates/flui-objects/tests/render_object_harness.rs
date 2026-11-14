@@ -6715,6 +6715,64 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callback
     }
 }
 
+fn harness_a_moved_region_painter_retires_its_draft_handlers_after_the_phase() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let invalid = Rc::new(Cell::new(false));
+    let dropped = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+    let paint = box_node(RenderCustomPaint::new(
+        Some(Rc::new(CapturingRegionPainter {
+            invalid: invalid.clone(),
+            dropped: dropped.clone(),
+            fails: [true, false],
+            custom: false,
+            blocked: false,
+            duplicate: false,
+        })),
+        None,
+        Size::new(40.0, 40.0),
+    ));
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::new(EdgeInsets::new(0.0, 0.0, 0.0, 0.0))).child(
+            box_node(RenderTransform::new(Matrix4::IDENTITY))
+                .label("transform")
+                .child(paint),
+        ),
+    )
+    .with_size(Size::new(80.0, 80.0))
+    .with_semantics_enabled()
+    .run_frame();
+    // From here on every call of `semantics_regions` hands out handlers whose
+    // captures panic when they are destroyed.
+    invalid.set(true);
+    let transform = run.id("transform");
+    flui_rendering::testing::update_render_object::<RenderTransform, _>(
+        run.owner_mut(),
+        transform,
+        |node| node.set_transform(Matrix4::translation(10.0, 0.0, 0.0)),
+    );
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.try_pump()));
+    assert!(
+        outcome.is_err(),
+        "the destroyed capture's panic reaches the caller"
+    );
+    assert!(
+        !run.owner().debug_doing_semantics(),
+        "the phase closed before any capture was destroyed"
+    );
+    let drafts = semantics_content(&run)
+        .into_iter()
+        .filter(|(label, _, _)| label == "Draft region")
+        .count();
+    assert_eq!(
+        drafts, 2,
+        "the move published the re-described regions before their rejected twins retired"
+    );
+    assert!(dropped[0].load(Ordering::Relaxed) > 0);
+    // The published handlers carry panicking captures too; they retire with
+    // the owner.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(run)));
+}
+
 fn harness_accepted_semantics_drafts_retire_filtered_callbacks() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     for (custom, blocked, expected) in [
@@ -14990,6 +15048,10 @@ fn family_semantics() {
             (
                 "accepted_semantics_drafts_retire_filtered_callbacks",
                 harness_accepted_semantics_drafts_retire_filtered_callbacks,
+            ),
+            (
+                "a_moved_region_painter_retires_its_draft_handlers_after_the_phase",
+                harness_a_moved_region_painter_retires_its_draft_handlers_after_the_phase,
             ),
             (
                 "custom_paint_repaint_refreshes_region_geometry_identity_and_actions",

@@ -273,7 +273,7 @@ impl RenderContainer {
         } else {
             RenderUpdateImpact::PAINT
         };
-        paint_or_layer | RenderUpdateImpact::SEMANTICS
+        paint_or_layer | RenderUpdateImpact::SEMANTICS_GEOMETRY
     }
 
     /// Whether [`paint_effects`](RenderBox::paint_effects) currently owns a

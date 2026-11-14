@@ -91,7 +91,7 @@ impl RenderRotatedBox {
     /// - Same parity (even ↔ even or odd ↔ odd), different quadrant (e.g.
     ///   `0` → `2`, `1` → `-1`):
     ///   [`COMPOSITED_LAYER_UPDATE`](flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE)
-    ///   `|` [`SEMANTICS`](flui_rendering::RenderUpdateImpact::SEMANTICS).
+    ///   `|` [`SEMANTICS_GEOMETRY`](flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY).
     ///   `perform_layout`, `compute_dry_layout`, the four intrinsic queries,
     ///   `compute_dry_baseline`, and `forwards_baseline_to_only_child` all
     ///   key off `is_vertical` (private) — the turn's parity — and never the
@@ -127,7 +127,7 @@ impl RenderRotatedBox {
         // are all unchanged — only the paint matrix rotates, so the retained
         // subtree can be patched in place instead of repainted.
         flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
-            | flui_rendering::RenderUpdateImpact::SEMANTICS
+            | flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY
     }
 
     /// Returns `true` when the quarter-turn count is odd (axes are swapped).

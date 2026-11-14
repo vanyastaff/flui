@@ -34,6 +34,7 @@ pub(crate) fn bit(kind: DirtyKind) -> u8 {
         DirtyKind::Paint => 4,
         DirtyKind::Semantics => 8,
         DirtyKind::CompositedLayerUpdate => 16,
+        DirtyKind::SemanticsGeometry => 32,
     }
 }
 
@@ -180,6 +181,10 @@ impl LocalRenderInvalidationHandle {
                 DirtyKind::Compositing,
             ),
             (impact.needs_semantics_update(), DirtyKind::Semantics),
+            (
+                impact.needs_semantics_geometry_update(),
+                DirtyKind::SemanticsGeometry,
+            ),
             (
                 impact.needs_composited_layer_update(),
                 DirtyKind::CompositedLayerUpdate,
