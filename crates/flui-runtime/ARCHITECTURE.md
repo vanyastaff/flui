@@ -714,10 +714,18 @@ haptic cut and its segment's span. The host later hands the raster side's
 verdict to the record its address and epoch name, by the same code an inline verdict runs, so
 the settlement commits the frame it names and not the tree as it is by then. Records queued
 before it fold into it (the raster side superseded those frames, and their layer reads wait for a
-later scene), and a settlement no record matches is `Settled::Stale` (ADR-0305 §4). Pinned by
+later scene), and a settlement no record matches is `Settled::Stale` (ADR-0305 §4). The frame's
+telemetry is recorded against the `FrameTelemetryCut` taken at submit: its own frame id and only
+the inputs stamped before it, which a frame failing inline meanwhile reads without taking.
+Pointer input held for a commit replays when the settled frame shows the current tree; an older
+frame's settlement leaves it for the later frame, and asks for a repaint when no later frame is
+still pending. Pinned by
 `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored`,
-`a_settlement_commits_the_revision_its_frame_was_painted_from` and
-`a_later_settlement_folds_the_frames_it_superseded`.
+`a_settlement_commits_the_revision_its_frame_was_painted_from`,
+`a_later_settlement_folds_the_frames_it_superseded`,
+`held_input_waits_for_the_settlement_that_commits_the_tree`,
+`held_input_behind_a_failed_frame_asks_for_the_frame_that_shows_the_tree` and
+`a_failed_frame_leaves_a_queued_frames_inputs_to_its_settlement`.
 
 ### `Vsync` controllers tick at the frame's timestamp
 

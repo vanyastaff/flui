@@ -120,7 +120,34 @@ impl UiRuntime {
     /// The sink never answered (it panicked, or a subscriber stopped the submit before it was
     /// reached): the layer reads the frame holds wait for the next scene.
     pub(super) fn abandon_pending_frame(producer: &PresentationState, frame: PendingFrame) {
+        let reads = frame.layer_reads.len();
         producer.restore_staged_agent_layer_reads(frame.layer_reads);
+        tracing::trace!(
+            target: "flui.frame",
+            epoch = frame.epoch.get(),
+            reads,
+            "a frame was abandoned before it was shown; its layer reads wait for the next scene"
+        );
+    }
+
+    /// What input held for a commit is owed by a frame whose verdict commits it: a frame that
+    /// shows the current tree replays the input. A frame painted before a later one commits an
+    /// older tree, and the input waits for the later frame's commit; when no later frame is
+    /// still pending (it was answered without a commit), the frame asks for a repaint so the
+    /// tree the input waits for is shown.
+    fn owe_held_input(
+        producer: &PresentationState,
+        shows_current_tree: bool,
+        tail: &mut VerdictTail,
+    ) {
+        if shows_current_tree {
+            tail.replay_committed_input = true;
+        } else if producer.pending_frames.borrow().is_empty()
+            && !producer.held_pointer_input().borrow().is_empty()
+        {
+            tail.retry_needed = true;
+            tail.retry_needs_repaint = true;
+        }
     }
 
     /// The sink queued `frame`, stamped `epoch`: its record waits for the settlement that names
@@ -249,16 +276,20 @@ impl UiRuntime {
                 self.wake_frame();
             }
         });
-        if let Some(payload) = held.into_payload() {
-            resume_unwind(payload);
-        }
-        // Held input replays only against a tree the screen shows: a frame that settles while a
-        // later one is still pending commits an older revision, and the input waits for that one.
-        if replay_committed_input && producer.frame_commit_state() == FrameCommitState::Committed {
-            self.replay_committed_held_pointer_input(producer);
+        // Held input replays once the retry is in place, before the first panic resumes: a panic
+        // that came first does not strand the input the commit released. Which settlement
+        // replays it is decided with the verdict (`owe_held_input`), by the rule the inline
+        // frame follows.
+        if replay_committed_input {
+            held.contain(|| self.replay_committed_held_pointer_input(producer));
         }
         if let Some(style) = overlay_style {
-            producer.with_window(|window| producer.overlay_style.deliver(window, style));
+            held.contain(|| {
+                producer.with_window(|window| producer.overlay_style.deliver(window, style));
+            });
+        }
+        if let Some(payload) = held.into_payload() {
+            resume_unwind(payload);
         }
     }
 
@@ -284,6 +315,9 @@ impl UiRuntime {
             haptics,
             overlay_style,
         } = frame;
+        // Input held for a commit replays against the tree this frame shows only if no later
+        // frame was painted since; a settlement of an older frame leaves it for the newer one.
+        let shows_current_tree = tree_revision >= producer.tree_revision();
         // The frame this scene becomes once presented.
         let frame_number = producer.frames_rendered() + 1;
         let shown_on_screen = matches!(
@@ -340,7 +374,7 @@ impl UiRuntime {
                     // not own (a haptic backend, telemetry, a subscriber) can panic.
                     tail.overlay_style = overlay_style;
                     tail.presented = true;
-                    tail.replay_committed_input = true;
+                    Self::owe_held_input(producer, shows_current_tree, &mut tail);
                     producer.record_frame_rendered();
                     // The surface is demonstrably available: any withheld
                     // streak ends here, so a later withdrawal gets the full
@@ -371,7 +405,7 @@ impl UiRuntime {
                     // before that previous frame already resolved with it; the
                     // rest resolve `Suppressed` at their deadline.
                     tail.overlay_style = overlay_style;
-                    tail.replay_committed_input = true;
+                    Self::owe_held_input(producer, shows_current_tree, &mut tail);
                     // Nothing was owed and nothing was lost — the surface was
                     // never asked to show anything, so a withheld streak is
                     // over just as it is on a present.
@@ -429,7 +463,7 @@ impl UiRuntime {
                     held.absorb(self.commit_painted_frame(producer, tree_revision, &input_regions));
                     producer.record_frame_dropped();
                     let streak = producer.record_frame_withheld();
-                    tail.replay_committed_input = true;
+                    Self::owe_held_input(producer, shows_current_tree, &mut tail);
                     if streak <= MAX_NOT_SHOWN_RETRIES {
                         // Armed before the trace: a subscriber's panic there keeps the retry.
                         tail.retry_needed = true;
@@ -536,12 +570,20 @@ impl UiRuntime {
                 }
                 SubmitVerdict::Failed => {
                     producer.record_frame_dropped();
+                    // A failed frame takes the inputs it was cut after only when no queued frame
+                    // still waits for its settlement: those inputs are that frame's to report, and
+                    // a failure reads them without taking them.
+                    let epochs = if producer.pending_frames.borrow().is_empty() {
+                        EpochDisposition::Drain
+                    } else {
+                        EpochDisposition::Retain
+                    };
                     self.record_submit_telemetry(
                         telemetry,
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
-                        EpochDisposition::Drain,
+                        epochs,
                     );
                     // The sink already logged the backend-specific error at
                     // classification time; this records the transaction-

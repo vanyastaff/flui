@@ -993,17 +993,13 @@ impl UiRuntime {
                 // is lost after the pipeline consumed its paint work: the repaint and the wake are
                 // owed before the first failure resumes, and a later failure of theirs yields to it.
                 (None, Err(payload)) => {
-                    Self::abandon_pending_frame(producer, pending);
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "ADR-0287: the repaint and wake owed after a sink panic run contained"
-                    )]
-                    let owed = catch_unwind(AssertUnwindSafe(|| {
+                    let mut later = FirstPanic::new();
+                    later.contain(|| Self::abandon_pending_frame(producer, pending));
+                    later.contain(|| {
                         self.mark_needs_full_repaint_for(producer);
                         self.wake_frame();
-                    }))
-                    .err();
-                    if let Some(later) = owed {
+                    });
+                    if let Some(later) = later.into_payload() {
                         flui_foundation::panic::discard_payload(later);
                     }
                     resume_unwind(payload);
@@ -1141,12 +1137,13 @@ impl UiRuntime {
         // A subscriber or waker that failed while the frame settled what the sink's verdict owes
         // is secondary to the failure that came first.
         hover_panic.absorb(settle_panic);
+        // Held input the commit released replays before the first panic resumes, as a queued
+        // frame's settlement does, so a panic that came first does not strand it.
+        if replay_committed_input {
+            hover_panic.contain(|| self.replay_committed_held_pointer_input(producer));
+        }
         if let Some(payload) = hover_panic.into_payload() {
             resume_unwind(payload);
-        }
-
-        if replay_committed_input {
-            self.replay_committed_held_pointer_input(producer);
         }
 
         // Animation continuation wake — deliberately placed AFTER
