@@ -573,17 +573,23 @@ impl<S: ClipGeometry> RenderClip<S> {
     /// `Clip::None` (see [`PaintClip`]'s docs) — so this setter never needs
     /// a second impact bit for that reason.
     ///
-    /// Does not report [`RenderUpdateImpact::SEMANTICS`]: the accessibility
-    /// clip gates on `Clip::None` at
-    /// [`describe_approximate_paint_clip`](RenderBox::describe_approximate_paint_clip)'s
-    /// read site rather than through this setter — a pre-existing gap, not
-    /// fixed here.
+    /// Switching to or from `Clip::None` also reports
+    /// [`RenderUpdateImpact::SEMANTICS`](flui_rendering::RenderUpdateImpact::SEMANTICS):
+    /// [`describe_approximate_paint_clip`](RenderBox::describe_approximate_paint_clip)
+    /// clips the children's semantics only while a clip applies, so content
+    /// outside the bounds turns hidden or visible to assistive technology.
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
+        let clips_semantics = (self.clip_behavior == Clip::None) != (clip_behavior == Clip::None);
         self.clip_behavior = clip_behavior;
-        flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+        if clips_semantics {
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        } else {
+            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+        }
     }
 
     /// Returns the current clip behavior.

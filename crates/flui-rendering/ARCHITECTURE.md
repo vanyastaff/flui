@@ -728,10 +728,10 @@ enclosing boundary's content, through `RenderClip<S>::paint_effects` /
   (`set_clip_behavior`, `set_clip_shape`, `set_border_radius`,
   `set_path_clip_source_token`, `set_path_clip_target`) report
   `COMPOSITED_LAYER_UPDATE`, `| SEMANTICS` on the four that change the
-  resolved geometry — `set_clip_behavior` does not, because the
-  accessibility clip reads `clip_behavior` directly at
-  `describe_approximate_paint_clip`'s call site rather than through this
-  setter, a pre-existing gap this change does not touch. No setter is
+  resolved geometry, and on a `set_clip_behavior` that switches to or from
+  `Clip::None`: `describe_approximate_paint_clip` clips the children's
+  semantics only while a clip applies, while two clipping behaviors clip
+  them alike. No setter is
   structural: a `PaintClip` at `Clip::None` is still a layer the pipeline
   builds, and the engine skips pushing it —
   `ClipRectLayer::clips()`/`ClipRRectLayer::clips()`/`ClipPathLayer::clips()`

@@ -957,6 +957,7 @@ fn semantics_translation_and_routing() {
             ("semantics::flow_repaint_and_delegate_replacement_update_accessible_children", crate::semantics::flow_repaint_and_delegate_replacement_update_accessible_children),
             ("semantics::custom_painter_regions_follow_semantics_only_updates_and_layout_size", crate::semantics::custom_painter_regions_follow_semantics_only_updates_and_layout_size),
             ("semantics::a_fields_runs_keep_their_identities_until_their_text_changes", crate::semantics::a_fields_runs_keep_their_identities_until_their_text_changes),
+            ("semantics::a_clip_behavior_switch_republishes_what_the_clip_hides", crate::semantics::a_clip_behavior_switch_republishes_what_the_clip_hides as fn()),
             ("semantics::retained_visibility_hides_child_semantics_by_default", crate::semantics::retained_visibility_hides_child_semantics_by_default as fn()),
             ("semantics::retained_visibility_updates_semantics_without_changing_layout", crate::semantics::retained_visibility_updates_semantics_without_changing_layout as fn()),
             ("semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer", crate::semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer as fn()),

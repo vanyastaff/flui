@@ -3416,3 +3416,77 @@ fn a_button_over_a_labelled_image_is_pressed_by_its_name() {
     assert!(add.supports_action(Action::Click), "{}", tree.describe());
     assert!(add.child_ids().is_empty(), "{}", tree.describe());
 }
+
+/// A clip whose behavior switches between `Clip::None` and a clipping one
+/// changes whether the children it lets paint outside its bounds are hidden
+/// from assistive technology, so the published tree follows the switch: each
+/// step publishes what building that behavior afresh publishes.
+///
+/// The viewports' content overflows them, so each clips its paint as well as
+/// its semantics while a clip applies.
+///
+/// Red-check: report no `SEMANTICS` from `RenderClip::set_clip_behavior`
+/// or either viewport's `set_clip_behavior` (the label keeps the hidden
+/// flag of the previous behavior).
+pub(crate) fn a_clip_behavior_switch_republishes_what_the_clip_hides() {
+    use flui_painting::paint::Clip;
+    use flui_widgets::{
+        ClipRect, ScrollPosition, ShrinkWrappingViewport, SliverToBoxAdapter, Transform, Viewport,
+    };
+
+    fn published(laid: &crate::common::LaidOut) -> Vec<(accesskit::NodeId, accesskit::Node)> {
+        let mut nodes = laid
+            .a11y_tree()
+            .expect("semantics enabled")
+            .raw()
+            .nodes
+            .clone();
+        nodes.sort_by_key(|(id, _)| id.0);
+        nodes
+    }
+    fn follows_the_switch<V: flui_view::View>(name: &str, content: impl Fn(Clip) -> V) {
+        let steps = [Clip::HardEdge, Clip::None, Clip::HardEdge];
+        let mut switched = lay_out(content(steps[0]), loose(400.0));
+        switched.enable_semantics();
+        switched.tick();
+        for &step in &steps[1..] {
+            switched.pump_widget(content(step));
+            switched.tick();
+            let mut fresh = lay_out(content(step), loose(400.0));
+            fresh.enable_semantics();
+            fresh.tick();
+            assert_eq!(published(&switched), published(&fresh), "{name}: {step:?}");
+        }
+    }
+    let outside = || {
+        Transform::translate(0.0, 200.0).child(
+            Semantics::new()
+                .label("outside")
+                .child(SizedBox::new(40.0, 20.0)),
+        )
+    };
+
+    follows_the_switch("clip rect", |clip| {
+        SizedBox::new(100.0, 100.0).child(ClipRect::new().clip_behavior(clip).child(outside()))
+    });
+    let position = ScrollPosition::fixed(0.0);
+    follows_the_switch("viewport", |clip| {
+        SizedBox::new(100.0, 100.0).child(
+            Viewport::new(
+                position.clone(),
+                (SliverToBoxAdapter::new().child(SizedBox::new(100.0, 300.0).child(outside())),),
+            )
+            .clip_behavior(clip),
+        )
+    });
+    let position = ScrollPosition::fixed(0.0);
+    follows_the_switch("shrink-wrapping viewport", |clip| {
+        SizedBox::new(100.0, 100.0).child(
+            ShrinkWrappingViewport::new(
+                position.clone(),
+                (SliverToBoxAdapter::new().child(SizedBox::new(100.0, 300.0).child(outside())),),
+            )
+            .clip_behavior(clip),
+        )
+    });
+}
