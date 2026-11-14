@@ -134,23 +134,29 @@ impl UiRuntime {
         );
     }
 
-    /// What input held for a commit is owed by a frame whose verdict commits it: a frame that
-    /// shows the current tree replays the input. A frame painted before a later one commits an
-    /// older tree, and the input waits for the later frame's commit; when no later frame is
-    /// still pending (it was answered without a commit), the frame asks for a repaint so the
-    /// tree the input waits for is shown.
-    fn owe_held_input(
+    /// What a frame whose verdict commits it owes the current tree: a frame that shows it replays
+    /// the input held for its commit. A frame painted before a later one commits an older tree,
+    /// and the input waits for the later frame's commit; when no pending frame was painted from
+    /// the current tree (the later one was answered without a commit), the frame asks for a
+    /// repaint so the current tree is shown, input held or not.
+    fn owe_current_tree(
         producer: &PresentationState,
         shows_current_tree: bool,
         tail: &mut VerdictTail,
     ) {
         if shows_current_tree {
             tail.replay_committed_input = true;
-        } else if producer.pending_frames.borrow().is_empty()
-            && !producer.held_pointer_input().borrow().is_empty()
-        {
-            tail.retry_needed = true;
-            tail.retry_needs_repaint = true;
+        } else {
+            let current = producer.tree_revision();
+            let shown_by_later = producer
+                .pending_frames
+                .borrow()
+                .iter()
+                .any(|pending| pending.tree_revision >= current);
+            if !shown_by_later && !producer.device_abandoned() {
+                tail.retry_needed = true;
+                tail.retry_needs_repaint = true;
+            }
         }
     }
 
@@ -298,7 +304,7 @@ impl UiRuntime {
         });
         // Held input replays once the retry is in place, before the first panic resumes: a panic
         // that came first does not strand the input the commit released. Which settlement
-        // replays it is decided with the verdict (`owe_held_input`), and the replay runs only
+        // replays it is decided with the verdict (`owe_current_tree`), and the replay runs only
         // while the presentation is committed, the rule that held it.
         if replay_committed_input {
             held.contain(|| self.replay_committed_held_pointer_input(producer));
@@ -387,6 +393,17 @@ impl UiRuntime {
             // epochs stay buffered on the clock for whichever later pump
             // does submit, per `FrameClock::record_frame`'s own doc.
             let submit_at = producer.clock().now();
+            // A frame that commits the current tree is through: the next dropped frame starts a
+            // fresh streak. An older frame's commit leaves the streak and the paced retry a newer
+            // failed frame armed, which still owes the current tree.
+            if shows_current_tree
+                && matches!(
+                    render_verdict,
+                    SubmitVerdict::Presented | SubmitVerdict::NoPresent | SubmitVerdict::NotShown
+                )
+            {
+                producer.reset_frame_failure_streak();
+            }
             match render_verdict {
                 SubmitVerdict::Presented => {
                     held.absorb(self.commit_painted_frame(producer, tree_revision, &input_regions));
@@ -394,7 +411,7 @@ impl UiRuntime {
                     // not own (a haptic backend, telemetry, a subscriber) can panic.
                     tail.overlay_style = overlay_style;
                     tail.presented = true;
-                    Self::owe_held_input(producer, shows_current_tree, &mut tail);
+                    Self::owe_current_tree(producer, shows_current_tree, &mut tail);
                     producer.record_frame_rendered();
                     // The surface is demonstrably available: any withheld
                     // streak ends here, so a later withdrawal gets the full
@@ -425,7 +442,7 @@ impl UiRuntime {
                     // before that previous frame already resolved with it; the
                     // rest resolve `Suppressed` at their deadline.
                     tail.overlay_style = overlay_style;
-                    Self::owe_held_input(producer, shows_current_tree, &mut tail);
+                    Self::owe_current_tree(producer, shows_current_tree, &mut tail);
                     // Nothing was owed and nothing was lost — the surface was
                     // never asked to show anything, so a withheld streak is
                     // over just as it is on a present.
@@ -546,10 +563,6 @@ impl UiRuntime {
                 }
                 SubmitVerdict::DeviceLost => {
                     producer.record_frame_dropped();
-                    // The submit consumed the paint demand, so the frame the
-                    // rebuilt device shows needs a full repaint whenever it
-                    // comes; marked before the telemetry's subscriber can panic.
-                    self.mark_needs_full_repaint_for(producer);
                     // Paced like any dropped frame (ADR-0267): a frame asked
                     // for at once would run again before the renderer's owner
                     // next rebuilds the device, and fail the same way. A
@@ -574,6 +587,11 @@ impl UiRuntime {
                     // `record_submit_telemetry`'s own doc. A subscriber's panic
                     // there is held until the failure is reported.
                     let mut reported = FirstPanic::new();
+                    // The submit consumed the paint demand, so the frame the
+                    // rebuilt device shows needs a full repaint whenever it
+                    // comes. Marked after the retry is armed, since its
+                    // platform wake can unwind, and held like the telemetry's.
+                    reported.contain(|| self.mark_needs_full_repaint_for(producer));
                     reported.contain(|| {
                         self.record_submit_telemetry(
                             telemetry,
@@ -590,8 +608,31 @@ impl UiRuntime {
                         resume_unwind(payload);
                     }
                 }
-                SubmitVerdict::Failed => {
+                SubmitVerdict::Failed | SubmitVerdict::Refused => {
                     producer.record_frame_dropped();
+                    // No retry fixes this frame, but its tree is still not shown and nothing else
+                    // may ask for a frame: unless a pending frame painted from this tree or a
+                    // later one will settle, the frame is tried again after the dropped-frame
+                    // backoff (a key or button press ends the wait early), with a full repaint
+                    // since the submit consumed the paint demand. The streak and the wait are armed
+                    // before the mark, whose platform wake is user code and can unwind; that panic
+                    // is held until the telemetry is drained. A given-up device holds the frames
+                    // (ADR-0267). A refused frame waits for its window's next change, which asks
+                    // for a frame.
+                    let shown_by_later = producer
+                        .pending_frames
+                        .borrow()
+                        .iter()
+                        .any(|pending| pending.tree_revision >= tree_revision);
+                    let mut held = FirstPanic::new();
+                    if render_verdict == SubmitVerdict::Failed
+                        && !shown_by_later
+                        && !producer.device_abandoned()
+                    {
+                        producer.note_frame_failure();
+                        Self::arm_failure_retry(producer);
+                        held.contain(|| self.mark_needs_full_repaint_for(producer));
+                    }
                     // A failed frame takes the inputs stamped since the frames still waiting for
                     // their settlement were cut: the earlier ones are theirs to report.
                     let mut telemetry = telemetry;
@@ -602,17 +643,22 @@ impl UiRuntime {
                         .fold(telemetry.cut, |cut, pending| {
                             cut.after(pending.telemetry.cut)
                         });
-                    self.record_submit_telemetry(
-                        telemetry,
-                        producer,
-                        submit_at,
-                        PresentOutcome::Errored,
-                        EpochDisposition::Drain,
-                    );
-                    // The sink already logged the backend-specific error at
-                    // classification time; this records the transaction-
-                    // level consequence.
-                    tracing::error!("Render error (non-recoverable this frame)");
+                    held.contain(|| {
+                        self.record_submit_telemetry(
+                            telemetry,
+                            producer,
+                            submit_at,
+                            PresentOutcome::Errored,
+                            EpochDisposition::Drain,
+                        );
+                        // The sink already logged the backend-specific error at
+                        // classification time; this records the transaction-
+                        // level consequence.
+                        tracing::error!("Render error (non-recoverable this frame)");
+                    });
+                    if let Some(payload) = held.into_payload() {
+                        resume_unwind(payload);
+                    }
                 }
                 SubmitVerdict::Queued | SubmitVerdict::QueuedReplacing(_) => {
                     unreachable!("BUG: a queued frame is applied only by its settlement")

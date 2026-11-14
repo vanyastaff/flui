@@ -280,6 +280,8 @@ Gesture-arena `Decision` rows from the same tap feed the inspector timeline.
   narrows to the one match `first`, `last` or `nth` names; strictness bites where one element is
   needed (an action, an expectation about one element), which answers `ambiguous`. Matches carry
   the tree revision. `TextMatch` is exact/contains/prefix only, so no regex engine enters the app.
+  Both read every built node, rows a scrollable keeps past its viewport included, through
+  AccessKit's filter without its clip rule; `visible` says whether one is shown.
 All three trees are walked through ADR-0242's `InspectTree` and answer the owned `Inspect`
 snapshot, so every property arrives typed:
 
@@ -301,8 +303,10 @@ own ID (`ElementId`, `RenderId`, `LayerId`), so identity follows the "Identity i
 - `attached`;
 - `rect` (surface logical);
 - `visible`: shown by the filtered tree, non-empty and intersecting the window's visible region
-  (the semantics assembly has already narrowed a node to its clipping ancestors, so a node clipped
-  out is not published);
+  and every ancestor that clips its children. The semantics assembly narrows a node to the paint
+  clips above it and does not publish one clipped out, except content a scrollable keeps past its
+  viewport for a reveal: that keeps its bounds, and the node that covers its paint clip publishes
+  `clips_children`, AccessKit's form of Flutter's `isHidden`;
 - `stable`: rect equal to the previous frame's;
 - `enabled`: not `disabled`, no disabled ancestor;
 - `receives`: whether the render hit-test at `point` (default: the rect's centre, clamped inside

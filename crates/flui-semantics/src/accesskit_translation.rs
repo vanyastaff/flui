@@ -48,6 +48,8 @@ pub(crate) struct PublishView<'a> {
     /// Effective action bits (`blocks_user_actions` already applied).
     pub(crate) actions: u64,
     pub(crate) rect: flui_foundation::geometry::Rect<f64>,
+    /// No child is painted outside `rect` (AccessKit's `clips_children`).
+    pub(crate) clips_children: bool,
     pub(crate) children: SmallVec<[AccessibilityNodeId; 4]>,
     /// The node's document selection resolved to runs published beneath it
     /// (ADR-0214 §3), or `None` when it declares none or an end names no
@@ -673,6 +675,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
             attrs,
             actions: data.actions,
             rect: data.rect,
+            clips_children: data.clips_children,
             children: data.children.clone(),
             text_selection: data.text_selection,
         };
@@ -839,6 +842,14 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         x1: data.rect.right(),
         y1: data.rect.bottom(),
     });
+
+    // A child wholly outside a node that clips is off screen, as Flutter's
+    // `isHidden` marks content past a scrollable's viewport. AccessKit's
+    // filter leaves such a child out of navigation, except the first one past
+    // each edge, which a reader moves to in order to scroll it in.
+    if data.clips_children {
+        node.set_clips_children();
+    }
 
     publish_scroll(&mut node, data.attrs);
 
@@ -1018,6 +1029,11 @@ pub(crate) fn to_published_node(
     // Only a root that declares no role and has no name becomes the window.
     if is_root && data.attrs.role == SemanticsRole::None && node.role() == Role::GenericContainer {
         node.set_role(Role::Window);
+    }
+    // The window clips the root anyway, and AccessKit would count the owner's
+    // announcer nodes, which have no area, as outside it.
+    if is_root {
+        node.clear_clips_children();
     }
     node
 }
@@ -1422,6 +1438,7 @@ mod tests {
             attrs,
             actions,
             rect: flui_foundation::geometry::Rect::ZERO,
+            clips_children: false,
             children: SmallVec::new(),
             text_selection: None,
         })

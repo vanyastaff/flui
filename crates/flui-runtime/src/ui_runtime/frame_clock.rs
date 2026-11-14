@@ -238,7 +238,6 @@ impl UiRuntime {
     /// Reached on every target: [`Self::render_frame`]'s `retry_needed` arm
     /// calls it.
     pub(super) fn mark_needs_full_repaint_for(&self, presentation: &PresentationState) {
-        self.request_redraw_for(presentation);
         presentation
             .renderer()
             .root_pipeline_owner()
@@ -247,6 +246,9 @@ impl UiRuntime {
                     owner.mark_needs_paint(root_id);
                 }
             });
+        // The paint demand is in the tree before the platform wake, which is user code and can
+        // unwind: a frame the wake still reaches finds the tree to repaint.
+        self.request_redraw_for(presentation);
     }
 
     /// `Self::mark_needs_full_repaint_for`, addressed to

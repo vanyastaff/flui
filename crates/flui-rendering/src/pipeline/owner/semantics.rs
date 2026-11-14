@@ -210,6 +210,9 @@ impl PipelineOwner<Semantics> {
                             &self.render_tree,
                             self.root_id,
                             owner,
+                            self.semantics_regions
+                                .containment_known
+                                .then_some(&self.semantics_regions.uncontained),
                             &marked,
                             &placed,
                             &mut regions,
@@ -272,20 +275,36 @@ impl PipelineOwner<Semantics> {
                     }
                     self.semantics_regions
                         .assign_text_runs(&mut planned, &self.render_tree);
+                    let mut uncontained = std::mem::take(&mut self.semantics_regions.uncontained);
+                    // Removing replaced nodes drops their handlers' captures, which is
+                    // authored code: a panic there leaves the table unknown, so the
+                    // next pass assembles afresh. A graft is planned only over a
+                    // known table, so both plans leave it known.
+                    self.semantics_regions.containment_known = false;
                     match planned {
                         SemanticsPlan::Rebuild(built) => {
                             rebuild_semantics_owner(
                                 owner,
                                 built.map(|node| *node),
                                 &self.semantics_regions,
+                                &mut uncontained,
                             );
                         }
                         SemanticsPlan::Graft(grafts) => {
+                            clear_graft_anchors(owner, &grafts, &mut uncontained);
                             for (anchor, built) in grafts {
-                                apply_graft(owner, anchor, built, &self.semantics_regions);
+                                apply_graft(
+                                    owner,
+                                    anchor,
+                                    built,
+                                    &self.semantics_regions,
+                                    &mut uncontained,
+                                );
                             }
                         }
                     }
+                    self.semantics_regions.uncontained = uncontained;
+                    self.semantics_regions.containment_known = true;
                     let published = owner.flush();
                     let diagnostics = owner.take_diagnostics();
                     #[cfg(any(test, feature = "testing"))]
@@ -414,6 +433,13 @@ pub(super) struct RegionIdentities {
     marked: Vec<RenderId>,
     placed: Vec<RenderId>,
     placement_walk: PlacementScratch,
+    /// The published nodes that are not contained (see
+    /// [`PendingSemanticsNode::form`]), which a graft compares its anchor
+    /// with. Its table is kept between passes, as the lists above are.
+    uncontained: FxHashSet<flui_foundation::SemanticsId>,
+    /// Whether `uncontained` describes the published tree: false until a
+    /// full assembly publishes it here.
+    containment_known: bool,
     /// Set by a test that measures a pass and so must not pay for
     /// [`check_placement_against_rebuild`].
     #[cfg(any(test, feature = "testing"))]
@@ -487,6 +513,13 @@ impl Drop for AssemblyCallbacks {
 }
 
 impl RegionIdentities {
+    /// Forgets which published nodes are contained, so no graft is planned
+    /// until a full assembly has published the tree again.
+    pub(super) fn forget_containment(&mut self) {
+        self.containment_known = false;
+        self.uncontained.clear();
+    }
+
     /// Whether a pass that re-placed moved subtrees checks itself against a
     /// rebuild: in debug builds with the `testing` feature, unless a test
     /// turned it off.
@@ -643,6 +676,11 @@ struct BuiltSemanticsNode<'f> {
     config: SemanticsConfiguration,
     rect: Rect<f64>,
     reveal_rect: Rect<f64>,
+    /// A child past `rect` is off screen: see [`PendingSemanticsNode::form`].
+    clips_children: bool,
+    /// Everything below the node, merged content included, lies inside the
+    /// rect of the node above it: see [`PendingSemanticsNode::form`].
+    contained: bool,
     /// From the owner's built-node arena: the pass moves the nodes into the semantics owner and
     /// drops the list.
     children: FrameVec<'f, BuiltSemanticsNode<'f>>,
@@ -867,19 +905,115 @@ struct PendingSemanticsNode<'f> {
     config: SemanticsConfiguration,
     rect: Rect<f64>,
     reveal_rect: Rect<f64>,
+    /// Each child of the node, and so everything below it, lies under a paint
+    /// clip inside its rect.
+    clip_inside: bool,
     children: FrameVec<'f, BuiltSemanticsNode<'f>>,
+    /// The content merged into the node, which has no node of its own, lies
+    /// inside its rect.
+    absorbed_inside: bool,
 }
 
 impl<'f> PendingSemanticsNode<'f> {
+    /// The node as published. It clips its children when everything below it
+    /// lies under a paint clip inside its rect and each child has an area and is
+    /// contained: everything below the child, at any depth, merged content
+    /// included, lies inside the rect of the node above it. That is a
+    /// scrollable's content past its viewport, which Flutter marks
+    /// `isHidden`, and AccessKit's filter leaves it out of navigation except
+    /// the first child past each edge, which a reader moves to in order to
+    /// scroll it in.
+    ///
+    /// The clip of the slot of the node a descendant sits under holds it, as
+    /// clips only narrow on the way down. AccessKit leaves out the whole
+    /// subtree of a node whose bounds miss its clipping parent's, and it
+    /// judges a node against its nearest ancestor that its filter keeps,
+    /// looking through generic containers. Containment makes any node it
+    /// leaves out lie, with everything below it, outside the node's rect,
+    /// which holds the clip, so nothing it leaves out is painted, however the
+    /// filter flattens the tree. Content laid out in a row past the edge but
+    /// translated back into view, or text a row merges that overflows it,
+    /// keeps the flag off. So does a list that fills only part of its
+    /// viewport (under a header, inside padding), whose rect is smaller than
+    /// the viewport's clip
+    /// ([gaps](../../../../../docs/gaps.md#a-list-that-fills-part-of-its-viewport-publishes-its-whole-cache-to-a-screen-reader)).
+    ///
+    /// A child with an empty or non-finite rect keeps the flag off: AccessKit
+    /// counts a child with no area as outside its clipping parent and drops
+    /// it unless a sibling next to it lies inside.
     fn form(self) -> BuiltSemanticsNode<'f> {
+        let contained = self.absorbed_inside
+            && self.children.iter().all(|child| {
+                has_area(&child.rect) && inside(&child.rect, &self.rect) && child.contained
+            });
+        let clips_children = self.clip_inside
+            && !self.children.is_empty()
+            && self
+                .children
+                .iter()
+                .all(|child| has_area(&child.rect) && child.contained);
         BuiltSemanticsNode {
             source: self.source,
             config: self.config,
             rect: self.rect,
             reveal_rect: self.reveal_rect,
+            clips_children,
+            contained,
             children: self.children,
         }
     }
+}
+
+/// What the flags above a formed node read of it: its area, whether it lies
+/// inside its parent's rect, and whether it is contained.
+fn place_in_parent(rect: &Rect<f64>, contained: bool, parent: &Rect<f64>) -> (bool, bool, bool) {
+    (has_area(rect), inside(rect, parent), contained)
+}
+
+/// Whether applying `grafts` leaves every published `clips_children` flag
+/// as a full assembly would set it. A graft re-forms its anchor and the
+/// nodes below it, not the nodes above, and the flag and containment of
+/// each node above read only the anchor's place in its parent
+/// ([`place_in_parent`]), besides its own rect and clip, which a graft
+/// below it does not move. `uncontained` holds the published nodes that are
+/// not contained; `None` when the published tree was not assembled here,
+/// which leaves the grafts nothing to compare with.
+fn grafts_keep_clipping(
+    arena: &SemanticsTree,
+    uncontained: Option<&FxHashSet<flui_foundation::SemanticsId>>,
+    grafts: &[(flui_foundation::SemanticsId, BuiltSemanticsNode<'_>)],
+) -> bool {
+    let Some(uncontained) = uncontained else {
+        return false;
+    };
+    grafts.iter().all(|(anchor, built)| {
+        let Some(old) = arena.get(*anchor) else {
+            return false;
+        };
+        let Some(parent) = old.parent().and_then(|parent| arena.get(parent)) else {
+            return true;
+        };
+        place_in_parent(&old.rect(), !uncontained.contains(anchor), &parent.rect())
+            == place_in_parent(&built.rect, built.contained, &parent.rect())
+    })
+}
+
+/// Whether `rect` is finite and has an area.
+fn has_area(rect: &Rect<f64>) -> bool {
+    let [left, top, right, bottom] = [rect.left(), rect.top(), rect.right(), rect.bottom()];
+    [left, top, right, bottom]
+        .iter()
+        .all(|edge| edge.is_finite())
+        && right > left
+        && bottom > top
+}
+
+/// Whether `outer` holds all of `inner`.
+fn inside(inner: &Rect<f64>, outer: &Rect<f64>) -> bool {
+    outer.left() <= inner.left()
+        && outer.top() <= inner.top()
+        && outer.right() >= inner.right()
+        && outer.bottom() >= inner.bottom()
 }
 
 enum SemanticsFragment<'f> {
@@ -1360,6 +1494,14 @@ fn build_semantics_fragments_impl<'f>(
     // layout box): the list allocates on its first fragment, not per node.
     let arena = regions.arena;
     let mut child_fragments: FrameVec<'f, SemanticsFragment<'f>> = Vec::new_in(arena);
+    // Whether every child, and so everything below the node, lies under a
+    // paint clip inside the node's rect: the clips only narrow on the way
+    // down, so the clip of the slot a descendant sits under holds it. A
+    // region lies under the node's own clip.
+    let inside_rect = |clip: Option<Rect<f64>>| clip.is_some_and(|clip| inside(&clip, &rect));
+    let mut clip_inside = (authored.before_children.is_empty()
+        && authored.after_children.is_empty())
+        || inside_rect(clips.paint);
     let mut children_block_previous = append_region_fragments(
         &mut child_fragments,
         authored.before_children,
@@ -1401,11 +1543,13 @@ fn build_semantics_fragments_impl<'f>(
                 continue;
             };
             let (local_paint, local_semantics) = child_clips_of(node, transform, child_slot);
+            let child_clips = clips.descend(local_paint, local_semantics);
+            clip_inside &= inside_rect(child_clips.paint);
             let fragments = build_semantics_fragments(
                 tree,
                 child_id,
                 child_transform,
-                clips.descend(local_paint, local_semantics),
+                child_clips,
                 decisions.child_context,
                 blocks_user_actions,
                 regions,
@@ -1471,8 +1615,9 @@ fn build_semantics_fragments_impl<'f>(
         });
     }
 
-    let children = merge_child_fragments(
+    let (children, absorbed_inside) = merge_child_fragments(
         &mut config,
+        &rect,
         child_fragments,
         regions.built,
         decisions.children_merge_into_ancestor,
@@ -1490,7 +1635,9 @@ fn build_semantics_fragments_impl<'f>(
         config,
         rect,
         reveal_rect,
+        clip_inside,
         children,
+        absorbed_inside,
     };
 
     let mut nodes = Vec::with_capacity_in(1, arena);
@@ -1593,7 +1740,9 @@ fn append_region_fragments<'f>(
             config,
             rect: clipped.rect,
             reveal_rect,
+            clip_inside: clips.paint.is_some_and(|clip| inside(&clip, &clipped.rect)),
             children: Vec::new_in(regions.built),
+            absorbed_inside: true,
         };
         fragments.push(if decisions.forms_node {
             SemanticsFragment::Formed(pending.form())
@@ -1606,11 +1755,12 @@ fn append_region_fragments<'f>(
 
 fn merge_child_fragments<'f>(
     config: &mut SemanticsConfiguration,
+    host: &Rect<f64>,
     mut fragments: FrameVec<'f, SemanticsFragment<'f>>,
     built: &'f FrameArena,
     suppress_conflicts: bool,
     names_a_control: bool,
-) -> FrameVec<'f, BuiltSemanticsNode<'f>> {
+) -> (FrameVec<'f, BuiltSemanticsNode<'f>>, bool) {
     // Stable sorting preserves declarative order for equal keys and unkeyed
     // siblings. Sort before folding, so merged labels follow reading order too.
     fragments.sort_by(|a, b| {
@@ -1633,6 +1783,7 @@ fn merge_child_fragments<'f>(
     // list is taken over instead, so a chain of absorbed nodes over many descendants moves one
     // list up the chain rather than copying it at each level.
     let mut children: FrameVec<'f, BuiltSemanticsNode<'f>> = Vec::new_in(built);
+    let mut absorbed_inside = true;
 
     // The iterator holds the fragments' buffer, below the conflict marks: it is dropped after
     // them, so the arena frees both in the reverse order it handed them out.
@@ -1659,6 +1810,7 @@ fn merge_child_fragments<'f>(
             }
             SemanticsFragment::Pending(pending) => {
                 config.absorb(&pending.config);
+                absorbed_inside &= pending.absorbed_inside && inside(&pending.rect, host);
                 if children.capacity() == 0 {
                     // Nothing is listed yet, so `children` holds no memory: take this list over
                     // with room for the fragments still to come.
@@ -1681,7 +1833,7 @@ fn merge_child_fragments<'f>(
             scratch,
         );
     }
-    children
+    (children, absorbed_inside)
 }
 
 /// Makes room in `list` for `additional` more: exactly that much for its first allocation, which
@@ -1818,18 +1970,22 @@ fn mark_configuration_conflicts<'f>(
     places
 }
 
+/// Replaces the published tree with `root`, and `uncontained` with its
+/// nodes that are not contained.
 fn rebuild_semantics_owner(
     owner: &mut SemanticsOwner,
     root: Option<BuiltSemanticsNode<'_>>,
     regions: &RegionIdentities,
+    uncontained: &mut FxHashSet<flui_foundation::SemanticsId>,
 ) {
     owner.clear();
+    uncontained.clear();
 
     let Some(root) = root else {
         return;
     };
 
-    let root_id = insert_built_semantics_node(owner, root, regions);
+    let root_id = insert_built_semantics_node(owner, root, regions, uncontained);
     owner.set_root(Some(root_id));
 }
 
@@ -1850,6 +2006,7 @@ fn semantics_node_parts<'f>(
     .with_config(built.config);
     node.set_rect(built.rect);
     node.set_reveal_rect(built.reveal_rect);
+    node.set_clips_children(built.clips_children);
     (node, built.children)
 }
 
@@ -1857,11 +2014,16 @@ fn insert_built_semantics_node(
     owner: &mut SemanticsOwner,
     built: BuiltSemanticsNode<'_>,
     regions: &RegionIdentities,
+    uncontained: &mut FxHashSet<flui_foundation::SemanticsId>,
 ) -> flui_foundation::SemanticsId {
+    let contained = built.contained;
     let (node, children) = semantics_node_parts(built, regions);
     let id = owner.insert(node);
+    if !contained {
+        uncontained.insert(id);
+    }
     for child in children {
-        let child_id = insert_built_semantics_node(owner, child, regions);
+        let child_id = insert_built_semantics_node(owner, child, regions, uncontained);
         owner.add_child(id, child_id);
     }
     id
@@ -1877,6 +2039,7 @@ fn plan_graft_pass<'f>(
     tree: &RenderTree,
     pipeline_root: Option<RenderId>,
     owner: &SemanticsOwner,
+    uncontained: Option<&FxHashSet<flui_foundation::SemanticsId>>,
     marked: &[RenderId],
     placed: &[RenderId],
     regions: &mut AssemblyRegions<'f>,
@@ -1940,7 +2103,9 @@ fn plan_graft_pass<'f>(
             regions,
         )?);
     }
-    Some(grafts)
+    // A flag above an anchor that the grafts would leave stale needs the
+    // node that holds it re-formed: the full rebuild.
+    grafts_keep_clipping(owner.tree(), uncontained, &grafts).then_some(grafts)
 }
 
 /// Resolves a placement mark — a node whose subtree moved while no
@@ -2330,27 +2495,49 @@ fn collection_affects_graft(tree: &SemanticsTree, anchor: flui_foundation::Seman
     false
 }
 
+/// Removes the nodes each graft of a pass replaces, and their entries in the
+/// containment table. The arena reuses a removed node's id, so the table
+/// drops them before any graft inserts a node; it is read once for the pass,
+/// not once per graft.
+fn clear_graft_anchors(
+    owner: &mut SemanticsOwner,
+    grafts: &[(flui_foundation::SemanticsId, BuiltSemanticsNode<'_>)],
+    uncontained: &mut FxHashSet<flui_foundation::SemanticsId>,
+) {
+    for &(anchor_sid, _) in grafts {
+        let old_children: Vec<flui_foundation::SemanticsId> = owner
+            .tree()
+            .children(anchor_sid)
+            .map_or_default(<[flui_foundation::SemanticsId]>::to_vec);
+        for child in old_children {
+            let _ = owner.tree_mut().remove(child);
+        }
+        uncontained.remove(&anchor_sid);
+    }
+    if !uncontained.is_empty() {
+        uncontained.retain(|id| owner.tree().contains(*id));
+    }
+}
+
+/// Places one graft into its anchor's slot, which
+/// [`clear_graft_anchors`] emptied.
 fn apply_graft(
     owner: &mut SemanticsOwner,
     anchor_sid: flui_foundation::SemanticsId,
     built: BuiltSemanticsNode<'_>,
     regions: &RegionIdentities,
+    uncontained: &mut FxHashSet<flui_foundation::SemanticsId>,
 ) {
-    let old_children: Vec<flui_foundation::SemanticsId> = owner
-        .tree()
-        .children(anchor_sid)
-        .map_or_default(<[flui_foundation::SemanticsId]>::to_vec);
-    for child in old_children {
-        let _ = owner.tree_mut().remove(child);
+    if !built.contained {
+        uncontained.insert(anchor_sid);
     }
-
     let (node, children) = semantics_node_parts(built, regions);
     assert!(
         owner.tree_mut().replace_node(anchor_sid, node),
         "BUG: a staged graft retains its anchor slot"
     );
     for child in children {
-        let child_sid = insert_built_semantics_node(owner, child, regions);
+        let child_sid = insert_built_semantics_node(owner, child, regions, uncontained);
         owner.add_child(anchor_sid, child_sid);
     }
 }
@@ -2403,7 +2590,13 @@ fn check_placement_against_rebuild(
     };
     let mut rebuilt = SemanticsOwner::new_without_callback();
     rebuilt.set_device_pixel_ratio(owner.device_pixel_ratio());
-    rebuild_semantics_owner(&mut rebuilt, built.map(|node| *node), identities);
+    let mut rebuilt_uncontained = FxHashSet::default();
+    rebuild_semantics_owner(
+        &mut rebuilt,
+        built.map(|node| *node),
+        identities,
+        &mut rebuilt_uncontained,
+    );
 
     let placed = owner.to_accesskit_tree_update(None);
     let expected = rebuilt.to_accesskit_tree_update(None);
@@ -2440,6 +2633,32 @@ fn check_placement_against_rebuild(
             );
         panic!(
             "BUG: re-placing moved semantics published another tree than a rebuild would\n{first}"
+        );
+    }
+    // The two trees publish the same nodes under the same stable ids, so the
+    // containment table the grafts kept must name the nodes a rebuild
+    // records: a stale entry lets a later graft keep a stale
+    // `clips_children` above its anchor.
+    if identities.containment_known {
+        let published = |tree: &flui_semantics::SemanticsTree,
+                         ids: &FxHashSet<flui_foundation::SemanticsId>| {
+            let mut stable: Vec<Option<u64>> = ids
+                .iter()
+                .map(|&id| {
+                    tree.get(id)
+                        .and_then(flui_semantics::SemanticsNode::accessibility_id)
+                        .map(flui_semantics::AccessibilityNodeId::as_u64)
+                })
+                .collect();
+            stable.sort_unstable();
+            stable
+        };
+        let kept = published(owner.tree(), &identities.uncontained);
+        let recorded = published(rebuilt.tree(), &rebuilt_uncontained);
+        assert!(
+            kept == recorded,
+            "BUG: re-placing moved semantics kept another containment table than a rebuild \
+             records\nkept {kept:?}\nrebuilt {recorded:?}"
         );
     }
     std::mem::take(&mut regions.callbacks)

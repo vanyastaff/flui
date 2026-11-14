@@ -523,10 +523,14 @@ pub struct FrameFailureReport {
     pub kind: FrameFailureKind,
     /// Whether this report dropped the frame or describes an inner recovery.
     pub disposition: FailureDisposition,
-    /// Consecutive [`FailureDisposition::FrameDropped`] count for this
-    /// presentation. A [`FailureDisposition::Contained`] report exposes the
-    /// current count but neither increments nor resets it; only a terminal
-    /// clean outcome resets the streak after contained reports are delivered.
+    /// Consecutive dropped frames for this presentation: each
+    /// [`FailureDisposition::FrameDropped`] report, and each submit that settles
+    /// `SubmitVerdict::Failed` and is retried, without a report (ADR-0334).
+    /// A [`FailureDisposition::Contained`] report exposes the
+    /// current count but neither increments nor resets it. A clean attempt that
+    /// paints nothing, or whose scene reaches no sink, resets the streak after
+    /// its contained reports are delivered; a painted scene resets it once its
+    /// verdict commits the current tree.
     /// An embedder can key its own escalation off this value.
     pub consecutive_failures: u32,
 }

@@ -1219,14 +1219,15 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
 
     /// The viewport's own bounds, with the
     /// leading edge pushed in by whatever overlaps this child — the room a
-    /// pinned header takes. `Clip::None` clips nothing, so it reports
-    /// nothing and content outside the viewport stays a fully present
+    /// pinned header takes. Paint clips only content that overflows the
+    /// viewport and never under `Clip::None`; otherwise this reports
+    /// nothing, and content painted outside the viewport stays a fully present
     /// accessibility node.
     ///
     /// The direction the correction pushes from follows the child's growth
     /// direction: a reverse-group child is measured from the far edge.
     fn describe_approximate_paint_clip(&self, child_slot: usize, size: Size) -> Option<Rect<f64>> {
-        if self.clip_behavior == Clip::None {
+        if self.clip_behavior == Clip::None || !self.layout.has_visual_overflow {
             return None;
         }
         let clip = Rect::from_origin_size(Point::ZERO, size);
@@ -2002,14 +2003,15 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
 
     /// The viewport's own bounds, with the
     /// leading edge pushed in by whatever overlaps this child — the room a
-    /// pinned header takes. `Clip::None` clips nothing, so it reports
-    /// nothing and content outside the viewport stays a fully present
+    /// pinned header takes. Paint clips only content that overflows the
+    /// viewport and never under `Clip::None`; otherwise this reports
+    /// nothing, and content painted outside the viewport stays a fully present
     /// accessibility node.
     ///
     /// The direction the correction pushes from follows the child's growth
     /// direction: a reverse-group child is measured from the far edge.
     fn describe_approximate_paint_clip(&self, child_slot: usize, size: Size) -> Option<Rect<f64>> {
-        if self.clip_behavior == Clip::None {
+        if self.clip_behavior == Clip::None || !self.layout.has_visual_overflow {
             return None;
         }
         let clip = Rect::from_origin_size(Point::ZERO, size);

@@ -3058,6 +3058,23 @@ fn a_node_moved_out_of_its_clip_comes_back() {
     );
     assert_eq!(seen[0], seen[2], "moving back restores the node");
 }
+/// A clip the move carries with it decides whether the node above clips its
+/// children: inside the holder it does, carried past the holder's edge it
+/// does not, and the node above is published as a rebuild publishes it.
+fn a_clip_moved_past_its_holder_ends_its_clipping() {
+    use flui_widgets::{ClipRect, Transform};
+    publishes_as_built_afresh(
+        |dx| {
+            Semantics::new().container(true).label("holder").child(
+                SizedBox::new(100.0, 100.0).child(
+                    Transform::translate(dx, 0.0)
+                        .child(ClipRect::new().child(labelled("clipped", 40.0))),
+                ),
+            )
+        },
+        &[0.0, 200.0, 0.0],
+    );
+}
 
 /// A layout wrapper the move takes from the visible part of a viewport into
 /// its cache extent is painted nowhere yet still published, so assembly marks
@@ -3100,6 +3117,51 @@ fn a_wrapper_moved_out_of_the_cache_extent_unhides_its_container() {
             ))
         },
         &[150.0, 0.0, 150.0],
+    );
+}
+
+/// A child of a clipping holder that a scale collapses to no area changes the
+/// holder's flag though no clip moves, and the holder is published as a
+/// rebuild publishes it.
+fn a_child_collapsed_under_a_clipping_holder() {
+    use flui_widgets::{SingleChildScrollView, Transform};
+    publishes_as_built_afresh(
+        |scale| {
+            SizedBox::new(100.0, 100.0).child(
+                SingleChildScrollView::new().child(
+                    Semantics::new().container(true).label("holder").child(
+                        SizedBox::new(100.0, 100.0)
+                            .child(Transform::scale(scale, scale).child(labelled("shrunk", 40.0))),
+                    ),
+                ),
+            )
+        },
+        &[1.0, 0.0, 1.0],
+    );
+}
+
+/// Content moved out of its row and back decides whether the holder clips
+/// its rows, though the move re-forms only the content: the row's
+/// containment changes, and the holder is published as a rebuild publishes
+/// it.
+fn content_moved_out_of_its_row_and_back() {
+    use flui_widgets::{Column, SingleChildScrollView, Transform};
+    publishes_as_built_afresh(
+        |dy| {
+            SizedBox::new(100.0, 100.0).child(SingleChildScrollView::new().child(
+                Semantics::new().container(true).label("holder").child(
+                    SizedBox::new(100.0, 100.0).child(Column::new((
+                        labelled("row", 50.0),
+                        Semantics::new().container(true).label("slot").child(
+                            SizedBox::new(100.0, 20.0).child(
+                                Transform::translate(0.0, dy).child(labelled("content", 40.0)),
+                            ),
+                        ),
+                    ))),
+                ),
+            ))
+        },
+        &[0.0, 50.0, 0.0],
     );
 }
 
@@ -3192,6 +3254,18 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
             ("sibling stays", a_sibling_outside_the_transform_stays),
             ("partial clip", a_partly_clipped_node_stays_published),
             ("full clip", a_node_moved_out_of_its_clip_comes_back),
+            (
+                "a clip moved past its holder",
+                a_clip_moved_past_its_holder_ends_its_clipping,
+            ),
+            (
+                "a child collapsed under a clipping holder",
+                a_child_collapsed_under_a_clipping_holder,
+            ),
+            (
+                "content moved out of its row and back",
+                content_moved_out_of_its_row_and_back,
+            ),
             (
                 "a wrapper moved into the cache extent",
                 a_wrapper_moved_into_the_cache_extent_is_hidden_with_it,
@@ -3489,4 +3563,48 @@ pub(crate) fn a_clip_behavior_switch_republishes_what_the_clip_hides() {
             .clip_behavior(clip),
         )
     });
+}
+
+/// A holder whose child stays inside it while that child's own content is
+/// painted past both of them, still inside the viewport, does not clip its
+/// children: everything painted under a node counts, not its children's
+/// rects alone. A reader and the agent's `visible` check reach the moved
+/// content.
+pub(crate) fn a_descendant_painted_past_its_holder_keeps_the_holder_unclipped() {
+    use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    let view = SizedBox::new(100.0, 300.0).child(Viewport::new(
+        ScrollPosition::fixed(0.0),
+        (SliverToBoxAdapter::new().child(
+            Semantics::new().container(true).label("holder").child(
+                SizedBox::new(100.0, 50.0).child(
+                    Semantics::new().container(true).label("inner").child(
+                        SizedBox::new(100.0, 50.0)
+                            .child(Transform::translate(0.0, 60.0).child(labelled("moved", 40.0))),
+                    ),
+                ),
+            ),
+        ),),
+    ));
+    let mut laid = lay_out(view, loose(400.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let clips = |label: &str| {
+        let id = tree
+            .find_by_label(label)
+            .unwrap_or_else(|error| panic!("{label}: {error}"))
+            .id();
+        tree.raw()
+            .nodes
+            .iter()
+            .find(|(node, _)| *node == id)
+            .expect("the node is published")
+            .1
+            .clips_children()
+    };
+    assert!(
+        !clips("holder"),
+        "the moved content is painted past the holder"
+    );
+    assert!(!clips("inner"), "and past the inner container");
 }

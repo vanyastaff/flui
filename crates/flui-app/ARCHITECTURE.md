@@ -282,7 +282,9 @@ the dispatch layer moves there too.
   `native_operation_retains_owners_after_the_last_external_handle_is_released`
   covers normal release and competing operation, driver and handler failures.
 - **Transient render failure retains demand.** Both sinks distinguish `Retry`
-  from terminal `Failed` and device recovery. The raster completion publishes
+  from `Failed` (tried again after the dropped-frame backoff), from `Refused` (a surface or size
+  the device refuses, or a renderer that panicked on the scene, which waits for the window's next
+  change; ADR-0334) and from device recovery. The raster completion publishes
   retry debt reliably even when telemetry acks are full; the UI runtime retains epochs
   and requests a paced full repaint (ADR-0101). Pinned for the host by
   `every_settled_verdict_maps_to_its_submit_verdict`, and for a slot by flui-engine's

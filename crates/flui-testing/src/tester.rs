@@ -64,6 +64,10 @@ const ANSWER_FRAMES: u32 = 64;
 /// Outline lines a failure lists.
 const SHOWN_LINES: usize = 15;
 
+/// How often [`Tester::try_is_visible`] locates and reads again when a frame
+/// changed the tree between the locate and a reading.
+const VISIBLE_READS: usize = 4;
+
 /// At most this many zero-length frames run work due now before a read: a
 /// woken completion, the rebuild it schedules and the semantics it commits.
 const DUE_NOW_FRAMES: u32 = 8;
@@ -229,6 +233,13 @@ pub enum TestError {
     /// The window's agent refused or failed a call.
     #[error("the window's agent answered {}: {}", .0.code, .0.message)]
     Agent(Box<ErrorObject>),
+    /// Frames kept changing the semantics tree between a locate and the
+    /// readings of what it found, every time it was read.
+    #[error("the semantics tree changed between a locate and its readings {reads} times")]
+    KeptChanging {
+        /// The locates made.
+        reads: usize,
+    },
 }
 
 impl From<ErrorObject> for TestError {
@@ -426,7 +437,11 @@ impl Tester {
 
     // --- Reading ----------------------------------------------------------
 
-    /// Every element `locator` matches now, in tree order.
+    /// Every element `locator` matches now, in tree order: the whole built
+    /// tree, rows a list keeps past its viewport included, as `flutter_test`'s
+    /// `find` sees them. Whether a match is shown is
+    /// [`is_visible`](Self::is_visible), and an action on one that is not
+    /// fails with `visible`.
     ///
     /// # Errors
     ///
@@ -470,6 +485,51 @@ impl Tester {
     #[must_use]
     pub fn read(&mut self, locator: &Locator) -> Node {
         self.try_read(locator)
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Whether an element `locator` matches is visible: its bounds are not
+    /// empty and lie partly inside the window and every clipping ancestor, the
+    /// `visible` check an action makes. A row a list keeps past its viewport
+    /// is matched and not visible. Whether a pointer there reaches it, past a
+    /// barrier or a popup over it, is an action's `receives` check, not this.
+    ///
+    /// The locate and the reading of each match are separate reads, and a
+    /// frame due between them may move or rebuild what the locate found: an
+    /// answer counts only when every reading was made on the tree the locate
+    /// read, and is taken again otherwise, a few times at most.
+    ///
+    /// # Errors
+    ///
+    /// When the window cannot answer, and [`TestError::KeptChanging`] when
+    /// frames keep changing the tree between the locate and its readings.
+    pub fn try_is_visible(&mut self, locator: &Locator) -> Result<bool, TestError> {
+        'read: for _ in 0..VISIBLE_READS {
+            for one in &self.try_find_all(locator)? {
+                let facts = self.actionability(one)?;
+                if facts.revision != one.revision {
+                    continue 'read;
+                }
+                if facts.visible {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
+        Err(TestError::KeptChanging {
+            reads: VISIBLE_READS,
+        })
+    }
+
+    /// Whether an element `locator` matches is visible.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_is_visible`] fails.
+    #[track_caller]
+    #[must_use]
+    pub fn is_visible(&mut self, locator: &Locator) -> bool {
+        self.try_is_visible(locator)
             .unwrap_or_else(|error| panic!("{error}"))
     }
 

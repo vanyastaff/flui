@@ -1240,8 +1240,11 @@ frame work does not count as pending, and a late redraw request does not wake th
 host, so a host that sleeps until `next_wake` makes one attempt per deadline. A key
 press or a pointer button press ends the wait once per interval; motion, signal
 writes, tickers and the frame's own invalidations keep their demand for the
-attempt. A text failure that waits for input arms nothing. A clean segment clears
-the streak and the wait. `headless_frame_driver_matrix` in `flui-testing` pins the
+attempt. A text failure that waits for input arms nothing. A clean segment that paints nothing
+clears the streak and the wait; a painted one clears them once its verdict commits the current
+tree, and a frame that settles `Failed` waits out the same backoff before its tree is painted again
+(ADR-0334); a frame the host answers `Refused` waits for its window's next change instead.
+`headless_frame_driver_matrix` in `flui-testing` pins the
 cadence at 60, 120 and 240 Hz, the single-failure redraw, the press bypass and a
 streak of forty.
 

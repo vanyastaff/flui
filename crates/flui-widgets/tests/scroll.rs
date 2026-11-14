@@ -5297,3 +5297,178 @@ pub(crate) fn scroll_physics_refuse_coefficients_outside_the_unit_range() {
     assert_eq!(bouncing.overscroll_spring_coefficient(), 0.3);
     assert_eq!(bouncing.fling_drag_coefficient(), 0.2);
 }
+
+/// A list's rows wholly past its viewport are off screen, as Flutter marks
+/// them `isHidden`, while the window still shows that spot: the list sits in
+/// the middle of a larger root. A screen reader, which reads the published
+/// tree through AccessKit's filter, reaches the first row past the edge and
+/// none beyond it, and moving there scrolls that row into the viewport.
+pub(crate) fn a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in() {
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
+    use flui_widgets::{Center, ListView, Text};
+
+    fn row(index: usize) -> flui_view::BoxedView {
+        SizedBox::new(100.0, 50.0)
+            .child(Text::new(format!("row {index}")))
+            .boxed()
+    }
+    let controller = ScrollController::new();
+    let list = Center::new().child(SizedBox::new(100.0, 100.0).child(
+        ListView::builder(40, 50.0, |i| (i < 40).then(|| row(i))).controller(controller.clone()),
+    ));
+    let mut laid = lay_out(list, tight(400.0, 400.0));
+    laid.enable_semantics();
+    laid.tick();
+
+    assert_eq!(
+        rows_a_reader_reaches(&laid),
+        ["row 0", "row 1", "row 2"],
+        "the two rows in view and the first past the edge; the cache's \
+         rows beyond it are left out"
+    );
+
+    let target = laid
+        .a11y_tree()
+        .expect("semantics enabled")
+        .find_by_label("row 2")
+        .expect("the row past the edge is published")
+        .id();
+    laid.invoke_semantics_action(ActionRequest {
+        action: Action::ScrollIntoView,
+        target_tree: TreeId::ROOT,
+        target_node: target,
+        data: None,
+    })
+    .expect("the row past the edge takes ScrollIntoView");
+    for _ in 0..60 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        controller.pixels(),
+        50.0,
+        "the row is scrolled just into view"
+    );
+    assert_eq!(
+        rows_a_reader_reaches(&laid),
+        ["row 0", "row 1", "row 2", "row 3"],
+        "row 0 is now the row past the top edge, row 3 the one past the bottom"
+    );
+}
+
+/// Content painted where the window shows it stays within a screen reader's
+/// reach, wherever its row is laid out. AccessKit drops the whole subtree of
+/// a child that lies outside a clipping node, so a list publishes
+/// `clips_children` only for a clip its paint applies and only when that
+/// leaves out nothing painted inside it.
+pub(crate) fn content_painted_in_view_from_a_row_past_the_edge_stays_in_reach() {
+    use flui_widgets::{Center, Column, ListView, Text, Transform};
+
+    fn labelled(dy: f64, label: &str) -> flui_view::BoxedView {
+        Transform::translate(0.0, dy)
+            .child(
+                flui_widgets::Semantics::new()
+                    .container(true)
+                    .label(label.to_owned())
+                    .child(SizedBox::new(100.0, 10.0)),
+            )
+            .boxed()
+    }
+    fn text_row(index: usize, extent: f64) -> flui_view::BoxedView {
+        SizedBox::new(100.0, extent)
+            .child(Text::new(format!("row {index}")))
+            .boxed()
+    }
+
+    struct Case {
+        name: &'static str,
+        count: usize,
+        extent: f64,
+        row: fn(usize) -> flui_view::BoxedView,
+        reached: &'static [&'static str],
+    }
+    let cases = [
+        Case {
+            // Row 4 lies past the bottom edge; its content is translated
+            // back into the viewport.
+            name: "content moved into view from a row past the edge",
+            count: 40,
+            extent: 50.0,
+            row: |index| {
+                if index != 4 {
+                    return text_row(index, 50.0);
+                }
+                flui_widgets::Semantics::new()
+                    .container(true)
+                    .label("slot 4")
+                    .child(SizedBox::new(100.0, 50.0).child(labelled(-175.0, "row moved")))
+                    .boxed()
+            },
+            reached: &["row moved"],
+        },
+        Case {
+            // The rows fill the viewport exactly, so paint applies no clip
+            // and the last row's content is painted below the viewport,
+            // inside the window.
+            name: "content painted past a list that fits its viewport",
+            count: 5,
+            extent: 20.0,
+            row: |index| {
+                if index != 4 {
+                    return text_row(index, 20.0);
+                }
+                SizedBox::new(100.0, 20.0)
+                    .child(Column::new(vec![
+                        labelled(40.0, "row B"),
+                        labelled(60.0, "row C"),
+                    ]))
+                    .boxed()
+            },
+            reached: &["row B", "row C"],
+        },
+    ];
+
+    for case in cases {
+        let (count, row) = (case.count, case.row);
+        let list = Center::new().child(SizedBox::new(100.0, 100.0).child(ListView::builder(
+            count,
+            case.extent,
+            move |index| (index < count).then(|| row(index)),
+        )));
+        let mut laid = lay_out(list, tight(400.0, 400.0));
+        laid.enable_semantics();
+        laid.tick();
+
+        let reached = rows_a_reader_reaches(&laid);
+        for label in case.reached {
+            assert!(
+                reached.iter().any(|reached| reached == label),
+                "{}: {label} is painted in the window and reachable: {reached:?}",
+                case.name
+            );
+        }
+    }
+}
+
+/// The rows of a list a screen reader reaches: what AccessKit's filter keeps
+/// of the published tree, by label.
+fn rows_a_reader_reaches(laid: &LaidOut) -> Vec<String> {
+    use accesskit_consumer::{FilterResult, common_filter};
+
+    let tree = accesskit_consumer::Tree::new(
+        laid.a11y_tree().expect("semantics enabled").raw().clone(),
+        true,
+    );
+    let mut names = Vec::new();
+    let mut pending = vec![tree.state().root()];
+    while let Some(node) = pending.pop() {
+        if common_filter(&node) == FilterResult::ExcludeSubtree {
+            continue;
+        }
+        if let Some(label) = node.label().filter(|label| label.starts_with("row ")) {
+            names.push(label);
+        }
+        pending.extend(node.children());
+    }
+    names.sort();
+    names
+}

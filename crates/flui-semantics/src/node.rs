@@ -75,6 +75,9 @@ pub struct SemanticsNode {
     rect: Rect<f64>,
     /// Unclipped geometry used only by ancestor reveal delivery.
     reveal_rect: Option<Rect<f64>>,
+    /// No child is painted outside `rect`, so a child wholly outside it is
+    /// off screen (a scrollable's content past its viewport).
+    clips_children: bool,
 
     /// Transform matrix.
     ///
@@ -101,6 +104,7 @@ impl SemanticsNode {
             config: SemanticsConfiguration::new(),
             rect: Rect::ZERO,
             reveal_rect: None,
+            clips_children: false,
             transform: None,
             dirty: true,
         }
@@ -261,6 +265,22 @@ impl SemanticsNode {
 
     pub(crate) fn reveal_rect(&self) -> Rect<f64> {
         self.reveal_rect.unwrap_or(self.rect)
+    }
+
+    /// Declare that no child is painted outside this node's rect, so a child
+    /// wholly outside it is off screen, as content past a scrollable's
+    /// viewport is. Assembly derives it from the paint clips.
+    pub fn set_clips_children(&mut self, clips: bool) {
+        if self.clips_children != clips {
+            self.clips_children = clips;
+            self.dirty = true;
+        }
+    }
+
+    /// Whether no child is painted outside this node's rect.
+    #[must_use]
+    pub fn clips_children(&self) -> bool {
+        self.clips_children
     }
 
     /// Returns the transform matrix, if any.

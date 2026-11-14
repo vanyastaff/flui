@@ -1386,9 +1386,10 @@ impl RasterHost {
     /// sequence, to `address`'s slot, measured on `surface`, turn
     /// the executor and answer what became of the frame. A panic of the
     /// frame is held for the window to report to its UI runtime after the
-    /// frame ([`RasterSlot::report_frame_panic`]); the frame fails, and the
-    /// window's next change draws in full. A size past the device's limit
-    /// fails the frame too, until the platform announces another size.
+    /// frame ([`RasterSlot::report_frame_panic`]); the frame is refused
+    /// (`SubmitVerdict::Refused`), and the window's next change draws in full.
+    /// A size past the device's limit refuses the frame too, until the
+    /// platform announces another size.
     fn submit(
         &mut self,
         address: PresentationAddress,
@@ -1411,7 +1412,7 @@ impl RasterHost {
             // Otherwise (a zero size, no surface yet) nothing is drawn until
             // the next resize.
             return if Self::size_refused(placed, address, surface) {
-                SubmitVerdict::Failed
+                SubmitVerdict::Refused
             } else {
                 SubmitVerdict::NotShown
             };
@@ -1463,9 +1464,9 @@ impl RasterHost {
             .iter()
             .find(|settlement| settlement.epoch == epoch)
             .map(|settlement| settlement.verdict);
-        // No surface the GPU takes, or no size it draws at: nothing until the
-        // window's next change (or a rebuilt device) asks again. Retried, the
-        // frame would meet a stale surface every display period.
+        // No surface the GPU takes, or no size it draws at: the frame is
+        // refused, and nothing until the window's next change (or a rebuilt
+        // device) asks again. Retried, the frame would meet the same refusal.
         let stuck = settled != Some(RasterVerdict::Presented)
             && (placed
                 .sender
@@ -1479,17 +1480,17 @@ impl RasterHost {
         if turned == SlotTurn::Panicked {
             let verdict = match settled {
                 // The render itself panicked, which the executor settles as
-                // a retry. Not retried: a renderer that panics on this scene
+                // a retry. Refused: a renderer that panics on this scene
                 // panics on its retry too, and the window's next change
                 // draws again.
-                Some(RasterVerdict::Retry) | None => SubmitVerdict::Failed,
+                Some(RasterVerdict::Retry) | None => SubmitVerdict::Refused,
                 // A command before the frame panicked (a resize, an upload)
                 // and the frame settled otherwise: what it became stands, so
                 // a stale surface is retried and applies what is still
                 // pending. Once: a retry whose resize panics again is the
                 // size's or the driver's failure, not the moment's; the
                 // window's next change tries it again.
-                Some(RasterVerdict::SurfaceStale) if retrying => SubmitVerdict::Failed,
+                Some(RasterVerdict::SurfaceStale) if retrying => SubmitVerdict::Refused,
                 Some(verdict) => {
                     let verdict = Self::verdict(&mut slot.base, verdict, shown, key);
                     slot.retrying_panic = matches!(verdict, SubmitVerdict::SurfaceStale);
@@ -1503,7 +1504,7 @@ impl RasterHost {
         }
         if stuck {
             slot.base.forget();
-            return SubmitVerdict::Failed;
+            return SubmitVerdict::Refused;
         }
         let Some(verdict) = settled else {
             tracing::error!(?epoch, "raster host: an inline frame settled nothing");

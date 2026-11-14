@@ -90,6 +90,7 @@ fn published_role(role: SemanticsRole, label: bool) -> accesskit::Role {
         attrs: &attrs,
         actions: 0,
         rect: flui_foundation::geometry::Rect::ZERO,
+        clips_children: false,
         children: smallvec::SmallVec::new(),
         text_selection: None,
     })
