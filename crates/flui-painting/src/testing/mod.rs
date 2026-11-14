@@ -156,6 +156,28 @@ pub fn paragraph_with_font_bytes(
     paragraph
 }
 
+/// The paragraph with every run drawn with `synthesis` and with the variation
+/// coordinates `coords`, so a test can tell paragraphs apart by what their
+/// glyphs rasterize with alone. Text, glyphs and placement stay unchanged.
+///
+/// # Errors
+///
+/// Returns an error if `coords` holds more than `u32::MAX` entries.
+pub fn paragraph_with_run_styles(
+    paragraph: &crate::ShapedParagraph,
+    synthesis: crate::glyphs::Synthesis,
+    coords: &[i16],
+) -> Result<crate::ShapedParagraph, &'static str> {
+    let end = u32::try_from(coords.len()).map_err(|_| "coordinates do not fit u32")?;
+    let mut paragraph = paragraph.clone();
+    paragraph.coords = coords.into();
+    for run in &mut paragraph.runs {
+        run.synthesis = synthesis;
+        run.coords = 0..end;
+    }
+    Ok(paragraph)
+}
+
 /// Gives the paragraph's faces deterministic ids to model independent plugin
 /// images whose local blob counters restart. This fixture changes ids only;
 /// the font bytes, shaped glyphs and placement stay unchanged.

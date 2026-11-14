@@ -4,8 +4,9 @@
 //! Inspection asks it to tell two pictures of one length and bounds apart, so
 //! it covers every value a command draws with: its transform, its op's fields,
 //! the payload the op names (by content, not by position), and the paint,
-//! path, image and paragraph behind them. Equal within one build of the
-//! program, not across builds.
+//! path, image and paragraph behind them. A paragraph's font is read by its
+//! face key, as the glyph caches read it, not by its bytes. Equal within one
+//! build of the program, not across builds.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem;
@@ -315,6 +316,8 @@ impl Fingerprint {
         }
         self.len(paragraph.faces.len());
         for face in &paragraph.faces {
+            // By key, as the glyph caches read a face: hashing its bytes would
+            // cost the font's size on every inspection.
             face.key().hash(&mut self.0);
         }
         self.len(paragraph.coords.len());
