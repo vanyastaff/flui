@@ -279,8 +279,8 @@ struct WindowedGpuStack {
 /// see `SurfaceLease`/`WindowTarget` in the sibling modules) — there is no
 /// manual `Send` assertion left anywhere in this file.
 ///
-/// Deliberately never `Sync`: the raster owner
-/// (`crate::raster_owner::RasterOwner`) has sole mutable access to the
+/// Deliberately never `Sync`: the raster executor
+/// ([`crate::RasterExecutor`]) has sole mutable access to the
 /// `Renderer`/`Surface`/`Device`/`Queue` it wraps, and a shared `&Renderer`
 /// across threads would defeat that single-mutator contract. Before #1043
 /// this held only by accident, riding on `pre_present_hook`'s `Box<dyn
@@ -1758,9 +1758,9 @@ impl Renderer {
     /// always repaints everything, and because it shows a scene the owner's
     /// producer never saw, the retained target stops describing the screen
     /// and the next frame renders in full too, even one the producer found
-    /// unchanged. A frame a [`crate::RasterOwner`] retires goes through
+    /// unchanged. A frame the raster executor renders goes through
     /// [`RasterBackend::render_scene`](crate::RasterBackend::render_scene)
-    /// instead, which renders the damage the owner applied.
+    /// instead, which renders the damage the frame carries.
     ///
     /// [`PresentDisposition::Presented`] means `present()` ran. Whether that
     /// call paced the frame depends on the backend: under the default Fifo

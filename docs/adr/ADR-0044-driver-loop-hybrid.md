@@ -198,11 +198,11 @@ The clock-level half is simple: an empty mask, no gating, and `poll` returns `Sk
 
 ### 9. Raster backpressure: a reliable in-flight counter with a retire→wake edge
 
-The third owner's accounting: `RasterOwner`/`RasterHandle`
-(`crates/flui-engine/src/raster_owner.rs`) owns an RAII `InFlightTicket`, incremented
-on accepted submit and decremented on retirement, including unwind through a
-panicking `render_scene`. Its retire wake is independent of the lossy ack lane.
-Supersede, frame completion and shutdown/device-loss all retire their tickets.
+The third owner's accounting: each slot of the raster executor
+(`crates/flui-engine/src/raster_executor/`) carries an in-flight count in its
+record, incremented on an accepted frame and decremented when the frame settles,
+including a contained panic in `render`. Its settlement is independent of any lossy
+channel. Supersede, frame completion and shutdown/device-loss all settle their frames.
 The former `RasterOptions` configuration type is removed. Current renderer
 surface configuration uses `desired_maximum_frame_latency: 2`; that swapchain
 setting is not a production `FrameClock` backpressure permit.
@@ -248,7 +248,7 @@ Every produce still has exactly the trigger it always had — a demand mark (`Di
 - The generic `WindowEvent::RedrawRequested` platform-event path stays unconsumed. A future embedder-facing use for it (an app author wanting to observe raw platform redraw requests) would need its own design, not an accidental side effect of this record.
 - `last_compositor_tick_interval`'s cadence data specifically has no consumer yet, even though a general frame-telemetry mechanism now exists (see "What this buys" bullet (b)) — a `FrameSnapshot` does not thread this particular pacing-feedback field through. A future jank-analysis consumer reading it is still open.
 - The table's Wayland row (the load-bearing one) and the Windows/macOS/Android/web rows are none of them freshly measured for this record — see the honesty notes in §4 for what each claim is actually sourced from; the same is true of §6's occlusion-delivery claims (no live Wayland minimize/restore pass in this environment).
-- `try_arm_redraw_request`'s latch has one open half of its documented liveness dependency (§2): the `Backpressure` skip reason's own retire→wake edge is now BUILT at the contract level (§9 — `RasterOwner`'s reliable in-flight counter, threaded-harness-tested), but no production `FrameClock` reads a live raster owner yet, so this latch's `Backpressure` half stays dormant in production until issue #559 wires that connection (the `Hidden` half closed in §6).
+- `try_arm_redraw_request`'s latch has one open half of its documented liveness dependency (§2): the `Backpressure` skip reason's own retire→wake edge is now BUILT at the contract level (§9 — the executor slot's reliable in-flight count), but no production `FrameClock` reads a live raster owner yet, so this latch's `Backpressure` half stays dormant in production until issue #559 wires that connection (the `Hidden` half closed in §6).
 - General application timers remain a separate future capability. They must enter through an owner-scoped scheduling abstraction whose wake source and drain path are inseparable, not by restoring the retired ambient service.
 - **Superseded in part by ADR-0199:** the `AppLifecycleState`-driven
   `frames_enabled`/`WakeAction::PumpBackground` gate now advances due input

@@ -48,7 +48,7 @@ UI runtime owner lane    UiRuntime (!Send + !Sync)
                        input, focus, semantics, text input
                          │ owned snapshots / closed commands
                          ▼
-raster owner lane   RasterOwner: surface, renderer, GPU submission,
+raster owner lane   RasterExecutor slot: surface, renderer, GPU submission,
                     SurfaceGeneration authority
 ```
 
@@ -56,7 +56,7 @@ raster owner lane   RasterOwner: surface, renderer, GPU submission,
 |---|---|---|
 | Event-loop side: the backend's `PlatformWindow` plus `AppRuntime`'s `WindowRegistry` | platform/event-loop lane | native window lifetime, event delivery, OS callback registration, redraw requests, the native-window → presentation map |
 | `PresentationState` | stored by value in its `UiRuntime`; `!Send + !Sync` (statically asserted) | the presentation's UI root and pipeline, frame/input state, focus, gestures, mouse tracking, text-input session, semantics |
-| `RasterOwner` (`flui-engine`) | raster owner lane | renderer, GPU surface, configure/present ordering, `SurfaceGeneration` |
+| `RasterExecutor` slot (`flui-engine`) | raster owner lane | renderer, GPU surface, configure/present ordering, `SurfaceGeneration` |
 
 `PresentationRuntime` survives only as the name of the contract those owners
 form. It is not a public struct, a crate, an `Arc` shared among lanes, a bundle
@@ -85,7 +85,7 @@ returns `OwnerGone`.
 Owners on different threads exchange owned `Send` data through bounded
 channels or dedicated one-shot completions — never UI closures or a generic
 "run this on the UI thread" job. `RuntimeEvent` (native/host observations → UI runtime) and
-`RasterAck` (raster → UI) are the shipped instances. The rules:
+`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shipped instances. The rules:
 
 - every routable message carries, or is structurally bound to, its exact
   `PresentationAddress`;
@@ -159,11 +159,11 @@ target, release, then invoke through the normal action path. No action runs
 while the render tree is borrowed. An identity from another presentation or a
 recycled generation is rejected and traced.
 
-### 8. `RasterOwner` is the sole `SurfaceGeneration` authority
+### 8. The raster executor is the sole `SurfaceGeneration` authority
 
 The event-loop side reports native size, scale and lifecycle changes; it never
 touches a GPU surface. `PresentationState` requests surface operations; it
-never increments `SurfaceGeneration`. Only `RasterOwner`, in the command stream
+never increments `SurfaceGeneration`. Only the raster executor's slot, in the command stream
 that actually attaches or reconfigures the surface, mints the next generation
 and returns it in its acknowledgement. A snapshot carrying a stale generation
 is rejected before render as `SurfaceOutdated`.

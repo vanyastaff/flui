@@ -116,7 +116,7 @@ producer is the missing piece, and `damage_scissor` remains the baseline.
 ADR-0087 §3 built it. `LayerNode` carries a `BoundaryStamp` (the boundary's `RenderId` and a
 `ContentToken`) on the root and on every repaint boundary's layer, and `flui_layer::LayerDiffer`
 compares consecutive frames' stamps into `DamageRegion::Partial`, `Unchanged` or `Full`;
-`flui-app`'s raster lane sends that instead of `Full`, and `RasterOwner::pump` hands it to
+`flui-app`'s raster lane sends that instead of `Full`, and the raster executor hands it to
 `mark_dirty`. The consequences above that say `DamageRegion` stays `Full`-only and that
 `mark_dirty` has no production caller are historical.
 

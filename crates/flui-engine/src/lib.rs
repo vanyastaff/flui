@@ -7,7 +7,7 @@
 )]
 // `missing_debug_implementations` is suppressed crate-wide for the public
 // types that hold `lyon`/atlas state or boxed closures with no `Debug`
-// (`WgpuPainter`, `RasterOwner<B>`'s backend, the pre-present hook). wgpu 30's
+// (`WgpuPainter`, the pre-present hook). wgpu 30's
 // own handles (Device, Queue, Texture, Buffer, …) all derive `Debug`, so they
 // are not the reason. It is an `expect`, not an `allow`: if the last such
 // type gains `Debug`, the attribute must go with it.
@@ -224,10 +224,6 @@ pub mod raster;
 /// The raster executor: one mutator rendering every presentation's slot,
 /// fed by closed commands and settling each frame by its stamp (ADR-0305).
 pub mod raster_executor;
-/// The raster mailbox + dedicated ack channel boundary
-/// ([`RasterOwner`]/[`RasterHandle`]/[`RasterAck`]).
-/// Generic over [`RasterBackend`].
-pub mod raster_owner;
 
 /// Test support: a GPU-free stand-in for the raster executor's backend.
 #[cfg(feature = "testing")]
@@ -502,15 +498,6 @@ pub use external_texture_registry::{
     reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
 )]
 pub use raster::{PrePresentHook, PresentDisposition, RasterBackend};
-// Raster mailbox + dedicated ack channel boundary.
-#[expect(
-    deprecated,
-    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-)]
-pub use raster_owner::{
-    FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner,
-    RasterSubmitError, SurfaceState,
-};
 // The raster executor and its commands (ADR-0305).
 pub use raster_executor::{
     DeviceHealth, ExecutorHealth, RasterCommand, RasterExecutor, RasterSendError, RasterSender,
@@ -521,7 +508,7 @@ pub use raster_executor::{
 // The GPU-resource freshness stamp (ADR-0045 decision 4); declared in
 // `flui-foundation` and re-exported here so `flui_engine::GpuResourceGeneration`
 // keeps resolving — the compile-fail fixture for its private field cites this
-// path, and `RasterAck`/`FrameStamp` compare this axis.
+// path, and `FrameStamp` compares this axis.
 pub use flui_foundation::GpuResourceGeneration;
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;

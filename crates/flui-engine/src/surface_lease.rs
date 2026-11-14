@@ -186,9 +186,7 @@ impl<S> Drop for SurfaceLease<S> {
         // Harnesses assert this line on both close routes (the window system's
         // close and a programmatic one). It is the only executed
         // witness that the surface — and this lease's `Arc` clone of the
-        // target — was actually released rather than orphaned by the
-        // frame-callback cycle described in
-        // `crate::raster_owner::RasterOwner`'s module docs.
+        // target — was actually released rather than orphaned.
         //
         // `debug`, not `trace`: a lease is released far less often than a
         // surface is acquired (once per window life, not once per frame),

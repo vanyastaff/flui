@@ -46,11 +46,6 @@ kind = "double"
 names = ["FakeTarget"]
 
 [[allow]]
-path = "crates/flui-engine/src/raster_owner.rs"
-kind = "double"
-names = ["FakeBackend"]
-
-[[allow]]
 path = "crates/flui-engine/src/renderer.rs"
 kind = "double"
 names = ["RecordingTarget"]

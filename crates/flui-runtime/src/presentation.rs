@@ -4,7 +4,7 @@
 //! is not an embedder API (ADR-0027 §9). It is the UI-owner domain, not a
 //! cross-thread god object: native event-loop ownership remains in the
 //! runner/window host and raster/surface ownership remains in
-//! `flui_engine::RasterOwner`.
+//! `flui_engine::RasterExecutor`.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

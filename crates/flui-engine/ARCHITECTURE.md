@@ -64,7 +64,7 @@ oversized radii against the same public path commands without a shape hint.
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
-| Raster protocol | `raster_executor/`, `raster.rs`, `raster_owner.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (the one lock, held only to swap values) and settlement ring, the inline turn, and `SlotBackend`, its GPU-free seam; the deprecated per-window `RasterBackend` and mailbox/ack channel (ADR-0045) the window runners use until they move to slots; frame timers |
+| Raster protocol | `raster_executor/`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (the one lock, held only to swap values) and settlement ring, the inline turn, and `SlotBackend`, its GPU-free seam; the deprecated per-window `RasterBackend` the web's direct sink draws through until it moves to slots; frame timers |
 | Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The dirty-rect accumulator behind `render_scene`'s scissor (ADR-0061), `plan_frame` (where a frame renders), `begin_partial` (the scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
 | Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `SlotBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
@@ -322,7 +322,7 @@ shared handle is a wgpu ref-count.
 | `Renderer::painter`, `Renderer::offscreen` | `WgpuPainter`, `OffscreenRenderer` | Owned outright; the painter records content and the offscreen renderer blits retained presentation |
 | `Renderer::_single_mutator` | `PhantomData<Cell<()>>` | Makes `Renderer: !Sync` by declaration rather than by whichever field happens to be `!Sync`; pinned by `assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` |
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
-| `RasterOwner` mailbox | `parking_lot::Mutex` + condvar + two atomics + bounded crossbeam channels | The one module with its own memory model; its orderings are argued in `InFlightAccounting`'s doc |
+| `RasterExecutor` slot inboxes and device record | one `Mutex` per slot inbox and one for the device's record | Held only to swap values; nothing that can run user code runs under them (`raster_executor` module doc) |
 
 **Unsafe.** `#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`, and one
 production exception with its own `expect`: `renderer::dxgi_frame_statistics`
@@ -340,18 +340,6 @@ and there is no manual `Send`/`Sync` impl. `deny` rather than `forbid` because
 `wgsl_bindgen`'s generated wrappers declare an `unsafe fn from_raw` the crate
 never calls and `allow` it locally. `fake_window_target.rs` uses test-only
 raw-handle borrows for synthetic window and display handles.
-
-**`raster_owner` under Miri and loom.** The mailbox's non-blocking tests run
-under Miri (36 pass; the ten that block on the condvar are filtered out
-because `parking_lot_core`'s futex call is outside Miri's model). Loom 0.7
-models `std::sync` and an unbounded std-shaped `mpsc`, while this module's
-trickiest invariants live in `crossbeam_channel::bounded`'s `try_send` /
-`Full` path — a `cfg(loom)` shim would test approximations of exactly the
-mechanisms under question, so it is declined. What stands in its place is
-the threaded harness in the module (real OS threads, real primitives,
-high-repetition races, a panic-unwind wake test); it exercises interleavings
-by timing, not exhaustively. Reopen when `parking_lot`/`crossbeam` grow a
-loom backend or the mailbox moves to `std::sync`.
 
 ---
 
@@ -825,9 +813,10 @@ from applying the mask operator directly to the parent. Nested groups use the
 same replay executor and DeviceDomain; effect nesting is admitted before replay.
 ### 12. A zero-sized resize mints nothing
 
-`RasterOwner::resize(0, h)` returns `None` instead of a fresh
-`SurfaceGeneration` that every subsequent submit would be rejected against;
-the caller (`flui-app`'s raster lane) keeps its last generation. A window
+A `SlotChange::Size` with a side of zero or less answers
+`SendReceipt::Unconfigured` instead of a fresh `SurfaceGeneration` that every
+subsequent frame would be rejected against; the caller (`flui-app`'s raster
+lane) keeps its last generation. A window
 minimised to zero is a pause, not a new surface epoch.
 
 ### 13. Frame failure does not leak painter state
@@ -836,15 +825,16 @@ The swapchain frame's content step (`FrameSteps::content`) returns
 `EngineResult`; on the error path the painter's
 end-of-frame maintenance still runs before the error propagates, so the next
 frame starts from balanced stacks rather than the failed frame's leftovers.
-A `WakeGuard` in `raster_owner` does the same for the threaded lane: a panic
-mid-pump still publishes the completion and retires the frame on unwind.
+The raster executor does the same for a slot's frame: a panic inside the
+backend is contained, settles the frame as `RasterVerdict::Retry` and leaves
+the slot owing a full repaint.
 
 ### 14. `GpuServices` and `RasterOptions`: deleted, not carried
 
 Two public types whose every reader was their own test. `GpuServices`
 (ADR-0045 decision 2) shipped only its offscreen half while the working
 windowed entry point was hidden; `RasterOptions` (decision 6) was a DTO
-`RasterOwner` stored and never read, advertising a range the capacity-one
+the raster owner stored and never read, advertising a range the capacity-one
 mailbox could not reach. Both ADR decisions carry an implementation-status
 paragraph; the pacing surface returns with a real consumer.
 
@@ -1043,11 +1033,10 @@ footprint of the scene patches since the version on screen, which the host holds
 to that base with `RasterBase` (ADR-0304 §7). The enum is exhaustive (ADR-0304 §5): `Unchanged`,
 `Region` of up to eight disjoint rects, or `Full` with its `FullReason`, and the
 engine matches all three with no wildcard, so a new variant fails to compile
-here. The tracker plans by the region's bounds. `RasterOwner::pump` hands it to the backend before the
-freshness checks, so a frame rejected on a stale generation still leaves its
-debt, a superseded frame's region is folded into the frame that replaced it,
-and a failed render marks the next frame full. The tracker forgets its debt
-only after a present.
+here. The tracker plans by the region's bounds. The raster executor hands each frame's region to the
+slot's backend; a frame rejected on a stale generation or hidden, and a failed
+render, make the slot owe a full repaint, a superseded frame's region is folded into
+the frame that replaced it, and the debt is forgotten only after a present.
 
 wgpu does not expose a swapchain image's age, so pixels outside a scissor on
 a freshly acquired image come from an arbitrary older frame. A partial frame
@@ -1079,7 +1068,7 @@ stays: with the correct previous frame outside the damage, it bounds a
 straddling shape's out-of-damage slice to one frame. The full clear and the
 partial clear paint one constant, `frame_protocol::BACKGROUND`.
 
-Only frames a `RasterOwner` retires render damage: `RasterBackend::render_scene`
+Only frames a producer accounted for render damage: `RasterBackend::render_scene`
 calls `Renderer::render_frame`. The public `Renderer::render_scene` is the
 entry point for a frame no producer accounted for (direct mode, a hot-reload
 plugin's scene): it renders in full, invalidates the target and makes the
@@ -1101,7 +1090,7 @@ for the current comparison and its limits. Locked by `damage_readback_tests.rs`
 (through the crate-private `RetainedCapture`, which runs the renderer's own
 `FrameProtocol` and `record_frame_content`; only the clear, the content
 submission and the blit are its own), `damage::tests::plan_frame_table` and
-the `raster_owner` damage tests. The windowed path itself runs only on a
+the raster executor test `latest_frame_wins_and_superseded_damage_folds_into_the_survivor`. The windowed path itself runs only on a
 developer machine: CI has no surface.
 
 ### 19. A layer composites its whole region with its recorded mode
@@ -1189,11 +1178,6 @@ opaque layer among them, its full frame against its partial one),
 
 ## Open items
 
-- **Threaded raster lane (ADR-0045, Proposed).** `raster_owner`'s mailbox,
-  ack channel, and `InFlightAccounting` exist for a lane that flui-app does
-  not yet drive; whether the lane ships or the direct path is the only path
-  decides whether this family stays. Until decided, it is tested but not
-  wired.
 - **`catch_unwind` around `render_scene`.** A panic inside a layer's paint
   poisons the frame rather than isolating the layer; changing that is a
   contract change that needs its own ADR.
@@ -1356,15 +1340,11 @@ Screenshots complement the numerical readbacks; they do not replace them.
 
 ### 22. The raster seam's outcome enums are closed
 
-`PresentDisposition`, `PumpOutcome`, `FrameDropReason` and `RasterSubmitError` carry
-no enum-level `#[non_exhaustive]`, for ADR-0068 §2's reason: the raster lane in
-`flui-app` turns each into a frame verdict, and a variant added later must stop
+`PresentDisposition`, `SendReceipt` and `RasterVerdict` carry no enum-level
+`#[non_exhaustive]`, for ADR-0068 §2's reason: the raster lane in `flui-app`
+turns each into a frame verdict or a stamp, and a variant added later must stop
 compiling at that match instead of falling into a default that drops owed work.
-`PumpOutcome`'s struct variants keep their variant-level `#[non_exhaustive]`, so a
-new field stays additive. `FrameDropReason::requires_retry` is the one place a drop
-reason is classified for `RasterCompletion::retry_required` (ADR-0101); `false` is
-terminal for the frame. Each enum's doc example matches it from outside the crate
-with no wildcard arm, so marking it `#[non_exhaustive]` again fails that example.
+Each carries its `#[expect(clippy::exhaustive_enums, reason = "…")]`.
 
 
 ### Reflected and scaled primitive bounds remain local

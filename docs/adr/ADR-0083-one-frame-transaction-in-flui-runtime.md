@@ -137,7 +137,7 @@ before `flui-testing` and `flui-sdk`. It owns:
 `flui-runtime` depends only on crates in tiers V–K and on `flui-platform` (ADR-0082). Its
 normal graph must not reach `flui-native`, `winit`, `wgpu`, `flui-engine` or `flui-app`
 (ADR-0081's K set). It talks to windows through `Arc<dyn PlatformWindow>` handles the runner
-passes in, and hands frames out through `FrameSink`; the wgpu raster lane and `RasterOwner` stay
+passes in, and hands frames out through `FrameSink`; the wgpu raster lane and `RasterExecutor` stay
 in `flui-app` and `flui-engine`.
 
 **Types stay low, instances move up.** `LifecycleContext` lives in `flui-view` and cannot name a

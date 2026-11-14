@@ -5,7 +5,7 @@
   thread is the model, not a stage before per-runtime threads; the spike and `OwnerExecutor` are
   withdrawn)
 - **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
-  for §6 only (the optional move of `RasterOwner` into the runtime once ADR-0087 §1 lands: ADR-0087
+  for §6 only (the optional move of the raster owner into the runtime once ADR-0087 §1 lands: ADR-0087
   §1 is withdrawn, and the raster executor stays in `flui-engine`)
 - **Amended by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   for §3, §4 and §7, which it gives their shape: one raster executor owns the `GpuContext`, inline or on the raster
@@ -144,9 +144,9 @@ inter-present interval against the display period) holds on that platform.
 | wasm | inline | no raster thread; web moves onto the lane protocol and `DirectSink` is deleted |
 | Android, iOS | inline until measured | no platform reason is recorded against threading; the lane is threaded once a device run meets the budget |
 
-### 6. `RasterOwner` stays in `flui-engine`
+### 6. The raster owner stays in `flui-engine`
 
-`RasterOwner` moves into the runtime only after [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)
+The raster owner moves into the runtime only after [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)
 has moved `RasterBackend`, `PresentDisposition` and a wgpu-free `RasterError` into `flui-layer`,
 so the runtime can hold it without reaching wgpu. The move is optional and not part of H0.
 
@@ -188,9 +188,7 @@ first consumer (the external-content spike), not here.
 
 ## Verification
 
-None of these exist yet, apart from the threaded protocol harness in
-`crates/flui-engine/src/raster_owner.rs`'s tests, which already spawns `run_until_shutdown` on a
-thread.
+None of these exist yet.
 
 - A two-window test that asserts one device and one glyph atlas are created.
 - The process-global state gate of [ADR-0097](ADR-0097-no-process-global-state-gate.md) finds no

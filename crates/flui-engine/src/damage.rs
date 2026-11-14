@@ -6,7 +6,7 @@
 //! `Renderer::render_scene`). The producer is the retained scene: each
 //! publication carries the footprint of its patches since the version on screen,
 //! held to that base by `flui_layer::RasterBase` (ADR-0304 §5, §7), and reaches the tracker through
-//! `RasterOwner::pump`, which marks every frame it retires — presented or not
+//! the raster executor, which marks every frame it settles — presented or not
 //! — so debt a frame did not present stays here until one does.
 //!
 //! The accumulator keeps one bounding rectangle, because the one consumer

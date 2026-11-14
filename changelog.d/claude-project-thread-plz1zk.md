@@ -24,8 +24,8 @@
 
 ### Deprecated
 
-- **`flui-engine`**: `RasterOwner`, `RasterHandle` and the per-window `RasterBackend`, replaced by
-  `RasterExecutor` and its slots; they go once the window runners move to slots.
+- **`flui-engine`**: the per-window `RasterBackend`, replaced by `RasterExecutor` and its slots;
+  it goes once the web draws through slots.
 
 ### Fixed
 

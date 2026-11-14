@@ -210,8 +210,8 @@ pub trait RasterBackend: Send {
 
     /// Give back GPU memory the next frames can rebuild.
     ///
-    /// The raster owner calls this on its own thread, between frames, when a
-    /// [`RasterHandle`](crate::RasterHandle) was asked to trim. Default:
+    /// The raster executor calls this on its own thread, between frames, when
+    /// its sender was asked to trim. Default:
     /// ignored; a backend that holds no GPU memory (scripted doubles) has
     /// nothing to give back.
     fn reclaim(&mut self, level: MemoryPressureLevel) {

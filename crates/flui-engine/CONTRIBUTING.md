@@ -157,7 +157,7 @@ The crate is ~40k non-test lines. The densest files, and what each owns:
 | State | `state_stack.rs`, `layer_compositor.rs` | Transform/clip/opacity stacks; layer save-state |
 | GPU resources | `{texture_pool,texture_cache,path_cache,buffer_pool}.rs` | Pooling and caching |
 | Filters | `{blur,mode,gamma,color_matrix,morphology}/` | The offscreen filter passes, each with its own pipeline |
-| Raster boundary | `raster_owner.rs`, `raster.rs` | The mailbox protocol between the app and the GPU |
+| Raster boundary | `raster_executor/`, `raster.rs` | The command protocol between the app and the GPU |
 
 ## Getting help
 

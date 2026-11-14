@@ -59,7 +59,7 @@ has neither. Evidence is at `e5ba8fe8f`.
 | A retired window's target answers `Unavailable` from then on, so an instance holding it panics at the next surface it creates | `crates/flui-platform/src/surface_target.rs:28-56`; `crates/flui-native/src/window/linux/wayland.rs:2547-2575`; `crates/flui-native/src/window/linux/x11/window.rs:1180-1230` |
 | A surface is made only on the main thread (Apple) or the looper thread (Android) | `surface_target.rs:18-25` |
 | The lane sits behind `Arc<Mutex<_>>`, justified by callbacks that "require `Send` closures"; the registrations take none, and the frame driver beside it already holds a `std::rc::Weak` | `desktop.rs:245-252`, `:419-425`; the former `raster_lane.rs:72-81`; `crates/flui-app/src/app/runner/window_routes.rs:185-237`; `crates/flui-app/src/app/runner/window_install.rs:269` |
-| Eight production calls reach past the raster protocol into the backend | `crates/flui-engine/src/raster_owner.rs:1258` and the table in §12 |
+| Eight production calls reach past the raster protocol into the backend | the former `raster_owner.rs:1258` and the table in §12 |
 | The GPU-resource axis of a frame stamp is `ZERO` on both sides, and its rejection is unreachable | `raster_lane.rs:344-348`, `:398-407` |
 | A presented `Fifo` frame on the Vulkan and Wayland path blocks its thread until vsync (Windows is unmeasured), and a device rebuild blocks on `pollster` — today on the one owner thread every runtime shares | `renderer.rs:1751-1760`; the former `runner/device_recovery.rs:33`; ADR-0266 |
 | wgpu's acquire timeout is a fixed second, and Metal ignores it | `wgpu-core/src/present.rs:32`, `:178`; `wgpu-hal/src/metal/surface.rs:349` |
