@@ -315,8 +315,10 @@ fn assert_closed_again(rig: &Rig) {
 fn surface_path(app: &LaidOut, color: Color) -> Option<flui_sdk::painting::Path> {
     app.draw_ops()
         .into_iter()
-        .find_map(|command| match command.op {
-            DrawOp::Path { path, paint } if paint.color == color => Some(path),
+        .find_map(|command| match &command.op {
+            DrawOp::Path { path, paint } if paint.color == color => {
+                Some(command.payload(*path).clone())
+            }
             _ => None,
         })
 }

@@ -702,7 +702,11 @@ impl FrameSink for HeadlessSink {
         self.size
     }
 
-    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict {
+    fn submit(
+        &mut self,
+        _epoch: flui_foundation::FrameEpoch,
+        publication: ScenePublication,
+    ) -> SubmitVerdict {
         if let Some(deferred) = self.deferred.checked_sub(1) {
             self.deferred = deferred;
             return SubmitVerdict::Retry;

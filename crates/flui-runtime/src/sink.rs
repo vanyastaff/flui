@@ -7,6 +7,7 @@
 //! not-shown handling (ADR-0068). The host implements the trait; this crate
 //! names no backend, surface or GPU type.
 
+use flui_foundation::FrameEpoch;
 use flui_layer::ScenePublication;
 
 /// What one submitted frame did, as the UI runtime's frame transaction needs to
@@ -80,8 +81,8 @@ pub enum SubmitVerdict {
 /// The seam a UI runtime's frame transaction submits through: the surface size
 /// layout must use, and the submit itself.
 ///
-/// Implemented by the host: `flui-app`'s raster executor host and its direct sink; a
-/// headless sink arrives with the UI runtime core. Every implementation feeds the
+/// Implemented by the host: `flui-app`'s raster executor host, and `flui-testing`'s headless
+/// sink. Every implementation feeds the
 /// same UI runtime-side classification arms via [`SubmitVerdict`], so the
 /// retry/telemetry semantics cannot drift between them.
 ///
@@ -105,5 +106,11 @@ pub trait FrameSink {
 
     /// Submit one composited scene for rasterization and classify what
     /// happened.
-    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict;
+    ///
+    /// `epoch` is the frame's place in its UI runtime's sequence, which the
+    /// runtime mints for each frame any of its presentations submits, so the
+    /// epochs a sink is handed only grow, whichever presentation produced
+    /// them: the host stamps the frame with it, so what the frame becomes is
+    /// matched to it by stamp, not by being the latest (ADR-0305 §4).
+    fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict;
 }

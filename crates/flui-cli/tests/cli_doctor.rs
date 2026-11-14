@@ -428,6 +428,24 @@ fn doctor_lists_what_a_manifest_lacks_of_what_the_application_opens() {
         ),
         "{checks:#?}"
     );
+    // Built without flui's `single-instance` feature, the Linux and Windows
+    // builds of an application that opens links and files are refused.
+    let one_instance = checks
+        .iter()
+        .find(|check| check["id"] == "project.single-instance")
+        .unwrap_or_else(|| panic!("a one-instance check: {checks:#?}"));
+    let detail = one_instance["detail"].as_str().unwrap_or_default();
+    assert!(
+        one_instance["status"] == "error"
+            && ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+                .iter()
+                .all(|target| detail
+                    .contains(&format!("opens `notes:` links, `.note` files on {target}")))
+            && one_instance["fix"]
+                .as_str()
+                .is_some_and(|fix| fix.contains("features = [\"single-instance\"]")),
+        "{one_instance:#?}"
+    );
     let manifests: Vec<&serde_json::Value> = checks
         .iter()
         .filter(|check| check["id"] == "project.manifest")

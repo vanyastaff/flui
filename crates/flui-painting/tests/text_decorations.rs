@@ -69,7 +69,7 @@ fn drawn(list: &DisplayList) -> Vec<Drawn> {
                 color: paint.color,
             },
             DrawOp::Path { path, paint } => Drawn::Pattern {
-                bounds: path.compute_bounds(),
+                bounds: command.payload(*path).compute_bounds(),
                 style: paint.style,
                 stroke: paint.stroke_width,
                 color: paint.color,

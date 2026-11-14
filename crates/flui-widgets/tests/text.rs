@@ -857,10 +857,12 @@ pub(crate) fn a_focused_link_rings_each_line_of_its_glyphs() {
     let rings = |laid: &crate::common::LaidOut| -> Vec<flui_foundation::geometry::Rect<f64>> {
         laid.draw_ops()
             .into_iter()
-            .filter_map(|command| match command.op {
-                DrawOp::DRRect { inner, paint, .. } if paint.color == STYLE.inner => {
-                    Some(command.transform.transform_rect(&inner.rect))
-                }
+            .filter_map(|command| match &command.op {
+                DrawOp::DRRect { rrects, paint } if paint.color == STYLE.inner => Some(
+                    command
+                        .transform
+                        .transform_rect(&command.payload(*rrects).inner.rect),
+                ),
                 _ => None,
             })
             .collect()

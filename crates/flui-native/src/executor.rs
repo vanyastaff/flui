@@ -17,8 +17,14 @@ use tokio::runtime::{Handle, Runtime};
 /// hands the host its IO runtime instead, so this one serves only a host
 /// started without one, and must never claim a full-core pool.
 #[cfg_attr(
-    not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
-    allow(dead_code, reason = "only the Linux hosts run IO on tokio")
+    not(any(
+        all(windows, feature = "single-instance"),
+        all(target_os = "linux", any(feature = "wayland", feature = "x11"))
+    )),
+    allow(
+        dead_code,
+        reason = "only the Linux hosts and the Windows pipe run IO on tokio"
+    )
 )]
 const WORKER_THREADS: usize = 2;
 
@@ -44,8 +50,14 @@ pub struct NativeExecutor(Inner);
 
 #[derive(Clone)]
 #[cfg_attr(
-    not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
-    allow(dead_code, reason = "only the Linux hosts run IO on tokio")
+    not(any(
+        all(windows, feature = "single-instance"),
+        all(target_os = "linux", any(feature = "wayland", feature = "x11"))
+    )),
+    allow(
+        dead_code,
+        reason = "only the Linux hosts and the Windows pipe run IO on tokio"
+    )
 )]
 enum Inner {
     /// A runtime of the host's own, started on first use.
@@ -65,9 +77,10 @@ impl NativeExecutor {
     }
 
     /// The runtime `runtime` belongs to, which must have its IO and time
-    /// drivers enabled (`Builder::enable_all`); the host's sources wait on
-    /// sockets and timers there. `flui-app` passes its execution services'
-    /// IO runtime.
+    /// drivers enabled (`Builder::enable_all`) and run while the host runs: a
+    /// multi-thread runtime, or a current-thread one that a thread other than
+    /// the host's drives. The host's sources wait on sockets and timers
+    /// there. `flui-app` passes its execution services' IO runtime.
     #[must_use]
     pub fn from_tokio(runtime: Handle) -> Self {
         Self(Inner::Borrowed(runtime))
@@ -75,8 +88,14 @@ impl NativeExecutor {
 
     /// The runtime to spawn on, starting an own runtime on first use.
     #[cfg_attr(
-        not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
-        allow(dead_code, reason = "only the Linux hosts run IO on tokio")
+        not(any(
+            all(windows, feature = "single-instance"),
+            all(target_os = "linux", any(feature = "wayland", feature = "x11"))
+        )),
+        allow(
+            dead_code,
+            reason = "only the Linux hosts and the Windows pipe run IO on tokio"
+        )
     )]
     pub(crate) fn handle(&self) -> Handle {
         match &self.0 {
@@ -88,8 +107,14 @@ impl NativeExecutor {
 
 impl RuntimeOwner {
     #[cfg_attr(
-        not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
-        allow(dead_code, reason = "only the Linux hosts run IO on tokio")
+        not(any(
+            all(windows, feature = "single-instance"),
+            all(target_os = "linux", any(feature = "wayland", feature = "x11"))
+        )),
+        allow(
+            dead_code,
+            reason = "only the Linux hosts and the Windows pipe run IO on tokio"
+        )
     )]
     fn runtime(&self) -> &Runtime {
         self.0.get_or_init(|| {

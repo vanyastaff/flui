@@ -245,6 +245,12 @@ impl LinkDeclarations {
         }
     }
 
+    /// The URL schemes [`url_schemes`](Self::url_schemes) declared.
+    #[must_use]
+    pub const fn declared_url_schemes(&self) -> &'static [&'static str] {
+        self.url_schemes
+    }
+
     /// Whether the application declared `url`: an `http` or `https` URL by
     /// its host, any other by its scheme.
     ///

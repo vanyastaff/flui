@@ -12,11 +12,7 @@
 //!
 //! [`InspectTree`]: flui_foundation::inspect::InspectTree
 
-use core::fmt::{self, Write as _};
 use flui_foundation::inspect::{Fields, Inspect, Level, Shared, Unit, Untyped, Value};
-use std::hash::{DefaultHasher, Hasher};
-
-use flui_painting::DisplayList;
 
 use crate::Layer;
 
@@ -63,12 +59,12 @@ impl Inspect for Layer {
             }
             Layer::Picture(layer) => {
                 out.field("commands", &layer.picture().len());
-                out.field("content", &fingerprint(layer.picture()))
+                out.field("content", &layer.picture().fingerprint())
                     .level(Level::Detail);
             }
             Layer::Canvas(layer) => {
                 out.field("commands", &layer.display_list().len());
-                out.field("content", &fingerprint(layer.display_list()))
+                out.field("content", &layer.display_list().fingerprint())
                     .level(Level::Detail);
             }
             Layer::Texture(layer) => {
@@ -84,7 +80,7 @@ impl Inspect for Layer {
             Layer::PerformanceOverlay(layer) => {
                 out.field("options", &layer.options().bits());
                 out.field("commands", &layer.readout().len());
-                out.field("content", &fingerprint(layer.readout()))
+                out.field("content", &layer.readout().fingerprint())
                     .level(Level::Detail);
             }
             Layer::ColorFilter(layer) => {
@@ -148,24 +144,4 @@ impl Inspect for Layer {
             }
         }
     }
-}
-
-/// A fingerprint of a display list's commands, so two pictures of one length and bounds that
-/// draw differently read apart. It hashes each command's `Debug` text as it is written, keeping
-/// none of it; equal within one build of the program, not across builds.
-pub(crate) fn fingerprint(list: &DisplayList) -> u64 {
-    struct Hashing(DefaultHasher);
-
-    impl fmt::Write for Hashing {
-        fn write_str(&mut self, text: &str) -> fmt::Result {
-            self.0.write(text.as_bytes());
-            Ok(())
-        }
-    }
-
-    let mut out = Hashing(DefaultHasher::new());
-    for command in list {
-        write!(out, "{command:?}").expect("BUG: hashing text never fails");
-    }
-    out.0.finish()
 }

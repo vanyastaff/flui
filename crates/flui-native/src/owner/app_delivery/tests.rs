@@ -126,7 +126,9 @@ fn a_report_before_ready_waits_for_it() {
 
 /// Opened URLs that wait for the handler are bounded: past
 /// `MAX_PENDING_OPENED` the newest is dropped, the others still arrive in
-/// order, and the other reports are not counted against it.
+/// order, and the other reports are not counted against it. A host that
+/// answers whoever handed it the launch gets the one past the bound back
+/// unanswered, and answers one with room before the handler hears it.
 fn opened_reports_waiting_for_ready_are_bounded() {
     let app = AppLog::new();
     let delivery = Arc::new(AppDelivery::new());
@@ -136,6 +138,16 @@ fn opened_reports_waiting_for_ready_are_bounded() {
     for opened in &links {
         assert!(matches!(delivery.opened(opened.clone()), Called::Vacant));
     }
+    // A host that answers whoever handed it a launch gets the one past the
+    // bound back, and answers nothing.
+    let mut answered = false;
+    let refused = delivery.try_opened(link("myapp:///refused", Launch::Running), || {
+        answered = true;
+    });
+    assert!(
+        refused.is_err() && !answered,
+        "past the bound, the launch is handed back unanswered"
+    );
     assert!(matches!(
         delivery.host_notice(SystemNotice::Sleep),
         Called::Vacant
@@ -161,6 +173,23 @@ fn opened_reports_waiting_for_ready_are_bounded() {
         Called::Returned(())
     ));
     assert_eq!(app.opens().last(), Some(&next));
+    // With room, the launch is answered once it is queued, before the
+    // handler hears it.
+    let answered_after = std::cell::Cell::new(None);
+    let admitted = link("myapp:///admitted", Launch::Running);
+    let called = run
+        .delivery
+        .try_opened(admitted.clone(), || {
+            answered_after.set(Some(app.opens().len()));
+        })
+        .expect("room for the launch");
+    assert!(matches!(called, Called::Returned(())));
+    assert_eq!(
+        answered_after.get(),
+        Some(app.opens().len() - 1),
+        "answered before the handler heard it"
+    );
+    assert_eq!(app.opens().last(), Some(&admitted));
 }
 
 /// What launched the application is the handler's to take inside `ready`

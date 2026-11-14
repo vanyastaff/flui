@@ -3,12 +3,12 @@
 //! Elements are stored in a Slab for O(1) access by ElementId; they form the
 //! retained tree.
 
-use rustc_hash::FxHashMap;
 use std::any::TypeId;
 use std::cell::Cell;
 
 use std::rc::Rc;
 
+use flui_foundation::arena::{FrameArena, FrameVec};
 #[cfg(test)]
 use flui_foundation::generation::Generation;
 use flui_foundation::generation::{GenSlots, Release};
@@ -40,10 +40,10 @@ enum RenderEdge {
     Sparse,
 }
 
-fn append_sparse_sliver_children(
+fn append_sparse_sliver_children<A: std::alloc::Allocator + Copy>(
     render_tree: &flui_rendering::storage::RenderTree,
     parent_render: RenderId,
-    desired_children: &mut Vec<RenderId>,
+    desired_children: &mut Vec<RenderId, A>,
 ) {
     // Lazy sliver children intentionally stay out of ElementNode::child_ids;
     // their render order is recovered from SliverMultiBoxAdaptorParentData.
@@ -55,7 +55,7 @@ fn append_sparse_sliver_children(
     // data says so; most parents have none, so membership in the walk's own
     // list is built only once the first such child turns up.
     let mut desired_membership: Option<flui_foundation::SlotSet<RenderId>> = None;
-    let mut sparse_children: Vec<(usize, RenderId)> = Vec::new();
+    let mut sparse_children: Vec<(usize, RenderId), A> = Vec::new_in(*desired_children.allocator());
     for &child in parent_node.children() {
         let Some(child_node) = render_tree.get(child) else {
             continue;
@@ -78,12 +78,19 @@ fn append_sparse_sliver_children(
             desired
         });
         if !desired.contains(child) {
+            if sparse_children.capacity() == 0 {
+                // Reserved before the sparse list, so in an arena the sparse list frees last.
+                desired_children.reserve(parent_node.children().len());
+            }
             sparse_children.push((index, child));
         }
     }
 
-    sparse_children.sort_by_key(|&(index, child)| (index, child));
-    desired_children.extend(sparse_children.into_iter().map(|(_, child)| child));
+    sparse_children.sort_unstable_by_key(|&(index, child)| (index, child));
+    desired_children.reserve(sparse_children.len());
+    for &(_, child) in &sparse_children {
+        desired_children.push(child);
+    }
 }
 
 /// A node in the Element tree.
@@ -1315,12 +1322,16 @@ impl ElementTree {
     pub(crate) fn reorder_render_children_after_build(
         &mut self,
         registry: &crate::element::child_manager::ChildManagerRegistry,
+        arena: &mut FrameArena,
     ) -> usize {
         if !self.needs_render_reorder {
             return 0;
         }
         self.needs_render_reorder = false;
-        self.synchronize_render_children(registry)
+        // Reset after the walk: between frames the arena holds one chunk, not the chain that grew.
+        let reordered = self.synchronize_render_children(registry, arena);
+        arena.reset();
+        reordered
     }
 
     pub(super) fn mark_render_reorder_needed(&mut self) {
@@ -1408,6 +1419,7 @@ impl ElementTree {
     fn synchronize_render_children(
         &mut self,
         registry: &crate::element::child_manager::ChildManagerRegistry,
+        arena: &FrameArena,
     ) -> usize {
         // Depth-first in slot order, tracking each node's nearest render
         // ancestor. A render node is appended to that ancestor's target order,
@@ -1420,22 +1432,29 @@ impl ElementTree {
         // child manager left it; only the render parents inside it are
         // synchronized. A row built in a sliver's layout-time build has the
         // same component-deferred attach order as one built anywhere else.
-        let mut target: FxHashMap<RenderId, Vec<RenderId>> = FxHashMap::default();
+        //
+        // Each render parent's target order is the run of `(parent, child)` edges a stable sort
+        // by parent leaves together, in walk order: one list for the whole walk, not one per
+        // parent. Every list comes from the build owner's frame arena (ADR-0328).
+        let mut target: FrameVec<'_, (RenderId, RenderId)> = Vec::new_in(arena);
         // Every render node with its desired render parent, in depth-first
         // pre-order: a parent's own edge is settled before its children
         // move under it, so no step of the sync closes a cycle.
-        let mut desired_parent: Vec<(flui_foundation::RenderId, RenderEdge)> = Vec::new();
+        let mut desired_parent: FrameVec<'_, (flui_foundation::RenderId, RenderEdge)> =
+            Vec::new_in(arena);
         let mut pipeline_owner: Option<PipelineCell> = None;
         let mut visited = 0;
 
         // Children are pushed reversed so siblings pop in ascending slot order.
         // The third field is `RenderEdge::Sparse` from a lazy child down to its
         // first render node.
-        let mut stack: Vec<(ElementId, Option<flui_foundation::RenderId>, RenderEdge)> = self
-            .iter_nodes()
-            .filter(|(_, node)| node.parent.is_none())
-            .map(|(id, _)| (id, None, RenderEdge::Parent(None)))
-            .collect();
+        let mut stack: FrameVec<'_, (ElementId, Option<flui_foundation::RenderId>, RenderEdge)> =
+            Vec::new_in(arena);
+        stack.extend(
+            self.iter_nodes()
+                .filter(|(_, node)| node.parent.is_none())
+                .map(|(id, _)| (id, None, RenderEdge::Parent(None))),
+        );
         stack.reverse();
         while let Some((element_id, render_ancestor, edge)) = stack.pop() {
             visited += 1;
@@ -1448,7 +1467,7 @@ impl ElementTree {
                     RenderEdge::Parent(_) => {
                         desired_parent.push((render_id, RenderEdge::Parent(render_ancestor)));
                         if let Some(parent_render) = render_ancestor {
-                            target.entry(parent_render).or_default().push(render_id);
+                            target.push((parent_render, render_id));
                         }
                     }
                 }
@@ -1474,6 +1493,10 @@ impl ElementTree {
         let Some(pipeline_owner) = pipeline_owner else {
             return visited;
         };
+
+        drop(stack);
+        target.sort_by_key(|&(parent, _)| parent);
+        let mut desired_children: FrameVec<'_, RenderId> = Vec::new_in(arena);
 
         // Tree borrows are dropped; the checkout guards only the render tree.
         pipeline_owner.with_mut(|owner| {
@@ -1504,7 +1527,14 @@ impl ElementTree {
                     // list holds only its sparse sliver children; anything
                     // else it still lists becomes a root. A child arriving
                     // from another render parent leaves that donor's list.
-                    let mut desired_children = target.remove(&render_id).unwrap_or_default();
+                    desired_children.clear();
+                    let first = target.partition_point(|&(parent, _)| parent < render_id);
+                    desired_children.extend(
+                        target[first..]
+                            .iter()
+                            .take_while(|&&(parent, _)| parent == render_id)
+                            .map(|&(_, child)| child),
+                    );
                     append_sparse_sliver_children(render_tree, render_id, &mut desired_children);
                     let update = render_tree.set_children(render_id, &desired_children);
                     if update.changed {

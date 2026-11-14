@@ -13,10 +13,15 @@ use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
 /// The channel every report comes back on.
 const CHANNEL: &str = "flui-agent";
 
-/// The events the link reads.
+/// The first Firefox that reports `browsingContext.navigationCommitted`.
+pub(super) const MIN_FIREFOX: u32 = 140;
+
+/// The events the link reads. A navigation is reported once it commits, as the DevTools
+/// protocol's `Page.frameNavigated` is: until then the tab still shows the document it
+/// leaves, and a connection made there would go with it.
 const EVENTS: [&str; 3] = [
     "script.message",
-    "browsingContext.navigationStarted",
+    "browsingContext.navigationCommitted",
     "browsingContext.contextDestroyed",
 ];
 
@@ -43,8 +48,23 @@ impl Bidi {
             socket,
             context: String::new(),
         };
-        link.command_by("session.new", json!({ "capabilities": {} }), ready_by)
+        let session = link
+            .command_by("session.new", json!({ "capabilities": {} }), ready_by)
             .map_err(AttachError::at("session.new"))?;
+        // `session.new`'s result names the version in every WebDriver BiDi browser; one that
+        // names none, or none Firefox writes, is left to refuse the subscription itself.
+        if let Some(version) = session
+            .pointer("/capabilities/browserVersion")
+            .and_then(Value::as_str)
+            && firefox_major(version).is_some_and(|major| major < MIN_FIREFOX)
+        {
+            return Err(AttachError::at("session.new")(LinkError::Unsupported(
+                format!(
+                    "Firefox {version} reports no navigation's commit; the link needs Firefox \
+                     {MIN_FIREFOX} or later"
+                ),
+            )));
+        }
         let tree = link
             .command_by(
                 "browsingContext.getTree",
@@ -126,6 +146,12 @@ impl Bidi {
     }
 }
 
+/// The major version of a Firefox `browserVersion`: `128` of `128.12.0esr`, `147` of
+/// `147.0a1`.
+fn firefox_major(version: &str) -> Option<u32> {
+    version.split('.').next()?.parse::<u32>().ok()
+}
+
 /// `args` as BiDi's local values.
 fn arguments(args: &[&str]) -> Vec<Value> {
     args.iter()
@@ -196,7 +222,7 @@ impl BrowserLink for Bidi {
                         return Ok(Some(LinkEvent::Report(text.to_owned())));
                     }
                 }
-                Some("browsingContext.navigationStarted") if ours => {
+                Some("browsingContext.navigationCommitted") if ours => {
                     return Ok(Some(LinkEvent::Navigated));
                 }
                 Some("browsingContext.contextDestroyed") if ours => {

@@ -17,7 +17,7 @@ use smallvec::SmallVec;
 
 use flui_foundation::geometry::{Matrix4, Rect};
 
-use crate::display_list::{DisplayList, DrawOp, Paint, paint_finite};
+use crate::display_list::{DisplayList, DrawOp, Paint, Payload, PayloadId, paint_finite};
 
 pub mod clipping;
 pub mod drawing;
@@ -102,12 +102,22 @@ impl Canvas {
     pub(crate) fn record(&mut self, op: DrawOp) {
         let pool = &self.paint_pool;
         self.display_list.record(&self.transform, op, |paint| {
-            // Every paint an op holds came from the pool; a miss is checked
-            // as it stands.
-            pool.iter()
-                .find(|interned| Arc::ptr_eq(&interned.paint, paint))
-                .map_or_else(|| paint_finite(paint), |interned| interned.finite)
+            pooled_paint_finite(pool, paint)
         });
+    }
+
+    /// Records the op `op` builds around the id of `payload`, which the list
+    /// keeps beside its commands (ADR-0333).
+    pub(crate) fn record_with<T: Payload>(
+        &mut self,
+        payload: T,
+        op: impl FnOnce(PayloadId<T>) -> DrawOp,
+    ) {
+        let pool = &self.paint_pool;
+        self.display_list
+            .record_with(&self.transform, payload, op, |paint| {
+                pooled_paint_finite(pool, paint)
+            });
     }
 
     /// Returns an `Arc<Paint>` from the per-canvas interning pool,
@@ -299,4 +309,13 @@ impl AsRef<DisplayList> for Canvas {
     fn as_ref(&self) -> &DisplayList {
         &self.display_list
     }
+}
+
+/// Whether `paint` is finite: every paint an op holds came from `pool`, so
+/// the verdict taken when it was interned answers; a miss is checked as it
+/// stands.
+fn pooled_paint_finite(pool: &[InternedPaint], paint: &Arc<Paint>) -> bool {
+    pool.iter()
+        .find(|interned| Arc::ptr_eq(&interned.paint, paint))
+        .map_or_else(|| paint_finite(paint), |interned| interned.finite)
 }

@@ -376,8 +376,8 @@ impl SceneOwner {
 impl ReleasedContents {
     pub fn reclaim(self) -> Reclaimed;                 // runs the destructors, keeps the buffers
 }
-// flui-runtime; `surface_size` is unchanged
-pub trait FrameSink { fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict; }
+// flui-runtime; `surface_size` is unchanged, and `epoch` is the frame's stamp (ADR-0305 §4)
+pub trait FrameSink { fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict; }
 // flui-engine
 pub struct SlotSettlement { pub address: PresentationAddress, pub epoch: FrameEpoch, pub verdict: RasterVerdict,
                             pub rastered: Option<SceneVersionId> }   // `rastered` is the addition

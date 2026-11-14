@@ -43,7 +43,11 @@ impl FrameSink for OpacitySceneSink {
         (800, 600)
     }
 
-    fn submit(&mut self, scene: flui_layer::ScenePublication) -> SubmitVerdict {
+    fn submit(
+        &mut self,
+        _epoch: flui_foundation::FrameEpoch,
+        scene: flui_layer::ScenePublication,
+    ) -> SubmitVerdict {
         let tree = scene.scene.flatten();
         self.alpha = tree.iter().find_map(|(_, node)| {
             if let flui_layer::Layer::Opacity(layer) = node.layer() {
@@ -390,7 +394,11 @@ impl FrameSink for Sink {
     fn surface_size(&mut self) -> (u32, u32) {
         self.size.get()
     }
-    fn submit(&mut self, scene: flui_layer::ScenePublication) -> SubmitVerdict {
+    fn submit(
+        &mut self,
+        _epoch: flui_foundation::FrameEpoch,
+        scene: flui_layer::ScenePublication,
+    ) -> SubmitVerdict {
         let tree = scene.scene.flatten();
         self.paragraphs.clear();
         for (_, node) in tree.iter() {
@@ -2527,7 +2535,11 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
         fn surface_size(&mut self) -> (u32, u32) {
             (40, 40)
         }
-        fn submit(&mut self, _: flui_layer::ScenePublication) -> SubmitVerdict {
+        fn submit(
+            &mut self,
+            _epoch: flui_foundation::FrameEpoch,
+            _: flui_layer::ScenePublication,
+        ) -> SubmitVerdict {
             SubmitVerdict::Presented
         }
     }

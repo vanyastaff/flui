@@ -23,6 +23,7 @@ use crate::host::{Absent, Host, position};
 use crate::lifecycle::linux::HostNoticeSource;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::app_delivery::AppDelivery;
+use crate::owner::linux::single_instance::FirstInstance;
 use crate::owner::linux::{LinuxNotices, LinuxPreferences};
 use crate::owner::notices::NoticeChannel;
 use crate::owner::signal::OwnerSignal;
@@ -60,8 +61,9 @@ mod wayland {
     use std::sync::Arc;
 
     use super::{
-        Absent, AppDelivery, Host, HostPlatform, LinuxNotices, LinuxPreferences, NativeExecutor,
-        NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility, UserDataDirs, position,
+        Absent, AppDelivery, FirstInstance, Host, HostPlatform, LinuxNotices, LinuxPreferences,
+        NativeExecutor, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility, UserDataDirs,
+        position,
     };
     use crate::clipboard::linux::wayland::SeatClipboard;
     use crate::display::linux::protocol::Environment;
@@ -165,12 +167,15 @@ mod wayland {
         /// compositor answers on it, libwayland cannot be loaded, or the
         /// compositor lacks the globals a window needs.
         pub fn try_new() -> Result<Self, PlatformError> {
-            Self::try_new_with(NativeExecutor::own())
+            Self::try_new_with(NativeExecutor::own(), None)
         }
 
         /// [`try_new`](Self::try_new) on `executor`'s runtime, as
         /// [`CurrentHost::start_with`](crate::CurrentHost::start_with) starts it.
-        pub(crate) fn try_new_with(executor: NativeExecutor) -> Result<Self, PlatformError> {
+        pub(crate) fn try_new_with(
+            executor: NativeExecutor,
+            instance: Option<FirstInstance>,
+        ) -> Result<Self, PlatformError> {
             let socket = Environment::current()
                 .wayland_socket_path()
                 .ok_or_else(|| PlatformError::Init {
@@ -179,7 +184,7 @@ mod wayland {
                         .to_owned(),
                 })?;
             Self::try_from_parts(WaylandWindows::new, |_| {
-                WaylandLoop::try_new::<Wayland>(&socket, executor)
+                WaylandLoop::try_new::<Wayland>(&socket, executor, instance)
             })
         }
     }
@@ -191,8 +196,9 @@ mod x11 {
     use std::sync::Arc;
 
     use super::{
-        Absent, AppDelivery, Host, HostPlatform, LinuxNotices, LinuxPreferences, NativeExecutor,
-        NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility, UserDataDirs, position,
+        Absent, AppDelivery, FirstInstance, Host, HostPlatform, LinuxNotices, LinuxPreferences,
+        NativeExecutor, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility, UserDataDirs,
+        position,
     };
     use crate::clipboard::linux::x11::X11Clipboard;
     use crate::display::linux::source::LinuxDisplays;
@@ -319,18 +325,28 @@ mod x11 {
         /// [`PlatformError::Init`] when libxcb cannot be loaded, no X server
         /// answers, or the loop's wake descriptor cannot be made.
         pub fn try_new() -> Result<Self, PlatformError> {
-            Self::try_new_with(NativeExecutor::own())
+            Self::try_new_with(NativeExecutor::own(), None)
         }
 
         /// [`try_new`](Self::try_new) on `executor`'s runtime, as
         /// [`CurrentHost::start_with`](crate::CurrentHost::start_with) starts it.
-        pub(crate) fn try_new_with(executor: NativeExecutor) -> Result<Self, PlatformError> {
+        pub(crate) fn try_new_with(
+            executor: NativeExecutor,
+            instance: Option<FirstInstance>,
+        ) -> Result<Self, PlatformError> {
             let connection = X11Connection::connect()?;
             let atoms = WindowAtoms::intern(&connection)?;
             let windows = Arc::clone(&connection);
             Self::try_from_parts(
                 |positions| X11Windows::new(positions, windows, atoms),
-                |windows| X11Loop::try_new::<X11>(connection, Arc::clone(windows) as _, executor),
+                |windows| {
+                    X11Loop::try_new::<X11>(
+                        connection,
+                        Arc::clone(windows) as _,
+                        executor,
+                        instance,
+                    )
+                },
             )
         }
     }

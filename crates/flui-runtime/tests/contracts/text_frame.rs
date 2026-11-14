@@ -43,7 +43,11 @@ impl flui_runtime::sink::FrameSink for Sink {
         (400, 400)
     }
 
-    fn submit(&mut self, _: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
+    fn submit(
+        &mut self,
+        _epoch: flui_foundation::FrameEpoch,
+        _: flui_layer::ScenePublication,
+    ) -> flui_runtime::sink::SubmitVerdict {
         self.0 += 1;
         flui_runtime::sink::SubmitVerdict::Presented
     }
@@ -897,7 +901,11 @@ impl flui_runtime::sink::FrameSink for PreparedTextSink {
         (400, 400)
     }
 
-    fn submit(&mut self, scene: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
+    fn submit(
+        &mut self,
+        _epoch: flui_foundation::FrameEpoch,
+        scene: flui_layer::ScenePublication,
+    ) -> flui_runtime::sink::SubmitVerdict {
         let tree = scene.scene.flatten();
         let mut registry = flui_painting::glyphs::FontRegistry::new();
         self.glyph_sizes.clear();

@@ -229,15 +229,16 @@ viewport cache geometry. Cache clipping cannot remove a materialized descendant
 under a registered reveal ancestor. Explicit bounds and authored occlusion keep
 their exclusion behavior; viewport paint clipping alone does not make a reveal
 target hidden in the native accessibility tree. Content past a viewport is off
-screen all the same, as Flutter marks it `isHidden`: a formed node whose rect
-covers the paint clip each of its children lies under publishes
-`clips_children`, AccessKit's form of that flag, unless a child it would leave
-out holds a node that reaches the node's rect (content translated from a row
-past the edge back into view). AccessKit's filter then leaves
-a child wholly outside the node out of navigation, except the first one past
-each edge, which a reader moves to in order to reveal it, and the agent's
-`visible` check narrows by every such ancestor. A graft that would change the
-flag of a node above its anchor falls back to a full assembly. A list that fills only part of its viewport
+screen all the same, as Flutter marks it `isHidden`: a formed node publishes
+`clips_children`, AccessKit's form of that flag, when each of its children lies
+under a paint clip inside its rect and has an area, and everything below each
+child, merged content included, lies inside the rect of the node above it.
+AccessKit's filter then leaves a child wholly outside the node out of
+navigation, except the first one past each edge, which a reader moves to in
+order to reveal it; containment makes whatever it leaves out lie outside the
+clip, however the filter flattens the tree, and the agent's `visible` check
+narrows by every such ancestor. A graft that would change the containment or
+place of its anchor falls back to a full assembly. A list that fills only part of its viewport
 keeps the flag off ([gaps](../../docs/gaps.md#a-list-that-fills-part-of-its-viewport-publishes-its-whole-cache-to-a-screen-reader)); the root never publishes it. Assembly retains both clipped
 publication geometry and unclipped root-logical reveal geometry, paired with
 the ancestor's published scroll position. Callback snapshots leave the owner
@@ -1611,7 +1612,7 @@ control, checking published extents and the cached items' committed geometry.
 | `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md)). |
 | `RenderTree::nodes` (`src/storage/tree.rs:59`) | `Slab<RenderNode>` | Auto-derived Send+Sync | No `unsafe impl` needed after U2. |
 | Viewport listener list (`OffsetListeners`, `src/view/viewport_offset.rs`, held by `ScrollPosition`) | `Notifier` on the owner thread | Listener registry | Off layout/paint hot path. A fixed offset never notifies, so `FixedViewportOffset` has no list. |
-| `PipelineOwner::frame_arena` (`src/pipeline/owner/mod.rs`) | `flui_foundation::arena::FrameArena` (`Cell` bump cursor) | Owner-thread scratch | ADR-0328. The semantics pass resets it as it begins and takes its fragment lists and conflict marks from it; each list borrows the arena, so none outlives the reset. `!Send`, like the owner. |
+| `PipelineOwner::frame_arena` (`src/pipeline/owner/mod.rs`) | `flui_foundation::arena::FrameArena` (`Cell` bump cursor) | Owner-thread scratch | ADR-0328. The semantics pass resets it as it begins and takes its fragment lists, conflict marks and reading-order scratch from it, and the nodes it builds (their child lists, the rebuilt root, the graft list) from `PipelineOwner::built_arena`, a second `FrameArena` reset with it, so a built list never sits above scratch the walk frees after it; each list borrows the arena, so none outlives the reset. `!Send`, like the owner. |
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The UI runtime's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the UI runtime's text context". |
 
 Two rows left this table because their sites left the crate: the mouse tracker

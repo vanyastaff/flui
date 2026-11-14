@@ -5,6 +5,7 @@
 use flui_foundation::geometry::{Matrix4, Rect, Size};
 
 use super::command::{DrawCommand, DrawOp};
+use super::payload::{StoredPayload, resolve};
 
 /// How far a recorded command, or a whole display list, can change pixels.
 ///
@@ -124,7 +125,11 @@ impl DrawCommand<'_> {
     /// coordinate space — see [`DrawOp::damage_bounds`]. `None` for ops that
     /// draw nothing (clips and scope markers).
     pub(crate) fn damage_extent(&self) -> Option<DamageExtent> {
-        Some(self.op.damage_bounds()?.transformed(self.transform))
+        Some(
+            self.op
+                .damage_bounds(self.payloads)?
+                .transformed(self.transform),
+        )
     }
 
     /// The bounding rectangle of this command in the display list's
@@ -136,7 +141,7 @@ impl DrawCommand<'_> {
     /// `Paint`).
     pub(crate) fn bounds(&self) -> Option<Rect<f64>> {
         self.op
-            .local_bounds()
+            .local_bounds(self.payloads)
             .map(|local| self.transform.transform_rect(&local))
     }
 }
@@ -238,7 +243,7 @@ impl DrawOp {
     /// - a full-canvas fill (`Color`, `Paint`), an unbounded `SaveLayer` and
     ///   a filtered image (whose filter can spread arbitrarily) are
     ///   [`DamageExtent::Unbounded`].
-    pub(crate) fn damage_bounds(&self) -> Option<DamageExtent> {
+    pub(crate) fn damage_bounds(&self, payloads: &[StoredPayload]) -> Option<DamageExtent> {
         let stroke = |paint: &crate::paint::Paint| paint.effective_stroke_width();
         let bounded = |rect: Rect<f64>| Some(DamageExtent::rect(rect));
         match self {
@@ -247,9 +252,12 @@ impl DrawOp {
             }
             DrawOp::Arc { rect, paint, .. } => bounded(rect.expand(stroke(paint) * 2.0)),
             DrawOp::RRect { rrect, paint } => bounded(rrect.bounding_rect().expand(stroke(paint))),
-            DrawOp::DRRect { outer, paint, .. } => {
-                bounded(outer.bounding_rect().expand(stroke(paint)))
-            }
+            DrawOp::DRRect { rrects, paint } => bounded(
+                resolve(payloads, *rrects)
+                    .outer
+                    .bounding_rect()
+                    .expand(stroke(paint)),
+            ),
             DrawOp::Circle {
                 center,
                 radius,
@@ -263,16 +271,18 @@ impl DrawOp {
             }
             DrawOp::Line { p1, p2, paint } => point_bounds([p1, p2].into_iter())
                 .and_then(|b| bounded(b.expand(line_width(paint) * 2.0))),
-            DrawOp::Path { path, paint } => {
-                bounded(path.compute_bounds().expand(stroke(paint) * 2.0))
-            }
+            DrawOp::Path { path, paint } => bounded(
+                resolve(payloads, *path)
+                    .compute_bounds()
+                    .expand(stroke(paint) * 2.0),
+            ),
             DrawOp::Points { points, paint, .. } => {
                 point_bounds(points.iter()).and_then(|b| bounded(b.expand(line_width(paint) * 2.0)))
             }
             DrawOp::Shadow {
                 path, elevation, ..
             } => Some(DamageExtent::Bounded {
-                rect: path.compute_bounds(),
+                rect: resolve(payloads, *path).compute_bounds(),
                 spread: *elevation * SHADOW_REACH,
             }),
             DrawOp::Paragraph {
@@ -318,7 +328,7 @@ impl DrawOp {
             | DrawOp::ImageRepeat { .. }
             | DrawOp::ImageNineSlice { .. }
             | DrawOp::Texture { .. }
-            | DrawOp::Vertices { .. } => self.local_bounds().map(DamageExtent::rect),
+            | DrawOp::Vertices { .. } => self.local_bounds(payloads).map(DamageExtent::rect),
             DrawOp::Atlas {
                 sprites,
                 transforms,
@@ -350,7 +360,7 @@ impl DrawOp {
 
     /// The op's bounds in its own (pre-transform) coordinate space, with
     /// half the stroke width added where the paint strokes.
-    pub(crate) fn local_bounds(&self) -> Option<Rect<f64>> {
+    pub(crate) fn local_bounds(&self, payloads: &[StoredPayload]) -> Option<Rect<f64>> {
         match self {
             DrawOp::Rect { rect, paint } | DrawOp::Oval { rect, paint } => {
                 let outset = paint.effective_stroke_width() * 0.5;
@@ -364,9 +374,14 @@ impl DrawOp {
                 let outset = paint.effective_stroke_width() * 0.5;
                 Some(rrect.bounding_rect().expand(outset))
             }
-            DrawOp::DRRect { outer, paint, .. } => {
+            DrawOp::DRRect { rrects, paint } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                Some(outer.bounding_rect().expand(outset))
+                Some(
+                    resolve(payloads, *rrects)
+                        .outer
+                        .bounding_rect()
+                        .expand(outset),
+                )
             }
             DrawOp::Circle {
                 center,
@@ -377,8 +392,8 @@ impl DrawOp {
                 let size = Size::new(effective_radius * 2.0, effective_radius * 2.0);
                 Some(Rect::from_center_size(*center, size))
             }
-            DrawOp::ImageRegion { dst, .. }
-            | DrawOp::Image { dst, .. }
+            DrawOp::ImageRegion { region, .. } => Some(resolve(payloads, *region).dst),
+            DrawOp::Image { dst, .. }
             | DrawOp::ImageRepeat { dst, .. }
             | DrawOp::ImageNineSlice { dst, .. }
             | DrawOp::ImageFiltered { dst, .. }
@@ -389,11 +404,11 @@ impl DrawOp {
             }
             DrawOp::Path { path, paint } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                Some(path.compute_bounds().expand(outset))
+                Some(resolve(payloads, *path).compute_bounds().expand(outset))
             }
             DrawOp::Shadow {
                 path, elevation, ..
-            } => Some(path.compute_bounds().expand(*elevation)),
+            } => Some(resolve(payloads, *path).compute_bounds().expand(*elevation)),
             DrawOp::Points { points, paint, .. } => {
                 let stroke_half = paint.effective_stroke_width() * 0.5;
                 point_bounds(points.iter()).map(|b| b.expand(stroke_half))

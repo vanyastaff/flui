@@ -60,8 +60,8 @@ from?
 
 ## Decision
 
-Option 1. `flui_foundation::arena` holds `FrameArena`; each `PipelineOwner` owns one, a phase
-walk lends it to its scratch collections, and the walk resets it as it begins.
+Option 1. `flui_foundation::arena` holds `FrameArena`; each `PipelineOwner` owns its arenas, a
+phase walk lends them to its scratch collections, and the walk resets them as it begins.
 
 ### §1 The arena
 
@@ -88,7 +88,8 @@ unsafe impl Allocator for &FrameArena { /* bump; free and grow the last block in
   reverse order of allocation reuses its memory within the frame.
 - The arena records the most bytes it had handed out at once since the last reset (its peak).
   `reset` keeps the newest chunk when it holds that peak and is at most four times the largest
-  peak of the last 120 resets that followed an allocation, and releases every other chunk. A
+  peak of the last 120 resets that followed an allocation, and releases every other chunk; keeping
+  none, it frees its list of chunks as well, so nothing of a grown chain stays live. A
   reset that follows no allocation changes nothing, so passes with no scratch to list neither age
   the recent peaks nor release the chunk they sized. `reset` never allocates: when it keeps no
   chunk, the next allocation opens one sized for the largest recent peak. So a steady frame bumps
@@ -108,12 +109,33 @@ free a chunk. Miri runs the arena's unit tests (the `flui-foundation` miri scope
 
 ### §3 Who holds it and how a walk reaches it
 
-The `PipelineOwner` owns its `FrameArena` beside its other per-frame state, so two UI runtimes on
-one thread never share one (ADR-0266). A phase walk resets it as it begins (`&mut self` on the
-owner), then lends `&FrameArena` to the walk's own context; the semantics assembly carries it in
-its `AssemblyRegions`. Resetting at the start of a walk needs no frame-end hook, and a walk that
-unwound has dropped its collections before the next one resets. `flui-view`'s build phase gets
-an arena of its own on the `BuildOwner` under the same rules when its first site moves.
+The `PipelineOwner` owns its arenas beside its other per-frame state, so two UI runtimes on one
+thread never share one (ADR-0266). A phase walk resets them as it begins (`&mut self` on the
+owner), then lends `&FrameArena` to the walk's own context; the semantics assembly carries them in
+its `AssemblyRegions`.
+
+A walk keeps two kinds of memory apart, one arena each. Scratch (`frame_arena`) is freed before
+the level that listed it returns: a fragment list, conflict marks, a reordering. What a level
+builds for its parent (`built_arena`) outlives the level until the walk hands it on: the semantics
+nodes the pass builds and their child lists, which it moves into the semantics owner. In one arena
+a built list would sit above every scratch list freed after it, so none of those would be reused
+within the walk and the frame's peak would grow to all of them. Apart, the scratch arena reuses
+each level's memory for the next. A level takes over the first non-empty list a child returns
+and reserves room for its remaining children while it is still the last block; each later
+child's list is emptied into it and freed as the last block; and the level drops its scratch in
+the reverse order it took it. A block freed while another sits above it (a list that must grow
+past its size, the lists inside fragments a barrier discards) waits for the reset. A level that absorbs a child's node
+as its first fragment takes over that node's child list: a chain of absorbed nodes with no
+siblings hands one list up without copying it, and a level with fragments after it moves the list
+once, as it would copy it into a new one. The built arena's peak is the built tree, plus a failed graft's partial nodes when
+the pass falls back to a rebuild. Resetting at the start of a walk needs no frame-end hook, and a walk that
+unwound has dropped its collections before the next one resets. `flui-view`'s build phase has an
+arena of its own on the `BuildOwner`: the render-edge sync after a build takes its walk stack,
+its edge lists and each parent's desired child list from it, and resets it when the walk ends. A
+build is not a frame (a frame can run several, a mount runs one), so between them the arena holds
+no chain of chunks: the newest chunk when it held the walk's peak, otherwise none until the next
+walk opens one sized for the recent peaks. A walk that unwound skips its reset; the next walk
+lists above the space it left, and its own reset frees both.
 
 A render object's `perform_layout` and `paint` never see the arena. What they hand the pipeline
 (a size, painted commands) is the pipeline's to store, and it stores retained data outside the
@@ -150,7 +172,7 @@ pure Rust performance gain and changes nothing an author writes.
 - Bad: scratch collections carry an allocator parameter inside the pipeline, which their
   signatures show, and a scratch type that holds one carries the arena's lifetime.
 - Bad: `unsafe impl Allocator` is new unsafe code in `flui-foundation`; miri covers it.
-- Neutral: memory held between frames is one chunk sized by the peaks of recent frames.
+- Neutral: memory held between frames is one chunk per arena, sized by the peaks of recent frames.
 
 ### Confirmation
 

@@ -1,4 +1,4 @@
-//! Whatever a scroll view paints inside its viewport stays within a screen
+//! Whatever a list paints inside its viewport stays within a screen
 //! reader's reach, however the content is nested, merged, moved or clipped:
 //! AccessKit's filter, reading the `clips_children` flags assembly publishes,
 //! never leaves out a node whose content is painted in view.
@@ -10,10 +10,9 @@
 
 use crate::common::{LaidOut, lay_out, loose};
 use flui_view::{BoxedView, ViewExt as _};
-use flui_widgets::{
-    ClipRect, Column, MergeSemantics, Semantics, SingleChildScrollView, SizedBox, Transform,
-};
+use flui_widgets::{ClipRect, Column, ListView, MergeSemantics, Semantics, SizedBox, Transform};
 use proptest::prelude::*;
+use std::rc::Rc;
 
 const VIEWPORT: f64 = 100.0;
 
@@ -50,6 +49,20 @@ enum GroupNode {
 }
 
 impl Content {
+    /// How many labels the content declares.
+    fn labels(&self) -> usize {
+        match self {
+            Self::Leaf { .. } => 1,
+            Self::Group { node, children } => {
+                usize::from(matches!(node, GroupNode::Labelled))
+                    + children.iter().map(Self::labels).sum::<usize>()
+            }
+            Self::Translate { child, .. } | Self::Clip(child) | Self::Merge(child) => {
+                child.labels()
+            }
+        }
+    }
+
     fn height(&self) -> f64 {
         match self {
             Self::Leaf { height, .. } => *height,
@@ -208,15 +221,24 @@ fn content() -> impl Strategy<Value = Content> {
 }
 
 fn screen(rows: &[Content], moved: bool) -> BoxedView {
-    let mut next = 0;
+    let mut first = 0;
+    let rows: Rc<Vec<(Content, usize)>> = Rc::new(
+        rows.iter()
+            .map(|row| {
+                let start = first;
+                first += row.labels();
+                (row.clone(), start)
+            })
+            .collect(),
+    );
+    let count = rows.len();
     SizedBox::new(VIEWPORT, VIEWPORT)
-        .child(
-            SingleChildScrollView::new().child(Column::new(
-                rows.iter()
-                    .map(|row| row.view(moved, &mut next))
-                    .collect::<Vec<BoxedView>>(),
-            )),
-        )
+        .child(ListView::builder(count, 50.0, move |index| {
+            rows.get(index).map(|(row, first)| {
+                let mut next = *first;
+                row.view(moved, &mut next)
+            })
+        }))
         .boxed()
 }
 

@@ -54,8 +54,11 @@ fn image_placement_builders_reach_the_painted_scene() {
     let regions = |laid: &crate::common::LaidOut| {
         laid.draw_ops()
             .into_iter()
-            .filter_map(|command| match command.op {
-                DrawOp::ImageRegion { dst, repeat, .. } => Some((dst, repeat)),
+            .filter_map(|command| match &command.op {
+                DrawOp::ImageRegion { region, .. } => {
+                    let region = command.payload(*region);
+                    Some((region.dst, region.repeat))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>()

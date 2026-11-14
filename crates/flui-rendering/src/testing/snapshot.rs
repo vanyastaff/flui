@@ -196,15 +196,15 @@ fn maybe_transform(transform: &Matrix4) -> String {
 /// compile error here rather than silently falling through.
 #[must_use]
 pub fn summarize_command(cmd: DrawCommand<'_>) -> DrawCommandSummary {
-    let DrawCommandSummary { kind, mut line } = summarize_op(cmd.op);
+    let DrawCommandSummary { kind, mut line } = summarize_op(cmd);
     line.push_str(&maybe_transform(cmd.transform));
     DrawCommandSummary { kind, line }
 }
 
 /// The op half of [`summarize_command`]: the variant and its geometry,
 /// without the transform suffix.
-fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
-    match op {
+fn summarize_op(cmd: DrawCommand<'_>) -> DrawCommandSummary {
+    match cmd.op {
         DrawOp::Save => DrawCommandSummary {
             kind: DrawKind::State,
             line: "Save".to_owned(),
@@ -268,8 +268,8 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
             kind: DrawKind::Clip,
             line: format!(
                 "ClipPath bounds={} pts={} op={} clip={}",
-                fmt_rect(path.compute_bounds()),
-                path.commands().len(),
+                fmt_rect(cmd.payload(*path).compute_bounds()),
+                cmd.payload(*path).commands().len(),
                 fmt_clip_op(*clip_op),
                 fmt_clip(*clip_behavior),
             ),
@@ -334,8 +334,8 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
                 kind: DrawKind::Path,
                 line: format!(
                     "DrawPath bounds={} pts={} {}",
-                    fmt_rect(path.compute_bounds()),
-                    path.commands().len(),
+                    fmt_rect(cmd.payload(*path).compute_bounds()),
+                    cmd.payload(*path).commands().len(),
                     summarize_paint(paint),
                 ),
             }
@@ -359,16 +359,12 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
             ),
         },
 
-        DrawOp::DRRect {
-            outer,
-            inner,
-            paint,
-        } => DrawCommandSummary {
+        DrawOp::DRRect { rrects, paint } => DrawCommandSummary {
             kind: DrawKind::DRRect,
             line: format!(
                 "DrawDRRect outer={} inner={} {}",
-                fmt_rrect(outer),
-                fmt_rrect(inner),
+                fmt_rrect(&cmd.payload(*rrects).outer),
+                fmt_rrect(&cmd.payload(*rrects).inner),
                 summarize_paint(paint),
             ),
         },
@@ -441,12 +437,12 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
         },
 
         // ── Images ───────────────────────────────────────────────────────────
-        DrawOp::ImageRegion { src, dst, .. } => DrawCommandSummary {
+        DrawOp::ImageRegion { region, .. } => DrawCommandSummary {
             kind: DrawKind::Image,
             line: format!(
                 "DrawImageRegion src={} dst={}",
-                fmt_rect(*src),
-                fmt_rect(*dst)
+                fmt_rect(cmd.payload(*region).src),
+                fmt_rect(cmd.payload(*region).dst)
             ),
         },
         DrawOp::Image { dst, .. } => DrawCommandSummary {
@@ -490,7 +486,7 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
             kind: DrawKind::Shadow,
             line: format!(
                 "DrawShadow path_bounds={} color={} elev={}",
-                fmt_rect(path.compute_bounds()),
+                fmt_rect(cmd.payload(*path).compute_bounds()),
                 hex_color(*color),
                 f(*elevation),
             ),

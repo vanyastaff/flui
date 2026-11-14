@@ -83,6 +83,48 @@ pub(crate) fn deferred_painted_frame_waits_for_the_later_present_to_commit() {
     assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
 }
 
+/// A frame withheld from the sink takes no epoch: the first frame the sink
+/// sees is its presentation's first.
+pub(crate) fn a_withheld_frame_takes_no_epoch() {
+    let ui_runtime = mount_box();
+    ui_runtime.defer_first_frame();
+    let mut backend = ScriptedSink::always_presents();
+    assert!(!ui_runtime.render_frame(&mut backend));
+    assert!(!ui_runtime.render_frame(&mut backend));
+    ui_runtime.allow_first_frame();
+    assert!(ui_runtime.render_frame(&mut backend));
+    assert_eq!(
+        backend.epochs,
+        vec![flui_foundation::FrameEpoch::ZERO.next()],
+        "the frames painted while deferred never reached the sink"
+    );
+}
+
+/// The runtime numbers the frames of all its presentations in one sequence:
+/// a frame a secondary presentation produces takes the epoch after the
+/// primary's last, so the epochs one sink is handed only grow.
+pub(crate) fn every_presentation_takes_the_next_epoch_of_its_runtime() {
+    let mut ui_runtime = mount_box();
+    let mut backend = ScriptedSink::always_presents();
+    assert!(ui_runtime.render_frame(&mut backend));
+    let secondary = ui_runtime.install_second_presentation_for_test();
+    ui_runtime
+        .attach_root_widget_to_for_test(secondary, &SizedBox::new(10.0, 10.0))
+        .expect("secondary root");
+    assert!(ui_runtime.render_frame(&mut backend));
+    let secondary = ui_runtime
+        .presentations
+        .get(secondary)
+        .expect("the secondary is installed");
+    assert!(
+        secondary.tree_revision() > TreeRevision::ZERO
+            && secondary.frame_commit_state() == FrameCommitState::Committed,
+        "the secondary painted the second frame and the sink's verdict committed it"
+    );
+    let first = flui_foundation::FrameEpoch::ZERO.next();
+    assert_eq!(backend.epochs, vec![first, first.next()]);
+}
+
 /// The withheld retry is BOUNDED: a drawable that never comes back stops
 /// being retried instead of spinning at the fallback pace forever.
 ///
@@ -258,6 +300,11 @@ fn a_subscriber_that_panics_opening_the_submit_span_keeps_the_repaint_owed() {
     assert!(
         ui_runtime.render_frame(&mut succeeding),
         "the lost scene is painted again"
+    );
+    assert_eq!(
+        succeeding.epochs,
+        vec![flui_foundation::FrameEpoch::ZERO.next()],
+        "the scene the subscriber stopped before the sink took no epoch"
     );
 }
 

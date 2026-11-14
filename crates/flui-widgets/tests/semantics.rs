@@ -3140,68 +3140,28 @@ fn a_child_collapsed_under_a_clipping_holder() {
     );
 }
 
-/// A row moved past the holder's edge while its content is painted in view
-/// keeps the holder from clipping its rows, and moving the row back lets it
-/// clip them again: the holder is not re-formed by the move, yet it is
-/// published as a rebuild publishes it.
-fn a_row_moved_past_the_edge_with_its_content_in_view() {
+/// Content moved out of its row and back decides whether the holder clips
+/// its rows, though the move re-forms only the content: the row's
+/// containment changes, and the holder is published as a rebuild publishes
+/// it.
+fn content_moved_out_of_its_row_and_back() {
     use flui_widgets::{Column, SingleChildScrollView, Transform};
     publishes_as_built_afresh(
         |dy| {
-            SizedBox::new(100.0, 100.0).child(
-                SingleChildScrollView::new().child(
-                    Semantics::new().container(true).label("holder").child(
-                        SizedBox::new(100.0, 100.0).child(Column::new((
-                            labelled("row", 50.0),
-                            Transform::translate(0.0, dy).child(
-                                Semantics::new().container(true).label("slot").child(
-                                    SizedBox::new(100.0, 20.0).child(
-                                        Transform::translate(0.0, -130.0)
-                                            .child(labelled("content", 40.0)),
-                                    ),
-                                ),
+            SizedBox::new(100.0, 100.0).child(SingleChildScrollView::new().child(
+                Semantics::new().container(true).label("holder").child(
+                    SizedBox::new(100.0, 100.0).child(Column::new((
+                        labelled("row", 50.0),
+                        Semantics::new().container(true).label("slot").child(
+                            SizedBox::new(100.0, 20.0).child(
+                                Transform::translate(0.0, dy).child(labelled("content", 40.0)),
                             ),
-                        ))),
-                    ),
+                        ),
+                    ))),
                 ),
-            )
+            ))
         },
-        &[0.0, 130.0, 0.0],
-    );
-}
-
-/// Content moved inside a row that stays past the holder's edge, from view
-/// out of it and back, decides whether the holder clips its rows, though the
-/// node the move re-forms sits two levels below the holder.
-fn content_moved_inside_a_row_past_the_edge() {
-    use flui_widgets::{Column, SingleChildScrollView, Transform};
-    publishes_as_built_afresh(
-        |dy| {
-            SizedBox::new(100.0, 100.0).child(
-                SingleChildScrollView::new().child(
-                    Semantics::new().container(true).label("holder").child(
-                        SizedBox::new(100.0, 100.0).child(Column::new((
-                            labelled("row", 50.0),
-                            Transform::translate(0.0, 130.0).child(
-                                Semantics::new().container(true).label("slot").child(
-                                    SizedBox::new(100.0, 20.0).child(
-                                        Transform::translate(0.0, dy).child(
-                                            Semantics::new().container(true).label("inner").child(
-                                                SizedBox::new(100.0, 20.0).child(
-                                                    Transform::translate(0.0, -130.0)
-                                                        .child(labelled("content", 40.0)),
-                                                ),
-                                            ),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                        ))),
-                    ),
-                ),
-            )
-        },
-        &[0.0, 100.0, 0.0],
+        &[0.0, 50.0, 0.0],
     );
 }
 
@@ -3303,12 +3263,8 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
                 a_child_collapsed_under_a_clipping_holder,
             ),
             (
-                "a row moved past the edge with its content in view",
-                a_row_moved_past_the_edge_with_its_content_in_view,
-            ),
-            (
-                "content moved inside a row past the edge",
-                content_moved_inside_a_row_past_the_edge,
+                "content moved out of its row and back",
+                content_moved_out_of_its_row_and_back,
             ),
             (
                 "a wrapper moved into the cache extent",

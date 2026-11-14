@@ -50,8 +50,8 @@ fn points(data: AnimatedIconData, progress: f64, direction: TextDirection) -> Ve
     laid.pump_for(Duration::ZERO);
     laid.draw_ops()
         .into_iter()
-        .filter_map(|command| match command.op {
-            DrawOp::Path { path, .. } => Some(path),
+        .filter_map(|command| match &command.op {
+            DrawOp::Path { path, .. } => Some(command.payload(*path).clone()),
             _ => None,
         })
         .flat_map(|path| {

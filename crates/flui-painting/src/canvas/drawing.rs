@@ -25,7 +25,8 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 
 use super::Canvas;
 use crate::display_list::{
-    BlendMode, ColorFilter, DrawOp, FilterQuality, ImageRepeat, Paint, PointMode, TextureId,
+    BlendMode, ColorFilter, DrawOp, FilterQuality, ImageRegionPlacement, ImageRepeat, NestedRRects,
+    Paint, PointMode, TextureId,
 };
 use crate::display_list::{BlurSigma, ShapedParagraph};
 
@@ -79,10 +80,7 @@ impl Canvas {
     /// Draws an arbitrary path.
     pub fn draw_path(&mut self, path: &Path, paint: &Paint) {
         let paint = self.intern_paint(paint);
-        self.record(DrawOp::Path {
-            path: path.clone(),
-            paint,
-        });
+        self.record_with(path.clone(), |path| DrawOp::Path { path, paint });
     }
 
     /// Draws a shaped paragraph with its top-left at `offset`.
@@ -160,13 +158,16 @@ impl Canvas {
         paint: Option<&Paint>,
     ) {
         let paint = self.intern_optional_paint(paint);
-        self.record(DrawOp::ImageRegion {
-            image,
+        let region = ImageRegionPlacement {
             src,
             dst,
             tile,
             repeat,
             filter,
+        };
+        self.record_with(region, |region| DrawOp::ImageRegion {
+            image,
+            region,
             paint,
         });
     }
@@ -214,7 +215,7 @@ impl Canvas {
         paint: Option<&Paint>,
     ) {
         let paint = self.intern_optional_paint(paint);
-        self.record(DrawOp::ImageFiltered {
+        self.record_with(filter, |filter| DrawOp::ImageFiltered {
             image,
             dst,
             filter,
@@ -252,8 +253,8 @@ impl Canvas {
             "Shadow elevation must be non-negative, got: {elevation}"
         );
 
-        self.record(DrawOp::Shadow {
-            path: path.clone(),
+        self.record_with(path.clone(), |path| DrawOp::Shadow {
+            path,
             color,
             elevation,
         });
@@ -281,9 +282,8 @@ impl Canvas {
     /// Draws difference between two rounded rectangles (ring/border).
     pub fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
         let paint = self.intern_paint(paint);
-        self.record(DrawOp::DRRect {
-            outer,
-            inner,
+        self.record_with(NestedRRects::new(outer, inner), |rrects| DrawOp::DRRect {
+            rrects,
             paint,
         });
     }

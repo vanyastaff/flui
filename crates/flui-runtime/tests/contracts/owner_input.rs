@@ -66,7 +66,11 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
         fn surface_size(&mut self) -> (u32, u32) {
             (160, 80)
         }
-        fn submit(&mut self, _: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
+        fn submit(
+            &mut self,
+            _epoch: flui_foundation::FrameEpoch,
+            _: flui_layer::ScenePublication,
+        ) -> flui_runtime::sink::SubmitVerdict {
             flui_runtime::sink::SubmitVerdict::Presented
         }
     }
@@ -688,7 +692,11 @@ fn accessibility_input_reaches_the_semantics_owner() {
         fn surface_size(&mut self) -> (u32, u32) {
             (40, 40)
         }
-        fn submit(&mut self, _: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
+        fn submit(
+            &mut self,
+            _epoch: flui_foundation::FrameEpoch,
+            _: flui_layer::ScenePublication,
+        ) -> flui_runtime::sink::SubmitVerdict {
             flui_runtime::sink::SubmitVerdict::Presented
         }
     }
@@ -1001,7 +1009,11 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
         fn surface_size(&mut self) -> (u32, u32) {
             (40, 40)
         }
-        fn submit(&mut self, _: flui_layer::ScenePublication) -> flui_runtime::sink::SubmitVerdict {
+        fn submit(
+            &mut self,
+            _epoch: flui_foundation::FrameEpoch,
+            _: flui_layer::ScenePublication,
+        ) -> flui_runtime::sink::SubmitVerdict {
             flui_runtime::sink::SubmitVerdict::Presented
         }
     }

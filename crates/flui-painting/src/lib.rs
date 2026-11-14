@@ -108,8 +108,8 @@ pub use box_fit::{BoxFit, BoxShape, FittedSizes};
 pub use canvas::Canvas;
 pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 pub use display_list::{
-    BlurSigma, DamageExtent, DisplayList, DrawCommand, DrawCommands, DrawOp, NonFiniteOps,
-    ShapedParagraph,
+    BlurSigma, DamageExtent, DisplayList, DrawCommand, DrawCommandBuf, DrawCommands, DrawOp,
+    ImageRegionPlacement, NestedRRects, NonFiniteOps, Payload, PayloadId, ShapedParagraph,
 };
 pub use error::RegisterFontError;
 pub use glyphs::{

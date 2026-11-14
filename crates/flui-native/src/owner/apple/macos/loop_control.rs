@@ -272,7 +272,7 @@ impl LoopControl {
             Launch::Cold
         };
         self.app
-            .opened(crate::owner::apple::opened_urls::opened_by_urls(
+            .opened(crate::owner::file_uri::opened_by_urls(
                 urls,
                 crate::owner::file_uri::PathConvention::HOST,
                 flui_platform::OpenTarget::Application,

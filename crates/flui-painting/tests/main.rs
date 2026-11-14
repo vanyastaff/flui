@@ -578,6 +578,22 @@ fn recording_contract() {
                 recording::a_canvas_records_into_a_buffer_it_was_handed,
             ),
             (
+                "re_recording_a_warm_list_with_payloads_allocates_nothing",
+                recording::re_recording_a_warm_list_with_payloads_allocates_nothing,
+            ),
+            (
+                "appended_payloads_follow_their_commands",
+                recording::appended_payloads_follow_their_commands,
+            ),
+            (
+                "a_command_describes_itself_wherever_its_payload_sits",
+                recording::a_command_describes_itself_wherever_its_payload_sits,
+            ),
+            (
+                "a_fingerprint_reads_what_the_commands_draw",
+                recording::a_fingerprint_reads_what_the_commands_draw,
+            ),
+            (
                 "a_finished_display_list_is_sendable_to_another_thread",
                 recording::a_finished_display_list_is_sendable_to_another_thread,
             ),

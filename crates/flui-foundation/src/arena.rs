@@ -158,9 +158,9 @@ impl FrameArena {
     /// Keeps the newest chunk when it holds the most this frame had handed out at once, so the
     /// next frame of the same shape allocates nothing from the global allocator; releases the
     /// others, and a chunk larger than four times the most any of the last 120 frames that used
-    /// the arena needed. A frame that handed out nothing
-    /// changes nothing. A reset never allocates: when it keeps no chunk, the next allocation
-    /// opens one sized for the recent frames.
+    /// the arena needed. Keeping no chunk, it frees the list of chunks too. A frame that handed
+    /// out nothing changes nothing. A reset never allocates: when it keeps no chunk, the next
+    /// allocation opens one sized for the recent frames.
     pub fn reset(&mut self) {
         let used = self.peak.get();
         if used == 0 {
@@ -183,13 +183,16 @@ impl FrameArena {
             chunk.capacity() >= used && chunk.capacity() <= wanted.saturating_mul(RELEASE_FACTOR)
         });
         let kept = if keep_newest { chunks.pop() } else { None };
-        chunks.clear();
         self.next_chunk = wanted;
         if let Some(chunk) = kept {
+            chunks.clear();
             self.base.set(chunk.ptr);
             self.capacity.set(chunk.capacity());
             chunks.push(chunk);
         } else {
+            // Keeping no chunk, the arena keeps no list of them either: the slots a grown chain
+            // left would stay live between frames for nothing.
+            *chunks = Vec::new();
             self.base.set(NonNull::dangling());
             self.capacity.set(0);
         }
@@ -551,6 +554,11 @@ mod tests {
             chunk_count(&arena),
             0,
             "the reset keeps no chunk and opens none"
+        );
+        assert_eq!(
+            arena.chunks.borrow().capacity(),
+            0,
+            "keeping no chunk, the reset frees the list of chunks"
         );
         assert_eq!(arena.capacity.get(), 0);
         assert!(

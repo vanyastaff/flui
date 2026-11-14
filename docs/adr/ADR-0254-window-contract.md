@@ -367,8 +367,46 @@ parsing stays above the host. At most sixteen `Opened` wait for the handler at o
 dropped with a warning. What launched the application is the handler's to take inside `ready`:
 `OwnerPlatform::take_launch_opened` hands over the `Launch::Cold` reports queued for the first
 one's target, joined in order, so the first window can be built on the link, as Flutter's initial
-route is; what `ready` leaves is reported first after it, on every exit. System preferences are
-not a registration:
+route is; what `ready` leaves is reported first after it, on every exit.
+
+**One instance.** A desktop host started with `CurrentHost::start_single(executor, app_id)` keeps
+one instance of the application per user session, named by its reverse-DNS app id. The first
+process owns the name; a later one hands it what its own launch opens, with the activation token
+its launcher gave it (Linux) or its right to the foreground (Windows), and ends once the first has
+taken the launch (`HostStart::Forwarded`, and `Application::run` returns `Ok(())`). A launch the
+first refuses or does not take within fifteen seconds of reaching it (it holds sixteen waiting
+already, it ends first, or its loop is busy) is handed back and never delivered there, and the
+later process, which waits longer, runs as an instance of its own, as does a launch carrying more
+than the first would keep, so no launch is lost or opened twice. The first hears the launch as `opened` with `Launch::Running` and
+`OpenTarget::Application`, after `reopen` when it shows no window (none is open, or each is
+hidden), and its host brings a shown window forward without a command from above. On Linux that is
+the window activated last, with the token (Wayland `xdg_activation_v1`; on X11 at the time the
+startup id names); with no window shown, the token waits for the next window shown, the one the
+application opens or shows for the reopen. On Windows it is the shown window highest in the
+screen's order, restored when minimized, with the right the launch handed over; with none shown,
+the window the application shows for the reopen comes forward with that right. On Linux the name
+is owned on the session bus, and only there, where the first process serves
+`org.freedesktop.Application` (`Activate`, `Open`, `ActivateAction`) as GApplication does; files
+travel as absolute `file:` URIs and a call's URIs are bounded as `Opened`'s are. On Windows the
+first process holds a mutex and serves a named pipe, both named with the app id and the user's
+session id and granted to the first's logon SID alone (another logon of the same user, over Remote
+Desktop or a second sign-in, holds the user's SID but not that one), with a mandatory label at its
+own integrity level that refuses any access from below it, so an unelevated process of the same user
+cannot hand an elevated instance links and files; the pipe rejects remote clients, and its frame
+(the launch's links and absolute paths, its length first) is bounded and read as untrusted input.
+A later launch hands its right and its frame only to a pipe served by a process of its own user
+at its own integrity level or above. An app id outside reverse DNS, or a session that cannot
+keep one instance (no bus, a mutex or pipe it cannot open), is warned about and the process
+runs as an instance of its own. macOS, iOS and Android keep one instance themselves and
+each Web page is an application of its own: `start_single` starts their host as `start_with`
+does. `flui-app` asks for one instance when the application declares a URL scheme or calls
+`Application::single_instance(true)`, and `single_instance(false)` turns it off. All of it is
+`flui`'s `single-instance` feature, off by default: without it the session-bus and pipe code is
+not linked and `Application::single_instance` is absent, so each launch is a process of its own,
+and `flui build` and `flui run` refuse a Linux or Windows build of an application that declares URL
+schemes or file types (`flui doctor` reports it as `project.single-instance`).
+
+System preferences are not a registration:
 ADR-0172's delivery stands. The notices, the session-end hold and their fan-out are ADR-0237's and
 do not change.
 

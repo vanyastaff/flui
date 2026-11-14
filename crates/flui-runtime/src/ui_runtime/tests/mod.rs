@@ -537,6 +537,8 @@ fn frame_failure_containment_matrix() {
             ("super::frame_commit_state_tests::errored_frame_is_uncommitted", super::frame_commit_state_tests::errored_frame_is_uncommitted as fn()),
             ("super::frame_commit_state_tests::deferred_painted_frame_waits_for_the_later_present_to_commit", super::frame_commit_state_tests::deferred_painted_frame_waits_for_the_later_present_to_commit as fn()),
             ("super::frame_commit_state_tests::the_withheld_retry_is_bounded_and_then_parks", super::frame_commit_state_tests::the_withheld_retry_is_bounded_and_then_parks as fn()),
+            ("super::frame_commit_state_tests::a_withheld_frame_takes_no_epoch", super::frame_commit_state_tests::a_withheld_frame_takes_no_epoch as fn()),
+            ("super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime", super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime as fn()),
         ],
     );
 }

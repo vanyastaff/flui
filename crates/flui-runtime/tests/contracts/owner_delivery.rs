@@ -843,6 +843,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
         }
         fn submit(
             &mut self,
+            _epoch: flui_foundation::FrameEpoch,
             scene: flui_layer::ScenePublication,
         ) -> flui_runtime::sink::SubmitVerdict {
             let tree = scene.scene.flatten();

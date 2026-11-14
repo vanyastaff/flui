@@ -1603,7 +1603,7 @@ impl IOSLoop {
                 let target =
                     flui_platform::OpenTarget::Window(flui_platform::PlatformWindow::id(&*window));
                 self.app
-                    .opened(super::opened_urls::opened_by_urls(
+                    .opened(crate::owner::file_uri::opened_by_urls(
                         urls,
                         crate::owner::file_uri::PathConvention::HOST,
                         target,

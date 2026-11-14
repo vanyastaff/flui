@@ -2887,6 +2887,28 @@ mod toplevel {
             }
             self.retire();
         }
+
+        fn activate_forwarded(&self, token: Option<ActivationToken>) {
+            if self.closed.get() {
+                return;
+            }
+            match token {
+                // Handed back once the window is shown, as the launcher's
+                // token of the first window is.
+                Some(token) => {
+                    self.record.tokens.lock().grant(token);
+                    self.hand_back_tokens();
+                }
+                None => {
+                    if let Err(error) = self.ask_activation() {
+                        tracing::debug!(
+                            ?error,
+                            "the compositor takes no activation for a forwarded launch"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// What the Wayland host's windows share and open with: what every

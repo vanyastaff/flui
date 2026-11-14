@@ -38,7 +38,10 @@ mod cases {
     use flui_foundation::geometry::{Size, WindowMetrics};
     use flui_native::testing::app::{AppCall, AppLog, with_log};
     use flui_native::testing::x11::run_for;
-    use flui_native::{AppHandler, HostWindow, Platform as _, WindowRequest, X11Platform};
+    use flui_native::{
+        AppHandler, CurrentHost, HostStart, HostWindow, NativeExecutor, Platform as _,
+        WindowRequest, X11Platform,
+    };
     use flui_platform::{
         CloseDecision, PlatformWindow, WindowCommand, WindowHandler, WindowMode, WindowOptions,
         WindowReveal,
@@ -101,6 +104,14 @@ mod cases {
             "a_surface_targets_display_equals_the_platforms_connection",
             a_surface_targets_display_equals_the_platforms_connection,
         ),
+        (
+            "a_later_launch_while_no_window_is_shown_asks_to_reopen",
+            a_later_launch_while_no_window_is_shown_asks_to_reopen,
+        ),
+        (
+            "the_window_reopened_for_a_later_launch_comes_forward",
+            the_window_reopened_for_a_later_launch_comes_forward,
+        ),
     ];
 
     pub(super) fn main() {
@@ -154,10 +165,13 @@ mod cases {
     }
 
     /// An X server of the harness's own with a window manager on it, which
-    /// `DISPLAY` names for the rest of the process.
+    /// `DISPLAY` names for the rest of the process, and a session bus of its
+    /// own, which `DBUS_SESSION_BUS_ADDRESS` names (none when no `dbus-daemon`
+    /// is installed).
     struct Session {
         server: Child,
         window_manager: Child,
+        bus: Option<Child>,
     }
 
     impl Session {
@@ -208,7 +222,44 @@ mod cases {
             panic!("no free X display number");
         }
 
+        /// A `dbus-daemon` that activates no service, so the session's own
+        /// services (a portal, the accessibility bus) stay out of the cases,
+        /// and its address.
+        fn bus() -> Option<(Child, String)> {
+            let config = std::env::temp_dir()
+                .join(format!("flui-x11-window-bus-{}.conf", std::process::id()));
+            std::fs::write(
+                &config,
+                "<busconfig><type>session</type><listen>unix:tmpdir=/tmp</listen>\
+                 <auth>EXTERNAL</auth><policy context=\"default\">\
+                 <allow send_destination=\"*\" eavesdrop=\"true\"/>\
+                 <allow eavesdrop=\"true\"/><allow own=\"*\"/></policy></busconfig>",
+            )
+            .ok()?;
+            let mut daemon = Command::new("dbus-daemon")
+                .arg(format!("--config-file={}", config.display()))
+                .args(["--nofork", "--print-address"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()?;
+            let mut address = String::new();
+            let read = std::io::BufRead::read_line(
+                &mut std::io::BufReader::new(daemon.stdout.take()?),
+                &mut address,
+            );
+            let _ = std::fs::remove_file(&config);
+            let address = address.trim().to_owned();
+            if read.is_err() || address.is_empty() {
+                let _ = daemon.kill();
+                let _ = daemon.wait();
+                return None;
+            }
+            Some((daemon, address))
+        }
+
         fn finish(server: Child, display: &str) -> Self {
+            let bus = Self::bus();
             #[expect(
                 unsafe_code,
                 reason = "the environment is set before any thread exists"
@@ -222,6 +273,10 @@ mod cases {
                 // the input cases type; the table is X's, no locale need
                 // be installed.
                 std::env::set_var("LC_CTYPE", "en_US.UTF-8");
+                match &bus {
+                    Some((_, address)) => std::env::set_var("DBUS_SESSION_BUS_ADDRESS", address),
+                    None => std::env::remove_var("DBUS_SESSION_BUS_ADDRESS"),
+                }
             }
             let window_manager = Command::new("openbox")
                 .arg("--sm-disable")
@@ -270,13 +325,15 @@ mod cases {
             Self {
                 server,
                 window_manager,
+                bus: bus.map(|(daemon, _)| daemon),
             }
         }
     }
 
     impl Drop for Session {
         fn drop(&mut self) {
-            for child in [&mut self.window_manager, &mut self.server] {
+            let children = [&mut self.window_manager, &mut self.server];
+            for child in children.into_iter().chain(self.bus.as_mut()) {
                 let _ = child.kill();
                 let _ = child.wait();
             }
@@ -969,6 +1026,156 @@ mod cases {
             std::thread::sleep(after);
             let _ = proxy.request_quit();
         });
+    }
+
+    /// The window an application opens, a turn later, for the reopen a later
+    /// launch asked of it while it held none comes forward when it is
+    /// mapped: the host keeps the launch's activation for it, as Wayland's
+    /// table keeps a forwarded token for the first window. Read from the root
+    /// window, where the host sends `_NET_ACTIVE_WINDOW` and a client that
+    /// selects substructure notifies hears it.
+    fn the_window_reopened_for_a_later_launch_comes_forward() {
+        const APP_ID: &str = "org.flui.X11WindowCases.Reopened";
+        /// `_NET_ACTIVE_WINDOW`'s source indication for an application.
+        const SOURCE_APPLICATION: u32 = 1;
+        if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+            eprintln!("skipped: no dbus-daemon for a session bus of the harness's own");
+            return;
+        }
+        let watcher = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let root = watcher.setup().roots[0].root;
+        watcher
+            .change_window_attributes(
+                root,
+                &x11rb::protocol::xproto::ChangeWindowAttributesAux::new()
+                    .event_mask(EventMask::SUBSTRUCTURE_NOTIFY),
+            )
+            .expect("request")
+            .check()
+            .expect("the root's substructure notifies");
+        let active_window = atom(&watcher, "_NET_ACTIVE_WINDOW");
+
+        let HostStart::Started(platform) = CurrentHost::X11
+            .start_single(NativeExecutor::own(), APP_ID)
+            .expect("the X11 platform")
+        else {
+            panic!("the first launch owns the application's name");
+        };
+        let (later, forwarded) = std::sync::mpsc::channel();
+        let log = AppLog::new();
+        log.react(|call, owner| {
+            if call != AppCall::Reopen {
+                return;
+            }
+            // Opened a turn later, as the desktop runner opens its main
+            // window for a reopen.
+            let proxy = owner.proxy();
+            std::thread::spawn(move || {
+                let request = WindowRequest::new(WindowOptions::default(), || {
+                    RecordingWindowHandler::new() as Rc<dyn WindowHandler>
+                });
+                let _ = proxy
+                    .open_window(request)
+                    .expect("the loop takes the open")
+                    .wait();
+                std::thread::sleep(Duration::from_millis(500));
+                let _ = proxy.request_quit();
+            });
+        });
+        log.bootstrap(move |owner| {
+            quit_after(owner.proxy(), Duration::from_secs(10));
+            std::thread::spawn(move || {
+                let started = CurrentHost::X11.start_single(NativeExecutor::own(), APP_ID);
+                let _ = later.send(matches!(started, Ok(HostStart::Forwarded)));
+            });
+            Ok(())
+        });
+        platform
+            .run(Rc::clone(&log) as Rc<dyn AppHandler>)
+            .expect("the loop runs");
+        assert_eq!(
+            forwarded.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "the later launch forwards to the first and ends"
+        );
+        assert_eq!(log.count(AppCall::Reopen), 1, "{:?}", log.calls());
+        let mut activations = 0;
+        while let Some(event) = watcher.poll_for_event().expect("the X server answers") {
+            if let x11rb::protocol::Event::ClientMessage(message) = event
+                && message.type_ == active_window
+                && message.data.as_data32()[0] == SOURCE_APPLICATION
+            {
+                activations += 1;
+            }
+        }
+        assert_eq!(
+            activations, 1,
+            "the reopened window is brought forward once, as it is mapped"
+        );
+    }
+
+    /// An application that keeps one instance and shows no window (it holds
+    /// one, hidden) is asked to reopen by a later launch, as a Dock click asks
+    /// on macOS, and the host leaves the hidden window hidden: whether it is
+    /// shown again is the application's to say. The later launch forwards
+    /// and ends.
+    fn a_later_launch_while_no_window_is_shown_asks_to_reopen() {
+        const APP_ID: &str = "org.flui.X11WindowCases";
+        if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+            eprintln!("skipped: no dbus-daemon for a session bus of the harness's own");
+            return;
+        }
+        let HostStart::Started(platform) = CurrentHost::X11
+            .start_single(NativeExecutor::own(), APP_ID)
+            .expect("the X11 platform")
+        else {
+            panic!("the first launch owns the application's name");
+        };
+        let held: Rc<RefCell<Option<Rc<dyn HostWindow>>>> = Rc::default();
+        let hidden_at_reopen = Rc::new(std::cell::Cell::new(None));
+        let (later, forwarded) = std::sync::mpsc::channel();
+        let log = AppLog::new();
+        let window_slot = Rc::clone(&held);
+        let seen = Rc::clone(&hidden_at_reopen);
+        log.react(move |call, owner| {
+            if call == AppCall::Reopen {
+                let window = window_slot.borrow();
+                seen.set(window.as_ref().map(|window| !window.state().visible));
+                let _ = owner.proxy().request_quit();
+            }
+        });
+        let window_slot = Rc::clone(&held);
+        log.bootstrap(move |owner| {
+            quit_after(owner.proxy(), Duration::from_secs(10));
+            let window = owner
+                .open_window(
+                    WindowOptions::default().visible(false),
+                    RecordingWindowHandler::new(),
+                )?
+                .try_ready()?;
+            *window_slot.borrow_mut() = Some(window);
+            std::thread::spawn(move || {
+                let started = CurrentHost::X11.start_single(NativeExecutor::own(), APP_ID);
+                let _ = later.send(matches!(started, Ok(HostStart::Forwarded)));
+            });
+            Ok(())
+        });
+        platform
+            .run(Rc::clone(&log) as Rc<dyn AppHandler>)
+            .expect("the loop runs");
+        assert_eq!(
+            forwarded.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "the later launch forwards to the first and ends"
+        );
+        assert_eq!(log.count(AppCall::Reopen), 1, "{:?}", log.calls());
+        assert_eq!(
+            hidden_at_reopen.get(),
+            Some(true),
+            "the hidden window stays hidden until the application shows it"
+        );
     }
 
     /// The loop ends when its last window closes and the application lets

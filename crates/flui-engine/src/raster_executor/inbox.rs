@@ -26,6 +26,11 @@ use crate::{FrameLatency, error::EngineError};
 /// no frame of a slot whose ring is full (ADR-0305 §4, §5).
 pub(crate) const INLINE_DEPTH: usize = 1;
 
+/// How many a slot on a raster thread holds: one frame presenting while the
+/// owner builds the next (ADR-0305 §5).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const THREADED_DEPTH: usize = 2;
+
 /// Where a slot is in its life, as its record reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -128,6 +133,8 @@ pub(crate) struct InboxState {
 pub(crate) struct SlotInbox {
     /// The presentation the slot is bound to.
     pub(crate) address: PresentationAddress,
+    /// How many settlements it holds undrained before its next frame waits.
+    pub(crate) depth: usize,
     state: Mutex<InboxState>,
 }
 
@@ -136,9 +143,11 @@ impl SlotInbox {
         address: PresentationAddress,
         generation: SurfaceGeneration,
         size: Option<DeviceSize>,
+        depth: usize,
     ) -> Self {
         Self {
             address,
+            depth,
             state: Mutex::new(InboxState {
                 frame: None,
                 surface: SlotSurface::attached(size),
@@ -147,7 +156,7 @@ impl SlotInbox {
                 latency: None,
                 generation,
                 in_flight: 0,
-                settlements: VecDeque::with_capacity(INLINE_DEPTH),
+                settlements: VecDeque::with_capacity(depth),
                 phase: SlotPhase::Attaching,
                 failure: None,
             }),
