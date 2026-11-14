@@ -132,8 +132,9 @@ unwound has dropped its collections before the next one resets. `flui-view`'s bu
 arena of its own on the `BuildOwner`: the render-edge sync after a build takes its walk stack,
 its edge lists and each parent's desired child list from it, and resets it when the walk ends. A
 build is not a frame (a frame can run several, a mount runs one), so between them the arena holds
-the one chunk a reset keeps, not the chain of chunks a walk grew; a walk that unwound leaves its
-space to the next walk's reset.
+no chain of chunks: the newest chunk when it held the walk's peak, otherwise none until the next
+walk opens one sized for the recent peaks. A walk that unwound skips its reset; the next walk
+lists above the space it left, and its own reset frees both.
 
 A render object's `perform_layout` and `paint` never see the arena. What they hand the pipeline
 (a size, painted commands) is the pipeline's to store, and it stores retained data outside the
