@@ -629,10 +629,14 @@ mod linking {
 
     /// A browser's WebSocket on the loopback that answers its first command `first_after` it
     /// came (never when `None`), as Firefox answers `session.new` once its window is up, and
-    /// every later one at once. It started with the tab `started`, opens `opened` when asked
-    /// for a tab and refuses to close a tab. Returns its URL and the commands it answers, each
+    /// every later one at once. In BiDi it started with the tab `started`, opens `opened` when
+    /// asked for a tab and refuses to close one, or never answers when `close_hangs`; in the
+    /// DevTools protocol its tab is `tab`. Returns its URL and the commands it answers, each
     /// sent before its answer.
-    fn starting_browser(first_after: Option<Duration>) -> (String, mpsc::Receiver<Value>) {
+    fn starting_browser(
+        first_after: Option<Duration>,
+        close_hangs: bool,
+    ) -> (String, mpsc::Receiver<Value>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let url = format!(
             "ws://{}/session",
@@ -669,7 +673,11 @@ mod linking {
                     Some("Target.attachToTarget") => json!({ "sessionId": "session" }),
                     _ => json!({}),
                 };
-                let answer = if command["method"] == "browsingContext.close" {
+                let closes = command["method"] == "browsingContext.close";
+                if closes && close_hangs {
+                    continue;
+                }
+                let answer = if closes {
                     json!({ "id": command["id"], "type": "error", "error": "unknown error",
                             "message": "the tab is still loading" })
                 } else {
@@ -696,7 +704,7 @@ mod linking {
     #[test]
     fn a_bidi_link_loads_the_page_in_a_tab_it_opened_and_closes_the_ones_the_browser_started_with()
     {
-        let (url, commands) = starting_browser(Some(Duration::ZERO));
+        let (url, commands) = starting_browser(Some(Duration::ZERO), false);
         let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
         let mut link = Bidi::attach(socket, Instant::now() + COMMAND_TIMEOUT)
             .expect("a refused close leaves the link attached");
@@ -728,12 +736,25 @@ mod linking {
         );
     }
 
+    #[test]
+    fn a_close_the_browser_never_answers_is_named_as_the_step_the_start_hung_on() {
+        let (url, _commands) = starting_browser(Some(Duration::ZERO), true);
+        let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
+        let hung = Bidi::attach(socket, Instant::now() + Duration::from_millis(300))
+            .map(drop)
+            .expect_err("a start that ran out of time is no link");
+        assert_eq!(
+            (hung.command, hung.error),
+            ("browsingContext.close", LinkError::Timeout)
+        );
+    }
+
     fn link(
         dialect: Dialect,
         first_after: Option<Duration>,
         ready_by: Instant,
     ) -> Result<(), AttachError> {
-        let socket = Socket::connect(&starting_browser(first_after).0, CONNECT_TIMEOUT)
+        let socket = Socket::connect(&starting_browser(first_after, false).0, CONNECT_TIMEOUT)
             .expect("the browser's socket is reached");
         attach(dialect, socket, ready_by).map(drop)
     }
