@@ -1691,6 +1691,31 @@ impl HeadlessHost {
         self.ui_runtime.navigate(window.0, intent)
     }
 
+    /// Open `url` in `window`, as a runner opens a URL the platform hands
+    /// that window: split, admitted by the declarations
+    /// [`set_link_declarations`](Self::set_link_declarations) set, and
+    /// applied to the window's `Router` as a `Go` (ADR-0330 §5). The Router's
+    /// edit is built by the next [`pump`](Self::pump).
+    ///
+    /// # Errors
+    ///
+    /// What [`UiRuntime::open_url`] refuses with: a URL too long, malformed
+    /// or not declared, and the navigation refusals of
+    /// [`navigate`](Self::navigate).
+    pub fn open_url(
+        &self,
+        window: HeadlessWindowId,
+        url: &str,
+    ) -> Result<(), flui_view::navigation::OpenUrlRefused> {
+        self.ui_runtime.open_url(window.0, url)
+    }
+
+    /// Set the URL schemes and associated domains the application declares,
+    /// which [`open_url`](Self::open_url) admits; a fresh host declares none.
+    pub fn set_link_declarations(&self, declarations: flui_view::navigation::LinkDeclarations) {
+        self.ui_runtime.set_link_declarations(declarations);
+    }
+
     /// Attach assistive technology to `window`; see
     /// [`enable_semantics`](Self::enable_semantics).
     ///

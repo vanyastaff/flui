@@ -1293,6 +1293,7 @@ fn router_and_widgets_app() {
             ("url_owner::an_intent_during_a_build_is_busy_before_it_is_parsed", crate::url_owner::an_intent_during_a_build_is_busy_before_it_is_parsed),
             ("url_owner::a_pop_intent_honours_the_pages_pop_scope", crate::url_owner::a_pop_intent_honours_the_pages_pop_scope),
             ("url_owner::an_unmounted_router_lets_go_of_its_unknown_hook", crate::url_owner::an_unmounted_router_lets_go_of_its_unknown_hook),
+            ("url_owner::an_opened_url_navigates_only_when_declared", crate::url_owner::an_opened_url_navigates_only_when_declared),
         ],
     );
 }

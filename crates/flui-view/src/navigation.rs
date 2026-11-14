@@ -10,12 +10,17 @@
 //! slot is the `RouteInformationProvider` the platform reports a new location
 //! to, the route type's `from_path` is the `RouteInformationParser`, and the
 //! Router applies the parsed stack as its delegate's `setNewRoutePath` does.
+//! A URL the platform opens arrives as text: [`OpenedUrl`] splits it, the
+//! application's [`LinkDeclarations`] admit it or refuse it with an
+//! [`OpenUrlRefused`], and its path becomes a [`NavigationOp::Go`].
 //! The types live here, below the widget catalog, so the runtime names no
 //! catalog type (ADR-0083).
 
+mod opened_url;
 mod path;
 pub(crate) mod url_owner;
 
+pub use opened_url::{LinkDeclarations, OpenUrlRefused, OpenedUrl};
 pub use path::{RouteParseError, RoutePath};
 
 /// What a [`NavigationIntent`] asks the URL owner to do.

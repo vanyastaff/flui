@@ -173,6 +173,9 @@ pub struct UiRuntime {
     /// presentation's `BuildOwner` when it is installed, and to every
     /// installed one when it changes.
     error_view_builder: Cell<Option<flui_view::ErrorViewBuilder>>,
+    /// The URLs the application declares it opens, which [`Self::open_url`]
+    /// admits; none until the runner sets them.
+    link_declarations: Cell<flui_view::navigation::LinkDeclarations>,
     geometry_turn: std::rc::Rc<RefCell<Option<Vec<flui_foundation::PresentationId>>>>,
     /// The UI runtime's owner-local frame state — its post-frame queue and its
     /// async tasks — of which the UI runtime is the only strong owner (ADR-0136

@@ -279,10 +279,27 @@ pub trait UrlOwner: 'static { // !Send: owner-thread state
 #[non_exhaustive]
 pub enum NavigationRefused { NoPresentation, NoUrlOwner, NoMatch(RoutePath), NothingToPop, Busy }
 
+// flui-view, the URLs the platform opens
+pub struct OpenedUrl { /* scheme, host, path: RoutePath */ }
+impl OpenedUrl {
+    pub const MAX_LEN: usize = 8192;
+    pub fn parse(url: &str) -> Result<Self, OpenUrlRefused>;
+}
+#[derive(Clone, Copy, Default)]
+pub struct LinkDeclarations { /* url_schemes, associated_domains: &'static [&'static str] */ }
+#[non_exhaustive]
+pub enum OpenUrlRefused {
+    TooLong { len: usize }, Malformed { url: String, reason: &'static str }, Path(RouteParseError),
+    UndeclaredScheme { scheme: String }, UndeclaredDomain { host: Option<String> },
+    Navigation(NavigationRefused),
+}
+
 // flui-runtime
 impl UiRuntime {
     pub fn navigate(&self, presentation: PresentationId, intent: NavigationIntent)
         -> Result<(), NavigationRefused>;
+    pub fn open_url(&self, presentation: PresentationId, url: &str) -> Result<(), OpenUrlRefused>;
+    pub fn set_link_declarations(&self, declarations: LinkDeclarations);
 }
 ```
 
@@ -310,6 +327,18 @@ the Back to the platform as Flutter's `popRoute` answering `false` does. An inte
 while the Router commits an edit (the parse of the intent's own path included), or while its UI
 runtime builds, is `Busy` before its path is parsed, not a second edit inside the first. A refused
 intent leaves the stack unchanged.
+
+A URL the platform opens enters through `UiRuntime::open_url`, which every host and the headless
+one call, so its policy holds on every platform. The URL is untrusted text: one over `MAX_LEN`
+bytes is refused before any of it is copied. `OpenedUrl::parse` splits it as RFC 3986, appendix
+B does, and its path is the URL's path, as Flutter and go_router read `uri.path`:
+`myapp:///note/3` and `https://example.com/note/3` open `/note/3`, `myapp://note/3` opens `/3`
+(`note` is the host), an empty path opens `/`, the query joins the `RoutePath` (§1) and the
+fragment is dropped. The URL is then admitted by the application's `LinkDeclarations`, the
+`url-schemes` and `associated-domains` its `[package.metadata.flui.declares]` lists (ADR-0307): an
+`http` or `https` URL by its host, compared whole and without regard to case, any other by its
+scheme; a UI runtime declares nothing until its runner sets them, so it opens nothing. An admitted
+URL is applied as a `Go`, so the pages it shares with the stack stay.
 
 The sources of an intent are on the owner thread already: the URLs the platform opens reach
 `AppHandler` (ADR-0254), the development agent's window methods arrive through
@@ -389,8 +418,13 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   `an_intent_during_a_build_is_busy_before_it_is_parsed`,
   `a_pop_intent_honours_the_pages_pop_scope` (a `PopScope` veto keeps the page),
   `an_unmounted_router_lets_go_of_its_unknown_hook`,
-  `a_sibling_router_takes_the_url_over_when_the_owner_leaves` and
-  `a_router_inside_a_page_does_not_own_the_url`.
+  `a_sibling_router_takes_the_url_over_when_the_owner_leaves`,
+  `a_router_inside_a_page_does_not_own_the_url` and, through `HeadlessHost::open_url`,
+  `an_opened_url_navigates_only_when_declared` (nothing declared opens nothing, an undeclared
+  scheme or domain and a web URL with no host are refused, an unmatched path is `NoMatch`, a
+  declared web link opens as a `go`); `opened_urls_split_into_scheme_host_and_route_location`
+  (the path without its authority, an empty path, case, escapes and the query, the length
+  bound, the declarations).
 - `examples/navigation.rs` (`cargo check --example navigation --features material`): a push, a
   page popped with a result, and a dialog.
 

@@ -25238,9 +25238,47 @@ reexport flui::view::key::ValueKey => flui::foundation::ValueKey
 reexport flui::view::key::ViewKey => flui::foundation::ViewKey
 reexport flui::view::key::WithKey => flui::foundation::WithKey
 pub mod flui::view::navigation
+pub struct flui::view::navigation::LinkDeclarations { .. }
+impl Clone for flui::view::navigation::LinkDeclarations
+impl Copy for flui::view::navigation::LinkDeclarations
+impl Default for flui::view::navigation::LinkDeclarations
+impl Eq for flui::view::navigation::LinkDeclarations
+impl PartialEq for flui::view::navigation::LinkDeclarations
+impl core::fmt::Debug for flui::view::navigation::LinkDeclarations
+impl core::marker::StructuralPartialEq for flui::view::navigation::LinkDeclarations
+pub const fn flui::view::navigation::LinkDeclarations::associated_domains(self, associated_domains: &'static [&'static str]) -> Self
+pub const fn flui::view::navigation::LinkDeclarations::new() -> Self
+pub const fn flui::view::navigation::LinkDeclarations::url_schemes(self, url_schemes: &'static [&'static str]) -> Self
+pub fn flui::view::navigation::LinkDeclarations::admit(&self, url: &flui::view::navigation::OpenedUrl) -> Result<(), flui::view::navigation::OpenUrlRefused>
 reexport flui::view::navigation::NavigationIntent => flui::widgets::NavigationIntent
 reexport flui::view::navigation::NavigationOp => flui::widgets::NavigationOp
 reexport flui::view::navigation::NavigationRefused => flui::widgets::NavigationRefused
+#[non_exhaustive] pub enum flui::view::navigation::OpenUrlRefused
+impl Clone for flui::view::navigation::OpenUrlRefused
+impl Eq for flui::view::navigation::OpenUrlRefused
+impl From<flui::widgets::NavigationRefused> for flui::view::navigation::OpenUrlRefused
+impl PartialEq for flui::view::navigation::OpenUrlRefused
+impl core::error::Error for flui::view::navigation::OpenUrlRefused
+impl core::fmt::Debug for flui::view::navigation::OpenUrlRefused
+impl core::fmt::Display for flui::view::navigation::OpenUrlRefused
+impl core::marker::StructuralPartialEq for flui::view::navigation::OpenUrlRefused
+variant flui::view::navigation::OpenUrlRefused::Malformed { url: String, reason: &'static str } // at 1
+variant flui::view::navigation::OpenUrlRefused::Navigation(flui::widgets::NavigationRefused) // at 5
+variant flui::view::navigation::OpenUrlRefused::Path(flui::widgets::RouteParseError) // at 2
+variant flui::view::navigation::OpenUrlRefused::TooLong { len: usize } // at 0
+variant flui::view::navigation::OpenUrlRefused::UndeclaredDomain { host: Option<String> } // at 4
+variant flui::view::navigation::OpenUrlRefused::UndeclaredScheme { scheme: String } // at 3
+pub struct flui::view::navigation::OpenedUrl { .. }
+impl Clone for flui::view::navigation::OpenedUrl
+impl Eq for flui::view::navigation::OpenedUrl
+impl PartialEq for flui::view::navigation::OpenedUrl
+impl core::fmt::Debug for flui::view::navigation::OpenedUrl
+impl core::marker::StructuralPartialEq for flui::view::navigation::OpenedUrl
+pub const flui::view::navigation::OpenedUrl::MAX_LEN: usize = 8192
+pub fn flui::view::navigation::OpenedUrl::host(&self) -> Option<&str>
+pub fn flui::view::navigation::OpenedUrl::parse(url: &str) -> Result<Self, flui::view::navigation::OpenUrlRefused>
+pub fn flui::view::navigation::OpenedUrl::path(&self) -> &flui::prelude::RoutePath
+pub fn flui::view::navigation::OpenedUrl::scheme(&self) -> &str
 reexport flui::view::navigation::RouteParseError => flui::widgets::RouteParseError
 reexport flui::view::navigation::RoutePath => flui::prelude::RoutePath
 pub trait flui::view::navigation::UrlOwner: 'static
@@ -27180,6 +27218,7 @@ variant flui::widgets::NavigationOp::Replace(flui::prelude::RoutePath) // at 1
 #[non_exhaustive] pub enum flui::widgets::NavigationRefused
 impl Clone for flui::widgets::NavigationRefused
 impl Eq for flui::widgets::NavigationRefused
+impl From<flui::widgets::NavigationRefused> for flui::view::navigation::OpenUrlRefused
 impl PartialEq for flui::widgets::NavigationRefused
 impl core::error::Error for flui::widgets::NavigationRefused
 impl core::fmt::Debug for flui::widgets::NavigationRefused
@@ -35444,6 +35483,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::needs_redraw(&self) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::next_wake(&self) -> Option<std::time::Instant>
 pub fn flui_runtime::ui_runtime::UiRuntime::note_frame_request(&self, presentation_id: flui::foundation::PresentationId, request: flui::platform::FrameRequest)
 pub fn flui_runtime::ui_runtime::UiRuntime::note_primary_device_recovery(&self, recovery: Option<flui::app::DeviceRecovery>)
+pub fn flui_runtime::ui_runtime::UiRuntime::open_url(&self, presentation: flui::foundation::PresentationId, url: &str) -> Result<(), flui::view::navigation::OpenUrlRefused>
 pub fn flui_runtime::ui_runtime::UiRuntime::owner_frame(&self) -> &flui_scheduler::post_frame::OwnerFrame
 pub fn flui_runtime::ui_runtime::UiRuntime::perform_hot_reload_entered(&self, tier: flui_runtime::reload::ReloadTier)
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_closing_for_test(&self, id: flui::foundation::PresentationId) -> Option<bool>
@@ -35474,6 +35514,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::set_device_pixel_ratio_for(&self, id
 pub fn flui_runtime::ui_runtime::UiRuntime::set_error_view_builder(&self, builder: Option<flui::view::ErrorViewBuilder>)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_frame_failure_detail(&self, detail: flui::app::FrameFailureDetail)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_frame_failure_handler(&self, handler: Option<flui::app::FrameFailureHandler>)
+pub fn flui_runtime::ui_runtime::UiRuntime::set_link_declarations(&self, declarations: flui::view::navigation::LinkDeclarations)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_motion_override(&self, preference: flui::animation::MotionOverride)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_now_secs_for_test(&self, secs: f64)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_performance_overlay(&self, enabled: bool)
