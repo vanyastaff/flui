@@ -178,14 +178,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - Sleep, wake and lock reach Windows, macOS and Linux (Linux checked only against a stand-in for logind), and memory pressure Windows, macOS, iOS, Android and Linux.
 - A GPU device whose rebuild keeps failing is given up after about twelve seconds (ADR-0267). On the desktop the application gets it back with `AppHandle::retry_render_device`; Android and iOS have no such entry, so a given-up window there stays blank until the platform takes its surface away and gives it back (the user leaves the application and returns), which asks the device to rebuild. No device loss has run on real hardware: the rows use the stand-in renderer.
 
-### The iOS loop delivers a due wake deadline without a frame
-
-> **Environments:** iOS · **Who it hurts:** Apps whose GPU device is lost or whose scene surface is refused · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
-
-- The Win32, X11, Wayland and Android loops deliver a due wake deadline as a frame to every window, and arm the same instant again only after a frame ran (`flui-native`'s `WakeDeadline`). The iOS loop delivers it as an owner turn, which runs no frame, and arms the same instant again at once.
-- A device rebuild or a surface restore on its pace is served only by a scene's frame. Until the display link ticks for another reason, the main queue repeats owner turns on the past instant, and the work waits for that tick.
-- The fix is the iOS loop on `WakeDeadline`, with the scene windows' frame count and a redraw for each of them. No run on a device yet.
-
 ### No deep links, URL schemes, file associations or single instance
 
 > **Environments:** all · **Who it hurts:** Apps opened from links, files or a second launch · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)

@@ -259,9 +259,10 @@ the dispatch layer moves there too.
   device's next rebuild) is what a window's frame gate counts, and the
   loop's wake (`AppRuntime::next_wake`, on every platform) counts it for each
   window whose frames run (`RasterHost::wake_deadline`), so no window's
-  deadline wakes the loop while only another window's frame would run. The
-  iOS loop delivers a due deadline as an owner turn, which runs no frame
-  ([gaps](../../docs/gaps.md#the-ios-loop-delivers-a-due-wake-deadline-without-a-frame)). A window whose
+  deadline wakes the loop while only another window's frame would run. A native
+  loop serves a due deadline with a frame of its windows; the Win32, X11,
+  Wayland and UIKit loops wait on that instant again only after a frame ran
+  (`flui-native`'s `owner::wake_deadline`). A window whose
   native surface does not exist yet is taken as released until the platform
   reports one. The development scene plugin draws through
   `RasterHost::render_lent`, after which the window's next frame draws in

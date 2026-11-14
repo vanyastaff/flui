@@ -237,6 +237,9 @@ pub struct WindowDelivery {
     /// with no handler to run, leaves it unchanged. Shareable so a backend can count frames across every window
     /// it opens ([`Self::counting_frames`]).
     frames_run: Arc<AtomicU64>,
+    /// Called on the owner thread after each run of the FIFO, one that
+    /// unwinds included (`after_each_run`); runs no user code.
+    after_run: Option<fn()>,
     /// The answer of the close request asked with the FIFO idle
     /// ([`Self::dispatch_close_request`]), left by its delivery.
     close_answer: Mutex<Option<CloseDecision>>,
@@ -303,6 +306,7 @@ impl WindowDelivery {
                 dispatching: false,
             }),
             frames_run,
+            after_run: None,
             close_answer: Mutex::new(None),
             close_granted: AtomicBool::new(false),
             state_publisher: Mutex::new(None),
@@ -315,6 +319,18 @@ impl WindowDelivery {
                 flui_protocol::native_recording::Stream::Window,
             ),
         }
+    }
+
+    /// Call `hook` on the owner thread after each run of the window's FIFO,
+    /// a run that unwinds included. A loop that no owner turn follows a
+    /// native delivery on (UIKit's: a display-link frame, a touch batch)
+    /// asks for its wake deadline again there, since the run may have left
+    /// a new one. `hook` runs no user code: it may run while a panic unwinds.
+    #[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
+    #[must_use]
+    pub(crate) fn after_each_run(mut self, hook: fn()) -> Self {
+        self.after_run = Some(hook);
+        self
     }
 
     /// The window's handler, for one call.
@@ -523,6 +539,7 @@ impl WindowDelivery {
     }
 
     fn run(&self, mut drain: Drain<'_>) -> Option<DispatchEventResult> {
+        let _after = AfterRun(self.after_run);
         let mut input_result = None;
         let failure = loop {
             let Some(delivery) = drain.next() else {
@@ -857,3 +874,15 @@ impl std::fmt::Debug for WindowDelivery {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
+
+/// Calls a window's `WindowDelivery::after_each_run` hook when a run of
+/// its FIFO ends, by return or by unwinding.
+struct AfterRun(Option<fn()>);
+
+impl Drop for AfterRun {
+    fn drop(&mut self) {
+        if let Some(hook) = self.0 {
+            hook();
+        }
+    }
+}

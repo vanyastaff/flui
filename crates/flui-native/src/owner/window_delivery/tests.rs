@@ -493,11 +493,41 @@ fn a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn() {
     );
 }
 
+/// The hook a loop asks for after each run of a window's FIFO is called once
+/// per run, after an input and after a frame, and after a frame that unwinds:
+/// the UIKit loop asks for its wake deadline there, and a run it misses
+/// leaves a deadline nobody asks for.
+fn the_run_hook_follows_every_run_an_unwinding_one_too() {
+    thread_local! {
+        static RUNS: Cell<u32> = const { Cell::new(0) };
+    }
+    fn count() {
+        RUNS.with(|runs| runs.set(runs.get() + 1));
+    }
+    let runs = || RUNS.with(Cell::get);
+    let handler = RecordingWindowHandler::new();
+    let delivery =
+        WindowDelivery::new(handler.clone(), InputCapabilities::UNAVAILABLE).after_each_run(count);
+    delivery.dispatch_input(ime());
+    assert_eq!(runs(), 1, "an input's run");
+    handler.react_to_frame(|_| {});
+    delivery.dispatch_request_frame();
+    assert_eq!(runs(), 2, "a frame's run");
+    handler.react_to_frame(|_| panic!("a frame that unwinds"));
+    let unwound = catch_unwind(AssertUnwindSafe(|| delivery.dispatch_request_frame()));
+    assert!(unwound.is_err(), "the frame's panic resumes");
+    assert_eq!(runs(), 3, "a run that unwinds");
+}
+
 /// One row per obligation of a window's handler, as its window delivers
 /// them.
 #[test]
 fn window_handler_obligation_table() {
     let rows: &[(&str, fn())] = &[
+        (
+            "the run hook follows every run, an unwinding one too",
+            the_run_hook_follows_every_run_an_unwinding_one_too,
+        ),
         (
             "a delivery raised off the owner thread waits for an owner turn",
             a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn,

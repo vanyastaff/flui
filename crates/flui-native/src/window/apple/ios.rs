@@ -59,7 +59,7 @@ use crate::owner::apple::ios::{
     HostDisplays, NativeOwner, ScreenIdentity, TouchPhase, TrackpadGesture, ViewRef, ViewTouches,
 };
 use crate::owner::apple::ios::{
-    IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer,
+    IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer, SceneDelivery,
     SceneInstallation, SceneWindow, SceneWindows,
 };
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
@@ -1150,13 +1150,17 @@ impl IOSWindow {
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
         positions: &WindowPositions<ViewRef>,
-        handler: Rc<dyn flui_platform::WindowHandler>,
+        handler: SceneDelivery,
     ) -> Self {
         let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
-        let delivery = Arc::new(WindowDelivery::new(
-            handler,
-            crate::input::availability::ios(),
-        ));
+        let delivery = Arc::new(
+            WindowDelivery::counting_frames(
+                handler.handler,
+                crate::input::availability::ios(),
+                handler.frames,
+            )
+            .after_each_run(crate::owner::apple::ios::after_delivery),
+        );
         // What another thread raises for the window waits for an owner turn.
         if let Some(signal) = signal.upgrade() {
             delivery.resume_through_signal(&signal);
@@ -1609,7 +1613,7 @@ impl SceneWindows for IOSWindows {
         signal: std::sync::Weak<OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
-        handler: Rc<dyn flui_platform::WindowHandler>,
+        handler: SceneDelivery,
     ) -> Rc<dyn SceneWindow> {
         let window = Rc::new(IOSWindow::new(
             marker,

@@ -95,7 +95,7 @@ pub(crate) mod panic_boundary;
 pub(crate) mod redraw_poll;
 pub(crate) mod signal;
 pub(crate) mod slot;
-#[cfg(any(windows, x11_host, wayland_host, test))]
+#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
 pub(crate) mod wake_deadline;
 #[cfg(any(
     target_os = "macos",

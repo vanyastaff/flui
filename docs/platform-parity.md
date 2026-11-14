@@ -93,7 +93,7 @@ columns and is listed after them.
 | macOS | AppKit (native) | 10 | 42 | 44 | 20 | 10 | 32% | no | macos-latest | 2 |
 | Wayland | Wayland (native) | 11 | 50 | 30 | 28 | 7 | 40% | no | — | 0 |
 | X11 | X11 (native) | 12 | 45 | 33 | 29 | 7 | 38% | no | — | 0 |
-| iOS | UIKit (native) | 7 | 36 | 42 | 33 | 8 | 29% | no | macos-latest, iOS Simulator | 0 |
+| iOS | UIKit (native) | 6 | 37 | 42 | 33 | 8 | 29% | no | macos-latest, iOS Simulator | 0 |
 | Android | android-activity (native) | 18 | 39 | 34 | 29 | 6 | 41% | no | ubuntu-24.04, Android emulator | 2 |
 | Web | wasm canvas (native) | 7 | 40 | 30 | 42 | 7 | 35% | no | — | 0 |
 | Headless | test double | 53 | 2 | 50 | 19 | 2 | 51% | — | — | 0 |
@@ -113,7 +113,7 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 | Reopen with no windows (Dock click) | — | ✅ | — | — | — | — | — | ❌ | a manual macOS run; headless can't drive it |
 | Focus and active state | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Android follows `onWindowFocusChanged` alone, and focus no longer stands for the Activity being resumed. |
 | Visibility, minimize, occlusion | 🟡 | ✅ | 🟡 | ✅ | ✅ | 🟡 | 🟡 | ✅ | Shown, minimized and occluded are three facts of the snapshot on every host (`visible`, `mode`, `occluded`), and a minimized or covered window stays shown. Wayland reports a window occluded while the compositor suspends it or keeps it on no output once shown, never minimized; Win+L and a desktop switch have not run on Windows. |
-| Suspend, resume, GPU-surface loss | — | — | — | — | ✅ | 🟡 | 🟡 | ✅ | Android dispatches `onResume` and `onPause` as the execution state, apart from focus; the Web's page events ran against a fake page, not yet in Chrome. |
+| Suspend, resume, GPU-surface loss | — | — | — | — | 🟡 | 🟡 | 🟡 | ✅ | Android dispatches `onResume` and `onPause` as the execution state, apart from focus; the Web's page events ran against a fake page, not yet in Chrome. On iOS a device rebuild and a refused surface asked for again on their pace have not run on a device. |
 | Configuration changes reach the running app (no Activity recreation) | — | — | — | — | — | 🟡 | — | — | Android's generated manifest declares the changes the host follows; dark mode, font scale, bold text, density and rotation ran on a Galaxy S21 without a second `android_main`. A language change still recreates the Activity. |
 | Sleep, wake, screen lock | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ❌ | Windows, macOS and Linux deliver them; none ran through a real sleep or lock, and [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the macOS run. |
 | Session end (log off, shutdown) with veto | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | Delivered on every environment but headless, with a veto only on Windows and macOS; none ran through a real log-off or shutdown. |
