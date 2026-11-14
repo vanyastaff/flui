@@ -8,12 +8,11 @@ use std::task::{Poll, Waker};
 
 use flui::platform::StorageError;
 use flui::platform::keyboard::NamedKey;
-use flui::testing::harness::storage::MemoryStorage;
-use flui::view::CloseReason;
+use flui::testing::MemoryStorage;
 use flui::view::persist::Document;
 use serde_json::{Value, json};
 
-use crate::app::{AcceptanceApp, Faults, Loader, Saved, Session};
+use crate::app::{AcceptanceApp, Faults, FirstScreens, Loader, NoteId, Route, Saved, Session};
 use crate::testing::AppRun;
 
 /// More frames than a load over memory storage takes.
@@ -207,6 +206,8 @@ fn settings_over_editor_restores_and_backs_out_twice() {
 #[test]
 fn list_offset_and_route_are_restored_on_the_first_loaded_frame() {
     let (app, gate) = gated();
+    let opened = Rc::new(FirstScreens::default());
+    let app = app.first_screens(Rc::clone(&opened));
     gate.set_open(true);
     let mut run = AppRun::start(app);
     run.shift_tab();
@@ -217,6 +218,7 @@ fn list_offset_and_route_are_restored_on_the_first_loaded_frame() {
     run.replace_title("Last");
 
     gate.set_open(false);
+    opened.reset();
     let mut run = run.restart();
     assert!(run.shows("Loading notes"));
     gate.set_open(true);
@@ -224,18 +226,33 @@ fn list_offset_and_route_are_restored_on_the_first_loaded_frame() {
         if !run.shows("Loading notes") {
             break;
         }
-        run.laid().pump();
+        run.pump();
     }
     assert!(!run.shows("Loading notes"), "the documents load");
-    assert!(
-        run.shows("Editing note 40"),
-        "the first loaded frame shows the restored route"
+    // A read runs the frames due when it is made, so what the first loaded
+    // frame showed is what the probe sealed in that frame's post-frame
+    // callback: the screens built before it, the draft and the offset.
+    assert_eq!(
+        opened.routes(),
+        [Route::Home, Route::Note { id: NoteId(40) }],
+        "the first loaded frame builds the restored route"
     );
-    assert_eq!(run.title(), "Last", "and the restored draft");
+    assert_eq!(
+        opened.draft().as_deref(),
+        Some("Last"),
+        "with the restored draft"
+    );
+    let first_offset = opened.offset().expect("the first loaded frame was sealed");
+    assert!(
+        (first_offset - offset).abs() <= 1.0,
+        "and the restored offset: {first_offset} for {offset}"
+    );
+    assert!(run.shows("Editing note 40"), "and shows it");
+    assert_eq!(run.title(), "Last", "and keeps the draft");
     let restored = run.list_offset();
     assert!(
         (restored - offset).abs() <= 1.0,
-        "and the restored offset: {restored} for {offset}"
+        "and the offset: {restored} for {offset}"
     );
 
     run.tap("Back");
@@ -286,7 +303,7 @@ fn deleted_note_then_crash_drops_the_draft_and_trims_the_stack() {
     // The data with note 3 deleted is stored; the session written after it
     // is lost with the process.
     run.storage().put(&Session::NAME, before);
-    let run = run.restart();
+    let mut run = run.restart();
     assert!(!run.shows_starting("Load failed: "), "no load error");
     assert!(
         run.shows("Note 1") && !run.shows("Note 3 does not exist"),
@@ -387,7 +404,7 @@ fn unreadable_session_starts_home_at_zero() {
     run.tap("Note 40");
     run.storage().put(&Session::NAME, "not a session");
 
-    let run = run.restart();
+    let mut run = run.restart();
     assert!(!run.shows_starting("Load failed: "), "the data loads");
     assert!(
         run.shows("Note 1") && !run.shows("Back"),
@@ -409,7 +426,7 @@ fn a_list_scrolled_and_left_reopens_at_its_offset() {
     let offset = run.list_offset();
     assert!(offset > 0.0, "End scrolls the list");
 
-    let run = run.restart();
+    let mut run = run.restart();
     let restored = run.list_offset();
     assert!(
         (restored - offset).abs() <= 1.0,
@@ -435,7 +452,7 @@ fn a_place_taken_while_an_unreadable_session_is_kept_aside_is_stored() {
         "the unreadable session is kept aside"
     );
 
-    let run = run.restart();
+    let mut run = run.restart();
     assert!(
         run.shows("Editing note 3"),
         "the place taken during the fresh start is stored"
@@ -487,7 +504,7 @@ fn each_load_failure_offers_its_way_on() {
                 kind: ErrorKind::PermissionDenied,
             }));
         }
-        let run = AppRun::start_over(app(), storage);
+        let mut run = AppRun::start_over(app(), storage);
         assert!(
             run.shows_starting("Load failed: "),
             "{}: the failure is shown",
@@ -529,7 +546,7 @@ fn start_over_keeps_the_unreadable_notes_aside_and_stores_fresh_ones() {
     run.replace_title("Groceries");
     run.tap("Save note");
     run.tap("Back");
-    let run = run.restart();
+    let mut run = run.restart();
     assert!(
         run.shows("Groceries") && !run.shows_starting("Load failed: "),
         "the fresh notes are stored and take later saves"
@@ -574,7 +591,7 @@ fn a_failed_save_shows_a_banner_whose_retry_stores_the_notes() {
         "the banner goes once it is stored"
     );
     run.tap("Back");
-    let run = run.restart();
+    let mut run = run.restart();
     assert!(run.shows("Groceries"), "the retried save is read back");
 }
 
@@ -657,7 +674,7 @@ fn start_over_shows_the_notes_once_they_take_edits() {
     run.replace_title("Groceries");
     run.tap("Save note");
     run.tap("Back");
-    let run = run.restart();
+    let mut run = run.restart();
     assert!(
         run.shows("Groceries"),
         "the first edit after the fresh start is stored"
@@ -699,7 +716,7 @@ fn start_over_drops_the_place_taken_in_the_notes_given_up() {
     run.tap("Back");
     run.tap("Note 3");
     run.replace_title("Old draft");
-    let run = run.restart();
+    let mut run = run.restart();
     assert!(run.shows("Editing note 3"), "the draft is restored");
 
     run.storage().put(&Saved::NAME, "not notes");
@@ -709,7 +726,7 @@ fn start_over_drops_the_place_taken_in_the_notes_given_up() {
         !run.shows("Editing note 3") && !run.shows("Back"),
         "the fresh notes open at Home, without the old draft"
     );
-    let run = run.restart();
+    let mut run = run.restart();
     assert!(
         !run.shows("Editing note 3") && run.shows("Note 3"),
         "nor does a later launch restore it over the fresh notes"
@@ -817,7 +834,7 @@ fn hidden_writes_the_session_and_resume_does_not_reread() {
     let mut run = AppRun::start(app());
     run.tap("Note 2");
     run.replace_title("Groceries");
-    run.laid().set_window_visible(false);
+    run.set_window_visible(false);
     run.settle();
     let stored = run
         .storage()
@@ -832,7 +849,7 @@ fn hidden_writes_the_session_and_resume_does_not_reread() {
         session["draft"]["title"] = json!("Changed elsewhere");
     });
     run.storage().put(&Saved::NAME, "not notes");
-    run.laid().set_window_visible(true);
+    run.set_window_visible(true);
     run.settle();
     assert_eq!(run.title(), "Groceries", "the draft in memory stays");
     assert!(
@@ -852,9 +869,9 @@ fn a_close_recorded_on_the_first_loaded_frame_is_shown() {
     // The unreadable session starts over, and its write is held.
     let held = run.storage().hold_writes();
     gate.set_open(true);
-    run.laid().pump();
+    run.pump();
     assert!(
-        !run.laid().request_close(CloseReason::User),
+        !run.try_close_now(),
         "the session write in flight holds the close"
     );
     run.settle();

@@ -89,7 +89,7 @@ fn acceptance_app_adds_notes_and_refuses_an_empty_title() {
     // The error is checked as laid-out text: the decoration that shows it
     // is not a tap target.
     assert!(
-        !run.laid().find_all_text("Enter a title").is_empty(),
+        run.lays_out("Enter a title"),
         "the field explains the refusal"
     );
 

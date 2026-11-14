@@ -140,3 +140,23 @@ fn competing_waker_panics_keep_the_first_and_wake_the_rest() {
     );
     assert!(woken.was_woken(), "the third copy is woken all the same");
 }
+
+/// Under a write hold a newer value of a name from the same handle replaces
+/// the waiting one, whose future resolves to `Superseded`.
+#[test]
+fn a_held_write_is_superseded_by_a_newer_value_of_its_name() {
+    use flui_platform::{StorageError, WriteMode};
+
+    let storage = MemoryStorage::new();
+    let hold = storage.hold_writes();
+    let mut first = storage.publish(&NOTES, b"first".to_vec(), WriteMode::Replace);
+    let mut second = storage.publish(&NOTES, b"second".to_vec(), WriteMode::Replace);
+    let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(matches!(
+        first.as_mut().poll(&mut ctx),
+        std::task::Poll::Ready(Err(StorageError::Superseded))
+    ));
+    drop(hold);
+    assert!(second.as_mut().poll(&mut ctx).is_ready());
+    assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"second"[..]));
+}

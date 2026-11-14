@@ -3264,6 +3264,14 @@ fn flui::foundation::WithKey::with_view_key(self, key: impl flui::foundation::Vi
 impl<T> flui::foundation::WithKey for T
 pub mod flui::foundation::affinity
 reexport flui::foundation::affinity::OwnerAffinity => flui::foundation::OwnerAffinity
+pub mod flui::foundation::arena
+pub struct flui::foundation::arena::FrameArena { .. }
+impl Default for flui::foundation::arena::FrameArena
+impl core::alloc::Allocator for &flui::foundation::arena::FrameArena
+impl core::fmt::Debug for flui::foundation::arena::FrameArena
+pub const fn flui::foundation::arena::FrameArena::new() -> Self
+pub fn flui::foundation::arena::FrameArena::reset(&mut self)
+pub type flui::foundation::arena::FrameVec<'f, T> = Vec<T, &'f flui::foundation::arena::FrameArena>
 pub mod flui::foundation::arity
 reexport flui::foundation::arity::Arity => flui::foundation::Arity
 reexport flui::foundation::arity::AtLeast => flui::foundation::AtLeast
@@ -9821,12 +9829,22 @@ pub fn flui::painting::DisplayList::new() -> Self
 pub fn flui::painting::DisplayList::non_finite(&self) -> flui_painting::display_list::finite::NonFiniteOps
 pub fn flui::painting::DisplayList::room(&self) -> usize
 pub fn flui::painting::DisplayList::volatile_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
-#[non_exhaustive] pub struct flui::painting::DrawCommand<'a>
+#[non_exhaustive] pub struct flui::painting::DrawCommand<'a> { .. }
 field flui::painting::DrawCommand::op: &'a flui::painting::DrawOp // at 1
 field flui::painting::DrawCommand::transform: &'a flui::geometry::Matrix4 // at 0
+impl core::fmt::Debug for flui::painting::DrawCommand<'_>
 impl<'a> Clone for flui::painting::DrawCommand<'a>
 impl<'a> Copy for flui::painting::DrawCommand<'a>
-impl<'a> core::fmt::Debug for flui::painting::DrawCommand<'a>
+pub fn flui::painting::DrawCommand::payload<T: flui::painting::Payload>(&self, id: flui::painting::PayloadId<T>) -> &'a T // impl<'a> flui::painting::DrawCommand<'a>
+pub fn flui::painting::DrawCommand::to_buf(&self) -> flui::painting::DrawCommandBuf // impl<'a> flui::painting::DrawCommand<'a>
+pub fn flui::painting::DrawCommand::try_payload<T: flui::painting::Payload>(&self, id: flui::painting::PayloadId<T>) -> Option<&'a T> // impl<'a> flui::painting::DrawCommand<'a>
+#[non_exhaustive] pub struct flui::painting::DrawCommandBuf { .. }
+field flui::painting::DrawCommandBuf::op: flui::painting::DrawOp // at 1
+field flui::painting::DrawCommandBuf::transform: flui::geometry::Matrix4 // at 0
+impl Clone for flui::painting::DrawCommandBuf
+impl core::fmt::Debug for flui::painting::DrawCommandBuf
+pub fn flui::painting::DrawCommandBuf::command(&self) -> flui::painting::DrawCommand<'_>
+pub fn flui::painting::DrawCommandBuf::payload<T: flui::painting::Payload>(&self, id: flui::painting::PayloadId<T>) -> &T
 pub struct flui::painting::DrawCommands<'a> { .. }
 impl DoubleEndedIterator for flui::painting::DrawCommands<'_>
 impl ExactSizeIterator for flui::painting::DrawCommands<'_>
@@ -9840,23 +9858,23 @@ impl core::fmt::Debug for flui::painting::DrawOp
 variant flui::painting::DrawOp::Arc { rect: flui::geometry::Rect<f64>, start_angle: f64, sweep_angle: f64, use_center: bool, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 19
 variant flui::painting::DrawOp::Atlas { image: flui::painting::paint::Image, sprites: Vec<flui::geometry::Rect<f64>>, transforms: Vec<flui::geometry::Matrix4>, colors: Option<Vec<flui::prelude::Color>>, blend_mode: flui::painting::BlendMode, paint: Option<alloc::rcs::arc::Arc<flui::painting::Paint>> } // at 25
 variant flui::painting::DrawOp::Circle { center: flui::geometry::Point<f64>, radius: f64, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 7
-variant flui::painting::DrawOp::ClipPath { path: flui::painting::paint::Path, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip } // at 3
+variant flui::painting::DrawOp::ClipPath { path: flui::painting::PayloadId<flui::painting::paint::Path>, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip } // at 3
 variant flui::painting::DrawOp::ClipRRect { rrect: flui::geometry::RRect, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip } // at 1
 variant flui::painting::DrawOp::ClipRSuperellipse { rsuperellipse: flui::geometry::RSuperellipse, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip } // at 2
 variant flui::painting::DrawOp::ClipRect { rect: flui::geometry::Rect<f64>, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip } // at 0
 variant flui::painting::DrawOp::Color { color: flui::prelude::Color, blend_mode: flui::painting::BlendMode } // at 23
-variant flui::painting::DrawOp::DRRect { outer: flui::geometry::RRect, inner: flui::geometry::RRect, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 20
+variant flui::painting::DrawOp::DRRect { rrects: flui::painting::PayloadId<flui::painting::NestedRRects>, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 20
 variant flui::painting::DrawOp::Image { image: flui::painting::paint::Image, dst: flui::geometry::Rect<f64>, paint: Option<alloc::rcs::arc::Arc<flui::painting::Paint>> } // at 12
-variant flui::painting::DrawOp::ImageFiltered { image: flui::painting::paint::Image, dst: flui::geometry::Rect<f64>, filter: flui::painting::paint::ColorFilter, paint: Option<alloc::rcs::arc::Arc<flui::painting::Paint>> } // at 16
+variant flui::painting::DrawOp::ImageFiltered { image: flui::painting::paint::Image, dst: flui::geometry::Rect<f64>, filter: flui::painting::PayloadId<flui::painting::paint::ColorFilter>, paint: Option<alloc::rcs::arc::Arc<flui::painting::Paint>> } // at 16
 variant flui::painting::DrawOp::ImageNineSlice { image: flui::painting::paint::Image, center_slice: flui::geometry::Rect<f64>, dst: flui::geometry::Rect<f64>, paint: Option<alloc::rcs::arc::Arc<flui::painting::Paint>> } // at 15
-variant flui::painting::DrawOp::ImageRegion { image: flui::painting::paint::Image, src: flui::geometry::Rect<f64>, dst: flui::geometry::Rect<f64>, tile: Option<flui::geometry::Rect<f64>>, repeat: flui::prelude::ImageRepeat, filter: Option<flui::painting::paint::ColorFilter>, paint: Option<alloc::rcs::arc::Arc<flui::painting::Paint>> } // at 13
+variant flui::painting::DrawOp::ImageRegion { image: flui::painting::paint::Image, region: flui::painting::PayloadId<flui::painting::ImageRegionPlacement>, paint: Option<alloc::rcs::arc::Arc<flui::painting::Paint>> } // at 13
 variant flui::painting::DrawOp::ImageRepeat { image: flui::painting::paint::Image, dst: flui::geometry::Rect<f64>, repeat: flui::prelude::ImageRepeat, paint: Option<alloc::rcs::arc::Arc<flui::painting::Paint>> } // at 14
 variant flui::painting::DrawOp::Line { p1: flui::geometry::Point<f64>, p2: flui::geometry::Point<f64>, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 4
 variant flui::painting::DrawOp::Oval { rect: flui::geometry::Rect<f64>, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 8
 variant flui::painting::DrawOp::Paint { paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 24
 variant flui::painting::DrawOp::Paragraph { paragraph: alloc::rcs::arc::Arc<flui_painting::display_list::paragraph::ShapedParagraph>, offset: flui::geometry::Offset<f64>, color: flui::prelude::Color } // at 10
 variant flui::painting::DrawOp::ParagraphShadow { paragraph: alloc::rcs::arc::Arc<flui_painting::display_list::paragraph::ShapedParagraph>, offset: flui::geometry::Offset<f64>, color: flui::prelude::Color, sigma: flui::painting::BlurSigma } // at 11
-variant flui::painting::DrawOp::Path { path: flui::painting::paint::Path, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 9
+variant flui::painting::DrawOp::Path { path: flui::painting::PayloadId<flui::painting::paint::Path>, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 9
 variant flui::painting::DrawOp::Points { mode: flui::painting::PointMode, points: Vec<flui::geometry::Point<f64>>, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 21
 variant flui::painting::DrawOp::RRect { rrect: flui::geometry::RRect, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 6
 variant flui::painting::DrawOp::Rect { rect: flui::geometry::Rect<f64>, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 5
@@ -9864,7 +9882,7 @@ variant flui::painting::DrawOp::Restore // at 29
 variant flui::painting::DrawOp::RestoreLayer // at 27
 variant flui::painting::DrawOp::Save // at 28
 variant flui::painting::DrawOp::SaveLayer { bounds: Option<flui::geometry::Rect<f64>>, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 26
-variant flui::painting::DrawOp::Shadow { path: flui::painting::paint::Path, color: flui::prelude::Color, elevation: f64 } // at 18
+variant flui::painting::DrawOp::Shadow { path: flui::painting::PayloadId<flui::painting::paint::Path>, color: flui::prelude::Color, elevation: f64 } // at 18
 variant flui::painting::DrawOp::Texture { texture_id: flui::painting::paint::TextureId, dst: flui::geometry::Rect<f64>, src: Option<flui::geometry::Rect<f64>>, filter_quality: flui::painting::paint::FilterQuality, opacity: f64 } // at 17
 variant flui::painting::DrawOp::Vertices { vertices: Vec<flui::geometry::Point<f64>>, colors: Option<Vec<flui::prelude::Color>>, tex_coords: Option<Vec<flui::geometry::Point<f64>>>, indices: Vec<u16>, paint: alloc::rcs::arc::Arc<flui::painting::Paint> } // at 22
 pub struct flui::painting::FittedSizes
@@ -9880,6 +9898,30 @@ impl<'de> serde_core::de::Deserialize<'de> for flui::painting::FittedSizes
 pub const fn flui::painting::FittedSizes::new(source: flui::geometry::Size<f64>, destination: flui::geometry::Size<f64>) -> Self
 pub fn flui::painting::FittedSizes::needs_scaling(&self) -> bool
 pub fn flui::painting::FittedSizes::scale_factor(&self) -> f64
+#[non_exhaustive] pub struct flui::painting::ImageRegionPlacement
+field flui::painting::ImageRegionPlacement::dst: flui::geometry::Rect<f64> // at 1
+field flui::painting::ImageRegionPlacement::filter: Option<flui::painting::paint::ColorFilter> // at 4
+field flui::painting::ImageRegionPlacement::repeat: flui::prelude::ImageRepeat // at 3
+field flui::painting::ImageRegionPlacement::src: flui::geometry::Rect<f64> // at 0
+field flui::painting::ImageRegionPlacement::tile: Option<flui::geometry::Rect<f64>> // at 2
+impl Clone for flui::painting::ImageRegionPlacement
+impl Copy for flui::painting::ImageRegionPlacement
+impl PartialEq for flui::painting::ImageRegionPlacement
+impl core::fmt::Debug for flui::painting::ImageRegionPlacement
+impl core::marker::StructuralPartialEq for flui::painting::ImageRegionPlacement
+impl flui::painting::Payload for flui::painting::ImageRegionPlacement
+impl flui_painting::display_list::payload::private::Sealed for flui::painting::ImageRegionPlacement
+#[non_exhaustive] pub struct flui::painting::NestedRRects
+field flui::painting::NestedRRects::inner: flui::geometry::RRect // at 1
+field flui::painting::NestedRRects::outer: flui::geometry::RRect // at 0
+impl Clone for flui::painting::NestedRRects
+impl Copy for flui::painting::NestedRRects
+impl PartialEq for flui::painting::NestedRRects
+impl core::fmt::Debug for flui::painting::NestedRRects
+impl core::marker::StructuralPartialEq for flui::painting::NestedRRects
+impl flui::painting::Payload for flui::painting::NestedRRects
+impl flui_painting::display_list::payload::private::Sealed for flui::painting::NestedRRects
+pub const fn flui::painting::NestedRRects::new(outer: flui::geometry::RRect, inner: flui::geometry::RRect) -> Self
 pub struct flui::painting::Paint
 field flui::painting::Paint::anti_alias: bool // at 6
 field flui::painting::Paint::blend_mode: flui::painting::BlendMode // at 5
@@ -9950,6 +9992,13 @@ pub const fn flui::painting::PaintStyle::is_fill(&self) -> bool
 pub const fn flui::painting::PaintStyle::is_stroke(&self) -> bool
 variant flui::painting::PaintStyle::Fill // at 0
 variant flui::painting::PaintStyle::Stroke // at 1
+pub trait flui::painting::Payload: flui_painting::display_list::payload::private::Sealed
+pub struct flui::painting::PayloadId<T> { .. }
+impl<T> Clone for flui::painting::PayloadId<T>
+impl<T> Copy for flui::painting::PayloadId<T>
+impl<T> Eq for flui::painting::PayloadId<T>
+impl<T> PartialEq for flui::painting::PayloadId<T>
+impl<T> core::fmt::Debug for flui::painting::PayloadId<T>
 pub enum flui::painting::PointMode
 impl Clone for flui::painting::PointMode
 impl Copy for flui::painting::PointMode
@@ -10178,6 +10227,8 @@ impl Copy for flui::painting::paint::ColorFilter
 impl PartialEq for flui::painting::paint::ColorFilter
 impl core::fmt::Debug for flui::painting::paint::ColorFilter
 impl core::marker::StructuralPartialEq for flui::painting::paint::ColorFilter
+impl flui::painting::Payload for flui::painting::paint::ColorFilter
+impl flui_painting::display_list::payload::private::Sealed for flui::painting::paint::ColorFilter
 impl serde_core::ser::Serialize for flui::painting::paint::ColorFilter
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::ColorFilter
 pub const fn flui::painting::paint::ColorFilter::grayscale() -> Self
@@ -10451,6 +10502,8 @@ impl From<flui::painting::paint::Path> for flui_painting::paint::path::PathRepr
 impl From<flui_painting::paint::path::PathRepr> for flui::painting::paint::Path
 impl PartialEq for flui::painting::paint::Path
 impl core::fmt::Debug for flui::painting::paint::Path
+impl flui::painting::Payload for flui::painting::paint::Path
+impl flui_painting::display_list::payload::private::Sealed for flui::painting::paint::Path
 impl serde_core::ser::Serialize for flui::painting::paint::Path
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::Path
 pub const fn flui::painting::paint::Path::fill_type(&self) -> flui::painting::paint::PathFillType
@@ -22704,6 +22757,17 @@ pub fn flui::testing::CommitBarrier::commit(self)
 pub struct flui::testing::CopyHold { .. }
 impl Drop for flui::testing::CopyHold
 impl core::fmt::Debug for flui::testing::CopyHold
+pub struct flui::testing::DropLedger { .. }
+impl Clone for flui::testing::DropLedger
+impl Default for flui::testing::DropLedger
+impl core::fmt::Debug for flui::testing::DropLedger
+pub fn flui::testing::DropLedger::live(&self) -> usize
+pub fn flui::testing::DropLedger::new() -> Self
+pub fn flui::testing::DropLedger::plant(&self) -> flui::testing::DropSentinel
+pub fn flui::testing::DropLedger::planted(&self) -> usize
+pub struct flui::testing::DropSentinel { .. }
+impl Drop for flui::testing::DropSentinel
+impl core::fmt::Debug for flui::testing::DropSentinel
 pub struct flui::testing::Expectation<'t> { .. }
 impl core::fmt::Debug for flui::testing::Expectation<'_>
 pub fn flui::testing::Expectation::to_be_checked(self) // impl flui::testing::Expectation<'_>
@@ -23048,10 +23112,12 @@ pub fn flui::testing::Tester::pump_and_settle(&mut self) -> usize
 pub fn flui::testing::Tester::pump_for(&mut self, duration: core::time::Duration)
 pub fn flui::testing::Tester::read(&mut self, locator: &flui::testing::Locator) -> flui::testing::Node
 pub fn flui::testing::Tester::rect(&mut self, locator: &flui::testing::Locator) -> flui::testing::LogicalRect
+pub fn flui::testing::Tester::relaunch_after_kill(self) -> Self
 pub fn flui::testing::Tester::request_close(&mut self) -> bool
 pub fn flui::testing::Tester::restart(self) -> Self
 pub fn flui::testing::Tester::semantics(&mut self) -> flui::testing::Tree
 pub fn flui::testing::Tester::set_window_focused(&mut self, focused: bool)
+pub fn flui::testing::Tester::set_window_visible(&mut self, visible: bool)
 pub fn flui::testing::Tester::storage(&self) -> Option<&flui::testing::MemoryStorage>
 pub fn flui::testing::Tester::tap(&mut self, locator: &flui::testing::Locator)
 pub fn flui::testing::Tester::try_cancel_composition(&mut self) -> Result<(), flui::testing::TestError>
@@ -23126,17 +23192,6 @@ impl core::fmt::Debug for flui::testing::harness::BuildCapabilities
 impl core::marker::StructuralPartialEq for flui::testing::harness::BuildCapabilities
 variant flui::testing::harness::BuildCapabilities::AsyncDriverOnly // at 1
 variant flui::testing::harness::BuildCapabilities::Installed // at 0
-pub struct flui::testing::harness::DropLedger { .. }
-impl Clone for flui::testing::harness::DropLedger
-impl Default for flui::testing::harness::DropLedger
-impl core::fmt::Debug for flui::testing::harness::DropLedger
-pub fn flui::testing::harness::DropLedger::live(&self) -> usize
-pub fn flui::testing::harness::DropLedger::new() -> Self
-pub fn flui::testing::harness::DropLedger::plant(&self) -> flui::testing::harness::DropSentinel
-pub fn flui::testing::harness::DropLedger::planted(&self) -> usize
-pub struct flui::testing::harness::DropSentinel { .. }
-impl Drop for flui::testing::harness::DropSentinel
-impl core::fmt::Debug for flui::testing::harness::DropSentinel
 pub struct flui::testing::harness::GestureBinding { .. }
 impl Default for flui::testing::harness::GestureBinding
 impl core::fmt::Debug for flui::testing::harness::GestureBinding
@@ -23562,11 +23617,6 @@ reexport flui::testing::harness::storage::CopyHold => flui::testing::CopyHold
 reexport flui::testing::harness::storage::MemoryStorage => flui::testing::MemoryStorage
 reexport flui::testing::harness::storage::WriteHold => flui::testing::WriteHold
 pub mod flui::testing::harness::widgets
-#[non_exhaustive] pub struct flui::testing::harness::widgets::DrawnOp
-field flui::testing::harness::widgets::DrawnOp::op: flui::painting::DrawOp // at 1
-field flui::testing::harness::widgets::DrawnOp::transform: flui::geometry::Matrix4 // at 0
-impl Clone for flui::testing::harness::widgets::DrawnOp
-impl core::fmt::Debug for flui::testing::harness::widgets::DrawnOp
 pub struct flui::testing::harness::widgets::LaidOut { .. }
 impl core::fmt::Debug for flui::testing::harness::widgets::LaidOut
 pub fn flui::testing::harness::widgets::LaidOut::a11y_nodes_named_by(&self, anchor: &flui::prelude::SemanticsAnchor) -> Vec<accesskit::NodeId>
@@ -23603,7 +23653,7 @@ pub fn flui::testing::harness::widgets::LaidOut::dispatch_scroll_with_modifiers(
 pub fn flui::testing::harness::widgets::LaidOut::dispatch_secondary_down(&self, x: f64, y: f64)
 pub fn flui::testing::harness::widgets::LaidOut::dispatch_secondary_up(&self, x: f64, y: f64)
 pub fn flui::testing::harness::widgets::LaidOut::dispatch_window_hover_left(&self)
-pub fn flui::testing::harness::widgets::LaidOut::draw_ops(&self) -> Vec<flui::testing::harness::widgets::DrawnOp>
+pub fn flui::testing::harness::widgets::LaidOut::draw_ops(&self) -> Vec<flui::painting::DrawCommandBuf>
 pub fn flui::testing::harness::widgets::LaidOut::element_node_count(&mut self) -> usize
 pub fn flui::testing::harness::widgets::LaidOut::enable_semantics(&mut self)
 pub fn flui::testing::harness::widgets::LaidOut::end_session(&mut self)
@@ -31173,6 +31223,17 @@ pub fn flui_painting::display_list::paragraph::ShapedRun::coords(&self) -> &'a [
 pub fn flui_painting::display_list::paragraph::ShapedRun::face(&self) -> &'a flui_painting::display_list::paragraph::FontFace // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
 pub fn flui_painting::display_list::paragraph::ShapedRun::glyphs(&self) -> &'a [flui_painting::display_list::paragraph::ShapedGlyph] // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
 pub fn flui_painting::display_list::paragraph::ShapedRun::placed_glyphs(&self, key: flui_painting::glyphs::registry::RunKey, origin: (f32, f32), scale: f32) -> impl Iterator<Item = flui_painting::glyphs::PlacedGlyph> + 'a // impl<'a> flui_painting::display_list::paragraph::ShapedRun<'a>
+pub trait flui_painting::display_list::payload::private::Sealed: Sized
+fn flui_painting::display_list::payload::private::Sealed::from_stored(stored: &flui_painting::display_list::payload::private::StoredPayload) -> Option<&Self>
+fn flui_painting::display_list::payload::private::Sealed::into_stored(self) -> flui_painting::display_list::payload::private::StoredPayload
+pub enum flui_painting::display_list::payload::private::StoredPayload
+impl Clone for flui_painting::display_list::payload::private::StoredPayload
+impl core::fmt::Debug for flui_painting::display_list::payload::private::StoredPayload
+pub fn flui_painting::display_list::payload::private::StoredPayload::known_equal(&self, other: &Self) -> bool
+variant flui_painting::display_list::payload::private::StoredPayload::ColorFilter(flui::painting::paint::ColorFilter) // at 3
+variant flui_painting::display_list::payload::private::StoredPayload::ImageRegion(flui::painting::ImageRegionPlacement) // at 2
+variant flui_painting::display_list::payload::private::StoredPayload::NestedRRects(flui::painting::NestedRRects) // at 1
+variant flui_painting::display_list::payload::private::StoredPayload::Path(flui::painting::paint::Path) // at 0
 pub struct flui_painting::error::RegisterFontError;
 impl Clone for flui_painting::error::RegisterFontError
 impl Copy for flui_painting::error::RegisterFontError
@@ -31453,6 +31514,8 @@ pub fn flui_painting::text_painter::measurement::TextMeasurement::layout(&mut se
 pub fn flui_painting::text_painter::measurement::TextMeasurement::max_intrinsic_width(&mut self, painter: &flui_painting::text_painter::TextPainter) -> Result<f64, flui_painting::text_painter::sizing::TextMeasurementError> // impl<'a> flui_painting::text_painter::measurement::TextMeasurement<'a>
 pub fn flui_painting::text_painter::measurement::TextMeasurement::min_intrinsic_width(&mut self, painter: &flui_painting::text_painter::TextPainter) -> Result<f64, flui_painting::text_painter::sizing::TextMeasurementError> // impl<'a> flui_painting::text_painter::measurement::TextMeasurement<'a>
 pub fn flui_painting::text_painter::measurement::TextMeasurement::new(context: &'a mut flui_painting::text_layout::context::TextContext, sizing: &'a flui::painting::TextSizing) -> Self // impl<'a> flui_painting::text_painter::measurement::TextMeasurement<'a>
+pub struct flui_painting::text_painter::sizing::RetiredTextSizingCohort(_)
+impl core::fmt::Debug for flui_painting::text_painter::sizing::RetiredTextSizingCohort
 pub enum flui_painting::text_painter::sizing::TextMeasurementError
 impl From<flui_painting::text_layout::error::TextLayoutError> for flui_painting::text_painter::sizing::TextMeasurementError
 impl From<flui_painting::text_painter::sizing::TextPreparationPending> for flui_painting::text_painter::sizing::TextMeasurementError
@@ -31461,8 +31524,6 @@ impl core::fmt::Debug for flui_painting::text_painter::sizing::TextMeasurementEr
 impl core::fmt::Display for flui_painting::text_painter::sizing::TextMeasurementError
 variant flui_painting::text_painter::sizing::TextMeasurementError::Layout(flui_painting::text_layout::error::TextLayoutError) // at 0
 variant flui_painting::text_painter::sizing::TextMeasurementError::Pending(flui_painting::text_painter::sizing::TextPreparationPending) // at 1
-pub struct flui_painting::text_painter::sizing::RetiredTextSizingCohort(_)
-impl core::fmt::Debug for flui_painting::text_painter::sizing::RetiredTextSizingCohort
 pub struct flui_painting::text_painter::sizing::TextPreparationPending
 field flui_painting::text_painter::sizing::TextPreparationPending::policy_source: flui_painting::text_painter::sizing::TextSizingSource // at 0
 field flui_painting::text_painter::sizing::TextPreparationPending::requests: Vec<flui::foundation::TextSizeRequest> // at 1

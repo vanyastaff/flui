@@ -53,9 +53,11 @@ fn drawn(laid: &LaidOut) -> (Vec<Point<f64>>, Color) {
     let mut paths: Vec<_> = laid
         .draw_ops()
         .into_iter()
-        .filter_map(|command| match command.op {
+        .filter_map(|command| match &command.op {
             DrawOp::Path { path, paint } => Some((
-                path.commands()
+                command
+                    .payload(*path)
+                    .commands()
                     .flat_map(|command| match command {
                         PathCommand::MoveTo(p) | PathCommand::LineTo(p) => vec![p],
                         PathCommand::CubicTo(a, b, p) => vec![a, b, p],

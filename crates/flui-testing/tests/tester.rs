@@ -594,15 +594,31 @@ struct Notebook {
     /// detaches.
     panic_at_session_end: bool,
     opened: Rc<std::cell::RefCell<Opened>>,
+    /// A write hold each state of the tree takes on this storage and drops
+    /// with the state.
+    state_hold: Option<flui_testing::storage::MemoryStorage>,
 }
 
-struct NotebookState(Notebook);
+/// The notebook, and the write hold the state keeps for its lifetime.
+struct NotebookState(
+    Notebook,
+    #[expect(
+        dead_code,
+        reason = "held for its drop: the state releases it as it is disposed"
+    )]
+    Option<flui_testing::storage::WriteHold>,
+);
 
 impl StatefulView for Notebook {
     type State = NotebookState;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        NotebookState(self.clone())
+        NotebookState(
+            self.clone(),
+            self.state_hold
+                .as_ref()
+                .map(flui_testing::storage::MemoryStorage::hold_writes),
+        )
     }
 }
 
@@ -674,6 +690,7 @@ fn notebook_saving(
         save_on_detach,
         panic_at_session_end,
         opened: Rc::clone(&opened),
+        state_hold: None,
     };
     (view, opened)
 }
@@ -777,6 +794,42 @@ fn the_window_losing_focus_makes_the_application_inactive() {
     assert_eq!(opened.borrow().lifecycle, [Inactive, Resumed]);
 }
 
+#[test]
+fn hiding_the_window_hides_the_application_and_showing_it_resumes() {
+    use flui_view::AppLifecycleState::{Hidden, Inactive, Resumed};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    opened.borrow_mut().lifecycle.clear();
+    t.set_window_visible(false);
+    assert_eq!(opened.borrow().lifecycle.last(), Some(&Hidden));
+    t.set_window_visible(true);
+    assert!(
+        opened
+            .borrow()
+            .lifecycle
+            .ends_with(&[Hidden, Inactive, Resumed]),
+        "shown again, the window climbs back through Inactive: {:?}",
+        opened.borrow().lifecycle
+    );
+}
+
+#[test]
+fn showing_an_unfocused_window_leaves_it_unfocused() {
+    use flui_view::AppLifecycleState::Inactive;
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    t.set_window_focused(false);
+    t.set_window_visible(false);
+    t.set_window_visible(true);
+    assert_eq!(
+        opened.borrow().lifecycle.last(),
+        Some(&Inactive),
+        "the OS focus never came back"
+    );
+}
+
 /// A restart is the user quitting and opening the application again: a write
 /// the run accepted and had not yet carried out still reaches the storage.
 #[test]
@@ -791,6 +844,271 @@ fn a_restart_writes_what_the_run_accepted_before_it_stops() {
     let mut t = t.restart();
     let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
     assert_eq!(*loaded, Note("unsaved".to_owned()));
+}
+
+/// A kill is the process ending with nothing more run: a write the run
+/// accepted and had not carried out never reaches the storage.
+#[test]
+fn a_relaunch_after_a_kill_loses_what_the_run_had_not_written() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    note(&opened)
+        .set(Note("unsaved".to_owned()))
+        .expect("a loaded note takes a value");
+
+    let mut t = t.relaunch_after_kill();
+    let loaded = settle(&mut t, note(&opened).load()).expect("the empty storage loads");
+    assert_ne!(*loaded, Note("unsaved".to_owned()));
+}
+
+/// A write the storage accepted but held, unstarted at a write hold or
+/// uncommitted at a commit barrier, dies with the killed run: releasing the
+/// hold after the relaunch stores nothing of it. Without the kill the same
+/// release stores it, so each case did hold a write.
+#[test]
+fn a_relaunch_after_a_kill_loses_a_write_the_storage_held() {
+    type Hold = fn(&flui_testing::storage::MemoryStorage) -> Box<dyn FnOnce()>;
+    let holds: [(&str, Hold); 2] = [
+        ("unstarted", |storage| {
+            let hold = storage.hold_writes();
+            Box::new(move || drop(hold))
+        }),
+        ("uncommitted", |storage| {
+            let barrier = storage.hold_commits();
+            Box::new(move || barrier.commit())
+        }),
+    ];
+    for (case, hold) in holds {
+        for kill in [false, true] {
+            let (view, opened) = notebook(false);
+            let mut t = Tester::mount(view);
+            let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+            let storage = t
+                .storage()
+                .cloned()
+                .expect("a mounted window has a storage");
+            let release = hold(&storage);
+            note(&opened)
+                .set(Note("held".to_owned()))
+                .expect("a loaded note takes a value");
+            t.pump_for(Duration::from_secs(1));
+            if kill {
+                t = t.relaunch_after_kill();
+            }
+            release();
+            t.pump_for(Duration::from_secs(1));
+            let stored = storage
+                .contents(&<Note as flui_view::persist::Document>::NAME)
+                .is_some_and(|bytes| String::from_utf8_lossy(&bytes).contains("held"));
+            assert_eq!(stored, !kill, "{case}, killed: {kill}");
+        }
+    }
+}
+
+/// A kill loses only the killed run's held writes: a write the test itself
+/// published, and a write another run over the same storage published under
+/// the same name before the killed run's, still start when the hold ends.
+#[test]
+fn a_relaunch_after_a_kill_keeps_a_held_write_the_run_did_not_publish() {
+    use flui_platform::{Storage as _, StorageName, WriteMode};
+
+    const OTHER: StorageName = StorageName::from_static("other");
+    let (view, opened) = notebook(false);
+    let mut killed = Tester::mount(view);
+    let _ = settle(&mut killed, note(&opened).load()).expect("an empty storage loads");
+    let storage = killed
+        .storage()
+        .cloned()
+        .expect("a mounted window has a storage");
+    let (other_view, other_opened) = notebook(false);
+    let mut other = Tester::mount_in(other_view, TestWindow::default().storage(storage.clone()));
+    let _ = settle(&mut other, note(&other_opened).load()).expect("an empty storage loads");
+
+    let hold = storage.hold_writes();
+    let own = storage.publish(&OTHER, b"kept".to_vec(), WriteMode::Replace);
+    note(&other_opened)
+        .set(Note("other run".to_owned()))
+        .expect("a loaded note takes a value");
+    other.pump_for(Duration::from_secs(1));
+    note(&opened)
+        .set(Note("killed run".to_owned()))
+        .expect("a loaded note takes a value");
+    killed.pump_for(Duration::from_secs(1));
+    let mut killed = killed.relaunch_after_kill();
+    drop(hold);
+    killed.pump();
+    other.pump();
+
+    assert_eq!(storage.contents(&OTHER).as_deref(), Some(&b"kept"[..]));
+    let stored = storage
+        .contents(&<Note as flui_view::persist::Document>::NAME)
+        .expect("the other run's note was written");
+    assert!(
+        String::from_utf8_lossy(&stored).contains("other run"),
+        "{}",
+        String::from_utf8_lossy(&stored)
+    );
+    drop(own);
+}
+
+/// A kill whose teardown panics still loses the run's held write: the
+/// observer that fails as the window detaches does not let it through.
+#[test]
+fn a_relaunch_after_a_kill_whose_teardown_panics_loses_the_held_write() {
+    let (view, opened) = notebook_saving(false, None, true);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t
+        .storage()
+        .cloned()
+        .expect("a mounted window has a storage");
+    let hold = storage.hold_writes();
+    note(&opened)
+        .set(Note("held".to_owned()))
+        .expect("a loaded note takes a value");
+    t.pump_for(Duration::from_secs(1));
+    let killed = catch_unwind(AssertUnwindSafe(|| t.relaunch_after_kill()));
+    assert!(killed.is_err(), "the detach observer fails the teardown");
+    drop(hold);
+    assert_eq!(
+        storage.contents(&<Note as flui_view::persist::Document>::NAME),
+        None
+    );
+}
+
+/// A run's newer value does not replace a value the test published that is
+/// still waiting at a hold: the run never read it, so the test's value lands
+/// first and the run's, based on the storage without it, conflicts.
+#[test]
+fn a_runs_value_does_not_replace_the_tests_held_write() {
+    use flui_platform::{Storage as _, WriteMode};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t
+        .storage()
+        .cloned()
+        .expect("a mounted window has a storage");
+    let name = <Note as flui_view::persist::Document>::NAME;
+    let hold = storage.hold_writes();
+    let own = storage.publish(&name, b"the test's".to_vec(), WriteMode::Replace);
+    note(&opened)
+        .set(Note("the run's".to_owned()))
+        .expect("a loaded note takes a value");
+    t.pump_for(Duration::from_secs(1));
+    drop(hold);
+    t.pump_for(Duration::from_secs(1));
+    assert_eq!(storage.contents(&name).as_deref(), Some(&b"the test's"[..]));
+    drop(own);
+}
+
+/// A kill loses the run's held write even when the hold belongs to the run's
+/// own state and is released by its teardown: the run is dead before its
+/// states are disposed. Without the kill, the state's release lands it.
+#[test]
+fn a_relaunch_after_a_kill_loses_a_write_its_own_state_held() {
+    for kill in [false, true] {
+        let storage = flui_testing::storage::MemoryStorage::new();
+        let (mut view, opened) = notebook(false);
+        view.state_hold = Some(storage.clone());
+        let mut t = Tester::mount_in(view, TestWindow::default().storage(storage.clone()));
+        let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+        note(&opened)
+            .set(Note("held".to_owned()))
+            .expect("a loaded note takes a value");
+        t.pump_for(Duration::from_secs(1));
+        assert_eq!(
+            storage.contents(&<Note as flui_view::persist::Document>::NAME),
+            None
+        );
+        if kill {
+            drop(t.relaunch_after_kill());
+        } else {
+            drop(t);
+        }
+        let stored = storage.contents(&<Note as flui_view::persist::Document>::NAME);
+        assert_eq!(stored.is_some(), !kill, "killed: {kill}");
+    }
+}
+
+/// A value the test publishes while a run's write of the same name waits at
+/// a hold does not replace it: the test never read the run's value, so the
+/// run's write lands first and the test's, based on the empty storage,
+/// conflicts.
+#[test]
+fn the_tests_value_does_not_replace_a_runs_held_write() {
+    use flui_platform::{Storage as _, StoredVersion, WriteMode};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t
+        .storage()
+        .cloned()
+        .expect("a mounted window has a storage");
+    let name = <Note as flui_view::persist::Document>::NAME;
+    let hold = storage.hold_writes();
+    note(&opened)
+        .set(Note("the run's".to_owned()))
+        .expect("a loaded note takes a value");
+    t.pump_for(Duration::from_secs(1));
+    let own = storage.publish(
+        &name,
+        b"the test's".to_vec(),
+        WriteMode::IfUnchanged(StoredVersion::ABSENT),
+    );
+    drop(hold);
+    t.pump_for(Duration::from_secs(1));
+    let stored = storage.contents(&name).expect("the run's write landed");
+    assert!(
+        String::from_utf8_lossy(&stored).contains("the run's"),
+        "{}",
+        String::from_utf8_lossy(&stored)
+    );
+    drop(own);
+}
+
+/// A quit write the storage holds lands when the hold ends, ahead of the next
+/// run's newer value, which was based on the storage without it and so
+/// conflicts: what a disk that had not finished the quit write gives, and
+/// the same whether the next run publishes before or after the release.
+#[test]
+fn a_restart_under_a_write_hold_lands_the_quit_write_first() {
+    for set_before_release in [true, false] {
+        let (view, opened) = notebook(false);
+        let mut t = Tester::mount(view);
+        let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+        let storage = t
+            .storage()
+            .cloned()
+            .expect("a mounted window has a storage");
+        let mut hold = Some(storage.hold_writes());
+        note(&opened)
+            .set(Note("quit".to_owned()))
+            .expect("a loaded note takes a value");
+        let mut t = t.restart();
+        let _ = settle(&mut t, note(&opened).load()).expect("the storage loads");
+        if !set_before_release {
+            hold = None;
+            t.pump_for(Duration::from_secs(1));
+        }
+        note(&opened)
+            .set(Note("next run".to_owned()))
+            .expect("a loaded note takes a value");
+        t.pump_for(Duration::from_secs(1));
+        drop(hold);
+        t.pump_for(Duration::from_secs(1));
+        let stored = storage
+            .contents(&<Note as flui_view::persist::Document>::NAME)
+            .expect("the quit write landed");
+        assert!(
+            String::from_utf8_lossy(&stored).contains("quit"),
+            "set before the release: {set_before_release}: {}",
+            String::from_utf8_lossy(&stored)
+        );
+    }
 }
 
 /// A value set twice before the restart is written as its latest: the first

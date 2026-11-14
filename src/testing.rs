@@ -19,6 +19,7 @@
 
 pub use flui_testing::find;
 pub use flui_testing::storage::{CommitBarrier, CopyHold, MemoryStorage, WriteHold};
+pub use flui_testing::{DropLedger, DropSentinel};
 pub use flui_testing::{
     Expectation, InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalPoint,
     LogicalRect, Match, Node, Pick, Role, StateFilter, TestError, TestWindow, Tester, TextMatch,
@@ -40,8 +41,8 @@ pub mod rendering {
 
 /// The harnesses `flui::testing` exported before [`Tester`]: the substrate
 /// driver, the widget layout harness, gesture replay, the accessibility
-/// reader and the teardown and storage doubles. The facade's own consumer
-/// fixtures are their last users ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#the-facades-old-test-harnesses)).
+/// reader and the storage doubles. The facade's own consumer
+/// fixture `facade_extensions` is their last user ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#the-facades-old-test-harnesses)).
 ///
 /// The compiler reports a deprecated module only for the items the module
 /// defines, and this one only re-exports, so a path through it raises no
@@ -54,6 +55,5 @@ pub mod harness {
     pub use flui_testing::{
         BuildCapabilities, HeadlessBinding, MountOptions, MountOwners, Mounted,
     };
-    pub use flui_testing::{DropLedger, DropSentinel};
     pub use flui_testing::{a11y, replay, storage, widgets};
 }
