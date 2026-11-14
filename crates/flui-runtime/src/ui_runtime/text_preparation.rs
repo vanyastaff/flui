@@ -7,7 +7,9 @@ use flui_animation::FrameTick;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_foundation::sequence::IdMint;
 use flui_foundation::{PresentationId, TextSizeRequest};
-use flui_painting::{TextPreparationPending, TextSizing, TextSizingCohort, TextSizingSource};
+use flui_painting::{
+    RetiredTextSizingCohort, TextPreparationPending, TextSizing, TextSizingCohort, TextSizingSource,
+};
 use flui_rendering::{LayoutPremise, constraints::BoxConstraints, pipeline::PipelineOwner};
 use flui_view::BuildPremise;
 use web_time::{Duration, Instant};
@@ -101,7 +103,7 @@ pub(crate) struct SavedTextSegment {
     pub(crate) constraints: BoxConstraints,
     dpr: DevicePixelRatio,
     policy: TextSizing,
-    _cohort: TextSizingCohort,
+    cohort: TextSizingCohort,
     layout: LayoutPremise,
     build: BuildPremise,
     frontier: Option<TextPreparationPending>,
@@ -144,6 +146,9 @@ pub(crate) struct TextPreparation {
     replacement_barrier: bool,
     pub(crate) segment: Option<SavedTextSegment>,
     seals: IdMint<NonZeroU64>,
+    /// The last finished segment's attempt allocation, which the next
+    /// admitted segment reuses.
+    retired_cohort: Option<RetiredTextSizingCohort>,
 }
 
 impl TextPreparation {
@@ -266,7 +271,15 @@ pub(crate) fn admit(
     let policy = presentation
         .pipeline()
         .with(|owner| owner.text_sizing().clone());
-    let cohort = policy.begin_cohort();
+    let retired = presentation
+        .text_preparation
+        .borrow_mut()
+        .retired_cohort
+        .take();
+    let cohort = match retired {
+        Some(retired) => policy.begin_cohort_in(retired),
+        None => policy.begin_cohort(),
+    };
     let attempt_policy = cohort.policy();
     presentation.pipeline().with_mut(|owner| {
         let _ = owner.set_text_sizing(attempt_policy);
@@ -291,7 +304,7 @@ pub(crate) fn admit(
             DevicePixelRatio::try_new(owner.device_pixel_ratio()).expect("BUG: accepted render DPR")
         }),
         policy,
-        _cohort: cohort,
+        cohort,
         layout: presentation.pipeline().with(PipelineOwner::layout_premise),
         build: presentation
             .widgets()
@@ -332,8 +345,13 @@ pub(crate) fn pending(presentation: &PresentationState, frontier: TextPreparatio
 }
 
 pub(crate) fn finish(presentation: &PresentationState) {
-    let retired = presentation.text_preparation.borrow_mut().segment.take();
-    drop(retired);
+    let Some(finished) = presentation.text_preparation.borrow_mut().segment.take() else {
+        return;
+    };
+    // Retiring releases the segment's numeric pins as dropping it would, with
+    // no borrow of the preparation state held.
+    let retired = finished.cohort.retire();
+    presentation.text_preparation.borrow_mut().retired_cohort = Some(retired);
 }
 
 impl UiRuntime {

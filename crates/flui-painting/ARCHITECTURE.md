@@ -299,9 +299,14 @@ An explicit override replaces that numeric authority while retaining the active
 measurement attempt. The attempt lazily pins requests from every selected
 capture, including cache hits and missing answers subsequently admitted. Its
 finite working set can exceed each capture's bounded historical cache; dropping
-the attempt releases its pins without withdrawing live geometry leases.
-`TextSizing::begin_cohort` creates this retention capability without granting
-numeric admission. The admission writer remains unique. Policies, numeric
+or retiring the attempt releases its pins without withdrawing live geometry
+leases. `TextSizing::begin_cohort` creates this retention capability without
+granting numeric admission, and `TextSizing::begin_cohort_in` creates it in the
+allocation of an attempt that `TextSizingCohort::retire` ended, so the runtime's
+steady frames begin their attempts without allocating. Retiring advances the
+attempt's generation: a policy minted for the retired attempt retains nothing in
+the attempt that reuses its allocation
+(`a_reused_attempt_allocation_retains_nothing_for_the_retired_attempts_policies`). The admission writer remains unique. Policies, numeric
 stores, answer leases and cohorts share owner-local `Rc` ownership; short
 `RefCell` borrows end before shaping, native evaluation or extensible iteration.
 Neither sizing authority nor its preparation debt crosses to the raster thread.

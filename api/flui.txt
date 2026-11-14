@@ -10087,6 +10087,7 @@ impl PartialEq for flui::painting::TextSizing
 impl core::fmt::Debug for flui::painting::TextSizing
 pub const fn flui::painting::TextSizing::fixed() -> Self
 pub fn flui::painting::TextSizing::begin_cohort(&self) -> flui_painting::text_painter::sizing::TextSizingCohort
+pub fn flui::painting::TextSizing::begin_cohort_in(&self, retired: flui_painting::text_painter::sizing::RetiredTextSizingCohort) -> flui_painting::text_painter::sizing::TextSizingCohort
 pub fn flui::painting::TextSizing::captured() -> (Self, flui_painting::text_painter::sizing::TextSizingAdmission)
 pub fn flui::painting::TextSizing::exact(answers: impl IntoIterator<Item = (flui::foundation::TextSizeRequest, flui::foundation::TextSize)>) -> Result<Self, flui_painting::text_painter::sizing::TextSizingConflict>
 pub fn flui::painting::TextSizing::linear(factor: f64) -> Result<Self, flui_painting::text_layout::error::TextLayoutError>
@@ -31429,6 +31430,8 @@ impl core::fmt::Debug for flui_painting::text_painter::sizing::TextMeasurementEr
 impl core::fmt::Display for flui_painting::text_painter::sizing::TextMeasurementError
 variant flui_painting::text_painter::sizing::TextMeasurementError::Layout(flui_painting::text_layout::error::TextLayoutError) // at 0
 variant flui_painting::text_painter::sizing::TextMeasurementError::Pending(flui_painting::text_painter::sizing::TextPreparationPending) // at 1
+pub struct flui_painting::text_painter::sizing::RetiredTextSizingCohort(_)
+impl core::fmt::Debug for flui_painting::text_painter::sizing::RetiredTextSizingCohort
 pub struct flui_painting::text_painter::sizing::TextPreparationPending
 field flui_painting::text_painter::sizing::TextPreparationPending::policy_source: flui_painting::text_painter::sizing::TextSizingSource // at 0
 field flui_painting::text_painter::sizing::TextPreparationPending::requests: Vec<flui::foundation::TextSizeRequest> // at 1
@@ -31457,6 +31460,7 @@ variant flui_painting::text_painter::sizing::TextSizingAdmissionError::RevisionE
 pub struct flui_painting::text_painter::sizing::TextSizingCohort { .. }
 impl core::fmt::Debug for flui_painting::text_painter::sizing::TextSizingCohort
 pub fn flui_painting::text_painter::sizing::TextSizingCohort::policy(&self) -> flui::painting::TextSizing
+pub fn flui_painting::text_painter::sizing::TextSizingCohort::retire(self) -> flui_painting::text_painter::sizing::RetiredTextSizingCohort
 pub struct flui_painting::text_painter::sizing::TextSizingConflict
 field flui_painting::text_painter::sizing::TextSizingConflict::request: flui::foundation::TextSizeRequest // at 0
 impl From<flui_painting::text_painter::sizing::TextSizingConflict> for flui_painting::text_painter::sizing::TextSizingAdmissionError

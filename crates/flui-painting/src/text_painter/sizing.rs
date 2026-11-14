@@ -44,7 +44,24 @@ impl TextSizingSource {
 
 /// Numeric sizing authority explicitly supplied to a measurement.
 #[derive(Clone, Debug)]
-pub struct TextSizing(pub(super) Policy, Option<Weak<AttemptAnswers>>);
+pub struct TextSizing(pub(super) Policy, Option<AttemptRef>);
+
+/// A policy's view of the attempt that retains the answers it resolves. The
+/// generation tells a policy minted for a retired attempt from a policy of the
+/// attempt that reuses its allocation, so a stale policy pins nothing.
+#[derive(Clone, Debug)]
+struct AttemptRef {
+    attempt: Weak<AttemptAnswers>,
+    generation: u64,
+}
+
+impl AttemptRef {
+    fn upgrade(&self) -> Option<Rc<AttemptAnswers>> {
+        self.attempt
+            .upgrade()
+            .filter(|attempt| attempt.generation.get() == self.generation)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(super) enum Policy {
@@ -80,10 +97,31 @@ type CohortAnswers = RefCell<HashMap<TextSizeRequest, Option<Rc<Answer>>>>;
 
 #[derive(Debug, Default)]
 struct AttemptAnswers {
+    /// Advanced when the attempt retires, so its policies stop pinning.
+    generation: Cell<u64>,
     sources: RefCell<Vec<(TextSizingSource, Rc<CohortAnswers>)>>,
 }
 
 impl AttemptAnswers {
+    /// Unregister every cohort of answers and release its numeric pins.
+    fn release(&self) {
+        let mut sources = std::mem::take(&mut *self.sources.borrow_mut());
+        for (source, pins) in sources.drain(..) {
+            let identity = Rc::downgrade(&pins);
+            source
+                .0
+                .cohorts
+                .borrow_mut()
+                .retain(|cohort| !Weak::ptr_eq(cohort, &identity));
+            // Numeric pins retire after the registry guard has ended.
+            drop(pins);
+            source.0.trim();
+        }
+        // The emptied list keeps its capacity for the attempt that reuses
+        // this allocation; nothing registers sources while it is released.
+        *self.sources.borrow_mut() = sources;
+    }
+
     fn pins(&self, source: &TextSizingSource) -> Rc<CohortAnswers> {
         let mut sources = self.sources.borrow_mut();
         if let Some((_, pins)) = sources.iter().find(|(candidate, _)| candidate == source) {
@@ -98,18 +136,7 @@ impl AttemptAnswers {
 
 impl Drop for AttemptAnswers {
     fn drop(&mut self) {
-        let sources = std::mem::take(self.sources.get_mut());
-        for (source, pins) in sources {
-            let identity = Rc::downgrade(&pins);
-            source
-                .0
-                .cohorts
-                .borrow_mut()
-                .retain(|cohort| !Weak::ptr_eq(cohort, &identity));
-            // Numeric pins retire after the registry guard has ended.
-            drop(pins);
-            source.0.trim();
-        }
+        self.release();
     }
 }
 
@@ -227,7 +254,8 @@ pub struct TextSizingAdmission {
 }
 
 /// Retains answers used during a finite measurement attempt across frontiers.
-/// Drop after convergence or cancellation, including after a suspended attempt.
+/// Drop or [retire](Self::retire) after convergence or cancellation, including
+/// after a suspended attempt.
 pub struct TextSizingCohort {
     policy: TextSizing,
     attempt: Rc<AttemptAnswers>,
@@ -246,7 +274,48 @@ impl TextSizingCohort {
     /// requests measured through it belong only to this cohort.
     #[must_use]
     pub fn policy(&self) -> TextSizing {
-        TextSizing(self.policy.0.clone(), Some(Rc::downgrade(&self.attempt)))
+        TextSizing(
+            self.policy.0.clone(),
+            Some(AttemptRef {
+                attempt: Rc::downgrade(&self.attempt),
+                generation: self.attempt.generation.get(),
+            }),
+        )
+    }
+
+    /// End the attempt as dropping it would: every answer it retained is
+    /// released and its policies stop retaining. The allocation stays, for
+    /// [`TextSizing::begin_cohort_in`] to give the next attempt.
+    #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "a u64 generation advanced once per retired attempt cannot run out"
+    )]
+    pub fn retire(self) -> RetiredTextSizingCohort {
+        let Self { policy, attempt } = self;
+        drop(policy);
+        let generation = attempt
+            .generation
+            .get()
+            .checked_add(1)
+            .expect("BUG: an attempt allocation retires fewer than 2^64 times");
+        attempt.generation.set(generation);
+        attempt.release();
+        RetiredTextSizingCohort(attempt)
+    }
+}
+
+/// The allocation of a [`TextSizingCohort`] that [retired](TextSizingCohort::retire),
+/// holding no answers. The next attempt reuses it and its list of sources, so
+/// a steady frame under a Fixed or Linear policy begins its attempt without
+/// allocating; an attempt that resolves through a captured source still
+/// allocates that source's pin table.
+pub struct RetiredTextSizingCohort(Rc<AttemptAnswers>);
+
+impl fmt::Debug for RetiredTextSizingCohort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RetiredTextSizingCohort")
+            .finish_non_exhaustive()
     }
 }
 
@@ -392,6 +461,24 @@ impl TextSizing {
         }
     }
 
+    /// [`begin_cohort`](Self::begin_cohort) in the allocation of a retired
+    /// attempt. Policies of the retired attempt retain nothing in this one.
+    #[must_use]
+    pub fn begin_cohort_in(&self, retired: RetiredTextSizingCohort) -> TextSizingCohort {
+        let RetiredTextSizingCohort(attempt) = retired;
+        // A retired attempt is reached only through generation-checked weak
+        // references, which hold a strong count for one closed lookup.
+        assert_eq!(
+            Rc::strong_count(&attempt),
+            1,
+            "BUG: a retired attempt has no owner but its retired handle"
+        );
+        TextSizingCohort {
+            policy: TextSizing(self.0.clone(), None),
+            attempt,
+        }
+    }
+
     /// Resolve using closed numeric data, retaining the live answer authority.
     pub fn resolve(
         &self,
@@ -419,7 +506,7 @@ impl TextSizing {
 
     pub(super) fn retain_resolved(&self, answers: &[TextResolvedSize]) {
         if let Policy::Exact(source) = &self.0
-            && let Some(attempt) = self.1.as_ref().and_then(Weak::upgrade)
+            && let Some(attempt) = self.1.as_ref().and_then(AttemptRef::upgrade)
         {
             let cohort = attempt.pins(source);
             let mut pins = cohort.borrow_mut();
@@ -460,7 +547,7 @@ impl TextSizing {
                 let cohort = self
                     .1
                     .as_ref()
-                    .and_then(Weak::upgrade)
+                    .and_then(AttemptRef::upgrade)
                     .map(|attempt| (attempt.pins(source), attempt));
                 let (resolved, retained, missing) = {
                     let state = store.state.borrow();

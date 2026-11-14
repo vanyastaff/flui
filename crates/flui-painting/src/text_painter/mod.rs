@@ -30,9 +30,9 @@ mod sizing;
 pub use baseline::TextBaseline;
 pub use measurement::TextMeasurement;
 pub use sizing::{
-    TextMeasurementError, TextPreparationPending, TextResolvedSize, TextSizing,
-    TextSizingAdmission, TextSizingAdmissionError, TextSizingCohort, TextSizingConflict,
-    TextSizingSource,
+    RetiredTextSizingCohort, TextMeasurementError, TextPreparationPending, TextResolvedSize,
+    TextSizing, TextSizingAdmission, TextSizingAdmissionError, TextSizingCohort,
+    TextSizingConflict, TextSizingSource,
 };
 
 /// Default font size when none is specified.
