@@ -142,6 +142,13 @@ fn run_session(
         let mut strategy = BrowserSession::new(browser.clone(), release, hot_reload, web, agent)?;
         return dev_loop(&mut strategy);
     }
+    // The application runs on this desktop: refused before it is built when
+    // it opens links or files a later launch could not hand to it.
+    if matches!(project, Project::Application { .. }) {
+        let root = std::env::current_dir().context("failed to resolve application directory")?;
+        let host = crate::build::DesktopBuilder::detect_host_target()?;
+        crate::declarations::Declarations::collect(&root, &[&host])?.require_one_instance(&host)?;
+    }
     if hot_reload {
         match project {
             Project::Worker(project) => {

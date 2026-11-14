@@ -21,7 +21,7 @@ impl DesktopBuilder {
     }
 
     /// Detect the host target triple from `rustc -vV`.
-    fn detect_host_target() -> BuildResult<String> {
+    pub(crate) fn detect_host_target() -> BuildResult<String> {
         // Get host triple from rustc
         let output = std::process::Command::new("rustc")
             .args(["-vV"])
@@ -88,6 +88,12 @@ impl DesktopBuilder {
             "Building desktop target '{target}' ({:?})",
             ctx.target
         ));
+        // Before the build: a Linux or Windows application that opens links
+        // or files needs the code that keeps one instance of it.
+        if target.contains("-linux-") || target.contains("-windows-") {
+            crate::declarations::Declarations::collect(&ctx.workspace_root, &[&target])?
+                .require_one_instance(&target)?;
+        }
 
         let mut args = vec!["build".to_string(), "--target".to_string(), target.clone()];
         let selected = cargo::select_target(&ctx.workspace_root, &ctx.target).await?;

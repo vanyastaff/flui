@@ -41,6 +41,11 @@ pub(crate) const SCHEMA: u32 = 3;
 /// declarations.
 const KEY: &str = "declares";
 
+/// The crate and feature that keep one instance of a Linux or Windows
+/// application, so that a later launch hands the running instance the link
+/// or file it was started with (ADR-0254 §4).
+const ONE_INSTANCE: (&str, &str) = ("flui-native", "single-instance");
+
 /// Whether a crate is an application of the graph or a dependency of one.
 /// The URLs an application opens are the application's own: `#[flui::main]`
 /// carries the crate's lists into the run, which opens only those, so a
@@ -380,6 +385,10 @@ pub(crate) struct Declarations {
     url_schemes: BTreeMap<UrlScheme, BTreeSet<String>>,
     associated_domains: BTreeMap<AssociatedDomain, BTreeSet<String>>,
     file_types: BTreeMap<FileType, BTreeSet<String>>,
+    /// Whether a graph joined here links `flui-native` with its
+    /// `single-instance` feature, the code that hands a later launch on
+    /// Linux and Windows to the running instance.
+    one_instance: bool,
 }
 
 impl Declarations {
@@ -466,6 +475,9 @@ impl Declarations {
                 CrateRole::Application
             };
             joined.add(package, &features, role)?;
+            if package.name.as_str() == ONE_INSTANCE.0 && features.contains(&ONE_INSTANCE.1) {
+                joined.one_instance = true;
+            }
         }
         Ok(joined)
     }
@@ -703,6 +715,7 @@ impl Declarations {
         for (file_type, crates) in other.file_types {
             self.file_types.entry(file_type).or_default().extend(crates);
         }
+        self.one_instance |= other.one_instance;
     }
 
     /// What one crate's `[package.metadata.flui.declares]`, given as TOML,
@@ -740,6 +753,50 @@ impl Declarations {
     /// the crates that declare it.
     pub(crate) fn file_types(&self) -> impl Iterator<Item = (&FileType, &BTreeSet<String>)> {
         self.file_types.iter()
+    }
+
+    /// Refuse a build for `target` that opens URL schemes or file types on a
+    /// Linux or Windows desktop without one instance.
+    ///
+    /// There the desktop starts the application with the link or file, and
+    /// only `flui`'s `single-instance` feature hands that launch to an
+    /// instance already running; without it every link opens a second
+    /// process. Any other target keeps one instance itself or has none to
+    /// keep.
+    ///
+    /// # Errors
+    ///
+    /// [`BuildError::InvalidConfig`] naming what the application opens and
+    /// the feature to turn on.
+    pub(crate) fn require_one_instance(&self, target: &str) -> BuildResult<()> {
+        let desktop = target.contains("-windows-")
+            || (target.contains("-linux-") && !target.contains("android"));
+        if !desktop || self.one_instance {
+            return Ok(());
+        }
+        let opens: Vec<String> = self
+            .url_schemes
+            .keys()
+            .map(|scheme| format!("`{scheme}:` links"))
+            .chain(
+                self.file_types
+                    .keys()
+                    .map(|file_type| format!("`.{}` files", file_type.extension())),
+            )
+            .collect();
+        if opens.is_empty() {
+            return Ok(());
+        }
+        Err(BuildError::invalid_config(
+            "features",
+            format!(
+                "the application opens {} on {target}, and is built without flui's \
+                 `single-instance` feature, so each one it is launched with would start a \
+                 second process; add `features = [\"single-instance\"]` to the `flui` \
+                 dependency in Cargo.toml",
+                opens.join(", ")
+            ),
+        ))
     }
 
     /// Every Android permission declared, in order, with the crates that ask
@@ -945,6 +1002,83 @@ mod tests {
                 .any(|(permission, _)| permission == "android.permission.READ_CONTACTS"),
             "a dependency the target links contributes: {linux:?}"
         );
+    }
+
+    /// A Linux or Windows build of an application that opens a scheme or a
+    /// file type is refused unless the graph links `flui-native` with
+    /// `single-instance`; an application that opens nothing, and every other
+    /// target, builds.
+    #[test]
+    fn a_desktop_that_opens_links_needs_one_instance() {
+        let project = fixture(&[
+            (
+                "app",
+                &manifest(
+                    "app",
+                    "[workspace]\n[features]\none = [\"flui/single-instance\"]\n\
+                     [dependencies]\nflui = { path = \"../flui\" }\n\
+                     [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n\
+                     [[package.metadata.flui.declares.file-types]]\n\
+                     extension = \"note\"\nmime = \"application/x-notes-note\"\nname = \"Note\"\n",
+                ),
+            ),
+            (
+                "quiet",
+                &manifest(
+                    "quiet",
+                    "[workspace]\n[dependencies]\nflui = { path = \"../flui\" }\n",
+                ),
+            ),
+            (
+                "flui",
+                &manifest(
+                    "flui",
+                    "[features]\nsingle-instance = [\"flui-native/single-instance\"]\n\
+                     [dependencies]\nflui-native = { path = \"../flui-native\" }\n",
+                ),
+            ),
+            (
+                "flui-native",
+                &manifest("flui-native", "[features]\nsingle-instance = []\n"),
+            ),
+        ]);
+        let app = project.path().join("app");
+        let mut failures = Vec::new();
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "aarch64-linux-android",
+            "aarch64-apple-darwin",
+            "wasm32-unknown-unknown",
+        ] {
+            let desktop = (!target.contains("android") && target.contains("-linux-"))
+                || target.contains("-windows-");
+            let off = Declarations::collect(&app, &[target])
+                .expect("declarations")
+                .require_one_instance(target)
+                .map_err(|error| error.to_string());
+            let refused = off.as_ref().is_err_and(|error| {
+                error.contains("`notes:` links, `.note` files")
+                    && error.contains("features = [\"single-instance\"]")
+            });
+            if refused != desktop {
+                failures.push(format!("{target} without the feature: {off:?}"));
+            }
+            let on = Declarations::collect_with_features(&app, &[target], &["one".to_owned()])
+                .expect("declarations")
+                .require_one_instance(target);
+            if on.is_err() {
+                failures.push(format!("{target} with the feature: {on:?}"));
+            }
+            let quiet = Declarations::collect(&project.path().join("quiet"), &[target])
+                .expect("declarations")
+                .require_one_instance(target);
+            if quiet.is_err() {
+                failures.push(format!("{target} opening nothing: {quiet:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     /// A feature the build turns on beyond the defaults, as `flui run --agent`

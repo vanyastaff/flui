@@ -310,3 +310,63 @@ fn a_worker_project_refuses_a_floor_flui_cannot_honour() {
         "nothing is built before the refusal"
     );
 }
+
+/// On a Linux or Windows desktop an application that opens links or files
+/// is refused before it is built unless flui keeps one instance of it; with
+/// the feature on it builds and runs.
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn a_desktop_run_that_opens_links_needs_one_instance() {
+    let tmp = TempDir::new().expect("fixture");
+    let root = tmp.path();
+    package(
+        &root.join("flui-native"),
+        "flui-native",
+        "[features]\nsingle-instance = []\n",
+    );
+    std::fs::write(root.join("flui-native/src/lib.rs"), "").expect("native library");
+    package(
+        &root.join("facade"),
+        "flui",
+        "[features]\nsingle-instance = [\"flui-native/single-instance\"]\n\
+         [dependencies]\nflui-native = { path = \"../flui-native\" }\n",
+    );
+    std::fs::write(root.join("facade/src/lib.rs"), "").expect("facade identity");
+    let app = root.join("app");
+    std::fs::create_dir_all(&app).expect("application directory");
+    std::fs::write(
+        app.join("flui.toml"),
+        "[app]\nname = \"app\"\nversion = \"0.1.0\"\nid = \"com.example.app\"\n",
+    )
+    .expect("application config");
+    let mut failures = Vec::new();
+    for (features, runs) in [("", false), (", features = [\"single-instance\"]", true)] {
+        package(
+            &app,
+            "app",
+            &format!(
+                "[workspace]\n[dependencies]\nflui = {{ path = \"../facade\"{features} }}\n\
+                 [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n"
+            ),
+        );
+        let output = run(&app)
+            .timeout(std::time::Duration::from_secs(120))
+            .output()
+            .expect("CLI");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let built = app
+            .join("target/release")
+            .join(format!("app{}", std::env::consts::EXE_SUFFIX))
+            .exists();
+        let refused = stderr.contains("`notes:` links")
+            && stderr.contains("features = [\"single-instance\"]");
+        if output.status.success() != runs || built != runs || refused == runs {
+            failures.push(format!(
+                "features `{features}`: {:?}\nstdout: {stdout}\nstderr: {stderr}",
+                output.status
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
