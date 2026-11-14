@@ -105,6 +105,7 @@ pub fn flui::Application::on_open_files(self, callback: impl Fn(&[flui::platform
 pub fn flui::Application::on_ready(self, callback: impl FnOnce(&flui::AppHandle) + 'static) -> Self
 pub fn flui::Application::on_window_error(self, callback: impl FnMut(&flui::AppWindowError) + 'static) -> Self
 pub fn flui::Application::plugin(self, plugin: impl flui::platform::capability::Plugin) -> Self
+pub fn flui::Application::register_links(self, register_links: bool) -> Self
 pub fn flui::Application::run<V>(self, root: V) -> Result<(), flui::LaunchError> where V: flui::prelude::View + Clone + 'static
 pub fn flui::Application::run_resident<V, F>(self, factory: F) -> Result<(), flui::LaunchError> where V: flui::prelude::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
 pub fn flui::Application::single_instance(self, single_instance: bool) -> Self

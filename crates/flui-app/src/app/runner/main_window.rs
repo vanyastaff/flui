@@ -763,9 +763,27 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
+    // An uninstaller's run removes the registration and starts nothing,
+    // before a running instance could be handed the launch.
+    #[cfg(windows)]
+    if let Some(unregistered) =
+        super::link_registration::unregister_if_requested(&application.config.application_identity)
+    {
+        return unregistered;
+    }
     let single = application
         .opening
         .single_instance_id(&application.config.application_identity);
+    // Held for the main window's first frame; a launch the running instance
+    // takes drops it, so only the instance that runs registers.
+    #[cfg(windows)]
+    {
+        let pending = super::link_registration::PendingRegistration::of(
+            &application.opening,
+            &application.config.application_identity,
+        );
+        APP_RUNTIME.with(|slot| slot.borrow_mut().pending_registration = pending);
+    }
     let started = start_or_forward(
         application,
         move || {

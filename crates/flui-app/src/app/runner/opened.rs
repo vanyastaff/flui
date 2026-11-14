@@ -41,6 +41,9 @@ pub(crate) struct OpenSettings {
     /// the declarations.
     #[cfg(feature = "single-instance")]
     pub(crate) single_instance: Option<bool>,
+    /// Whether an unpackaged Windows run registers its URL schemes; `None`
+    /// leaves it to the build (`link_registration`).
+    pub(crate) register_links: Option<bool>,
 }
 
 impl OpenSettings {
@@ -118,6 +121,7 @@ impl std::fmt::Debug for OpenSettings {
             .field("on_open_files", &self.on_open_files.is_some());
         #[cfg(feature = "single-instance")]
         debug.field("single_instance", &self.single_instance);
+        debug.field("register_links", &self.register_links);
         debug.finish()
     }
 }

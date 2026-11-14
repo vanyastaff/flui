@@ -152,6 +152,24 @@ impl Application {
         self
     }
 
+    /// Whether the application registers the URL schemes it declares with
+    /// Windows as it runs, so a link launches the executable that runs. Each
+    /// scheme becomes a key of the user's classes marked with the
+    /// application id
+    /// ([`AppConfig::application_identity`](crate::AppConfig::application_identity)),
+    /// written after the first frame; a key another application owns is
+    /// never touched. Without this, a release build registers and a
+    /// development build registers only under `flui run --register-links`.
+    ///
+    /// An uninstaller removes the keys by running the executable with
+    /// `--flui-unregister-links`. A packaged (MSIX) application registers
+    /// through its package manifest instead, and other systems register
+    /// through what `flui build` writes: there it does nothing.
+    pub fn register_links(mut self, register_links: bool) -> Self {
+        self.opening.register_links = Some(register_links);
+        self
+    }
+
     /// Run `root` in the main window until the application quits.
     ///
     /// On the desktop it drives the native event loop and returns after

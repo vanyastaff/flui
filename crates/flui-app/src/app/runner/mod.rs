@@ -34,6 +34,8 @@ mod host;
 mod installed_host;
 #[cfg(target_os = "ios")]
 pub(super) mod ios;
+#[cfg(any(windows, test))]
+mod link_registration;
 mod native_bindings;
 #[cfg(native_journal)]
 pub(super) mod native_journal;
@@ -79,6 +81,8 @@ pub(crate) use host::{
 pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
 use ios::run_ios;
+#[cfg(windows)]
+pub(in crate::app) use link_registration::PendingRegistration;
 pub(crate) use opened::OpenSettings;
 #[cfg(all(
     not(target_os = "android"),

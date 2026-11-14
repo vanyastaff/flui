@@ -220,6 +220,13 @@ pub use input::event_timestamp_ns;
 #[doc(hidden)]
 pub mod journal;
 mod lifecycle;
+// An unpackaged Windows application's registration of its URL schemes
+// (ADR-0307 §4), which `flui-app` runs after the first frame; its rules run
+// in the tests of every host.
+#[cfg(windows)]
+pub mod link_registration;
+#[cfg(all(test, not(windows)))]
+mod link_registration;
 pub mod os;
 // A page's script connections to the application, and the page's timer: the
 // web's development-agent endpoint (ADR-0288 §6).
