@@ -107,6 +107,7 @@ pub fn flui::Application::on_window_error(self, callback: impl FnMut(&flui::AppW
 pub fn flui::Application::plugin(self, plugin: impl flui::platform::capability::Plugin) -> Self
 pub fn flui::Application::run<V>(self, root: V) -> Result<(), flui::LaunchError> where V: flui::prelude::View + Clone + 'static
 pub fn flui::Application::run_resident<V, F>(self, factory: F) -> Result<(), flui::LaunchError> where V: flui::prelude::View + Clone + 'static, F: FnMut(&flui::AppHandle) -> V + 'static
+pub fn flui::Application::single_instance(self, single_instance: bool) -> Self
 #[non_exhaustive] pub struct flui::BackendFailure
 field flui::BackendFailure::backend: flui::GpuBackend // at 0
 field flui::BackendFailure::reason: String // at 1
@@ -25293,6 +25294,7 @@ impl PartialEq for flui::view::navigation::LinkDeclarations
 impl core::fmt::Debug for flui::view::navigation::LinkDeclarations
 impl core::marker::StructuralPartialEq for flui::view::navigation::LinkDeclarations
 pub const fn flui::view::navigation::LinkDeclarations::associated_domains(self, associated_domains: &'static [&'static str]) -> Self
+pub const fn flui::view::navigation::LinkDeclarations::declared_url_schemes(&self) -> &'static [&'static str]
 pub const fn flui::view::navigation::LinkDeclarations::new() -> Self
 pub const fn flui::view::navigation::LinkDeclarations::url_schemes(self, url_schemes: &'static [&'static str]) -> Self
 pub fn flui::view::navigation::LinkDeclarations::admit(&self, url: &flui::view::navigation::OpenedUrl) -> Result<(), flui::view::navigation::OpenUrlRefused>

@@ -763,21 +763,56 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
-    run_with_platform_factory(application, || {
-        let host = flui_native::current_host().map_err(LaunchError::from_platform)?;
-        // Before the platform, whose registries report only to a capture already installed.
-        super::begin_native_journal(host.backend());
-        start_host(host)
-    })
+    let single = application
+        .opening
+        .single_instance_id(&application.config.application_identity);
+    let started = start_or_forward(
+        application,
+        move || {
+            let host = flui_native::current_host().map_err(LaunchError::from_platform)?;
+            // Before the platform, whose registries report only to a capture already installed.
+            super::begin_native_journal(host.backend());
+            start_host(host, single.as_deref())
+        },
+        Rc::default(),
+        RasterFactory::Gpu,
+    )?;
+    started.map_or(Ok(()), StartedLoop::finish)
 }
 
-/// Start `host`. The Wayland and X11 hosts run their IO sources (XIM, IBus,
-/// logind, the settings portal) on the application's IO runtime, so a
+/// Start `host`, as one instance named `single` when it is given
+/// ([`CurrentHost::start_single`](flui_native::CurrentHost::start_single)).
+/// The Wayland and X11 hosts run their IO sources (XIM, IBus, logind, the
+/// settings portal, the session bus) on the application's IO runtime, so a
 /// process runs one (ADR-0327 §3); every other host, and an application that
 /// brought its own executors, starts on the host's own.
 fn start_host(
     host: flui_native::CurrentHost,
-) -> Result<Box<dyn flui_native::Platform>, LaunchError> {
+    single: Option<&str>,
+) -> Result<flui_native::HostStart, LaunchError> {
+    let executor = host_executor(host)?.unwrap_or_else(flui_native::NativeExecutor::own);
+    let started = match single {
+        Some(app_id) => host.start_single(executor, app_id),
+        None => host
+            .start_with(executor)
+            .map(flui_native::HostStart::Started),
+    };
+    started.map_err(LaunchError::from_platform)
+}
+
+/// The executor `host` runs its IO on: the application's IO runtime for the
+/// Wayland and X11 hosts, when the application has one; `None` for the host's
+/// own.
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "only the Linux hosts take the application's IO runtime, which can fail to start"
+    )
+)]
+fn host_executor(
+    host: flui_native::CurrentHost,
+) -> Result<Option<flui_native::NativeExecutor>, LaunchError> {
     #[cfg(target_os = "linux")]
     if matches!(
         host,
@@ -789,13 +824,10 @@ fn start_host(
             .map_err(|error| LaunchError::Platform {
                 source: Arc::new(error),
             })?;
-        if let Some(runtime) = runtime {
-            return host
-                .start_with(flui_native::NativeExecutor::from_tokio(runtime))
-                .map_err(LaunchError::from_platform);
-        }
+        return Ok(runtime.map(flui_native::NativeExecutor::from_tokio));
     }
-    host.start().map_err(LaunchError::from_platform)
+    let _ = host;
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -810,6 +842,7 @@ where
     run_with_platform_factory(application, || Ok(platform))
 }
 
+#[cfg(test)]
 fn run_with_platform_factory<V, F>(
     application: DesktopRun<V, F>,
     platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, LaunchError>,
@@ -886,12 +919,35 @@ impl StartedLoop {
 /// [`Platform::run`](flui_native::Platform::run) returns, writing each
 /// teardown step that ends to `teardown_log`, on unwind too. Its windows
 /// render with what `renderers` builds.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) fn start_loop<V, F>(
-    mut application: DesktopRun<V, F>,
+    application: DesktopRun<V, F>,
     platform: impl FnOnce() -> Result<Box<dyn flui_native::Platform>, LaunchError>,
     teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
     renderers: RasterFactory,
 ) -> Result<StartedLoop, LaunchError>
+where
+    V: View + Clone + 'static,
+    F: FnMut(&AppHandle) -> V + 'static,
+{
+    let started = start_or_forward(
+        application,
+        || platform().map(flui_native::HostStart::Started),
+        teardown_log,
+        renderers,
+    )?;
+    Ok(started.expect("BUG: a platform the factory made starts a loop"))
+}
+
+/// [`start_loop`] on the host `platform` starts, or `None` when the
+/// application runs as one instance and another process of it took this
+/// launch: nothing started, and the services the start installed are down.
+fn start_or_forward<V, F>(
+    mut application: DesktopRun<V, F>,
+    platform: impl FnOnce() -> Result<flui_native::HostStart, LaunchError>,
+    teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
+    renderers: RasterFactory,
+) -> Result<Option<StartedLoop>, LaunchError>
 where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
@@ -913,7 +969,12 @@ where
     if let Some(executors) = application.config.executors.clone() {
         APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(executors));
     }
-    let platform = platform()?;
+    let platform = match platform()? {
+        flui_native::HostStart::Started(platform) => platform,
+        // The running instance took the launch; the guard takes the services
+        // down as for a refused start.
+        flui_native::HostStart::Forwarded => return Ok(None),
+    };
     startup.disarm();
     let fatal = Rc::new(RefCell::new(None));
     let disconnect = Arc::new(Disconnect::default());
@@ -1083,14 +1144,14 @@ where
         super::terminal::hold_terminal(payload, "platform loop");
         Ok(())
     });
-    Ok(StartedLoop {
+    Ok(Some(StartedLoop {
         teardown,
         owner_guard,
         watchdog,
         fatal,
         result,
         disconnect,
-    })
+    }))
 }
 
 #[cfg(test)]

@@ -1072,12 +1072,19 @@ impl X11Window {
     /// (`_NET_ACTIVE_WINDOW`, which also raises it), else from the server
     /// directly.
     fn activate(&self) {
+        self.activate_at(x11rb::CURRENT_TIME);
+    }
+
+    /// [`activate`](Self::activate) at `time`, the server time of the user
+    /// action that asked for it: a window manager that prevents focus
+    /// stealing compares it with the user's last input.
+    fn activate_at(&self, time: u32) {
         if self.support().managed {
             self.send_to_root(ClientMessageEvent::new(
                 32,
                 self.xid,
                 self.atoms.net_active_window,
-                [SOURCE_APPLICATION, x11rb::CURRENT_TIME, 0, 0, 0],
+                [SOURCE_APPLICATION, time, 0, 0, 0],
             ));
             return;
         }
@@ -1087,7 +1094,7 @@ impl X11Window {
         );
         let focused = self
             .xcb()
-            .set_input_focus(InputFocus::PARENT, self.xid, x11rb::CURRENT_TIME);
+            .set_input_focus(InputFocus::PARENT, self.xid, time);
         if let Err(error) = raised.and(focused) {
             tracing::debug!(%error, "cannot focus an X11 window");
         }
@@ -2138,6 +2145,21 @@ impl LoopWindows for X11Windows {
         };
         for window in windows {
             window.release();
+        }
+    }
+
+    /// The window that has the focus comes forward, else any open one.
+    fn activate_forwarded(&self, token: Option<&str>) {
+        let windows = self.open_windows();
+        let window = windows
+            .iter()
+            .find(|window| !window.closed.get() && PlatformWindow::state(&***window).focused)
+            .or_else(|| windows.iter().find(|window| !window.closed.get()));
+        if let Some(window) = window {
+            let time = token
+                .and_then(crate::owner::linux::single_instance::startup_time)
+                .unwrap_or(x11rb::CURRENT_TIME);
+            window.activate_at(time);
         }
     }
 }

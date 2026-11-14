@@ -37,6 +37,9 @@ pub(crate) struct OpenSettings {
     pub(crate) declarations: Option<LinkDeclarations>,
     /// Where its opened files go.
     pub(crate) on_open_files: Option<OpenFilesCallback>,
+    /// Whether the application runs as one instance; `None` leaves it to
+    /// the declarations.
+    pub(crate) single_instance: Option<bool>,
 }
 
 impl OpenSettings {
@@ -51,6 +54,33 @@ impl OpenSettings {
         }
         self
     }
+
+    /// The application id the run keeps one instance under: when the
+    /// application asked for one instance, or, without
+    /// [`single_instance`](crate::Application::single_instance), declared a
+    /// URL scheme, whose links a second launch would otherwise open in a
+    /// second process. `None` without an application id in `identity`,
+    /// which is warned about: the bus name and the pipe are named by it.
+    pub(crate) fn single_instance_id(&self, identity: &flui_log::AppIdentity) -> Option<String> {
+        let declared = self
+            .declarations
+            .is_some_and(|declarations| !declarations.declared_url_schemes().is_empty());
+        // Only the Linux hosts keep one instance yet; macOS, iOS and Android
+        // keep one themselves, and each page on the Web is an application of
+        // its own.
+        let kept_here = cfg!(target_os = "linux");
+        if !kept_here || !self.single_instance.unwrap_or(declared) {
+            return None;
+        }
+        let app_id = identity.app_id().map(|app_id| app_id.as_str().to_owned());
+        if app_id.is_none() {
+            tracing::warn!(
+                "one instance needs an application id (`AppConfig::application_identity`): \
+                 the application runs as many instances as it is launched"
+            );
+        }
+        app_id
+    }
 }
 
 impl std::fmt::Debug for OpenSettings {
@@ -58,6 +88,7 @@ impl std::fmt::Debug for OpenSettings {
         f.debug_struct("OpenSettings")
             .field("declarations", &self.declarations)
             .field("on_open_files", &self.on_open_files.is_some())
+            .field("single_instance", &self.single_instance)
             .finish()
     }
 }
@@ -298,5 +329,54 @@ fn open_urls(
                 tracing::warn!(?address, %error, "an opened URL could not reach its window");
             }
         });
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use flui_log::{AppId, AppIdentity};
+    use flui_view::navigation::LinkDeclarations;
+
+    use super::OpenSettings;
+
+    /// One instance is kept under the application id when the application
+    /// declares a URL scheme or asks for it, and not when it turns it off,
+    /// declares only web domains, or has no id.
+    #[test]
+    fn one_instance_follows_the_declarations_unless_the_application_says() {
+        let named = AppIdentity::try_new("Notes")
+            .expect("a display name")
+            .with_app_id(AppId::try_new("com.example.Notes").expect("an id"));
+        let unnamed = AppIdentity::try_new("Notes").expect("a display name");
+        let settings =
+            |declarations: Option<LinkDeclarations>, single: Option<bool>| OpenSettings {
+                declarations,
+                single_instance: single,
+                ..OpenSettings::default()
+            };
+        let scheme = Some(LinkDeclarations::new().url_schemes(&["notes"]));
+        let domain = Some(LinkDeclarations::new().associated_domains(&["example.com"]));
+        let id = Some("com.example.Notes".to_owned());
+        let cases = [
+            (
+                "a declared scheme",
+                settings(scheme, None),
+                &named,
+                id.clone(),
+            ),
+            ("turned off", settings(scheme, Some(false)), &named, None),
+            ("asked for", settings(None, Some(true)), &named, id),
+            ("domains only", settings(domain, None), &named, None),
+            ("nothing declared", settings(None, None), &named, None),
+            (
+                "no application id",
+                settings(scheme, Some(true)),
+                &unnamed,
+                None,
+            ),
+        ];
+        for (case, settings, identity, expected) in cases {
+            assert_eq!(settings.single_instance_id(identity), expected, "{case}");
+        }
     }
 }

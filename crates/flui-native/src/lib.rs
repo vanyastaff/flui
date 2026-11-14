@@ -573,6 +573,29 @@ pub fn current_host() -> Result<CurrentHost, PlatformError> {
     }
 }
 
+/// What [`CurrentHost::start_single`] found: this process is the application's one instance and
+/// its host started, or another process is and took this launch.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a launch either starts its host or hands itself to the running instance"
+)]
+pub enum HostStart {
+    /// This process is the application's instance: its host started.
+    Started(Box<dyn Platform>),
+    /// Another process of the application runs in this user session and took what this launch
+    /// opens: this process starts no host and ends, as GApplication's second instance does.
+    Forwarded,
+}
+
+impl std::fmt::Debug for HostStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Started(platform) => f.debug_tuple("Started").field(&platform.name()).finish(),
+            Self::Forwarded => f.write_str("Forwarded"),
+        }
+    }
+}
+
 impl CurrentHost {
     /// Starts this host on a runtime of its own ([`NativeExecutor::own`]), for a host started
     /// without an application: tests, headless, tools.
@@ -584,7 +607,7 @@ impl CurrentHost {
     pub fn start(self) -> Result<Box<dyn Platform>, PlatformError> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.launch(NativeExecutor::own())
+            self.launch(NativeExecutor::own(), None)
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -602,7 +625,68 @@ impl CurrentHost {
     /// connection to the display server).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn start_with(self, executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
-        self.launch(executor)
+        self.launch(executor, None)
+    }
+
+    /// Starts this host, as [`start_with`](Self::start_with) does, for an application that runs
+    /// as one instance per user session, named by `app_id` (reverse DNS, `com.example.Notes`).
+    ///
+    /// On Wayland and X11 the first process owns `app_id` on the session bus and serves
+    /// `org.freedesktop.Application` there, as GApplication does: a later launch hands it what
+    /// it opens, as [`Launch::Running`](flui_platform::Launch::Running), with its launcher's
+    /// activation token, and ends ([`HostStart::Forwarded`]). An `app_id` that is not in reverse
+    /// DNS, or a session without a bus, is warned about and the host starts as an instance of
+    /// its own, so the launch is never lost. macOS, iOS and Android keep one instance
+    /// themselves, and each page on the Web is an application of its own: there the host starts
+    /// as [`start_with`](Self::start_with) starts it.
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError::Init`] when the host fails to start, as [`start_with`](Self::start_with).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_single(
+        self,
+        executor: NativeExecutor,
+        app_id: &str,
+    ) -> Result<HostStart, PlatformError> {
+        #[cfg(any(x11_host, wayland_host))]
+        if matches!(self, Self::Wayland | Self::X11) {
+            use owner::linux::single_instance::{self, Claim, Forwarded};
+
+            let Some(bus_name) = single_instance::bus_name(app_id) else {
+                tracing::warn!(
+                    app_id,
+                    "the application id is not in reverse DNS: it runs as many instances as it is launched"
+                );
+                return self.launch(executor, None).map(HostStart::Started);
+            };
+            let launch = Forwarded::of_launch(
+                owner::launch_arguments::launched_by(owner::launch_arguments::process_arguments()),
+                single_instance::launch_token(
+                    std::env::var_os("XDG_ACTIVATION_TOKEN"),
+                    std::env::var_os("DESKTOP_STARTUP_ID"),
+                ),
+            );
+            return match single_instance::claim(&executor, None, bus_name, launch) {
+                Ok(Claim::First(instance)) => self
+                    .launch(executor, Some(instance))
+                    .map(HostStart::Started),
+                Ok(Claim::Forwarded) => {
+                    tracing::info!(bus_name, "another instance took this launch");
+                    Ok(HostStart::Forwarded)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        bus_name,
+                        "the session bus cannot keep one instance: this one runs on its own"
+                    );
+                    self.launch(executor, None).map(HostStart::Started)
+                }
+            };
+        }
+        let _ = app_id;
+        self.launch(executor, None).map(HostStart::Started)
     }
 
     /// The host, built on `executor` where it runs IO. The browser host has no
@@ -614,9 +698,10 @@ impl CurrentHost {
     fn launch(
         self,
         #[cfg(not(target_arch = "wasm32"))] executor: NativeExecutor,
+        #[cfg(not(target_arch = "wasm32"))] instance: Option<InstanceClaim>,
     ) -> Result<Box<dyn Platform>, PlatformError> {
         #[cfg(not(any(target_os = "linux", target_arch = "wasm32")))]
-        let _ = executor;
+        let _ = (executor, instance);
         match self {
             Self::Headless => Ok(Box::new(HeadlessPlatform::new())),
             #[cfg(windows)]
@@ -626,9 +711,9 @@ impl CurrentHost {
             #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
             Self::Wayland | Self::X11 => {
                 let platform = if self == Self::Wayland {
-                    start_wayland(executor)
+                    start_wayland(executor, instance)
                 } else {
-                    start_x11(executor)
+                    start_x11(executor, instance)
                 }?;
                 tracing::info!(host = platform.name(), "the session's native host started");
                 Ok(platform)
@@ -697,15 +782,30 @@ impl CurrentHost {
     }
 }
 
+/// The name a Linux host's process owns on the session bus while it is its application's one
+/// instance ([`CurrentHost::start_single`]).
+#[cfg(any(x11_host, wayland_host))]
+type InstanceClaim = owner::linux::single_instance::FirstInstance;
+
+/// No host of this build keeps one instance itself.
+#[cfg(not(any(x11_host, wayland_host, target_arch = "wasm32")))]
+type InstanceClaim = std::convert::Infallible;
+
 /// The native Wayland host, as [`current_platform`] starts it.
 #[cfg(all(target_os = "linux", feature = "wayland"))]
-fn start_wayland(executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(WaylandPlatform::try_new_with(executor)?))
+fn start_wayland(
+    executor: NativeExecutor,
+    instance: Option<InstanceClaim>,
+) -> Result<Box<dyn Platform>, PlatformError> {
+    Ok(Box::new(WaylandPlatform::try_new_with(executor, instance)?))
 }
 
 /// A build without the Wayland host never chooses it.
 #[cfg(all(target_os = "linux", not(feature = "wayland")))]
-fn start_wayland(_executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
+fn start_wayland(
+    _executor: NativeExecutor,
+    _instance: Option<InstanceClaim>,
+) -> Result<Box<dyn Platform>, PlatformError> {
     Err(PlatformError::Init {
         message: "the Wayland host is not built".to_owned(),
     })
@@ -713,13 +813,19 @@ fn start_wayland(_executor: NativeExecutor) -> Result<Box<dyn Platform>, Platfor
 
 /// The native X11 host, as [`current_platform`] starts it.
 #[cfg(x11_host)]
-fn start_x11(executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(X11Platform::try_new_with(executor)?))
+fn start_x11(
+    executor: NativeExecutor,
+    instance: Option<InstanceClaim>,
+) -> Result<Box<dyn Platform>, PlatformError> {
+    Ok(Box::new(X11Platform::try_new_with(executor, instance)?))
 }
 
 /// A build without the X11 host never chooses it.
 #[cfg(all(target_os = "linux", not(feature = "x11")))]
-fn start_x11(_executor: NativeExecutor) -> Result<Box<dyn Platform>, PlatformError> {
+fn start_x11(
+    _executor: NativeExecutor,
+    _instance: Option<InstanceClaim>,
+) -> Result<Box<dyn Platform>, PlatformError> {
     Err(PlatformError::Init {
         message: "the X11 host is not built".to_owned(),
     })

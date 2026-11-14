@@ -8,6 +8,7 @@
 //! hooks here, which each host's table fills, and names no feature
 //! (ADR-0151 §10).
 
+pub(crate) mod single_instance;
 #[cfg(any(wayland_host, test))]
 pub(crate) mod wayland;
 #[cfg(x11_host)]
