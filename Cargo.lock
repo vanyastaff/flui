@@ -240,7 +240,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -251,7 +251,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -982,7 +982,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1373,7 +1373,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1633,7 +1633,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1769,7 +1769,7 @@ dependencies = [
  "flui-painting",
  "flui-platform",
  "flui-testing",
- "parking_lot",
+ "parking_lot 0.13.0",
  "proptest",
  "serde",
  "serde_json",
@@ -1807,7 +1807,7 @@ dependencies = [
  "flui-view",
  "flui-widgets",
  "interprocess",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pollster",
  "raw-window-handle",
  "rustc-hash 2.1.3",
@@ -1833,7 +1833,7 @@ dependencies = [
  "image",
  "lru",
  "moka",
- "parking_lot",
+ "parking_lot 0.13.0",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -1931,7 +1931,7 @@ dependencies = [
  "flui-scheduler",
  "flui-sdk",
  "flui-testing",
- "parking_lot",
+ "parking_lot 0.13.0",
  "serde",
  "serde_json",
  "tracing",
@@ -1956,7 +1956,7 @@ dependencies = [
  "glam",
  "image",
  "lyon",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pollster",
  "raw-window-handle",
  "regex",
@@ -2007,7 +2007,7 @@ dependencies = [
  "flui-sdk",
  "image",
  "libc",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pollster",
  "tracing",
  "tracing-subscriber",
@@ -2033,7 +2033,7 @@ dependencies = [
  "flui-painting",
  "flui-platform",
  "flui-testing",
- "parking_lot",
+ "parking_lot 0.13.0",
  "proptest",
  "serde",
  "slab",
@@ -2054,7 +2054,7 @@ dependencies = [
  "flui-foundation",
  "flui-layer",
  "flui-painting",
- "parking_lot",
+ "parking_lot 0.13.0",
  "proptest",
  "smallvec",
  "thiserror 2.0.21",
@@ -2145,7 +2145,7 @@ dependencies = [
  "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
  "objc2-ui-kit 0.3.2",
- "parking_lot",
+ "parking_lot 0.13.0",
  "proptest",
  "raw-window-handle",
  "roxmltree",
@@ -2194,7 +2194,7 @@ dependencies = [
  "flui-painting",
  "flui-rendering",
  "insta",
- "parking_lot",
+ "parking_lot 0.13.0",
  "serde",
  "static_assertions",
  "thiserror 2.0.21",
@@ -2290,7 +2290,7 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
- "parking_lot",
+ "parking_lot 0.13.0",
  "proptest",
  "rustc-hash 2.1.3",
  "serde",
@@ -2324,7 +2324,7 @@ dependencies = [
  "flui-view",
  "flui-widgets",
  "libfuzzer-sys",
- "parking_lot",
+ "parking_lot 0.13.0",
  "proptest",
  "serde",
  "serde_json",
@@ -2347,7 +2347,7 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-testing",
- "parking_lot",
+ "parking_lot 0.13.0",
  "serde",
  "static_assertions",
  "thiserror 2.0.21",
@@ -2384,7 +2384,7 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-protocol",
- "parking_lot",
+ "parking_lot 0.13.0",
  "rustc-hash 2.1.3",
  "serde_json",
  "slab",
@@ -2431,7 +2431,7 @@ dependencies = [
  "flui-semantics",
  "flui-view",
  "flui-widgets",
- "parking_lot",
+ "parking_lot 0.13.0",
  "raw-window-handle",
  "rustc-hash 2.1.3",
  "serde",
@@ -2461,7 +2461,7 @@ dependencies = [
  "flui-testing",
  "flui-view",
  "futures-core",
- "parking_lot",
+ "parking_lot 0.13.0",
  "percent-encoding",
  "proptest",
  "rustc-hash 2.1.3",
@@ -2514,7 +2514,7 @@ dependencies = [
  "flui-view",
  "flui-widgets",
  "futures-core",
- "parking_lot",
+ "parking_lot 0.13.0",
  "proptest",
  "smallvec",
  "static_assertions",
@@ -3011,7 +3011,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -3670,6 +3670,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lock_api"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3875,7 +3884,7 @@ dependencies = [
  "equivalent",
  "event-listener",
  "futures-util",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "smallvec",
  "tagptr",
@@ -4065,7 +4074,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4678,8 +4687,18 @@ version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
- "lock_api",
- "parking_lot_core",
+ "lock_api 0.4.14",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226"
+dependencies = [
+ "lock_api 0.5.0",
+ "parking_lot_core 0.10.0",
 ]
 
 [[package]]
@@ -4690,7 +4709,19 @@ checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall",
+ "redox_syscall 0.5.18",
+ "smallvec",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826"
+dependencies = [
+ "libc",
+ "redox_syscall 0.9.5",
  "smallvec",
  "windows-link 0.2.1",
 ]
@@ -5166,6 +5197,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_syscall"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
 name = "redox_users"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5332,7 +5372,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5389,7 +5429,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5601,7 +5641,7 @@ dependencies = [
  "futures-util",
  "log",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serial_test_derive",
 ]
 
@@ -5760,7 +5800,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5788,7 +5828,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5921,7 +5961,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6251,7 +6291,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6798,7 +6838,7 @@ dependencies = [
  "naga",
  "naga-types",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
@@ -6885,7 +6925,7 @@ dependencies = [
  "objc2-quartz-core 0.3.2",
  "once_cell",
  "ordered-float",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "portable-atomic-util",
  "profiling",
@@ -6922,7 +6962,7 @@ version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a15a635a2a2ec0b9787589f17dbbffaa7960e779bcf0348a67f73c3e7665f9eb"
 dependencies = [
- "parking_lot",
+ "parking_lot 0.12.5",
  "thiserror 2.0.21",
  "wgpu",
 ]
@@ -7042,7 +7082,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
