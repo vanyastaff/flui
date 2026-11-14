@@ -223,6 +223,10 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Scratch memory a walk lists into while it runs, reset as the next walk that uses it
     /// begins (ADR-0328). The semantics assembly takes its fragment lists from it.
     frame_arena: flui_foundation::arena::FrameArena,
+    /// What a walk builds that outlives the level that built it, until the walk hands it on:
+    /// the semantics assembly's built nodes. Kept apart from [`Self::frame_arena`] so each frees
+    /// in the reverse order it allocates and reuses its memory within the walk (ADR-0328 §1).
+    built_arena: flui_foundation::arena::FrameArena,
 
     /// Semantics diagnostics the frame driver has not yet reported, moved
     /// here from the semantics owner after each flush so a disposed or
@@ -449,6 +453,7 @@ where
         semantics_owner: from.semantics_owner,
         semantics_regions: from.semantics_regions,
         frame_arena: from.frame_arena,
+        built_arena: from.built_arena,
         semantics_diagnostics: from.semantics_diagnostics,
         assistive_focus: from.assistive_focus,
         #[cfg(any(test, feature = "testing"))]

@@ -129,8 +129,10 @@ impl PipelineOwner<Semantics> {
 
     /// The body of [`Self::run_semantics`], entered with the phase set.
     fn run_semantics_in_phase(&mut self) -> crate::error::RenderResult<()> {
-        // The last pass's scratch lists are gone with its regions; this one starts empty.
+        // The last pass's scratch lists and built nodes are gone with its regions; this one
+        // starts empty.
         self.frame_arena.reset();
+        self.built_arena.reset();
         let mut callbacks = AssemblyCallbacks::default();
         // The rebuild check's own retained handlers, retired with the pass's.
         #[cfg_attr(
@@ -172,6 +174,7 @@ impl PipelineOwner<Semantics> {
                 // cannot partially commit an earlier subtree.
                 let mut regions = AssemblyRegions::reusing(
                     &self.frame_arena,
+                    &self.built_arena,
                     std::mem::take(&mut self.semantics_regions.visited),
                 );
                 if !tree_is_empty {
@@ -242,7 +245,7 @@ impl PipelineOwner<Semantics> {
                         assemble_semantics_root(&self.render_tree, self.root_id, &mut regions).map(
                             |root| {
                                 SemanticsPlan::Rebuild(
-                                    root.map(|root| Box::new_in(root, &self.frame_arena)),
+                                    root.map(|root| Box::new_in(root, &self.built_arena)),
                                 )
                             },
                         )
@@ -418,8 +421,12 @@ pub(super) struct RegionIdentities {
 }
 
 struct AssemblyRegions<'f> {
-    /// Where the pass's scratch lists come from (ADR-0328).
+    /// Where the pass's scratch lists come from (ADR-0328): each is freed before the level
+    /// that listed it returns.
     arena: &'f FrameArena,
+    /// Where the child lists of the nodes the pass builds come from: they outlive the level
+    /// that built them, and in [`Self::arena`] would sit above every list freed after them.
+    built: &'f FrameArena,
     /// The render nodes this pass walked, in the table the previous pass grew:
     /// emptying it writes its control bytes, which costs less than regrowing.
     visited: FxHashSet<RenderId>,
@@ -430,12 +437,17 @@ struct AssemblyRegions<'f> {
 }
 
 impl<'f> AssemblyRegions<'f> {
-    /// Regions for a pass that takes its scratch lists from `arena` and walks into the table
-    /// of `visited`, emptied.
-    fn reusing(arena: &'f FrameArena, mut visited: FxHashSet<RenderId>) -> Self {
+    /// Regions for a pass that takes its scratch lists from `arena`, builds its nodes' child
+    /// lists in `built` and walks into the table of `visited`, emptied.
+    fn reusing(
+        arena: &'f FrameArena,
+        built: &'f FrameArena,
+        mut visited: FxHashSet<RenderId>,
+    ) -> Self {
         visited.clear();
         Self {
             arena,
+            built,
             visited,
             authored: FxHashSet::default(),
             duplicate: None,
@@ -637,7 +649,7 @@ struct BuiltSemanticsNode<'f> {
 
 enum SemanticsPlan<'f> {
     Rebuild(Option<Box<BuiltSemanticsNode<'f>, &'f FrameArena>>),
-    Graft(Vec<(flui_foundation::SemanticsId, BuiltSemanticsNode<'f>)>),
+    Graft(FrameVec<'f, (flui_foundation::SemanticsId, BuiltSemanticsNode<'f>)>),
 }
 
 /// A set an ancestor in the built tree contains, as a member below it sees it.
@@ -1455,6 +1467,7 @@ fn build_semantics_fragments_impl<'f>(
     let children = merge_child_fragments(
         &mut config,
         child_fragments,
+        regions.built,
         decisions.children_merge_into_ancestor,
         decisions.child_context.names_a_control,
     );
@@ -1587,6 +1600,7 @@ fn append_region_fragments<'f>(
 fn merge_child_fragments<'f>(
     config: &mut SemanticsConfiguration,
     mut fragments: FrameVec<'f, SemanticsFragment<'f>>,
+    built: &'f FrameArena,
     suppress_conflicts: bool,
     names_a_control: bool,
 ) -> FrameVec<'f, BuiltSemanticsNode<'f>> {
@@ -1606,7 +1620,8 @@ fn merge_child_fragments<'f>(
     let conflicts = (!suppress_conflicts).then(|| {
         mark_configuration_conflicts(config, &fragments, names_a_control, fragments.allocator())
     });
-    let mut children = Vec::with_capacity_in(fragments.len(), *fragments.allocator());
+    let scratch = *fragments.allocator();
+    let mut children = Vec::with_capacity_in(fragments.len(), built);
 
     for (index, fragment) in fragments.into_iter().enumerate() {
         match fragment {
@@ -1631,7 +1646,11 @@ fn merge_child_fragments<'f>(
     }
 
     if config.makes_document_selections() {
-        in_reading_order(&mut children, config.text_direction().unwrap_or_default());
+        in_reading_order(
+            &mut children,
+            config.text_direction().unwrap_or_default(),
+            scratch,
+        );
     }
     children
 }
@@ -1661,24 +1680,31 @@ fn by_sort_key(
 /// ([`flui_semantics::reading_order`]), so the text a selection reports is
 /// the text the pointer selects. The children of folded-in nodes are ordered
 /// with their new siblings.
-fn in_reading_order(children: &mut FrameVec<'_, BuiltSemanticsNode<'_>>, direction: TextDirection) {
+///
+/// The children stay in their own list; the reordering lists into `scratch`, freed in the
+/// reverse order it allocates.
+fn in_reading_order(
+    children: &mut FrameVec<'_, BuiltSemanticsNode<'_>>,
+    direction: TextDirection,
+    scratch: &FrameArena,
+) {
     children.sort_by(|a, b| by_sort_key(a.config.sort_key(), b.config.sort_key()));
     let keyed = children
         .iter()
         .take_while(|child| child.config.sort_key().is_some())
         .count();
-    let unkeyed = children.split_off(keyed);
-    let arena = *children.allocator();
-    let mut boxes: FrameVec<'_, Rect<f64>> = Vec::with_capacity_in(unkeyed.len(), arena);
-    boxes.extend(unkeyed.iter().map(|child| child.reveal_rect));
+    let unkeyed = children.len() - keyed;
+    let mut boxes: FrameVec<'_, Rect<f64>> = Vec::with_capacity_in(unkeyed, scratch);
+    boxes.extend(children[keyed..].iter().map(|child| child.reveal_rect));
+    let order = flui_semantics::reading_order(&boxes, direction);
     let mut slots: FrameVec<'_, Option<BuiltSemanticsNode<'_>>> =
-        Vec::with_capacity_in(unkeyed.len(), arena);
-    slots.extend(unkeyed.into_iter().map(Some));
-    children.extend(
-        flui_semantics::reading_order(&boxes, direction)
-            .into_iter()
-            .filter_map(|index| slots[index].take()),
-    );
+        Vec::with_capacity_in(unkeyed, scratch);
+    while children.len() > keyed {
+        slots.push(children.pop());
+    }
+    slots.reverse();
+    // Popping kept the list's capacity, so this refills it in place.
+    children.extend(order.into_iter().filter_map(|index| slots[index].take()));
 }
 
 /// What the conflict marking decided for one fragment of a parent.
@@ -1815,7 +1841,7 @@ fn plan_graft_pass<'f>(
     marked: &[RenderId],
     placed: &[RenderId],
     regions: &mut AssemblyRegions<'f>,
-) -> Option<Vec<(flui_foundation::SemanticsId, BuiltSemanticsNode<'f>)>> {
+) -> Option<FrameVec<'f, (flui_foundation::SemanticsId, BuiltSemanticsNode<'f>)>> {
     let pipeline_root = pipeline_root?;
     let marked_set: FxHashSet<RenderId> = marked.iter().copied().collect();
 
@@ -1865,10 +1891,17 @@ fn plan_graft_pass<'f>(
     // rebuild of the same tree.
     survivors.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
-    survivors
-        .into_iter()
-        .map(|(_, anchor)| plan_graft_anchor(tree, pipeline_root, owner, anchor, regions))
-        .collect()
+    let mut grafts = Vec::with_capacity_in(survivors.len(), regions.built);
+    for (_, anchor) in survivors {
+        grafts.push(plan_graft_anchor(
+            tree,
+            pipeline_root,
+            owner,
+            anchor,
+            regions,
+        )?);
+    }
+    Some(grafts)
 }
 
 /// Resolves a placement mark — a node whose subtree moved while no
@@ -2302,7 +2335,8 @@ fn check_placement_against_rebuild(
     identities: &mut RegionIdentities,
 ) -> AssemblyCallbacks {
     let arena = FrameArena::new();
-    let mut regions = AssemblyRegions::reusing(&arena, FxHashSet::default());
+    let built_arena = FrameArena::new();
+    let mut regions = AssemblyRegions::reusing(&arena, &built_arena, FxHashSet::default());
     let announcers: Vec<accesskit::NodeId> =
         identities
             .existing_announcements()
@@ -2317,7 +2351,7 @@ fn check_placement_against_rebuild(
     let Ok(built) = assemble_semantics_root(tree, root, &mut regions) else {
         return std::mem::take(&mut regions.callbacks);
     };
-    let mut plan = SemanticsPlan::Rebuild(built.map(|root| Box::new_in(root, &arena)));
+    let mut plan = SemanticsPlan::Rebuild(built.map(|root| Box::new_in(root, &built_arena)));
     if let SemanticsPlan::Rebuild(Some(root)) = &mut plan {
         reconcile_collections(root);
     }
