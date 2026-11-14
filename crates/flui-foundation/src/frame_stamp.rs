@@ -21,7 +21,7 @@ use crate::id::PresentationAddress;
 ///
 /// A frame's full identity is `(address, epoch)`, never `epoch` alone:
 /// [`FrameEpoch`] counts one UI runtime's frames, so two runtimes stamp the same
-/// epoch on different frames, and a slot sees gaps where other presentations took one —
+/// epoch on different frames —
 /// `address` disambiguates them. `address` is the full `(ui_runtime_id,
 /// presentation_id)` pair — never `presentation_id` alone, since two
 /// different UI runtime incarnations can mint an identical `PresentationId` and

@@ -301,6 +301,11 @@ fn a_subscriber_that_panics_opening_the_submit_span_keeps_the_repaint_owed() {
         ui_runtime.render_frame(&mut succeeding),
         "the lost scene is painted again"
     );
+    assert_eq!(
+        succeeding.epochs,
+        vec![flui_foundation::FrameEpoch::ZERO.next()],
+        "the scene the subscriber stopped before the sink took no epoch"
+    );
 }
 
 /// A withheld frame whose `commit` span fails still records the withholding and arms its retry:
