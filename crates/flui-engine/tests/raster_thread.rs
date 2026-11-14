@@ -18,7 +18,7 @@ use flui_engine::{
 };
 use flui_foundation::{
     FrameEpoch, FrameStamp, ManualClock, PresentationAddress, PresentationId, SurfaceGeneration,
-    UiRuntimeId, geometry::DeviceSize,
+    UiRuntimeId, geometry::DeviceSize, memory::MemoryPressureLevel,
 };
 use flui_layer::{CanvasLayer, DamageRegion, Layer, LayerTree, Scene, SceneSnapshot};
 
@@ -197,9 +197,21 @@ fn a_raster_thread_slot_renders_two_frames_before_the_owner_drains() {
     thread.sender.send(frame(at, 2)).expect("accepted");
     eventually("rendered the second frame undrained", || undrained(2));
     thread.sender.send(frame(at, 3)).expect("accepted");
-    // Time for the thread to turn on the third frame's ring and hold the
-    // frame behind the full ring, so the drain's ring is the only one left.
-    std::thread::sleep(Duration::from_millis(50));
+    // A trim sent after the frame is reclaimed in a turn that started after
+    // the frame was in the inbox; that turn holds the frame behind the full
+    // ring. The pause lets it end, so the drain's ring is the only one left.
+    thread
+        .sender
+        .send(RasterCommand::Trim(MemoryPressureLevel::Moderate))
+        .expect("accepted");
+    eventually("turned after the third frame", || {
+        thread
+            .backend
+            .calls()
+            .iter()
+            .any(|call| matches!(call, SlotCall::Reclaim(_)))
+    });
+    std::thread::sleep(Duration::from_millis(20));
     assert_eq!(
         thread.backend.renders().len(),
         2,
@@ -296,10 +308,17 @@ fn a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline() {
         thread.sender.take_executor_failure(),
         Some(ExecutorFailure::Wedged { waited })
     );
+    let asked = Instant::now();
     assert_eq!(
-        thread.handle.detach(&thread.sender, at.slot, waited),
+        thread
+            .handle
+            .detach(&thread.sender, at.slot, DETACH_DEADLINE),
         Err(ExecutorFailure::Wedged { waited }),
-        "a dead executor answers why at once"
+        "a dead executor answers the cause it died of"
+    );
+    assert!(
+        asked.elapsed() < DETACH_DEADLINE / 2,
+        "a dead executor answers at once"
     );
     let Thread { handle, .. } = thread;
     let dropped = Instant::now();
@@ -360,4 +379,142 @@ fn a_panic_in_the_hosts_wake_reaches_the_owner_and_the_thread_serves_on() {
             .collect::<Vec<_>>(),
         vec![RasterVerdict::Presented]
     );
+}
+
+/// A panic in a turn that settles nothing (here a trim's reclaim) still wakes
+/// the owner once the failure is there to take, since the turn's own wake
+/// never ran.
+///
+/// Red-check: without the wake after `hand_over` in `serve`, no wake comes and
+/// the owner never learns of the panic until something else settles.
+#[test]
+fn a_panic_in_a_turn_that_settles_nothing_wakes_the_owner() {
+    let thread = spawn();
+    let _at = attach(&thread.sender);
+    thread.backend.script_reclaim(ScriptedAnswer::Panic);
+    thread
+        .sender
+        .send(RasterCommand::Trim(MemoryPressureLevel::Critical))
+        .expect("accepted");
+    thread
+        .woken
+        .recv_timeout(PATIENCE)
+        .expect("the owner is woken for the turn's panic");
+    let failure = thread.sender.take_executor_failure();
+    let Some(ExecutorFailure::TurnPanicked { message }) = failure else {
+        panic!("the reclaim's panic is reported: {failure:?}");
+    };
+    assert!(message.contains("scripted reclaim panic"), "{message}");
+    assert_eq!(thread.sender.health(), ExecutorHealth::Running);
+}
+
+/// The owner's clock, panicking on every read and counting the reads.
+#[derive(Debug, Default)]
+struct BrokenClock {
+    reads: std::sync::atomic::AtomicUsize,
+}
+
+impl flui_foundation::clock::MonotonicClock for BrokenClock {
+    fn now(&self) -> web_time::Instant {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        panic!("the clock fails on purpose");
+    }
+
+    fn epoch(&self) -> web_time::Instant {
+        panic!("the clock fails on purpose");
+    }
+}
+
+/// A clock that panics is the owner's failure, not the thread's: the first
+/// read is contained and reported, the thread serves, and a lost device's
+/// rebuild, which the clock can no longer pace, does not spin the thread on
+/// it.
+///
+/// Red-check: without the containment of the first read the thread never
+/// builds its executor, and the attach is never applied; with
+/// `rebuild_due_in` answering a zero wait for a clock that panics, the thread
+/// turns in a loop and the reads climb.
+#[test]
+fn a_clock_that_panics_is_reported_and_does_not_spin_the_raster_thread() {
+    let clock = Arc::new(BrokenClock::default());
+    let (wake, woken) = mpsc::channel();
+    let backend = ScriptedSlots::new();
+    let (handle, sender) =
+        RasterExecutor::spawn(backend.clone(), Arc::clone(&clock) as _, move || {
+            let _told = wake.send(());
+        })
+        .expect("the raster thread starts");
+    let thread = Thread {
+        handle,
+        sender,
+        backend,
+        woken,
+    };
+    let at = attach(&thread.sender);
+    let failure = thread.sender.take_executor_failure();
+    let Some(ExecutorFailure::TurnPanicked { message }) = failure else {
+        panic!("the clock's panic is reported: {failure:?}");
+    };
+    assert!(message.contains("the clock fails on purpose"), "{message}");
+    // The first rebuild fails, so the next one waits on a backoff the clock
+    // would pace.
+    thread
+        .backend
+        .script_rebuild(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    thread.backend.lose_device();
+    thread.sender.send(frame(at, 1)).expect("accepted");
+    eventually("published the loss", || {
+        thread.sender.device_health() != DeviceHealth::Healthy
+    });
+    // Time for the turn that published the loss to end and the thread to
+    // wait; a thread that spins reads the clock thousands of times by then.
+    std::thread::sleep(Duration::from_millis(50));
+    let settled = clock.reads.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(100));
+    let later = clock.reads.load(Ordering::SeqCst);
+    assert!(
+        later <= settled + 2,
+        "the thread waits for a ring, not on the clock: {settled} reads, then {later}"
+    );
+    assert_eq!(thread.sender.health(), ExecutorHealth::Running);
+}
+
+/// A turn's panic the owner has not taken yet does not hide a later death:
+/// the owner takes the panic, then the cause the executor died of, once.
+///
+/// Red-check: with the death read only from the held failure, the second take
+/// answers `None` and the owner never learns the executor died.
+#[test]
+fn a_held_panic_does_not_hide_the_executors_death() {
+    let thread = spawn();
+    let at = attach(&thread.sender);
+    thread.backend.script_reclaim(ScriptedAnswer::Panic);
+    thread
+        .sender
+        .send(RasterCommand::Trim(MemoryPressureLevel::Critical))
+        .expect("accepted");
+    thread
+        .woken
+        .recv_timeout(PATIENCE)
+        .expect("the owner is woken for the turn's panic");
+    let hold = thread.backend.hold_next_render();
+    thread.sender.send(frame(at, 1)).expect("accepted");
+    assert!(hold.began_within(PATIENCE), "the thread starts the render");
+    let waited = Duration::from_millis(50);
+    assert_eq!(
+        thread.handle.detach(&thread.sender, at.slot, waited),
+        Err(ExecutorFailure::Wedged { waited })
+    );
+    assert!(matches!(
+        thread.sender.take_executor_failure(),
+        Some(ExecutorFailure::TurnPanicked { .. })
+    ));
+    assert_eq!(
+        thread.sender.take_executor_failure(),
+        Some(ExecutorFailure::Wedged { waited })
+    );
+    assert_eq!(thread.sender.take_executor_failure(), None, "reported once");
+    let Thread { handle, .. } = thread;
+    drop(handle);
+    hold.release();
 }

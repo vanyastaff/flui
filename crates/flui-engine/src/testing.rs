@@ -96,6 +96,7 @@ struct Script {
     /// retires or the slot detaches.
     kept: Vec<(SlotId, TextureId, flui_painting::paint::Image)>,
     rebuilds: VecDeque<ScriptedAnswer>,
+    reclaims: VecDeque<ScriptedAnswer>,
     /// The slots the next successful rebuild cannot present to.
     rebuild_refusals: Vec<(SlotId, EngineError)>,
     device_lost: bool,
@@ -227,6 +228,12 @@ impl ScriptedSlots {
         self.script.lock().rebuild_takes = Some((clock.clone(), took));
     }
 
+    /// Answer the next unanswered reclaim with `answer`: a
+    /// [`ScriptedAnswer::Panic`] panics, any other answer frees nothing.
+    pub fn script_reclaim(&self, answer: ScriptedAnswer) {
+        self.script.lock().reclaims.push_back(answer);
+    }
+
     /// Answer the next unanswered device rebuild with `answer`; one the
     /// script does not answer succeeds. A [`ScriptedAnswer::Panic`] panics
     /// once the new device is in place, so the backend no longer reports the
@@ -273,8 +280,8 @@ impl ScriptedSlots {
             SlotCall::Release(_)
             | SlotCall::DisplayColor(..)
             | SlotCall::Latency(..)
-            | SlotCall::Detach(_)
-            | SlotCall::Reclaim(_) => None,
+            | SlotCall::Detach(_) => None,
+            SlotCall::Reclaim(_) => script.reclaims.pop_front(),
             SlotCall::RebuildDevice => script.rebuilds.pop_front(),
         }
     }
@@ -429,7 +436,9 @@ impl RasterBackend for ScriptedSlots {
     }
 
     fn reclaim(&mut self, level: MemoryPressureLevel) {
-        let _none = self.answer(SlotCall::Reclaim(level));
+        if let Some(ScriptedAnswer::Panic) = self.answer(SlotCall::Reclaim(level)) {
+            panic!("scripted reclaim panic");
+        }
     }
 
     fn device_lost(&self) -> bool {

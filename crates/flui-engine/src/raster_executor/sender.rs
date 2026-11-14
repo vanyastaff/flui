@@ -6,7 +6,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
 };
 
@@ -124,6 +124,15 @@ pub(crate) struct Shared {
         )
     )]
     death: std::sync::OnceLock<ExecutorFailure>,
+    /// The owner took the death's cause.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    death_reported: AtomicBool,
 }
 
 const RUNNING: u8 = 0;
@@ -164,6 +173,7 @@ impl Shared {
             doorbell,
             failure: Mutex::new(None),
             death: std::sync::OnceLock::new(),
+            death_reported: AtomicBool::new(false),
         }
     }
 
@@ -250,8 +260,28 @@ impl Shared {
         drop(refused);
     }
 
+    /// The held failure, then the death's cause once: a turn's panic held
+    /// before the death does not hide it.
     pub(crate) fn take_failure(&self) -> Option<ExecutorFailure> {
-        self.failure.lock().take()
+        let held = self.failure.lock().take();
+        // The web has no raster thread to die (ADR-0305 §10).
+        #[cfg(not(target_arch = "wasm32"))]
+        if held.is_none() {
+            return self.take_death();
+        }
+        held
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn take_death(&self) -> Option<ExecutorFailure> {
+        if self.death_reported.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        let death = self.death.get().cloned();
+        if death.is_none() {
+            self.death_reported.store(false, Ordering::Release);
+        }
+        death
     }
 
     /// The raster thread is wedged past its deadline, or ended without an
@@ -259,10 +289,11 @@ impl Shared {
     /// does next (ADR-0305 §9). The first cause is kept.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn die(&self, failure: ExecutorFailure) {
+        // The cause first, so whoever reads the health as died finds it.
+        let _first = self.death.set(failure);
         self.health.store(DIED, Ordering::SeqCst);
-        if self.death.set(failure.clone()).is_ok() {
-            self.hold_failure(failure);
-        }
+        // An owner waiting on a slot's record learns of it now.
+        self.note_turn();
     }
 
     /// Why the executor died; `None` while it has not.

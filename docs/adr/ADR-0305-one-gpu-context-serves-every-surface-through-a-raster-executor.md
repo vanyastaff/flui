@@ -437,7 +437,8 @@ executor and slot.
 
 - `ExecutorHealth { Running, ShutDown, Died }` rides the executor's record; the two non-running
   states log at `error`. Once it is not `Running`, every send answers `Gone` with its command, and
-  the owner settles every frame still pending `Failed`, since the executor no longer can.
+  the owner settles every frame still pending in a slot's inbox `Failed`, since the executor no
+  longer can. The frame a wedged render holds settles only if that render returns.
 - `Detach` and `Release` complete before the native window is destroyed or its surface given
   back. Inline they complete within the call. Threaded, the owner waits for the slot's record with
   a deadline (`DETACH_DEADLINE`, two seconds, above wgpu's one-second acquire timeout), with no
@@ -448,9 +449,10 @@ executor and slot.
 - On a timeout the window is quarantined, not closed: the presentation leaves, its window and
   target are kept until the process exits, and the executor is marked `Died`. A raster thread
   wedged past the deadline holds the context, so every window stops drawing, not one; the
-  application learns it from `ExecutorHealth`, from each frame's `Failed` settlement, and from
-  `ExecutorFailure::Wedged`, which the owner takes from its sender (`take_executor_failure`) and
-  reports as it reports a device's failure, with no panic on its thread.
+  application learns it from `ExecutorHealth`, from the `Failed` settlement of each frame still in
+  an inbox, and from `ExecutorFailure::Wedged`, which the owner takes from its sender
+  (`take_executor_failure`) and reports as it reports a device's failure, with no panic on its
+  thread.
 - `Died` is terminal for the application's rendering, as a dead runtime is under ADR-0258 §2: the
   owner does not bootstrap a second context while the wedged thread still holds the first and its
   quarantined windows, and the application decides whether to exit.
