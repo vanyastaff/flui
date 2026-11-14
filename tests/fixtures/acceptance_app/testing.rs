@@ -2,34 +2,95 @@
 //! it over a storage, restart it over the same storage, close it or end its
 //! session, give it the user's taps and keys, and read where the keyboard
 //! focus is.
+//!
+//! A run is a [`Tester`]: it finds what is on screen in the window's
+//! semantics tree, acts through the window's own input path, and reads the
+//! render and widget trees as an agent inspects them. The application runs
+//! under [`Controlled`], a root of its own that does for the rows what a host
+//! application does for itself: rebuild from the root, drop the keyboard
+//! focus, and say where the focus is.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
-use flui::foundation::RenderId;
-use flui::interaction::PointerKind;
-use flui::platform::{EventTime, ImeEvent};
-use flui::platform::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
-use flui::testing::harness::a11y::Role;
-use flui::testing::harness::storage::MemoryStorage;
-use flui::testing::harness::widgets::{LaidOut, lay_out, lay_out_with_storage, offset, settle_lazy, tight};
-use flui::view::CloseReason;
+use flui::foundation::RebuildReason;
+use flui::interaction::FocusManager;
+use flui::platform::ImeEvent;
+use flui::platform::keyboard::{Modifiers, NamedKey};
+use flui::prelude::*;
+use flui::testing::{
+    InspectNode, InspectValue, Locator, Match, MemoryStorage, Node, Role, TestWindow, Tester,
+    TextMatch, find,
+};
 
 use crate::app::AcceptanceApp;
 
 /// The headless window the application runs in.
-pub const WIDTH: f64 = 640.0;
-pub const HEIGHT: f64 = 720.0;
+pub const WIDTH: u32 = 640;
+pub const HEIGHT: u32 = 720;
 
 /// Longer than any page transition, so a route change has finished.
 const SETTLE_STEP: Duration = Duration::from_millis(50);
 const SETTLE_STEPS: usize = 8;
 
-/// One run of the application: its mounted tree, the storage it runs over and
-/// the configuration a restart mounts again.
+/// How often [`AppRun::shows`] locates and reads again when a frame ran
+/// between the two.
+const READ_ATTEMPTS: usize = 4;
+
+/// One run of the application: the tester driving it and the handles its
+/// root gives the rows.
 pub struct AppRun {
-    laid: LaidOut,
-    storage: MemoryStorage,
+    tester: Tester,
+    control: Rc<Control>,
+    /// What [`storage`](Self::storage) hands a run without storage.
+    detached: MemoryStorage,
+}
+
+/// What [`Controlled`] hands the rows once it is mounted: its own rebuild
+/// handle and the window's focus manager.
+#[derive(Default)]
+struct Control {
+    rebuild: RefCell<Option<RebuildHandle>>,
+    focus: RefCell<Option<Rc<FocusManager>>>,
+}
+
+impl Control {
+    fn focus(&self) -> Rc<FocusManager> {
+        Rc::clone(
+            self.focus
+                .borrow()
+                .as_ref()
+                .expect("BUG: the root takes its focus manager when it is mounted"),
+        )
+    }
+}
+
+/// The application under a root the rows control.
+#[derive(Clone, StatefulView)]
+struct Controlled {
     app: AcceptanceApp,
+    control: Rc<Control>,
+}
+
+struct ControlledState;
+
+impl StatefulView for Controlled {
+    type State = ControlledState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        // A restart mounts a new root over the same control; the root
+        // publishes its handles as it is born.
+        *self.control.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
+        *self.control.focus.borrow_mut() = Some(ctx.focus_manager());
+        ControlledState
+    }
+}
+
+impl ViewState<Controlled> for ControlledState {
+    fn build(&self, view: &Controlled, _ctx: &dyn BuildContext) -> impl IntoView {
+        view.app.clone()
+    }
 }
 
 impl AppRun {
@@ -40,52 +101,66 @@ impl AppRun {
 
     /// Start `app` over `storage`, as a launch over what earlier runs left.
     pub fn start_over(app: AcceptanceApp, storage: MemoryStorage) -> Self {
-        let mut laid = lay_out_with_storage(app.clone(), tight(WIDTH, HEIGHT), storage.clone());
-        laid.enable_semantics();
-        let mut run = Self { laid, storage, app };
-        run.settle();
-        run
+        Self::launch(app, TestWindow::new(WIDTH, HEIGHT).storage(storage))
     }
 
     /// Start `app` on a host with no storage at all, as a platform without
     /// files runs it. [`storage`](Self::storage) is an empty one nothing
     /// reads or writes.
     pub fn start_without_storage(app: AcceptanceApp) -> Self {
-        let mut laid = lay_out(app.clone(), tight(WIDTH, HEIGHT));
-        laid.enable_semantics();
-        let mut run = Self {
-            laid,
-            storage: MemoryStorage::new(),
+        Self::launch(app, TestWindow::new(WIDTH, HEIGHT).without_storage())
+    }
+
+    fn launch(app: AcceptanceApp, window: TestWindow) -> Self {
+        let control = Rc::new(Control::default());
+        let root = Controlled {
             app,
+            control: Rc::clone(&control),
+        };
+        let mut run = Self {
+            tester: Tester::mount_in(root, window),
+            control,
+            detached: MemoryStorage::new(),
         };
         run.settle();
         run
     }
 
     /// Stop this run and launch the same application over the same storage.
-    /// The old tree is gone before the new one mounts, as across a process
+    /// The process is killed: what the run had not written is lost, and the
+    /// old tree is gone before the new one mounts, as across a process
     /// restart.
     #[must_use]
     pub fn restart(self) -> Self {
-        let Self { laid, storage, app } = self;
-        drop(laid);
-        Self::start_over(app, storage)
+        let Self {
+            tester,
+            control,
+            detached,
+        } = self;
+        let mut run = Self {
+            tester: tester.relaunch_after_kill(),
+            control,
+            detached,
+        };
+        run.settle();
+        run
     }
 
-    /// The storage this run reads and writes.
+    /// The storage this run reads and writes; an empty one nothing reads or
+    /// writes for a run without storage.
     pub fn storage(&self) -> &MemoryStorage {
-        &self.storage
+        self.tester.storage().unwrap_or(&self.detached)
     }
 
-    /// The mounted tree, for input the methods here do not cover.
-    pub fn laid(&mut self) -> &mut LaidOut {
-        &mut self.laid
-    }
-
-    /// The user closes the window.
+    /// The user closes the window, then the run settles.
     pub fn request_close(&mut self) {
-        self.laid.request_close(CloseReason::User);
+        let _closed = self.tester.request_close();
         self.settle();
+    }
+
+    /// The user closes the window; `true` when it closed at once.
+    pub fn try_close_now(&mut self) -> bool {
+        self.tester.request_close()
     }
 
     /// The user closes the last window and the application exits: what the
@@ -98,50 +173,79 @@ impl AppRun {
     /// Whether the window has closed: at once, or once what held its close
     /// was released or decided.
     pub fn is_closed(&self) -> bool {
-        self.laid.is_closed()
+        self.tester.is_closed()
     }
 
     /// The operating system ends the session.
     pub fn end_session(&mut self) {
-        self.laid.end_session();
+        self.tester.end_session();
         self.settle();
     }
 
     /// Let virtual time pass until loads, transitions and lazy rows are done.
     pub fn settle(&mut self) {
         for _ in 0..SETTLE_STEPS {
-            self.laid.pump_for(SETTLE_STEP);
+            self.tester.pump_for(SETTLE_STEP);
         }
-        settle_lazy(&mut self.laid);
+        // Lazy rows build after the paint that demanded them, and lay out on
+        // the frame after.
+        self.tester.pump();
+        self.tester.pump();
+    }
+
+    /// One frame at the current time.
+    pub fn pump(&mut self) {
+        self.tester.pump();
     }
 
     /// Rebuild the application from its root, as a parent's rebuild would,
     /// with nothing changed, then settle.
     pub fn rebuild(&mut self) {
-        self.laid.pump();
+        self.control
+            .rebuild
+            .borrow()
+            .as_ref()
+            .expect("BUG: the root takes its rebuild handle when it is mounted")
+            .schedule(RebuildReason::StateChange);
         self.settle();
     }
 
-    /// Whether `text` is on screen where a pointer reaches it: a covered or
-    /// departed page's text is not.
-    pub fn shows(&self, text: &str) -> bool {
-        self.reachable(text).is_some()
+    /// Whether `text` is on screen: its element's centre inside the window and
+    /// the bounds of every element above it. A row built off screen, a covered
+    /// or a departed page's text is not.
+    pub fn shows(&mut self, text: &str) -> bool {
+        self.any(&find::text(text))
     }
 
-    /// Whether text starting with `prefix` is on screen where a pointer
-    /// reaches it, for a message that ends with a detail the row does not
+    /// Whether text starting with `prefix` is on screen, as [`Self::shows`]
+    /// reads it, for a message that ends with a detail the row does not
     /// pin, such as an error's description.
-    pub fn shows_starting(&self, prefix: &str) -> bool {
-        self.laid
-            .find_all_by_render_type("RenderParagraph")
-            .into_iter()
-            .filter(|id| {
-                self.laid
-                    .render_node(*id)
-                    .get::<&str>("text")
-                    .is_ok_and(|text| text.starts_with(prefix))
-            })
-            .any(|id| self.centre_if_hit(id).is_some())
+    pub fn shows_starting(&mut self, prefix: &str) -> bool {
+        self.any(&Locator::default().name_matching(TextMatch::prefix(prefix)))
+    }
+
+    /// Whether a laid-out paragraph holds exactly `text`, for text that is
+    /// drawn but is no element of its own, such as a field's error.
+    pub fn lays_out(&mut self, text: &str) -> bool {
+        let reading = self.tester.inspect_render();
+        let mut found = false;
+        walk(&reading.roots, &mut |node| {
+            found |= node.kind == "RenderParagraph"
+                && matches!(field(node, "text"), Some(InspectValue::Str(laid)) if laid == text);
+        });
+        found
+    }
+
+    /// How many widgets of the view type named `kind` are mounted.
+    pub fn count_views(&mut self, kind: &str) -> usize {
+        let reading = self.tester.inspect_widgets();
+        let mut count = 0;
+        walk(&reading.roots, &mut |node| {
+            if node.kind == kind {
+                count += 1;
+            }
+        });
+        count
     }
 
     /// Tap the on-screen `text`, then settle.
@@ -150,66 +254,84 @@ impl AppRun {
     ///
     /// When `text` is not on screen.
     pub fn tap(&mut self, text: &str) {
-        let (x, y) = self
-            .reachable(text)
-            .unwrap_or_else(|| panic!("{text:?} is not on screen"));
-        self.laid.dispatch_pointer_down(x, y);
-        self.laid.dispatch_pointer_up(x, y);
+        self.tester.tap(&find::text(text));
         self.settle();
     }
 
     /// Type `text` into the focused field, one key per character, then
     /// settle.
     pub fn type_text(&mut self, text: &str) {
-        for character in text.chars() {
-            self.press(Key::character(character.to_string()), Modifiers::NONE);
-        }
+        self.type_keys(text);
         self.settle();
     }
 
-    /// Tap the Title field near its start, focusing it, then settle.
+    /// Tap the Title field, focusing it, then settle.
     ///
     /// # Panics
     ///
     /// When no Title field is on screen.
     pub fn focus_title(&mut self) {
-        let field = self.title_field();
-        let position = self.laid.absolute_offset(field);
-        let size = self.laid.size(field);
-        let (x, y) = (position.dx + 2.0, position.dy + size.height / 2.0);
-        self.laid.dispatch_pointer_down(x, y);
-        self.laid.dispatch_pointer_up(x, y);
+        self.tester.tap(&title_field());
         self.settle();
     }
 
     /// Deliver `event` from the platform's input method, then settle.
+    ///
+    /// # Panics
+    ///
+    /// On a composition whose cursor selects a range or does not fall
+    /// between characters, which the window's input path does not take.
     pub fn ime(&mut self, event: ImeEvent) {
-        self.laid.dispatch_ime(event);
+        match event {
+            ImeEvent::Preedit { text, .. } if text.is_empty() => {
+                self.tester.cancel_composition();
+            }
+            ImeEvent::Preedit { text, cursor } => {
+                let caret = cursor.map(|(start, end)| {
+                    assert_eq!(start, end, "a composition's cursor is a caret");
+                    let before = text
+                        .get(..start)
+                        .expect("a composition's caret falls between characters");
+                    u32::try_from(before.chars().count()).expect("a row's composition is short")
+                });
+                self.tester.compose(&text, caret);
+            }
+            ImeEvent::Commit(text) => self.tester.commit_composition(&text),
+            // The framework ends the composition at the end of a session, the
+            // edit an empty composition makes (`project_ime_event`).
+            ImeEvent::Disabled => self.tester.cancel_composition(),
+            // The window's input path has no session start: the compositions
+            // arrive in the focused field's open text-input session.
+            ImeEvent::Enabled => {}
+            other => panic!("the window's input path takes no {other:?}"),
+        }
         self.settle();
     }
 
     /// The byte range of the Title field's composition, if one is shown.
-    pub fn title_composing(&self) -> Option<std::ops::Range<u64>> {
-        let node = self.laid.render_node(self.title_field());
-        let start = node.get::<u64>("composing_start").ok()?;
-        let end = node.get::<u64>("composing_end").ok()?;
-        Some(start..end)
+    pub fn title_composing(&mut self) -> Option<std::ops::Range<u64>> {
+        let start = self.editable("composing_start")?;
+        let end = self.editable("composing_end")?;
+        match (start, end) {
+            (InspectValue::Uint(start), InspectValue::Uint(end)) => Some(start..end),
+            _ => None,
+        }
     }
 
     /// Whether the Title field shows its caret.
-    pub fn title_shows_caret(&self) -> bool {
-        self.laid
-            .render_node(self.title_field())
-            .get::<bool>("show_caret")
-            .expect("BUG: an editable reports whether it shows its caret")
+    pub fn title_shows_caret(&mut self) -> bool {
+        match self.editable("show_caret") {
+            Some(InspectValue::Bool(shown)) => shown,
+            other => panic!("an editable reports whether it shows its caret: {other:?}"),
+        }
     }
 
     /// Where the Title field's caret is, as a byte offset into its text.
-    pub fn title_caret(&self) -> u64 {
-        self.laid
-            .render_node(self.title_field())
-            .get::<u64>("caret_byte_offset")
-            .expect("BUG: an editable reports its caret")
+    pub fn title_caret(&mut self) -> u64 {
+        match self.editable("caret_byte_offset") {
+            Some(InspectValue::Uint(caret)) => caret,
+            other => panic!("an editable reports its caret: {other:?}"),
+        }
     }
 
     /// Focus the Title field and replace its text by typing `text`.
@@ -219,26 +341,14 @@ impl AppRun {
     /// When no Title field is on screen.
     pub fn replace_title(&mut self, text: &str) {
         self.focus_title();
-        let command = if cfg!(any(target_os = "macos", target_os = "ios")) {
-            Modifiers::META
-        } else {
-            Modifiers::CONTROL
-        };
-        self.press(Key::character("a"), command);
-        self.press(Key::Named(NamedKey::Backspace), Modifiers::NONE);
-        for character in text.chars() {
-            self.press(Key::character(character.to_string()), Modifiers::NONE);
-        }
+        self.tester.press_keys(&["Control+a", "Backspace"]);
+        self.type_keys(text);
         self.settle();
     }
 
     /// The text the on-screen Title field holds.
-    pub fn title(&self) -> String {
-        self.laid
-            .render_node(self.title_field())
-            .get::<&str>("text")
-            .expect("BUG: an editable reports its text")
-            .to_owned()
+    pub fn title(&mut self) -> String {
+        self.tester.read(&title_field()).value.unwrap_or_default()
     }
 
     /// Press and release `key`, then settle.
@@ -248,7 +358,20 @@ impl AppRun {
 
     /// Press and release `key` with `modifiers` held, then settle.
     pub fn chord(&mut self, key: NamedKey, modifiers: Modifiers) {
-        self.press(Key::Named(key), modifiers);
+        let mut chord = String::new();
+        for (modifier, name) in [
+            (Modifiers::CONTROL, "Control"),
+            (Modifiers::ALT, "Alt"),
+            (Modifiers::SHIFT, "Shift"),
+            (Modifiers::META, "Meta"),
+        ] {
+            if modifiers.contains(modifier) {
+                chord.push_str(name);
+                chord.push('+');
+            }
+        }
+        chord.push_str(key.as_str());
+        self.tester.press_keys(&[&chord]);
         self.settle();
     }
 
@@ -262,155 +385,231 @@ impl AppRun {
         self.chord(NamedKey::Tab, Modifiers::SHIFT);
     }
 
-    /// The platform's Back chord: Cmd+\[ on Apple, Alt+Left elsewhere.
+    /// The Back chord of the platform-neutral conventions a headless window
+    /// follows: Alt+Left.
     pub fn back_key(&mut self) {
-        if cfg!(any(target_os = "macos", target_os = "ios")) {
-            self.press(Key::character("["), Modifiers::META);
-            self.settle();
-        } else {
-            self.chord(NamedKey::ArrowLeft, Modifiers::ALT);
-        }
+        self.chord(NamedKey::ArrowLeft, Modifiers::ALT);
     }
 
     /// Hold `key` down through `repeats` auto-repeats, release it, then
     /// settle.
     pub fn hold(&mut self, key: NamedKey, repeats: usize) {
-        let key = Key::Named(key);
-        self.dispatch(KeyState::Down, &key, KeyRepeat::First, Modifiers::NONE);
-        for _ in 0..repeats {
-            self.dispatch(KeyState::Down, &key, KeyRepeat::AutoRepeat, Modifiers::NONE);
+        let key = key.as_str();
+        for _ in 0..=repeats {
+            self.tester.key_down(key);
         }
-        self.dispatch(KeyState::Up, &key, KeyRepeat::First, Modifiers::NONE);
+        self.tester.key_up(key);
         self.settle();
+    }
+
+    /// The window becomes hidden (`false`) or shown again, and the frames due
+    /// now run; the row settles when it is ready to.
+    pub fn set_window_visible(&mut self, visible: bool) {
+        self.tester.set_window_visible(visible);
     }
 
     /// The window loses (`false`) or regains its OS focus, then settles.
     pub fn set_window_focused(&mut self, focused: bool) {
-        self.laid.set_window_focused(focused);
+        self.tester.set_window_focused(focused);
         self.settle();
     }
 
     /// Drop the keyboard focus, as a fresh window has none.
     pub fn unfocus(&mut self) {
-        self.laid.focus_manager().unfocus();
+        self.control.focus().unfocus();
         self.settle();
     }
 
-    /// The label of the element the accessibility tree reports focused.
+    /// The name of the element the semantics tree reports focused.
     ///
     /// # Panics
     ///
     /// When the tree's focused node is not where the primary focus is: after
     /// every step the two name the same element.
-    pub fn focused(&self) -> Option<String> {
-        let tree = self
-            .laid
-            .a11y_tree()
-            .expect("BUG: AppRun enables semantics");
-        // With nothing focused the tree reports its root window focused.
-        let node = tree.focus().filter(|node| node.role() != Role::Window);
-        let primary = self.laid.focus_manager().primary_focus();
-        match (&node, &primary) {
+    pub fn focused(&mut self) -> Option<String> {
+        let tree = self.tester.semantics();
+        let mut focused = None;
+        walk_semantics(&tree.roots, &mut |node| {
+            if node.focused && node.role != Role::Window {
+                focused = Some(node.clone());
+            }
+        });
+        let primary = self.control.focus().primary_focus();
+        match (&focused, &primary) {
             (None, None) => {}
             (Some(node), Some(primary)) => {
-                let bounds = tree
-                    .window_bounds(node)
-                    .expect("BUG: a focused node has bounds");
                 let rect = primary.rect();
                 let (x, y) = (
                     (rect.left() + rect.right()) / 2.0,
                     (rect.top() + rect.bottom()) / 2.0,
                 );
+                // A headless window's device pixels are its logical pixels.
+                let bounds = node
+                    .surface_rect
+                    .or(node.rect)
+                    .expect("BUG: a focused node has bounds");
+                let (left, top) = (f64::from(bounds.x), f64::from(bounds.y));
+                let (right, bottom) = (
+                    left + f64::from(bounds.width),
+                    top + f64::from(bounds.height),
+                );
                 assert!(
-                    (bounds.x0..=bounds.x1).contains(&x) && (bounds.y0..=bounds.y1).contains(&y),
-                    "the accessibility tree's focus {} is not the primary focus at {rect:?}",
-                    node.describe()
+                    (left..=right).contains(&x) && (top..=bottom).contains(&y),
+                    "the semantics tree's focus {:?} is not the primary focus at {rect:?}",
+                    node.name
                 );
             }
             _ => panic!(
-                "the accessibility tree's focus ({:?}) and the primary focus ({}) disagree",
-                node.map(|node| node.describe()),
+                "the semantics tree's focus ({:?}) and the primary focus ({}) disagree",
+                focused.as_ref().map(|node| node.name.clone()),
                 if primary.is_some() { "set" } else { "none" }
             ),
         }
-        node.and_then(|node| node.label().map(ToOwned::to_owned))
+        focused.and_then(|node| node.name)
     }
 
     /// Whether the focused element shows the focus indicator.
     pub fn shows_focus_indicator(&self) -> bool {
-        self.laid
-            .focus_manager()
+        self.control
+            .focus()
             .primary_focus()
             .is_some_and(|node| node.has_visible_focus())
     }
 
     /// The notes list's scroll offset, as its viewport last laid out or was
     /// given it: the list is the only scrolling view.
-    pub fn list_offset(&self) -> f64 {
-        let viewports = self.laid.find_all_by_render_type("RenderViewport");
-        assert_eq!(viewports.len(), 1, "one notes list is mounted");
-        self.laid
-            .render_node(viewports[0])
-            .get::<f64>("scroll_offset")
-            .expect("BUG: a viewport reports its scroll offset")
-    }
-
-    fn press(&self, key: Key, modifiers: Modifiers) {
-        for state in [KeyState::Down, KeyState::Up] {
-            self.dispatch(state, &key, KeyRepeat::First, modifiers);
+    pub fn list_offset(&mut self) -> f64 {
+        let reading = self.tester.inspect_render();
+        let mut offsets = Vec::new();
+        walk(&reading.roots, &mut |node| {
+            if node.kind == "RenderViewport" {
+                offsets.push(field(node, "scroll_offset"));
+            }
+        });
+        assert_eq!(offsets.len(), 1, "one notes list is mounted");
+        match offsets[0] {
+            Some(InspectValue::Float(offset)) => offset,
+            Some(InspectValue::Int(offset)) => offset as f64,
+            Some(InspectValue::Uint(offset)) => offset as f64,
+            ref other => panic!("a viewport reports its scroll offset: {other:?}"),
         }
     }
 
-    fn dispatch(&self, state: KeyState, key: &Key, repeat: KeyRepeat, modifiers: Modifiers) {
-        self.laid.dispatch_key(
-            KeyEvent::new(
-                state,
-                key.clone(),
-                Code::Unidentified,
-                EventTime::from_nanos(0),
-            )
-            .with_modifiers(modifiers)
-            .with_repeat(repeat),
-        );
-    }
-
-    fn title_field(&self) -> RenderId {
-        let fields: Vec<_> = self
-            .laid
-            .find_all_by_render_type("RenderEditable")
-            .into_iter()
-            .filter(|field| self.centre_if_hit(*field).is_some())
-            .collect();
-        assert_eq!(fields.len(), 1, "one Title field on screen");
-        fields[0]
-    }
-
-    /// The centre of a render object showing `text` that a pointer there
-    /// reaches.
-    fn reachable(&self, text: &str) -> Option<(f64, f64)> {
-        self.laid
-            .find_all_text(text)
-            .into_iter()
-            .find_map(|id| self.centre_if_hit(id))
-    }
-
-    fn centre_if_hit(&self, id: RenderId) -> Option<(f64, f64)> {
-        let size = self.laid.try_size(id)?;
-        if size.width <= 0.0 || size.height <= 0.0 {
-            return None;
+    fn type_keys(&mut self, text: &str) {
+        let keys: Vec<String> = text.chars().map(String::from).collect();
+        let chords: Vec<&str> = keys.iter().map(String::as_str).collect();
+        if !chords.is_empty() {
+            self.tester.press_keys(&chords);
         }
-        let position = self.laid.absolute_offset(id);
-        let (x, y) = (
-            position.dx + size.width / 2.0,
-            position.dy + size.height / 2.0,
-        );
-        if !(0.0..WIDTH).contains(&x) || !(0.0..HEIGHT).contains(&y) {
-            return None;
+    }
+
+    /// Whether an element `locator` matches has its centre inside the window
+    /// and inside the bounds of every element above it, as a pointer at that
+    /// centre would reach it: a row the list scrolled out of its viewport, or
+    /// built in its cache, lies outside the list's bounds. `locator` matches by
+    /// name only: the read holds a node by the id and name it was found by.
+    fn any(&mut self, locator: &Locator) -> bool {
+        // The locate and the read are two reads, and a frame between them may
+        // rebuild or rename what the first found: a node counts only when the
+        // read holds it with the name it was found by, and a read holding
+        // none of them is taken again.
+        for _ in 0..READ_ATTEMPTS {
+            let found: Vec<Match> = self.tester.find_all(locator);
+            if found.is_empty() {
+                return false;
+            }
+            let tree = self.tester.semantics();
+            let same = |node: &Node| {
+                found
+                    .iter()
+                    .any(|found| found.node.id == node.id && found.node.name == node.name)
+            };
+            let mut held = false;
+            walk_semantics(&tree.roots, &mut |node| held |= same(node));
+            if !held {
+                continue;
+            }
+            let mut shown = false;
+            walk_shown(&tree.roots, None, &mut |node| shown |= same(node));
+            return shown;
         }
-        let path = self.laid.hit_test_pointer(offset(x, y), PointerKind::Mouse);
-        path.path()
-            .iter()
-            .any(|entry| entry.target == id)
-            .then_some((x, y))
+        panic!("the tree changed between every locate and read of {locator:?}");
+    }
+
+    /// The Title field's render-object field `name`.
+    fn editable(&mut self, name: &str) -> Option<InspectValue> {
+        let reading = self.tester.inspect_render();
+        let mut editables = Vec::new();
+        walk(&reading.roots, &mut |node| {
+            if node.kind == "RenderEditable" {
+                editables.push(field(node, name));
+            }
+        });
+        assert_eq!(editables.len(), 1, "one Title field on screen");
+        editables.remove(0)
+    }
+}
+
+/// The Title field.
+fn title_field() -> Locator {
+    find::role(Role::TextInput)
+}
+
+fn field(node: &InspectNode, name: &str) -> Option<InspectValue> {
+    node.fields
+        .iter()
+        .find(|field| field.name == name)
+        .map(|field| field.value.clone())
+}
+
+fn walk(nodes: &[InspectNode], visit: &mut impl FnMut(&InspectNode)) {
+    for node in nodes {
+        visit(node);
+        walk(&node.children, visit);
+    }
+}
+
+fn walk_semantics(nodes: &[Node], visit: &mut impl FnMut(&Node)) {
+    for node in nodes {
+        visit(node);
+        walk_semantics(&node.children, visit);
+    }
+}
+
+/// Left, top, right and bottom, in the window's pixels.
+type Bounds = (f64, f64, f64, f64);
+
+fn bounds(node: &Node) -> Option<Bounds> {
+    let rect = node.surface_rect.or(node.rect)?;
+    let (left, top) = (f64::from(rect.x), f64::from(rect.y));
+    Some((
+        left,
+        top,
+        left + f64::from(rect.width),
+        top + f64::from(rect.height),
+    ))
+}
+
+/// Visit each node whose centre lies inside `clip` and the bounds of every
+/// node above it. Each node is tested on its own, so a container larger than
+/// its clip still has its visible children visited; a node without bounds,
+/// or with empty ones, is a wrapper: it is neither visited nor narrows the
+/// clip below it.
+fn walk_shown(nodes: &[Node], clip: Option<Bounds>, visit: &mut impl FnMut(&Node)) {
+    for node in nodes {
+        let own = bounds(node).filter(|&(left, top, right, bottom)| right > left && bottom > top);
+        let Some((left, top, right, bottom)) = own else {
+            walk_shown(&node.children, clip, visit);
+            continue;
+        };
+        let (x, y) = ((left + right) / 2.0, (top + bottom) / 2.0);
+        if clip.is_none_or(|(cl, ct, cr, cb)| (cl..=cr).contains(&x) && (ct..=cb).contains(&y)) {
+            visit(node);
+        }
+        let narrowed = match clip {
+            Some((cl, ct, cr, cb)) => (left.max(cl), top.max(ct), right.min(cr), bottom.min(cb)),
+            None => (left, top, right, bottom),
+        };
+        walk_shown(&node.children, Some(narrowed), visit);
     }
 }

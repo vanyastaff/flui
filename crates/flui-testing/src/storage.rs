@@ -5,8 +5,8 @@
 //! a pumped frame, so a test decides with [`MemoryStorage::hold_writes`] and
 //! [`MemoryStorage::hold_commits`] when a write lands instead of racing an
 //! IO thread. The double follows [`Storage::publish`]'s acceptance contract
-//! (a newer value replaces one not yet started) and a file's compare and
-//! replace: a [`WriteMode::IfUnchanged`] write is refused with
+//! (a newer value from the same writer replaces one not yet started) and a
+//! file's compare and replace: a [`WriteMode::IfUnchanged`] write is refused with
 //! [`StorageError::Conflict`] when it commits over another version.
 //!
 //! ```
@@ -34,11 +34,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
+use flui_foundation::IdMint;
 use flui_platform::{
     CopiedAside, Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion,
     WriteMode,
@@ -53,7 +55,14 @@ use parking_lot::Mutex;
 #[derive(Clone, Default)]
 pub struct MemoryStorage {
     state: Arc<Mutex<State>>,
+    /// The run this handle publishes for; `None` for the test's own handles.
+    run: Option<RunId>,
 }
+
+/// One run of the application over a [`MemoryStorage`], so a kill finds the
+/// writes that run left held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunId(NonZeroU64);
 
 #[derive(Default)]
 struct State {
@@ -62,6 +71,11 @@ struct State {
     /// Request futures not yet dropped.
     live: usize,
     next_write: u64,
+    /// Mints the run of each [`MemoryStorage::for_run`] handle.
+    runs: IdMint<NonZeroU64>,
+    /// The runs a kill ended; their publishes are refused. One entry per
+    /// kill a test makes.
+    killed: Vec<RunId>,
     /// The answer slot of every write future not yet dropped.
     writes: HashMap<u64, WriteSlot>,
     /// Accepted while a [`WriteHold`] is alive; not started.
@@ -86,6 +100,8 @@ struct State {
 /// An accepted value on its way to [`State::values`].
 struct Write {
     id: u64,
+    /// The run that published it; `None` for the test's own writes.
+    run: Option<RunId>,
     name: StorageName,
     bytes: Vec<u8>,
     mode: WriteMode,
@@ -179,15 +195,56 @@ impl MemoryStorage {
     }
 
     /// Accept writes but start none while the returned hold is alive; a
-    /// newer value of a name replaces the one waiting, whose future resolves
-    /// to [`StorageError::Superseded`]. Dropping the last hold starts the
-    /// waiting writes.
+    /// newer value of a name replaces the one waiting from the same writer,
+    /// whose future resolves to [`StorageError::Superseded`]. A writer is one
+    /// run of the application, or the test's own handles together; the
+    /// writes of different writers each wait their turn, as two processes'
+    /// would. Dropping the last hold starts the waiting writes in the order
+    /// they were accepted.
     #[must_use = "writes are held only while the hold is alive"]
     pub fn hold_writes(&self) -> WriteHold {
         self.state.lock().write_holds += 1;
         WriteHold {
             state: Arc::clone(&self.state),
         }
+    }
+
+    /// A handle on this storage for one run of the application: the writes
+    /// it publishes are that run's, which
+    /// [`kill_run`](Self::kill_run) finds again when the
+    /// run is killed.
+    pub(crate) fn for_run(&self) -> (Self, RunId) {
+        let run = RunId(
+            self.state
+                .lock()
+                .runs
+                .next()
+                .expect("BUG: a test launches fewer runs than u64 holds"),
+        );
+        (
+            Self {
+                state: Arc::clone(&self.state),
+                run: Some(run),
+            },
+            run,
+        )
+    }
+
+    /// `run` was killed: a write it left waiting at a [`WriteHold`] never
+    /// starts and one it left at a [`CommitBarrier`] never commits, as a
+    /// process killed before it replaced its files, and every later publish
+    /// through its handles is refused with [`StorageError::Cancelled`], so
+    /// whatever its teardown or a handle of the run that outlives it still
+    /// writes is lost too. A future of a discarded write gets no answer, as the killed
+    /// process would get none. Another run's writes and the test's own are
+    /// kept.
+    pub(crate) fn kill_run(&self, run: RunId) {
+        let mut state = self.state.lock();
+        if !state.killed.contains(&run) {
+            state.killed.push(run);
+        }
+        state.queued.retain(|write| write.run != Some(run));
+        state.written.retain(|write| write.run != Some(run));
     }
 
     /// Write but commit nothing while the returned barrier is alive: reads
@@ -373,14 +430,17 @@ impl Storage for MemoryStorage {
             name: *name,
             bytes,
             mode,
+            run: self.run,
         };
         let mut wakers = Vec::new();
-        if let Some(error) = state.fail_next.pop_front() {
+        if self.run.is_some_and(|run| state.killed.contains(&run)) {
+            wakers.extend(state.answer(id, Err(StorageError::Cancelled)));
+        } else if let Some(error) = state.fail_next.pop_front() {
             wakers.extend(state.answer(id, Err(error)));
         } else if state.write_holds > 0 {
             let (superseded, waiting): (Vec<Write>, Vec<Write>) = std::mem::take(&mut state.queued)
                 .into_iter()
-                .partition(|queued| queued.name == *name);
+                .partition(|queued| queued.name == *name && queued.run == self.run);
             state.queued = waiting;
             for queued in superseded {
                 wakers.extend(state.answer(queued.id, Err(StorageError::Superseded)));
@@ -615,5 +675,37 @@ impl Drop for CopyHold {
         };
         drop(state);
         wake_all(wakers);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
+
+    use flui_platform::{Storage, StorageError, StorageName, WriteMode};
+
+    use super::MemoryStorage;
+
+    const NAME: StorageName = StorageName::from_static("doc");
+
+    /// A storage handle of a killed run that outlives the run is refused: its
+    /// publish resolves to `Cancelled` and stores nothing, while the test's
+    /// own handle still writes.
+    #[test]
+    fn a_killed_runs_later_publish_is_refused() {
+        let storage = MemoryStorage::new();
+        let (run_handle, run) = storage.for_run();
+        storage.kill_run(run);
+        let mut ctx = Context::from_waker(Waker::noop());
+        let refused = run_handle.publish(&NAME, b"late".to_vec(), WriteMode::Replace);
+        assert!(matches!(
+            pin!(refused).poll(&mut ctx),
+            Poll::Ready(Err(StorageError::Cancelled))
+        ));
+        assert_eq!(storage.contents(&NAME), None);
+        let own = storage.publish(&NAME, b"own".to_vec(), WriteMode::Replace);
+        assert!(pin!(own).poll(&mut ctx).is_ready());
+        assert_eq!(storage.contents(&NAME).as_deref(), Some(&b"own"[..]));
     }
 }

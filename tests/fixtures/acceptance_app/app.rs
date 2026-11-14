@@ -196,6 +196,74 @@ pub type Planter = Rc<dyn Fn(Kept) -> Box<dyn Any>>;
 /// composes.
 pub type EditCounter = Rc<Cell<u32>>;
 
+/// What the application gave the first loaded frame: the routes it built
+/// screens for, the screens made before that frame's post-frame callbacks run,
+/// so a page pushed on a later frame is not one, and the draft and the list's
+/// offset its controllers held when that frame ended, so a value the
+/// application restores on a later frame is not one either. It reads the
+/// controllers, not the render tree: whether the field and the list show what
+/// their controllers hold on their first frame is theirs to test.
+#[derive(Debug, Default)]
+pub struct FirstScreens {
+    routes: RefCell<Vec<Route>>,
+    sealing: Cell<bool>,
+    sealed: Cell<bool>,
+    draft: RefCell<Option<String>>,
+    offset: Cell<Option<f64>>,
+}
+
+impl FirstScreens {
+    /// The routes the first loaded frame built screens for, in build order.
+    pub fn routes(&self) -> Vec<Route> {
+        self.routes.borrow().clone()
+    }
+
+    /// The draft controller's text when the first loaded frame ended.
+    pub fn draft(&self) -> Option<String> {
+        self.draft.borrow().clone()
+    }
+
+    /// The list controller's offset when the first loaded frame ended.
+    pub fn offset(&self) -> Option<f64> {
+        self.offset.get()
+    }
+
+    /// Forget what was recorded, for the next run's first loaded frame.
+    pub fn reset(&self) {
+        self.routes.borrow_mut().clear();
+        self.sealing.set(false);
+        self.sealed.set(false);
+        self.draft.replace(None);
+        self.offset.set(None);
+    }
+
+    fn record(
+        self: &Rc<Self>,
+        route: &Route,
+        draft: &TextEditingController,
+        scroll: &ScrollController,
+        ctx: &dyn LifecycleContext,
+    ) {
+        if self.sealed.get() {
+            return;
+        }
+        self.routes.borrow_mut().push(route.clone());
+        if !self.sealing.replace(true) {
+            let first = Rc::clone(self);
+            let draft = draft.clone();
+            let scroll = scroll.clone();
+            ctx.post_frame_handle()
+                .expect("a mounted screen has a post-frame handle")
+                .schedule(move |_timing| {
+                    first.draft.replace(Some(draft.text()));
+                    first.offset.set(Some(scroll.pixels()));
+                    first.sealed.set(true);
+                })
+                .expect("the running window takes a post-frame callback");
+        }
+    }
+}
+
 /// What `planter` gives for `kind`, when there is a planter.
 fn plant(planter: Option<&Planter>, kind: Kept) -> Option<Rc<dyn Any>> {
     planter.map(|planter| Rc::<dyn Any>::from(planter(kind)))
@@ -232,6 +300,7 @@ pub struct AcceptanceApp {
     first_attempt: u32,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
+    opened: Option<Rc<FirstScreens>>,
 }
 
 impl AcceptanceApp {
@@ -245,6 +314,7 @@ impl AcceptanceApp {
             first_attempt: 0,
             planter: None,
             edits: None,
+            opened: None,
             loader: Rc::new(|_attempt| {
                 let mut polled = false;
                 Box::pin(poll_fn(move |ctx| {
@@ -286,6 +356,13 @@ impl AcceptanceApp {
         self.edits = Some(edits);
         self
     }
+
+    /// Record in `opened` the routes the first loaded frame builds screens for.
+    #[must_use]
+    pub fn first_screens(mut self, opened: Rc<FirstScreens>) -> Self {
+        self.opened = Some(opened);
+        self
+    }
 }
 
 impl StatelessView for AcceptanceApp {
@@ -296,6 +373,7 @@ impl StatelessView for AcceptanceApp {
             first_attempt: self.first_attempt,
             planter: self.planter.clone(),
             edits: self.edits.clone(),
+            opened: self.opened.clone(),
         }
     }
 }
@@ -615,6 +693,7 @@ struct Shared {
     faults: Faults,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
+    opened: Option<Rc<FirstScreens>>,
 }
 
 /// A presentation's close guard and a notifier told each time what it has
@@ -682,6 +761,7 @@ struct Root {
     first_attempt: u32,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
+    opened: Option<Rc<FirstScreens>>,
 }
 
 struct RootState {
@@ -765,6 +845,7 @@ impl ViewState<Root> for RootState {
         let faults = view.faults;
         let planter = view.planter.clone();
         let edits = view.edits.clone();
+        let opened = view.opened.clone();
         let fresh = Rc::clone(&self.fresh);
         let starting_over = Rc::clone(&self.fresh);
         let ready = FutureBuilder::keyed(
@@ -861,6 +942,7 @@ impl ViewState<Root> for RootState {
                     faults,
                     planter: planter.clone(),
                     edits: edits.clone(),
+                    opened: opened.clone(),
                 }
                 .boxed()
             }),
@@ -877,6 +959,7 @@ struct Loaded {
     faults: Faults,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
+    opened: Option<Rc<FirstScreens>>,
 }
 
 struct LoadedState {
@@ -889,6 +972,7 @@ struct LoadedState {
     faults: Faults,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
+    opened: Option<Rc<FirstScreens>>,
     _kept: Option<Rc<dyn Any>>,
 }
 
@@ -904,6 +988,7 @@ impl StatefulView for Loaded {
             faults: self.faults,
             planter: self.planter.clone(),
             edits: self.edits.clone(),
+            opened: self.opened.clone(),
             _kept: plant(self.planter.as_ref(), Kept::State),
         }
     }
@@ -969,6 +1054,7 @@ impl ViewState<Loaded> for LoadedState {
             faults: self.faults,
             planter: self.planter.clone(),
             edits: self.edits.clone(),
+            opened: self.opened.clone(),
         });
         self.stack = restored.stack;
         self.place = Some(place);
@@ -1010,6 +1096,14 @@ struct ScreenState {
     /// On Home's page, the bottom one: what writes the session, which
     /// follows the router while the page is mounted.
     place: Option<Weak<Place>>,
+    /// Where this screen reports being built, for which route, and the draft
+    /// and list the first loaded frame's seal reads.
+    first: Option<(
+        Rc<FirstScreens>,
+        Route,
+        TextEditingController,
+        ScrollController,
+    )>,
     _kept: Option<Rc<dyn Any>>,
 }
 
@@ -1024,6 +1118,14 @@ impl StatefulView for Screen {
             panic_on_dispose: self.shared.faults.contains(Fault::Dispose)
                 && matches!(self.route, Route::Note { .. }),
             place: (self.route == Route::Home).then(|| Weak::clone(&self.shared.place)),
+            first: self.shared.opened.clone().map(|opened| {
+                (
+                    opened,
+                    self.route.clone(),
+                    self.shared.draft.clone(),
+                    self.shared.scroll.clone(),
+                )
+            }),
             _kept: plant(self.shared.planter.as_ref(), Kept::State),
         }
     }
@@ -1032,6 +1134,9 @@ impl StatefulView for Screen {
 impl ViewState<Screen> for ScreenState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let router = Router::<Route>::of(ctx).expect("BUG: a screen is under the Router");
+        if let Some((opened, route, draft, scroll)) = &self.first {
+            opened.record(route, draft, scroll, ctx);
+        }
         if let Some(place) = self.place.as_ref().and_then(Weak::upgrade) {
             place.attach(router.clone());
         }

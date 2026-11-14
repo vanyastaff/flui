@@ -16,6 +16,6 @@
 ### Deprecated
 
 - `flui::testing`'s old harnesses moved under the deprecated `flui::testing::harness`:
-  `HeadlessBinding`, `BuildCapabilities`, `MountOptions`, `MountOwners`, `Mounted`, `DropLedger`,
-  `DropSentinel`, `widgets`, `storage`, `replay`, `a11y` and `render_snapshot`. Use `Tester`,
+  `HeadlessBinding`, `BuildCapabilities`, `MountOptions`, `MountOwners`, `Mounted`, `widgets`,
+  `storage`, `replay`, `a11y` and `render_snapshot`. Use `Tester`,
   `flui::testing::find` and `Tester::inspect_render`.

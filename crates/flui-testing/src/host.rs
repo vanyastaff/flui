@@ -1850,17 +1850,14 @@ impl HeadlessHost {
     }
 
     /// Report the primary window shown (`true`) or hidden, minimized or fully
-    /// occluded (`false`), as a backend's visibility callback does.
+    /// occluded (`false`), as a backend's visibility callback does: the host
+    /// delivers `WindowObservation::Visibility(visible)`, and the window's
+    /// focus and execution state stay as they were.
     pub fn set_window_visible(&self, visible: bool) {
-        let id = self.ui_runtime.presentation_id();
-        self.ui_runtime.enter(|ui_runtime| {
-            ui_runtime.synchronize_window_snapshot(
-                id,
-                flui_platform::WindowExecutionState::Running,
-                true,
-                visible,
-            );
-        });
+        self.observe(
+            self.ui_runtime.presentation_id(),
+            flui_runtime::owner::WindowObservation::Visibility(visible),
+        );
     }
 
     /// Report that the primary window gained (`true`) or lost OS focus, as a

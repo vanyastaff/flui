@@ -16,7 +16,8 @@ use crate::testing::AppRun;
 /// changes counted from here on.
 fn editing(title: &str) -> (AppRun, Rc<Cell<u32>>) {
     let edits = Rc::new(Cell::new(0));
-    let mut run = AppRun::start(AcceptanceApp::new(Faults::NONE).with_edit_counter(Rc::clone(&edits)));
+    let mut run =
+        AppRun::start(AcceptanceApp::new(Faults::NONE).with_edit_counter(Rc::clone(&edits)));
     run.tap("Note 2");
     run.replace_title(title);
     edits.set(0);
@@ -44,7 +45,11 @@ fn ime_preedit_is_underlined_at_the_caret_and_hides_it_on_request() {
         Some(8..23),
         "the composition is marked where the caret was"
     );
-    assert_eq!(run.title_caret(), 23, "the caret is at the composition's cursor");
+    assert_eq!(
+        run.title_caret(),
+        23,
+        "the caret is at the composition's cursor"
+    );
     assert!(run.title_shows_caret());
 
     run.ime(preedit(kana, None));
@@ -88,7 +93,11 @@ fn ime_cancel_removes_the_preedit_and_keeps_the_committed_text() {
     run.ime(ImeEvent::Disabled);
     assert_eq!(run.title(), "Trip to ");
     assert_eq!(run.title_composing(), None);
-    assert_eq!(run.title_caret(), 8, "the caret stays where the composition began");
+    assert_eq!(
+        run.title_caret(),
+        8,
+        "the caret stays where the composition began"
+    );
     assert_eq!(edits.get(), 0, "a cancelled composition changes nothing");
 }
 
@@ -104,7 +113,10 @@ fn pointer_down_mid_composition_commits_before_the_save_handler() {
     assert_eq!(run.title_composing(), None, "the tap ended the composition");
     assert_eq!(edits.get(), 1, "the commit changed the value once");
     run.tap("Back");
-    assert!(run.shows("Trip to 東京"), "the saved title holds the composition");
+    assert!(
+        run.shows("Trip to 東京"),
+        "the saved title holds the composition"
+    );
 }
 
 /// The Back chord pops the Note screen while its field composes: the field
@@ -117,6 +129,10 @@ fn route_change_mid_composition_commits_the_preedit_into_the_draft() {
     run.back_key();
     assert!(!run.shows("Editing note 2"), "the Note screen is gone");
     run.tap("Note 2");
-    assert_eq!(run.title(), "Trip to 東京", "the draft holds the composition");
+    assert_eq!(
+        run.title(),
+        "Trip to 東京",
+        "the draft holds the composition"
+    );
     assert_eq!(run.title_composing(), None, "committed, not composing");
 }
