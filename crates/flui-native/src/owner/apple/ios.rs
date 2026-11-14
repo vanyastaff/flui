@@ -52,6 +52,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
+use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class};
@@ -338,8 +339,18 @@ pub(crate) trait SceneWindows: Send + Sync {
         signal: std::sync::Weak<OwnerSignal>,
         displays: Arc<dyn HostDisplays>,
         touches: Box<dyn ViewTouches>,
-        handler: Rc<dyn flui_platform::WindowHandler>,
+        handler: SceneDelivery,
     ) -> Rc<dyn SceneWindow>;
+}
+
+/// What a scene window delivers to: the application's handler, and the
+/// loop's count of the frames that handler produces, which tells the loop's
+/// wake deadline that a frame ran since it last armed.
+pub(crate) struct SceneDelivery {
+    /// The application's handler for the window.
+    pub(crate) handler: Rc<dyn flui_platform::WindowHandler>,
+    /// The loop's frame count, raised once per frame the handler produces.
+    pub(crate) frames: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// An iOS window as the features beside it reach it (ADR-0151 §3), on the
@@ -447,7 +458,14 @@ pub struct IOSLoop {
     /// The application's wake callback between owner turns.
     turn: Rc<OwnerTurnSlot>,
     identity: Arc<()>,
+    /// The timer of the armed wake deadline, named by its ticket.
     deadline: RefCell<Option<(Arc<()>, web_time::Instant)>>,
+    /// The deadline armed and the last one delivered: a due deadline is
+    /// delivered as a frame request to the scene's window, and the same
+    /// instant is armed again only once a frame ran ([`WakeDeadline`]).
+    wake: RefCell<WakeDeadline>,
+    /// The frames the scenes' windows' handlers produced.
+    frames: FrameCount,
     /// The screens, as the table made them; shared with every window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     /// Marks `displays` stale and wakes the owner on screen and scene
@@ -544,6 +562,8 @@ impl IOSLoop {
             turn: Rc::default(),
             identity,
             deadline: RefCell::new(None),
+            wake: RefCell::default(),
+            frames: FrameCount::default(),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
             notices: H::notices(&app),
@@ -664,11 +684,35 @@ impl IOSLoop {
         }
     }
 
+    /// Deliver the armed deadline if it is due: an owner turn runs no frame,
+    /// so the scene's window is asked for one, as the other loops ask every
+    /// window, and the delivery is recorded at the frame count before it.
+    /// The window is asked with no borrow of the scenes held.
+    fn deliver_due_deadline(&self) {
+        if !self
+            .wake
+            .borrow_mut()
+            .take_due(web_time::Instant::now(), self.frames.get())
+        {
+            return;
+        }
+        let window = self
+            .state()
+            .borrow()
+            .session
+            .as_ref()
+            .map(|session| Rc::clone(&session.window));
+        if let Some(window) = window {
+            window.request_redraw();
+        }
+    }
+
     fn arm_deadline(&self) {
         if !self.signal.accepting() {
             return;
         }
-        let next = self.app.wake_deadline().or_resume(None);
+        let answer = self.app.wake_deadline().or_resume(None);
+        let next = self.wake.borrow_mut().arm(answer, self.frames.get());
         let ticket = {
             let mut current = self.deadline.borrow_mut();
             if current.as_ref().map(|(_, deadline)| *deadline) == next {
@@ -713,6 +757,7 @@ impl IOSLoop {
                             }
                         };
                         if admitted {
+                            platform.deliver_due_deadline();
                             let _ = platform.signal.wake();
                         }
                     });
@@ -1129,7 +1174,10 @@ impl IOSLoop {
                 Arc::downgrade(&self.signal),
                 Arc::clone(&self.displays),
                 (self.view_touches)(),
-                handler,
+                SceneDelivery {
+                    handler,
+                    frames: self.frames.counter(),
+                },
             );
             let admitted = {
                 let mut state = self.state().borrow_mut();
@@ -1561,6 +1609,13 @@ impl IOSLoop {
             }
         }
     }
+}
+
+/// A scene's window delivered a frame: the loop's wake deadline is armed
+/// again, since the frame may have served the deadline last delivered or
+/// left a new one, and no owner turn need follow a frame.
+pub(crate) fn after_frame() {
+    FluiAppDelegate::with_platform(IOSLoop::arm_deadline);
 }
 
 pub(crate) fn request_close(id: WindowId) {

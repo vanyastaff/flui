@@ -2669,7 +2669,11 @@ newer request. After a frame that left nothing marked, the producer stops.
 - **iOS** pauses the link after a tick that left nothing marked. Its requester
   resumes the link on the main thread: inline from there, otherwise through the
   main queue. The lifecycle hold (background, no published attachment) is
-  separate from the demand, and a release always owes a frame.
+  separate from the demand, and a release always owes a frame. A wake deadline
+  that came due is a frame request to the scene window, made once and armed
+  again only after a frame ran (`owner::wake_deadline::WakeDeadline`, the
+  Win32, X11 and Wayland loops' rule); the display link arms the next deadline
+  after each tick, since no owner turn follows a frame.
 - **The Web** loop asks the browser for the next frame only when one is marked,
   or while the refresh estimate is still measuring. The estimate measures for a
   window of intervals from start and after each restart (scale, screen,
