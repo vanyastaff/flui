@@ -935,7 +935,10 @@ impl Tester {
     /// The process is killed and the application opened again over the same
     /// storage: no composition is committed, no close is asked and nothing
     /// more is written, so a write the run accepted and had not carried out
-    /// is lost, a write the storage holds unstarted or uncommitted included;
+    /// is lost, a write the storage holds unstarted or uncommitted included,
+    /// and the storage refuses whatever the run still publishes, from its
+    /// teardown or a handle the test kept, with
+    /// [`StorageError::Cancelled`](flui_platform::StorageError::Cancelled);
     /// another run's write over the same storage is kept, and so is the
     /// test's own. The old run is dropped as a host drops its UI runtime: its
     /// states are disposed and its observers see it detach, which a real kill
@@ -946,33 +949,18 @@ impl Tester {
     /// # Panics
     ///
     /// When code the old run's teardown runs panics, or when the new run's
-    /// first frame fails. A teardown panic still discards the run's held
-    /// writes before it propagates.
+    /// first frame fails. The run's writes are discarded before the teardown,
+    /// so a teardown panic loses them all the same.
     #[must_use]
     pub fn relaunch_after_kill(self) -> Self {
-        /// Discards the killed run's held writes on every exit of its
-        /// teardown, an unwinding one included, so a panic in a detach
-        /// observer cannot let them reach the storage.
-        struct DiscardRunWrites(Option<(MemoryStorage, RunId)>);
-
-        impl Drop for DiscardRunWrites {
-            fn drop(&mut self) {
-                if let Some((storage, run)) = &self.0 {
-                    storage.discard_writes_of(*run);
-                }
-            }
-        }
-
         let relaunch = Rc::clone(&self.relaunch);
         let config = self.config.clone();
-        let discard = DiscardRunWrites(self.storage().cloned().zip(self.run));
-        // Before the teardown too: a hold the old run's state owns and
-        // releases as it drops would otherwise start the writes first.
-        if let Some((storage, run)) = &discard.0 {
-            storage.discard_writes_of(*run);
+        // The run dies before its teardown starts, so nothing the teardown
+        // writes or releases reaches the storage, a panic in it included.
+        if let (Some(storage), Some(run)) = (self.storage(), self.run) {
+            storage.kill_run(run);
         }
         drop(self);
-        drop(discard);
         relaunch(config)
     }
 

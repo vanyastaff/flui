@@ -73,6 +73,9 @@ struct State {
     next_write: u64,
     /// Mints the run of each [`MemoryStorage::for_run`] handle.
     runs: IdMint<NonZeroU64>,
+    /// The runs a kill ended; their publishes are refused. One entry per
+    /// kill a test makes.
+    killed: Vec<RunId>,
     /// The answer slot of every write future not yet dropped.
     writes: HashMap<u64, WriteSlot>,
     /// Accepted while a [`WriteHold`] is alive; not started.
@@ -208,7 +211,7 @@ impl MemoryStorage {
 
     /// A handle on this storage for one run of the application: the writes
     /// it publishes are that run's, which
-    /// [`discard_writes_of`](Self::discard_writes_of) finds again when the
+    /// [`kill_run`](Self::kill_run) finds again when the
     /// run is killed.
     pub(crate) fn for_run(&self) -> (Self, RunId) {
         let run = RunId(
@@ -229,12 +232,17 @@ impl MemoryStorage {
 
     /// `run` was killed: a write it left waiting at a [`WriteHold`] never
     /// starts and one it left at a [`CommitBarrier`] never commits, as a
-    /// process killed before it replaced its files. A future of such a write
-    /// that state the test holds keeps alive gets no answer, as the killed
+    /// process killed before it replaced its files, and every later publish
+    /// through its handles is refused with [`StorageError::Cancelled`], so
+    /// whatever its teardown or a handle the test kept still writes is lost
+    /// too. A future of a discarded write gets no answer, as the killed
     /// process would get none. Another run's writes and the test's own are
     /// kept.
-    pub(crate) fn discard_writes_of(&self, run: RunId) {
+    pub(crate) fn kill_run(&self, run: RunId) {
         let mut state = self.state.lock();
+        if !state.killed.contains(&run) {
+            state.killed.push(run);
+        }
         state.queued.retain(|write| write.run != Some(run));
         state.written.retain(|write| write.run != Some(run));
     }
@@ -425,7 +433,9 @@ impl Storage for MemoryStorage {
             run: self.run,
         };
         let mut wakers = Vec::new();
-        if let Some(error) = state.fail_next.pop_front() {
+        if self.run.is_some_and(|run| state.killed.contains(&run)) {
+            wakers.extend(state.answer(id, Err(StorageError::Cancelled)));
+        } else if let Some(error) = state.fail_next.pop_front() {
             wakers.extend(state.answer(id, Err(error)));
         } else if state.write_holds > 0 {
             let (superseded, waiting): (Vec<Write>, Vec<Write>) = std::mem::take(&mut state.queued)
