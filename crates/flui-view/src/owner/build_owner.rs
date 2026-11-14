@@ -202,7 +202,7 @@ pub(crate) struct BuildDrainResult {
 /// loop: each one unwinds `drain_build_scope`'s stack frame immediately,
 /// skipping any code placed after the loop. Without this guard, an id
 /// already marked dirty on the tree and removed from `external_inbox` (by
-/// `absorb_mid_drain_inbox`'s own `drain()`) but capped by the budget would
+/// `absorb_mid_drain_inbox`'s `take_into`) but capped by the budget would
 /// end up in none of `dirty_elements`, `dirty_reasons`, or `external_inbox`
 /// the moment a LATER build in the same drain panics — a silently lost
 /// rebuild request. A `Drop` impl runs on every exit path, unwind included,
@@ -229,8 +229,10 @@ impl Drop for CappedLeftoverGuard {
         if self.leftover.is_empty() {
             return;
         }
+        let mut capped = Vec::new();
+        self.leftover.take_into(&mut capped);
         let mut inbox = self.inbox.lock();
-        for (id, reasons) in self.leftover.take() {
+        for (id, reasons) in capped {
             inbox.merge(id, reasons);
         }
     }
@@ -468,6 +470,10 @@ pub struct BuildOwner {
     /// each id's tree depth is looked up (issue #1180). Shared (`Arc`) so
     /// the listener callbacks and the owner reference the same queue.
     pub(crate) external_inbox: Arc<ExternalBuildInbox>,
+
+    /// The kept buffer `absorb_mid_drain_inbox` moves the inbox's requests
+    /// into, so a steady frame's drain allocates nothing.
+    landed_builds: Vec<(ElementId, RebuildReasons)>,
 
     /// Remaining RE-ENTRY mid-drain absorb budget for the current frame
     /// (issue #1180, [`MAX_MID_DRAIN_ABSORBS`]). Reset at every
@@ -740,6 +746,7 @@ impl BuildOwner {
             scope_depth: 0,
             on_build_scheduled: None,
             external_inbox: Arc::new(ExternalBuildInbox::default()),
+            landed_builds: Vec::new(),
             mid_drain_absorbs_left: MAX_MID_DRAIN_ABSORBS,
             mid_drain_cap_streak: false,
             built_this_frame: SlotSet::new(),
@@ -2186,12 +2193,12 @@ impl BuildOwner {
     /// at once, and `self.external_inbox` can go and stay empty for the
     /// remainder of the drain (the common case once budget is exhausted), so
     /// later pops hit this function's early return instead of a full
-    /// lock-drain-collect cycle.
+    /// lock-and-move cycle.
     ///
     /// # Locking
     ///
-    /// The inbox lock is held only for the `drain()` that empties it into an
-    /// owned `Vec`, released before anything else runs. It is never held
+    /// The inbox lock is held only for the `take_into` that moves its requests
+    /// into the kept `landed_builds` buffer, released before anything else runs. It is never held
     /// across a build — `parking_lot::Mutex` is non-reentrant, and a build
     /// may call `schedule` synchronously. `capped_leftover` itself is a
     /// plain, unlocked map; `CappedLeftoverGuard::drop` re-locks the inbox
@@ -2204,17 +2211,21 @@ impl BuildOwner {
         tree: &mut ElementTree,
         capped_leftover: &mut PendingBuilds,
     ) -> usize {
-        let landed = {
+        // The kept buffer leaves its field for the loop; a panic below drops
+        // it, and the next absorb grows a new one.
+        let mut landed = std::mem::take(&mut self.landed_builds);
+        {
             let mut inbox = self.external_inbox.lock();
             if inbox.is_empty() {
+                self.landed_builds = landed;
                 return 0;
             }
-            inbox.take()
-        };
+            inbox.take_into(&mut landed);
+        }
 
         let mut absorbed = 0usize;
         let mut newly_capped_ids: Vec<ElementId> = Vec::new();
-        for (id, reasons) in landed {
+        for (id, reasons) in landed.drain(..) {
             // Mark dirty unconditionally, Occupied or Vacant — matching the
             // pre-#1180 drain's own unconditional call. A `RebuildHandle`
             // carries no reference to the element's dirty flag (a plain
@@ -2254,6 +2265,7 @@ impl BuildOwner {
             self.mid_drain_cap_streak = true;
         }
 
+        self.landed_builds = landed;
         absorbed
     }
 
