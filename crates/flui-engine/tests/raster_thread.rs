@@ -595,3 +595,46 @@ fn a_failure_held_before_a_stop_that_comes_first_wakes_the_owner() {
         Some(ExecutorFailure::TurnPanicked { .. })
     ));
 }
+
+/// A capture whose destructor blocks until its gate opens, or [`PATIENCE`].
+struct BlockingDrop(Arc<AtomicBool>);
+
+impl Drop for BlockingDrop {
+    fn drop(&mut self) {
+        let started = Instant::now();
+        while !self.0.load(Ordering::SeqCst) && started.elapsed() < PATIENCE {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+/// The host's wake is dropped on the raster thread before the stop is told,
+/// so a destructor that blocks there falls under the stop's deadline instead
+/// of holding the owner in a join.
+///
+/// Red-check: with the wake dropped after the thread tells the stop, the
+/// stop answers `Ok` only once the destructor ends.
+#[test]
+fn a_wake_whose_destructor_blocks_does_not_hold_the_stop_past_its_deadline() {
+    let gate = Arc::new(AtomicBool::new(false));
+    let blocking = BlockingDrop(Arc::clone(&gate));
+    let (mut handle, _sender) = RasterExecutor::spawn(
+        ScriptedSlots::new(),
+        Arc::new(ManualClock::new()),
+        move || {
+            let _held = &blocking;
+        },
+    )
+    .expect("the raster thread starts");
+    let waited = Duration::from_millis(50);
+    let asked = Instant::now();
+    assert_eq!(
+        handle.shut_down(waited),
+        Err(ExecutorFailure::Wedged { waited })
+    );
+    assert!(
+        asked.elapsed() < DETACH_DEADLINE,
+        "the stop keeps its deadline"
+    );
+    gate.store(true, Ordering::SeqCst);
+}

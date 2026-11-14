@@ -111,6 +111,11 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
                     served.die(failure);
                     wake_owner(&*wake, &served);
                 }
+                // The wake is the host's: its destructor runs before the stop is
+                // told, so one that blocks is under the owner's deadline.
+                let mut released = FirstPanic::new();
+                released.contain(move || drop(wake));
+                let _held = hand_over(released, &served);
                 // The owner may have stopped waiting; nobody to tell then.
                 let _told = stopped_tx.send(());
             })?;
