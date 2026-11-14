@@ -125,23 +125,48 @@ impl HoldsChildParentData for crate::protocol::ErasedSliverChildState {
 /// (a sliver's `layout_offset`, a default it created on first access) is what the child keeps,
 /// which is the parent data's contract: the parent owns it.
 ///
+/// Only the child's own parent borrows it: a torn list that names a child another node owns gets
+/// a copy, as does a harness seed, and neither goes back. A child listed twice is lent to its first
+/// slot; the second reads none this pass, and whatever it creates never replaces the original.
+///
 /// The render tree cannot change while the walk runs (the lease holds its `&mut RenderTree`, and
 /// child builds are deferred until the walk ends), so every lent value goes back to the node it
 /// came from.
 struct LentChildren<'a, 'tree, T: HoldsChildParentData> {
     arena: &'a SubtreeArena<'tree>,
+    /// The node laying these children out.
+    parent: RenderId,
     states: Pooled<'a, T>,
 }
 
 impl<'a, 'tree, T: HoldsChildParentData> LentChildren<'a, 'tree, T> {
-    fn new(arena: &'a SubtreeArena<'tree>, states: Pooled<'a, T>) -> Self {
-        Self { arena, states }
+    fn new(arena: &'a SubtreeArena<'tree>, parent: RenderId, states: Pooled<'a, T>) -> Self {
+        Self {
+            arena,
+            parent,
+            states,
+        }
     }
 
-    /// Moves `node`'s parent data into `state`, the state of the child `node` is.
-    fn lend(state: &mut T, node: &mut RenderNode) {
-        *state.parent_data_slot() = node.take_parent_data();
+    /// Fills `state` with the parent data of `node`, the child it describes: moved out when
+    /// `parent`, the node laying it out, is the child's parent, a copy otherwise.
+    fn lend(arena: &SubtreeArena<'_>, parent: RenderId, state: &mut T, node: &mut RenderNode) {
+        *state.parent_data_slot() = if borrows_from(arena, parent, state.child()) {
+            node.take_parent_data()
+        } else {
+            node.parent_data().map(dyn_clone::clone_box)
+        };
     }
+}
+
+/// Whether `child` lends its parent data to `parent`'s layout frame: it is not in flight, has no
+/// harness seed, and names `parent` as its parent.
+fn borrows_from(arena: &SubtreeArena<'_>, parent: RenderId, child: RenderId) -> bool {
+    #[cfg(any(test, feature = "testing"))]
+    if arena.parent_data_seeds.contains_key(&child) {
+        return false;
+    }
+    !arena.is_in_flight(child) && arena.lease.is_child_of(child, parent)
 }
 
 impl<T: HoldsChildParentData> std::ops::Deref for LentChildren<'_, '_, T> {
@@ -162,14 +187,9 @@ impl<T: HoldsChildParentData> Drop for LentChildren<'_, '_, T> {
     fn drop(&mut self) {
         for state in self.states.iter_mut() {
             let child = state.child();
-            // An in-flight child was never lent (its `&mut` is live on an ancestor frame), so
-            // whatever its state holds is the parent's own default and dies with the state.
-            if self.arena.is_in_flight(child) {
-                continue;
-            }
-            // A harness seed stands in for the node's parent data and was never lent either.
-            #[cfg(any(test, feature = "testing"))]
-            if self.arena.parent_data_seeds.contains_key(&child) {
+            // A child that did not borrow (in flight on an ancestor frame, seeded, or owned by
+            // another node) holds a copy or the parent's own default, which dies with the state.
+            if !borrows_from(self.arena, self.parent, child) {
                 continue;
             }
             let Some(data) = state.parent_data_slot().take() else {
@@ -1233,8 +1253,11 @@ unsafe fn layout_subtree_borrowed_impl(
     // the child AFTER opening the parent's &mut.  Seeding here, while only
     // the `LayoutCycleGuard` (not any &mut) is live, removes the race.
     // -----------------------------------------------------------------------
-    let mut child_states =
-        LentChildren::new(arena, arena.buffers.box_children.checkout(child_ids.len()));
+    let mut child_states = LentChildren::new(
+        arena,
+        id,
+        arena.buffers.box_children.checkout(child_ids.len()),
+    );
     child_states.extend(
         child_ids
             .iter()
@@ -1285,9 +1308,10 @@ unsafe fn layout_subtree_borrowed_impl(
                     cs.sliver_geometry = sliver_entry.state().geometry();
                 }
                 // The child's parent data moves into its state for this layout and back when
-                // `child_states` drops; a harness seed stands in for it unlent.
+                // `child_states` drops (a copy when another node owns the child); a harness seed
+                // stands in for it unlent.
                 if !seeded {
-                    LentChildren::lend(cs, child_node);
+                    LentChildren::lend(arena, id, cs, child_node);
                 }
             }
         }
@@ -2053,6 +2077,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // wired in — even when the current child list is empty.
     let mut child_states = LentChildren::new(
         arena,
+        id,
         arena.buffers.sliver_children.checkout(child_ids.len()),
     );
     child_states.extend(
@@ -2100,7 +2125,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             let child_node: &mut RenderNode = unsafe { &mut *child_ptr.0 };
             cs.offset = child_node.offset();
             if !seeded {
-                LentChildren::lend(cs, child_node);
+                LentChildren::lend(arena, id, cs, child_node);
             }
         }
     }

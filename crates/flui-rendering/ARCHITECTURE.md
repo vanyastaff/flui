@@ -386,9 +386,12 @@ back is two pointer writes and no allocation.
 **What makes it sound:** the lease holds the `&mut RenderTree` for the whole walk and child builds
 are deferred until it ends, so no node is inserted, removed or given new parent data while its
 parent holds it, and nothing reads a child's own parent data during the child's layout. A child in
-flight (a cyclic edge to an ancestor) is never lent; a child listed twice is lent once, and a
-second state never replaces what the first returned. Tests:
-`a_child_keeps_the_parent_data_its_parent_left_it`,
+flight (a cyclic edge to an ancestor) is never lent. Only the node the child names as its parent
+borrows it: a torn list that names a child another node owns reads a copy that goes nowhere. A
+child listed twice is lent to its first slot, the second reads none, and nothing the second
+creates replaces what the first returned. Tests: `a_child_keeps_the_parent_data_its_parent_left_it`,
+`a_child_listed_twice_keeps_what_its_first_slot_wrote`,
+`a_torn_list_reads_a_copy_of_a_child_it_does_not_own`,
 `a_sliver_list_child_keeps_the_layout_offset_its_list_wrote`.
 
 The intrinsic, dry-layout and dry-baseline query walks still read a copy.
