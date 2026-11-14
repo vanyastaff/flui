@@ -547,3 +547,51 @@ fn a_panic_in_the_stop_wakes_the_owner_and_reaches_it() {
     };
     assert!(message.contains("scripted detach panic"), "{message}");
 }
+
+/// The owner's clock, whose first read waits for a gate and then panics.
+#[derive(Debug, Default)]
+struct GatedClock {
+    open: AtomicBool,
+}
+
+impl flui_foundation::clock::MonotonicClock for GatedClock {
+    fn now(&self) -> web_time::Instant {
+        while !self.open.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("the gated clock fails on purpose");
+    }
+
+    fn epoch(&self) -> web_time::Instant {
+        panic!("the gated clock fails on purpose");
+    }
+}
+
+/// A failure held before the first turn still wakes the owner when the stop
+/// comes before that turn.
+///
+/// Red-check: without the stop path's wake for a failure owed from before the
+/// first turn, the owner is never woken for the first read's panic.
+#[test]
+fn a_failure_held_before_a_stop_that_comes_first_wakes_the_owner() {
+    let clock = Arc::new(GatedClock::default());
+    let (wake, woken) = mpsc::channel();
+    let (mut handle, sender) =
+        RasterExecutor::spawn(ScriptedSlots::new(), Arc::clone(&clock) as _, move || {
+            let _told = wake.send(());
+        })
+        .expect("the raster thread starts");
+    let stopping = std::thread::spawn(move || handle.shut_down(DETACH_DEADLINE));
+    eventually("saw the stop", || {
+        sender.health() == ExecutorHealth::ShutDown
+    });
+    clock.open.store(true, Ordering::SeqCst);
+    assert_eq!(stopping.join().expect("the stop returns"), Ok(()));
+    woken
+        .recv_timeout(PATIENCE)
+        .expect("the owner is woken for the first read's panic");
+    assert!(matches!(
+        sender.take_executor_failure(),
+        Some(ExecutorFailure::TurnPanicked { .. })
+    ));
+}
