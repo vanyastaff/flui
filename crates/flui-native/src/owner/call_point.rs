@@ -79,7 +79,7 @@ impl<R> Called<R> {
         target_os = "macos",
         target_os = "ios",
         target_arch = "wasm32",
-        all(target_os = "linux", feature = "x11"),
+        all(target_os = "linux", any(feature = "x11", feature = "wayland")),
         all(test, not(target_arch = "wasm32"))
     ))]
     pub(crate) fn or_contain(self, fallback: R, handler: &'static str) -> R {
