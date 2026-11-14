@@ -291,6 +291,7 @@ impl PipelineOwner<Semantics> {
                             );
                         }
                         SemanticsPlan::Graft(grafts) => {
+                            clear_graft_anchors(owner, &grafts, &mut uncontained);
                             for (anchor, built) in grafts {
                                 apply_graft(
                                     owner,
@@ -2494,6 +2495,32 @@ fn collection_affects_graft(tree: &SemanticsTree, anchor: flui_foundation::Seman
     false
 }
 
+/// Removes the nodes each graft of a pass replaces, and their entries in the
+/// containment table. The arena reuses a removed node's id, so the table
+/// drops them before any graft inserts a node; it is read once for the pass,
+/// not once per graft.
+fn clear_graft_anchors(
+    owner: &mut SemanticsOwner,
+    grafts: &[(flui_foundation::SemanticsId, BuiltSemanticsNode<'_>)],
+    uncontained: &mut FxHashSet<flui_foundation::SemanticsId>,
+) {
+    for &(anchor_sid, _) in grafts {
+        let old_children: Vec<flui_foundation::SemanticsId> = owner
+            .tree()
+            .children(anchor_sid)
+            .map_or_default(<[flui_foundation::SemanticsId]>::to_vec);
+        for child in old_children {
+            let _ = owner.tree_mut().remove(child);
+        }
+        uncontained.remove(&anchor_sid);
+    }
+    if !uncontained.is_empty() {
+        uncontained.retain(|id| owner.tree().contains(*id));
+    }
+}
+
+/// Places one graft into its anchor's slot, which
+/// [`clear_graft_anchors`] emptied.
 fn apply_graft(
     owner: &mut SemanticsOwner,
     anchor_sid: flui_foundation::SemanticsId,
@@ -2501,22 +2528,6 @@ fn apply_graft(
     regions: &RegionIdentities,
     uncontained: &mut FxHashSet<flui_foundation::SemanticsId>,
 ) {
-    let old_children: Vec<flui_foundation::SemanticsId> = owner
-        .tree()
-        .children(anchor_sid)
-        .map_or_default(<[flui_foundation::SemanticsId]>::to_vec);
-    for child in old_children {
-        let _ = owner.tree_mut().remove(child);
-    }
-    // The arena reuses a removed node's id, so the nodes the graft replaced
-    // leave the set before any new node can take one of their ids. The set
-    // holds only the nodes that are not contained, so this reads it, not
-    // the replaced subtree.
-    uncontained.remove(&anchor_sid);
-    if !uncontained.is_empty() {
-        uncontained.retain(|id| owner.tree().contains(*id));
-    }
-
     if !built.contained {
         uncontained.insert(anchor_sid);
     }
