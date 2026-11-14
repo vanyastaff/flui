@@ -395,8 +395,9 @@ pub enum ExecutorFailure {
         /// How long the owner waited.
         waited: std::time::Duration,
     },
-    /// A turn panicked outside a slot's own command (the host's wake, a trim
-    /// or a destructor). The thread contained it and kept serving; the
+    /// Code the executor does not own panicked outside a slot's own command
+    /// (the host's wake, the clock, a trim, a destructor, or a log subscriber
+    /// on the executor's death). The executor contained it and kept serving; the
     /// payload is discarded once its text is read, since it cannot be
     /// resumed on the owner's thread.
     #[error("a raster turn panicked: {message}")]
