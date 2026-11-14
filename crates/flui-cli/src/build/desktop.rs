@@ -230,6 +230,9 @@ impl DesktopBuilder {
             } => target.clone(),
             _ => format!("{}-apple-darwin", std::env::consts::ARCH),
         };
+        // What the application opens, from the crates it links for this target.
+        let declarations =
+            crate::declarations::Declarations::collect(&ctx.workspace_root, &[triple.as_str()])?;
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -255,13 +258,21 @@ impl DesktopBuilder {
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-</dict>
+{opening}</dict>
 </plist>
 "#,
             name = xml_escape(&bundle.name),
             identifier = xml_escape(&bundle.identifier),
             executable = xml_escape(&exe_name),
             minimum = ctx.floors.macos(&triple),
+            opening = crate::build::apple_opening::plist_xml_entries(
+                &crate::build::apple_opening::info_plist_keys(
+                    &bundle.identifier,
+                    &declarations,
+                    crate::build::apple_opening::ApplePlatform::Macos,
+                ),
+                1,
+            ),
         );
         std::fs::write(contents.join("Info.plist"), plist)?;
 

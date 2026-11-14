@@ -15,6 +15,8 @@ pub(crate) mod android;
 mod android_elf;
 /// APK packaging with the SDK build-tools (no Gradle).
 mod android_package;
+/// What an Apple bundle's `Info.plist` states about what the application opens.
+mod apple_opening;
 /// Type-state builder for `BuilderContext`
 pub(crate) mod context_builder;
 /// Desktop platform build support (Windows, macOS, Linux)

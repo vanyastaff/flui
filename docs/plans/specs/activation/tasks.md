@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4; AC5 без чтения `[package.metadata.flui.declares]` в `#[flui::main]`. В работе: —; следующие остаток AC5, AC11.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4; AC5 без чтения `[package.metadata.flui.declares]` в `#[flui::main]`. AC11 частично: ключи schema 3, AndroidManifest и `Info.plist`. В работе: —; следующие остаток AC5, остаток AC11.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -52,3 +52,11 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   слиты по порядку, другой адресат и работающее приложение слышатся после `ready`) и
   `opened_reports_waiting_for_ready_are_bounded`. Холодный тест падает без
   `OwnerPlatform::take_launch_opened` (строится `initial`).
+- **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`
+  (схемы, домены, расширения, MIME, имена), `what_the_application_opens_is_joined_over_the_graph`
+  (регистр, файл фичи только при включённой фиче), строки `a_malformed_declaration_is_refused_by_crate`
+  (ключ версии 3 при `schema = 2`, веб-схема, URL вместо домена, одно расширение с двумя MIME),
+  `the_activity_filters_what_the_application_opens`, `a_bundle_registers_what_the_application_opens`,
+  `the_keys_render_as_xml_property_list_entries`, строка «the info plist registers what the
+  application opens» `ios_package::tests::publication_contract`. Остаток: entitlement доменов,
+  `.desktop`, регистрация Windows, проверки `flui doctor`.

@@ -68,9 +68,70 @@ pub(crate) fn render(facts: &ManifestFacts<'_>, declarations: &Declarations) -> 
         uses_permissions.push_str("\" />\n");
     }
     BASE.replace("{{uses_permissions}}\n", &uses_permissions)
+        .replace("{{intent_filters}}\n", &intent_filters(declarations))
         .replace("{{app_name}}", &xml_escape(facts.label))
         .replace("{{lib_name}}", &xml_escape(facts.lib_name))
         .replace("{{activity}}", ACTIVITY)
+}
+
+/// The Activity's intent filters for what the application opens: one
+/// `VIEW` filter for its own schemes, one verified (`autoVerify`) for the
+/// `https` links of its domains, which Android checks against each domain's
+/// `/.well-known/assetlinks.json`, and one for its file types by MIME type,
+/// which a file manager or a `content:` URI reaches. Each value was checked
+/// when it was read (`declarations::opening`), so none needs escaping.
+fn intent_filters(declarations: &Declarations) -> String {
+    const VIEW: &str = "                <action android:name=\"android.intent.action.VIEW\" />\n\
+                        \x20               <category android:name=\"android.intent.category.DEFAULT\" />\n";
+    const BROWSABLE: &str =
+        "                <category android:name=\"android.intent.category.BROWSABLE\" />\n";
+    let mut filters = String::new();
+    let mut filter = |verified: bool, browsable: bool, data: Vec<String>| {
+        if data.is_empty() {
+            return;
+        }
+        filters.push_str(if verified {
+            "            <intent-filter android:autoVerify=\"true\">\n"
+        } else {
+            "            <intent-filter>\n"
+        });
+        filters.push_str(VIEW);
+        if browsable {
+            filters.push_str(BROWSABLE);
+        }
+        for attributes in data {
+            filters.push_str("                <data ");
+            filters.push_str(&attributes);
+            filters.push_str(" />\n");
+        }
+        filters.push_str("            </intent-filter>\n");
+    };
+    filter(
+        false,
+        true,
+        declarations
+            .url_schemes()
+            .map(|(scheme, _)| format!("android:scheme=\"{scheme}\""))
+            .collect(),
+    );
+    let hosts: Vec<String> = declarations
+        .associated_domains()
+        .map(|(domain, _)| format!("android:host=\"{domain}\""))
+        .collect();
+    if !hosts.is_empty() {
+        let mut data = vec!["android:scheme=\"https\"".to_owned()];
+        data.extend(hosts);
+        filter(true, true, data);
+    }
+    filter(
+        false,
+        false,
+        declarations
+            .file_types()
+            .map(|(file_type, _)| format!("android:mimeType=\"{}\"", file_type.mime()))
+            .collect(),
+    );
+    filters
 }
 
 /// Writes [`render`]'s manifest to `path` unless it already holds it.
@@ -180,6 +241,86 @@ mod tests {
         assert_eq!(rules.len(), 1, "{rules:?}");
         let kept = std::fs::read_to_string(rules[0].1).expect("the declared R8 rules");
         assert!(kept.contains("-keep class dev.flui.** { *; }"), "{kept}");
+    }
+
+    /// What the application opens becomes the Activity's intent filters: its
+    /// schemes browsable, its domains' `https` links verified, its file types
+    /// by MIME type. An application that declares nothing gets the launcher
+    /// filter alone.
+    #[test]
+    fn the_activity_filters_what_the_application_opens() {
+        let declarations = Declarations::of_table(
+            "notes",
+            "schema = 3\nurl-schemes = [\"notes\", \"notes-beta\"]\n\
+             associated-domains = [\"notes.example.com\", \"example.org\"]\n\
+             [[file-types]]\nextension = \"note\"\nmime = \"application/x-notes-note\"\n\
+             name = \"Note\"\n",
+        );
+        let manifest = render(&FACTS, &declarations);
+        let document = roxmltree::Document::parse(&manifest).expect("the manifest is XML");
+        const ANDROID: &str = "http://schemas.android.com/apk/res/android";
+        let filters: Vec<(Option<&str>, Vec<&str>, Vec<String>)> = document
+            .descendants()
+            .filter(|node| node.has_tag_name("intent-filter"))
+            .map(|filter| {
+                let names = |tag: &str| -> Vec<&str> {
+                    filter
+                        .children()
+                        .filter(|node| node.has_tag_name(tag))
+                        .filter_map(|node| node.attribute((ANDROID, "name")))
+                        .collect()
+                };
+                let mut named = names("action");
+                named.extend(names("category"));
+                let data = filter
+                    .children()
+                    .filter(|node| node.has_tag_name("data"))
+                    .flat_map(|node| {
+                        node.attributes()
+                            .map(|attribute| format!("{}={}", attribute.name(), attribute.value()))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                (filter.attribute((ANDROID, "autoVerify")), named, data)
+            })
+            .collect();
+        const VIEW: &str = "android.intent.action.VIEW";
+        const DEFAULT: &str = "android.intent.category.DEFAULT";
+        const BROWSABLE: &str = "android.intent.category.BROWSABLE";
+        assert_eq!(
+            filters,
+            [
+                (
+                    None,
+                    vec![
+                        "android.intent.action.MAIN",
+                        "android.intent.category.LAUNCHER"
+                    ],
+                    vec![]
+                ),
+                (
+                    None,
+                    vec![VIEW, DEFAULT, BROWSABLE],
+                    vec!["scheme=notes".to_owned(), "scheme=notes-beta".to_owned()]
+                ),
+                (
+                    Some("true"),
+                    vec![VIEW, DEFAULT, BROWSABLE],
+                    vec![
+                        "scheme=https".to_owned(),
+                        "host=example.org".to_owned(),
+                        "host=notes.example.com".to_owned()
+                    ]
+                ),
+                (
+                    None,
+                    vec![VIEW, DEFAULT],
+                    vec!["mimeType=application/x-notes-note".to_owned()]
+                ),
+            ]
+        );
+        let plain = render(&FACTS, &Declarations::default());
+        assert_eq!(plain.matches("<intent-filter").count(), 1, "{plain}");
     }
 
     /// The manifest a FLUI application on Android gets, whole: a change to
