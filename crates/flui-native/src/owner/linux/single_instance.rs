@@ -327,11 +327,8 @@ mod bus {
         async fn open(
             &self,
             uris: Vec<String>,
-            hint: String,
             platform_data: HashMap<String, OwnedValue>,
         ) -> zbus::fdo::Result<()> {
-            // What `uris` are opened as is decided here, whatever the hint.
-            drop(hint);
             taken(
                 self.0.post(Forwarded {
                     uris: uris
@@ -507,7 +504,7 @@ mod bus {
                     path,
                     Some(INTERFACE),
                     "Open",
-                    &(launch.uris, "", data),
+                    &(launch.uris, data),
                 )
                 .await?;
         }
