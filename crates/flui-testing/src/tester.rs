@@ -47,7 +47,7 @@ use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
 
 use crate::host::KitStorage;
-use crate::storage::MemoryStorage;
+use crate::storage::{MemoryStorage, RunId};
 use crate::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 
 /// One frame at 60 Hz: what [`Tester::pump`] advances and what an action or
@@ -271,6 +271,9 @@ pub struct Tester {
     /// The keys [`Tester::key_down`] holds, which a chord neither presses
     /// nor releases.
     held_keys: Vec<String>,
+    /// This run of the application over its storage, whose held writes a
+    /// kill discards.
+    run: Option<RunId>,
     /// Mounts the same view again in a window: what [`Tester::restart`] runs.
     relaunch: Rc<dyn Fn(TestWindow) -> Tester>,
 }
@@ -327,9 +330,11 @@ impl Tester {
         }
         let windows = Arc::new(Mutex::new(Vec::new()));
         let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
+        let run_storage = storage.as_ref().map(MemoryStorage::for_run);
+        let run = run_storage.as_ref().map(|(_, run)| *run);
         let mut host = HeadlessHost::with_storage(
             headless,
-            storage.map(|storage| KitStorage {
+            run_storage.map(|(storage, _)| KitStorage {
                 host: Arc::new(storage),
                 provided: None,
             }),
@@ -352,6 +357,7 @@ impl Tester {
             _agent: agent,
             config,
             held_keys: Vec::new(),
+            run,
             relaunch: Rc::new(move |window| Self::mount_in(view.clone(), window)),
         };
         // The window collects semantics from the frame after its agent took
@@ -928,8 +934,10 @@ impl Tester {
     /// The process is killed and the application opened again over the same
     /// storage: no composition is committed, no close is asked and nothing
     /// more is written, so a write the run accepted and had not carried out
-    /// is lost, and so is every write the storage holds unstarted (a storage
-    /// two runs share loses the other's too). The old run is
+    /// is lost, a write the storage holds unstarted or uncommitted included,
+    /// and a future of such a write the test still holds resolves to
+    /// [`StorageError::Cancelled`](flui_platform::StorageError::Cancelled);
+    /// another run's write over the same storage is kept. The old run is
     /// dropped as a host drops its UI runtime: its
     /// states are disposed and its observers see it detach, which a real kill
     /// never runs. The old tree is gone before the new one mounts.
@@ -944,9 +952,10 @@ impl Tester {
         let relaunch = Rc::clone(&self.relaunch);
         let config = self.config.clone();
         let storage = self.storage().cloned();
+        let run = self.run;
         drop(self);
-        if let Some(storage) = storage {
-            storage.discard_held_writes();
+        if let (Some(storage), Some(run)) = (storage, run) {
+            storage.discard_writes_of(run);
         }
         relaunch(config)
     }

@@ -34,11 +34,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
+use flui_foundation::IdMint;
 use flui_platform::{
     CopiedAside, Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion,
     WriteMode,
@@ -53,7 +55,14 @@ use parking_lot::Mutex;
 #[derive(Clone, Default)]
 pub struct MemoryStorage {
     state: Arc<Mutex<State>>,
+    /// The run this handle publishes for; `None` for the test's own handles.
+    run: Option<RunId>,
 }
+
+/// One run of the application over a [`MemoryStorage`], so a kill finds the
+/// writes that run left held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunId(NonZeroU64);
 
 #[derive(Default)]
 struct State {
@@ -62,6 +71,8 @@ struct State {
     /// Request futures not yet dropped.
     live: usize,
     next_write: u64,
+    /// Mints the run of each [`MemoryStorage::for_run`] handle.
+    runs: IdMint<NonZeroU64>,
     /// The answer slot of every write future not yet dropped.
     writes: HashMap<u64, WriteSlot>,
     /// Accepted while a [`WriteHold`] is alive; not started.
@@ -86,6 +97,8 @@ struct State {
 /// An accepted value on its way to [`State::values`].
 struct Write {
     id: u64,
+    /// The run that published it; `None` for the test's own writes.
+    run: Option<RunId>,
     name: StorageName,
     bytes: Vec<u8>,
     mode: WriteMode,
@@ -190,11 +203,49 @@ impl MemoryStorage {
         }
     }
 
-    /// The process that asked for the writes a hold keeps waiting is gone:
-    /// they never start, and releasing the hold starts none of them. Their
-    /// futures, while still polled, stay pending.
-    pub(crate) fn discard_held_writes(&self) {
-        self.state.lock().queued.clear();
+    /// A handle on this storage for one run of the application: the writes
+    /// it publishes are that run's, which
+    /// [`discard_writes_of`](Self::discard_writes_of) finds again when the
+    /// run is killed.
+    pub(crate) fn for_run(&self) -> (Self, RunId) {
+        let run = RunId(
+            self.state
+                .lock()
+                .runs
+                .next()
+                .expect("BUG: a test launches fewer runs than u64 holds"),
+        );
+        (
+            Self {
+                state: Arc::clone(&self.state),
+                run: Some(run),
+            },
+            run,
+        )
+    }
+
+    /// `run` was killed: a write it left waiting at a [`WriteHold`] never
+    /// starts and one it left at a [`CommitBarrier`] never commits, as a
+    /// process killed before it replaced its files; a future of it still
+    /// alive resolves to [`StorageError::Cancelled`]. Another run's writes
+    /// and the test's own are kept.
+    pub(crate) fn discard_writes_of(&self, run: RunId) {
+        let mut guard = self.state.lock();
+        let mut dead = Vec::new();
+        let state = &mut *guard;
+        for list in [&mut state.queued, &mut state.written] {
+            let (gone, kept): (Vec<Write>, Vec<Write>) = std::mem::take(list)
+                .into_iter()
+                .partition(|write| write.run == Some(run));
+            *list = kept;
+            dead.extend(gone.into_iter().map(|write| write.id));
+        }
+        let wakers: Vec<Waker> = dead
+            .into_iter()
+            .filter_map(|id| state.answer(id, Err(StorageError::Cancelled)))
+            .collect();
+        drop(guard);
+        wake_all(wakers);
     }
 
     /// Write but commit nothing while the returned barrier is alive: reads
@@ -380,6 +431,7 @@ impl Storage for MemoryStorage {
             name: *name,
             bytes,
             mode,
+            run: self.run,
         };
         let mut wakers = Vec::new();
         if let Some(error) = state.fail_next.pop_front() {
