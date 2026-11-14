@@ -7,7 +7,7 @@ use flui_foundation::panic::FirstPanic;
 use flui_scheduler::SchedulerPhase;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Errors returned by [`UiCommandSender`] sends.
 ///
@@ -203,43 +203,53 @@ pub struct DrainReport {
 // Sender
 // ---------------------------------------------------------------------------
 
-/// Identity tokens for coalesced platform wakes.
+/// Tickets for coalesced platform wakes.
 ///
 /// A boolean is insufficient because senders are concurrent: an older wake
 /// may return successfully after a newer wake panics, and must not clear the
-/// newer demand. Each request therefore replaces the current token; a wake
-/// can acknowledge only the exact token it captured. Unlike an integer
-/// generation, token identity cannot saturate on 32-bit targets.
+/// newer demand. Each request therefore takes the next ticket, and a wake
+/// acknowledges only through the ticket it captured: the debt is paid once
+/// the newest acknowledged ticket reaches the newest requested one. A ticket
+/// is one integer and the debt two, so requesting a wake allocates nothing.
 #[derive(Default)]
 pub(super) struct WakeDebt {
-    current: parking_lot::Mutex<Option<Arc<AtomicBool>>>,
+    /// The newest ticket a request minted.
+    requested: AtomicU64,
+    /// The newest ticket a normally returning wake acknowledged.
+    acknowledged: AtomicU64,
 }
+
+/// One requested wake, as [`WakeDebt::request`] minted it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WakeTicket(u64);
 
 impl std::fmt::Debug for WakeDebt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WakeDebt")
-            .field("pending", &self.pending_token().is_some())
+            .field("pending", &self.pending_ticket().is_some())
             .finish()
     }
 }
 
 impl WakeDebt {
-    fn request(&self) -> Arc<AtomicBool> {
-        let token = Arc::new(AtomicBool::new(false));
-        *self.current.lock() = Some(Arc::clone(&token));
-        token
+    fn request(&self) -> WakeTicket {
+        // Minting and publishing are one read-modify-write on `requested`, so
+        // the release sequence on it orders every earlier request's send before
+        // the wake that acknowledges a newer ticket.
+        let previous = self
+            .requested
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
+            .expect("BUG: a runtime requests fewer than 2^64 wakes");
+        WakeTicket(previous + 1)
     }
 
-    fn pending_token(&self) -> Option<Arc<AtomicBool>> {
-        self.current
-            .lock()
-            .as_ref()
-            .filter(|token| !token.load(Ordering::Acquire))
-            .cloned()
+    fn pending_ticket(&self) -> Option<WakeTicket> {
+        let requested = self.requested.load(Ordering::Acquire);
+        (self.acknowledged.load(Ordering::Acquire) < requested).then_some(WakeTicket(requested))
     }
 
-    fn acknowledge(token: &AtomicBool) {
-        token.store(true, Ordering::Release);
+    fn acknowledge(&self, ticket: WakeTicket) {
+        self.acknowledged.fetch_max(ticket.0, Ordering::AcqRel);
     }
 }
 
@@ -254,8 +264,8 @@ pub struct UiCommandSender {
     pub(super) tx: Sender<UiCommand>,
     pub(super) capacity: usize,
     pub(super) redraw_pending: Arc<AtomicBool>,
-    /// A platform wake accepts each command/redraw token only once that exact
-    /// token is acknowledged. A panicking wake leaves debt so the
+    /// A platform wake accepts each command/redraw ticket only once that exact
+    /// ticket is acknowledged. A panicking wake leaves debt so the
     /// next command ingress or completed owner-inbox drain retries delivery
     /// instead of mistaking durable queue/dirty flags for event-loop progress.
     pub(super) wake_debt: Arc<WakeDebt>,
@@ -281,7 +291,7 @@ impl std::fmt::Debug for UiCommandSender {
                 "redraw_pending",
                 &self.redraw_pending.load(Ordering::Relaxed),
             )
-            .field("wake_debt", &self.wake_debt.pending_token().is_some())
+            .field("wake_debt", &self.wake_debt.pending_ticket().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -385,7 +395,7 @@ impl UiCommandSender {
         // wake; a pending frame absorbs repeated wakes anyway, this just
         // skips redundant platform calls.
         if !self.redraw_pending.swap(true, Ordering::AcqRel)
-            || self.wake_debt.pending_token().is_some()
+            || self.wake_debt.pending_ticket().is_some()
         {
             self.wake_owner();
         }
@@ -454,32 +464,32 @@ impl UiCommandSender {
 
     /// Deliver one platform wake while retaining failed-delivery debt.
     ///
-    /// The demand itself is already durable in the inbox/redraw flags. This
-    /// identity token records that the host has not yet accepted the owner
+    /// The demand itself is already durable in the inbox/redraw flags. The
+    /// wake's ticket records that the host has not yet accepted the owner
     /// turn needed to observe that demand. Only a normally returning wake
-    /// acknowledges its captured token; unwinding therefore leaves
-    /// the next ingress or owner boundary responsible for retrying it.
+    /// acknowledges its ticket; unwinding therefore leaves the debt for the
+    /// next ingress or owner boundary to retry.
     pub(super) fn wake_owner(&self) {
-        let token = self.wake_debt.request();
-        self.deliver_wake(token);
+        let ticket = self.wake_debt.request();
+        self.deliver_wake(ticket);
     }
 
-    fn deliver_wake(&self, token: Arc<AtomicBool>) {
+    fn deliver_wake(&self, ticket: WakeTicket) {
         #[expect(
             clippy::disallowed_methods,
-            reason = "ADR-0287: the platform wake is user code; a panic clears the pending token"
+            reason = "ADR-0287: the platform wake is user code; a panic leaves its ticket unacknowledged"
         )]
         let outcome = catch_unwind(AssertUnwindSafe(|| (self.wake)()));
         match outcome {
-            Ok(()) => WakeDebt::acknowledge(&token),
+            Ok(()) => self.wake_debt.acknowledge(ticket),
             Err(payload) => resume_unwind(payload),
         }
     }
 
     /// Retry a wake that a prior owner-turn rearm failed to deliver.
     fn retry_wake_debt(&self) {
-        if let Some(token) = self.wake_debt.pending_token() {
-            self.deliver_wake(token);
+        if let Some(ticket) = self.wake_debt.pending_ticket() {
+            self.deliver_wake(ticket);
         }
     }
 }

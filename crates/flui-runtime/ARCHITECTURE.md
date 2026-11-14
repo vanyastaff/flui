@@ -818,11 +818,13 @@ state from being stranded even though Rust cannot recover from two panicking fie
 destructors inside one aggregate's generated drop glue.
 
 Every command and input-redraw wake has UI runtime-scoped delivery debt shared by
-the UI runtime and every `UiCommandSender`. Replaceable identity tokens, rather than
-a boolean latch or finite integer generation, prevent an older overlapping
-successful wake from erasing a newer failed delivery and cannot saturate on
-32-bit targets. Later command ingress or a completed owner-inbox drain retries
-the newest unacknowledged token; no retry is promised without a
+the UI runtime and every `UiCommandSender`. Each wake takes the next ticket of a
+`u64` counter in one atomic update that also publishes it, and only a wake that
+returns acknowledges its own ticket, the acknowledged count rising to the newest
+one seen. An older overlapping successful wake therefore never erases a newer
+failed delivery; exhausting the counter is a `BUG:` panic, unreachable in practice. Later command
+ingress or a completed owner-inbox drain retries the newest unacknowledged
+ticket; no retry is promised without a
 later host opportunity. A send refused because the bounded inbox is full is
 also a host opportunity: it retries existing debt before returning the rejected
 command, because otherwise no successful ingress could reach the wake path.

@@ -8,6 +8,7 @@ use crate::presentation::PresentationState;
 use flui_foundation::panic::{FailureClass, PanicRecovery, RecoveryScope};
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 use flui_scheduler::{DemandKind, PollDecision};
+use smallvec::SmallVec;
 use std::time::Duration;
 use web_time::Instant;
 
@@ -30,6 +31,11 @@ enum DeadlineOperation {
     Observe,
     PollDue,
 }
+
+/// The presentations one frame samples, in presentation order. An application
+/// usually has one window, so that one stays inline and a steady frame does
+/// not allocate the list; a second window spills to the heap.
+pub(super) type SamplingBatch<'runtime> = SmallVec<[PresentationSampling<'runtime>; 1]>;
 
 /// One presentation's first failure and its independent publication evidence.
 pub(super) struct PresentationSampling<'runtime> {
@@ -416,7 +422,7 @@ impl UiRuntime {
         // nested drains still apply commands, but defer their metadata refresh.
         let _turn = self.begin_geometry_turn();
         let now = flui_foundation::MonotonicClock::now(&self.clock);
-        let mut sampling: Vec<_> = self
+        let mut sampling: SamplingBatch<'_> = self
             .presentations
             .iter()
             .filter(|presentation| !presentation.closing_requested.get())
@@ -481,16 +487,13 @@ impl UiRuntime {
         }
     }
 
-    pub(super) fn sample_presentations(
-        &self,
-        constraints: BoxConstraints,
-    ) -> Vec<PresentationSampling<'_>> {
+    pub(super) fn sample_presentations(&self, constraints: BoxConstraints) -> SamplingBatch<'_> {
         let raw = self.raw_frame_time();
         let now = self
             .frame_time
             .get()
             .unwrap_or_else(|| flui_foundation::MonotonicClock::now(&self.clock));
-        let mut sampling: Vec<_> = self
+        let mut sampling: SamplingBatch<'_> = self
             .presentations
             .iter()
             .map(PresentationSampling::new)

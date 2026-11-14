@@ -1,9 +1,11 @@
 //! Presentation-local retained numeric preparation, serviced outside tree loans.
 
+use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
 
 use flui_animation::FrameTick;
 use flui_foundation::geometry::DevicePixelRatio;
+use flui_foundation::sequence::IdMint;
 use flui_foundation::{PresentationId, TextSizeRequest};
 use flui_painting::{TextPreparationPending, TextSizing, TextSizingCohort, TextSizingSource};
 use flui_rendering::{LayoutPremise, constraints::BoxConstraints, pipeline::PipelineOwner};
@@ -15,11 +17,17 @@ use crate::presentation::PresentationState;
 
 const RECEIPT_RETRY: Duration = Duration::from_millis(100);
 
+/// Names one admitted segment of a presentation: a sample or a detached work
+/// item answers only the segment it was taken from, never a later one that
+/// replaced it. Minted per presentation, never reused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SegmentSeal(NonZeroU64);
+
 /// Detached numeric work for one exact retained presentation segment.
 /// Dropping a receipt does not erase its accepted frontier.
 pub struct TextSizingWork {
     presentation: PresentationId,
-    segment: Rc<()>,
+    segment: SegmentSeal,
     receipt: Rc<()>,
     source: TextSizingSource,
     requests: Vec<TextSizeRequest>,
@@ -87,7 +95,7 @@ enum Wait {
 }
 
 pub(crate) struct SavedTextSegment {
-    seal: Rc<()>,
+    seal: SegmentSeal,
     pub(crate) tick: FrameTick,
     pub(crate) host_time: Instant,
     pub(crate) constraints: BoxConstraints,
@@ -104,7 +112,7 @@ pub(crate) struct SavedTextSegment {
 
 /// The exact retained attempt that supplied a sampling operation's frozen tick.
 pub(crate) struct RetainedSample {
-    seal: Weak<()>,
+    seal: SegmentSeal,
     tick: FrameTick,
 }
 
@@ -114,7 +122,7 @@ impl RetainedSample {
     }
 
     fn matches(&self, current: Option<&SavedTextSegment>) -> bool {
-        current.is_some_and(|saved| Weak::ptr_eq(&self.seal, &Rc::downgrade(&saved.seal)))
+        current.is_some_and(|saved| saved.seal == self.seal)
     }
 }
 
@@ -125,7 +133,7 @@ pub(crate) fn retained_sample(presentation: &PresentationState) -> Option<Retain
         .segment
         .as_ref()
         .map(|saved| RetainedSample {
-            seal: Rc::downgrade(&saved.seal),
+            seal: saved.seal,
             tick: saved.tick,
         })
 }
@@ -135,6 +143,7 @@ pub(crate) struct TextPreparation {
     installed: Option<TextSizingSource>,
     replacement_barrier: bool,
     pub(crate) segment: Option<SavedTextSegment>,
+    seals: IdMint<NonZeroU64>,
 }
 
 impl TextPreparation {
@@ -263,8 +272,15 @@ pub(crate) fn admit(
         let _ = owner.set_text_sizing(attempt_policy);
         owner.set_root_constraints(Some(constraints));
     });
+    let seal = presentation
+        .text_preparation
+        .borrow()
+        .seals
+        .next()
+        .map(SegmentSeal)
+        .expect("BUG: a presentation admits fewer than 2^64 text segments");
     let saved = SavedTextSegment {
-        seal: Rc::new(()),
+        seal,
         tick: presentation
             .sampled_motion_tick
             .get()
@@ -482,7 +498,7 @@ impl UiRuntime {
             };
             work.push(TextSizingWork {
                 presentation: presentation.id(),
-                segment: Rc::clone(&saved.seal),
+                segment: saved.seal,
                 receipt,
                 source: frontier.policy_source.clone(),
                 requests: frontier.requests.clone(),
@@ -508,9 +524,11 @@ impl UiRuntime {
         });
         let accepted = {
             let mut state = presentation.text_preparation.borrow_mut();
-            let Some(saved) = state.segment.as_mut().filter(|saved| {
-                Rc::ptr_eq(&saved.seal, &work.segment) && accepts(presentation, saved)
-            }) else {
+            let Some(saved) = state
+                .segment
+                .as_mut()
+                .filter(|saved| saved.seal == work.segment && accepts(presentation, saved))
+            else {
                 return false;
             };
             if !matches!(&saved.wait, Wait::InFlight {receipt, ..} | Wait::Stalled {receipt} if Weak::ptr_eq(receipt, &Rc::downgrade(&work.receipt)))
