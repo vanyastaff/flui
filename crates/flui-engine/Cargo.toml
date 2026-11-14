@@ -172,6 +172,10 @@ name = "compile_fail"
 path = "tests/compile_fail.rs"
 
 [[test]]
+name = "painter_warm_path_allocation"
+path = "tests/painter_warm_path_allocation.rs"
+
+[[test]]
 name = "engine_it"
 path = "tests/main.rs"
 # The raster executor's protocol suite drives the `testing` kit's backend.

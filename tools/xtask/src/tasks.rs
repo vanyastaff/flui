@@ -614,7 +614,7 @@ fn native_feature_slice_plan(target: Option<&str>) -> Vec<Step> {
     steps
 }
 
-/// Local `gpu-test` gate: the engine's readbacks, then the facade's
+/// Local `gpu-test` gate: engine readbacks and path-recording allocations, then the facade's
 /// composited-layer update readback (it needs the render pipeline and the
 /// headless renderer, which only the facade depends on together); that test is
 /// `#[ignore]`d in ordinary runs, which have no adapter, so this run names
@@ -630,6 +630,8 @@ fn gpu_test_plan(backend: Option<GpuBackend>) -> Vec<Step> {
         "--features",
         "testing",
         "--lib",
+        "--test",
+        "painter_warm_path_allocation",
     ]);
     let facade = Cmd::cargo(["nextest", "run", "-p", "flui", "--no-default-features"])
         .args(["--run-ignored", "all"])
@@ -1387,14 +1389,14 @@ mod tests {
         assert_eq!(
             lines(&gpu_test_plan(None)),
             [
-                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1",
                 "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
         assert_eq!(
             lines(&gpu_test_plan(Some(GpuBackend::Gl))),
             [
-                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui-engine --features testing --lib --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1",
                 "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
