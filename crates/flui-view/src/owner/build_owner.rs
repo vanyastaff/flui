@@ -531,7 +531,7 @@ pub struct BuildOwner {
     /// long service call.
     pub(crate) child_manager_registry: ChildManagerRegistry,
 
-    /// The build phase's scratch lists (ADR-0328 §3), reset as the render-edge sync begins.
+    /// The build phase's scratch lists (ADR-0328 §3), reset as the render-edge sync ends.
     frame_arena: flui_foundation::arena::FrameArena,
 
     /// Registry of live build-during-layout nodes, one per

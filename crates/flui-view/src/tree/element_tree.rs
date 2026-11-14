@@ -1328,9 +1328,10 @@ impl ElementTree {
             return 0;
         }
         self.needs_render_reorder = false;
-        // The last walk's lists are gone with it; this one starts empty.
+        // Reset after the walk: between frames the arena holds one chunk, not the chain that grew.
+        let reordered = self.synchronize_render_children(registry, arena);
         arena.reset();
-        self.synchronize_render_children(registry, arena)
+        reordered
     }
 
     pub(super) fn mark_render_reorder_needed(&mut self) {
