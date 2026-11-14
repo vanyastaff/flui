@@ -934,10 +934,9 @@ impl Tester {
     /// The process is killed and the application opened again over the same
     /// storage: no composition is committed, no close is asked and nothing
     /// more is written, so a write the run accepted and had not carried out
-    /// is lost, a write the storage holds unstarted or uncommitted included,
-    /// and a future of such a write the test still holds resolves to
-    /// [`StorageError::Cancelled`](flui_platform::StorageError::Cancelled);
-    /// another run's write over the same storage is kept. The old run is
+    /// is lost, a write the storage holds unstarted or uncommitted included;
+    /// another run's write over the same storage is kept, and so is the
+    /// test's own. The old run is
     /// dropped as a host drops its UI runtime: its
     /// states are disposed and its observers see it detach, which a real kill
     /// never runs. The old tree is gone before the new one mounts.

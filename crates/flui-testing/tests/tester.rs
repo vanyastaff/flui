@@ -890,26 +890,48 @@ fn a_relaunch_after_a_kill_loses_a_write_the_storage_held() {
 }
 
 /// A kill loses only the killed run's held writes: a write the test itself
-/// published to the same storage while the hold was alive still starts when
-/// the hold ends.
+/// published, and a write another run over the same storage published under
+/// the same name before the killed run's, still start when the hold ends.
 #[test]
 fn a_relaunch_after_a_kill_keeps_a_held_write_the_run_did_not_publish() {
     use flui_platform::{Storage as _, StorageName, WriteMode};
 
     const OTHER: StorageName = StorageName::from_static("other");
     let (view, opened) = notebook(false);
-    let mut t = Tester::mount(view);
-    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
-    let storage = t
+    let mut killed = Tester::mount(view);
+    let _ = settle(&mut killed, note(&opened).load()).expect("an empty storage loads");
+    let storage = killed
         .storage()
         .cloned()
         .expect("a mounted window has a storage");
+    let (other_view, other_opened) = notebook(false);
+    let mut other = Tester::mount_in(other_view, TestWindow::default().storage(storage.clone()));
+    let _ = settle(&mut other, note(&other_opened).load()).expect("an empty storage loads");
+
     let hold = storage.hold_writes();
     let own = storage.publish(&OTHER, b"kept".to_vec(), WriteMode::Replace);
-    let mut t = t.relaunch_after_kill();
+    note(&other_opened)
+        .set(Note("other run".to_owned()))
+        .expect("a loaded note takes a value");
+    other.pump_for(Duration::from_secs(1));
+    note(&opened)
+        .set(Note("killed run".to_owned()))
+        .expect("a loaded note takes a value");
+    killed.pump_for(Duration::from_secs(1));
+    let mut killed = killed.relaunch_after_kill();
     drop(hold);
-    t.pump();
+    killed.pump();
+    other.pump();
+
     assert_eq!(storage.contents(&OTHER).as_deref(), Some(&b"kept"[..]));
+    let stored = storage
+        .contents(&<Note as flui_view::persist::Document>::NAME)
+        .expect("the other run's note was written");
+    assert!(
+        String::from_utf8_lossy(&stored).contains("other run"),
+        "{}",
+        String::from_utf8_lossy(&stored)
+    );
     drop(own);
 }
 

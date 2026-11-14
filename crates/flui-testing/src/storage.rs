@@ -192,8 +192,9 @@ impl MemoryStorage {
     }
 
     /// Accept writes but start none while the returned hold is alive; a
-    /// newer value of a name replaces the one waiting, whose future resolves
-    /// to [`StorageError::Superseded`]. Dropping the last hold starts the
+    /// newer value of a name replaces the one waiting from the same run, or
+    /// from the test's own handles, whose future resolves to
+    /// [`StorageError::Superseded`]. Dropping the last hold starts the
     /// waiting writes.
     #[must_use = "writes are held only while the hold is alive"]
     pub fn hold_writes(&self) -> WriteHold {
@@ -226,26 +227,14 @@ impl MemoryStorage {
 
     /// `run` was killed: a write it left waiting at a [`WriteHold`] never
     /// starts and one it left at a [`CommitBarrier`] never commits, as a
-    /// process killed before it replaced its files; a future of it still
-    /// alive resolves to [`StorageError::Cancelled`]. Another run's writes
-    /// and the test's own are kept.
+    /// process killed before it replaced its files. A future of such a write
+    /// that state the test holds keeps alive gets no answer, as the killed
+    /// process would get none. Another run's writes and the test's own are
+    /// kept.
     pub(crate) fn discard_writes_of(&self, run: RunId) {
-        let mut guard = self.state.lock();
-        let mut dead = Vec::new();
-        let state = &mut *guard;
-        for list in [&mut state.queued, &mut state.written] {
-            let (gone, kept): (Vec<Write>, Vec<Write>) = std::mem::take(list)
-                .into_iter()
-                .partition(|write| write.run == Some(run));
-            *list = kept;
-            dead.extend(gone.into_iter().map(|write| write.id));
-        }
-        let wakers: Vec<Waker> = dead
-            .into_iter()
-            .filter_map(|id| state.answer(id, Err(StorageError::Cancelled)))
-            .collect();
-        drop(guard);
-        wake_all(wakers);
+        let mut state = self.state.lock();
+        state.queued.retain(|write| write.run != Some(run));
+        state.written.retain(|write| write.run != Some(run));
     }
 
     /// Write but commit nothing while the returned barrier is alive: reads
@@ -439,7 +428,7 @@ impl Storage for MemoryStorage {
         } else if state.write_holds > 0 {
             let (superseded, waiting): (Vec<Write>, Vec<Write>) = std::mem::take(&mut state.queued)
                 .into_iter()
-                .partition(|queued| queued.name == *name);
+                .partition(|queued| queued.name == *name && queued.run == self.run);
             state.queued = waiting;
             for queued in superseded {
                 wakers.extend(state.answer(queued.id, Err(StorageError::Superseded)));
