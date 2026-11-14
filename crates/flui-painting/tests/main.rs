@@ -734,6 +734,7 @@ fn text_contract() {
             ("captured_live_geometry_rejects_conflicts_after_warm_eviction", text_layout_pipeline::captured_live_geometry_rejects_conflicts_after_warm_eviction),
             ("captured_cohorts_converge_beyond_warm_capacity_and_retire_history", text_layout_pipeline::captured_cohorts_converge_beyond_warm_capacity_and_retire_history),
             ("captured_cohorts_do_not_pin_other_attempts_history", text_layout_pipeline::captured_cohorts_do_not_pin_other_attempts_history),
+            ("a_reused_attempt_allocation_retains_nothing_for_the_retired_attempts_policies", text_layout_pipeline::a_reused_attempt_allocation_retains_nothing_for_the_retired_attempts_policies),
             ("captured_attempts_retain_nested_sources_across_frontiers", text_layout_pipeline::captured_attempts_retain_nested_sources_across_frontiers),
             ("fixed_and_linear_attempts_retain_multiple_nested_sources", text_layout_pipeline::fixed_and_linear_attempts_retain_multiple_nested_sources),
             ("captured_debug_releases_infrastructure_before_formatter_reentry", text_layout_pipeline::captured_debug_releases_infrastructure_before_formatter_reentry),

@@ -981,3 +981,72 @@ pub(crate) fn full_pipeline_with_styled_text() {
     let dl = canvas.finish();
     assert!(!dl.is_empty());
 }
+
+pub(crate) fn a_reused_attempt_allocation_retains_nothing_for_the_retired_attempts_policies() {
+    use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+    use flui_painting::{TextMeasurementError, TextSizing};
+    let request = |size| TextSizeRequest {
+        size: TextSize::try_new(size).expect("authored size"),
+        profile: TextScaleProfile::Body,
+    };
+    let answer = |size| TextSize::try_new(size).expect("answer size");
+    let (sizing, mut admission) = TextSizing::captured();
+    admission.set_warm_capacity(0);
+
+    // Retiring releases what the attempt pinned, as dropping it does.
+    let first = sizing.begin_cohort();
+    let stale = first.policy();
+    assert!(matches!(
+        stale.resolve(request(14.0)),
+        Err(TextMeasurementError::Pending(_))
+    ));
+    admission
+        .admit([(request(14.0), answer(21.0))])
+        .expect("first attempt admission");
+    assert_eq!(
+        stale.resolve(request(14.0)).expect("pinned answer").value(),
+        21.0
+    );
+    let retired = first.retire();
+    assert!(matches!(
+        sizing.resolve(request(14.0)),
+        Err(TextMeasurementError::Pending(_))
+    ));
+
+    // The next attempt reuses the allocation; the retired attempt's policy
+    // reaches it no more and pins nothing there.
+    let next = sizing.begin_cohort_in(retired);
+    let next_policy = next.policy();
+    assert!(matches!(
+        stale.resolve(request(16.0)),
+        Err(TextMeasurementError::Pending(_))
+    ));
+    admission
+        .admit([(request(16.0), answer(24.0))])
+        .expect("answer requested through a retired policy");
+    assert!(matches!(
+        sizing.resolve(request(16.0)),
+        Err(TextMeasurementError::Pending(_))
+    ));
+
+    // The reusing attempt retains its own answers.
+    assert!(matches!(
+        next_policy.resolve(request(18.0)),
+        Err(TextMeasurementError::Pending(_))
+    ));
+    admission
+        .admit([(request(18.0), answer(27.0))])
+        .expect("next attempt admission");
+    assert_eq!(
+        sizing
+            .resolve(request(18.0))
+            .expect("next attempt pins its answer")
+            .value(),
+        27.0
+    );
+    drop(next);
+    assert!(matches!(
+        sizing.resolve(request(18.0)),
+        Err(TextMeasurementError::Pending(_))
+    ));
+}

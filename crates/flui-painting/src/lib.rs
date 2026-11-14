@@ -122,8 +122,8 @@ pub use text_layout::{
     TextContext, TextLayoutError, TextLayoutResult,
 };
 pub use text_painter::{
-    Invalidation, TextBaseline, TextMeasurement, TextMeasurementError, TextPainter,
-    TextPreparationPending, TextResolvedSize, TextSizing, TextSizingAdmission,
+    Invalidation, RetiredTextSizingCohort, TextBaseline, TextMeasurement, TextMeasurementError,
+    TextPainter, TextPreparationPending, TextResolvedSize, TextSizing, TextSizingAdmission,
     TextSizingAdmissionError, TextSizingCohort, TextSizingConflict, TextSizingSource,
 };
 
