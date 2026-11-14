@@ -23,23 +23,25 @@
 (`FlutterViewController`/`FlutterActivity`); начальный адрес в слоте — `defaultRouteName`;
 `navigate(Go)` — `didPushRouteInformation` и `RouterDelegate.setNewRoutePath`; разбор пути —
 `RouteInformationParser`, у FLUI выведенный из маршрута (`Routable::from_path`, `back_stack`).
-
-## 2. Контракт хоста (`flui-native`)
+## 2. Контракт хоста (`flui-platform`, `flui-native`)
 
 ```rust
+// crates/flui-platform/src/opened.rs, рядом с SystemNotice
+pub const MAX_OPENED_ITEMS: usize = 64;
+pub const MAX_OPENED_URL_LEN: usize = 8 * 1024;   // и OpenedUrl::MAX_LEN в flui-view
+#[non_exhaustive]
+pub struct Opened {
+    pub urls: Vec<String>,         // URL как его дала ОС; разбор выше хоста
+    pub files: Vec<OpenedFile>,    // путь; доступ песочницы (security-scoped, SAF) — задачи хостов
+    pub target: OpenTarget,        // Window(WindowId) | Application
+    pub launch: Launch,            // Cold | Running
+}
+impl Opened { pub fn new(urls, files, target, launch) -> Self; } // применяет границы
+
 // crates/flui-native/src/platform.rs, рядом с reopen
 pub trait AppHandler: 'static {
     // ...
-    /// The platform opened URLs or files for the application.
     fn opened(&self, owner: &OwnerPlatform, opened: Opened);
-}
-
-#[non_exhaustive]
-pub struct Opened {
-    pub urls: Vec<String>,         // URL как его дала ОС, не длиннее MAX_URL_BYTES; разбор выше хоста
-    pub files: Vec<OpenedFile>,    // путь или handle с доступом песочницы (security-scoped, SAF)
-    pub target: OpenTarget,        // Window(WindowId) | Application
-    pub launch: Launch,            // Cold | Running
 }
 ```
 
@@ -47,13 +49,12 @@ pub struct Opened {
 - Очередь: `owner/app_delivery` получает строку `Opened` рядом с `reopen`. Принятое до `ready`
   ждёт и доставляется сразу после `ready`; холодный URL поэтому всегда приходит после того, как
   приложение создало основное окно, но до первого кадра (см. §4).
-- Границы (R7): `MAX_OPENED_ITEMS = 64` элементов на одно `Opened`, `MAX_URL_BYTES = 8192`;
-  лишнее отбрасывается в хосте с `tracing::warn`, до разбора, и headless применяет те же. Предел
-  длины URL уже есть выше хоста: `OpenedUrl::MAX_LEN` (`flui-view`), который `UiRuntime::open_url`
-  проверяет до копирования; `flui-native` не видит `flui-view`, поэтому AC4 переносит это одно
-  число в `flui-foundation`, ниже обоих, и оба читают его оттуда.
-- Headless: `HeadlessPlatform::open(Opened)` ставит строку в ту же очередь; это вход для тестов и
-  для `flui_testing`.
+- Границы (R7): `Opened::new` отбрасывает элементы после 64-го (сначала URL, потом файлы) и URL
+  длиннее `MAX_OPENED_URL_LEN` целиком, с `tracing::warn`, до разбора; каждый хост строит
+  `Opened` через него, headless тоже. `OpenedUrl::MAX_LEN` — то же число, так что `open_url`
+  проверяет ту же границу.
+- Headless: `HeadlessHostEvents::open(Opened)` ставит строку в ту же очередь; это вход для тестов
+  и для `flui_testing`.
 
 `OpenTarget::Window` несёт окно, которому ОС отдала ссылку (сцена iOS, `Activity` Android).
 Настольные хосты ставят `Application`: окно выбирает `flui-app` (§3), потому что «активное
@@ -96,7 +97,7 @@ pub struct Opened {
   причиной; `NoMatch` уже доставлен в `on_unknown`.
 
 `HeadlessHost::open_url(window, url)` вызывает `UiRuntime::open_url`, так что весь путь от URL до
-стека тестируется без хоста; `HeadlessPlatform::open` проверяет очередь хоста.
+стека тестируется без хоста; `HeadlessHostEvents::open` проверяет очередь хоста.
 
 ## 3a. Query в `RoutePath`
 

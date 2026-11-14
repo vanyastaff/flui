@@ -182,7 +182,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** all · **Who it hurts:** Apps opened from links, files or a second launch · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- No host reports an opened URL or file: the registration that would have heard one is gone, and `opened(urls, files)` joins the application handler with the activation feature. What a host will hand over is ready: `UiRuntime::open_url` bounds, splits and admits a URL by the application's declarations and opens its path, one opened before the first frame opens the first Router on it, and `HeadlessHost::open_url` drives it; no runner sets the declarations yet (`Application::declares` comes with the runner's `opened`).
+- No native host reports an opened URL or file yet. The application handler hears `opened(&OwnerPlatform, Opened)`, bounded by `Opened::new` (`MAX_OPENED_ITEMS`, `MAX_OPENED_URL_LEN`) and queued in order with the other reports, and the headless host reports one (`HeadlessHostEvents::open`); `flui-app`'s runner logs it and does not route it to a window yet. Above it, `UiRuntime::open_url` bounds, splits and admits a URL by the application's declarations and opens its path, one opened before the first frame opens the first Router on it, and `HeadlessHost::open_url` drives it; no runner sets the declarations yet (`Application::declares` comes with the runner's routing).
 - Packaging (app identity) not audited.
 
 ### System preferences missing or never run

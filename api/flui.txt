@@ -12585,6 +12585,16 @@ pub fn flui::platform::KeyboardInset::at(&self, time: flui::interaction::EventTi
 pub fn flui::platform::KeyboardInset::settles_at(&self) -> Option<flui::interaction::EventTime>
 pub fn flui::platform::KeyboardInset::try_at_rest(target: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
 pub fn flui::platform::KeyboardInset::try_moving(target: flui::geometry::EdgeInsets, motion: flui::platform::InsetMotion) -> Result<Self, flui::platform::InvalidInsets>
+#[non_exhaustive] pub enum flui::platform::Launch
+impl Clone for flui::platform::Launch
+impl Copy for flui::platform::Launch
+impl Eq for flui::platform::Launch
+impl PartialEq for flui::platform::Launch
+impl core::fmt::Debug for flui::platform::Launch
+impl core::hash::Hash for flui::platform::Launch
+impl core::marker::StructuralPartialEq for flui::platform::Launch
+variant flui::platform::Launch::Cold // at 0
+variant flui::platform::Launch::Running // at 1
 pub struct flui::platform::LaunchKey(_)
 impl Clone for flui::platform::LaunchKey
 impl Copy for flui::platform::LaunchKey
@@ -12627,6 +12637,8 @@ pub fn flui::platform::Locale::with_script(language: impl AsRef<str>, country: O
 pub fn flui::platform::Locale::zh_cn() -> Self
 reexport flui::platform::Location => flui::interaction::Location
 pub const flui::platform::MAX_LAUNCH_KEY_LEN: usize = 128
+pub const flui::platform::MAX_OPENED_ITEMS: usize = 64
+pub const flui::platform::MAX_OPENED_URL_LEN: usize = 8192
 #[non_exhaustive] pub enum flui::platform::MeasurementSystem
 impl Clone for flui::platform::MeasurementSystem
 impl Copy for flui::platform::MeasurementSystem
@@ -12702,6 +12714,36 @@ impl core::hash::Hash for flui::platform::NumberingSystem
 impl core::marker::StructuralPartialEq for flui::platform::NumberingSystem
 pub fn flui::platform::NumberingSystem::try_new(value: &str) -> Result<Self, flui::platform::InvalidRegionalFormat>
 pub fn flui::platform::NumberingSystem::unicode_value(&self) -> &str
+#[non_exhaustive] pub enum flui::platform::OpenTarget
+impl Clone for flui::platform::OpenTarget
+impl Copy for flui::platform::OpenTarget
+impl Eq for flui::platform::OpenTarget
+impl PartialEq for flui::platform::OpenTarget
+impl core::fmt::Debug for flui::platform::OpenTarget
+impl core::hash::Hash for flui::platform::OpenTarget
+impl core::marker::StructuralPartialEq for flui::platform::OpenTarget
+variant flui::platform::OpenTarget::Application // at 1
+variant flui::platform::OpenTarget::Window(flui::platform::WindowId) // at 0
+#[non_exhaustive] pub struct flui::platform::Opened
+field flui::platform::Opened::files: Vec<flui::platform::OpenedFile> // at 1
+field flui::platform::Opened::launch: flui::platform::Launch // at 3
+field flui::platform::Opened::target: flui::platform::OpenTarget // at 2
+field flui::platform::Opened::urls: Vec<String> // at 0
+impl Clone for flui::platform::Opened
+impl Eq for flui::platform::Opened
+impl PartialEq for flui::platform::Opened
+impl core::fmt::Debug for flui::platform::Opened
+impl core::marker::StructuralPartialEq for flui::platform::Opened
+pub fn flui::platform::Opened::is_empty(&self) -> bool
+pub fn flui::platform::Opened::new(urls: impl IntoIterator<Item = String>, files: impl IntoIterator<Item = flui::platform::OpenedFile>, target: flui::platform::OpenTarget, launch: flui::platform::Launch) -> Self
+#[non_exhaustive] pub struct flui::platform::OpenedFile
+field flui::platform::OpenedFile::path: std::path::PathBuf // at 0
+impl Clone for flui::platform::OpenedFile
+impl Eq for flui::platform::OpenedFile
+impl PartialEq for flui::platform::OpenedFile
+impl core::fmt::Debug for flui::platform::OpenedFile
+impl core::marker::StructuralPartialEq for flui::platform::OpenedFile
+pub fn flui::platform::OpenedFile::new(path: impl Into<std::path::PathBuf>) -> Self
 pub struct flui::platform::OsRelease(_)
 impl Clone for flui::platform::OsRelease
 impl Eq for flui::platform::OsRelease
@@ -25275,7 +25317,7 @@ impl Eq for flui::view::navigation::OpenedUrl
 impl PartialEq for flui::view::navigation::OpenedUrl
 impl core::fmt::Debug for flui::view::navigation::OpenedUrl
 impl core::marker::StructuralPartialEq for flui::view::navigation::OpenedUrl
-pub const flui::view::navigation::OpenedUrl::MAX_LEN: usize = 8192
+pub const flui::view::navigation::OpenedUrl::MAX_LEN: usize = flui_platform::MAX_OPENED_URL_LEN
 pub fn flui::view::navigation::OpenedUrl::host(&self) -> Option<&str>
 pub fn flui::view::navigation::OpenedUrl::parse(url: &str) -> Result<Self, flui::view::navigation::OpenUrlRefused>
 pub fn flui::view::navigation::OpenedUrl::path(&self) -> &flui::prelude::RoutePath

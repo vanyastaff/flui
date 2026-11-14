@@ -346,7 +346,7 @@ the window (the same split ADR-0237 decision 4 makes for `WindowHandle`).
 replaces the registrations `Platform` has today for application-level events and queries
 (`on_quit`, `on_reopen`, `on_session_end`, `on_host_notice`, `set_exit_policy_hook`,
 `set_wake_deadline_hook`) and the one-shot `PlatformReadyCallback`: one required method per
-obligation (`ready` with the `OwnerPlatform`, quit requested, reopened, session end with its
+obligation (`ready` with the `OwnerPlatform`, quit requested, reopened, opened, session end with its
 answer, host notice, and the two queries `exit_policy(&OwnerPlatform) -> ExitAnswer` and
 `wake_deadline(&OwnerPlatform) -> Option<Instant>`), each receiving `&OwnerPlatform` where the
 platform exists. `ExitAnswer` is `End`, `KeepRunning` or `HostDecides`; `HostDecides` leaves the
@@ -356,9 +356,15 @@ contract: it names `OwnerPlatform`, so only code that runs a host itself impleme
 and an example or a test that drives `flui-native` directly (ADR-0151 §9). The other
 registrations are not carried over.
 `on_window_event` is deleted below. `on_keyboard_layout_change` becomes `pub(crate)` in the host
-crate with `keyboard_layout`, which nothing above the host reads. `on_open_urls` is deleted now,
-because nothing produces it, and the delivery of opened URLs and files, `opened(urls, files)`,
-joins the handler with the activation feature. System preferences are not a registration:
+crate with `keyboard_layout`, which nothing above the host reads. `on_open_urls` is deleted: what
+the operating system opens the application with is the report `opened(&OwnerPlatform, Opened)`,
+queued in order with the others. `Opened` (`flui-platform`, beside `SystemNotice`) carries the URLs
+and files as the operating system gave them, where it addressed them (`OpenTarget::Window` or
+`Application`) and whether they launched the application (`Launch::Cold` or `Running`); its
+constructor drops the items past `MAX_OPENED_ITEMS` and a URL past `MAX_OPENED_URL_LEN` bytes, the
+bound `UiRuntime::open_url` applies too, so every host hands over the same bounded value and
+parsing stays above the host. At most sixteen `Opened` wait for the handler at once; a later one is
+dropped with a warning. System preferences are not a registration:
 ADR-0172's delivery stands. The notices, the session-end hold and their fan-out are ADR-0237's and
 do not change.
 

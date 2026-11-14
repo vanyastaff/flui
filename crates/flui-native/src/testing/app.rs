@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform::{Launch, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
 
 use crate::error::BootstrapError;
 use crate::owner::OwnerPlatform;
@@ -65,6 +65,16 @@ pub enum AppCall {
     Quit,
     /// [`AppHandler::reopen`].
     Reopen,
+    /// [`AppHandler::opened`], with how many URLs and files it carried and
+    /// how they came; [`AppLog::opens`] keeps what it carried.
+    Opened {
+        /// How many URLs.
+        urls: usize,
+        /// How many files.
+        files: usize,
+        /// At launch or while running.
+        launch: Launch,
+    },
     /// [`AppHandler::session_end`] with its phase.
     SessionEnd(SessionEndPhase),
     /// [`AppHandler::host_notice`] with its notice.
@@ -83,6 +93,7 @@ type Reaction = Rc<dyn Fn(AppCall, &OwnerPlatform)>;
 /// otherwise.
 pub struct AppLog {
     calls: RefCell<Vec<AppCall>>,
+    opens: RefCell<Vec<Opened>>,
     bootstrap: RefCell<Option<Bootstrap>>,
     reaction: RefCell<Option<Reaction>>,
     session_end: RefCell<Rc<dyn Fn(SessionEndPhase) -> SessionEndAnswer>>,
@@ -96,6 +107,7 @@ impl AppLog {
     pub fn new() -> Rc<Self> {
         Rc::new(Self {
             calls: RefCell::new(Vec::new()),
+            opens: RefCell::new(Vec::new()),
             bootstrap: RefCell::new(None),
             reaction: RefCell::new(None),
             session_end: RefCell::new(Rc::new(|_| SessionEndAnswer::Proceed)),
@@ -179,6 +191,12 @@ impl AppLog {
             .count()
     }
 
+    /// What [`AppHandler::opened`] carried each time, in order.
+    #[must_use]
+    pub fn opens(&self) -> Vec<Opened> {
+        self.opens.borrow().clone()
+    }
+
     /// The notices it heard, in order.
     #[must_use]
     pub fn notices(&self) -> Vec<SystemNotice> {
@@ -222,6 +240,16 @@ impl AppHandler for AppLog {
 
     fn reopen(&self, owner: &OwnerPlatform) {
         self.heard(AppCall::Reopen, owner);
+    }
+
+    fn opened(&self, owner: &OwnerPlatform, opened: Opened) {
+        let call = AppCall::Opened {
+            urls: opened.urls.len(),
+            files: opened.files.len(),
+            launch: opened.launch,
+        };
+        self.opens.borrow_mut().push(opened);
+        self.heard(call, owner);
     }
 
     fn session_end(&self, owner: &OwnerPlatform, phase: SessionEndPhase) -> SessionEndAnswer {

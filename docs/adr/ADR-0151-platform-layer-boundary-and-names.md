@@ -494,12 +494,12 @@ framework handed it, there is one slot and one drop order, and nothing is regist
 `OwnerPlatform`, so only code that runs a host itself implements it: `flui-app`, and an example or
 a test that drives `flui-native` directly. Its obligations are exactly what `Platform`
 registers today, as required methods with no default body: `ready(OwnerPlatform)` (the bootstrap
-that `PlatformReadyCallback` carried), `quit_requested`, `reopen`, `session_end` (answering with
+that `PlatformReadyCallback` carried), `quit_requested`, `reopen`, `opened`, `session_end` (answering with
 `SessionEndAnswer`), `host_notice`, and the two queries the loop asks, `exit_policy` and
-`wake_deadline`. Nothing else is on it. `opened(urls, files)`, the delivery of activated URLs
-and files, joins the handler with the activation feature, together with its producer and its
-consumer, the router; it is not added now as an empty method, which would be the inert default
-section 7 and ADR-0254 remove. System preferences keep the delivery ADR-0172 decided; no
+`wake_deadline`. Nothing else is on it. `opened(&OwnerPlatform, Opened)` delivers the URLs and
+files the operating system activated the application with (ADR-0254 §4); its producers are the
+hosts' activation entries, and its consumer the runner, which opens each URL through the
+presentation's URL owner (ADR-0330 §5). System preferences keep the delivery ADR-0172 decided; no
 `on_preferences_changed` exists and none is added.
 
 The core host stops re-exporting contract names: every item has one path.

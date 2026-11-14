@@ -10,7 +10,7 @@ use std::sync::Arc;
 use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
-    AppDataDir, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
+    AppDataDir, DisplaySnapshot, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice,
     SystemPreferences, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 
@@ -70,6 +70,16 @@ pub trait AppHandler: 'static {
     /// The user reopened the application (a click on its Dock icon). Only
     /// AppKit reports it.
     fn reopen(&self, owner: &OwnerPlatform);
+
+    /// The operating system opened URLs or files with the application: a
+    /// link, a custom-scheme URL, a document, at launch or while it runs.
+    /// `opened` is bounded already ([`Opened::new`]); what it carries is
+    /// still untrusted text, which the UI runtime parses and admits
+    /// (`UiRuntime::open_url`). Reported in order with the other reports, so
+    /// one the operating system gives at launch is heard right after `ready`
+    /// returns; of those that wait for the handler at once, the first
+    /// sixteen are kept and a later one is dropped with a warning.
+    fn opened(&self, owner: &OwnerPlatform, opened: Opened);
 
     /// A phase of the user's session ending (log off, restart, shut down),
     /// possibly inside a nested native loop. The answer to
