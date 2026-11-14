@@ -1295,6 +1295,7 @@ fn router_and_widgets_app() {
             ("url_owner::a_pop_intent_honours_the_pages_pop_scope", crate::url_owner::a_pop_intent_honours_the_pages_pop_scope),
             ("url_owner::an_unmounted_router_lets_go_of_its_unknown_hook", crate::url_owner::an_unmounted_router_lets_go_of_its_unknown_hook),
             ("url_owner::an_opened_url_navigates_only_when_declared", crate::url_owner::an_opened_url_navigates_only_when_declared),
+            ("url_owner::a_page_opens_the_urls_of_its_own_origin", crate::url_owner::a_page_opens_the_urls_of_its_own_origin),
             ("url_owner::a_url_opened_before_the_first_frame_opens_the_router_on_it", crate::url_owner::a_url_opened_before_the_first_frame_opens_the_router_on_it),
             ("url_owner::a_cold_url_no_route_matches_reaches_on_unknown_after_the_frame", crate::url_owner::a_cold_url_no_route_matches_reaches_on_unknown_after_the_frame),
             ("url_owner::a_cold_url_no_router_took_is_dropped_after_the_first_frame", crate::url_owner::a_cold_url_no_router_took_is_dropped_after_the_first_frame),

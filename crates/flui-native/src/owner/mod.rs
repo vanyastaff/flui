@@ -346,6 +346,13 @@ impl OwnerPlatform {
         self.platform.launch_value(key)
     }
 
+    /// The origin of the page the application runs in on the web; see
+    /// [`Platform::page_origin`].
+    #[must_use]
+    pub fn page_origin(&self) -> Option<String> {
+        self.platform.page_origin()
+    }
+
     /// Where the application `app` keeps its data, or `None` when this
     /// platform has nowhere to keep it.
     #[must_use]

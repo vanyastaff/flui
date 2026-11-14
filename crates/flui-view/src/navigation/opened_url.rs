@@ -21,6 +21,8 @@ pub struct OpenedUrl {
     /// The authority's host, in lower case, without user information, port or
     /// a trailing dot; `None` when the URL has no authority or an empty host.
     host: Option<String>,
+    /// The authority's port; `None` when it names none.
+    port: Option<u16>,
     path: RoutePath,
 }
 
@@ -72,12 +74,15 @@ impl OpenedUrl {
             Some((before, query)) => (before, Some(query)),
             None => (rest, None),
         };
-        let (host, path) = match rest.strip_prefix("//") {
+        let (host, port, path) = match rest.strip_prefix("//") {
             Some(after) => {
                 let end = after.find('/').unwrap_or(after.len());
-                (host_of(&after[..end]), &after[end..])
+                let authority = &after[..end];
+                let port = port_of(authority)
+                    .map_err(|()| malformed("its port is not a number from 0 to 65535"))?;
+                (host_of(authority), port, &after[end..])
             }
-            None => (None, rest),
+            None => (None, None, rest),
         };
         let mut location = String::with_capacity(path.len() + query.map_or(0, str::len) + 2);
         if !path.starts_with('/') {
@@ -92,8 +97,34 @@ impl OpenedUrl {
         Ok(Self {
             scheme: scheme.to_ascii_lowercase(),
             host,
+            port,
             path,
         })
+    }
+
+    /// The port the URL names, or `None` when its authority names none.
+    #[must_use]
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    /// Whether `self` and `other` have one origin, as a browser compares two
+    /// (RFC 6454 §5): the same scheme, the same host and the same port, a
+    /// web URL naming none being on its scheme's (80 for `http`, 443 for
+    /// `https`). A URL with no host has no origin it shares.
+    #[must_use]
+    pub fn same_origin(&self, other: &Self) -> bool {
+        let port = |url: &Self| {
+            url.port.or(match url.scheme.as_str() {
+                "http" => Some(80),
+                "https" => Some(443),
+                _ => None,
+            })
+        };
+        self.host.is_some()
+            && self.scheme == other.scheme
+            && self.host == other.host
+            && port(self) == port(other)
     }
 
     /// The scheme, in lower case: `https`, or an application's own `myapp`.
@@ -142,6 +173,30 @@ fn host_of(authority: &str) -> Option<String> {
     };
     let host = host.strip_suffix('.').unwrap_or(host);
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// The port of `authority` (`userinfo@host:port`): `Ok(None)` when it names
+/// none or an empty one (RFC 3986 §3.2.3), `Err` when it is not a number a
+/// port holds.
+fn port_of(authority: &str) -> Result<Option<u16>, ()> {
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_userinfo, host_port)| host_port);
+    let after_host = if host_port.starts_with('[') {
+        host_port.find(']').map_or("", |end| &host_port[end + 1..])
+    } else {
+        host_port.rfind(':').map_or("", |at| &host_port[at..])
+    };
+    let Some(port) = after_host.strip_prefix(':') else {
+        return Ok(None);
+    };
+    if port.is_empty() {
+        return Ok(None);
+    }
+    if !port.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(());
+    }
+    port.parse::<u16>().map(Some).map_err(|_| ())
 }
 
 /// The URLs an application declares it opens: its own schemes and the web

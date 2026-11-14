@@ -73,6 +73,9 @@ pub(crate) struct OpenRouting {
     /// URLs whose presentation did not exist when they arrived, with the
     /// target they were addressed to.
     held: RefCell<Option<(OpenTarget, Vec<String>)>>,
+    /// The origin of the page the run is in on the web, whose URLs every UI
+    /// runtime of the run admits beside the declarations.
+    page_origin: RefCell<Option<String>>,
 }
 
 impl OpenRouting {
@@ -81,6 +84,7 @@ impl OpenRouting {
             settings,
             active: Cell::new(None),
             held: RefCell::new(None),
+            page_origin: RefCell::new(None),
         }
     }
 
@@ -88,6 +92,29 @@ impl OpenRouting {
     /// runtime of the run is given before its first presentation opens.
     pub(crate) fn declarations(&self) -> LinkDeclarations {
         self.settings.declarations.unwrap_or_default()
+    }
+
+    /// The run is a page of `origin` on the web: the platform said so before
+    /// the bootstrap opened its first presentation.
+    pub(crate) fn set_page_origin(&self, origin: String) {
+        *self.page_origin.borrow_mut() = Some(origin);
+    }
+
+    /// Give `ui_runtime` what it admits: the declarations, and on the web
+    /// the page's origin. Before its first presentation can hear an opened
+    /// URL.
+    pub(crate) fn admit_in(&self, ui_runtime: &UiRuntime) {
+        ui_runtime.set_link_declarations(self.declarations());
+        // Cloned, so no borrow is held while the log line reaches its subscriber.
+        let origin = self.page_origin.borrow().clone();
+        if let Some(origin) = origin.as_deref()
+            && let Err(refused) = ui_runtime.set_page_origin(origin)
+        {
+            tracing::warn!(
+                reason = refused.reason(),
+                "the page's origin is not an origin; only the declarations admit its URLs"
+            );
+        }
     }
 
     /// The window of `address` gained focus.

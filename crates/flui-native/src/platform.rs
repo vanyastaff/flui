@@ -451,6 +451,13 @@ pub trait Platform: sealed::Sealed + 'static {
     /// the platform's copy.
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String>;
 
+    /// The origin of the page the application runs in (`location.origin`:
+    /// scheme, host and port) on the web, whose own address is how a page
+    /// is opened; `None` on every other platform.
+    fn page_origin(&self) -> Option<String> {
+        None
+    }
+
     /// Where the application `app` keeps its data on this platform, or `None`
     /// when it has nowhere to keep it.
     ///
@@ -723,6 +730,10 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         self.owner.launch_value(key)
+    }
+
+    fn page_origin(&self) -> Option<String> {
+        self.owner.page_origin()
     }
 
     fn data_store(&self, app: &AppDataDir) -> Option<DataStore> {

@@ -176,6 +176,9 @@ pub struct UiRuntime {
     /// The URLs the application declares it opens, which [`Self::open_url`]
     /// admits; none until the runner sets them.
     link_declarations: Cell<flui_view::navigation::LinkDeclarations>,
+    /// The origin of the page the application runs in on the web, whose URLs
+    /// [`Self::open_url`] admits beside the declarations; `None` elsewhere.
+    page_origin: RefCell<Option<flui_view::navigation::OpenedUrl>>,
     geometry_turn: std::rc::Rc<RefCell<Option<Vec<flui_foundation::PresentationId>>>>,
     /// The UI runtime's owner-local frame state — its post-frame queue and its
     /// async tasks — of which the UI runtime is the only strong owner (ADR-0136
