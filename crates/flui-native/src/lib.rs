@@ -634,13 +634,15 @@ impl CurrentHost {
     /// as one instance per user session, named by `app_id` (reverse DNS, `com.example.Notes`).
     ///
     /// On Wayland and X11 the first process owns `app_id` on the session bus and serves
-    /// `org.freedesktop.Application` there, as GApplication does: a later launch hands it what
-    /// it opens, as [`Launch::Running`](flui_platform::Launch::Running), with its launcher's
-    /// activation token, and ends ([`HostStart::Forwarded`]). An `app_id` that is not in reverse
-    /// DNS, or a session without a bus, is warned about and the host starts as an instance of
-    /// its own, so the launch is never lost. macOS, iOS and Android keep one instance
-    /// themselves, and each page on the Web is an application of its own: there the host starts
-    /// as [`start_with`](Self::start_with) starts it.
+    /// `org.freedesktop.Application` there, as GApplication does; on Windows it holds a mutex and
+    /// serves a named pipe, both named by `app_id` and the session and granted to the current
+    /// user alone. A later launch hands it what it opens, as
+    /// [`Launch::Running`](flui_platform::Launch::Running), with its launcher's activation token
+    /// (Linux) or its right to the foreground (Windows), and ends ([`HostStart::Forwarded`]). An
+    /// `app_id` that is not in reverse DNS, or a session that cannot keep one instance, is warned
+    /// about and the host starts as an instance of its own, so the launch is never lost. macOS,
+    /// iOS and Android keep one instance themselves, and each page on the Web is an application
+    /// of its own: there the host starts as [`start_with`](Self::start_with) starts it.
     ///
     /// # Errors
     ///
@@ -655,7 +657,7 @@ impl CurrentHost {
         if matches!(self, Self::Wayland | Self::X11) {
             use owner::linux::single_instance::{self, Claim, Forwarded};
 
-            let Some(bus_name) = single_instance::bus_name(app_id) else {
+            let Some(bus_name) = owner::single_instance::instance_name(app_id) else {
                 tracing::warn!(
                     app_id,
                     "the application id is not in reverse DNS: it runs as many instances as it is launched"
@@ -694,6 +696,45 @@ impl CurrentHost {
                 }
             };
         }
+        #[cfg(windows)]
+        if self == Self::Windows {
+            use owner::windows::single_instance::{self, Claim, Forwarded};
+
+            let Some(name) = owner::single_instance::instance_name(app_id) else {
+                tracing::warn!(
+                    app_id,
+                    "the application id is not in reverse DNS: it runs as many instances as it is launched"
+                );
+                return self.launch(executor, None).map(HostStart::Started);
+            };
+            let launch = Forwarded::of_launch(owner::launch_arguments::launched_by(
+                owner::launch_arguments::process_arguments(),
+            ));
+            if launch.encode().is_none() {
+                tracing::warn!(
+                    name,
+                    "what this launch opens is too long to hand over: it runs on its own"
+                );
+                return self.launch(executor, None).map(HostStart::Started);
+            }
+            return match single_instance::claim(&executor, name, &launch) {
+                Ok(Claim::First(instance)) => self
+                    .launch(executor, Some(instance))
+                    .map(HostStart::Started),
+                Ok(Claim::Forwarded) => {
+                    tracing::info!(name, "another instance took this launch");
+                    Ok(HostStart::Forwarded)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        name,
+                        "the session cannot keep one instance: this one runs on its own"
+                    );
+                    self.launch(executor, None).map(HostStart::Started)
+                }
+            };
+        }
         let _ = app_id;
         self.launch(executor, None).map(HostStart::Started)
     }
@@ -710,11 +751,13 @@ impl CurrentHost {
         #[cfg(not(target_arch = "wasm32"))] instance: Option<InstanceClaim>,
     ) -> Result<Box<dyn Platform>, PlatformError> {
         #[cfg(not(any(target_os = "linux", target_arch = "wasm32")))]
-        let _ = (executor, instance);
+        let _ = executor;
+        #[cfg(not(any(target_os = "linux", windows, target_arch = "wasm32")))]
+        let _ = instance;
         match self {
             Self::Headless => Ok(Box::new(HeadlessPlatform::new())),
             #[cfg(windows)]
-            Self::Windows => Ok(Box::new(WindowsPlatform::try_new()?)),
+            Self::Windows => Ok(Box::new(WindowsPlatform::try_new_with(instance)?)),
             #[cfg(all(target_os = "macos", not(windows)))]
             Self::MacOs => Ok(Box::new(MacOSPlatform::try_new()?)),
             #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
@@ -796,8 +839,13 @@ impl CurrentHost {
 #[cfg(any(x11_host, wayland_host))]
 type InstanceClaim = owner::linux::single_instance::FirstInstance;
 
+/// The mutex and pipe a Windows process holds while it is its application's one instance in the
+/// session ([`CurrentHost::start_single`]).
+#[cfg(windows)]
+type InstanceClaim = owner::windows::single_instance::FirstInstance;
+
 /// No host of this build keeps one instance itself.
-#[cfg(not(any(x11_host, wayland_host, target_arch = "wasm32")))]
+#[cfg(not(any(x11_host, wayland_host, windows, target_arch = "wasm32")))]
 type InstanceClaim = std::convert::Infallible;
 
 /// The native Wayland host, as [`current_platform`] starts it.

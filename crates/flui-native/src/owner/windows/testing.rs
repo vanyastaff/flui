@@ -108,6 +108,12 @@ impl ClassWindows for NoWindows {
     fn redraw_for_deadline(&self) {}
 
     fn paint_invalid(&self) {}
+
+    fn shows_any(&self) -> bool {
+        false
+    }
+
+    fn activate_forwarded(&self) {}
 }
 
 /// An input that holds no window.

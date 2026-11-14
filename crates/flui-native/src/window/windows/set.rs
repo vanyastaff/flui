@@ -13,7 +13,8 @@ use windows::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::UpdateWindow,
     UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowPlacement, IsWindowVisible, WINDOWPLACEMENT,
+        GW_HWNDNEXT, GetForegroundWindow, GetTopWindow, GetWindow, GetWindowPlacement,
+        IsWindowVisible, WINDOWPLACEMENT,
     },
 };
 
@@ -249,6 +250,54 @@ impl ClassWindows for WindowSet {
             // earlier paint fails the call harmlessly. Nothing is borrowed.
             let _ = unsafe { UpdateWindow(window.hwnd()) };
         }
+    }
+
+    fn shows_any(&self) -> bool {
+        self.by_handle.borrow().values().any(|window| {
+            // SAFETY: a query of a handle this set holds; a closed one answers
+            // false.
+            unsafe { IsWindowVisible(window.hwnd()) }.as_bool()
+        })
+    }
+
+    fn activate_forwarded(&self) {
+        // Taken out of the set before it is activated: an activation runs
+        // user code, which may open or close windows.
+        let front = self.front_shown();
+        if let Some(window) = front {
+            window.activate_forwarded();
+        }
+    }
+}
+
+impl WindowSet {
+    /// How many top-level windows the walk down the screen's order looks at
+    /// for one of the set's before it takes any shown one.
+    const FRONT_WALK: usize = 4096;
+
+    /// The shown window of the set highest in the order of the windows on the
+    /// screen (the one activated last comes to the top), else any shown one.
+    fn front_shown(&self) -> Option<Rc<WindowsWindow>> {
+        let windows = self.by_handle.borrow();
+        let shown = |window: &&Rc<WindowsWindow>| {
+            // SAFETY: a query of a handle this set holds.
+            unsafe { IsWindowVisible(window.hwnd()) }.as_bool()
+        };
+        // SAFETY: `GetTopWindow` and `GetWindow` read the order of the
+        // desktop's windows and dereference nothing of ours; a handle that
+        // closed during the walk ends it with an error.
+        let mut next = unsafe { GetTopWindow(None) }.ok();
+        for _ in 0..Self::FRONT_WALK {
+            let Some(hwnd) = next else {
+                break;
+            };
+            if let Some(window) = windows.get(&(hwnd.0 as isize)).filter(shown) {
+                return Some(Rc::clone(window));
+            }
+            // SAFETY: as above.
+            next = unsafe { GetWindow(hwnd, GW_HWNDNEXT) }.ok();
+        }
+        windows.values().find(shown).cloned()
     }
 }
 

@@ -66,10 +66,10 @@ impl OpenSettings {
         let declared = self
             .declarations
             .is_some_and(|declarations| !declarations.declared_url_schemes().is_empty());
-        // Only the Linux hosts keep one instance yet; macOS, iOS and Android
-        // keep one themselves, and each page on the Web is an application of
-        // its own.
-        let kept_here = cfg!(target_os = "linux");
+        // The Linux and Windows hosts keep one instance; macOS, iOS and
+        // Android keep one themselves, and each page on the Web is an
+        // application of its own.
+        let kept_here = cfg!(any(target_os = "linux", windows));
         if !kept_here || !self.single_instance.unwrap_or(declared) {
             return None;
         }
@@ -333,7 +333,7 @@ fn open_urls(
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", windows)))]
 mod tests {
     use flui_log::{AppId, AppIdentity};
     use flui_view::navigation::LinkDeclarations;

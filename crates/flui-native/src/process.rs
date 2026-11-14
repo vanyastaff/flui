@@ -49,10 +49,51 @@ pub fn end_process(code: i32) -> ! {
 /// The system's error when the token or its user cannot be read.
 #[cfg(windows)]
 pub fn current_user_sid() -> std::io::Result<String> {
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
+    // SAFETY: the current-process pseudo-handle is valid for the process's
+    // whole life and needs no closing.
+    user_sid_of(unsafe { GetCurrentProcess() })
+}
+
+/// The SID, in string form, of the user the process `pid` runs as: what the
+/// later launch of a single-instance application compares with its own
+/// before it hands its launch to the process serving the application's pipe.
+///
+/// # Errors
+///
+/// The system's error when the process cannot be opened for a query, or its
+/// token or user cannot be read.
+#[cfg(windows)]
+pub(crate) fn process_user_sid(pid: u32) -> std::io::Result<String> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    /// Closes the process handle on every path out.
+    struct Process(HANDLE);
+    impl Drop for Process {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is the handle `OpenProcess` opened below,
+            // owned by this guard alone and closed only here.
+            let _: windows::core::Result<()> = unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    // SAFETY: plain values; the handle returned is owned by the guard.
+    let process = Process(
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+            .map_err(std::io::Error::from)?,
+    );
+    user_sid_of(process.0)
+}
+
+/// The SID, in string form, of the user `process`'s token names.
+#[cfg(windows)]
+fn user_sid_of(process: windows::Win32::Foundation::HANDLE) -> std::io::Result<String> {
     use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
     use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
     use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
-    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows::Win32::System::Threading::OpenProcessToken;
     use windows::core::PWSTR;
 
     /// Closes the token on every path out.
@@ -66,9 +107,9 @@ pub fn current_user_sid() -> std::io::Result<String> {
     }
 
     let mut raw = HANDLE::default();
-    // SAFETY: the current-process pseudo-handle needs no closing, and `raw`
-    // is a live out-pointer for the call.
-    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut raw) }
+    // SAFETY: `process` is a process handle the caller keeps open for the
+    // call, and `raw` is a live out-pointer for it.
+    unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut raw) }
         .map_err(std::io::Error::from)?;
     let token = Token(raw);
 

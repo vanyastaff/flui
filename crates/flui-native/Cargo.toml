@@ -148,10 +148,16 @@ windows = { workspace = true, features = [
     # Session lock and unlock: `WTSRegisterSessionNotification` on the hidden
     # top-level receiver.
     "Win32_System_RemoteDesktop",
+    # One instance per session: the process serving the pipe
+    # (`GetNamedPipeServerProcessId`).
+    "Win32_System_Pipes",
 ] }
 # `#[implement]` (the COM objects the text services hand TSF) expands to
 # `::windows_core` paths.
 windows-core = { workspace = true }
+# One instance per session: the first instance serves a named pipe on the
+# IO runtime, and a later launch writes its frame to it.
+tokio = { workspace = true, features = ["net", "io-util", "macros"] }
 
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]

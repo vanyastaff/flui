@@ -24,6 +24,12 @@ impl ClassWindows for CountedWindows {
     }
 
     fn paint_invalid(&self) {}
+
+    fn shows_any(&self) -> bool {
+        false
+    }
+
+    fn activate_forwarded(&self) {}
 }
 
 /// A due deadline is delivered once per frame generation: the application's

@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9. AC10 частично: Linux (D-Bus); Windows впереди. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC10).
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9. AC10: Linux (D-Bus) и Windows (мьютекс и канал сессии; запуск на Windows — строка parity). AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (регистрация Windows, entitlement после подписи iOS).
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -125,7 +125,18 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   `#[tokio::main]`). Окно вперёд выводит хост: последнее активное окно Wayland с токеном, X11
   `_NET_ACTIVE_WINDOW` со временем запуска; без показанного окна приходит `reopen`, а время ждёт
   следующего показанного окна (`x11_window`: `a_later_launch_while_no_window_is_shown_asks_to_reopen`,
-  `the_window_reopened_for_a_later_launch_comes_forward`). Запуск с рабочего стола — строка parity. Остаток: Windows; включение по `file-types` ждёт их чтения в `#[flui::main]`.
+  `the_window_reopened_for_a_later_launch_comes_forward`). Запуск с рабочего стола — строка parity. Включение по `file-types` ждёт их чтения в `#[flui::main]`.
+- **AC10 (Windows).** Первый держит мьютекс `Local\flui-<app-id>-<session>` и сервер канала
+  `\\.\pipe\flui-<app-id>-<session>` с DACL на SID пользователя и `PIPE_REJECT_REMOTE_CLIENTS`;
+  второй проверяет пользователя процесса сервера (`GetNamedPipeServerProcessId`), передаёт право на
+  передний план и кадр. Модель кадра на Linux CI: `a_launch_crosses_the_pipe_as_it_left` (ссылки,
+  пути не в UTF-16, пустой запуск, пределы), `a_launch_past_its_bounds_is_not_sent`,
+  `a_malformed_frame_is_refused_whole` (длина до чтения тела, версия, вид, обрезка, хвост, NUL,
+  не текст, больше 64 элементов); общая очередь с Linux: `the_owner_is_woken_once_attached_and_refuses_once_ended`
+  и тесты выше; `an_app_id_in_reverse_dns_names_the_instance`; запуск, взятый владельцем в миг ухода
+  экземпляра, получает ответ «взят» (ответ — отдельная задача, на Linux:
+  `a_launch_taken_as_the_instance_ends_is_answered_as_taken`). Запуск двумя процессами на Windows —
+  строка parity `single-instance-forward-arguments`.
 - **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`
   (схемы, домены, расширения, MIME, имена), `what_the_application_opens_is_joined_over_the_graph`
   (регистр, файл фичи только при включённой фиче), строки `a_malformed_declaration_is_refused_by_crate`

@@ -26,6 +26,7 @@ pub(crate) mod control;
 #[cfg(test)]
 mod modal_frame_tests;
 pub(crate) mod modal_loop;
+pub(crate) mod single_instance;
 #[cfg(test)]
 mod tests;
 // The quiet host the loop's tests run over, and another host's tests name.
@@ -405,6 +406,18 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
     /// Paints every window with an invalid region now, as the main loop would
     /// while a modal loop stands in for it.
     fn paint_invalid(&self);
+
+    /// Whether any window is shown: a launch another process forwarded asks
+    /// an application that shows none to reopen.
+    fn shows_any(&self) -> bool;
+
+    /// Bring forward the shown window highest in the order of the windows on
+    /// the screen, the one the user worked with last, restoring it when it is
+    /// minimized: a launch another process forwarded with the right to the
+    /// foreground. With no window shown, nothing comes forward: the window
+    /// the application shows for the reopen it was asked comes forward with
+    /// that right.
+    fn activate_forwarded(&self);
 }
 
 /// One feature's part of the procedure of FLUI's window class.
@@ -806,6 +819,7 @@ impl WindowsLoop {
                     Arc::new(testing::NoWindows),
                     &source,
                     <testing::QuietHost>::drag,
+                    None,
                 )
             });
             assert!(
@@ -882,10 +896,11 @@ impl std::fmt::Debug for WindowsLoop {
             .finish_non_exhaustive()
     }
 }
-
 impl WindowsLoop {
     /// A loop whose windows are `windows`, the window feature's, and that
-    /// dispatches through the hooks and subscribers `H` names.
+    /// dispatches through the hooks and subscribers `H` names; with
+    /// `instance`, the application's one instance in the session, which
+    /// takes the launches later processes hand it.
     ///
     /// # Errors
     ///
@@ -893,8 +908,9 @@ impl WindowsLoop {
     /// registered for another host, and whatever the native setup refuses.
     pub(crate) fn try_new<H: WindowsHost>(
         windows: Arc<dyn ClassWindows>,
+        instance: Option<single_instance::FirstInstance>,
     ) -> Result<Self, PlatformError> {
-        Self::admit::<H>(windows, WindowIdentity::source(), H::drag)
+        Self::admit::<H>(windows, WindowIdentity::source(), H::drag, instance)
     }
 
     /// [`Self::try_new`] holding `drag` in place of the transport `H` makes, for
@@ -904,7 +920,7 @@ impl WindowsLoop {
         windows: Arc<dyn ClassWindows>,
         drag: Arc<dyn HostDrag>,
     ) -> Result<Self, PlatformError> {
-        Self::admit::<H>(windows, WindowIdentity::source(), move || drag)
+        Self::admit::<H>(windows, WindowIdentity::source(), move || drag, None)
     }
 
     /// [`Self::try_new`] with the identity drawn from `source` and the transport
@@ -915,6 +931,7 @@ impl WindowsLoop {
         windows: Arc<dyn ClassWindows>,
         source: &std::sync::atomic::AtomicU64,
         drag: impl FnOnce() -> Arc<dyn HostDrag>,
+        instance: Option<single_instance::FirstInstance>,
     ) -> Result<Self, PlatformError> {
         let owner_identity = WindowIdentity::mint_from(source);
 
@@ -961,7 +978,9 @@ impl WindowsLoop {
         let owner_control = control::OwnerControl::try_new::<H>(
             owner_identity,
             Arc::downgrade(&windows),
-            vec![Arc::clone(&drag) as Arc<dyn control::OwnerMessages>],
+            std::iter::once(Arc::clone(&drag) as Arc<dyn control::OwnerMessages>)
+                .chain(instance.map(single_instance::FirstInstance::into_hook))
+                .collect::<Vec<Arc<dyn control::OwnerMessages>>>(),
             Arc::clone(&displays),
             notices,
             Arc::clone(&app),

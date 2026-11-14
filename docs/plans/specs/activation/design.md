@@ -146,7 +146,7 @@ Fragment в `RoutePath` не входит: для ссылки он ничего
 отключает его, `Application::single_instance(true)` включает без объявлений.
 Имя экземпляра — `AppIdentity` (app id в обратной DNS-форме).
 
-- **Windows.** Первый экземпляр создаёт именованный мьютекс `Local\flui-<app-id>` и сервер
+- **Windows.** Первый экземпляр создаёт именованный мьютекс `Local\flui-<app-id>-<session-id>` и сервер
   именованного канала `\\.\pipe\flui-<app-id>-<session-id>`. Второй, найдя мьютекс, вызывает
   `AllowSetForegroundWindow(pid первого)` (pid из `GetNamedPipeServerProcessId`), пишет свой `argv`
   в канал (длина префиксом, предел `MAX_OPENED_ITEMS`/`MAX_URL_BYTES` на стороне чтения) и выходит
