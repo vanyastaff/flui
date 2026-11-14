@@ -14,7 +14,7 @@
 //! line by line as `run.app.log` so a tool driving `flui run` sees everything
 //! on one machine-readable stream.
 
-use crate::agent::browser::launch::LaunchedBrowser;
+use crate::agent::browser::launch::{LaunchError, LaunchedBrowser};
 use crate::agent::browser::relay::Relay;
 use crate::agent::browser::{self, Dialect};
 use crate::agent::{self, Session};
@@ -1291,7 +1291,7 @@ impl BrowserSession {
             .with_context(|| format!("find the executable of {}", self.browser.name))?;
         let (launched, mut link) =
             LaunchedBrowser::start(&executable, dialect, self.options.headless)
-                .with_context(|| format!("start {} for the agent", self.browser.name))?;
+                .map_err(|error| agent_start_error(&self.browser.name, error))?;
         link.open(&browser::preload(&session.page_launch()), url)
             .context("open the app in the browser")?;
         let agent::Endpoint::Local(endpoint) = &session.credentials().endpoint else {
@@ -1366,6 +1366,18 @@ impl BrowserSession {
 
     fn output_dir(&self) -> PathBuf {
         self.builder().1.output_dir
+    }
+}
+
+/// Why `flui run --agent` could not start `browser`: one too old for the link is refused as
+/// Safari is, as an unsupported target (exit 2); anything else failed starting it (exit 1).
+fn agent_start_error(browser: &str, error: LaunchError) -> CliError {
+    match error {
+        LaunchError::Unsupported(reason) => CliError::Unsupported {
+            what: format!("`flui run --agent` in {browser}"),
+            reason,
+        },
+        error => CliError::context(error, format!("start {browser} for the agent")),
     }
 }
 
@@ -2642,6 +2654,38 @@ pub(crate) fn execute_scene(
 #[cfg(test)]
 mod tests {
     use super::env;
+
+    /// A browser too old for the agent's link exits as an unsupported target, as Safari does,
+    /// with the version it needs and nothing of a failed start; a browser that failed starting
+    /// stays a generic failure.
+    #[test]
+    fn a_browser_too_old_for_the_agent_is_an_unsupported_target() {
+        use crate::agent::browser::launch::LaunchError;
+        use crate::error::exit_code;
+
+        let refused = super::agent_start_error(
+            "Firefox",
+            LaunchError::Unsupported("the link needs Firefox 140 or later".to_owned()),
+        );
+        assert_eq!(refused.exit_code(), exit_code::USAGE);
+        let told = refused.to_string();
+        assert!(
+            told.contains("`flui run --agent` in Firefox")
+                && told.contains("needs Firefox 140 or later")
+                && !told.contains("start Firefox"),
+            "{told}"
+        );
+
+        let failed = super::agent_start_error(
+            "Firefox",
+            LaunchError::Start(std::io::Error::other("no such file")),
+        );
+        assert_ne!(failed.exit_code(), exit_code::USAGE);
+        assert!(
+            failed.to_string().contains("start Firefox for the agent"),
+            "{failed}"
+        );
+    }
 
     /// `flui run` builds a host that names a `reload_feature` with that
     /// feature and its default features off, and passes nothing for one that

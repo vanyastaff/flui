@@ -73,6 +73,9 @@ pub(crate) enum LaunchError {
         command: &'static str,
         stderr: Vec<String>,
     },
+    /// The browser answered, but is one the link cannot drive. Its stderr says nothing of
+    /// that, so it is left out.
+    Unsupported(String),
     /// The browser's protocol failed.
     Link {
         error: LinkError,
@@ -84,6 +87,9 @@ impl std::fmt::Display for LaunchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let stderr = match self {
             Self::Start(error) => return write!(f, "could not start the browser: {error}"),
+            Self::Unsupported(why) => {
+                return write!(f, "the link cannot drive this browser: {why}");
+            }
             Self::Silent { why, stderr } => {
                 write!(f, "the browser opened no remote protocol: {why}")?;
                 stderr
@@ -114,13 +120,15 @@ impl std::fmt::Display for LaunchError {
 
 impl LaunchError {
     /// A failure of the link while the browser starts: a command it did not answer in time
-    /// ran out the start's deadline.
+    /// ran out the start's deadline, and a browser the link cannot drive is named as one,
+    /// without the stderr of a browser that is working.
     fn linking(failure: AttachError, stderr: Vec<String>) -> Self {
         match failure.error {
             LinkError::Timeout => Self::NotReady {
                 command: failure.command,
                 stderr,
             },
+            LinkError::Unsupported(why) => Self::Unsupported(why),
             error => Self::Link { error, stderr },
         }
     }
@@ -624,19 +632,38 @@ mod linking {
     use serde_json::{Value, json};
     use tungstenite::Message;
 
-    use super::super::COMMAND_TIMEOUT;
+    use super::super::bidi::MIN_FIREFOX;
+    use super::super::{COMMAND_TIMEOUT, LinkEvent};
     use super::*;
+
+    /// How a browser of [`starting_browser`]'s answers.
+    struct Answers {
+        /// How long its first command waits for an answer; never answered when `None`.
+        first_after: Option<Duration>,
+        /// A close is never answered, instead of refused.
+        close_hangs: bool,
+        /// The `browserVersion` its `session.new` names.
+        version: String,
+    }
+
+    impl Answers {
+        fn after(first_after: Option<Duration>) -> Self {
+            Self {
+                first_after,
+                close_hangs: false,
+                version: format!("{MIN_FIREFOX}.0.1"),
+            }
+        }
+    }
 
     /// A browser's WebSocket on the loopback that answers its first command `first_after` it
     /// came (never when `None`), as Firefox answers `session.new` once its window is up, and
     /// every later one at once. In BiDi it started with the tab `started`, opens `opened` when
-    /// asked for a tab and refuses to close one, or never answers when `close_hangs`; in the
-    /// DevTools protocol its tab is `tab`. Returns its URL and the commands it answers, each
-    /// sent before its answer.
-    fn starting_browser(
-        first_after: Option<Duration>,
-        close_hangs: bool,
-    ) -> (String, mpsc::Receiver<Value>) {
+    /// asked for a tab and refuses to close one; in the DevTools protocol its tab is `tab`. A
+    /// BiDi navigation is followed by the events the link subscribed to of what Firefox sends:
+    /// its start, a report from the document it leaves and the new one's commit. Returns its
+    /// URL and the commands it answers, each sent before its answer.
+    fn starting_browser(answers: Answers) -> (String, mpsc::Receiver<Value>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let url = format!(
             "ws://{}/session",
@@ -650,7 +677,8 @@ mod linking {
             let Ok(mut ws) = tungstenite::accept(stream) else {
                 return;
             };
-            let mut delay = first_after;
+            let mut delay = answers.first_after;
+            let mut subscribed = Vec::<Value>::new();
             // Ends once the link goes and its socket with it.
             while let Ok(message) = ws.read() {
                 let Message::Text(text) = message else {
@@ -662,30 +690,62 @@ mod linking {
                 thread::sleep(after);
                 delay = Some(Duration::ZERO);
                 let command = serde_json::from_str::<Value>(&text).expect("a command is JSON");
-                let result = match command["method"].as_str() {
-                    Some("browsingContext.getTree") => {
+                let method = command["method"].as_str().unwrap_or_default().to_owned();
+                let result = match method.as_str() {
+                    "browsingContext.getTree" => {
                         json!({ "contexts": [{ "context": "started" }] })
                     }
-                    Some("browsingContext.create") => json!({ "context": "opened" }),
-                    Some("Target.getTargets") => {
+                    "browsingContext.create" => json!({ "context": "opened" }),
+                    "Target.getTargets" => {
                         json!({ "targetInfos": [{ "type": "page", "targetId": "tab" }] })
                     }
-                    Some("Target.attachToTarget") => json!({ "sessionId": "session" }),
+                    "Target.attachToTarget" => json!({ "sessionId": "session" }),
+                    "session.new" => json!({
+                        "capabilities": { "browserVersion": answers.version }
+                    }),
                     _ => json!({}),
                 };
-                let closes = command["method"] == "browsingContext.close";
-                if closes && close_hangs {
+                if method == "browsingContext.close" && answers.close_hangs {
                     continue;
                 }
-                let answer = if closes {
-                    json!({ "id": command["id"], "type": "error", "error": "unknown error",
-                            "message": "the tab is still loading" })
-                } else {
-                    json!({ "id": command["id"], "type": "success", "result": result })
+                let events = command["params"]["events"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let refusal = match method.as_str() {
+                    "browsingContext.close" => Some("the tab is still loading"),
+                    _ => None,
                 };
+                let answer = match refusal {
+                    Some(message) => json!({ "id": command["id"], "type": "error",
+                                             "error": "invalid argument", "message": message }),
+                    None => json!({ "id": command["id"], "type": "success", "result": result }),
+                };
+                if method == "session.subscribe" && refusal.is_none() {
+                    subscribed.extend(events);
+                }
                 let _ = answered.send(command);
                 if ws.send(Message::text(answer.to_string())).is_err() {
                     return;
+                }
+                if method != "browsingContext.navigate" {
+                    continue;
+                }
+                for event in [
+                    json!({ "method": "browsingContext.navigationStarted",
+                            "params": { "context": "opened" } }),
+                    json!({ "method": "script.message",
+                            "params": { "channel": "flui-agent",
+                                        "data": { "type": "string", "value": "left" } } }),
+                    json!({ "method": "browsingContext.navigationCommitted",
+                            "params": { "context": "opened" } }),
+                ] {
+                    if !subscribed.contains(&event["method"]) {
+                        continue;
+                    }
+                    if ws.send(Message::text(event.to_string())).is_err() {
+                        return;
+                    }
                 }
             }
         });
@@ -704,7 +764,7 @@ mod linking {
     #[test]
     fn a_bidi_link_loads_the_page_in_a_tab_it_opened_and_closes_the_ones_the_browser_started_with()
     {
-        let (url, commands) = starting_browser(Some(Duration::ZERO), false);
+        let (url, commands) = starting_browser(Answers::after(Some(Duration::ZERO)));
         let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
         let mut link = Bidi::attach(socket, Instant::now() + COMMAND_TIMEOUT)
             .expect("a refused close leaves the link attached");
@@ -737,8 +797,31 @@ mod linking {
     }
 
     #[test]
+    fn a_bidi_navigation_is_reported_once_its_document_replaced_the_one_it_leaves() {
+        let (url, _commands) = starting_browser(Answers::after(Some(Duration::ZERO)));
+        let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
+        let mut link =
+            Bidi::attach(socket, Instant::now() + COMMAND_TIMEOUT).expect("the link attaches");
+        link.open("() => {}", "http://127.0.0.1:1/")
+            .expect("the page opens");
+        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        let events = [link.next_event(deadline), link.next_event(deadline)];
+        assert_eq!(
+            events,
+            [
+                Ok(Some(LinkEvent::Report("left".to_owned()))),
+                Ok(Some(LinkEvent::Navigated)),
+            ],
+            "a navigation is reported once its document replaced the one that still reports"
+        );
+    }
+
+    #[test]
     fn a_close_the_browser_never_answers_is_named_as_the_step_the_start_hung_on() {
-        let (url, _commands) = starting_browser(Some(Duration::ZERO), true);
+        let (url, _commands) = starting_browser(Answers {
+            close_hangs: true,
+            ..Answers::after(Some(Duration::ZERO))
+        });
         let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
         let hung = Bidi::attach(socket, Instant::now() + Duration::from_millis(300))
             .map(drop)
@@ -749,13 +832,55 @@ mod linking {
         );
     }
 
+    #[test]
+    fn a_firefox_that_reports_no_commit_is_refused_naming_the_version_the_link_needs() {
+        let before = MIN_FIREFOX - 1;
+        for (version, refused) in [
+            (format!("{before}.0.1"), true),
+            ("128.12.0esr".to_owned(), true),
+            (before.to_string(), true),
+            (format!("{MIN_FIREFOX}.0"), false),
+            (format!("{MIN_FIREFOX}.3.0esr"), false),
+            (format!("{}.0a1", MIN_FIREFOX + 7), false),
+        ] {
+            let (url, _commands) = starting_browser(Answers {
+                version: version.clone(),
+                ..Answers::after(Some(Duration::ZERO))
+            });
+            let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
+            let linked = Bidi::attach(socket, Instant::now() + COMMAND_TIMEOUT).map(drop);
+            if !refused {
+                assert_eq!(linked, Ok(()), "Firefox {version} reports the commit");
+                continue;
+            }
+            let failure = linked.expect_err("a link that would miss every reload is no link");
+            assert_eq!(failure.command, "session.new", "before anything is opened");
+            assert!(
+                matches!(&failure.error, LinkError::Unsupported(why)
+                    if why.starts_with(&format!("Firefox {version} "))
+                        && why.ends_with(&format!("needs Firefox {MIN_FIREFOX} or later"))),
+                "{:?}",
+                failure.error
+            );
+            // The browser's log says nothing of its version, and it refused nothing.
+            let told = LaunchError::linking(failure, vec!["a line of its log".to_owned()]);
+            assert!(
+                matches!(told, LaunchError::Unsupported(_)) && !told.to_string().contains("log"),
+                "{told}"
+            );
+        }
+    }
+
     fn link(
         dialect: Dialect,
         first_after: Option<Duration>,
         ready_by: Instant,
     ) -> Result<(), AttachError> {
-        let socket = Socket::connect(&starting_browser(first_after, false).0, CONNECT_TIMEOUT)
-            .expect("the browser's socket is reached");
+        let socket = Socket::connect(
+            &starting_browser(Answers::after(first_after)).0,
+            CONNECT_TIMEOUT,
+        )
+        .expect("the browser's socket is reached");
         attach(dialect, socket, ready_by).map(drop)
     }
 
