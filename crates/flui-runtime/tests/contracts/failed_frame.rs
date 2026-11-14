@@ -32,7 +32,7 @@ impl FrameSink for Refusing {
     }
 }
 
-fn pump(runtime: &mut UiRuntime, sink: &mut Refusing) -> bool {
+fn host_turn(runtime: &mut UiRuntime, sink: &mut Refusing) -> bool {
     runtime
         .pump(
             &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
@@ -62,7 +62,7 @@ fn wait_out_the_backoff(
         if wake == deadline {
             break;
         }
-        assert!(!pump(runtime, sink));
+        assert!(!host_turn(runtime, sink));
         assert_eq!(
             sink.submits, submits,
             "no frame is submitted before the backoff runs out"
@@ -83,13 +83,13 @@ fn a_failed_frame_is_painted_again_after_a_backoff_that_grows() {
         submits: 0,
     };
     let mut failed_at = web_time::Instant::now();
-    assert!(!pump(&mut runtime, &mut sink), "the first frame fails");
+    assert!(!host_turn(&mut runtime, &mut sink), "the first frame fails");
     assert_eq!(sink.submits, 1);
     assert!(
         !runtime.has_pending_work(),
         "the repaint waits for the deadline"
     );
-    assert!(!pump(&mut runtime, &mut sink));
+    assert!(!host_turn(&mut runtime, &mut sink));
     assert_eq!(
         sink.submits, 1,
         "no frame is submitted before the backoff runs out"
@@ -99,7 +99,7 @@ fn a_failed_frame_is_painted_again_after_a_backoff_that_grows() {
     for attempt in 2..=4 {
         waits.push(wait_out_the_backoff(&mut runtime, &mut sink, failed_at));
         failed_at = web_time::Instant::now();
-        let presented = pump(&mut runtime, &mut sink);
+        let presented = host_turn(&mut runtime, &mut sink);
         assert_eq!(
             sink.submits, attempt,
             "the retried frame paints and submits the tree"
@@ -119,6 +119,6 @@ fn a_failed_frame_is_painted_again_after_a_backoff_that_grows() {
         None,
         "a presented frame ends the wait"
     );
-    assert!(!pump(&mut runtime, &mut sink));
+    assert!(!host_turn(&mut runtime, &mut sink));
     assert_eq!(sink.submits, 4, "a presented tree is not painted again");
 }
