@@ -624,15 +624,16 @@ mod linking {
     use serde_json::{Value, json};
     use tungstenite::Message;
 
-    use super::super::COMMAND_TIMEOUT;
+    use super::super::{COMMAND_TIMEOUT, LinkEvent};
     use super::*;
 
     /// A browser's WebSocket on the loopback that answers its first command `first_after` it
     /// came (never when `None`), as Firefox answers `session.new` once its window is up, and
     /// every later one at once. In BiDi it started with the tab `started`, opens `opened` when
     /// asked for a tab and refuses to close one, or never answers when `close_hangs`; in the
-    /// DevTools protocol its tab is `tab`. Returns its URL and the commands it answers, each
-    /// sent before its answer.
+    /// DevTools protocol its tab is `tab`. A BiDi navigation is followed by a report from the
+    /// document it leaves and the new one's commit. Returns its URL and the commands it
+    /// answers, each sent before its answer.
     fn starting_browser(
         first_after: Option<Duration>,
         close_hangs: bool,
@@ -683,9 +684,27 @@ mod linking {
                 } else {
                     json!({ "id": command["id"], "type": "success", "result": result })
                 };
+                let navigates = command["method"] == "browsingContext.navigate";
                 let _ = answered.send(command);
                 if ws.send(Message::text(answer.to_string())).is_err() {
                     return;
+                }
+                if navigates {
+                    // A navigation starts, the document it leaves still reports, and then the
+                    // new one commits.
+                    for event in [
+                        json!({ "method": "browsingContext.navigationStarted",
+                                "params": { "context": "opened" } }),
+                        json!({ "method": "script.message",
+                                "params": { "channel": "flui-agent", "context": "opened",
+                                            "data": { "type": "string", "value": "left" } } }),
+                        json!({ "method": "browsingContext.navigationCommitted",
+                                "params": { "context": "opened" } }),
+                    ] {
+                        if ws.send(Message::text(event.to_string())).is_err() {
+                            return;
+                        }
+                    }
                 }
             }
         });
@@ -733,6 +752,26 @@ mod linking {
         assert!(
             position("browsingContext.close") < position("session.subscribe"),
             "the closed tab's events come before the link listens"
+        );
+    }
+
+    #[test]
+    fn a_bidi_navigation_is_reported_once_its_document_replaced_the_one_it_leaves() {
+        let (url, _commands) = starting_browser(Some(Duration::ZERO), false);
+        let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
+        let mut link =
+            Bidi::attach(socket, Instant::now() + COMMAND_TIMEOUT).expect("the link attaches");
+        link.open("() => {}", "http://127.0.0.1:1/")
+            .expect("the page opens");
+        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        let events = [link.next_event(deadline), link.next_event(deadline)];
+        assert_eq!(
+            events,
+            [
+                Ok(Some(LinkEvent::Report("left".to_owned()))),
+                Ok(Some(LinkEvent::Navigated)),
+            ],
+            "a navigation is reported once its document replaced the one that still reports"
         );
     }
 

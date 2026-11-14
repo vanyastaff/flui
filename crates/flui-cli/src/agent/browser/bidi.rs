@@ -13,10 +13,12 @@ use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
 /// The channel every report comes back on.
 const CHANNEL: &str = "flui-agent";
 
-/// The events the link reads.
+/// The events the link reads. A navigation is reported once it commits, as the DevTools
+/// protocol's `Page.frameNavigated` is: until then the tab still shows the document it
+/// leaves, and a connection made there would go with it.
 const EVENTS: [&str; 3] = [
     "script.message",
-    "browsingContext.navigationStarted",
+    "browsingContext.navigationCommitted",
     "browsingContext.contextDestroyed",
 ];
 
@@ -196,7 +198,7 @@ impl BrowserLink for Bidi {
                         return Ok(Some(LinkEvent::Report(text.to_owned())));
                     }
                 }
-                Some("browsingContext.navigationStarted") if ours => {
+                Some("browsingContext.navigationCommitted") if ours => {
                     return Ok(Some(LinkEvent::Navigated));
                 }
                 Some("browsingContext.contextDestroyed") if ours => {
