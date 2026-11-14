@@ -154,7 +154,7 @@ flui run --device browser:chrome            # wasm32 build, served on localhost,
 flui run --device browser:firefox --web-port 8080 --no-open   # fixed port, URL printed only
 flui run --device emulator-5554             # Android: build the APK, install, start, follow logcat
 flui run --profile bench
-flui run --register-links                   # Windows: register the URL schemes from a debug build
+flui run --register-associations            # Windows: register the URL schemes and file types from a debug build
 ```
 
 On Android the project's `cdylib` is compiled with `cargo ndk`, packaged

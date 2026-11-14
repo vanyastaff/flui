@@ -1,9 +1,11 @@
 //! The registry behind [`Classes`]: the user's `HKCU\Software\Classes`,
-//! read through the merged `HKEY_CLASSES_ROOT` view so a scheme the machine
-//! registered counts as taken, and the process's package identity.
+//! read through the merged `HKEY_CLASSES_ROOT` view so a key the machine
+//! registered counts as taken, the extensions' `OpenWithProgids` there, the
+//! shell's association cache, and the process's package identity.
 #![expect(
     unsafe_code,
-    reason = "the registry and the package identity are Win32 calls, which have no safe wrapper"
+    reason = "the registry, the shell notification and the package identity are Win32 calls, \
+              which have no safe wrapper"
 )]
 
 use windows::Win32::Foundation::{
@@ -12,13 +14,15 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_CREATE_KEY_DISPOSITION,
-    REG_CREATED_NEW_KEY, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_SZ, RegCloseKey,
-    RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, RegSetValueExW,
+    HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_READ, KEY_SET_VALUE,
+    KEY_WRITE, REG_CREATE_KEY_DISPOSITION, REG_CREATED_NEW_KEY, REG_NONE, REG_OPTION_NON_VOLATILE,
+    REG_SZ, RRF_RT_ANY, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW,
+    RegDeleteValueW, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, RegSetValueExW,
 };
+use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 
-use super::{Claim, Classes, Entry, Found, MARKER, Wrote};
+use super::{Claim, Classes, Entry, FILE_TYPE, Found, MARKER, Marked, Wrote};
 
 /// Where the user's classes are, under `HKEY_CURRENT_USER`.
 const USER_CLASSES: &str = "Software\\Classes";
@@ -26,6 +30,10 @@ const USER_CLASSES: &str = "Software\\Classes";
 /// The longest key name the registry holds, in UTF-16 units, without the
 /// terminating NUL.
 const MAX_KEY_NAME: usize = 255;
+
+/// The subkey of an extension's key whose values name the ProgIDs offered to
+/// open its files.
+const OPEN_WITH: &str = "OpenWithProgids";
 
 /// The user's classes, read through the merged view.
 pub(super) struct UserClasses;
@@ -142,8 +150,8 @@ fn string(key: &Key, subkey: &str, name: &str) -> std::io::Result<Option<String>
     ))
 }
 
-/// Create or open `path` under the user's hive for writing, and say whether
-/// this call created it.
+/// Create or open `path` under the user's hive for writing and reading its
+/// values, and say whether this call created it.
 fn create(path: &str) -> std::io::Result<(Key, bool)> {
     let path = HSTRING::from(path);
     let mut key = HKEY::default();
@@ -158,7 +166,7 @@ fn create(path: &str) -> std::io::Result<(Key, bool)> {
             None,
             PCWSTR::null(),
             REG_OPTION_NON_VOLATILE,
-            KEY_WRITE,
+            KEY_WRITE | KEY_QUERY_VALUE,
             None,
             &raw mut key,
             Some(&raw mut disposition),
@@ -184,6 +192,21 @@ fn set_string(key: &Key, name: &str, data: &str) -> std::io::Result<()> {
     // call, and `data` is the value's UTF-16 with its terminating NUL, the
     // form `REG_SZ` holds.
     checked(unsafe { RegSetValueExW(key.0, name, None, REG_SZ, Some(&data)) })
+}
+
+/// Whether `key` has a value named `name`, of any type.
+fn has_value(key: &Key, name: &str) -> std::io::Result<bool> {
+    let name = HSTRING::from(name);
+    // SAFETY: `name` is a NUL-terminated string that outlives the call; with
+    // no type, data or size pointer the call only answers whether the value
+    // exists.
+    let status =
+        unsafe { RegGetValueW(key.0, PCWSTR::null(), &name, RRF_RT_ANY, None, None, None) };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(false);
+    }
+    checked(status)?;
+    Ok(true)
 }
 
 impl Classes for UserClasses {
@@ -241,7 +264,7 @@ impl Classes for UserClasses {
         checked(status)
     }
 
-    fn marked_by(&self, app_id: &str) -> std::io::Result<Vec<String>> {
+    fn marked_by(&self, app_id: &str) -> std::io::Result<Vec<Marked>> {
         let Some(classes) = open(HKEY_CURRENT_USER, USER_CLASSES, KEY_READ)? else {
             return Ok(Vec::new());
         };
@@ -277,10 +300,47 @@ impl Classes for UserClasses {
                 .flatten()
                 .is_some_and(|marker| marker == app_id)
             {
-                marked.push(key_name);
+                let file_type = string(&classes, &key_name, FILE_TYPE).ok().flatten();
+                marked.push(Marked {
+                    name: key_name,
+                    file_type,
+                });
             }
         }
         Ok(marked)
+    }
+
+    fn offer(&mut self, extension_key: &str, prog_id: &str) -> std::io::Result<bool> {
+        let (key, _) = create(&format!("{USER_CLASSES}\\{extension_key}\\{OPEN_WITH}"))?;
+        if has_value(&key, prog_id)? {
+            return Ok(false);
+        }
+        let name = HSTRING::from(prog_id);
+        // SAFETY: `name` is a NUL-terminated string that outlives the call;
+        // a `REG_NONE` value holds no data, the form an `OpenWithProgids`
+        // entry takes.
+        checked(unsafe { RegSetValueExW(key.0, &name, None, REG_NONE, None) })?;
+        Ok(true)
+    }
+
+    fn withdraw(&mut self, extension_key: &str, prog_id: &str) -> std::io::Result<()> {
+        let path = format!("{USER_CLASSES}\\{extension_key}\\{OPEN_WITH}");
+        let Some(key) = open(HKEY_CURRENT_USER, &path, KEY_SET_VALUE)? else {
+            return Ok(());
+        };
+        let name = HSTRING::from(prog_id);
+        // SAFETY: `name` is a NUL-terminated string that outlives the call.
+        let status = unsafe { RegDeleteValueW(key.0, &name) };
+        if status == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        checked(status)
+    }
+
+    fn announce(&mut self) {
+        // SAFETY: `SHCNE_ASSOCCHANGED` names no item, so both item pointers
+        // are null, as the event requires with `SHCNF_IDLIST`.
+        unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None) };
     }
 }
 

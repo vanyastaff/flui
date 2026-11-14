@@ -185,15 +185,21 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   for file types, the shared-mime-info package `share/mime/packages/<id>.xml` giving each MIME type
   its extension, at the paths a package installs them to below its prefix; the entry carries
   `MimeType=x-scheme-handler/<scheme>;` and each file type's MIME type. An unpackaged Windows
-  application registers its schemes and extensions as it runs, after the main window's first
-  frame, under `HKCU\Software\Classes`: each key it writes carries the application id as
-  `FluiApplicationId`, and it writes a key only when no key, the user's or the machine's, has the
-  name, or when the key is its own and names another executable; a key without that marker, or
-  with another application's, is never touched. A release build registers by itself, a
-  development build only under `flui run --register-links`, and `Application::register_links`
-  decides over both; `<executable> --flui-unregister-links` deletes the keys marked with the
-  application's id and exits, for an uninstaller. An MSIX package declares them as `uap:Protocol`
-  and `uap:FileTypeAssociation` in its manifest, and a packaged process registers nothing.
+  application registers its schemes and file types as it runs, after the main window's first
+  frame, under `HKCU\Software\Classes`: a scheme is a key named by the scheme, a file type the
+  ProgID `<application id>.<extension>` (its extension under `FluiFileType`) named as a value of
+  `.<extension>\OpenWithProgids`, so the application is offered in the extension's "Open with"
+  list and the extension's default stays the user's choice. Each key it writes carries the
+  application id as `FluiApplicationId`, and it writes a key only when no key, the user's or the
+  machine's, has the name, or when the key is its own and names another executable; a key without
+  that marker, or with another application's, is never touched, and a change to a file type is
+  announced to the shell (`SHChangeNotify`). A release build registers by itself, a development
+  build only under `flui run --register-associations`, and
+  `Application::register_associations` decides over both;
+  `<executable> --flui-unregister-associations` deletes the keys marked with the application's id
+  and their `OpenWithProgids` values and exits, for an uninstaller. An MSIX package declares them
+  as `uap:Protocol` and `uap:FileTypeAssociation` in its manifest, and a packaged process
+  registers nothing.
 - **Apple.** The iOS packager writes the bundle's `PrivacyInfo.xcprivacy` from the accessed APIs
   the graph of the application's target declares, joined with the application's own
   `<project>/platforms/ios/PrivacyInfo.xcprivacy`: per category, the reasons of every crate and of the

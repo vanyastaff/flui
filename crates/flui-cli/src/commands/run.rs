@@ -48,7 +48,7 @@ pub(crate) fn execute(
     let RunOptions {
         web,
         agent,
-        register_links,
+        register_associations,
     } = options;
     let mode = if release { "release" } else { "debug" };
     ui::intro(style(" flui run ").on_green().black())?;
@@ -88,7 +88,7 @@ pub(crate) fn execute(
         SessionExtras {
             web,
             agent,
-            register_links,
+            register_associations,
         },
     );
     // `run.stop` closes `run.start` on every outcome; the `error` event that
@@ -109,16 +109,17 @@ pub(crate) struct RunOptions {
     pub(crate) web: WebOptions,
     /// `--agent`: serve the app to an AI agent.
     pub(crate) agent: bool,
-    /// `--register-links`: a development build on this desktop registers
-    /// its URL schemes with Windows as a release build does.
-    pub(crate) register_links: bool,
+    /// `--register-associations`: a development build on this desktop
+    /// registers its URL schemes and file types with Windows as a release
+    /// build does.
+    pub(crate) register_associations: bool,
 }
 
 /// [`RunOptions`] once `--agent` has become a session.
 struct SessionExtras {
     web: WebOptions,
     agent: Option<Session>,
-    register_links: bool,
+    register_associations: bool,
 }
 
 /// The part of `execute` whose outcome `run.stop` reports.
@@ -134,7 +135,7 @@ fn run_session(
     let SessionExtras {
         web,
         agent,
-        register_links,
+        register_associations,
     } = extras;
     if let Target::Android(device) = target {
         if matches!(project, Project::Worker(_)) {
@@ -181,7 +182,7 @@ fn run_session(
                     profile,
                     verbose,
                     floor_env,
-                    register_links,
+                    register_associations,
                 };
                 dev_loop(&mut strategy)?;
             }
@@ -191,13 +192,19 @@ fn run_session(
                     profile,
                     verbose,
                     agent,
-                    register_links,
+                    register_associations,
                 };
                 dev_loop(&mut strategy)?;
             }
         }
     } else {
-        run_once(release, profile, verbose, agent.as_ref(), register_links)?;
+        run_once(
+            release,
+            profile,
+            verbose,
+            agent.as_ref(),
+            register_associations,
+        )?;
     }
     Ok(())
 }
@@ -311,10 +318,10 @@ fn with_agent(cmd: &mut Command, agent: Option<&Session>) {
 }
 
 /// Ask the application `cmd` starts to register its URL schemes with
-/// Windows (`--register-links`), as a release build does by itself.
-fn with_registration(cmd: &mut Command, register_links: bool) {
-    if register_links {
-        cmd.env(env::REGISTER_LINKS, "1");
+/// Windows (`--register-associations`), as a release build does by itself.
+fn with_registration(cmd: &mut Command, register_associations: bool) {
+    if register_associations {
+        cmd.env(env::REGISTER_ASSOCIATIONS, "1");
     }
 }
 
@@ -512,7 +519,7 @@ fn run_once(
     profile: Option<String>,
     verbose: bool,
     agent: Option<&Session>,
-    register_links: bool,
+    register_associations: bool,
 ) -> CliResult<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
@@ -527,7 +534,7 @@ fn run_once(
         cmd.arg("--verbose");
     }
     with_agent(&mut cmd, agent);
-    with_registration(&mut cmd, register_links);
+    with_registration(&mut cmd, register_associations);
 
     ui::step("Building and running...")?;
     let interrupted = install_interrupt_flag();
@@ -579,11 +586,11 @@ mod env {
     pub(crate) const HOT_RELOAD: &str = "FLUI_HOT_RELOAD";
     /// Path of the worker `cdylib` a `--hot-reload` host should load.
     pub(crate) const WORKER_PLUGIN: &str = "FLUI_WORKER_PLUGIN";
-    /// Set to `1` by `flui run --register-links`: a development build
-    /// registers its URL schemes with Windows. The application reads it in
-    /// `flui-app` (`runner::link_registration::REGISTER_ENV`), which the CLI
-    /// does not link.
-    pub(crate) const REGISTER_LINKS: &str = "FLUI_REGISTER_LINKS";
+    /// Set to `1` by `flui run --register-associations`: a development build
+    /// registers its URL schemes and file types with Windows. The application
+    /// reads it in `flui-app` (`runner::associations::REGISTER_ENV`), which
+    /// the CLI does not link.
+    pub(crate) const REGISTER_ASSOCIATIONS: &str = "FLUI_REGISTER_ASSOCIATIONS";
 }
 
 // ============================================================================
@@ -1196,8 +1203,9 @@ struct ProcessRestart {
     /// without debug assertions) and started
     /// with the session's endpoint and token.
     agent: Option<Session>,
-    /// `--register-links`: the app registers its URL schemes with Windows.
-    register_links: bool,
+    /// `--register-associations`: the app registers its URL schemes and file
+    /// types with Windows.
+    register_associations: bool,
 }
 
 impl ReloadStrategy for ProcessRestart {
@@ -1221,7 +1229,7 @@ impl ReloadStrategy for ProcessRestart {
             self.profile.as_deref(),
             self.verbose,
             self.agent.as_ref(),
-            self.register_links,
+            self.register_associations,
         )?;
         announce_started(&spawned, "Application started");
         *child = Some(spawned);
@@ -1876,7 +1884,7 @@ fn spawn_app(
     profile: Option<&str>,
     verbose: bool,
     agent: Option<&Session>,
-    register_links: bool,
+    register_associations: bool,
 ) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
@@ -1892,7 +1900,7 @@ fn spawn_app(
     }
 
     with_agent(&mut cmd, agent);
-    with_registration(&mut cmd, register_links);
+    with_registration(&mut cmd, register_associations);
 
     cmd.env(env::HOT_RELOAD, "1");
     spawn_child(cmd, "Failed to spawn application")
@@ -1919,8 +1927,9 @@ struct WorkerHost {
     /// The application's floors (ADR-0244 §10), for both cargo invocations:
     /// the same values keep the build script from rerunning between them.
     floor_env: Vec<(&'static str, String)>,
-    /// `--register-links`: the host registers its URL schemes with Windows.
-    register_links: bool,
+    /// `--register-associations`: the host registers its URL schemes and file
+    /// types with Windows.
+    register_associations: bool,
 }
 
 impl WorkerHost {
@@ -1990,7 +1999,7 @@ impl WorkerHost {
             self.verbose,
             &self.floor_env,
             &self.host_feature_args(),
-            self.register_links,
+            self.register_associations,
         )
     }
 }
@@ -2264,13 +2273,13 @@ fn spawn_host_package(
     verbose: bool,
     floor_env: &[(&'static str, String)],
     feature_args: &[String],
-    register_links: bool,
+    register_associations: bool,
 ) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "-p", package]);
     cmd.args(feature_args);
     cmd.envs(floor_env.iter().map(|(name, value)| (*name, value)));
-    with_registration(&mut cmd, register_links);
+    with_registration(&mut cmd, register_associations);
 
     if let Some(prof) = profile {
         cmd.args(["--profile", prof]);
@@ -2768,7 +2777,7 @@ mod tests {
             profile: None,
             verbose: false,
             floor_env: Vec::new(),
-            register_links: false,
+            register_associations: false,
         };
         assert_eq!(
             host(Some("reload")).host_feature_args(),
@@ -2864,14 +2873,15 @@ mod tests {
         );
     }
 
-    /// `--register-links` hands the application the variable it registers
-    /// its URL schemes by; without it the variable is not set.
-    fn register_links_sets_the_application_variable() {
-        let variable = |register_links: bool| {
+    /// `--register-associations` hands the application the variable it
+    /// registers its URL schemes and file types by; without it the variable
+    /// is not set.
+    fn register_associations_sets_the_application_variable() {
+        let variable = |register_associations: bool| {
             let mut cmd = std::process::Command::new("cargo");
-            super::with_registration(&mut cmd, register_links);
+            super::with_registration(&mut cmd, register_associations);
             cmd.get_envs()
-                .find(|(name, _)| *name == env::REGISTER_LINKS)
+                .find(|(name, _)| *name == env::REGISTER_ASSOCIATIONS)
                 .and_then(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
         };
         assert_eq!(variable(true).as_deref(), Some(std::ffi::OsStr::new("1")));
@@ -3092,8 +3102,8 @@ mod tests {
             ),
             ("env names match the runtime", env_names_match_the_runtime),
             (
-                "register links sets the application variable",
-                register_links_sets_the_application_variable,
+                "register associations sets the application variable",
+                register_associations_sets_the_application_variable,
             ),
             (
                 "device selection prefers exact id then name then unique prefix",
