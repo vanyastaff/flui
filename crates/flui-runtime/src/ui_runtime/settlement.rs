@@ -19,14 +19,16 @@ use crate::frame_failure::FrameFailureKind;
 use crate::presentation::PresentationState;
 use crate::sink::{FrameSettlement, Settled, SubmitVerdict};
 
-/// The most frames one presentation keeps pending, a bound on memory and not on the protocol.
-/// A record leaves only when a settlement names it or a later frame (ADR-0305 §4): a frame the
-/// raster side superseded in its inbox gets no settlement of its own and folds when the frame
-/// that replaced it settles, so no record is folded on a guess of what the raster side holds.
-/// The legal frames in flight are the placement's depth of settled frames not drained yet, the
-/// one rendering and the one in the inbox, beside the superseded ones that wait for that one's
-/// settlement; a sink that queues past the bound has stopped settling, and its oldest record
-/// folds with a `BUG` warning.
+/// The most frames one presentation keeps pending. A record leaves when a settlement names it or
+/// a later frame (ADR-0305 §4): a frame the raster side superseded in its inbox gets no
+/// settlement of its own and folds when the frame that replaced it settles. Until the frame
+/// clock's in-flight gate (§5) paces production, a raster side that renders one frame for long
+/// while the owner keeps producing piles superseded records behind it, and the bound stops the
+/// pile: a frame queued into a full ring replaces the newest record in the inbox, so that record
+/// is the one folded. That holds while the host delivers settlements before it pumps the next
+/// frame: the pile forms behind one frame rendering, which is older than all of it, and once
+/// that frame settles the ring holds fewer than eight, so a full ring's newest record is the
+/// one waiting in the inbox, never the one the executor took.
 pub(super) const MAX_PENDING_FRAMES: usize = 8;
 
 /// What a frame commits once its sink's verdict is known, captured when the frame is handed to
@@ -156,8 +158,8 @@ impl UiRuntime {
     }
 
     /// The sink queued `frame`, stamped `epoch`: its record waits for the settlement that names
-    /// it. A presentation already holding [`MAX_PENDING_FRAMES`] has a sink that stopped settling:
-    /// its oldest record folds, so the reads it holds wait for a later scene.
+    /// it. Into a presentation already holding [`MAX_PENDING_FRAMES`], `frame` replaces the newest
+    /// record in the raster inbox, which folds, so the reads it holds wait for a later scene.
     /// Returns the first panic of that fold, for the caller to resume after the frame's tail.
     pub(super) fn queue_pending_frame(
         producer: &PresentationState,
@@ -168,7 +170,7 @@ impl UiRuntime {
         let folded = {
             let mut pending = producer.pending_frames.borrow_mut();
             let folded = (pending.len() >= MAX_PENDING_FRAMES)
-                .then(|| pending.pop_front())
+                .then(|| pending.pop_back())
                 .flatten();
             pending.push_back(frame);
             folded
@@ -179,10 +181,10 @@ impl UiRuntime {
             // The reads wait again before a subscriber hears of it, and each step runs contained.
             held.contain(|| Self::abandon_pending_frame(producer, folded));
             held.contain(|| {
-                tracing::warn!(
+                tracing::debug!(
                     target: "flui.frame",
                     epoch,
-                    "BUG: a sink queued more frames than the settlement ring holds without settling; the oldest is folded"
+                    "a frame queued into a full settlement ring superseded the newest record; it folds"
                 );
             });
         }
@@ -396,7 +398,7 @@ impl UiRuntime {
                         PresentOutcome::Presented,
                         EpochDisposition::Drain,
                     );
-                    tracing::warn!(
+                    tracing::trace!(
                         frame = frame_number,
                         total = producer.frames_rendered(),
                         "Frame rendered successfully"
@@ -415,7 +417,7 @@ impl UiRuntime {
                     // never asked to show anything, so a withheld streak is
                     // over just as it is on a present.
                     producer.clear_not_shown_streak();
-                    tracing::warn!(
+                    tracing::trace!(
                         frame = frame_number,
                         "Frame skipped: no damage (no present)"
                     );
@@ -500,7 +502,7 @@ impl UiRuntime {
                         // permanent disable: the next real event gets a full
                         // budget again.
                         producer.clear_not_shown_streak();
-                        tracing::warn!(
+                        tracing::trace!(
                             frame = frame_number,
                             streak,
                             "Frame withheld by the surface for {} consecutive attempts; \

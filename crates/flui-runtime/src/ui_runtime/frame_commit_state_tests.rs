@@ -661,23 +661,24 @@ fn a_queued_frame_keeps_its_record_until_a_settlement_reaches_it() {
     assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
 }
 
-/// A sink that queues past the ring's bound without settling has stopped settling: the oldest
-/// record folds, and a subscriber that panics on that fold's warning leaves the frame to finish:
-/// it settles as rendered before the panic continues, and the newest frame waits for its
-/// settlement.
+/// A raster side that renders one frame for long piles superseded frames behind it. A frame
+/// queued into a full ring replaces the newest record in the inbox, which folds; the oldest,
+/// the one the executor renders, keeps its record. A subscriber that panics on the fold's trace
+/// leaves the frame to finish: it settles as rendered before the panic continues.
 ///
-/// Fails when the fold's panic leaves the frame before its tail.
+/// Fails when the fold drops the frame being rendered, or when its panic leaves the frame
+/// before its tail.
 #[test]
 fn a_subscriber_that_panics_on_a_folded_frame_leaves_the_frame_finished() {
     let mut ui_runtime = mount_box();
     let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
-    let _ = queue_two_frames(&ui_runtime, &mut sink);
+    let [(rendering, _), _] = queue_two_frames(&ui_runtime, &mut sink);
     queue_more(
         &ui_runtime,
         &mut sink,
         super::settlement::MAX_PENDING_FRAMES - 2,
     );
-    let oldest = sink.epochs[0];
+    let superseded = *sink.epochs.last().expect("frames were queued");
     ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
 
     let panicked = render_under(
@@ -705,16 +706,17 @@ fn a_subscriber_that_panics_on_a_folded_frame_leaves_the_frame_finished() {
         "the frame settled as rendered before the panic continued"
     );
     assert_eq!(
-        settle(&mut ui_runtime, oldest),
+        settle(&mut ui_runtime, rendering),
+        Settled::Applied,
+        "the frame being rendered keeps its record"
+    );
+    assert_eq!(
+        settle(&mut ui_runtime, superseded),
         Settled::Stale,
-        "the oldest folded"
+        "the frame the inbox replaced folded"
     );
     let newest = *sink.epochs.last().expect("frames were queued");
-    assert_eq!(
-        settle(&mut ui_runtime, newest),
-        Settled::Applied,
-        "the newest frame waits for its settlement"
-    );
+    assert_eq!(settle(&mut ui_runtime, newest), Settled::Applied);
 }
 
 fn press_primary(ui_runtime: &UiRuntime) {
