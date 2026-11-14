@@ -1612,17 +1612,12 @@ impl IOSLoop {
     }
 }
 
-/// A scene's window delivered a frame, which may have unwound: when the
-/// wake deadline last delivered waits on a frame to be armed again, the
-/// handler is asked now, since no owner turn need follow a frame. Any other
-/// frame asks nothing, so a running animation does not consult the handler
-/// once per tick.
+/// A scene's window delivered a frame, which may have unwound: the frame
+/// may have served the deadline last delivered or left a new one, and no
+/// owner turn need follow a frame, so the handler is asked for the next
+/// deadline now, as the other loops ask on every iteration.
 pub(crate) fn after_frame() {
-    FluiAppDelegate::with_platform(|platform| {
-        if platform.wake.borrow().awaits_frame(platform.frames.get()) {
-            platform.arm_deadline();
-        }
-    });
+    FluiAppDelegate::with_platform(IOSLoop::arm_deadline);
 }
 
 pub(crate) fn request_close(id: WindowId) {

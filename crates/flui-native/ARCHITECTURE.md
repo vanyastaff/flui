@@ -2673,8 +2673,8 @@ newer request. After a frame that left nothing marked, the producer stops.
   that came due is a frame request to the scene window, made once and armed
   again only after a frame ran (`owner::wake_deadline::WakeDeadline`, the
   Win32, X11 and Wayland loops' rule). Since no owner turn follows a frame,
-  a display-link frame that ran (produced, failed or unwound) after such a
-  delivery asks the handler for the next deadline; other frames ask nothing.
+  every display-link tick that dispatched a frame, one that unwound too, asks the
+  handler for the next deadline, which may be one that frame left.
 - **The Web** loop asks the browser for the next frame only when one is marked,
   or while the refresh estimate is still measuring. The estimate measures for a
   window of intervals from start and after each restart (scale, screen,
