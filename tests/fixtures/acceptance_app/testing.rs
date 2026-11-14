@@ -306,7 +306,8 @@ impl AppRun {
             // The framework ends the composition at the end of a session, the
             // edit an empty composition makes (`project_ime_event`).
             ImeEvent::Disabled => self.tester.cancel_composition(),
-            // The framework takes the start of a session as no edit.
+            // The window's input path has no session start: the compositions
+            // arrive in the focused field's open text-input session.
             ImeEvent::Enabled => {}
             other => panic!("the window's input path takes no {other:?}"),
         }
@@ -407,8 +408,8 @@ impl AppRun {
         self.settle();
     }
 
-    /// The window becomes hidden (`false`) or shown again, without settling:
-    /// a row reads what the store holds before the frames run.
+    /// The window becomes hidden (`false`) or shown again, and the frames due
+    /// now run; the row settles when it is ready to.
     pub fn set_window_visible(&mut self, visible: bool) {
         self.tester.set_window_visible(visible);
     }
@@ -511,7 +512,8 @@ impl AppRun {
     /// Whether an element `locator` matches has its centre inside the window
     /// and inside the bounds of every element above it, as a pointer at that
     /// centre would reach it: a row the list scrolled out of its viewport, or
-    /// built in its cache, lies outside the list's bounds.
+    /// built in its cache, lies outside the list's bounds. `locator` matches by
+    /// name only: the read holds a node by the id and name it was found by.
     fn any(&mut self, locator: &Locator) -> bool {
         // The locate and the read are two reads, and a frame between them may
         // rebuild or rename what the first found: a node counts only when the
@@ -594,33 +596,26 @@ fn bounds(node: &Node) -> Option<Bounds> {
     ))
 }
 
-/// Visit each node whose centre lies inside `clip`, the bounds of the nodes
-/// above it. A node without bounds, or with empty ones, narrows nothing
-/// below it: it is a wrapper, not a region on screen.
+/// Visit each node whose centre lies inside `clip` and the bounds of every
+/// node above it. Each node is tested on its own, so a container larger than
+/// its clip still has its visible children visited; a node without bounds,
+/// or with empty ones, is a wrapper: it is neither visited nor narrows the
+/// clip below it.
 fn walk_shown(nodes: &[Node], clip: Option<Bounds>, visit: &mut impl FnMut(&Node)) {
     for node in nodes {
-        let Some(own) = bounds(node) else {
+        let own = bounds(node).filter(|&(left, top, right, bottom)| right > left && bottom > top);
+        let Some((left, top, right, bottom)) = own else {
             walk_shown(&node.children, clip, visit);
             continue;
         };
-        let (left, top, right, bottom) = own;
-        if let Some((cl, ct, cr, cb)) = clip {
-            let (x, y) = ((left + right) / 2.0, (top + bottom) / 2.0);
-            if !((cl..=cr).contains(&x) && (ct..=cb).contains(&y)) {
-                continue;
-            }
+        let (x, y) = ((left + right) / 2.0, (top + bottom) / 2.0);
+        if clip.is_none_or(|(cl, ct, cr, cb)| (cl..=cr).contains(&x) && (ct..=cb).contains(&y)) {
+            visit(node);
         }
-        visit(node);
-        let narrowed = if right <= left || bottom <= top {
-            clip
-        } else {
-            Some(match clip {
-                Some((cl, ct, cr, cb)) => {
-                    (left.max(cl), top.max(ct), right.min(cr), bottom.min(cb))
-                }
-                None => own,
-            })
+        let narrowed = match clip {
+            Some((cl, ct, cr, cb)) => (left.max(cl), top.max(ct), right.min(cr), bottom.min(cb)),
+            None => (left, top, right, bottom),
         };
-        walk_shown(&node.children, narrowed, visit);
+        walk_shown(&node.children, Some(narrowed), visit);
     }
 }
