@@ -2,6 +2,6 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [idle_frame_retained_scene]
-allocated_bytes = 192
-allocations = 4
+allocated_bytes = 0
+allocations = 0
 reallocations = 0
