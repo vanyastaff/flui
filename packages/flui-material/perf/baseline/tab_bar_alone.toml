@@ -5,7 +5,7 @@
 # --features flui/material,flui/cupertino,flui/native --test perf`.
 
 [tab_bar_alone]
-allocations = 562
+allocations = 543
 bytes = 68913
 elements = 41
 reallocations = 16
