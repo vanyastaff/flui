@@ -24,8 +24,8 @@ use downcast_rs::{Downcast, impl_downcast};
 /// `ParentData` requires `DynClone` from the `dyn_clone` crate. All types
 /// that implement `Clone` automatically satisfy this bound. This enables
 /// `dyn_clone::clone_box(&*data)` to clone `&dyn ParentData` into
-/// `Box<dyn ParentData>`, used to seed `ErasedChildState` from the
-/// child's persistent `RenderState.parent_data`.
+/// `Box<dyn ParentData>`, which the intrinsic and dry query walks use to read
+/// a child's parent data. The layout walk lends it instead of copying it.
 ///
 /// # Example
 ///

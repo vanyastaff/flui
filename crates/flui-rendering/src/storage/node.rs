@@ -612,6 +612,15 @@ impl RenderNode {
         with_entry!(self, entry => entry.state_mut().parent_data_mut())
     }
 
+    /// Moves this node's parent data out, leaving it with none.
+    ///
+    /// The layout walk lends a child's parent data to the parent laying it out and gives it back
+    /// with [`Self::set_parent_data`] when that parent's layout ends, so a pass copies none.
+    #[inline]
+    pub(crate) fn take_parent_data(&mut self) -> Option<Box<dyn crate::parent_data::ParentData>> {
+        with_entry!(self, entry => entry.state_mut().take_parent_data())
+    }
+
     /// Installs `data` as this node's parent data, replacing any previously
     /// stored value.
     ///
