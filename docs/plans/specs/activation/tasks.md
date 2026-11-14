@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest`. В работе: —; следующие остаток AC11 (entitlement, Windows вместе с AC9/AC10, проверка файлов доменов), AC6–AC9.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC9/AC10), AC6–AC9.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -70,5 +70,15 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   application opens» `ios_package::tests::publication_contract`; `doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`
   (фильтр без схемы, домен без `autoVerify`, фильтр с `tools:node="remove"`, `Info.plist` без схемы и
   без типа документа, полные файлы), `a_linux_desktop_registers_what_the_application_opens` и
-  `desktop_entry_values_are_escaped`. Остаток: entitlement доменов,
-  регистрация Windows, проверка `apple-app-site-association` и `assetlinks.json` в `flui doctor`.
+  `desktop_entry_values_are_escaped`.
+- **AC11 (файлы доменов).** `each_associated_domain_is_checked_for_both_files` (`Fetch` отвечает
+  из таблицы: отданные `apple-app-site-association` и `assetlinks.json` проходят, редирект и
+  недоступный домен отказаны, проект без доменов ничего не запрашивает),
+  `doctor_checks_the_associated_domains_only_when_asked` (без `--domains` ничего не запрашивается
+  и проверка объявлений называет флаг, `--domains` вне проекта отказан; падает без примечания
+  проверки объявлений),
+  `an_apple_association_names_the_application_with_what_it_opens` (`appIDs` и старый `appID`,
+  редирект, 404, чужое приложение, без команды, без `components`/`paths`, не JSON),
+  `asset_links_grant_the_package_with_its_fingerprints` (тип не `application/json`, чужой пакет,
+  другое отношение, без отпечатка, плохой отпечаток). Остаток: entitlement доменов (iOS ещё не
+  подписывается) и регистрация Windows.

@@ -115,6 +115,14 @@ line to add, under the stable ids `project.declarations`, `project.android-manif
 `project.manifest`. The merger is not run: an Android file that is not Gradle's merged manifest
 carries a note saying so (`doctor_lists_what_a_manifest_lacks_of_the_crates_declarations`).
 
+`flui doctor --domains` (`commands/doctor/domains.rs`) fetches each associated domain's
+`apple-app-site-association` and `assetlinks.json` with `Https`: `ureq` over rustls with the
+platform's verifier, the client a Linux host's HTTP capability runs (ADR-0280), `https` only, no
+redirect, a 15-second deadline and 128 KiB. The fetch sits behind the `Fetch` trait, so
+`each_associated_domain_is_checked_for_both_files` answers from a table without a network, and
+`doctor_checks_the_associated_domains_only_when_asked` shows that nothing is fetched without
+the flag.
+
 `flui add <capability>` (`commands/add.rs`) links a capability crate: it enables the facade
 feature that carries it (`toml_edit`, the file's formatting kept) or, without the facade, runs
 `cargo add` from the FLUI checkout the app already depends on. It then reads the crate's

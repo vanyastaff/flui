@@ -446,3 +446,62 @@ fn doctor_lists_what_a_manifest_lacks_of_what_the_application_opens() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// Without `--domains` `flui doctor` fetches nothing: no domain is
+/// checked, and the declarations naming an associated domain say how to
+/// ask for it. Outside a FLUI project `--domains` fails with the reason.
+#[test]
+fn doctor_checks_the_associated_domains_only_when_asked() {
+    let dir = project(&[
+        (
+            "Cargo.toml",
+            b"[package]\nname = \"notes\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n\
+              [package.metadata.flui.declares]\nschema = 3\n\
+              associated-domains = [\"notes.example.com\"]\n",
+        ),
+        ("src/lib.rs", b""),
+        (
+            "flui.toml",
+            b"[app]\nname = \"notes\"\nversion = \"0.1.0\"\nid = \"com.example.notes\"\n",
+        ),
+    ]);
+    let output = flui()
+        .current_dir(dir.path())
+        .args(["--json", "doctor", "--web"])
+        .output()
+        .expect("flui doctor");
+    let inside = checks(&output.stdout);
+    let declarations = inside
+        .iter()
+        .find(|check| check["id"] == "project.declarations")
+        .expect("the declarations check");
+    assert!(
+        declarations["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("--domains")),
+        "{declarations}"
+    );
+    assert!(
+        inside.iter().all(|check| check["url"].is_null()),
+        "fetched without --domains: {inside:#?}"
+    );
+
+    let elsewhere = tempfile::tempdir().expect("a temporary directory");
+    let output = flui()
+        .current_dir(elsewhere.path())
+        .args(["--json", "doctor", "--web", "--domains"])
+        .output()
+        .expect("flui doctor");
+    let outside = checks(&output.stdout);
+    let domains = outside
+        .iter()
+        .find(|check| check["id"] == "project.domains")
+        .expect("the domains check");
+    assert_eq!(domains["status"], "error", "{domains}");
+    assert!(
+        domains["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("no flui.toml")),
+        "{domains}"
+    );
+}
