@@ -2,6 +2,6 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [list_10k_scroll_warm]
-allocated_bytes = 461397
-allocations = 2090
-reallocations = 114
+allocated_bytes = 415217
+allocations = 1923
+reallocations = 98

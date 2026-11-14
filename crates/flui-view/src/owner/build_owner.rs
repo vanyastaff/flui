@@ -531,6 +531,9 @@ pub struct BuildOwner {
     /// long service call.
     pub(crate) child_manager_registry: ChildManagerRegistry,
 
+    /// The build phase's scratch lists (ADR-0328 §3), reset as the render-edge sync ends.
+    frame_arena: flui_foundation::arena::FrameArena,
+
     /// Registry of live build-during-layout nodes, one per
     /// mounted layout-builder element, keyed by its render object's `RenderId`.
     /// Drained every layout pass by
@@ -752,6 +755,7 @@ impl BuildOwner {
             built_this_frame: SlotSet::new(),
             frame_builds: Box::default(),
             child_manager_registry: RefCell::new(FxHashMap::default()),
+            frame_arena: flui_foundation::arena::FrameArena::new(),
             layout_builder_registry: LayoutBuilderRegistry::default(),
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
             build_scope_queues: None,
@@ -2101,16 +2105,17 @@ impl BuildOwner {
             }
         }
 
-        // `capped_leftover`'s `Drop` flushes whatever this drain capped back
-        // into the real inbox here, on this normal-return path exactly like
-        // it would on an unwind through the loop above — see
-        // `CappedLeftoverGuard`'s doc.
+        // `capped_leftover`'s `Drop` flushes whatever this drain capped back into the real
+        // inbox here, on this normal-return path exactly like it would on an unwind through the
+        // loop above — see `CappedLeftoverGuard`'s doc.
 
-        // The build drained: every render child has attached. Settle each
-        // render parent's children into element-slot order (no-op unless an
-        // insert flagged a possible drift), so a render sibling that attached
-        // before a component-deferred sibling does not invert their layout.
-        tree.reorder_render_children_after_build(&self.child_manager_registry);
+        // The build drained: every render child has attached. Settle each render parent's
+        // children into element-slot order (no-op unless an insert flagged a possible drift), so
+        // a render sibling attached before a component-deferred one does not invert their layout.
+        tree.reorder_render_children_after_build(
+            &self.child_manager_registry,
+            &mut self.frame_arena,
+        );
 
         // Record onto whichever span is current — `build_scope`'s own "build"
         // span and `service_layout_builders`'s `during_layout` "build" span
