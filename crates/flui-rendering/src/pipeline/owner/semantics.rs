@@ -643,7 +643,8 @@ struct BuiltSemanticsNode<'f> {
     config: SemanticsConfiguration,
     rect: Rect<f64>,
     reveal_rect: Rect<f64>,
-    /// From the frame arena: the pass moves the nodes into the semantics owner and drops the list.
+    /// From the owner's built-node arena: the pass moves the nodes into the semantics owner and
+    /// drops the list.
     children: FrameVec<'f, BuiltSemanticsNode<'f>>,
 }
 
@@ -1416,14 +1417,17 @@ fn build_semantics_fragments_impl<'f>(
                 child_fragments.clear();
                 children_block_previous = true;
             }
+            // Room for one fragment per child still to come, as a list sized for every child up
+            // front would have; a child with several fragments grows it by doubling.
+            let still_to_come = node.children().len() - child_slot - 1;
             if child_fragments.is_empty() {
-                // The first child that contributes hands its list over whole.
+                // The first child that contributes hands its list over whole. It is the arena's
+                // last block, so it grows in place; each later child's list then sits above it,
+                // is emptied into it and freed as the last block, and the arena reuses that
+                // memory for the next child.
                 child_fragments = fragments.nodes;
+                child_fragments.reserve(still_to_come);
             } else {
-                // Room for these and one fragment per child still to come, as
-                // a list sized for every child up front would have; a child with
-                // several fragments grows it by doubling.
-                let still_to_come = node.children().len() - child_slot - 1;
                 child_fragments.reserve(fragments.nodes.len() + still_to_come);
                 child_fragments.extend(fragments.nodes);
             }
@@ -1543,7 +1547,7 @@ fn append_region_fragments<'f>(
     clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     blocks_user_actions: bool,
-    regions: &mut AssemblyRegions<'_>,
+    regions: &mut AssemblyRegions<'f>,
 ) -> bool {
     let mut blocks_previous = false;
     for region in authored {
@@ -1586,7 +1590,7 @@ fn append_region_fragments<'f>(
             config,
             rect: clipped.rect,
             reveal_rect,
-            children: Vec::new_in(*fragments.allocator()),
+            children: Vec::new_in(regions.built),
         };
         fragments.push(if decisions.forms_node {
             SemanticsFragment::Formed(pending.form())
@@ -1623,7 +1627,10 @@ fn merge_child_fragments<'f>(
     let scratch = *fragments.allocator();
     let mut children = Vec::with_capacity_in(fragments.len(), built);
 
-    for (index, fragment) in fragments.into_iter().enumerate() {
+    // The iterator holds the fragments' buffer, below the conflict marks: it is dropped after
+    // them, so the arena frees both in the reverse order it handed them out.
+    let mut drained = fragments.into_iter();
+    for (index, fragment) in drained.by_ref().enumerate() {
         match fragment {
             SemanticsFragment::Formed(node) => children.push(node),
             // Runs are the synthetic children of the one node declaring them,
@@ -1644,6 +1651,8 @@ fn merge_child_fragments<'f>(
             }
         }
     }
+    drop(conflicts);
+    drop(drained);
 
     if config.makes_document_selections() {
         in_reading_order(

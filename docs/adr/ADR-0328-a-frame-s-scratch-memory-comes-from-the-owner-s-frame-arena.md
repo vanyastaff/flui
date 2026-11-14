@@ -118,8 +118,12 @@ the level that listed it returns: a fragment list, conflict marks, a reordering.
 builds for its parent (`built_arena`) outlives the level until the walk hands it on: the semantics
 nodes the pass builds and their child lists, which it moves into the semantics owner. In one arena
 a built list would sit above every scratch list freed after it, so none of those would be reused
-within the walk and the frame's peak would grow to all of them. Apart, each arena frees in the
-reverse order it allocates. Resetting at the start of a walk needs no frame-end hook, and a walk that
+within the walk and the frame's peak would grow to all of them. Apart, the scratch arena reuses
+each level's memory for the next: a walk takes a level's lists while the arena's top is free,
+grows a list while it is the last block, and drops scratch in the reverse order it took it. A
+list that must grow with a sibling's list above it moves, and its old block waits for the reset.
+The built arena's peak is the built tree, plus a failed graft's partial nodes when the pass falls
+back to a rebuild. Resetting at the start of a walk needs no frame-end hook, and a walk that
 unwound has dropped its collections before the next one resets. `flui-view`'s build phase gets
 an arena of its own on the `BuildOwner` under the same rules when its first site moves.
 
