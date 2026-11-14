@@ -8,3 +8,8 @@
   `Application::register_links(bool)` decides over both. Running the executable with
   `--flui-unregister-links` deletes the keys it wrote and exits, for an uninstaller. A packaged
   (MSIX) process registers nothing.
+
+### Changed
+
+- `flui build` and `flui doctor` refuse a one-letter URL scheme in `url-schemes`, which Windows
+  reads as a drive in the arguments a link launches with.
