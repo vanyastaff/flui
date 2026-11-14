@@ -20,9 +20,13 @@ pub(crate) struct CargoTarget {
 }
 
 impl CargoTarget {
-    /// The workspace member the build compiles.
-    pub(crate) fn package_name(&self) -> &str {
-        &self.package_name
+    /// The workspace member the build compiles, and whether its target
+    /// links the member's dev-dependencies (an example's does).
+    pub(crate) fn member(&self) -> crate::declarations::Member<'_> {
+        crate::declarations::Member {
+            name: &self.package_name,
+            dev: self.kind == TargetKind::Example,
+        }
     }
     pub(crate) fn metadata(&self) -> serde_json::Value {
         serde_json::json!({"package_name": self.package_name, "package_version": self.version})

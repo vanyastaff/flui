@@ -465,8 +465,12 @@ enum ReadError {
 /// is aborted. Each launch that reaches it is read and answered by a task of
 /// its own, which aborting this one does not end: a launch the owner took as
 /// the instance ends is still answered as taken, so its process does not
-/// open it a second time. At most [`MAX_WAITING`] launches are under way; a
-/// later one waits for the pipe.
+/// open it a second time.
+///
+/// At most [`MAX_WAITING`] launches are under way. A later one is refused at
+/// once, as a full inbox refuses it, and is not left connected to wait: a
+/// client may connect to an instance before it is served, and one read after
+/// it gave up would be opened here too while its process runs on its own.
 async fn serve(
     mut server: NamedPipeServer,
     name: String,
@@ -476,9 +480,6 @@ async fn serve(
 ) {
     let answering = Arc::new(tokio::sync::Semaphore::new(MAX_WAITING));
     loop {
-        let Ok(room) = Arc::clone(&answering).acquire_owned().await else {
-            return;
-        };
         let connected = server.connect().await;
         // The next instance is made before this one is handed on, so the
         // pipe's name never lapses while the instance serves.
@@ -490,7 +491,9 @@ async fn serve(
                     "the running instance cannot serve its pipe again; later launches run on \
                      their own"
                 );
-                if connected.is_ok() {
+                if connected.is_ok()
+                    && let Ok(room) = Arc::clone(&answering).try_acquire_owned()
+                {
                     tokio::spawn(answer(server, Arc::clone(&inbox), room, executor));
                 }
                 return;
@@ -499,7 +502,14 @@ async fn serve(
         let reached = std::mem::replace(&mut server, next);
         match connected {
             Ok(()) => {
-                tokio::spawn(answer(reached, Arc::clone(&inbox), room, executor.clone()));
+                if let Ok(room) = Arc::clone(&answering).try_acquire_owned() {
+                    tokio::spawn(answer(reached, Arc::clone(&inbox), room, executor.clone()));
+                } else {
+                    // Closed unread: its process hears the pipe break and
+                    // runs as an instance of its own.
+                    drop(reached);
+                    tracing::warn!("the owner is not taking forwarded launches; one is refused");
+                }
             }
             Err(error) => {
                 tracing::debug!(%error, "a later launch left before it was read");

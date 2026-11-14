@@ -96,7 +96,7 @@ impl DesktopBuilder {
             crate::declarations::Declarations::collect_package(
                 &ctx.workspace_root,
                 &[&target],
-                selected.package_name(),
+                selected.member(),
             )?
             .require_one_instance(&target)?;
         }
@@ -116,7 +116,8 @@ impl DesktopBuilder {
             metadata: serde_json::json!({
                 "target": target,
                 "kind": "executable",
-                "package": selected.package_name(),
+                "package": selected.member().name,
+                "links_dev_dependencies": selected.member().dev,
             }),
         })
     }
@@ -201,6 +202,14 @@ impl DesktopBuilder {
         artifacts: &BuildArtifacts,
         triple: &str,
     ) -> BuildResult<crate::declarations::Declarations> {
+        let member = |package| crate::declarations::Member {
+            name: package,
+            dev: artifacts
+                .metadata
+                .get("links_dev_dependencies")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        };
         match artifacts
             .metadata
             .get("package")
@@ -209,7 +218,7 @@ impl DesktopBuilder {
             Some(package) => crate::declarations::Declarations::collect_package(
                 &ctx.workspace_root,
                 &[triple],
-                package,
+                member(package),
             ),
             None => crate::declarations::Declarations::collect(&ctx.workspace_root, &[triple]),
         }

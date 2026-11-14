@@ -282,9 +282,12 @@ mod bus {
     ///
     /// Each answer runs as a task of its own, which aborting this one does
     /// not end: a launch the owner took as the instance ends is still
-    /// answered as taken, so its process does not open it a second time. At
-    /// most [`MAX_READ`] answers are under way; the next call waits on the
-    /// bus.
+    /// answered as taken, so its process does not open it a second time.
+    ///
+    /// At most [`MAX_READ`] answers are under way. A call read past them is
+    /// refused at once, as a full inbox refuses it, and is not left waiting
+    /// to be posted: a launch posted after its caller gave up would be
+    /// opened here too while its process runs on its own.
     async fn serve(
         connection: zbus::Connection,
         path: String,
@@ -294,14 +297,16 @@ mod bus {
     ) {
         let answering = Arc::new(tokio::sync::Semaphore::new(MAX_READ));
         loop {
-            let Ok(room) = Arc::clone(&answering).acquire_owned().await else {
-                return;
-            };
             // A launch is posted as its call is read, so launches are queued
             // in the order they came; only the wait for the owner runs
             // alongside.
             match calls.next().await {
                 Some(Ok(call)) => {
+                    let Ok(room) = Arc::clone(&answering).try_acquire_owned() else {
+                        let refused = Answer::of(call, Err(refusal(Refused::Full)));
+                        respond(connection.clone(), Arc::clone(&inbox), refused).await;
+                        continue;
+                    };
                     let asked = ask(&inbox, &path, &call);
                     let answer = Answer::of(call, asked);
                     let (connection, inbox) = (connection.clone(), Arc::clone(&inbox));

@@ -52,7 +52,9 @@ const ONE_INSTANCE: (&str, &str) = ("flui-native", "single-instance");
 /// without procedural macros resolves features as `cargo build` does for the
 /// target: without the ones only a dev-dependency turns on, and without the
 /// ones a build script's or a procedural macro's own copy of the crate turns
-/// on, which the resolver builds apart for the host.
+/// on, which the resolver builds apart for the host. With `dev`, the build is
+/// an example's, which links the package's dev-dependencies as well, and
+/// their edges count.
 ///
 /// # Errors
 ///
@@ -62,6 +64,7 @@ fn links_one_instance(
     target: &str,
     features: &[String],
     package: Option<&str>,
+    dev: bool,
 ) -> BuildResult<bool> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut command = std::process::Command::new(cargo);
@@ -70,7 +73,11 @@ fn links_one_instance(
         "--target",
         target,
         "--edges",
-        "normal,no-proc-macro",
+        if dev {
+            "normal,dev,no-proc-macro"
+        } else {
+            "normal,no-proc-macro"
+        },
         "--prefix",
         "none",
         "--format",
@@ -99,6 +106,17 @@ fn links_one_instance(
                 && enabled.split(',').any(|enabled| enabled.trim() == feature)
         })
     }))
+}
+
+/// The workspace member a build compiles, by name, and whether the target
+/// it builds links the member's dev-dependencies as well, as an example does
+/// and a binary does not.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Member<'a> {
+    /// The member's package name.
+    pub(crate) name: &'a str,
+    /// Whether its dev-dependencies are linked too.
+    pub(crate) dev: bool,
 }
 
 /// Whether a crate is an application of the graph or a dependency of one.
@@ -474,27 +492,27 @@ impl Declarations {
         Self::collect_graph(app_dir, targets, features, None)
     }
 
-    /// [`Declarations::collect`] for the build of the workspace member named
-    /// `package` alone: the crates that member links, not those of its
-    /// siblings in the workspace.
+    /// [`Declarations::collect`] for the build of one workspace member alone:
+    /// the crates `member` links, not those of its siblings in the
+    /// workspace.
     ///
     /// # Errors
     ///
     /// As [`Declarations::collect`], and [`BuildError::InvalidConfig`] when
-    /// no workspace member is named `package`.
+    /// no workspace member has `member`'s name.
     pub(crate) fn collect_package(
         app_dir: &Path,
         targets: &[&str],
-        package: &str,
+        member: Member<'_>,
     ) -> BuildResult<Self> {
-        Self::collect_graph(app_dir, targets, &[], Some(package))
+        Self::collect_graph(app_dir, targets, &[], Some(member))
     }
 
     fn collect_graph(
         app_dir: &Path,
         targets: &[&str],
         features: &[String],
-        package: Option<&str>,
+        member: Option<Member<'_>>,
     ) -> BuildResult<Self> {
         let mut joined = Self::default();
         for target in targets {
@@ -509,29 +527,30 @@ impl Declarations {
                 .map_err(|error| {
                     BuildError::Other(format!("cargo metadata for {target}: {error}"))
                 })?;
-            let root = match package {
-                Some(name) => Some(
+            let root = match member {
+                Some(member) => Some(
                     metadata
                         .workspace_packages()
                         .into_iter()
-                        .find(|member| member.name.as_str() == name)
+                        .find(|package| package.name.as_str() == member.name)
                         .ok_or_else(|| {
                             BuildError::invalid_config(
                                 "package",
-                                format!("the workspace has no member named `{name}`"),
+                                format!("the workspace has no member named `{}`", member.name),
                             )
                         })?,
                 ),
                 None => metadata.root_package(),
             };
-            let mut graph = Self::of_graph(&metadata, package.and(root))?;
+            let dev = member.is_some_and(|member| member.dev);
+            let mut graph = Self::of_graph(&metadata, member.and(root), dev)?;
             // The metadata's features count what dev-dependencies turn on;
             // whether the build links one instance is read from the graph
             // the build itself resolves, only when it matters.
             if graph.one_instance && (!graph.url_schemes.is_empty() || !graph.file_types.is_empty())
             {
                 let package = root.map(|package| package.name.as_str());
-                graph.one_instance = links_one_instance(app_dir, target, features, package)?;
+                graph.one_instance = links_one_instance(app_dir, target, features, package, dev)?;
             }
             joined.join(graph);
         }
@@ -540,8 +559,9 @@ impl Declarations {
 
     /// The declarations of every crate in `metadata`'s resolved graph, each
     /// with the features the graph enables for it; with a `root`, only of the
-    /// crates that root links by normal and build edges, itself included.
-    fn of_graph(metadata: &Metadata, root: Option<&Package>) -> BuildResult<Self> {
+    /// crates that root links by normal and build edges, itself included, and
+    /// with `dev` (an example's build) by its own dev-dependencies too.
+    fn of_graph(metadata: &Metadata, root: Option<&Package>, dev: bool) -> BuildResult<Self> {
         let resolve = metadata.resolve.as_ref().ok_or_else(|| {
             BuildError::Other("cargo metadata resolved no dependency graph".to_owned())
         })?;
@@ -550,27 +570,30 @@ impl Declarations {
             .iter()
             .map(|package| (&package.id, package))
             .collect();
-        // What a crate links into its build: its normal and build edges.
-        fn linked(node: &cargo_metadata::Node) -> impl Iterator<Item = &PackageId> {
+        // What a crate links into its build: its normal and build edges, and
+        // with `dev` its dev-dependencies as well.
+        fn linked(node: &cargo_metadata::Node, dev: bool) -> impl Iterator<Item = &PackageId> {
             node.deps
                 .iter()
-                .filter(|dependency| {
+                .filter(move |dependency| {
                     dependency
                         .dep_kinds
                         .iter()
-                        .any(|kind| kind.kind != DependencyKind::Development)
+                        .any(|kind| dev || kind.kind != DependencyKind::Development)
                 })
                 .map(|dependency| &dependency.pkg)
         }
         let nodes: BTreeMap<&PackageId, &cargo_metadata::Node> =
             resolve.nodes.iter().map(|node| (&node.id, node)).collect();
         // The crates the build of `root` links, found from it over the same
-        // edges; without one, the whole graph.
+        // edges (the root's dev-dependencies for an example); without one,
+        // the whole graph.
         let built: Option<BTreeSet<&PackageId>> = root.map(|root| {
             let mut reached = BTreeSet::from([&root.id]);
             let mut pending = vec![&root.id];
             while let Some(id) = pending.pop() {
-                for dependency in nodes.get(id).into_iter().flat_map(|node| linked(node)) {
+                let dev = dev && *id == root.id;
+                for dependency in nodes.get(id).into_iter().flat_map(|node| linked(node, dev)) {
                     if reached.insert(dependency) {
                         pending.push(dependency);
                     }
@@ -585,7 +608,7 @@ impl Declarations {
             .nodes
             .iter()
             .filter(|node| in_build(&node.id))
-            .flat_map(linked)
+            .flat_map(|node| linked(node, dev && root.is_some_and(|root| root.id == node.id)))
             .collect();
         let mut joined = Self::default();
         for node in resolve.nodes.iter().filter(|node| in_build(&node.id)) {
@@ -974,7 +997,7 @@ impl Declarations {
 mod tests {
     use std::path::Path;
 
-    use super::{AndroidPermission, Declarations, PrivacyReason};
+    use super::{AndroidPermission, Declarations, Member, PrivacyReason};
 
     /// A fixture project: `members` written as `(directory, Cargo.toml)`
     /// under one temporary directory, with an empty `src/lib.rs` each.
@@ -1134,7 +1157,8 @@ mod tests {
 
     /// A Linux or Windows build of an application that opens a scheme or a
     /// file type is refused unless the build's own graph links `flui-native`
-    /// with `single-instance` (a dev-dependency or a build script's dependency
+    /// with `single-instance` (a dev-dependency, unless an example is built, or a
+    /// build script's dependency
     /// that turns it on does not count); an application that opens nothing,
     /// and every other target, builds.
     #[test]
@@ -1230,6 +1254,24 @@ mod tests {
                     "{target} with the feature on a dev-dependency only: {tested:?}"
                 ));
             }
+            // An example links the package's dev-dependencies, so their
+            // feature counts for it.
+            let tested_example = Member {
+                name: "tested",
+                dev: true,
+            };
+            let example = Declarations::collect_package(
+                &project.path().join("tested"),
+                &[target],
+                tested_example,
+            )
+            .expect("declarations")
+            .require_one_instance(target);
+            if example.is_err() {
+                failures.push(format!(
+                    "{target}, an example that links the dev-dependency's feature: {example:?}"
+                ));
+            }
             let scripted = Declarations::collect(&project.path().join("scripted"), &[target])
                 .expect("declarations")
                 .require_one_instance(target);
@@ -1294,7 +1336,8 @@ mod tests {
                 .collect::<Vec<String>>()
         };
         let member = |name: &str| {
-            Declarations::collect_package(project.path(), &[target], name).expect("declarations")
+            Declarations::collect_package(project.path(), &[target], Member { name, dev: false })
+                .expect("declarations")
         };
         let app = member("app");
         assert_eq!(schemes(&app), ["notes"], "the member's own scheme");
@@ -1305,7 +1348,11 @@ mod tests {
         plain
             .require_one_instance(target)
             .expect("a member that opens nothing builds");
-        let missing = Declarations::collect_package(project.path(), &[target], "absent")
+        let absent = Member {
+            name: "absent",
+            dev: false,
+        };
+        let missing = Declarations::collect_package(project.path(), &[target], absent)
             .map(|_| ())
             .map_err(|error| error.to_string());
         assert!(
