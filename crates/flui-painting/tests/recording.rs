@@ -4,9 +4,10 @@
 use std::sync::Arc;
 use std::thread;
 
-use flui_foundation::geometry::{Matrix4, Rect};
+use flui_foundation::geometry::{Matrix4, Point, RRect, Rect};
+use flui_painting::paint::Path;
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp, NonFiniteOps, Paint};
+use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp, NonFiniteOps, Paint, PayloadId};
 
 pub(crate) fn save_restore_tracks_the_save_count() {
     let mut canvas = Canvas::new();
@@ -885,5 +886,213 @@ pub(crate) fn appended_commands_keep_their_transforms() {
             (at(50.0, 0.0), "rect"),
             (at(50.0, 1.0), "rect"),
         ],
+    );
+}
+
+/// A shape, a shadowed and filled card, a clip and a ring: every kind of op
+/// that keeps its large data beside the commands, plus a plain rect.
+fn draw_payloads(canvas: &mut Canvas, card: &Path, curve: &Path) {
+    let paint = Paint::fill(Color::RED);
+    let outer = RRect::from_rect_circular(Rect::from_ltrb(0.0, 0.0, 40.0, 40.0), 8.0);
+    let inner = RRect::from_rect_circular(Rect::from_ltrb(4.0, 4.0, 36.0, 36.0), 4.0);
+    canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0), &paint);
+    canvas.draw_shadow(card, Color::BLACK, 4.0);
+    canvas.draw_path(card, &paint);
+    canvas.draw_path(curve, &paint);
+    canvas.draw_drrect(outer, inner, &paint);
+    canvas.save();
+    canvas.clip_path(curve);
+    canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 2.0, 2.0), &paint);
+    canvas.restore();
+}
+
+fn sample_paths() -> (Path, Path) {
+    let card = Path::from_rrect(RRect::from_rect_circular(
+        Rect::from_ltrb(0.0, 0.0, 30.0, 20.0),
+        6.0,
+    ));
+    let mut curve = Path::new();
+    curve.move_to(Point::new(0.0, 0.0));
+    curve.quadratic_bezier_to(Point::new(10.0, 20.0), Point::new(20.0, 0.0));
+    curve.close();
+    // Built once here, so each clone the canvas keeps shares the curves.
+    let _ = curve.compute_bounds();
+    (card, curve)
+}
+
+/// A list a scene let go of is recorded into again without asking the heap
+/// for a block: its commands, transforms and payloads keep their room
+/// through `clear`, so a repaint that draws paths, shadows, rings and path
+/// clips again allocates nothing (ADR-0333).
+pub(crate) fn re_recording_a_warm_list_with_payloads_allocates_nothing() {
+    let (card, curve) = sample_paths();
+    let mut canvas = Canvas::new();
+    canvas.translate(3.0, 5.0);
+    draw_payloads(&mut canvas, &card, &curve);
+    let first = canvas.take_recording();
+    let commands = first.len();
+    canvas.record_into(first);
+
+    let (allocations, second) = crate::foreign_image::allocations_during(|| {
+        canvas.translate(3.0, 5.0);
+        draw_payloads(&mut canvas, &card, &curve);
+        canvas.take_recording()
+    });
+    assert_eq!(second.len(), commands, "the same frame was recorded again");
+    assert_eq!(
+        allocations, 0,
+        "re-recording into a warm list asked the heap for {allocations} blocks"
+    );
+}
+
+/// Ops name their payloads by id: a shadowed and filled card keeps its path
+/// once, and appending rebases the ids of the moved run, so every command
+/// of the joined list reads the payload it was recorded with.
+pub(crate) fn appended_payloads_follow_their_commands() {
+    let (card, curve) = sample_paths();
+    let record = |path: &Path| {
+        flui_painting::testing::record(|canvas| {
+            canvas.draw_shadow(path, Color::BLACK, 2.0);
+            canvas.draw_path(path, &Paint::fill(Color::BLUE));
+            canvas.clip_path(&curve);
+        })
+    };
+    let paths = |list: &DisplayList| -> Vec<Path> {
+        list.iter()
+            .filter_map(|command| match command.op {
+                DrawOp::Shadow { path, .. }
+                | DrawOp::Path { path, .. }
+                | DrawOp::ClipPath { path, .. } => Some(command.payload(*path).clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let ids = |list: &DisplayList| -> Vec<PayloadId<Path>> {
+        list.iter()
+            .filter_map(|command| match command.op {
+                DrawOp::Shadow { path, .. } | DrawOp::Path { path, .. } => Some(*path),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let shared = record(&card);
+    let [shadow, fill] = ids(&shared)[..] else {
+        panic!("a shadow and a fill were recorded");
+    };
+    assert_eq!(shadow, fill, "the shadowed and filled card is kept once");
+
+    let square_again = || Path::rectangle(Rect::from_ltrb(0.0, 0.0, 5.0, 5.0));
+    let square = square_again();
+    let mut joined = record(&card);
+    joined.append(record(&square));
+    assert_eq!(
+        paths(&joined),
+        [
+            card.clone(),
+            card.clone(),
+            curve.clone(),
+            square.clone(),
+            square,
+            curve.clone()
+        ]
+    );
+
+    let mut empty = DisplayList::new();
+    empty.append(record(&card));
+
+    // An id names nothing outside the command whose op holds it.
+    let clip = joined.get(2).expect("the first run's clip");
+    let DrawOp::ClipPath { path: clip_id, .. } = clip.op else {
+        panic!("the third command is the clip");
+    };
+    assert_eq!(clip.try_payload(*clip_id), Some(&curve));
+    let DrawOp::Shadow {
+        path: own_shadow, ..
+    } = joined.get(0).expect("the first run's shadow").op
+    else {
+        panic!("the first command is the shadow");
+    };
+    assert_eq!(clip.try_payload(*own_shadow), None, "another command's id");
+    let rect = flui_painting::testing::record(|canvas| {
+        canvas.draw_rect(
+            Rect::from_ltrb(0.0, 0.0, 1.0, 1.0),
+            &Paint::fill(Color::RED),
+        );
+    });
+    let rect = rect.get(0).expect("the rectangle");
+    assert_eq!(
+        rect.try_payload(*clip_id),
+        None,
+        "an op that holds no payload"
+    );
+    assert_eq!(paths(&empty), [card.clone(), card.clone(), curve.clone()]);
+
+    // A receiver with a transform of its own but no payloads, by `append`
+    // and by `append_isolated`, first run and later run alike.
+    let moved = || {
+        flui_painting::testing::record(|canvas| {
+            canvas.translate(7.0, 0.0);
+            canvas.draw_rect(
+                Rect::from_ltrb(0.0, 0.0, 1.0, 1.0),
+                &Paint::fill(Color::RED),
+            );
+        })
+    };
+    // A run under a transform of its own, shadowed and filled, appended
+    // after a receiver whose one op has another transform: each moved
+    // command keeps its transform and its payload.
+    let lifted = || {
+        flui_painting::testing::record(|canvas| {
+            canvas.translate(0.0, 9.0);
+            canvas.draw_shadow(&square_again(), Color::BLACK, 2.0);
+            canvas.draw_path(&square_again(), &Paint::fill(Color::BLUE));
+        })
+    };
+    let lifted_square = || (Matrix4::translation(0.0, 9.0, 0.0), square_again());
+    let placed = |list: &DisplayList| -> Vec<(Matrix4, Path)> {
+        list.iter()
+            .filter_map(|command| match command.op {
+                DrawOp::Shadow { path, .. } | DrawOp::Path { path, .. } => {
+                    Some((*command.transform, command.payload(*path).clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let mut plain = moved();
+    plain.append(record(&card));
+    plain.append(lifted());
+    assert_eq!(
+        placed(&plain),
+        [
+            (Matrix4::IDENTITY, card.clone()),
+            (Matrix4::IDENTITY, card.clone()),
+            lifted_square(),
+            lifted_square()
+        ]
+    );
+    let mut isolated = DisplayList::new();
+    isolated.append_isolated(record(&card));
+    isolated.append_isolated(record(&square_again()));
+    assert_eq!(
+        paths(&isolated),
+        [
+            card.clone(),
+            card,
+            curve.clone(),
+            square_again(),
+            square_again(),
+            curve.clone()
+        ]
+    );
+    let mut after_moved = moved();
+    after_moved.append_isolated(lifted());
+    assert_eq!(placed(&after_moved), [lifted_square(), lifted_square()]);
+    let mut after_moved_plainly = moved();
+    after_moved_plainly.append(lifted());
+    assert_eq!(
+        placed(&after_moved_plainly),
+        [lifted_square(), lifted_square()]
     );
 }

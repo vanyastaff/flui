@@ -6,6 +6,7 @@
 //! exists. Same shape and reason as `flui_layer::Layer`: a trait-object
 //! command would be a `Box<dyn Drawable>` the backend cannot translate.
 
+use std::fmt;
 use std::sync::Arc;
 
 use crate::{
@@ -14,6 +15,7 @@ use crate::{
 };
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect};
 
+use super::payload::{self, ImageRegionPlacement, NestedRRects, Payload, PayloadId, StoredPayload};
 use super::{BlurSigma, ShapedParagraph};
 use super::{ColorFilter, ImageRepeat};
 use crate::display_list::{BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId};
@@ -28,13 +30,126 @@ use crate::display_list::{BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMo
 /// them. Commands that share the list's entry for their transform (one
 /// recorded equal to the last entry reuses it) yield the same reference
 /// (ADR-0306 §1, §5).
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 #[non_exhaustive]
 pub struct DrawCommand<'a> {
     /// The canvas transform at recording time.
     pub transform: &'a Matrix4,
     /// The operation.
     pub op: &'a DrawOp,
+    /// The payloads of the list the command was read from, which the op's
+    /// [`PayloadId`]s name.
+    pub(crate) payloads: &'a [StoredPayload],
+}
+
+/// A command describes itself: its transform, its op and the one payload the
+/// op names, never the rest of its list's buffer.
+impl fmt::Debug for DrawCommand<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The op prints with its id at position 0 and the payload beside it,
+        // so the text names what is drawn, not where the list keeps it.
+        let mut op = self.op.clone();
+        op.map_payloads(|_| 0);
+        let payload = self
+            .op
+            .payload_index()
+            .and_then(|index| self.payloads.get(index));
+        f.debug_struct("DrawCommand")
+            .field("transform", self.transform)
+            .field("op", &op)
+            .field("payload", &payload)
+            .finish()
+    }
+}
+
+impl<'a> DrawCommand<'a> {
+    /// The payload `id` names: `id` is the one this command's op holds.
+    ///
+    /// # Panics
+    ///
+    /// If this command's op does not hold `id`; [`Self::try_payload`]
+    /// answers `None` instead.
+    #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "the convenience twin of try_payload, for an id read from this command's own op"
+    )]
+    pub fn payload<T: Payload>(&self, id: PayloadId<T>) -> &'a T {
+        self.try_payload(id)
+            .expect("the id is the one this command's op holds; use try_payload for any other")
+    }
+
+    /// The payload `id` names, or `None` when this command's op does not hold
+    /// `id`, as for an id copied from another command of this list. An id is
+    /// a position in its own list's buffer, so one copied from another list
+    /// that happens to name the same position is not told apart.
+    #[must_use]
+    pub fn try_payload<T: Payload>(&self, id: PayloadId<T>) -> Option<&'a T> {
+        (self.op.payload_index() == Some(id.index()))
+            .then(|| payload::lookup(self.payloads, id))
+            .flatten()
+    }
+
+    /// The command with its own copy of every payload its op names, which
+    /// outlives the list it was read from.
+    #[must_use]
+    pub fn to_buf(&self) -> DrawCommandBuf {
+        let mut payloads = Vec::new();
+        let mut op = self.op.clone();
+        op.map_payloads(|index| {
+            payloads.push(self.payloads[index].clone());
+            payloads.len() - 1
+        });
+        DrawCommandBuf {
+            transform: *self.transform,
+            op,
+            payloads,
+        }
+    }
+}
+
+/// An owned [`DrawCommand`]: its transform, its operation and the payloads
+/// the operation names. Its `op` is the one its payloads were copied for: an op
+/// put in its place may name an entry of another position, which reads a
+/// payload it was not recorded with or, in a bounds query, panics. It prints
+/// as the [`DrawCommand`] it borrows out does.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct DrawCommandBuf {
+    /// The canvas transform at recording time.
+    pub transform: Matrix4,
+    /// The operation.
+    pub op: DrawOp,
+    payloads: Vec<StoredPayload>,
+}
+
+impl fmt::Debug for DrawCommandBuf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.command(), f)
+    }
+}
+
+impl DrawCommandBuf {
+    /// The payload `id` names: `id` is the one this command's op holds.
+    ///
+    /// # Panics
+    ///
+    /// If this command's op does not hold `id`; [`DrawCommand::try_payload`]
+    /// answers `None` instead.
+    #[must_use]
+    pub fn payload<T: Payload>(&self, id: PayloadId<T>) -> &T {
+        self.command().payload(id)
+    }
+
+    /// The command, borrowed.
+    #[must_use]
+    pub fn command(&self) -> DrawCommand<'_> {
+        DrawCommand {
+            transform: &self.transform,
+            op: &self.op,
+            payloads: &self.payloads,
+        }
+    }
 }
 
 /// The closed vocabulary of paint operations.
@@ -89,7 +204,7 @@ pub enum DrawOp {
     /// Clip to an arbitrary path.
     ClipPath {
         /// Path to clip to.
-        path: Path,
+        path: PayloadId<Path>,
         /// Set operation (Intersect or Difference).
         clip_op: ClipOp,
         /// Anti-aliasing behavior.
@@ -144,7 +259,7 @@ pub enum DrawOp {
     /// Draw an arbitrary path.
     Path {
         /// Path to draw.
-        path: Path,
+        path: PayloadId<Path>,
         /// Paint style.
         paint: Arc<Paint>,
     },
@@ -200,17 +315,8 @@ pub enum DrawOp {
     ImageRegion {
         /// Decoded image.
         image: Image,
-        /// Positive in-bounds source rectangle in image texels.
-        src: Rect<f64>,
-        /// Logical destination; repeated draws cover this rectangle.
-        dst: Rect<f64>,
-        /// Fitted logical tile rectangle, including aligned phase.
-        /// `None` keeps the natural source size and destination-origin phase.
-        tile: Option<Rect<f64>>,
-        /// Repeated axes, or a single destination quad.
-        repeat: ImageRepeat,
-        /// Filter decoded straight channels before Paint and sampling.
-        filter: Option<ColorFilter>,
+        /// Where the source texels land.
+        region: PayloadId<ImageRegionPlacement>,
         /// Optional RGB/alpha tint and framebuffer blend mode.
         paint: Option<Arc<Paint>>,
     },
@@ -246,7 +352,7 @@ pub enum DrawOp {
         /// Destination rectangle.
         dst: Rect<f64>,
         /// Color filter to apply.
-        filter: ColorFilter,
+        filter: PayloadId<ColorFilter>,
         /// Optional paint (for additional effects).
         paint: Option<Arc<Paint>>,
     },
@@ -270,7 +376,7 @@ pub enum DrawOp {
     /// Draw a shadow.
     Shadow {
         /// Path casting shadow.
-        path: Path,
+        path: PayloadId<Path>,
         /// Shadow color.
         color: Color,
         /// Elevation (blur amount).
@@ -296,10 +402,8 @@ pub enum DrawOp {
 
     /// Draw difference between two rounded rectangles (ring/border).
     DRRect {
-        /// Outer rounded rectangle.
-        outer: RRect,
-        /// Inner rounded rectangle.
-        inner: RRect,
+        /// The outer and inner rounded rectangles.
+        rrects: PayloadId<NestedRRects>,
         /// Paint style.
         paint: Arc<Paint>,
     },
@@ -393,4 +497,80 @@ pub enum DrawOp {
     /// an offscreen target and manages its own state — so exactly one of the
     /// two is recorded per balanced pair, never both.
     Restore,
+}
+
+impl DrawOp {
+    /// The entry of its list's payload buffer the op names, if it holds a
+    /// payload; an op holds at most one.
+    pub(crate) fn payload_index(&self) -> Option<usize> {
+        match self {
+            Self::ClipPath { path, .. } | Self::Path { path, .. } | Self::Shadow { path, .. } => {
+                Some(path.index())
+            }
+            Self::ImageRegion { region, .. } => Some(region.index()),
+            Self::ImageFiltered { filter, .. } => Some(filter.index()),
+            Self::DRRect { rrects, .. } => Some(rrects.index()),
+            Self::ClipRect { .. }
+            | Self::ClipRRect { .. }
+            | Self::ClipRSuperellipse { .. }
+            | Self::Line { .. }
+            | Self::Rect { .. }
+            | Self::RRect { .. }
+            | Self::Circle { .. }
+            | Self::Oval { .. }
+            | Self::Paragraph { .. }
+            | Self::ParagraphShadow { .. }
+            | Self::Image { .. }
+            | Self::ImageRepeat { .. }
+            | Self::ImageNineSlice { .. }
+            | Self::Texture { .. }
+            | Self::Arc { .. }
+            | Self::Points { .. }
+            | Self::Vertices { .. }
+            | Self::Color { .. }
+            | Self::Paint { .. }
+            | Self::Atlas { .. }
+            | Self::SaveLayer { .. }
+            | Self::RestoreLayer
+            | Self::Save
+            | Self::Restore => None,
+        }
+    }
+
+    /// Moves each payload id the op holds to the index `map` gives for it,
+    /// in the order the op's fields hold them.
+    pub(crate) fn map_payloads(&mut self, mut map: impl FnMut(usize) -> usize) {
+        match self {
+            Self::ClipPath { path, .. } | Self::Path { path, .. } | Self::Shadow { path, .. } => {
+                *path = PayloadId::at(map(path.index()));
+            }
+            Self::ImageRegion { region, .. } => *region = PayloadId::at(map(region.index())),
+            Self::ImageFiltered { filter, .. } => *filter = PayloadId::at(map(filter.index())),
+            Self::DRRect { rrects, .. } => *rrects = PayloadId::at(map(rrects.index())),
+            Self::ClipRect { .. }
+            | Self::ClipRRect { .. }
+            | Self::ClipRSuperellipse { .. }
+            | Self::Line { .. }
+            | Self::Rect { .. }
+            | Self::RRect { .. }
+            | Self::Circle { .. }
+            | Self::Oval { .. }
+            | Self::Paragraph { .. }
+            | Self::ParagraphShadow { .. }
+            | Self::Image { .. }
+            | Self::ImageRepeat { .. }
+            | Self::ImageNineSlice { .. }
+            | Self::Texture { .. }
+            | Self::Arc { .. }
+            | Self::Points { .. }
+            | Self::Vertices { .. }
+            | Self::Color { .. }
+            | Self::Paint { .. }
+            | Self::Atlas { .. }
+            | Self::SaveLayer { .. }
+            | Self::RestoreLayer
+            | Self::Save
+            | Self::Restore => {}
+        }
+    }
 }

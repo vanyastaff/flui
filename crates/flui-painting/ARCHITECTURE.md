@@ -19,7 +19,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Concern | Files | What lives there |
 |---|---|---|
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
-| Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (interned transforms, ops and cached bounds), `DrawCommand` (the transform and op the reader yields), `DrawOp` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` and `DrawOp::ParagraphShadow` carry, decision 18), `BlurSigma` (a text shadow's bounded blur) |
+| Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (interned transforms, ops, payloads and cached bounds), `DrawCommand` (the transform and op the reader yields, which resolves the op's payload ids), `DrawCommandBuf` (an owned command with its payloads), `DrawOp` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` and `DrawOp::ParagraphShadow` carry, decision 18), `BlurSigma` (a text shadow's bounded blur) |
 | Text | `text_layout/{host,fallback_chain,fallback_tables,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; `HostFonts` (the one host font scan a collection is fed from), the per-platform fallback lists and the order a fed collection falls back in, family resolution |
 | Per-UI runtime text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection), `HostFontFeed` (the host's faces, added off the owner thread) and `TextContext` (one UI runtime's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per UI runtime; every `TextPainter` measurement shapes on it |
 | Parley shaping | `parley_text/{shape,caret}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15) |
@@ -81,7 +81,7 @@ The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-comma
 `Paint` is interned per canvas: each `draw_*` scans a small pool of `Arc<Paint>`s
 for an equal paint and shares the `Arc` (`Canvas::intern_paint`,
 `src/canvas/mod.rs:101`). `Path` is copy-on-write over `Arc<kurbo::BezPath>`
-(`src/paint/path.rs:139`): a path inside a `DrawOp` (`ClipPath`, `Path`,
+(`src/paint/path.rs:139`): a path the list keeps for a `DrawOp` (`ClipPath`, `Path`,
 `Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a pending
 offset, a fill type and a finiteness flag, and recording a caller's path
 copies no geometry. A rounded rectangle made by its constructor whose corners are circular
@@ -103,11 +103,14 @@ rectangle and an oval
 are built at once: they are drawn from their curves, so their clones share one build.
 `PathCommand` (`src/paint/path.rs:28`) is the element `Path::commands` yields
 (`src/paint/path.rs:781`), not the storage.
-A stored command is its `DrawOp` and one word for its transform id. `const`
-assertions in `src/display_list/mod.rs` hold the measured sizes, which only
-go down: `DrawOp` at most 216 bytes and a stored command at most 224, until
-ADR-0306 §3 boxes the fat payloads; `display_list_record` (criterion)
-measures the recording cost.
+A stored command is its `DrawOp` and one word for its transform id. The
+payloads larger than the rest (a path, `DRRect`'s two rounded rectangles, an
+image region's placement, a colour filter) live in the list's payload buffer,
+which `clear` empties and keeps, and the op holds a `PayloadId<T>` that
+`DrawCommand::payload` resolves; a payload equal to the last one stored, known
+without building it, is stored once (ADR-0333). `const` assertions in
+`src/display_list/mod.rs` hold `DrawOp` at most 112 bytes and a stored command
+at most 120; `display_list_record` (criterion) measures the recording cost.
 
 `Canvas::finish` is infallible: an unbalanced save fires a `debug_assert`
 and a `tracing::warn!`, then the list ships as recorded, which is what

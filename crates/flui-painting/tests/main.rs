@@ -578,6 +578,14 @@ fn recording_contract() {
                 recording::a_canvas_records_into_a_buffer_it_was_handed,
             ),
             (
+                "re_recording_a_warm_list_with_payloads_allocates_nothing",
+                recording::re_recording_a_warm_list_with_payloads_allocates_nothing,
+            ),
+            (
+                "appended_payloads_follow_their_commands",
+                recording::appended_payloads_follow_their_commands,
+            ),
+            (
                 "a_finished_display_list_is_sendable_to_another_thread",
                 recording::a_finished_display_list_is_sendable_to_another_thread,
             ),

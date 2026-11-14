@@ -28,13 +28,10 @@ fn regions(
         .finish()
         .iter()
         .filter_map(|command| match &command.op {
-            DrawOp::ImageRegion {
-                src,
-                dst,
-                tile,
-                repeat,
-                ..
-            } => Some((*src, *dst, *tile, *repeat)),
+            DrawOp::ImageRegion { region, .. } => {
+                let region = command.payload(*region);
+                Some((region.src, region.dst, region.tile, region.repeat))
+            }
             _ => None,
         })
         .collect()

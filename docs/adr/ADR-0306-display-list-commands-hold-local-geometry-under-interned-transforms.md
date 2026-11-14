@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-11-03)
 - **Date:** 2026-11-03
+- **Superseded-by:** [ADR-0333](ADR-0333-a-display-list-keeps-large-payloads-beside-its-commands.md) for
+  §3's boxed payloads, `Path` as one pointer and the `size_of::<Path>()` assertion; §3's two size
+  assertions and the other sections remain in force
 - **Supersedes:** [ADR-0066](ADR-0066-display-list-command-representation.md) "The command is
   `{ transform, op }`" and "The op has a budget" only (the absolute matrix stored in every command,
   `draw_picture` as a per-command re-stamp, and the unasserted 128- and 192-byte budget with a

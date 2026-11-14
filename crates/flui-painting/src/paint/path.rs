@@ -799,6 +799,21 @@ impl Path {
         }
     }
 
+    /// Whether `self` and `other` are known to be equal without building or
+    /// walking either one's curves: they share their curves, or neither has
+    /// built them and both name the same constructor shape. `false` says
+    /// nothing; [`PartialEq`] answers the full question.
+    pub(crate) fn known_equal(&self, other: &Self) -> bool {
+        let unbuilt = |path: &Self| path.curves.get().is_none();
+        let same_geometry = self.shares_commands_with(other)
+            || (unbuilt(self)
+                && unbuilt(other)
+                && self.hint != ShapeHint::None
+                && self.hint == other.hint
+                && self.offset == other.offset);
+        same_geometry && self.fill_type == other.fill_type && self.finite == other.finite
+    }
+
     /// Returns `true` if the path has no elements.
     #[must_use]
     #[inline]

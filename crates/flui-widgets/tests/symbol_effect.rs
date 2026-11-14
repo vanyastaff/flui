@@ -105,8 +105,8 @@ impl Stage {
         self.laid
             .draw_ops()
             .into_iter()
-            .filter_map(|command| match command.op {
-                DrawOp::Path { path, .. } => Some(path.length()),
+            .filter_map(|command| match &command.op {
+                DrawOp::Path { path, .. } => Some(command.payload(*path).length()),
                 _ => None,
             })
             .sum()

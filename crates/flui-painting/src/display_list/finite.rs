@@ -11,6 +11,7 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Radius, Rect};
 
 use super::command::DrawOp;
+use super::payload::StoredPayload;
 use crate::paint::image::ColorFilter;
 use crate::paint::{ClipOp, DashPattern, ImageShader, Paint, Shader};
 
@@ -132,7 +133,8 @@ impl DrawOp {
             DrawOp::ClipRect { rect, .. } => rect_finite(rect),
             DrawOp::ClipRRect { rrect, .. } => rrect_finite(rrect),
             DrawOp::ClipRSuperellipse { rsuperellipse, .. } => rsuperellipse_finite(rsuperellipse),
-            DrawOp::ClipPath { path, .. } => path.is_finite(),
+            // A payload is checked apart, by `payload_finite`.
+            DrawOp::ClipPath { .. } => true,
             DrawOp::Line { p1, p2, paint } => {
                 point_finite(p1) && point_finite(p2) && paint_finite(paint)
             }
@@ -145,42 +147,25 @@ impl DrawOp {
                 radius,
                 paint,
             } => point_finite(center) && radius.is_finite() && paint_finite(paint),
-            DrawOp::Path { path, paint } => path.is_finite() && paint_finite(paint),
+            DrawOp::Path { paint, .. } | DrawOp::DRRect { paint, .. } => paint_finite(paint),
             DrawOp::Paragraph { offset, .. } | DrawOp::ParagraphShadow { offset, .. } => {
                 offset_finite(offset)
             }
             DrawOp::Image { dst, paint, .. } | DrawOp::ImageRepeat { dst, paint, .. } => {
                 rect_finite(dst) && optional_paint(paint)
             }
-            DrawOp::ImageRegion {
-                src,
-                dst,
-                tile,
-                filter,
-                paint,
-                ..
-            } => {
-                rect_finite(src)
-                    && rect_finite(dst)
-                    && tile.as_ref().is_none_or(rect_finite)
-                    && filter.as_ref().is_none_or(color_filter_finite)
-                    && optional_paint(paint)
-            }
+            DrawOp::ImageRegion { paint, .. } => optional_paint(paint),
             DrawOp::ImageNineSlice {
                 center_slice,
                 dst,
                 paint,
                 ..
             } => rect_finite(center_slice) && rect_finite(dst) && optional_paint(paint),
-            DrawOp::ImageFiltered {
-                dst, filter, paint, ..
-            } => rect_finite(dst) && color_filter_finite(filter) && optional_paint(paint),
+            DrawOp::ImageFiltered { dst, paint, .. } => rect_finite(dst) && optional_paint(paint),
             DrawOp::Texture {
                 dst, src, opacity, ..
             } => rect_finite(dst) && src.as_ref().is_none_or(rect_finite) && opacity.is_finite(),
-            DrawOp::Shadow {
-                path, elevation, ..
-            } => path.is_finite() && elevation.is_finite(),
+            DrawOp::Shadow { elevation, .. } => elevation.is_finite(),
             DrawOp::Arc {
                 rect,
                 start_angle,
@@ -193,11 +178,6 @@ impl DrawOp {
                     && sweep_angle.is_finite()
                     && paint_finite(paint)
             }
-            DrawOp::DRRect {
-                outer,
-                inner,
-                paint,
-            } => rrect_finite(outer) && rrect_finite(inner) && paint_finite(paint),
             DrawOp::Points { points, paint, .. } => {
                 points.iter().all(point_finite) && paint_finite(paint)
             }
@@ -305,6 +285,22 @@ fn point_finite(point: &Point<f64>) -> bool {
     point.x.is_finite() && point.y.is_finite()
 }
 
+/// Whether every value of a payload an op names is finite.
+pub(crate) fn payload_finite(payload: &StoredPayload) -> bool {
+    match payload {
+        StoredPayload::Path(path) => path.is_finite(),
+        StoredPayload::NestedRRects(rrects) => {
+            rrect_finite(&rrects.outer) && rrect_finite(&rrects.inner)
+        }
+        StoredPayload::ImageRegion(region) => {
+            rect_finite(&region.src)
+                && rect_finite(&region.dst)
+                && region.tile.as_ref().is_none_or(rect_finite)
+                && region.filter.as_ref().is_none_or(color_filter_finite)
+        }
+        StoredPayload::ColorFilter(filter) => color_filter_finite(filter),
+    }
+}
 fn offset_finite(offset: &Offset<f64>) -> bool {
     offset.dx.is_finite() && offset.dy.is_finite()
 }

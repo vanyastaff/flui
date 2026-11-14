@@ -5,8 +5,8 @@
 # --features flui/material,flui/cupertino,flui/native --test perf`.
 
 [switch_alone]
-allocations = 119
-bytes = 16342
+allocations = 120
+bytes = 15507
 elements = 4
 reallocations = 3
 render_nodes = 2
