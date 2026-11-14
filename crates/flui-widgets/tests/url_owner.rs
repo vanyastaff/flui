@@ -796,3 +796,153 @@ pub(crate) fn an_opened_url_navigates_only_when_declared() {
         "a closed window"
     );
 }
+
+/// What a Router built pages for, in order.
+type Built = Rc<RefCell<Vec<AppRoute>>>;
+
+/// [`router`], also recording each route it builds a page for in `built`.
+fn recording_router(
+    initial: AppRoute,
+    captured: &Captured<AppRoute>,
+    built: &Built,
+) -> Router<AppRoute> {
+    let (captured, built) = (Rc::clone(captured), Rc::clone(built));
+    Router::new(initial, move |route: &AppRoute, ctx: &dyn BuildContext| {
+        built.borrow_mut().push(route.clone());
+        *captured.borrow_mut() = Router::<AppRoute>::of(ctx).ok();
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    })
+}
+
+fn declaring_host() -> HeadlessHost {
+    let host = HeadlessHost::new(HeadlessWindow::new(400, 400));
+    host.set_link_declarations(LinkDeclarations::new().url_schemes(&["myapp"]));
+    host
+}
+
+/// What the cold start warns when no Router took the URL.
+const DROPPED_WARNING: &str = "found no Router to open it";
+
+pub(crate) fn a_url_opened_before_the_first_frame_opens_the_router_on_it() {
+    let mut host = declaring_host();
+    let window = host.primary_window();
+    assert_eq!(host.open_url(window, "myapp:///note/1"), Ok(()));
+    assert_eq!(
+        host.open_url(window, "myapp:///note/3"),
+        Ok(()),
+        "a second link replaces the first"
+    );
+    let captured = Captured::default();
+    let built = Built::default();
+    host.attach(&recording_router(
+        AppRoute::Note { id: 9 },
+        &captured,
+        &built,
+    ))
+    .expect("a fresh window");
+    settle(&mut host);
+
+    assert_eq!(stack(&captured), [AppRoute::Home, AppRoute::Note { id: 3 }]);
+    let built = built.borrow();
+    assert!(
+        !built.contains(&AppRoute::Note { id: 9 }),
+        "the initial page is never built: {built:?}"
+    );
+    assert!(
+        !built.contains(&AppRoute::Note { id: 1 }),
+        "the replaced link opens nothing: {built:?}"
+    );
+}
+
+pub(crate) fn a_cold_url_no_route_matches_reaches_on_unknown_after_the_frame() {
+    let mut host = declaring_host();
+    let window = host.primary_window();
+    assert_eq!(host.open_url(window, "myapp:///nowhere"), Ok(()));
+    let captured = Captured::default();
+    let unknown = Rc::new(RefCell::new(Vec::new()));
+    let redirected = Rc::new(RefCell::new(None));
+    // The hook runs after the frame, not inside its build, so its redirect
+    // is not refused.
+    let hook = {
+        let (captured, unknown, redirected) = (
+            Rc::clone(&captured),
+            Rc::clone(&unknown),
+            Rc::clone(&redirected),
+        );
+        move |path: &RoutePath| {
+            unknown.borrow_mut().push(path.clone());
+            let handle = captured
+                .borrow()
+                .clone()
+                .expect("the Router built its page");
+            *redirected.borrow_mut() = Some(handle.push(AppRoute::Note { id: 404 }));
+        }
+    };
+    host.attach(&router(AppRoute::Home, &captured).on_unknown(hook))
+        .expect("a fresh window");
+    settle(&mut host);
+
+    assert_eq!(*unknown.borrow(), [path("/nowhere")]);
+    assert_eq!(*redirected.borrow(), Some(Ok(())), "the hook navigated");
+    assert_eq!(
+        stack(&captured),
+        [AppRoute::Home, AppRoute::Note { id: 404 }],
+        "the initial stack, then the redirect"
+    );
+}
+
+pub(crate) fn a_cold_url_no_router_took_is_dropped_after_the_first_frame() {
+    let mut host = declaring_host();
+    let window = host.primary_window();
+    let captured = Captured::default();
+    let show_router = Rc::new(Cell::new(false));
+    let toggle = Rc::new(ChangeNotifier::new());
+    let root = {
+        let (captured, show_router) = (Rc::clone(&captured), Rc::clone(&show_router));
+        AnimatedBuilder::new(
+            Rc::clone(&toggle) as Rc<dyn flui_foundation::Listenable>,
+            move || {
+                if show_router.get() {
+                    router(AppRoute::Home, &captured).into_view().boxed()
+                } else {
+                    SizedBox::new(10.0, 10.0).into_view().boxed()
+                }
+            },
+        )
+    };
+    assert_eq!(host.open_url(window, "myapp:///note/3"), Ok(()));
+    let ((), log) = flui_testing::capture(|| {
+        host.attach(&root).expect("a fresh window");
+        settle(&mut host);
+    });
+    assert_eq!(log.count_containing(DROPPED_WARNING), 1, "{log}");
+    assert_eq!(
+        host.open_url(window, "myapp:///note/3"),
+        Err(OpenUrlRefused::Navigation(NavigationRefused::NoUrlOwner)),
+        "after the first frame a URL is not held for a later Router"
+    );
+
+    show_router.set(true);
+    toggle.notify_listeners();
+    settle(&mut host);
+    assert_eq!(
+        stack(&captured),
+        [AppRoute::Home],
+        "the old link opens nothing"
+    );
+    assert_eq!(host.open_url(window, "myapp:///note/3"), Ok(()));
+    settle(&mut host);
+    assert_eq!(stack(&captured), [AppRoute::Home, AppRoute::Note { id: 3 }]);
+
+    // A window that closes before its first frame drops the URL it held, and
+    // says so.
+    let closing = host.open_window(HeadlessWindow::new(400, 400));
+    assert_eq!(host.open_url(closing, "myapp:///note/4"), Ok(()));
+    let (closed, log) = flui_testing::capture(|| {
+        let closed = host.request_close(closing, CloseReason::Program);
+        settle(&mut host);
+        closed
+    });
+    assert!(closed);
+    assert_eq!(log.count_containing(DROPPED_WARNING), 1, "{log}");
+}

@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2. В работе: —; следующие AC3, AC4, AC11.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3. В работе: —; следующие AC4, AC11.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -41,3 +41,4 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
 
 - **AC1.** `route_locations_preserve_encoded_segment_identity` (строки query: `+` как пробел, порядок и повторы, голый ключ, пустые пары, разделители в значении, отказ плохого escape, query только у последнего префикса, поля `#[query]` трёх видов и `Param`), `derived_routable_round_trips` с полями query, `routable_derive_ui` (`pass/query_fields.rs`; `fail/query_and_param.rs`, `fail/query_attr_arg.rs`, `fail/query_without_default.rs`, `fail/pattern_query.rs`); строка пустых пар падает при откате пропуска пустой пары в `push_query`.
 - **AC2.** `opened_urls_split_into_scheme_host_and_route_location` (`///`, authority не в пути, схема без authority и путь без `/`, пустой путь, регистр схемы и хоста, IPv6, проценты и query, fragment отброшен, нет схемы, плохая схема, путь не адрес, предел `OpenedUrl::MAX_LEN` и на байт больше, объявления по схеме и домену, поддомен и `https` без домена отказаны), строка `url_owner::an_opened_url_navigates_only_when_declared` таблицы `router_and_widgets_app` через `HeadlessHost::open_url` (без объявлений ничего не открывается, чужие схема и домен и `https` без домена отказаны со стеком без изменений, `NoMatch`, объявленная веб-ссылка открывается как `go`, закрытое окно — `NoPresentation`); строка падает при откате проверки объявлений в `UiRuntime::open_url`.
+- **AC3.** Строки `url_owner::` таблицы `router_and_widgets_app` через `HeadlessHost::open_url` до `attach`: `a_url_opened_before_the_first_frame_opens_the_router_on_it` (стек `back_stack`, страница `initial` и заменённая ссылка не строились), `a_cold_url_no_route_matches_reaches_on_unknown_after_the_frame` (`on_unknown` после кадра, его переход применён), `a_cold_url_no_router_took_is_dropped_after_the_first_frame` (предупреждение, затем `NoUrlOwner`, позднее смонтированный `Router` открыт на своём стеке); все три падают при откате взятия адреса в `Router::create_state` и сброса после первого кадра.

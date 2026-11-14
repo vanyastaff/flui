@@ -592,6 +592,13 @@ impl UiRuntime {
 
         phases.lap(FramePhase::Build);
 
+        // The first build of a tree mounted its Routers: a URL the platform
+        // opened before it and no Router took is dropped now, not opened by a
+        // Router mounted later (ADR-0330 §5).
+        if !presentation.url_owner.is_warm() && presentation.widgets().root_element().is_some() {
+            presentation.url_owner.end_cold_start();
+        }
+
         // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
         // typestate-driven orchestrator.
         presentation.enter_segment_phase(SegmentPhase::Pipeline);

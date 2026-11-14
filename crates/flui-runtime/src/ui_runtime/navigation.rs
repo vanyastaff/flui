@@ -2,7 +2,7 @@
 
 use flui_foundation::PresentationId;
 use flui_view::navigation::{
-    LinkDeclarations, NavigationIntent, NavigationOp, NavigationRefused, OpenUrlRefused, OpenedUrl,
+    LinkDeclarations, NavigationIntent, NavigationRefused, OpenUrlRefused, OpenedUrl,
 };
 
 use super::UiRuntime;
@@ -41,21 +41,30 @@ impl UiRuntime {
     /// `presentation`, as Flutter's engine hands a deep link to its Router:
     /// the URL is split ([`OpenedUrl::parse`]), admitted by the application's
     /// [`LinkDeclarations`], and its path is applied as a
-    /// [`NavigationOp::Go`], so the pages it shares with the current stack
-    /// stay. Every host and the headless one open URLs through here, so the
-    /// length bound and the declaration check hold on every platform.
+    /// [`NavigationOp::Go`](flui_view::navigation::NavigationOp::Go), so the
+    /// pages it shares with the current stack stay. A URL that arrives before
+    /// the presentation's first frame, when no `Router` has mounted yet,
+    /// becomes the location the first Router
+    /// opens on (a cold start). Every host and the headless one open URLs
+    /// through here, so the length bound, the declaration check and the cold
+    /// start hold on every platform.
     ///
     /// # Errors
     ///
     /// The [`OpenUrlRefused`] of a URL that is too long, malformed or not
     /// declared, and [`OpenUrlRefused::Navigation`] with what
-    /// [`navigate`](Self::navigate) refuses. A refused URL leaves the stack
-    /// unchanged.
+    /// [`navigate`](Self::navigate) refuses (`NoUrlOwner` only after the
+    /// first frame). A refused URL leaves the stack unchanged.
     pub fn open_url(&self, presentation: PresentationId, url: &str) -> Result<(), OpenUrlRefused> {
         let url = OpenedUrl::parse(url)?;
         self.link_declarations.get().admit(&url)?;
-        let intent = NavigationIntent::new(NavigationOp::Go(url.path().clone()));
-        Ok(self.navigate(presentation, intent)?)
+        let slot = self
+            .presentations
+            .get(presentation)
+            .map(|state| state.url_owner.clone())
+            .ok_or(NavigationRefused::NoPresentation)?;
+        let path = url.path().clone();
+        Ok(self.enter(|_| slot.open_at(path))?)
     }
 
     /// Set the URLs the application declares it opens, which

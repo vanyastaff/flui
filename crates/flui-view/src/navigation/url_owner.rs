@@ -1,11 +1,11 @@
 //! A presentation's one URL-owner slot, which its outermost `Router` registers
 //! into (ADR-0330 §5).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
 
-use super::{NavigationIntent, NavigationRefused, UrlOwner};
+use super::{NavigationIntent, NavigationOp, NavigationRefused, RoutePath, UrlOwner};
 
 /// A presentation's URL-owner slot. The runtime makes one per presentation
 /// and installs it among the presentation's capabilities, which a lifecycle
@@ -16,20 +16,112 @@ use super::{NavigationIntent, NavigationRefused, UrlOwner};
 /// The slot holds its owners weakly, so it keeps no Router alive. When two
 /// Routers register (siblings, neither nested in the other), the first that
 /// is still mounted owns the URL, and the next takes over when it leaves.
+///
+/// A URL the platform opens before the presentation's first frame (a cold
+/// start) finds no Router yet: the slot keeps its location as the initial
+/// one, which the Router that registers first opens with instead of its own,
+/// as Flutter's `defaultRouteName` gives the first route. The first frame
+/// that builds a tree ends the cold start, and an initial location no Router
+/// took then is dropped, so a Router mounted later never opens on an old link.
 #[derive(Clone, Default)]
 pub struct UrlOwnerSlot(Rc<SlotInner>);
+
+/// What the slot warns when a URL from the cold start is dropped untaken.
+const DROPPED_COLD_URL: &str =
+    "a URL opened before the first frame found no Router to open it, and is dropped";
 
 #[derive(Default)]
 struct SlotInner {
     /// Registrations, oldest first.
     owners: RefCell<Vec<Weak<dyn UrlOwner>>>,
+    /// The location a URL opened during the cold start, for the first Router
+    /// that registers.
+    initial: RefCell<Option<RoutePath>>,
+    /// Whether the presentation's first frame with a tree has run, ending the
+    /// cold start.
+    warm: Cell<bool>,
+}
+
+impl Drop for SlotInner {
+    /// A presentation that closes during its cold start drops the URL it
+    /// held with the warning the end of the cold start gives.
+    fn drop(&mut self) {
+        if let Some(path) = self.initial.get_mut().take() {
+            tracing::warn!(
+                %path,
+                DROPPED_COLD_URL
+            );
+        }
+    }
 }
 
 impl UrlOwnerSlot {
-    /// An empty slot.
+    /// An empty slot, in its cold start.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Open `path`, the location of a URL the platform opened: its owner
+    /// applies it as a [`NavigationOp::Go`], and during the cold start, with
+    /// no owner registered yet, it becomes the initial location of the first
+    /// Router that registers. A second URL in the cold start replaces the
+    /// first, as a later link does in a running application.
+    ///
+    /// # Errors
+    ///
+    /// [`NavigationRefused::NoUrlOwner`] after the cold start when no owner
+    /// is registered, and whatever the owner refuses with.
+    pub fn open_at(&self, path: RoutePath) -> Result<(), NavigationRefused> {
+        let owner = self.0.owners.borrow().iter().find_map(Weak::upgrade);
+        if let Some(owner) = owner {
+            return owner.navigate(NavigationIntent::new(NavigationOp::Go(path)));
+        }
+        if self.0.warm.get() {
+            return Err(NavigationRefused::NoUrlOwner);
+        }
+        // A replaced `RoutePath` runs no user code as it drops.
+        let replaced = self.0.initial.replace(Some(path));
+        drop(replaced);
+        Ok(())
+    }
+
+    /// The initial location a URL opened during the cold start, taken by the
+    /// Router about to register as the first owner; `None` when an owner is
+    /// registered already, so a sibling Router does not open on it.
+    #[must_use]
+    pub fn take_initial(&self) -> Option<RoutePath> {
+        let owned = self
+            .0
+            .owners
+            .borrow()
+            .iter()
+            .any(|registered| registered.strong_count() > 0);
+        if owned {
+            return None;
+        }
+        self.0.initial.take()
+    }
+
+    /// Whether the cold start is over.
+    #[must_use]
+    pub fn is_warm(&self) -> bool {
+        self.0.warm.get()
+    }
+
+    /// End the cold start: the runtime calls this after the presentation's
+    /// first frame that built a tree. An initial location no Router took is
+    /// dropped with a warning.
+    pub fn end_cold_start(&self) {
+        if self.0.warm.replace(true) {
+            return;
+        }
+        if let Some(path) = self.0.initial.take() {
+            tracing::warn!(
+                %path,
+                DROPPED_COLD_URL
+            );
+        }
     }
 
     /// Register `owner`. It owns the URL while it is the oldest registration
@@ -86,6 +178,7 @@ impl fmt::Debug for UrlOwnerSlot {
             .map(|owners| owners.iter().filter(|o| o.strong_count() > 0).count());
         f.debug_struct("UrlOwnerSlot")
             .field("owners", &owners.ok())
+            .field("warm", &self.0.warm.get())
             .finish()
     }
 }
