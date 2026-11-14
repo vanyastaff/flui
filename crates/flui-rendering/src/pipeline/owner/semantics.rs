@@ -1420,7 +1420,10 @@ fn build_semantics_fragments_impl<'f>(
             // Room for one fragment per child still to come, as a list sized for every child up
             // front would have; a child with several fragments grows it by doubling.
             let still_to_come = node.children().len() - child_slot - 1;
-            if child_fragments.is_empty() {
+            if fragments.nodes.is_empty() {
+                // A child that contributes nothing leaves the list as it is: a node whose
+                // children list nothing allocates nothing.
+            } else if child_fragments.capacity() == 0 {
                 // The first child that contributes hands its list over whole. It is the arena's
                 // last block, so it grows in place; each later child's list then sits above it,
                 // is emptied into it and freed as the last block, and the arena reuses that
@@ -1625,14 +1628,22 @@ fn merge_child_fragments<'f>(
         mark_configuration_conflicts(config, &fragments, names_a_control, fragments.allocator())
     });
     let scratch = *fragments.allocator();
-    let mut children = Vec::with_capacity_in(fragments.len(), built);
+    let total = fragments.len();
+    // Allocated on the first child that needs a list of its own: an absorbed pending node's
+    // list is taken over instead, so a chain of absorbed nodes over many descendants moves one
+    // list up the chain rather than copying it at each level.
+    let mut children: FrameVec<'f, BuiltSemanticsNode<'f>> = Vec::new_in(built);
 
     // The iterator holds the fragments' buffer, below the conflict marks: it is dropped after
     // them, so the arena frees both in the reverse order it handed them out.
     let mut drained = fragments.into_iter();
     for (index, fragment) in drained.by_ref().enumerate() {
+        let rest = total - index - 1;
         match fragment {
-            SemanticsFragment::Formed(node) => children.push(node),
+            SemanticsFragment::Formed(node) => {
+                make_room(&mut children, 1 + rest);
+                children.push(node);
+            }
             // Runs are the synthetic children of the one node declaring them,
             // so a merge never drops a second text's runs for the first's:
             // that text keeps its node and its runs (ADR-0214 §2).
@@ -1643,11 +1654,20 @@ fn merge_child_fragments<'f>(
                     || (pending.config.text_content().is_some()
                         && config.text_content().is_some()) =>
             {
+                make_room(&mut children, 1 + rest);
                 children.push(pending.form());
             }
             SemanticsFragment::Pending(pending) => {
                 config.absorb(&pending.config);
-                children.extend(pending.children);
+                if children.capacity() == 0 {
+                    // Nothing is listed yet, so `children` holds no memory: take this list over
+                    // with room for the fragments still to come.
+                    children = pending.children;
+                    children.reserve_exact(rest);
+                } else {
+                    make_room(&mut children, pending.children.len() + rest);
+                    children.extend(pending.children);
+                }
             }
         }
     }
@@ -1662,6 +1682,16 @@ fn merge_child_fragments<'f>(
         );
     }
     children
+}
+
+/// Makes room in `list` for `additional` more: exactly that much for its first allocation, which
+/// is sized for every fragment still to come, and by doubling after that.
+fn make_room<T>(list: &mut FrameVec<'_, T>, additional: usize) {
+    if list.capacity() == 0 {
+        list.reserve_exact(additional);
+    } else {
+        list.reserve(additional);
+    }
 }
 
 /// Keyed siblings first, by name and then order; unkeyed ones after, as
