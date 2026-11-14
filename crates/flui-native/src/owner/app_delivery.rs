@@ -5,7 +5,8 @@
 //! slot, so the handler is reached, called and dropped only there; the loop's
 //! sources report to it from then on, and before then too.
 //!
-//! What the platform *reports* (a quit, a reopen, a host notice) goes through
+//! What the platform *reports* (a quit, a reopen, what it opened, a host
+//! notice) goes through
 //! one causal FIFO. A report accepted while the handler cannot hear it yet —
 //! before [`AppHandler::ready`] has returned, while another method runs, or on
 //! another thread — waits in order and is delivered on the owner thread as
@@ -34,7 +35,7 @@ use std::collections::VecDeque;
 use std::rc::{Rc, Weak as RcWeak};
 use std::sync::Arc;
 
-use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform::{Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
 use parking_lot::Mutex;
 
 use super::call_point::{Called, Failure, HandlerSlot, call, retire};
@@ -44,11 +45,18 @@ use super::{OwnerHooks, OwnerPlatform};
 use crate::error::BootstrapError;
 use crate::platform::{AppHandler, ExitAnswer, Platform};
 
+/// The most [`Report::Opened`] that wait for the handler at once. Each is
+/// bounded ([`Opened::new`]); this bounds how many a host that keeps opening
+/// (a second instance forwarding in a loop, a flood of links before `ready`)
+/// can hold in the queue, and a later one is dropped with a warning.
+const MAX_PENDING_OPENED: usize = 16;
+
 /// What the platform reports to the application, accepted in order.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Report {
     Quit,
     Reopen,
+    Opened(Opened),
     Notice(SystemNotice),
 }
 
@@ -57,7 +65,18 @@ impl Report {
         match self {
             Self::Quit => handler.quit_requested(owner),
             Self::Reopen => handler.reopen(owner),
+            Self::Opened(opened) => handler.opened(owner, opened),
             Self::Notice(notice) => handler.host_notice(owner, notice),
+        }
+    }
+
+    /// What the report is, for a log line that outlives it.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Quit => "quit",
+            Self::Reopen => "reopen",
+            Self::Opened(_) => "opened",
+            Self::Notice(_) => "notice",
         }
     }
 }
@@ -241,7 +260,7 @@ impl AppDelivery {
         };
         if !unheard.is_empty() {
             tracing::debug!(
-                ?unheard,
+                unheard = unheard.len(),
                 "the run ended with reports its handler never heard"
             );
         }
@@ -290,6 +309,15 @@ impl AppDelivery {
         self.journal
             .record(crate::journal::capture::Captured::Reopen);
         self.report(Report::Reopen)
+    }
+
+    /// The operating system opened URLs or files ([`AppHandler::opened`]).
+    /// An empty one reports nothing.
+    pub(crate) fn opened(&self, opened: Opened) -> Called<()> {
+        if opened.is_empty() {
+            return Called::Vacant;
+        }
+        self.report(Report::Opened(opened))
     }
 
     /// A system notice ([`AppHandler::host_notice`]). The lifecycle feature's
@@ -384,11 +412,27 @@ impl AppDelivery {
     fn report(&self, report: Report) -> Called<()> {
         {
             let mut state = self.state.lock();
-            if report == Report::Quit {
+            if matches!(report, Report::Quit) {
                 if state.quit_accepted {
                     return Called::Vacant;
                 }
                 state.quit_accepted = true;
+            }
+            if matches!(report, Report::Opened(_))
+                && state
+                    .pending
+                    .iter()
+                    .filter(|queued| matches!(queued, Report::Opened(_)))
+                    .count()
+                    == MAX_PENDING_OPENED
+            {
+                drop(state);
+                tracing::warn!(
+                    max = MAX_PENDING_OPENED,
+                    "the operating system opened more while the application could not hear it \
+                     than it keeps waiting; the newest is dropped"
+                );
+                return Called::Vacant;
             }
             state.pending.push_back(report);
             if !state.on_owner() {
@@ -439,6 +483,7 @@ impl AppDelivery {
                 next
             };
             let Some(report) = next else { break };
+            let kind = report.kind();
             match self.ask(|handler, owner| report.deliver(handler, owner)) {
                 Called::Returned(()) => heard = true,
                 Called::Panicked(failure) => match first {
@@ -446,7 +491,7 @@ impl AppDelivery {
                     Some(_) => failure.contain("the application handler"),
                 },
                 Called::Vacant => tracing::debug!(
-                    ?report,
+                    kind,
                     "a report has no handler to hear it: the platform is gone"
                 ),
             }

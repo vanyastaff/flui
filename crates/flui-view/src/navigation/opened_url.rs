@@ -28,7 +28,7 @@ impl OpenedUrl {
     /// The longest URL, in bytes, that [`parse`](Self::parse) reads: a URL
     /// the platform hands over is untrusted input, and its length is checked
     /// before any of it is copied.
-    pub const MAX_LEN: usize = 8192;
+    pub const MAX_LEN: usize = flui_platform::MAX_OPENED_URL_LEN;
 
     /// Split `url` into its scheme, host and route location.
     ///

@@ -1191,6 +1191,18 @@ impl flui_native::AppHandler for RunnerHandler {
         });
     }
 
+    /// No host reports an opened URL or file yet, and the runner does not
+    /// route one to a presentation yet ([gaps](../../../../../docs/gaps.md),
+    /// "No deep links, URL schemes, file associations or single instance"):
+    /// what arrives is logged, not opened.
+    fn opened(&self, _: &flui_native::OwnerPlatform, opened: flui_platform::Opened) {
+        tracing::info!(
+            urls = opened.urls.len(),
+            files = opened.files.len(),
+            "the platform opened URLs or files, which this runner does not route yet"
+        );
+    }
+
     fn session_end(
         &self,
         _: &flui_native::OwnerPlatform,

@@ -96,7 +96,7 @@ columns and is listed after them.
 | iOS | UIKit (native) | 6 | 37 | 42 | 33 | 8 | 29% | no | macos-latest, iOS Simulator | 0 |
 | Android | android-activity (native) | 18 | 39 | 34 | 29 | 6 | 41% | no | ubuntu-24.04, Android emulator | 2 |
 | Web | wasm canvas (native) | 7 | 40 | 30 | 42 | 7 | 35% | no | — | 0 |
-| Headless | test double | 53 | 2 | 50 | 19 | 2 | 51% | — | — | 0 |
+| Headless | test double | 53 | 3 | 49 | 19 | 2 | 52% | — | — | 0 |
 
 Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partly; 3 not met (power and thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not audited (timestamps across a counter wrap or a clock-base change, platform-edge diagnostics free of secrets).
 
@@ -120,7 +120,7 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 | Memory pressure | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | — | ❌ | Delivered on Windows, macOS, iOS, Android and Linux; only Android's levels were driven on a device. |
 | Bring the app forward, request attention | 🟡 | ❌ | 🟡 | ❌ | — | — | — | ❌ | Windows: `WindowCommand::Activate` brings the window forward where the foreground rules allow and flashes its taskbar button where they refuse, run against a second process; attention has no request of its own. Wayland asks with an `xdg-activation` token (sway marks the window urgent), run by hand on sway only. |
 | Single instance, forward arguments | ❌ | — | ❌ | ❌ | — | — | — | ❌ | macOS enforces one instance itself |
-| Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | No host reports an opened URL or file, at cold start or while running (`opened(urls, files)` joins the application handler with the activation feature); the Web entry URL is under history routing |
+| Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | 🟡 | No native host reports an opened URL or file yet, at cold start or while running. The application handler hears `opened(&OwnerPlatform, Opened)`, bounded, and the headless host reports one (`HeadlessHostEvents::open`); the runner does not route it to a window yet, and `UiRuntime::open_url` opens a URL in a Router, the cold start included. The Web entry URL is under history routing |
 | State restoration | — | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | macOS window restoration, iOS scene restoration, Android state after process death, Web `history.state` |
 | Activation obeys the OS focus rules (Wayland `xdg-activation` token, Windows foreground rights handed to the activated process) | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | — | Windows: an activation never takes the foreground from another application and comes forward once that application hands the right over, run with two processes; opening a link or file hands the right to the handler process the shell started; no second launch hands it yet (single instance, in the activation spec). The Wayland token's whole path runs only on sway, by hand: CI's Weston has no `xdg_activation_v1`. A Wayland token names the seat and serial of the user input behind the activation. macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is not audited. |
 | App identity (AUMID, bundle ID, `.desktop` file) | ❔ | ❔ | ❔ | ❔ | — | — | — | — | Notifications, URL schemes, the tray, jump lists and portals need it; `flui-cli` packaging not audited |
