@@ -19,7 +19,7 @@
 
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, PipeMode, ServerOptions};
@@ -60,9 +60,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long between two tries to reach the pipe.
 const CONNECT_RETRY: Duration = Duration::from_millis(20);
 /// How long a later process waits for the first to take its launch: longer
-/// than the first's [`HOLD`], so it hears the answer before it stops
-/// waiting.
+/// than [`CONNECT_TIMEOUT`] and the first's [`HOLD`] together, since the
+/// hold runs from when the first's pipe connected and counts the frame's
+/// reading, so the process hears the answer before it stops waiting.
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(20);
+const _: () = assert!(
+    CONNECT_TIMEOUT.as_millis() + HOLD.as_millis() < FORWARD_TIMEOUT.as_millis(),
+    "a later launch waits past the hold of a launch that connected at its last try"
+);
 /// How long the first waits for a launch that reached its pipe to send its
 /// frame, and for its caller to read the answer.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -481,6 +486,9 @@ async fn serve(
     let answering = Arc::new(tokio::sync::Semaphore::new(MAX_WAITING));
     loop {
         let connected = server.connect().await;
+        // The launch's hold runs from here: its process began waiting as it
+        // connected, so reading its frame counts against the hold.
+        let connected_at = Instant::now();
         // The next instance is made before this one is handed on, so the
         // pipe's name never lapses while the instance serves.
         let next = match pipe_instance(&name, &sddl, false) {
@@ -494,7 +502,13 @@ async fn serve(
                 if connected.is_ok()
                     && let Ok(room) = Arc::clone(&answering).try_acquire_owned()
                 {
-                    tokio::spawn(answer(server, Arc::clone(&inbox), room, executor));
+                    tokio::spawn(answer(
+                        server,
+                        connected_at,
+                        Arc::clone(&inbox),
+                        room,
+                        executor,
+                    ));
                 }
                 return;
             }
@@ -503,7 +517,13 @@ async fn serve(
         match connected {
             Ok(()) => {
                 if let Ok(room) = Arc::clone(&answering).try_acquire_owned() {
-                    tokio::spawn(answer(reached, Arc::clone(&inbox), room, executor.clone()));
+                    tokio::spawn(answer(
+                        reached,
+                        connected_at,
+                        Arc::clone(&inbox),
+                        room,
+                        executor.clone(),
+                    ));
                 } else {
                     // Closed unread: its process hears the pipe break and
                     // runs as an instance of its own.
@@ -518,13 +538,15 @@ async fn serve(
     }
 }
 
-/// Read the launch on `pipe`, hand it to the owner and answer whether the
-/// owner took it, holding `_room`, its place among the launches under way,
-/// and `_executor`, the runtime it runs on: an executor the host owns shuts
-/// its runtime down with its last clone, which the instance and the host may
+/// Read the launch on `pipe`, connected at `connected_at`, from which its
+/// hold is measured, hand it to the owner and answer whether the owner took
+/// it, holding `_room`, its place among the launches under way, and
+/// `_executor`, the runtime it runs on: an executor the host owns shuts its
+/// runtime down with its last clone, which the instance and the host may
 /// drop before the answer is sent.
 async fn answer(
     mut pipe: NamedPipeServer,
+    connected_at: Instant,
     inbox: Arc<Inbox<Forwarded>>,
     _room: tokio::sync::OwnedSemaphorePermit,
     _executor: NativeExecutor,
@@ -539,7 +561,7 @@ async fn answer(
             tracing::debug!(%error, "a later launch's frame is refused");
             REFUSED
         }
-        Ok(Ok(forwarded)) => match inbox.post(forwarded) {
+        Ok(Ok(forwarded)) => match inbox.post(forwarded, connected_at) {
             Err(refused) => {
                 tracing::debug!(reason = refused.reason(), "a later launch is refused");
                 REFUSED

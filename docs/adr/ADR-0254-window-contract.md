@@ -374,10 +374,10 @@ one instance of the application per user session, named by its reverse-DNS app i
 process owns the name; a later one hands it what its own launch opens, with the activation token
 its launcher gave it (Linux) or its right to the foreground (Windows), and ends once the first has
 taken the launch (`HostStart::Forwarded`, and `Application::run` returns `Ok(())`). A launch the
-first refuses or does not take within fifteen seconds (it holds sixteen waiting already, it ends
-first, or its loop is busy) is handed back and never delivered there, and the later process runs as
-an instance of its own, as does a launch carrying more than the first would keep, so no launch is
-lost or opened twice. The first hears the launch as `opened` with `Launch::Running` and
+first refuses or does not take within fifteen seconds of reaching it (it holds sixteen waiting
+already, it ends first, or its loop is busy) is handed back and never delivered there, and the
+later process, which waits longer, runs as an instance of its own, as does a launch carrying more
+than the first would keep, so no launch is lost or opened twice. The first hears the launch as `opened` with `Launch::Running` and
 `OpenTarget::Application`, after `reopen` when it shows no window (none is open, or each is
 hidden), and its host brings a shown window forward without a command from above. On Linux that is
 the window activated last, with the token (Wayland `xdg_activation_v1`; on X11 at the time the

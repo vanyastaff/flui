@@ -146,7 +146,10 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   (переполненная очередь отчётов возвращает запуск его процессу); запуски берутся по одному, и стоящий
   за заблокированным обработчиком всё ещё возвращается по сроку: `a_launch_behind_a_taken_one_is_still_handed_back`;
   задача ответа держит клон исполнителя, пока не ответит (на обоих хостах; гонку с остановкой runtime
-  тест не упорядочивает); запуск сверх числа читаемых отказывается сразу, а не ждёт подключённым.
+  тест не упорядочивает); запуск сверх числа читаемых отказывается сразу, а не ждёт подключённым;
+  срок 15 с считается с подключения к каналу, так что чтение кадра входит в него и второй процесс
+  (ждёт 20 с, из них до 2 с на подключение) слышит отказ раньше, чем перестаёт ждать:
+  `the_hold_counts_from_when_the_launch_reached_the_instance`.
 - **Фича `single-instance`.** Выключена по умолчанию; `a_desktop_that_opens_links_needs_one_instance`
   (Linux и Windows без фичи отказ с названием схемы, типа и фичи, фича только у dev-зависимости не
   считается, как и фича зависимости сборочного скрипта: её читает `cargo tree` по рёбрам normal без
@@ -154,7 +157,8 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   Android, macOS и wasm не затронуты), `a_desktop_run_that_opens_links_needs_one_instance` (`flui run`
   отказывает до сборки), `a_workspace_member_is_read_without_its_siblings` (участник workspace
   читается без соседей, `flui build --package` проверяет выбранный пакет; пример учитывает dev-зависимости
-  пакета), проверка `project.single-instance` в
+  пакета), `a_run_reads_the_package_cargo_runs` (`flui run` читает пакет, который запускает `cargo run`:
+  ближайший манифест или участники по умолчанию, не соседей), проверка `project.single-instance` в
   `doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`; clippy `flui-native` и
   `flui-app` для Linux (без фичи, `wayland`, `x11`, с фичей) и `x86_64-pc-windows-msvc` с фичей и без.
 - **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`

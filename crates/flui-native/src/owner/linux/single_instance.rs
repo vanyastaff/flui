@@ -194,7 +194,7 @@ mod off {
 mod bus {
     use std::collections::HashMap;
     use std::sync::{Arc, Weak};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use futures_util::StreamExt as _;
     use zbus::fdo::{RequestNameFlags, RequestNameReply};
@@ -394,7 +394,11 @@ mod bus {
                 )));
             }
         };
-        inbox.post(forwarded).map(Asked::Launch).map_err(refusal)
+        // A call arrives whole: it reached the instance as it is read.
+        inbox
+            .post(forwarded, Instant::now())
+            .map(Asked::Launch)
+            .map_err(refusal)
     }
 
     /// A call's answer, until it is sent.

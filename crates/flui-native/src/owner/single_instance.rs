@@ -59,7 +59,7 @@ mod inbox {
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::Poll;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use parking_lot::Mutex;
     use tokio::sync::oneshot;
@@ -107,8 +107,12 @@ mod inbox {
     type Waiting<T> = (T, oneshot::Sender<oneshot::Receiver<()>>);
 
     /// What the caller of [`Inbox::post`] waits on: the owner's claim of
-    /// the launch, which carries the owner's answer to come.
-    pub(crate) struct Posted(oneshot::Receiver<oneshot::Receiver<()>>);
+    /// the launch, which carries the owner's answer to come, and when the
+    /// launch reached the instance, from which its hold is measured.
+    pub(crate) struct Posted {
+        claimed: oneshot::Receiver<oneshot::Receiver<()>>,
+        reached: Instant,
+    }
 
     /// The owner's answer to a launch it took: [`Self::delivered`] once the
     /// application holds what the launch opens; dropped, the launch is
@@ -187,8 +191,12 @@ mod inbox {
             }
         }
 
-        /// Queue `launch` and wake the owner, once it is attached; its caller
-        /// waits on what this returns with [`Self::answer`].
+        /// Queue `launch`, which reached the instance at `reached`, and wake
+        /// the owner, once it is attached; its caller waits on what this
+        /// returns with [`Self::answer`]. The hold is measured from
+        /// `reached`, so the time a transport spent reading the launch counts
+        /// against it and the launch is handed back before its process stops
+        /// waiting.
         ///
         /// # Errors
         ///
@@ -196,7 +204,7 @@ mod inbox {
         /// the owner's loop has ended: the launching process hears the
         /// refusal and runs as an instance of its own, so the launch is not
         /// lost.
-        pub(crate) fn post(&self, launch: T) -> Result<Posted, Refused> {
+        pub(crate) fn post(&self, launch: T, reached: Instant) -> Result<Posted, Refused> {
             let (claim, claimed) = oneshot::channel();
             let refused = {
                 let mut queue = self.queue.lock();
@@ -215,7 +223,7 @@ mod inbox {
                 return Err(Refused::Full);
             }
             if self.wake() {
-                return Ok(Posted(claimed));
+                return Ok(Posted { claimed, reached });
             }
             // The owner's loop ended: what waits is never taken, and each
             // waiting caller hears it as its sender drops.
@@ -283,9 +291,14 @@ mod inbox {
         /// it past the hold, or could not deliver it.
         pub(crate) async fn answer(&self, posted: Posted) -> Result<(), &'static str> {
             const ENDED: &str = "the running instance ended before it took the launch";
-            let Posted(mut claimed) = posted;
+            let Posted {
+                mut claimed,
+                reached,
+            } = posted;
+            // What is left of the hold since the launch reached the instance:
+            // nothing, once reading it took the whole hold.
+            let hold = self.hold.saturating_sub(reached.elapsed());
             // The timer is made on its runtime, not on the transport's executor.
-            let hold = self.hold;
             let mut held = self
                 .timers
                 .spawn(async move { tokio::time::sleep(hold).await });
@@ -354,7 +367,7 @@ mod inbox {
     mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
 
         use super::{Delivery, Inbox, MAX_WAITING, OwnerWake, Posted, Refused};
 
@@ -387,10 +400,10 @@ mod inbox {
             let runtime = timers();
             let inbox = Inbox::new(Duration::from_secs(15), runtime.handle().clone());
             let posted: Vec<Posted> = (0..MAX_WAITING)
-                .map(|at| inbox.post(at).expect("room to wait"))
+                .map(|at| inbox.post(at, Instant::now()).expect("room to wait"))
                 .collect();
             assert_eq!(
-                inbox.post(MAX_WAITING).err(),
+                inbox.post(MAX_WAITING, Instant::now()).err(),
                 Some(Refused::Full),
                 "past the bound"
             );
@@ -412,7 +425,7 @@ mod inbox {
                     "each caller hears its launch was taken"
                 );
             }
-            assert!(inbox.post(0).is_ok(), "room again");
+            assert!(inbox.post(0, Instant::now()).is_ok(), "room again");
         }
 
         /// A launch the owner does not take within the hold is handed back:
@@ -422,7 +435,7 @@ mod inbox {
         fn a_launch_held_past_the_hold_is_handed_back_once() {
             let runtime = timers();
             let inbox = Inbox::new(Duration::from_millis(20), runtime.handle().clone());
-            let posted = inbox.post("flui:a").expect("room to wait");
+            let posted = inbox.post("flui:a", Instant::now()).expect("room to wait");
             let handed_back = runtime.block_on(inbox.answer(posted));
             assert!(handed_back.is_err(), "the caller hears the refusal");
             assert!(
@@ -431,11 +444,38 @@ mod inbox {
             );
             assert_eq!(inbox.waiting(), 0, "nor kept waiting");
 
-            let posted = inbox.post("flui:b").expect("room to wait");
+            let posted = inbox.post("flui:b", Instant::now()).expect("room to wait");
             let (launch, delivery) = inbox.take_next().expect("the one launch is taken");
             assert_eq!(launch, "flui:b");
             delivery.delivered();
             assert_eq!(runtime.block_on(inbox.answer(posted)), Ok(()));
+        }
+
+        /// The hold is measured from when the launch reached the instance,
+        /// not from when it was posted: a launch whose reading took the whole
+        /// hold is handed back at once, so its process, whose wait began
+        /// when it connected, hears the refusal before it stops waiting and
+        /// the owner never takes it too.
+        #[test]
+        fn the_hold_counts_from_when_the_launch_reached_the_instance() {
+            let runtime = timers();
+            let hold = Duration::from_secs(10);
+            let inbox = Inbox::new(hold, runtime.handle().clone());
+            let reached = Instant::now()
+                .checked_sub(hold)
+                .expect("the monotonic clock reaches back ten seconds");
+            let posted = inbox.post("flui:slow", reached).expect("room to wait");
+            let answered = runtime.block_on(async {
+                tokio::time::timeout(Duration::from_secs(1), inbox.answer(posted)).await
+            });
+            assert!(
+                answered.is_ok_and(|answered| answered.is_err()),
+                "handed back without waiting another hold"
+            );
+            assert!(
+                inbox.take_next().is_none(),
+                "a launch handed back is not delivered as well"
+            );
         }
 
         /// A launch the owner took is answered by the owner, not by the hold:
@@ -450,7 +490,9 @@ mod inbox {
                 Duration::from_millis(20),
                 runtime.handle().clone(),
             ));
-            let posted = inbox.post("flui:held").expect("room to wait");
+            let posted = inbox
+                .post("flui:held", Instant::now())
+                .expect("room to wait");
             let (_, delivery) = inbox.take_next().expect("the one launch is taken");
             let answering = runtime.spawn({
                 let inbox = Arc::clone(&inbox);
@@ -464,7 +506,9 @@ mod inbox {
             delivery.delivered();
             assert_eq!(runtime.block_on(answering).expect("the answer ran"), Ok(()));
 
-            let posted = inbox.post("flui:undelivered").expect("room to wait");
+            let posted = inbox
+                .post("flui:undelivered", Instant::now())
+                .expect("room to wait");
             drop(inbox.take_next());
             assert_eq!(
                 runtime.block_on(inbox.answer(posted)),
@@ -481,8 +525,12 @@ mod inbox {
         fn a_launch_behind_a_taken_one_is_still_handed_back() {
             let runtime = timers();
             let inbox = Inbox::new(Duration::from_millis(20), runtime.handle().clone());
-            let first = inbox.post("flui:first").expect("room to wait");
-            let second = inbox.post("flui:second").expect("room to wait");
+            let first = inbox
+                .post("flui:first", Instant::now())
+                .expect("room to wait");
+            let second = inbox
+                .post("flui:second", Instant::now())
+                .expect("room to wait");
             let (launch, delivery) = inbox.take_next().expect("the first launch is taken");
             assert_eq!(launch, "flui:first");
             assert_eq!(
@@ -506,7 +554,7 @@ mod inbox {
         fn the_owner_is_woken_once_attached_and_refuses_once_ended() {
             let runtime = timers();
             let inbox = Inbox::new(Duration::from_secs(15), runtime.handle().clone());
-            let mut early = inbox.post(1).expect("room to wait");
+            let mut early = inbox.post(1, Instant::now()).expect("room to wait");
             let owner = Arc::new(Owner::default());
             inbox.attach(Arc::clone(&owner) as Arc<dyn OwnerWake>);
             assert_eq!(
@@ -515,11 +563,11 @@ mod inbox {
                 "woken for the early launch"
             );
 
-            let mut waiting = inbox.post(2).expect("room to wait");
+            let mut waiting = inbox.post(2, Instant::now()).expect("room to wait");
             assert_eq!(owner.wakes.load(Ordering::SeqCst), 2, "woken for the next");
 
             owner.ended.store(true, Ordering::SeqCst);
-            assert_eq!(inbox.post(3).err(), Some(Refused::Ending));
+            assert_eq!(inbox.post(3, Instant::now()).err(), Some(Refused::Ending));
             assert_eq!(
                 inbox.waiting(),
                 0,
@@ -527,7 +575,7 @@ mod inbox {
             );
             for answer in [&mut early, &mut waiting] {
                 assert_eq!(
-                    answer.0.try_recv().err(),
+                    answer.claimed.try_recv().err(),
                     Some(tokio::sync::oneshot::error::TryRecvError::Closed),
                     "each waiting caller hears the refusal"
                 );
