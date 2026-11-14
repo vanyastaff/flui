@@ -530,6 +530,13 @@ impl State {
     }
 }
 
+/// The frame-queued requests one frame confirms, taken when the frame is
+/// submitted ([`HapticsHost::frame_cut`]) and handed back when it is presented
+/// ([`HapticsHost::frame_presented`]). A frame presented after a later request
+/// was queued plays only the requests queued before it was submitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HapticCut(Option<HapticTicket>);
+
 /// A presentation's haptics: its frame queue, outcome mailbox and observers.
 ///
 /// Owner-thread (`!Send`). The presentation that owns it drives it:
@@ -675,23 +682,38 @@ impl HapticsHost {
         }
     }
 
-    /// A frame was presented: every queued request whose deadline has not
-    /// passed plays now, and the rest resolve to
-    /// [`HapticOutcome::Suppressed`], as all of them do while haptics are off
-    /// or the window is hidden. Runs no observer: their outcomes wait in the
-    /// mailbox for the next [`service`](Self::service).
-    pub fn frame_presented(&self) {
+    /// The requests a frame about to be submitted confirms: every request
+    /// queued so far. A frame presented later plays only these
+    /// ([`frame_presented`](Self::frame_presented)); a request queued after
+    /// the cut waits for the next frame or its deadline.
+    #[must_use]
+    pub fn frame_cut(&self) -> HapticCut {
+        HapticCut(self.state.queue.borrow().back().map(|queued| queued.ticket))
+    }
+
+    /// The frame cut at `cut` was presented: every request of the cut whose
+    /// deadline has not passed plays now, and the rest of the cut resolve to
+    /// [`HapticOutcome::Suppressed`], as every queued request does while
+    /// haptics are off or the window is hidden. Requests queued after the cut
+    /// stay queued. Runs no observer: their outcomes wait in the mailbox for
+    /// the next [`service`](Self::service).
+    pub fn frame_presented(&self, cut: HapticCut) {
         let state = &*self.state;
         if state.suppressed() {
             state.suppress_queued();
             return;
         }
+        let Some(last) = cut.0 else {
+            return;
+        };
         let now = state.now();
         state.resolve(|entry| {
-            Some(if now <= entry.deadline {
-                state.play_now(&entry.play, &entry.request)
-            } else {
-                HapticOutcome::Suppressed
+            (entry.ticket <= last).then(|| {
+                if now <= entry.deadline {
+                    state.play_now(&entry.play, &entry.request)
+                } else {
+                    HapticOutcome::Suppressed
+                }
             })
         });
     }

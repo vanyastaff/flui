@@ -539,6 +539,8 @@ fn frame_failure_containment_matrix() {
             ("super::frame_commit_state_tests::the_withheld_retry_is_bounded_and_then_parks", super::frame_commit_state_tests::the_withheld_retry_is_bounded_and_then_parks as fn()),
             ("super::frame_commit_state_tests::a_withheld_frame_takes_no_epoch", super::frame_commit_state_tests::a_withheld_frame_takes_no_epoch as fn()),
             ("super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime", super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime as fn()),
+            ("super::frame_commit_state_tests::a_settlement_commits_the_revision_its_frame_was_painted_from", super::frame_commit_state_tests::a_settlement_commits_the_revision_its_frame_was_painted_from as fn()),
+            ("super::frame_commit_state_tests::a_later_settlement_folds_the_frames_it_superseded", super::frame_commit_state_tests::a_later_settlement_folds_the_frames_it_superseded as fn()),
         ],
     );
 }

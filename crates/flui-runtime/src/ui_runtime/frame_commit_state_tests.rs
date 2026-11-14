@@ -5,7 +5,7 @@ use flui_widgets::SizedBox;
 
 use super::{SegmentPhase, UiRuntime};
 use crate::epoch::{FrameCommitState, TreeRevision};
-use crate::sink::SubmitVerdict;
+use crate::sink::{FrameSettlement, Settled, SubmitVerdict};
 use crate::testing::ScriptedSink;
 
 fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
@@ -123,6 +123,78 @@ pub(crate) fn every_presentation_takes_the_next_epoch_of_its_runtime() {
     );
     let first = flui_foundation::FrameEpoch::ZERO.next();
     assert_eq!(backend.epochs, vec![first, first.next()]);
+}
+
+/// Paints and queues two frames, the second after the tree moved on, and returns their epochs
+/// and the revisions they were painted from.
+fn queue_two_frames(
+    ui_runtime: &UiRuntime,
+    sink: &mut ScriptedSink,
+) -> [(flui_foundation::FrameEpoch, TreeRevision); 2] {
+    let primary = || ui_runtime.presentations.primary();
+    assert!(
+        !ui_runtime.render_frame(sink),
+        "a queued frame is not presented yet"
+    );
+    let first = primary().tree_revision();
+    ui_runtime.mark_needs_full_repaint_for(primary());
+    assert!(!ui_runtime.render_frame(sink));
+    let second = primary().tree_revision();
+    assert!(
+        second > first,
+        "the second frame was painted from a later tree"
+    );
+    let [one, two] = sink.epochs[..] else {
+        panic!("two frames were submitted, got {:?}", sink.epochs);
+    };
+    [(one, first), (two, second)]
+}
+
+fn settle(ui_runtime: &mut UiRuntime, epoch: flui_foundation::FrameEpoch) -> Settled {
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+    ui_runtime.settle_frame(FrameSettlement::new(
+        address,
+        epoch,
+        SubmitVerdict::Presented,
+    ))
+}
+
+/// A queued frame that settles after a later one was painted commits the revision it was painted
+/// from, not the tree as it is when its settlement arrives.
+pub(crate) fn a_settlement_commits_the_revision_its_frame_was_painted_from() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(first, first_revision), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    assert_uncommitted_since(&ui_runtime, TreeRevision::ZERO.next());
+
+    assert_eq!(settle(&mut ui_runtime, first), Settled::Applied);
+    assert_uncommitted_since(&ui_runtime, first_revision.next());
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+}
+
+/// A settlement of a later frame settles the frames queued before it, which the raster side
+/// superseded: their own settlement, should one still arrive, is stale.
+pub(crate) fn a_later_settlement_folds_the_frames_it_superseded() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(first, _), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert!(
+        ui_runtime
+            .presentations
+            .primary()
+            .pending_frames
+            .borrow()
+            .is_empty(),
+        "the superseded frame's record folded into the settled one"
+    );
+    assert_eq!(settle(&mut ui_runtime, first), Settled::Stale);
 }
 
 /// The withheld retry is BOUNDED: a drawable that never comes back stops
