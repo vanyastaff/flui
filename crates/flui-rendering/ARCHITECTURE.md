@@ -238,7 +238,9 @@ navigation, except the first one past each edge, which a reader moves to in
 order to reveal it; containment makes whatever it leaves out lie outside the
 clip, however the filter flattens the tree, and the agent's `visible` check
 narrows by every such ancestor. A graft that would change the containment or
-place of its anchor falls back to a full assembly. A list that fills only part of its viewport
+place of its anchor falls back to a full assembly. The paint clip is the one paint
+applies: `describe_approximate_paint_clip` reports none where paint clips nothing,
+as a viewport whose content fits it does. A list that fills only part of its viewport
 keeps the flag off ([gaps](../../docs/gaps.md#a-list-that-fills-part-of-its-viewport-publishes-its-whole-cache-to-a-screen-reader)); the root never publishes it. Assembly retains both clipped
 publication geometry and unclipped root-logical reveal geometry, paired with
 the ancestor's published scroll position. Callback snapshots leave the owner

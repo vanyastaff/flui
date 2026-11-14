@@ -243,11 +243,18 @@ fn screen(rows: &[Content], moved: bool) -> BoxedView {
 }
 
 fn painted_in_view(rows: &[Content], moved: bool) -> Vec<String> {
+    // The viewport clips its paint only when its rows overflow it; rows that
+    // fit it paint their content wherever it lies in the window.
+    let clip = if rows.iter().map(Content::height).sum::<f64>() > VIEWPORT {
+        (0.0, VIEWPORT)
+    } else {
+        (f64::NEG_INFINITY, f64::INFINITY)
+    };
     let mut next = 0;
     let mut out = Vec::new();
     let mut top = 0.0;
     for row in rows {
-        row.painted(moved, top, 0.0, (0.0, VIEWPORT), &mut next, &mut out);
+        row.painted(moved, top, 0.0, clip, &mut next, &mut out);
         top += row.height();
     }
     out
@@ -297,8 +304,10 @@ fn check(laid: &LaidOut, rows: &[Content], moved: bool) -> Result<(), TestCaseEr
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// Built, and then moved: the move re-places what it can and assembles
-    /// the rest, and the debug check holds each re-placed tree to a rebuild.
+    /// Built, moved and moved back: each move re-places what it can and
+    /// assembles the rest, the second one deciding from the containment the
+    /// first one's grafts kept, and the debug check holds each re-placed tree
+    /// to a rebuild.
     #[test]
     fn content_painted_in_view_stays_in_a_readers_reach(
         rows in prop::collection::vec(content(), 1..6),
@@ -310,5 +319,8 @@ proptest! {
         laid.pump_widget(screen(&rows, true));
         laid.tick();
         check(&laid, &rows, true)?;
+        laid.pump_widget(screen(&rows, false));
+        laid.tick();
+        check(&laid, &rows, false)?;
     }
 }

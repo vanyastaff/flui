@@ -276,6 +276,11 @@ impl PipelineOwner<Semantics> {
                     self.semantics_regions
                         .assign_text_runs(&mut planned, &self.render_tree);
                     let mut uncontained = std::mem::take(&mut self.semantics_regions.uncontained);
+                    // Removing replaced nodes drops their handlers' captures, which is
+                    // authored code: a panic there leaves the table unknown, so the
+                    // next pass assembles afresh. A graft is planned only over a
+                    // known table, so both plans leave it known.
+                    self.semantics_regions.containment_known = false;
                     match planned {
                         SemanticsPlan::Rebuild(built) => {
                             rebuild_semantics_owner(
@@ -284,7 +289,6 @@ impl PipelineOwner<Semantics> {
                                 &self.semantics_regions,
                                 &mut uncontained,
                             );
-                            self.semantics_regions.containment_known = true;
                         }
                         SemanticsPlan::Graft(grafts) => {
                             for (anchor, built) in grafts {
@@ -299,6 +303,7 @@ impl PipelineOwner<Semantics> {
                         }
                     }
                     self.semantics_regions.uncontained = uncontained;
+                    self.semantics_regions.containment_known = true;
                     let published = owner.flush();
                     let diagnostics = owner.take_diagnostics();
                     #[cfg(any(test, feature = "testing"))]
@@ -2500,19 +2505,15 @@ fn apply_graft(
         .tree()
         .children(anchor_sid)
         .map_or_default(<[flui_foundation::SemanticsId]>::to_vec);
-    // The arena reuses a removed node's id, so the nodes the graft replaces
-    // leave the set with it. Most trees have no uncontained node at all.
-    if !uncontained.is_empty() {
-        uncontained.remove(&anchor_sid);
-        let mut pending = old_children.clone();
-        while let Some(id) = pending.pop() {
-            uncontained.remove(&id);
-            pending.extend_from_slice(owner.tree().children(id).unwrap_or_default());
-        }
-    }
     for child in old_children {
         let _ = owner.tree_mut().remove(child);
     }
+    // The arena reuses a removed node's id, so the nodes the graft replaced
+    // leave the set before any new node can take one of their ids. The set
+    // holds only the nodes that are not contained, so this reads it, not
+    // the replaced subtree.
+    uncontained.remove(&anchor_sid);
+    uncontained.retain(|id| owner.tree().contains(*id));
 
     if !built.contained {
         uncontained.insert(anchor_sid);
@@ -2576,11 +2577,12 @@ fn check_placement_against_rebuild(
     };
     let mut rebuilt = SemanticsOwner::new_without_callback();
     rebuilt.set_device_pixel_ratio(owner.device_pixel_ratio());
+    let mut rebuilt_uncontained = FxHashSet::default();
     rebuild_semantics_owner(
         &mut rebuilt,
         built.map(|node| *node),
         identities,
-        &mut FxHashSet::default(),
+        &mut rebuilt_uncontained,
     );
 
     let placed = owner.to_accesskit_tree_update(None);
@@ -2618,6 +2620,32 @@ fn check_placement_against_rebuild(
             );
         panic!(
             "BUG: re-placing moved semantics published another tree than a rebuild would\n{first}"
+        );
+    }
+    // The two trees publish the same nodes under the same stable ids, so the
+    // containment table the grafts kept must name the nodes a rebuild
+    // records: a stale entry lets a later graft keep a stale
+    // `clips_children` above its anchor.
+    if identities.containment_known {
+        let published = |tree: &flui_semantics::SemanticsTree,
+                         ids: &FxHashSet<flui_foundation::SemanticsId>| {
+            let mut stable: Vec<Option<u64>> = ids
+                .iter()
+                .map(|&id| {
+                    tree.get(id)
+                        .and_then(flui_semantics::SemanticsNode::accessibility_id)
+                        .map(flui_semantics::AccessibilityNodeId::as_u64)
+                })
+                .collect();
+            stable.sort_unstable();
+            stable
+        };
+        let kept = published(owner.tree(), &identities.uncontained);
+        let recorded = published(rebuilt.tree(), &rebuilt_uncontained);
+        assert!(
+            kept == recorded,
+            "BUG: re-placing moved semantics kept another containment table than a rebuild \
+             records\nkept {kept:?}\nrebuilt {recorded:?}"
         );
     }
     std::mem::take(&mut regions.callbacks)
