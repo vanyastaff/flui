@@ -808,8 +808,11 @@ pub trait ErasedBoxLayoutContext {
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size>;
 
-    /// The size child `index` was laid out at, or `None` for an index out of range or a child
-    /// this context has not laid out.
+    /// The size child `index` was laid out at, or `None` for an index out of range.
+    ///
+    /// The pipeline's driver context also answers `None` for a child this pass has not laid out
+    /// yet. A Direct-storage [`RawBoxLayoutContext`] answers the size its child state holds,
+    /// which is the size it was built with until `layout_child` runs.
     fn child_size(&self, index: usize) -> Option<&Size>;
 
     /// Lays out a **sliver** child at `index` with the given
