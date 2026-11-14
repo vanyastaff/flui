@@ -350,6 +350,16 @@ navigate. The first frame that builds a tree ends the cold start: a location no 
 dropped with a warning, so a Router mounted later never opens on an old link, and a URL for a tree
 with no Router is `NoUrlOwner` from then on.
 
+The application runner routes what the platform opens. A URL addressed to a window goes to that
+window's presentation, one addressed to the application to the presentation whose window was
+focused last, else the first one opened. URLs whose presentation does not exist yet (the link that
+launched the application, which the runner takes in `ready` before the first window opens) are
+held for it, bounded, and opened in its UI runtime before its root mounts, so its first Router
+opens on them; held URLs whose window never opens are refused in the log when the run ends. Each
+URL is opened alone under `FirstPanic` (ADR-0281), so a panic in one URL's navigation does not lose
+the next. Files go to `Application::on_open_files`, and the declarations are
+`Application::declares`.
+
 The sources of an intent are on the owner thread already: the URLs the platform opens reach
 `AppHandler` (ADR-0254), the development agent's window methods arrive through
 `UiCommand::Agent`. A thread that needs to navigate writes a signal (`UiCommand::SignalWrite`,
@@ -438,7 +448,12 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   and `a_cold_url_no_router_took_is_dropped_after_the_first_frame` (the warning, `NoUrlOwner`, a
   Router mounted later opens on its own stack); `opened_urls_split_into_scheme_host_and_route_location`
   (the path without its authority, an empty path, case, escapes and the query, the length
-  bound, the declarations).
+  bound, the declarations). Through the application runner, `flui-app`'s `runner_open` table:
+  `a_link_that_launched_the_app_opens_its_first_router_on_it` (the initial page never built),
+  `a_link_goes_to_the_window_focused_last`, `an_undeclared_scheme_opens_nothing`,
+  `opened_files_reach_on_open_files` and
+  `a_panic_in_the_first_urls_navigation_does_not_lose_the_second`; in `flui-native`,
+  `ready_takes_what_launched_the_application`.
 - `examples/navigation.rs` (`cargo check --example navigation --features material`): a push, a
   page popped with a result, and a dialog.
 

@@ -13,7 +13,11 @@ use crate::app::AppConfig;
 // ============================================================================
 
 #[cfg(target_arch = "wasm32")]
-pub(super) fn run_web<V>(root: V, config: AppConfig) -> Result<(), crate::app::LaunchError>
+pub(super) fn run_web<V>(
+    root: V,
+    config: AppConfig,
+    opening: super::OpenSettings,
+) -> Result<(), crate::app::LaunchError>
 where
     V: View + Clone + 'static,
 {
@@ -185,29 +189,32 @@ where
     // (ADR-0039 §6/§7 "wasm posture"). An explicit web detach/quit
     // ownership hook is deferred until the platform exposes a callback
     // whose lifetime encloses the RAF registration.
-    let result = platform.run(crate::app::runner::app_handler(move |owner| {
-        let quit = owner.proxy();
-        disconnect.arm(move || {
-            let _ = quit.request_quit();
-        });
-        install_owner_platform(owner)?;
-        super::host::install_configured_executors(&config);
-        super::host::install_host_storage(&config);
-        // Started before the page's one window opens, as a desktop loop starts
-        // before its first; a failed bootstrap ends them, which detaches the
-        // hooks. The loop they serve is the page's, which ends only with a
-        // quit (a driver's going under `EXIT_ON_DISCONNECT`): the quit ends
-        // them, so a served page's export goes and its connections close.
-        super::host::route_quit(super::dev_agents::end);
-        super::dev_agents::start(&config);
-        let bootstrapped = bootstrap_web(root, config);
-        if bootstrapped.is_err() {
-            super::dev_agents::end();
-        }
-        bootstrapped?;
-        tracing::info!("Web platform ready");
-        Ok(())
-    }));
+    let result = platform.run(crate::app::runner::opening_app_handler(
+        opening,
+        move |owner| {
+            let quit = owner.proxy();
+            disconnect.arm(move || {
+                let _ = quit.request_quit();
+            });
+            install_owner_platform(owner)?;
+            super::host::install_configured_executors(&config);
+            super::host::install_host_storage(&config);
+            // Started before the page's one window opens, as a desktop loop starts
+            // before its first; a failed bootstrap ends them, which detaches the
+            // hooks. The loop they serve is the page's, which ends only with a
+            // quit (a driver's going under `EXIT_ON_DISCONNECT`): the quit ends
+            // them, so a served page's export goes and its connections close.
+            super::host::route_quit(super::dev_agents::end);
+            super::dev_agents::start(&config);
+            let bootstrapped = bootstrap_web(root, config);
+            if bootstrapped.is_err() {
+                super::dev_agents::end();
+            }
+            bootstrapped?;
+            tracing::info!("Web platform ready");
+            Ok(())
+        },
+    ));
 
     // `on_ready`'s `Err` propagates straight out of `Platform::run`:
     // `WebPlatform::run` does not install the RAF loop over a half-built

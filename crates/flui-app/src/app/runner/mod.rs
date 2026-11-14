@@ -39,6 +39,7 @@ mod native_bindings;
 pub(super) mod native_journal;
 mod native_retirement;
 mod native_text_sizing;
+mod opened;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -72,12 +73,13 @@ use android::run_android;
 pub(in crate::app) use display_host::color_on as display_color_on;
 pub use fonts::{FontRegistrationError, register_font};
 pub(crate) use host::{
-    AppRoutes, OwnerHostClearGuard, app_handler, install_owner_platform, route_exit_policy,
-    route_quit, with_owner_platform,
+    AppRoutes, OwnerHostClearGuard, app_handler, install_owner_platform, opening_app_handler,
+    route_exit_policy, route_quit, with_owner_platform,
 };
 pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
 use ios::run_ios;
+pub(crate) use opened::OpenSettings;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -360,6 +362,7 @@ where
         let crate::app::Application {
             config,
             capabilities,
+            opening,
         } = application;
         // Logging first: `android_main` has no stderr, so the log is where a
         // conflict can be read. Managed startup installs FLUI's default
@@ -378,11 +381,11 @@ where
             "Starting FLUI application"
         );
         #[cfg(target_os = "android")]
-        let started = run_android(root, config, android_app);
+        let started = run_android(root, config, opening, android_app);
         #[cfg(target_os = "ios")]
-        let started = run_ios(root, config);
+        let started = run_ios(root, config, opening);
         #[cfg(target_arch = "wasm32")]
-        let started = run_web(root, config);
+        let started = run_web(root, config, opening);
         started.inspect_err(|_| discard_capabilities())
     }
 }

@@ -364,7 +364,11 @@ and files as the operating system gave them, where it addressed them (`OpenTarge
 constructor drops the items past `MAX_OPENED_ITEMS` and a URL past `MAX_OPENED_URL_LEN` bytes, the
 bound `UiRuntime::open_url` applies too, so every host hands over the same bounded value and
 parsing stays above the host. At most sixteen `Opened` wait for the handler at once; a later one is
-dropped with a warning. System preferences are not a registration:
+dropped with a warning. What launched the application is the handler's to take inside `ready`:
+`OwnerPlatform::take_launch_opened` hands over the `Launch::Cold` reports queued for the first
+one's target, joined in order, so the first window can be built on the link, as Flutter's initial
+route is; what `ready` leaves is reported first after it, on every exit. System preferences are
+not a registration:
 ADR-0172's delivery stands. The notices, the session-end hold and their fan-out are ADR-0237's and
 do not change.
 

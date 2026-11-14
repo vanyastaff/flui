@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4. В работе: —; следующие AC5, AC11.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4; AC5 без чтения `[package.metadata.flui.declares]` в `#[flui::main]`. В работе: —; следующие остаток AC5, AC11.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -43,3 +43,12 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
 - **AC2.** `opened_urls_split_into_scheme_host_and_route_location` (`///`, authority не в пути, схема без authority и путь без `/`, пустой путь, регистр схемы и хоста, IPv6, проценты и query, fragment отброшен, нет схемы, плохая схема, путь не адрес, предел `OpenedUrl::MAX_LEN` и на байт больше, объявления по схеме и домену, поддомен и `https` без домена отказаны), строка `url_owner::an_opened_url_navigates_only_when_declared` таблицы `router_and_widgets_app` через `HeadlessHost::open_url` (без объявлений ничего не открывается, чужие схема и домен и `https` без домена отказаны со стеком без изменений, `NoMatch`, объявленная веб-ссылка открывается как `go`, закрытое окно — `NoPresentation`); строка падает при откате проверки объявлений в `UiRuntime::open_url`.
 - **AC3.** Строки `url_owner::` таблицы `router_and_widgets_app` через `HeadlessHost::open_url` до `attach`: `a_url_opened_before_the_first_frame_opens_the_router_on_it` (стек `back_stack`, страница `initial` и заменённая ссылка не строились), `a_cold_url_no_route_matches_reaches_on_unknown_after_the_frame` (`on_unknown` после кадра, его переход применён), `a_cold_url_no_router_took_is_dropped_after_the_first_frame` (предупреждение, затем `NoUrlOwner`, позднее смонтированный `Router` открыт на своём стеке); все три падают при откате взятия адреса в `Router::create_state` и сброса после первого кадра.
 - **AC4.** `Report::Opened` в четырёх тестах таблицы `app_delivery_contracts` (`owner/app_delivery/tests.rs`): до `ready` ждёт его и слышится после (холодная ссылка), поднятый внутри метода слышится после него, с другого потока ждёт хода владельца, паникующий метод не теряет ни ссылки, ни первой паники; `opened_reports_waiting_for_ready_are_bounded` (из 17 ожидающих `ready` слышны первые 16 по порядку, затем очередь снова принимает); `opened_items_and_urls_are_bounded_before_they_are_read` (`flui-platform`): 64 элемента сохраняются по порядку, 65-й и файлы сверх предела отброшены, URL в `MAX_OPENED_URL_LEN` байт сохраняется, на байт длиннее отброшен целиком; тесты доставки падают при откате `Report::Opened` в `deliver`.
+- **AC5 (маршрутизация).** Таблица `runner_open` в `flui-app` (`tests/runner_open.rs`, через
+  `HeadlessRun` и `HeadlessHostEvents::open`): `a_link_that_launched_the_app_opens_its_first_router_on_it`
+  (ссылка до `ready`, страница `initial` не строилась), `a_link_goes_to_the_window_focused_last`
+  (два окна, ссылка в активное последним), `an_undeclared_scheme_opens_nothing`,
+  `opened_files_reach_on_open_files`, `a_panic_in_the_first_urls_navigation_does_not_lose_the_second`;
+  в `flui-native` — `ready_takes_what_launched_the_application` (холодные отчёты первого адресата
+  слиты по порядку, другой адресат и работающее приложение слышатся после `ready`) и
+  `opened_reports_waiting_for_ready_are_bounded`. Холодный тест падает без
+  `OwnerPlatform::take_launch_opened` (строится `initial`).

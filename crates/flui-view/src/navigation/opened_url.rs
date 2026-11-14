@@ -265,3 +265,20 @@ pub enum OpenUrlRefused {
     #[error(transparent)]
     Navigation(#[from] NavigationRefused),
 }
+
+impl OpenUrlRefused {
+    /// What kind of refusal this is, in words that name no part of the URL,
+    /// for a log line: an opened link may carry a token, which its
+    /// [`Display`](std::fmt::Display) would print.
+    #[must_use]
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::TooLong { .. } => "too long",
+            Self::Malformed { .. } => "not a URL",
+            Self::Path(_) => "not a route location",
+            Self::UndeclaredScheme { .. } => "undeclared scheme",
+            Self::UndeclaredDomain { .. } => "undeclared domain",
+            Self::Navigation(_) => "navigation refused",
+        }
+    }
+}

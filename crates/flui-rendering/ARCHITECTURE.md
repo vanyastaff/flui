@@ -368,6 +368,35 @@ lazy host, an authored `SemanticsCollection` or a `Semantics` with
 levels, sorted headers, hand-built lists and these limits the way an adapter
 does.
 
+### A layout lends each child's parent data to its parent
+
+**Rule:** a child's parent data belongs to its parent. While a parent lays out, the walk moves
+each child's parent data out of the child's node into that child's walk state (`LentChildren` in
+`pipeline/owner/subtree_arena.rs`), the parent reads and writes it there through
+`child_parent_data`/`child_parent_data_mut`, and the walk moves it back when the parent's frame
+ends, on success, on an error and on an unwind alike. What the parent wrote (a lazy list's
+`layout_offset`, a default its typed bridge created on first access) is what the child keeps.
+
+**Why lent rather than copied:** the walk used to clone each child's parent data into the walk
+state, one heap allocation per child per laid-out parent, and dropped the copy with the state, so
+a parent's writes never reached the child. The node cannot keep the data in place for the parent
+to borrow, because laying out the child takes a `&mut` to the child's node. Moving the box out and
+back is two pointer writes and no allocation.
+
+**What makes it sound:** the lease holds the `&mut RenderTree` for the whole walk and child builds
+are deferred until it ends, so no node is inserted, removed or given new parent data while its
+parent holds it, and nothing reads a child's own parent data during the child's layout. A child in
+flight (a cyclic edge to an ancestor) is never lent. Only the node the child names as its parent
+borrows it: a torn list that names a child another node owns reads a copy of what the node holds
+(none while the owner's frame, above it, has it lent), and the copy goes nowhere. A
+child listed twice is lent to its first slot, the second reads none, and nothing the second
+creates replaces what the first returned. Tests: `a_child_keeps_the_parent_data_its_parent_left_it`,
+`a_child_listed_twice_keeps_what_its_first_slot_wrote`,
+`a_torn_list_reads_a_copy_of_a_child_it_does_not_own`,
+`a_sliver_list_child_keeps_the_layout_offset_its_list_wrote`.
+
+The intrinsic, dry-layout and dry-baseline query walks still read a copy.
+
 ### A layout stamps the children it laid out; paint and hit-test skip the rest
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's

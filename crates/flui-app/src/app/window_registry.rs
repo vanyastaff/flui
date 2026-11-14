@@ -24,7 +24,7 @@
 use std::rc::Rc;
 
 use flui_foundation::PresentationAddress;
-use flui_platform::{PlatformWindow, WindowId};
+use flui_platform::{OpenTarget, PlatformWindow, WindowId};
 
 /// A native identity sampled before entering a registry publication interval.
 /// The registration stores only identity; the installation separately retains
@@ -101,6 +101,35 @@ impl WindowRegistry {
             .iter()
             .find(|(existing, _)| *existing == id)
             .map(|(_, address)| *address)
+    }
+
+    /// The presentation what the operating system opened goes to
+    /// (`flui_platform::Opened`): the window's own for
+    /// [`OpenTarget::Window`], once it has one; for the application as a
+    /// whole, `active` (the window focused last) while it is still mapped,
+    /// else the window opened first. `None` while the target has no
+    /// presentation yet.
+    pub(crate) fn open_target(
+        &self,
+        target: OpenTarget,
+        active: Option<PresentationAddress>,
+    ) -> Option<PresentationAddress> {
+        match target {
+            OpenTarget::Window(id) => self.resolve(id),
+            OpenTarget::Application | _ => active
+                .filter(|address| self.contains_address(*address))
+                .or_else(|| self.entries.first().map(|(_, address)| *address)),
+        }
+    }
+
+    /// Whether what the operating system opened for `target` goes to
+    /// `window`'s presentation before the window is registered: the
+    /// window's own, or any for the application as a whole.
+    pub(crate) fn opens_in(target: OpenTarget, window: &dyn PlatformWindow) -> bool {
+        match target {
+            OpenTarget::Window(id) => window.id() == id,
+            OpenTarget::Application | _ => true,
+        }
     }
 
     /// Whether `address` names a window mapping currently held by this

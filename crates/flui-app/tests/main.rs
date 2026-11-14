@@ -149,3 +149,47 @@ fn runner_keyboard_traversal() {
         )],
     );
 }
+
+// The same kit, with what the operating system opens the application with.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[path = "runner_open.rs"]
+mod runner_open;
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn runner_open() {
+    run_table(
+        "runner_open",
+        &[
+            (
+                "runner_open::a_link_that_launched_the_app_opens_its_first_router_on_it",
+                runner_open::a_link_that_launched_the_app_opens_its_first_router_on_it as fn(),
+            ),
+            (
+                "runner_open::a_link_goes_to_the_window_focused_last",
+                runner_open::a_link_goes_to_the_window_focused_last as fn(),
+            ),
+            (
+                "runner_open::an_undeclared_scheme_opens_nothing",
+                runner_open::an_undeclared_scheme_opens_nothing as fn(),
+            ),
+            (
+                "runner_open::opened_files_reach_on_open_files",
+                runner_open::opened_files_reach_on_open_files as fn(),
+            ),
+            (
+                "runner_open::a_panic_in_the_first_urls_navigation_does_not_lose_the_second",
+                runner_open::a_panic_in_the_first_urls_navigation_does_not_lose_the_second
+                    as fn(),
+            ),
+        ],
+    );
+}
