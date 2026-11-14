@@ -1182,3 +1182,156 @@ pub(crate) fn re_assembling_marked_subtrees_refuses_like_the_whole_tree() {
         "the marked re-assembly must name the host the whole-tree assembly names",
     );
 }
+
+/// A handler a graft replaces panics as the graft destroys it. The pass that
+/// unwinds leaves its containment table unknown, so the next pass assembles
+/// afresh: the holder whose last uncontained child became contained then
+/// clips its children. Deciding that pass's graft from the table the unwind
+/// emptied would keep the holder's flag off.
+pub(crate) fn a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// Panics as it is destroyed while armed.
+    struct PanicsOnDrop(Rc<Cell<bool>>);
+    impl Drop for PanicsOnDrop {
+        fn drop(&mut self) {
+            if self.0.replace(false) {
+                std::panic::panic_any("handler teardown failed");
+            }
+        }
+    }
+
+    fn pressable(armed: &Rc<Cell<bool>>) -> SemanticsConfiguration {
+        let mut config = SemanticsConfiguration::new();
+        config.set_label("Alpha");
+        let capture = PanicsOnDrop(Rc::clone(armed));
+        config.add_action(
+            SemanticsAction::Click,
+            Rc::new(move |_| {
+                let _ = &capture;
+            }),
+        );
+        config
+    }
+
+    fn leaf_mut(run: &mut FrameRun, id: RenderId) -> &mut SemanticsLeaf {
+        run.owner_mut()
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("leaf node")
+            .as_box_mut()
+            .expect("leaf is a box")
+            .render_object_mut()
+            .as_any_mut()
+            .downcast_mut::<SemanticsLeaf>()
+            .expect("leaf is a SemanticsLeaf")
+    }
+
+    fn clips_children(run: &FrameRun, id: RenderId) -> bool {
+        let tree = run
+            .owner()
+            .semantics_owner()
+            .expect("semantics must remain enabled")
+            .tree();
+        let mut pending = vec![tree.root().expect("an assembled tree is rooted")];
+        while let Some(sid) = pending.pop() {
+            let node = tree.get(sid).expect("a child of a live node is live");
+            if node.accessibility_id() == Some(accessibility_id(id)) {
+                return node.clips_children();
+            }
+            pending.extend(node.children().iter().copied());
+        }
+        panic!("the holder is published");
+    }
+
+    let armed = Rc::new(Cell::new(false));
+    let mut holder = SemanticsContainer::default()
+        .with_boundary()
+        .with_side(100.0);
+    holder.paint_clip = Some(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
+    let mut run = RenderTester::mount(
+        box_node(SemanticsContainer::default()).label("root").child(
+            box_node(holder)
+                .label("holder")
+                .child(
+                    // Alpha's marks re-form sigma, apart from beta's subtree.
+                    box_node(
+                        SemanticsContainer::default()
+                            .with_boundary()
+                            .with_side(20.0),
+                    )
+                    .label("sigma")
+                    .child(
+                        box_node(SemanticsLeaf {
+                            side: 20.0,
+                            configuration: Some(pressable(&armed)),
+                            boundary: true,
+                            ..Default::default()
+                        })
+                        .label("alpha"),
+                    ),
+                )
+                .child(
+                    // Beta lies inside the holder, but kappa below it merges
+                    // gamma's label from past its own rect, so neither beta
+                    // nor kappa is contained.
+                    box_node(
+                        SemanticsContainer::default()
+                            .with_boundary()
+                            .with_side(30.0),
+                    )
+                    .label("beta")
+                    .child(
+                        box_node(
+                            SemanticsContainer::default()
+                                .with_boundary()
+                                .with_side(20.0)
+                                .with_child_offset(0.0, 50.0),
+                        )
+                        .label("kappa")
+                        .child(
+                            box_node(SemanticsLeaf::new(10.0).with_label("Gamma")).label("gamma"),
+                        ),
+                    ),
+                ),
+        ),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_frame();
+    let (holder, alpha, gamma) = (run.id("holder"), run.id("alpha"), run.id("gamma"));
+    assert!(
+        !clips_children(&run, holder),
+        "a child that is not contained keeps the holder's flag off"
+    );
+
+    // The graft anchored at alpha destroys its old handler, which panics.
+    armed.set(true);
+    leaf_mut(&mut run, alpha).configuration = Some(pressable(&Rc::new(Cell::new(false))));
+    run.owner_mut().mark_needs_semantics(alpha);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the test observes the handler's panic reaching the frame's caller"
+    )]
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.pump()));
+    let payload = outcome.expect_err("the handler's panic reaches the caller");
+    assert_eq!(
+        flui_foundation::panic::payload_text(payload.as_ref()),
+        Some("handler teardown failed")
+    );
+
+    // The next frame finishes the work the panicked one left.
+    run.pump();
+
+    // Gamma stops contributing, so kappa and beta are contained. The graft
+    // is anchored at kappa, gamma's published parent, below the holder.
+    let gamma_leaf = leaf_mut(&mut run, gamma);
+    gamma_leaf.label = None;
+    run.owner_mut().mark_needs_semantics(gamma);
+    run.pump();
+    assert!(
+        clips_children(&run, holder),
+        "every child of the holder is contained now, so it clips them"
+    );
+}

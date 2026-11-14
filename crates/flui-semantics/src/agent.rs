@@ -41,7 +41,7 @@ use std::collections::hash_map::Entry;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use accesskit::{Action, NodeId, Toggled, TreeId};
-use accesskit_consumer::{FilterResult, NodeRef, common_filter};
+use accesskit_consumer::{FilterResult, NodeRef};
 use flui_foundation::geometry::{DevicePixelRatio, Rect as LogicalRect, device_rect_covering};
 use flui_protocol::{
     ActionName, ActionRequest, Checked, ElementId, Node, ReadQuery, Rect, Role, Tree,
@@ -392,9 +392,9 @@ fn reads_selected(node: &NodeRef<'_>) -> bool {
 /// `Value` pattern on any node with a value, but calling it on one with no
 /// `SetValue` action does nothing.
 fn wire_actions(node: &NodeRef<'_>) -> Vec<ActionName> {
-    let supports = |action| node.supports_action(action, &common_filter);
+    let supports = |action| node.supports_action(action, &unclipped_filter);
     let mut actions = Vec::new();
-    if node.is_invocable(&common_filter) {
+    if node.is_invocable(&unclipped_filter) {
         actions.push(ActionName::Invoke);
     }
     if node.toggled().is_some() && !offers_selection_item(node) {
@@ -424,9 +424,12 @@ fn wire_actions(node: &NodeRef<'_>) -> Vec<ActionName> {
     actions
 }
 
-/// AccessKit's common filter, which also leaves out the owner's announcer
-/// nodes: they carry what assistive technology speaks, not an element of the
-/// interface, so an agent neither reads nor acts on them.
+/// What an agent reads and acts on: AccessKit's common filter without its
+/// clipping rule, so every built node, rows a list keeps past its viewport
+/// included, as `flutter_test`'s finders search them. Whether one is shown is
+/// the actionability `visible` check. It also leaves out the owner's
+/// announcer nodes: they carry what assistive technology speaks, not an
+/// element of the interface, so an agent neither reads nor acts on them.
 #[derive(Clone, Copy)]
 struct AgentFilter {
     announcers: Option<[NodeId; 2]>,
@@ -451,9 +454,37 @@ impl AgentFilter {
         {
             FilterResult::ExcludeSubtree
         } else {
-            common_filter(node)
+            unclipped_filter(node)
         }
     }
+}
+
+/// AccessKit's common filter without its clipping rule: a focused node is
+/// kept, a hidden one and every node under it are left out, and a graft, a
+/// generic container or a text run is passed through. Matches
+/// `accesskit_consumer`'s `common_filter_base` and its walk up the parents.
+fn unclipped_filter(node: &NodeRef<'_>) -> FilterResult {
+    if node.is_focused() {
+        return FilterResult::Include;
+    }
+    if node.is_hidden() {
+        return FilterResult::ExcludeSubtree;
+    }
+    if node.is_graft()
+        || matches!(
+            node.role(),
+            accesskit::Role::GenericContainer | accesskit::Role::TextRun
+        )
+    {
+        return FilterResult::ExcludeNode;
+    }
+    if node
+        .parent()
+        .is_some_and(|parent| unclipped_filter(&parent) == FilterResult::ExcludeSubtree)
+    {
+        return FilterResult::ExcludeSubtree;
+    }
+    FilterResult::Include
 }
 
 /// A read's budget and what it left out.
@@ -586,7 +617,7 @@ pub(crate) fn identifier_clashes(
     let mut clashes = Vec::new();
     let mut pending = vec![state.root()];
     while let Some(node) = pending.pop() {
-        let children: Vec<NodeRef<'_>> = node.filtered_children(common_filter).collect();
+        let children: Vec<NodeRef<'_>> = node.filtered_children(unclipped_filter).collect();
         if let Some(parent) = accessibility_id(&node) {
             let siblings = children
                 .iter()
@@ -645,7 +676,7 @@ fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node
     }
     out.disabled = node.is_disabled();
     out.focused = node.is_focused() && (!node.is_root() || root_claims_focus);
-    out.focusable = node.is_focusable(&common_filter);
+    out.focusable = node.is_focusable(&unclipped_filter);
     if node.toggled().is_some() && !offers_selection_item(node) {
         out.checked = node.toggled().map(|state| match state {
             Toggled::True => Checked::True,

@@ -350,3 +350,49 @@ fn the_agent_journal_counts_what_it_no_longer_holds() {
     assert_eq!(capped.entries[0].message, "Item 299");
     assert_eq!(capped.dropped, 0);
 }
+
+/// A root whose content lies under a clip it covers would clip its
+/// children, and AccessKit's filter counts the announcer nodes, which have no
+/// area, as outside it: the assertive one, with no sibling inside, would be
+/// dropped and its announcements never spoken. The root never publishes the
+/// flag beside them.
+#[test]
+fn a_root_that_clips_its_content_keeps_both_announcers() {
+    use accesskit_consumer::{FilterResult, common_filter};
+    use flui_foundation::geometry::Rect;
+
+    let announcements = announcements();
+    let (mut owner, received, _) = owner_with(&announcements);
+    let root = owner.root().expect("the owner is rooted");
+    let mut content = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
+        1,
+        flui_foundation::generation::Generation::try_from(
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        )
+        .expect("a fixture generation leaves the reserved bit clear"),
+    ));
+    content.config_mut().set_label("Content");
+    content.set_rect(Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
+    let content = owner.insert(content);
+    let node = owner.get_mut(root).expect("the root is in the tree");
+    node.set_rect(Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
+    node.add_child(content);
+    node.set_clips_children(true);
+    owner.flush();
+
+    let update = owner
+        .to_accesskit_tree_update(None)
+        .expect("the tree is published");
+    let tree = accesskit_consumer::Tree::new(update, true);
+    for urgency in [Urgency::Polite, Urgency::Assertive] {
+        let node = tree
+            .state()
+            .node_by_tree_local_id(
+                accesskit::NodeId(announcements.node_id(urgency).as_u64()),
+                accesskit::TreeId::ROOT,
+            )
+            .expect("the announcer is published");
+        assert_eq!(common_filter(&node), FilterResult::Include, "{urgency:?}");
+    }
+    drop(received);
+}

@@ -228,7 +228,22 @@ This section records design decisions and why they were taken. Each entry follow
 viewport cache geometry. Cache clipping cannot remove a materialized descendant
 under a registered reveal ancestor. Explicit bounds and authored occlusion keep
 their exclusion behavior; viewport paint clipping alone does not make a reveal
-target hidden in the native accessibility tree. Assembly retains both clipped
+target hidden in the native accessibility tree. Content past a viewport is off
+screen all the same, as Flutter marks it `isHidden`: a formed node publishes
+`clips_children`, AccessKit's form of that flag, when each of its children lies
+under a paint clip inside its rect and has an area, and everything below each
+child, merged content included, lies inside the rect of the node above it.
+AccessKit's filter then leaves a child wholly outside the node out of
+navigation, except the first one past each edge, which a reader moves to in
+order to reveal it; containment makes whatever it leaves out lie outside the
+clip, however the filter flattens the tree, and the agent's `visible` check
+narrows by every such ancestor. A graft that would change the containment or
+place of its anchor falls back to a full assembly. The clip a node lies under is
+paint's own clip, less the room a pinned header takes: `describe_approximate_paint_clip`
+reports none where paint clips nothing, as a viewport whose content fits it does,
+and a viewport narrows it by a pinned header's room, as Flutter's viewport does,
+so a row wholly behind a translucent pinned header counts as past the edge. A list that fills only part of its viewport
+keeps the flag off ([gaps](../../docs/gaps.md#a-list-that-fills-part-of-its-viewport-publishes-its-whole-cache-to-a-screen-reader)); the root never publishes it. Assembly retains both clipped
 publication geometry and unclipped root-logical reveal geometry, paired with
 the ancestor's published scroll position. Callback snapshots leave the owner
 borrow before invocation or retirement; delivery belongs to `SemanticsOwner`.
@@ -238,7 +253,9 @@ records the cross-crate contract. Existing public row
 `a_semantics_clip_drops_a_child_that_falls_entirely_outside_it` preserves explicit
 bounds, while widget row
 `show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse` exercises
-actual viewport addressability, advertised native actions and visible output.
+actual viewport addressability, advertised native actions and visible output;
+`a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in` pins the filter
+and the reveal of the row past the edge.
 
 ### Render storage and pipeline callbacks drop as std drops
 

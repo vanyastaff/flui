@@ -262,7 +262,9 @@ graph LR
       its render object's id, so the mapping cannot go stale.
     - `visible` relies on the clip the semantics assembly already applies (a node entirely outside
       its clipping ancestors is not published: `semantics_assembly`'s
-      `a_semantics_clip_drops_a_child_that_falls_entirely_outside_it`), and checks the window's
+      `a_semantics_clip_drops_a_child_that_falls_entirely_outside_it`), narrows by every ancestor
+      that publishes `clips_children` (content a scrollable keeps past its viewport:
+      `a_reader_reaches_the_row_past_a_scroll_views_edge_and_no_further`), and checks the window's
       region here; the `Edge` row covers a node half outside the window.
     - `SemanticsOwner::revision` counts the publications that delivered something; matches and
       facts carry it. `TextMatch::matches` and `Actionability::new` are new in `flui-protocol`.

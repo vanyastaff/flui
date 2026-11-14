@@ -88,6 +88,7 @@ fn semantics_assembly_matrix() {
         ("semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node", crate::semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node),
         ("semantics_assembly::nested_merge_semantics_keeps_its_own_node", crate::semantics_assembly::nested_merge_semantics_keeps_its_own_node),
         ("semantics_assembly::sibling_insert_and_reorder_preserve_existing_accessibility_ids", crate::semantics_assembly::sibling_insert_and_reorder_preserve_existing_accessibility_ids),
+        ("semantics_assembly::a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild", crate::semantics_assembly::a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild),
     ];
     for &(name, case) in cases {
         if let Err(payload) = std::panic::catch_unwind(case) {

@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c483a7cffa24e332494c173b93d61e5c6ea33ce43d46e0bbc535728fef6e3774 # shrinks to rows = [Clip(Translate { dy: 60.0, moved_dy: 0.0, child: Group { node: Labelled, children: [Leaf { height: 20.0, container: false }, Leaf { height: 50.0, container: false }] } })]
+cc 1e0d76deb9228b23789c09e61c1009f887e120124e8ed4197b65db12858de82c # shrinks to rows = [Translate { dy: 0.0, moved_dy: 0.0, child: Leaf { height: 50.0, container: false } }, Group { node: Labelled, children: [Group { node: Labelled, children: [Leaf { height: 50.0, container: false }] }] }, Leaf { height: 10.0, container: false }, Merge(Group { node: Labelled, children: [Translate { dy: 0.0, moved_dy: -60.0, child: Leaf { height: 10.0, container: false } }] })]
+cc fe668aa20bdca955c6d91f36ad504e2c74e9b86172cda60db6db77669f05f12d # shrinks to rows = [Group { node: Labelled, children: [Translate { dy: 0.0, moved_dy: -130.0, child: Leaf { height: 10.0, container: false } }] }]

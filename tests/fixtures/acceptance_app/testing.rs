@@ -20,8 +20,8 @@ use flui::platform::ImeEvent;
 use flui::platform::keyboard::{Modifiers, NamedKey};
 use flui::prelude::*;
 use flui::testing::{
-    InspectNode, InspectValue, Locator, Match, MemoryStorage, Node, Role, TestWindow, Tester,
-    TextMatch, find,
+    InspectNode, InspectValue, Locator, MemoryStorage, Node, Role, TestWindow, Tester, TextMatch,
+    find,
 };
 
 use crate::app::AcceptanceApp;
@@ -33,10 +33,6 @@ pub const HEIGHT: u32 = 720;
 /// Longer than any page transition, so a route change has finished.
 const SETTLE_STEP: Duration = Duration::from_millis(50);
 const SETTLE_STEPS: usize = 8;
-
-/// How often [`AppRun::shows`] locates and reads again when a frame ran
-/// between the two.
-const READ_ATTEMPTS: usize = 4;
 
 /// One run of the application: the tester driving it and the handles its
 /// root gives the rows.
@@ -210,9 +206,9 @@ impl AppRun {
         self.settle();
     }
 
-    /// Whether `text` is on screen: its element's centre inside the window and
-    /// the bounds of every element above it. A row built off screen, a covered
-    /// or a departed page's text is not.
+    /// Whether `text` is on screen: its element visible inside the window
+    /// and every clipping ancestor. A row a list keeps past its viewport or a
+    /// departed page's text is not.
     pub fn shows(&mut self, text: &str) -> bool {
         self.any(&find::text(text))
     }
@@ -503,37 +499,11 @@ impl AppRun {
         }
     }
 
-    /// Whether an element `locator` matches has its centre inside the window
-    /// and inside the bounds of every element above it, as a pointer at that
-    /// centre would reach it: a row the list scrolled out of its viewport, or
-    /// built in its cache, lies outside the list's bounds. `locator` matches by
-    /// name only: the read holds a node by the id and name it was found by.
+    /// Whether an element `locator` matches is visible: inside the window and
+    /// every clipping ancestor, so a row a list keeps past its viewport is not
+    /// shown.
     fn any(&mut self, locator: &Locator) -> bool {
-        // The locate and the read are two reads, and a frame between them may
-        // rebuild or rename what the first found: a node counts only when the
-        // read holds it with the name it was found by, and a read holding
-        // none of them is taken again.
-        for _ in 0..READ_ATTEMPTS {
-            let found: Vec<Match> = self.tester.find_all(locator);
-            if found.is_empty() {
-                return false;
-            }
-            let tree = self.tester.semantics();
-            let same = |node: &Node| {
-                found
-                    .iter()
-                    .any(|found| found.node.id == node.id && found.node.name == node.name)
-            };
-            let mut held = false;
-            walk_semantics(&tree.roots, &mut |node| held |= same(node));
-            if !held {
-                continue;
-            }
-            let mut shown = false;
-            walk_shown(&tree.roots, None, &mut |node| shown |= same(node));
-            return shown;
-        }
-        panic!("the tree changed between every locate and read of {locator:?}");
+        self.tester.is_visible(locator)
     }
 
     /// The Title field's render-object field `name`.
@@ -573,43 +543,5 @@ fn walk_semantics(nodes: &[Node], visit: &mut impl FnMut(&Node)) {
     for node in nodes {
         visit(node);
         walk_semantics(&node.children, visit);
-    }
-}
-
-/// Left, top, right and bottom, in the window's pixels.
-type Bounds = (f64, f64, f64, f64);
-
-fn bounds(node: &Node) -> Option<Bounds> {
-    let rect = node.surface_rect.or(node.rect)?;
-    let (left, top) = (f64::from(rect.x), f64::from(rect.y));
-    Some((
-        left,
-        top,
-        left + f64::from(rect.width),
-        top + f64::from(rect.height),
-    ))
-}
-
-/// Visit each node whose centre lies inside `clip` and the bounds of every
-/// node above it. Each node is tested on its own, so a container larger than
-/// its clip still has its visible children visited; a node without bounds,
-/// or with empty ones, is a wrapper: it is neither visited nor narrows the
-/// clip below it.
-fn walk_shown(nodes: &[Node], clip: Option<Bounds>, visit: &mut impl FnMut(&Node)) {
-    for node in nodes {
-        let own = bounds(node).filter(|&(left, top, right, bottom)| right > left && bottom > top);
-        let Some((left, top, right, bottom)) = own else {
-            walk_shown(&node.children, clip, visit);
-            continue;
-        };
-        let (x, y) = ((left + right) / 2.0, (top + bottom) / 2.0);
-        if clip.is_none_or(|(cl, ct, cr, cb)| (cl..=cr).contains(&x) && (ct..=cb).contains(&y)) {
-            visit(node);
-        }
-        let narrowed = match clip {
-            Some((cl, ct, cr, cb)) => (left.max(cl), top.max(ct), right.min(cr), bottom.min(cb)),
-            None => (left, top, right, bottom),
-        };
-        walk_shown(&node.children, Some(narrowed), visit);
     }
 }

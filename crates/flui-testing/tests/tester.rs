@@ -1215,3 +1215,36 @@ fn a_session_end_writes_even_when_committing_the_composition_panics() {
     let loaded = settle(&mut t, note(&opened).load()).expect("the stored note loads");
     assert_eq!(*loaded, Note("draft".to_owned()));
 }
+
+/// Locators search the whole built tree, as `flutter_test`'s `find` does: a
+/// row a list keeps in its cache past its viewport is found, though the
+/// window shows the spot it lies on, and a tap on it fails its `visible`
+/// check, as `flutter_test` warns that it is not hit-testable.
+#[test]
+fn a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible() {
+    use flui_protocol::ActionabilityCheck;
+    use flui_widgets::ListView;
+
+    let items: Vec<_> = (0..40)
+        .map(|index| Text::new(format!("Item {index}")))
+        .collect();
+    let list = Center::new().child(SizedBox::new(100.0, 100.0).child(ListView::new(50.0, items)));
+    let mut t = Tester::mount_in(list, TestWindow::new(400, 400));
+    assert!(t.is_visible(&find::text("Item 1")), "in view");
+    for row in ["Item 2", "Item 4"] {
+        let past = find::text(row);
+        assert_eq!(t.find_all(&past).len(), 1, "{row} is built and found");
+        assert!(!t.is_visible(&past), "{row} lies past the viewport's edge");
+        assert!(
+            matches!(
+                t.try_tap(&past),
+                Err(TestError::NotActionable {
+                    check: ActionabilityCheck::Visible,
+                    ..
+                })
+            ),
+            "{row}: a tap on it is not visible"
+        );
+    }
+    assert!(t.find_all(&find::text("Item 39")).is_empty(), "never built");
+}
