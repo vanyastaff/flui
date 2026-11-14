@@ -341,7 +341,7 @@ flui doctor --json --manifest ../host/app/src/main/AndroidManifest.xml
 `--domains` fetches, for each associated domain the crates declare, the file
 an Apple platform (`/.well-known/apple-app-site-association`) and the one
 Android (`/.well-known/assetlinks.json`) read to verify the application's
-`https` links, with `curl` and without following a redirect, as the platforms
+`https` links, over the built-in HTTP client and without following a redirect, as the platforms
 do: one `project.apple-app-site-association` and one `project.assetlinks`
 check per domain, the address in the event's `url`. It is the only network
 `flui doctor` touches, so it runs only when asked; the team identifier and the

@@ -71,10 +71,12 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   (фильтр без схемы, домен без `autoVerify`, фильтр с `tools:node="remove"`, `Info.plist` без схемы и
   без типа документа, полные файлы), `a_linux_desktop_registers_what_the_application_opens` и
   `desktop_entry_values_are_escaped`.
-- **AC11 (файлы доменов).** `doctor_fetches_what_each_associated_domain_serves_only_when_asked`
-  (`curl`-заглушка первой в `PATH`: отданные `apple-app-site-association` и `assetlinks.json`
-  проходят, редирект и недоступный домен отказаны, без `--domains` ничего не запрашивается и
-  проверка объявлений называет флаг; падает без вызова `domain_checks`),
+- **AC11 (файлы доменов).** `each_associated_domain_is_checked_for_both_files` (`Fetch` отвечает
+  из таблицы: отданные `apple-app-site-association` и `assetlinks.json` проходят, редирект и
+  недоступный домен отказаны, проект без доменов ничего не запрашивает),
+  `doctor_checks_the_associated_domains_only_when_asked` (без `--domains` ничего не запрашивается
+  и проверка объявлений называет флаг, `--domains` вне проекта отказан; падает без примечания
+  проверки объявлений),
   `an_apple_association_names_the_application_with_what_it_opens` (`appIDs` и старый `appID`,
   редирект, 404, чужое приложение, без команды, без `components`/`paths`, не JSON),
   `asset_links_grant_the_package_with_its_fingerprints` (тип не `application/json`, чужой пакет,

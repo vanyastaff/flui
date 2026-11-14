@@ -42,7 +42,10 @@ pub(super) fn project_checks(dir: &Path, manifests: &[PathBuf], domains: bool) -
     }
     if domains {
         if project {
-            checks.extend(super::domains::domain_checks(dir, &super::domains::curl));
+            checks.extend(super::domains::domain_checks(
+                dir,
+                &super::domains::Https::new(),
+            ));
         } else {
             checks.push(Check::failing(
                 "project.domains",

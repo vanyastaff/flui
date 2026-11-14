@@ -7,17 +7,15 @@
 //! platform reads `https://<domain>/.well-known/apple-app-site-association`
 //! for the domains of the application's Apple targets, Android reads
 //! `https://<domain>/.well-known/assetlinks.json` for those of its Android
-//! targets. Neither follows a redirect, so neither does the check. The fetch
-//! is `curl`, which the platforms the CLI runs on carry; the reading of an
-//! answer is apart from it, so the tests need no network.
+//! targets. Neither follows a redirect, so neither does the check. The
+//! fetch is [`Https`], behind [`Fetch`] so the tests answer without a
+//! network.
 //!
 //! Check ids, one per domain and file, the file's address in the event's
 //! `url`: `project.apple-app-site-association` and `project.assetlinks`;
 //! `project.domains` when the domains cannot be read.
 
-use std::io::Read as _;
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
 use super::{Check, Fix, Status};
@@ -60,11 +58,13 @@ pub(super) struct Answer {
 }
 
 /// Fetches a URL without following a redirect, or says why it could not.
-pub(super) type Fetch<'a> = &'a dyn Fn(&str) -> Result<Answer, String>;
+pub(super) trait Fetch {
+    fn fetch(&self, url: &str) -> Result<Answer, String>;
+}
 
 /// The checks of each associated domain the project at `dir` declares,
 /// fetched with `fetch`.
-pub(super) fn domain_checks(dir: &Path, fetch: Fetch<'_>) -> Vec<Check> {
+pub(super) fn domain_checks(dir: &Path, fetch: &dyn Fetch) -> Vec<Check> {
     const ID: &str = "project.domains";
     const TITLE: &str = "Associated domains";
     let failing = |detail: String| {
@@ -108,7 +108,9 @@ pub(super) fn domain_checks(dir: &Path, fetch: Fetch<'_>) -> Vec<Check> {
     let package = config.app.id.android_package();
     let apple_checks = apple.iter().map(|domain| {
         let url = format!("https://{domain}/.well-known/apple-app-site-association");
-        let verdict = fetch(&url).and_then(|answer| apple_association(&answer, &bundle));
+        let verdict = fetch
+            .fetch(&url)
+            .and_then(|answer| apple_association(&answer, &bundle));
         domain_check(
             "project.apple-app-site-association",
             "Apple app site association",
@@ -119,7 +121,9 @@ pub(super) fn domain_checks(dir: &Path, fetch: Fetch<'_>) -> Vec<Check> {
     });
     let android_checks = android.iter().map(|domain| {
         let url = format!("https://{domain}/.well-known/assetlinks.json");
-        let verdict = fetch(&url).and_then(|answer| asset_links(&answer, package));
+        let verdict = fetch
+            .fetch(&url)
+            .and_then(|answer| asset_links(&answer, package));
         domain_check(
             "project.assetlinks",
             "Android asset links",
@@ -357,67 +361,73 @@ fn is_sha256_fingerprint(fingerprint: &str) -> bool {
             .all(|byte| byte.len() == 2 && byte.bytes().all(|digit| digit.is_ascii_hexdigit()))
 }
 
-/// Fetch `url` with `curl`, refusing anything but `https`, following no
-/// redirect and reading at most [`MAX_BODY`] bytes.
-///
-/// # Errors
-///
-/// Why no answer came: `curl` missing, the connection, the deadline, or a
-/// body over the bound.
-pub(super) fn curl(url: &str) -> Result<Answer, String> {
-    let file = tempfile::NamedTempFile::new()
-        .map_err(|error| format!("cannot create a file for the answer: {error}"))?;
-    let mut command = Command::new("curl");
-    command
-        .args(["--silent", "--show-error", "--proto", "=https"])
-        .args(["--max-time", &FETCH_TIMEOUT.as_secs().to_string()])
-        .args(["--max-filesize", &MAX_BODY.to_string()])
-        .arg("--output")
-        .arg(file.path())
-        .args(["--write-out", "%{http_code}\\n%{content_type}"])
-        .arg(url);
-    let output = crate::proc::output_with_timeout(&mut command, FETCH_TIMEOUT + FETCH_TIMEOUT)
-        .map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => "cannot be fetched: `curl` is not on PATH".to_owned(),
-            _ => format!("cannot be fetched: {error}"),
-        })?;
-    // curl's exit code for a body over `--max-filesize`.
-    const FILE_TOO_LARGE: i32 = 63;
-    match output.status.code() {
-        Some(0) => {}
-        Some(FILE_TOO_LARGE) => return Err(format!("is larger than {} KiB", MAX_BODY / 1024)),
-        _ => {
-            return Err(format!(
-                "cannot be fetched: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
+/// The HTTP client the check fetches with: `ureq` over rustls, the system's
+/// trust store deciding through the platform verifier, as the built-in
+/// HTTP capability of a Linux host does (ADR-0280). Only `https`, no
+/// redirect, a deadline over the whole exchange.
+pub(super) struct Https {
+    agent: ureq::Agent,
+}
+
+impl Https {
+    pub(super) fn new() -> Self {
+        let tls = ureq::tls::TlsConfig::builder()
+            .provider(ureq::tls::TlsProvider::Rustls)
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+            .unversioned_rustls_crypto_provider(std::sync::Arc::new(
+                rustls::crypto::aws_lc_rs::default_provider(),
+            ))
+            .build();
+        let config = ureq::Agent::config_builder()
+            .tls_config(tls)
+            .https_only(true)
+            // A redirect is answered as it is: neither platform follows one.
+            .max_redirects(0)
+            // A status is the check's to read, not a failure of the fetch.
+            .http_status_as_error(false)
+            .timeout_global(Some(FETCH_TIMEOUT))
+            .build();
+        Self {
+            agent: config.new_agent(),
         }
     }
-    let written = String::from_utf8_lossy(&output.stdout);
-    let mut lines = written.lines();
-    let status = lines
-        .next()
-        .and_then(|code| code.trim().parse::<u16>().ok())
-        .ok_or_else(|| format!("curl reported no status: {written}"))?;
-    let content_type = lines.next().unwrap_or_default().trim().to_owned();
-    let mut body = Vec::new();
-    file.as_file()
-        .take(MAX_BODY + 1)
-        .read_to_end(&mut body)
-        .map_err(|error| format!("cannot read the answer: {error}"))?;
-    if u64::try_from(body.len()).unwrap_or(u64::MAX) > MAX_BODY {
-        return Err(format!("is larger than {} KiB", MAX_BODY / 1024));
+}
+
+impl Fetch for Https {
+    fn fetch(&self, url: &str) -> Result<Answer, String> {
+        let mut response = self
+            .agent
+            .get(url)
+            .call()
+            .map_err(|error| format!("cannot be fetched: {error}"))?;
+        let content_type = response
+            .headers()
+            .get(ureq::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_BODY)
+            .read_to_vec()
+            .map_err(|error| match error {
+                ureq::Error::BodyExceedsLimit(_) => {
+                    format!("is larger than {} KiB", MAX_BODY / 1024)
+                }
+                error => format!("cannot be read: {error}"),
+            })?;
+        Ok(Answer {
+            status: response.status().as_u16(),
+            content_type,
+            body,
+        })
     }
-    Ok(Answer {
-        status,
-        content_type,
-        body,
-    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Answer, apple_association, asset_links};
+    use super::{Answer, Fetch, apple_association, asset_links, domain_checks};
 
     fn answer(status: u16, content_type: &str, body: &str) -> Answer {
         Answer {
@@ -428,6 +438,129 @@ mod tests {
     }
 
     const FINGERPRINT: &str = "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A8:8A:04:96:B2:3F:CF:44:E5";
+
+    /// Answers from a table, recording each address it is asked for; an
+    /// address with no answer fails as an unresolved host does.
+    struct Answers {
+        answers: Vec<(&'static str, u16, &'static str, String)>,
+        asked: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl Fetch for Answers {
+        fn fetch(&self, url: &str) -> Result<Answer, String> {
+            self.asked.borrow_mut().push(url.to_owned());
+            self.answers
+                .iter()
+                .find(|(address, ..)| *address == url)
+                .map(|(_, status, content_type, body)| answer(*status, content_type, body))
+                .ok_or_else(|| "cannot be fetched: dns failed".to_owned())
+        }
+    }
+
+    /// Each associated domain gets the Apple and the Android file checked,
+    /// the address in the check: served files pass, a redirect and a domain
+    /// that cannot be fetched fail; a project declaring no domain fetches
+    /// nothing.
+    #[test]
+    fn each_associated_domain_is_checked_for_both_files() {
+        let project = |declares: &str| {
+            let dir = tempfile::tempdir().expect("a temporary directory");
+            std::fs::create_dir_all(dir.path().join("src")).expect("src");
+            std::fs::write(dir.path().join("src/lib.rs"), "").expect("lib.rs");
+            std::fs::write(
+                dir.path().join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"notes\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+                     [workspace]\n[package.metadata.flui.declares]\nschema = 3\n{declares}"
+                ),
+            )
+            .expect("Cargo.toml");
+            std::fs::write(
+                dir.path().join("flui.toml"),
+                "[app]\nname = \"notes\"\nversion = \"0.1.0\"\nid = \"com.example.notes\"\n",
+            )
+            .expect("flui.toml");
+            dir
+        };
+        let links = format!(
+            r#"[{{"relation":["delegate_permission/common.handle_all_urls"],"target":{{"namespace":"android_app","package_name":"com.example.notes","sha256_cert_fingerprints":["{FINGERPRINT}"]}}}}]"#
+        );
+        let answers = Answers {
+            answers: vec![
+                (
+                    "https://notes.example.com/.well-known/apple-app-site-association",
+                    200,
+                    "application/json",
+                    r#"{"applinks":{"details":[{"appIDs":["ABCDE12345.com.example.notes"],"components":[{"/":"/note/*"}]}]}}"#
+                        .to_owned(),
+                ),
+                (
+                    "https://notes.example.com/.well-known/assetlinks.json",
+                    200,
+                    "application/json",
+                    links,
+                ),
+                (
+                    "https://old.example.com/.well-known/apple-app-site-association",
+                    301,
+                    "text/html",
+                    String::new(),
+                ),
+            ],
+            asked: std::cell::RefCell::default(),
+        };
+        let dir = project("associated-domains = [\"notes.example.com\", \"old.example.com\"]\n");
+        let checks: Vec<(&str, Option<String>, super::Status, String)> =
+            domain_checks(dir.path(), &answers)
+                .into_iter()
+                .map(|check| (check.id, check.url, check.status, check.detail))
+                .collect();
+        let at = |url: &str| Some(url.to_owned());
+        assert_eq!(
+            checks,
+            [
+                (
+                    "project.apple-app-site-association",
+                    at("https://notes.example.com/.well-known/apple-app-site-association"),
+                    super::Status::Ok,
+                    "opens the application's links for ABCDE12345.com.example.notes".to_owned(),
+                ),
+                (
+                    "project.apple-app-site-association",
+                    at("https://old.example.com/.well-known/apple-app-site-association"),
+                    super::Status::Error,
+                    "answers with a redirect (HTTP 301), which the platform does not follow"
+                        .to_owned(),
+                ),
+                (
+                    "project.assetlinks",
+                    at("https://notes.example.com/.well-known/assetlinks.json"),
+                    super::Status::Ok,
+                    "lets com.example.notes handle its links, signed by 1 certificate(s)"
+                        .to_owned(),
+                ),
+                (
+                    "project.assetlinks",
+                    at("https://old.example.com/.well-known/assetlinks.json"),
+                    super::Status::Error,
+                    "cannot be fetched: dns failed".to_owned(),
+                ),
+            ]
+        );
+
+        answers.asked.borrow_mut().clear();
+        let none = project("");
+        let checks = domain_checks(none.path(), &answers);
+        assert_eq!(
+            checks.iter().map(|check| check.id).collect::<Vec<_>>(),
+            ["project.domains"]
+        );
+        assert_eq!(
+            answers.asked.borrow().len(),
+            0,
+            "a project without domains fetches nothing"
+        );
+    }
 
     /// An `apple-app-site-association` opens the application's links when
     /// an `applinks` entry names its bundle under a team with what it opens;

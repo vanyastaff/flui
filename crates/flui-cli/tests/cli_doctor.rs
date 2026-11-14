@@ -447,104 +447,31 @@ fn doctor_lists_what_a_manifest_lacks_of_what_the_application_opens() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// A `curl` that answers from `answers` and records each address it is
-/// asked for in `fetched`, so the domain checks run without a network: an
-/// address with no answer fails as an unresolved host does.
-#[cfg(unix)]
-const CURL_STUB: &str = r#"#!/bin/sh
-dir=$(dirname "$0")
-previous=""
-output=""
-for argument in "$@"; do
-    [ "$previous" = "--output" ] && output="$argument"
-    previous="$argument"
-    url="$argument"
-done
-echo "$url" >> "$dir/fetched"
-name=$(printf '%s' "$url" | sed -e 's|^https://||' -e 's|/|_|g')
-if [ ! -f "$dir/answers/$name.body" ]; then
-    echo "curl: (6) Could not resolve host" >&2
-    exit 6
-fi
-cat "$dir/answers/$name.body" > "$output"
-cat "$dir/answers/$name.head"
-"#;
-
-/// `flui doctor --domains` fetches, for each associated domain, the file an
-/// Apple platform and the one Android read to verify the application's
-/// links, and fails a domain whose file redirects or cannot be fetched;
-/// without `--domains` nothing is fetched and the declarations say how to
-/// ask for it.
-#[cfg(unix)]
+/// Without `--domains` `flui doctor` fetches nothing: no domain is
+/// checked, and the declarations naming an associated domain say how to
+/// ask for it. Outside a FLUI project `--domains` fails with the reason.
 #[test]
-fn doctor_fetches_what_each_associated_domain_serves_only_when_asked() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let fingerprint = "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A8:8A:04:96:B2:3F:CF:44:E5";
-    let association = r#"{"applinks":{"details":[{"appIDs":["ABCDE12345.com.example.notes"],"components":[{"/":"/note/*"}]}]}}"#;
-    let links = format!(
-        r#"[{{"relation":["delegate_permission/common.handle_all_urls"],"target":{{"namespace":"android_app","package_name":"com.example.notes","sha256_cert_fingerprints":["{fingerprint}"]}}}}]"#
-    );
+fn doctor_checks_the_associated_domains_only_when_asked() {
     let dir = project(&[
         (
             "Cargo.toml",
             b"[package]\nname = \"notes\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n\
               [package.metadata.flui.declares]\nschema = 3\n\
-              associated-domains = [\"notes.example.com\", \"old.example.com\"]\n",
+              associated-domains = [\"notes.example.com\"]\n",
         ),
         ("src/lib.rs", b""),
         (
             "flui.toml",
             b"[app]\nname = \"notes\"\nversion = \"0.1.0\"\nid = \"com.example.notes\"\n",
         ),
-        ("bin/curl", CURL_STUB.as_bytes()),
-        (
-            "bin/answers/notes.example.com_.well-known_apple-app-site-association.head",
-            b"200\napplication/json\n",
-        ),
-        (
-            "bin/answers/notes.example.com_.well-known_apple-app-site-association.body",
-            association.as_bytes(),
-        ),
-        (
-            "bin/answers/notes.example.com_.well-known_assetlinks.json.head",
-            b"200\napplication/json\n",
-        ),
-        (
-            "bin/answers/notes.example.com_.well-known_assetlinks.json.body",
-            links.as_bytes(),
-        ),
-        (
-            "bin/answers/old.example.com_.well-known_apple-app-site-association.head",
-            b"301\ntext/html\n",
-        ),
-        (
-            "bin/answers/old.example.com_.well-known_apple-app-site-association.body",
-            b"",
-        ),
     ]);
-    let stub = dir.path().join("bin");
-    std::fs::set_permissions(stub.join("curl"), std::fs::Permissions::from_mode(0o755))
-        .expect("the stub is executable");
-    let path = std::env::join_paths(std::iter::once(stub.clone()).chain(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    )))
-    .expect("a PATH");
-    let run = |domains: bool| {
-        let mut command = flui();
-        command
-            .current_dir(dir.path())
-            .env("PATH", &path)
-            .args(["--json", "doctor", "--web"]);
-        if domains {
-            command.arg("--domains");
-        }
-        checks(&command.output().expect("flui doctor").stdout)
-    };
-
-    let unasked = run(false);
-    assert!(!stub.join("fetched").exists(), "fetched without --domains");
-    let declarations = unasked
+    let output = flui()
+        .current_dir(dir.path())
+        .args(["--json", "doctor", "--web"])
+        .output()
+        .expect("flui doctor");
+    let inside = checks(&output.stdout);
+    let declarations = inside
         .iter()
         .find(|check| check["id"] == "project.declarations")
         .expect("the declarations check");
@@ -554,53 +481,27 @@ fn doctor_fetches_what_each_associated_domain_serves_only_when_asked() {
             .is_some_and(|note| note.contains("--domains")),
         "{declarations}"
     );
+    assert!(
+        inside.iter().all(|check| check["url"].is_null()),
+        "fetched without --domains: {inside:#?}"
+    );
 
-    let checks = run(true);
-    let fetched: Vec<(String, String, String)> = checks
+    let elsewhere = tempfile::tempdir().expect("a temporary directory");
+    let output = flui()
+        .current_dir(elsewhere.path())
+        .args(["--json", "doctor", "--web", "--domains"])
+        .output()
+        .expect("flui doctor");
+    let outside = checks(&output.stdout);
+    let domains = outside
         .iter()
-        .filter(|check| {
-            check["id"] == "project.apple-app-site-association"
-                || check["id"] == "project.assetlinks"
-        })
-        .map(|check| {
-            (
-                check["url"].as_str().unwrap_or_default().to_owned(),
-                check["status"].as_str().unwrap_or_default().to_owned(),
-                check["detail"].as_str().unwrap_or_default().to_owned(),
-            )
-        })
-        .collect();
-    let expected = [
-        (
-            "https://notes.example.com/.well-known/apple-app-site-association",
-            "ok",
-            "opens the application's links for ABCDE12345.com.example.notes",
-        ),
-        (
-            "https://old.example.com/.well-known/apple-app-site-association",
-            "error",
-            "answers with a redirect (HTTP 301), which the platform does not follow",
-        ),
-        (
-            "https://notes.example.com/.well-known/assetlinks.json",
-            "ok",
-            "lets com.example.notes handle its links, signed by 1 certificate(s)",
-        ),
-        (
-            "https://old.example.com/.well-known/assetlinks.json",
-            "error",
-            "cannot be fetched: curl: (6) Could not resolve host",
-        ),
-    ];
-    let expected: Vec<(String, String, String)> = expected
-        .iter()
-        .map(|(url, status, detail)| {
-            (
-                (*url).to_owned(),
-                (*status).to_owned(),
-                (*detail).to_owned(),
-            )
-        })
-        .collect();
-    assert_eq!(fetched, expected, "{checks:#?}");
+        .find(|check| check["id"] == "project.domains")
+        .expect("the domains check");
+    assert_eq!(domains["status"], "error", "{domains}");
+    assert!(
+        domains["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("no flui.toml")),
+        "{domains}"
+    );
 }

@@ -390,8 +390,8 @@ enum Commands {
         manifests: Vec<std::path::PathBuf>,
 
         /// Fetch each associated domain's apple-app-site-association and
-        /// assetlinks.json (with `curl`, the only network this command
-        /// touches) and check that they open the application
+        /// assetlinks.json (the only network this command touches) and check
+        /// that they open the application
         #[arg(long)]
         domains: bool,
     },
