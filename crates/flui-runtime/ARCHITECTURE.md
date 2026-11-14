@@ -717,8 +717,9 @@ verdict to the record its address and epoch name, by the same code an inline ver
 the settlement commits the frame it names and not the tree as it is by then. A frame the sink
 replaced in its inbox folds when the frame that replaced it is queued (`QueuedReplacing`), and
 records still queued before a settled one fold into it (the raster side settles a slot's frames
-in order); their layer reads wait for a later scene. A settlement no record matches is
-`Settled::Stale` (ADR-0305 §4). The frame's
+in order, except that a render still running when its executor dies settles after the inbox frame
+the death settles `Failed`); their layer reads wait for a later scene. A settlement no record
+matches is `Settled::Stale` (ADR-0305 §4). The frame's
 telemetry is recorded against the `FrameTelemetryCut` taken at submit: its own frame id and only
 the inputs stamped before it; a frame that fails inline meanwhile takes only the inputs stamped
 since (`FrameTelemetryCut::after`).

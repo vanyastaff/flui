@@ -176,8 +176,8 @@ pub(crate) fn a_settlement_commits_the_revision_its_frame_was_painted_from() {
     assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
 }
 
-/// A settlement of a later frame settles the frames queued before it, which the raster side
-/// superseded: their own settlement, should one still arrive, is stale.
+/// A settlement of a later frame folds the frames queued before it and still pending, which get
+/// no settlement of their own: one that still arrives is stale.
 pub(crate) fn a_later_settlement_folds_the_frames_it_superseded() {
     let mut ui_runtime = mount_box();
     let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
@@ -717,7 +717,7 @@ fn a_replaced_frame_folds_by_its_stamp_and_never_the_frame_being_rendered() {
 /// it queued and finished: its record waits for its settlement, the replaced one is gone, and
 /// the panic continues after the frame's tail.
 ///
-/// Fails when the fold runs before the new record is pushed, or uncontained before the tail.
+/// Fails when the fold runs uncontained, so its panic leaves the frame before its tail.
 #[test]
 fn a_subscriber_that_panics_on_a_replaced_frame_leaves_the_replacing_frame_queued() {
     let mut ui_runtime = mount_box();
