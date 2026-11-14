@@ -73,27 +73,21 @@ struct Controlled {
     control: Rc<Control>,
 }
 
-struct ControlledState {
-    control: Rc<Control>,
-}
+struct ControlledState;
 
 impl StatefulView for Controlled {
     type State = ControlledState;
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
-        // A restart mounts a new root over the same control.
+        // A restart mounts a new root over the same control; the root
+        // publishes its handles as it is born.
+        *self.control.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
         *self.control.focus.borrow_mut() = Some(ctx.focus_manager());
-        ControlledState {
-            control: Rc::clone(&self.control),
-        }
+        ControlledState
     }
 }
 
 impl ViewState<Controlled> for ControlledState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.control.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
-    }
-
     fn build(&self, view: &Controlled, _ctx: &dyn BuildContext) -> impl IntoView {
         view.app.clone()
     }
