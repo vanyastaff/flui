@@ -279,15 +279,11 @@ impl UiRuntime {
                     // The payload may contain several panicking destructors.
                     // Retain it before any recovery operation or diagnostics.
                     flui_foundation::panic::discard_payload(payload);
-                    if matches!(failed_phase, SegmentPhase::Tail | SegmentPhase::Scene) {
-                        // The pipeline already consumed this presentation's
-                        // paint dirtiness before either post-pipeline segment
-                        // began. Re-dirty the exact failed presentation here,
-                        // while its identity is still local to this catch;
-                        // a later clean sibling must not steal attribution.
-                        self.mark_needs_full_repaint_for(presentation);
-                    }
-                    self.report_frame_failure(
+                    // The report counts the failure into the streak the retry
+                    // is paced by, and the retry is armed before the platform
+                    // wake or the failure handler, code the runtime does not
+                    // own, can unwind.
+                    let report = self.frame_failure_report(
                         presentation,
                         FrameFailureKind::SegmentPanic {
                             message,
@@ -296,6 +292,19 @@ impl UiRuntime {
                         },
                     );
                     Self::arm_failure_retry(presentation);
+                    let mut held = FirstPanic::new();
+                    if matches!(failed_phase, SegmentPhase::Tail | SegmentPhase::Scene) {
+                        // The pipeline already consumed this presentation's
+                        // paint dirtiness before either post-pipeline segment
+                        // began. Re-dirty the exact failed presentation here,
+                        // while its identity is still local to this catch;
+                        // a later clean sibling must not steal attribution.
+                        held.contain(|| self.mark_needs_full_repaint_for(presentation));
+                    }
+                    held.contain(|| self.deliver_failure_report(report));
+                    if let Some(payload) = held.into_payload() {
+                        resume_unwind(payload);
+                    }
                     FramePaintOutcome::Errored { retry: true }
                 }
             };

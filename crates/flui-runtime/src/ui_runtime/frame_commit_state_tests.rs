@@ -1167,24 +1167,40 @@ fn a_parked_withheld_settlement_leaves_the_failed_frames_retry() {
 
 /// A queued frame that commits an older tree asks for the frame that shows the current one when
 /// no pending frame was painted from it, with no input held; a frame still pending from the
-/// current tree owes it instead, so that settlement asks for nothing.
+/// current tree owes it instead, and a given-up device holds the frame (ADR-0267).
 ///
-/// Fails when the repaint is owed only to held input, or when a later pending frame is ignored.
+/// Fails when the repaint is owed only to held input, when a later pending frame is ignored, or
+/// when a given-up device is asked for a frame.
 #[test]
 fn a_settlement_of_an_older_tree_asks_for_the_current_one() {
     let mut ui_runtime = mount_box();
     let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
     let [(first, _), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    queue_more(&ui_runtime, &mut sink, 1);
+    let third = *sink.epochs.last().expect("three frames were queued");
     assert_eq!(held_pointer_count(&ui_runtime), 0);
     assert_eq!(settle(&mut ui_runtime, first), Settled::Applied);
     assert!(
         !ui_runtime.needs_redraw(),
-        "the pending frame painted from the current tree owes it"
+        "the pending frames painted from later trees owe it"
     );
 
-    // The tree moves on with no frame queued from it, and the queued frame commits the older one.
+    // The tree moves on with no frame queued from it, while the device is given up.
+    let abandoned = crate::frame_failure::DeviceRecovery::Abandoned { attempts: 10 };
+    ui_runtime.note_primary_device_recovery(Some(abandoned));
     ui_runtime.presentations.primary().advance_tree_revision();
     assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert!(
+        !ui_runtime.needs_redraw(),
+        "a given-up device asks for no frame"
+    );
+
+    ui_runtime
+        .presentations
+        .primary()
+        .replace_device_recovery(None);
+    ui_runtime.presentations.primary().advance_tree_revision();
+    assert_eq!(settle(&mut ui_runtime, third), Settled::Applied);
     assert!(
         ui_runtime.needs_redraw(),
         "the settlement asks for the frame that shows the current tree"

@@ -219,10 +219,11 @@ re-exports the types):
   recovery. It does not by itself drop the surrounding frame or arm a retry.
 - `FrameFailureReport { address, kind, disposition, consecutive_failures }`
   carries the generational presentation address (#552). The streak counts
-  consecutive `FrameDropped` reports only. A `Contained` report exposes the
-  current streak but neither increments nor resets it; a terminally clean
-  attempt that painted nothing resets the streak after that attempt's contained reports have been
-  delivered, and a painted one resets it once its verdict commits the current tree (ADR-0334).
+  consecutive `FrameDropped` reports and `Failed` submits, which are retried without a report
+  (ADR-0334). A `Contained` report exposes the current streak but neither increments nor resets
+  it; a terminally clean attempt that painted nothing, or whose scene reached no sink, resets the
+  streak after that attempt's contained reports have been delivered, and a painted one resets it
+  once its verdict commits the current tree (ADR-0334).
 
 Disposition is derived privately from `FrameFailureKind`, so an impossible
 kind/disposition pair cannot enter the delivery path. Each report is traced

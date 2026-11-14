@@ -563,10 +563,6 @@ impl UiRuntime {
                 }
                 SubmitVerdict::DeviceLost => {
                     producer.record_frame_dropped();
-                    // The submit consumed the paint demand, so the frame the
-                    // rebuilt device shows needs a full repaint whenever it
-                    // comes; marked before the telemetry's subscriber can panic.
-                    self.mark_needs_full_repaint_for(producer);
                     // Paced like any dropped frame (ADR-0267): a frame asked
                     // for at once would run again before the renderer's owner
                     // next rebuilds the device, and fail the same way. A
@@ -591,6 +587,11 @@ impl UiRuntime {
                     // `record_submit_telemetry`'s own doc. A subscriber's panic
                     // there is held until the failure is reported.
                     let mut reported = FirstPanic::new();
+                    // The submit consumed the paint demand, so the frame the
+                    // rebuilt device shows needs a full repaint whenever it
+                    // comes. Marked after the retry is armed, since its
+                    // platform wake can unwind, and held like the telemetry's.
+                    reported.contain(|| self.mark_needs_full_repaint_for(producer));
                     reported.contain(|| {
                         self.record_submit_telemetry(
                             telemetry,
@@ -614,21 +615,23 @@ impl UiRuntime {
                     // later one will settle, the frame is tried again after the dropped-frame
                     // backoff (a key or button press ends the wait early), with a full repaint
                     // since the submit consumed the paint demand. The streak and the wait are armed
-                    // before the mark, whose platform wake is user code and can unwind, and before
-                    // the telemetry's subscriber. A given-up device holds the frames (ADR-0267). A
-                    // refused frame waits for its window's next change, which asks for a frame.
+                    // before the mark, whose platform wake is user code and can unwind; that panic
+                    // is held until the telemetry is drained. A given-up device holds the frames
+                    // (ADR-0267). A refused frame waits for its window's next change, which asks
+                    // for a frame.
                     let shown_by_later = producer
                         .pending_frames
                         .borrow()
                         .iter()
                         .any(|pending| pending.tree_revision >= tree_revision);
+                    let mut held = FirstPanic::new();
                     if render_verdict == SubmitVerdict::Failed
                         && !shown_by_later
                         && !producer.device_abandoned()
                     {
                         producer.note_frame_failure();
                         Self::arm_failure_retry(producer);
-                        self.mark_needs_full_repaint_for(producer);
+                        held.contain(|| self.mark_needs_full_repaint_for(producer));
                     }
                     // A failed frame takes the inputs stamped since the frames still waiting for
                     // their settlement were cut: the earlier ones are theirs to report.
@@ -640,17 +643,22 @@ impl UiRuntime {
                         .fold(telemetry.cut, |cut, pending| {
                             cut.after(pending.telemetry.cut)
                         });
-                    self.record_submit_telemetry(
-                        telemetry,
-                        producer,
-                        submit_at,
-                        PresentOutcome::Errored,
-                        EpochDisposition::Drain,
-                    );
-                    // The sink already logged the backend-specific error at
-                    // classification time; this records the transaction-
-                    // level consequence.
-                    tracing::error!("Render error (non-recoverable this frame)");
+                    held.contain(|| {
+                        self.record_submit_telemetry(
+                            telemetry,
+                            producer,
+                            submit_at,
+                            PresentOutcome::Errored,
+                            EpochDisposition::Drain,
+                        );
+                        // The sink already logged the backend-specific error at
+                        // classification time; this records the transaction-
+                        // level consequence.
+                        tracing::error!("Render error (non-recoverable this frame)");
+                    });
+                    if let Some(payload) = held.into_payload() {
+                        resume_unwind(payload);
+                    }
                 }
                 SubmitVerdict::Queued | SubmitVerdict::QueuedReplacing(_) => {
                     unreachable!("BUG: a queued frame is applied only by its settlement")

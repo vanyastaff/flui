@@ -85,6 +85,8 @@ and spends none on a window the host knows is refused.
   retried once per second until the presentation goes. The cost is one paint, and the frame
   driver's wait keeps the host asleep in between.
 - Bad, because a refused window holds its pointer input until it changes, as before this record.
+  A renderer whose panic would not repeat leaves its window on the last frame until then, since
+  the host cannot tell such a panic from one that would.
 - Neutral, because `consecutive_failures` in a later `FrameFailureReport` now counts failed
   submits as well as dropped segments, and frames lost with their device count 1, 2, 3… instead
   of 1 each time: their painted segments no longer reset the streak, so their wait doubles to the
@@ -106,12 +108,16 @@ Tests in `crates/flui-runtime/src/ui_runtime/frame_commit_state_tests.rs`:
   settlement of an older frame leaves the wait standing;
 - `a_settlement_of_an_older_tree_asks_for_the_current_one` (§3): a settlement of an older tree
   with no input held asks for a repaint, and asks for none while a frame from the current tree is
-  pending.
+  pending or while the device is given up.
 
 `failed_frame::a_failed_frame_is_painted_again_after_a_backoff_that_grows` in
-`crates/flui-runtime/tests/main.rs` pins §1 and §2 through `UiRuntime::pump`: no frame is submitted
+`crates/flui-runtime/tests/contracts/failed_frame.rs` pins §1 and §2 through `UiRuntime::pump`: no frame is submitted
 before the deadline `next_wake` reports, each retry submits once, the waits grow, and a presented
-frame ends the wait.
+frame ends the wait. In the same file,
+`a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff` pins that a `Failed` or
+`DeviceLost` frame whose platform wake panics keeps its backoff, and
+`a_refused_frame_waits_for_its_windows_next_change` pins §4: no wait, no frame, until the host
+asks again.
 
 `crates/flui-app/tests/runner_close.rs` pins §4 through the raster host:
 `a_window_past_the_device_limit_waits_for_a_size_it_takes`,
