@@ -928,7 +928,9 @@ impl Tester {
     /// The process is killed and the application opened again over the same
     /// storage: no composition is committed, no close is asked and nothing
     /// more is written, so a write the run accepted and had not carried out
-    /// is lost. The old run is dropped as a host drops its UI runtime: its
+    /// is lost, and so is every write the storage holds unstarted (a storage
+    /// two runs share loses the other's too). The old run is
+    /// dropped as a host drops its UI runtime: its
     /// states are disposed and its observers see it detach, which a real kill
     /// never runs. The old tree is gone before the new one mounts.
     /// [`Self::restart`] is the quit that writes.
@@ -941,7 +943,11 @@ impl Tester {
     pub fn relaunch_after_kill(self) -> Self {
         let relaunch = Rc::clone(&self.relaunch);
         let config = self.config.clone();
+        let storage = self.storage().cloned();
         drop(self);
+        if let Some(storage) = storage {
+            storage.discard_held_writes();
+        }
         relaunch(config)
     }
 

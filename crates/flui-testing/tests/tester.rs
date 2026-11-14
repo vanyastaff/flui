@@ -845,6 +845,26 @@ fn a_relaunch_after_a_kill_loses_what_the_run_had_not_written() {
     assert_ne!(*loaded, Note("unsaved".to_owned()));
 }
 
+/// A write the storage accepted but held unstarted dies with the killed run:
+/// releasing the hold after the relaunch writes nothing of it.
+#[test]
+fn a_relaunch_after_a_kill_loses_a_write_the_storage_held() {
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t.storage().cloned().expect("a mounted window has a storage");
+    let hold = storage.hold_writes();
+    note(&opened)
+        .set(Note("held".to_owned()))
+        .expect("a loaded note takes a value");
+    t.pump_for(Duration::from_secs(1));
+
+    let mut t = t.relaunch_after_kill();
+    drop(hold);
+    let loaded = settle(&mut t, note(&opened).load()).expect("the storage loads");
+    assert_ne!(*loaded, Note("held".to_owned()));
+}
+
 /// A value set twice before the restart is written as its latest: the first
 /// write finishes as the run stops and the second, queued behind it, runs too.
 #[test]

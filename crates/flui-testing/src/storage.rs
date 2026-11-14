@@ -190,6 +190,13 @@ impl MemoryStorage {
         }
     }
 
+    /// The process that asked for the writes a hold keeps waiting is gone:
+    /// they never start, and releasing the hold starts none of them. Their
+    /// futures, while still polled, stay pending.
+    pub(crate) fn discard_held_writes(&self) {
+        self.state.lock().queued.clear();
+    }
+
     /// Write but commit nothing while the returned barrier is alive: reads
     /// and [`contents`](Self::contents) keep the old values and the write
     /// futures stay pending. Barriers are counted, and the last one released
