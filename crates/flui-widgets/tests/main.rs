@@ -159,6 +159,8 @@ mod raw_button;
 mod routable_derive;
 #[path = "router.rs"]
 mod router;
+#[path = "screen_reader_reach.rs"]
+mod screen_reader_reach;
 #[path = "scroll.rs"]
 mod scroll;
 #[path = "scrollbar.rs"]

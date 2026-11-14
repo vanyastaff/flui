@@ -2217,6 +2217,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
             owner.set_device_pixel_ratio(self.device_pixel_ratio);
         }
+        // A tree assembled elsewhere has no containment known here, so the
+        // next pass assembles it whole.
+        self.semantics_regions.forget_containment();
         let retired = std::mem::replace(&mut self.semantics_owner, owner);
         if self.semantics_enabled()
             && let Some(root) = self.root_id
