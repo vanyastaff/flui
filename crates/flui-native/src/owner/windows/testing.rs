@@ -56,6 +56,11 @@ impl ClassHooks for NoHooks {
 pub(crate) struct QuietHost<C = NoHooks>(PhantomData<fn() -> C>);
 
 impl<C: ClassHooks> WindowsHost for QuietHost<C> {
+    /// A test process's arguments are its harness's: nothing launched it.
+    fn launch_arguments() -> Vec<std::ffi::OsString> {
+        Vec::new()
+    }
+
     fn window_class() -> WindowClass {
         WindowClass {
             hooks: C::hooks(),

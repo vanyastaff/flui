@@ -77,6 +77,8 @@ pub(crate) mod call_point;
 pub(crate) mod frame_demand;
 pub mod handlers;
 pub(crate) mod headless;
+#[cfg(any(windows, x11_host, wayland_host, test))]
+pub(crate) mod launch_arguments;
 #[cfg(any(wayland_host, x11_host, test))]
 pub(crate) mod linux;
 #[cfg(any(test, windows))]

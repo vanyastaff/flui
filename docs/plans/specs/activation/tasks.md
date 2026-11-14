@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC9/AC10), AC6–AC9.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5. AC9 частично: аргументы запуска Windows и Linux (Web — остаток). AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие Web в AC9, остаток AC11 (entitlement после подписи iOS, Windows вместе с AC10), AC6–AC8.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -61,6 +61,14 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   проекта, чей манифест и фича объявляют ссылки, компилируется с фичей и без),
   `only_the_application_declares_the_links_it_opens` (схема или домен зависимости отказаны по
   имени, приложение под dev-зависимостью остаётся приложением).
+- **AC9 (Windows, Linux).** `launch_arguments_open_their_urls_and_existing_files` (модель разбора
+  `argv` в `owner/launch_arguments.rs`: URL своей схемы и `https`, `file:` URI с `localhost` и
+  процентами, относительный путь к существующему файлу; флаги, значения, несуществующий файл,
+  `file:` другого хоста на Unix и буква диска не URL; на Windows `file:///C:/…` и
+  `file://server/share/…`), `a_launch_path_need_not_be_text`; хосты X11, Wayland и Win32
+  сообщают разобранное как холодный `Opened` до `ready` (`WindowsHost`, `X11Host`, `WaylandHost`
+  `::launch_arguments`, у тестового `QuietHost` пусто). Запуск по зарегистрированной схеме на
+  рабочем столе — строка parity. Остаток: Web.
 - **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`
   (схемы, домены, расширения, MIME, имена), `what_the_application_opens_is_joined_over_the_graph`
   (регистр, файл фичи только при включённой фиче), строки `a_malformed_declaration_is_refused_by_crate`
