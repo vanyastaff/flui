@@ -88,7 +88,8 @@ unsafe impl Allocator for &FrameArena { /* bump; free and grow the last block in
   reverse order of allocation reuses its memory within the frame.
 - The arena records the most bytes it had handed out at once since the last reset (its peak).
   `reset` keeps the newest chunk when it holds that peak and is at most four times the largest
-  peak of the last 120 resets that followed an allocation, and releases every other chunk. A
+  peak of the last 120 resets that followed an allocation, and releases every other chunk; keeping
+  none, it frees its list of chunks as well, so nothing of a grown chain stays live. A
   reset that follows no allocation changes nothing, so passes with no scratch to list neither age
   the recent peaks nor release the chunk they sized. `reset` never allocates: when it keeps no
   chunk, the next allocation opens one sized for the largest recent peak. So a steady frame bumps
@@ -128,8 +129,13 @@ as its first fragment takes over that node's child list: a chain of absorbed nod
 siblings hands one list up without copying it, and a level with fragments after it moves the list
 once, as it would copy it into a new one. The built arena's peak is the built tree, plus a failed graft's partial nodes when
 the pass falls back to a rebuild. Resetting at the start of a walk needs no frame-end hook, and a walk that
-unwound has dropped its collections before the next one resets. `flui-view`'s build phase gets
-an arena of its own on the `BuildOwner` under the same rules when its first site moves.
+unwound has dropped its collections before the next one resets. `flui-view`'s build phase has an
+arena of its own on the `BuildOwner`: the render-edge sync after a build takes its walk stack,
+its edge lists and each parent's desired child list from it, and resets it when the walk ends. A
+build is not a frame (a frame can run several, a mount runs one), so between them the arena holds
+no chain of chunks: the newest chunk when it held the walk's peak, otherwise none until the next
+walk opens one sized for the recent peaks. A walk that unwound skips its reset; the next walk
+lists above the space it left, and its own reset frees both.
 
 A render object's `perform_layout` and `paint` never see the arena. What they hand the pipeline
 (a size, painted commands) is the pipeline's to store, and it stores retained data outside the
