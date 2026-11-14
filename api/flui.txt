@@ -23056,6 +23056,7 @@ pub fn flui::testing::Tester::find_all(&mut self, locator: &flui::testing::Locat
 pub fn flui::testing::Tester::inspect_render(&mut self) -> flui::testing::InspectReading
 pub fn flui::testing::Tester::inspect_widgets(&mut self) -> flui::testing::InspectReading
 pub fn flui::testing::Tester::is_closed(&self) -> bool
+pub fn flui::testing::Tester::is_visible(&mut self, locator: &flui::testing::Locator) -> bool
 pub fn flui::testing::Tester::key_down(&mut self, key: &str)
 pub fn flui::testing::Tester::key_up(&mut self, key: &str)
 pub fn flui::testing::Tester::long_press(&mut self, locator: &flui::testing::Locator, duration: core::time::Duration)
@@ -23082,6 +23083,7 @@ pub fn flui::testing::Tester::try_drag(&mut self, locator: &flui::testing::Locat
 pub fn flui::testing::Tester::try_drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_enter_text(&mut self, locator: &flui::testing::Locator, text: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_find_all(&mut self, locator: &flui::testing::Locator) -> Result<Vec<flui::testing::Match>, flui::testing::TestError>
+pub fn flui::testing::Tester::try_is_visible(&mut self, locator: &flui::testing::Locator) -> Result<bool, flui::testing::TestError>
 pub fn flui::testing::Tester::try_key_down(&mut self, key: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_key_up(&mut self, key: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_long_press(&mut self, locator: &flui::testing::Locator, duration: core::time::Duration) -> Result<(), flui::testing::TestError>
@@ -36191,6 +36193,7 @@ pub fn flui_semantics::node::SemanticsNode::accessibility_id(&self) -> Option<fl
 pub fn flui_semantics::node::SemanticsNode::add_child(&mut self, child: flui::foundation::SemanticsId)
 pub fn flui_semantics::node::SemanticsNode::children(&self) -> &[flui::foundation::SemanticsId]
 pub fn flui_semantics::node::SemanticsNode::clear_children(&mut self)
+pub fn flui_semantics::node::SemanticsNode::clips_children(&self) -> bool
 pub fn flui_semantics::node::SemanticsNode::config(&self) -> &flui::prelude::SemanticsConfiguration
 pub fn flui_semantics::node::SemanticsNode::config_mut(&mut self) -> &mut flui::prelude::SemanticsConfiguration
 pub fn flui_semantics::node::SemanticsNode::element_id(&self) -> Option<flui::foundation::ElementId>
@@ -36204,6 +36207,7 @@ pub fn flui_semantics::node::SemanticsNode::new() -> Self
 pub fn flui_semantics::node::SemanticsNode::parent(&self) -> Option<flui::foundation::SemanticsId>
 pub fn flui_semantics::node::SemanticsNode::rect(&self) -> flui::geometry::Rect<f64>
 pub fn flui_semantics::node::SemanticsNode::remove_child(&mut self, child: flui::foundation::SemanticsId)
+pub fn flui_semantics::node::SemanticsNode::set_clips_children(&mut self, clips: bool)
 pub fn flui_semantics::node::SemanticsNode::set_config(&mut self, config: flui::prelude::SemanticsConfiguration)
 pub fn flui_semantics::node::SemanticsNode::set_element_id(&mut self, element_id: Option<flui::foundation::ElementId>)
 pub fn flui_semantics::node::SemanticsNode::set_parent(&mut self, parent: Option<flui::foundation::SemanticsId>)

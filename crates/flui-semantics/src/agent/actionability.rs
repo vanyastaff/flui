@@ -132,12 +132,19 @@ impl<'s> Facts<'s> {
         };
         let rect = logical_bounds(&node, published_ratio);
         let window = logical_bounds(&state.root(), published_ratio);
-        // The part of the bounds the window shows. The semantics assembly has
-        // already narrowed a node to its clipping ancestors, so what is left
-        // is what a pointer can reach.
+        // The part of the bounds the window and every clipping ancestor show.
+        // The semantics assembly narrows a node to the paint clips above it,
+        // except under a scrollable: there a node keeps its whole bounds so a
+        // reader can reveal it, and the scrollable publishes that it clips.
         let shown = rect.and_then(|rect| match window {
             Some(window) => rect.intersect(&window),
             None => Some(rect),
+        });
+        let shown = clipping_ancestors(&node).fold(shown, |shown, clip| {
+            match logical_bounds(&clip, published_ratio) {
+                Some(clip) => shown.and_then(|shown| shown.intersect(&clip)),
+                None => shown,
+            }
         });
         let shown = shown.filter(|shown| !shown.is_empty());
         let included = common_filter(&node) == FilterResult::Include;
@@ -204,6 +211,11 @@ fn reached_node<'s>(state: &'s TreeState, hit: &[RenderId]) -> Option<NodeRef<'s
             .node_by_tree_local_id(NodeId(render.as_u64()), TreeId::ROOT)
             .filter(|node| common_filter(node) == FilterResult::Include)
     })
+}
+
+/// The ancestors of `node` that clip their children, nearest first.
+fn clipping_ancestors<'s>(node: &NodeRef<'s>) -> impl Iterator<Item = NodeRef<'s>> {
+    std::iter::successors(node.parent(), NodeRef::parent).filter(NodeRef::clips_children)
 }
 
 /// Whether `node` is `ancestor` or lies below it.

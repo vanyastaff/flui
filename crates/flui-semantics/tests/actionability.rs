@@ -20,6 +20,10 @@ use crate::fixture::{Fixture, element, element_of, placement, render_id};
 ///   8 button "Hidden" (hidden)
 ///   9 button "Covered" (10,200 100×40), over which sits 10 panel "Banner"
 ///  11 button "Card" (200,200 100×50) → 12 label "Title"
+///  13 scroll view "Inbox" (310,60 80×100), clipping its children → 14
+///     button "In view" (310,60 80×50), 15 "Past the edge" (310,160) and
+///     16 "Beyond the edge" (310,210), both inside the window and outside
+///     the scroll view
 /// ```
 fn window() -> Fixture {
     let mut f = Fixture::new();
@@ -56,6 +60,25 @@ fn window() -> Fixture {
     f.add(Some(11), 12, (210.0, 210.0, 50.0, 10.0), |c| {
         c.set_label("Title");
     });
+    f.add(Some(1), 13, (310.0, 60.0, 80.0, 100.0), |c| {
+        c.set_role(SemanticsRole::ScrollView);
+        c.set_label("Inbox");
+        c.set_scroll_position(0.0);
+    });
+    let inbox = f.id_of(13);
+    f.owner
+        .get_mut(inbox)
+        .expect("the fixture has the scroll view")
+        .set_clips_children(true);
+    button(&mut f, 13, 14, "In view", (310.0, 60.0, 80.0, 50.0));
+    button(&mut f, 13, 15, "Past the edge", (310.0, 160.0, 80.0, 50.0));
+    button(
+        &mut f,
+        13,
+        16,
+        "Beyond the edge",
+        (310.0, 210.0, 80.0, 50.0),
+    );
     f.flush();
     f
 }
@@ -99,6 +122,27 @@ fn the_first_failed_check_names_why_an_element_cannot_be_acted_on() {
     );
     let table: Vec<Row> = vec![
         ("actionable", element(2), steady, ids(&[2, 1]), None),
+        (
+            "in its scroll view",
+            element(14),
+            Some(rect(310.0, 60.0, 80.0, 50.0)),
+            ids(&[14, 13, 1]),
+            None,
+        ),
+        (
+            "past its scroll view's edge, inside the window",
+            element(15),
+            Some(rect(310.0, 160.0, 80.0, 50.0)),
+            ids(&[1]),
+            Some(ActionabilityCheck::Visible),
+        ),
+        (
+            "beyond the row past the edge",
+            element(16),
+            Some(rect(310.0, 210.0, 80.0, 50.0)),
+            ids(&[1]),
+            Some(ActionabilityCheck::Visible),
+        ),
         (
             "not in the tree",
             element(50),
@@ -307,4 +351,29 @@ fn a_handle_from_before_a_replacement_is_not_attached() {
     assert!(!facts(&f, old, None, &[]).attached, "the old handle");
     let new = element_of(render_id(2, 6));
     assert!(facts(&f, new, None, &[]).attached, "the replacement");
+}
+
+/// A scroll view's bounds are its viewport, so a row wholly outside them is
+/// off screen, as Flutter marks it `isHidden`. What an agent reads is what a
+/// screen reader can move to: the row in view, the first row past the edge
+/// (which a reader moves to in order to scroll it in), and not the rows
+/// beyond it.
+#[test]
+fn a_reader_reaches_the_row_past_a_scroll_views_edge_and_no_further() {
+    use flui_protocol::ReadQuery;
+
+    let f = window();
+    let tree = f
+        .owner
+        .read_wire(
+            &ReadQuery::new().with_root(element(13).element),
+            placement(),
+        )
+        .expect("the tree reads");
+    let rows: Vec<Option<&str>> = tree.roots[0]
+        .children
+        .iter()
+        .map(|row| row.name.as_deref())
+        .collect();
+    assert_eq!(rows, [Some("In view"), Some("Past the edge")]);
 }

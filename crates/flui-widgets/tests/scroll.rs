@@ -5297,3 +5297,80 @@ pub(crate) fn scroll_physics_refuse_coefficients_outside_the_unit_range() {
     assert_eq!(bouncing.overscroll_spring_coefficient(), 0.3);
     assert_eq!(bouncing.fling_drag_coefficient(), 0.2);
 }
+
+/// A list's rows wholly past its viewport are off screen, as Flutter marks
+/// them `isHidden`, while the window still shows that spot: the list sits in
+/// the middle of a larger root. A screen reader, which reads the published
+/// tree through AccessKit's filter, reaches the first row past the edge and
+/// none beyond it, and moving there scrolls that row into the viewport.
+pub(crate) fn a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in() {
+    use accesskit_consumer::{FilterResult, common_filter};
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
+    use flui_widgets::{Center, ListView, Text};
+
+    fn row(index: usize) -> flui_view::BoxedView {
+        SizedBox::new(100.0, 50.0)
+            .child(Text::new(format!("row {index}")))
+            .boxed()
+    }
+    let controller = ScrollController::new();
+    let list = Center::new().child(SizedBox::new(100.0, 100.0).child(
+        ListView::builder(40, 50.0, |i| (i < 40).then(|| row(i))).controller(controller.clone()),
+    ));
+    let mut laid = lay_out(list, tight(400.0, 400.0));
+    laid.enable_semantics();
+    laid.tick();
+
+    let reached = |laid: &LaidOut| -> Vec<String> {
+        let tree = accesskit_consumer::Tree::new(
+            laid.a11y_tree().expect("semantics enabled").raw().clone(),
+            true,
+        );
+        let mut names = Vec::new();
+        let mut pending = vec![tree.state().root()];
+        while let Some(node) = pending.pop() {
+            if common_filter(&node) == FilterResult::ExcludeSubtree {
+                continue;
+            }
+            if let Some(label) = node.label().filter(|label| label.starts_with("row ")) {
+                names.push(label);
+            }
+            pending.extend(node.children());
+        }
+        names.sort();
+        names
+    };
+    assert_eq!(
+        reached(&laid),
+        ["row 0", "row 1", "row 2"],
+        "the two rows in view and the first past the edge; the cache's \
+         rows beyond it are left out"
+    );
+
+    let target = laid
+        .a11y_tree()
+        .expect("semantics enabled")
+        .find_by_label("row 2")
+        .expect("the row past the edge is published")
+        .id();
+    laid.invoke_semantics_action(ActionRequest {
+        action: Action::ScrollIntoView,
+        target_tree: TreeId::ROOT,
+        target_node: target,
+        data: None,
+    })
+    .expect("the row past the edge takes ScrollIntoView");
+    for _ in 0..60 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        controller.pixels(),
+        50.0,
+        "the row is scrolled just into view"
+    );
+    assert_eq!(
+        reached(&laid),
+        ["row 0", "row 1", "row 2", "row 3"],
+        "row 0 is now the row past the top edge, row 3 the one past the bottom"
+    );
+}

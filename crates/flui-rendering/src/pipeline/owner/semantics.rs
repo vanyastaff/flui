@@ -626,6 +626,10 @@ struct BuiltSemanticsNode {
     config: SemanticsConfiguration,
     rect: Rect<f64>,
     reveal_rect: Rect<f64>,
+    /// The paint clip the node lies under, in root coordinates.
+    paint_clip: Option<Rect<f64>>,
+    /// No child is painted outside `rect`: see [`PendingSemanticsNode::form`].
+    clips_children: bool,
     children: Vec<BuiltSemanticsNode>,
 }
 
@@ -848,19 +852,44 @@ struct PendingSemanticsNode {
     config: SemanticsConfiguration,
     rect: Rect<f64>,
     reveal_rect: Rect<f64>,
+    /// The paint clip the node lies under, in root coordinates.
+    paint_clip: Option<Rect<f64>>,
     children: Vec<BuiltSemanticsNode>,
 }
 
 impl PendingSemanticsNode {
+    /// The node as published. It clips its children when each of them lies
+    /// under a paint clip its own rect covers: nothing of a child is painted
+    /// outside the node, so a child wholly outside it is off screen. That is
+    /// a scrollable's content past its viewport, which Flutter marks
+    /// `isHidden`, and AccessKit's filter leaves it out of navigation except
+    /// the first child past each edge, which a reader moves to in order to
+    /// scroll it in.
     fn form(self) -> BuiltSemanticsNode {
+        let clips_children = !self.children.is_empty()
+            && self.children.iter().all(|child| {
+                child
+                    .paint_clip
+                    .is_some_and(|clip| covers(&self.rect, &clip))
+            });
         BuiltSemanticsNode {
             source: self.source,
             config: self.config,
             rect: self.rect,
             reveal_rect: self.reveal_rect,
+            paint_clip: self.paint_clip,
+            clips_children,
             children: self.children,
         }
     }
+}
+
+/// Whether `outer` holds all of `inner`.
+fn covers(outer: &Rect<f64>, inner: &Rect<f64>) -> bool {
+    outer.left() <= inner.left()
+        && outer.top() <= inner.top()
+        && outer.right() >= inner.right()
+        && outer.bottom() >= inner.bottom()
 }
 
 enum SemanticsFragment {
@@ -1464,6 +1493,7 @@ fn build_semantics_fragments_impl<'f>(
         config,
         rect,
         reveal_rect,
+        paint_clip: clips.paint,
         children,
     };
 
@@ -1567,6 +1597,7 @@ fn append_region_fragments(
             config,
             rect: clipped.rect,
             reveal_rect,
+            paint_clip: clips.paint,
             children: Vec::new(),
         };
         fragments.push(if decisions.forms_node {
@@ -1773,6 +1804,7 @@ fn semantics_node_parts(
     .with_config(built.config);
     node.set_rect(built.rect);
     node.set_reveal_rect(built.reveal_rect);
+    node.set_clips_children(built.clips_children);
     (node, built.children)
 }
 

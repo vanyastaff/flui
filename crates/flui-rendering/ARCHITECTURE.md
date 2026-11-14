@@ -228,7 +228,13 @@ This section records design decisions and why they were taken. Each entry follow
 viewport cache geometry. Cache clipping cannot remove a materialized descendant
 under a registered reveal ancestor. Explicit bounds and authored occlusion keep
 their exclusion behavior; viewport paint clipping alone does not make a reveal
-target hidden in the native accessibility tree. Assembly retains both clipped
+target hidden in the native accessibility tree. Content past a viewport is off
+screen all the same, as Flutter marks it `isHidden`: a formed node whose rect
+covers the paint clip each of its children lies under publishes
+`clips_children`, AccessKit's form of that flag. AccessKit's filter then leaves
+a child wholly outside the node out of navigation, except the first one past
+each edge, which a reader moves to in order to reveal it, and the agent's
+`visible` check narrows by every such ancestor. Assembly retains both clipped
 publication geometry and unclipped root-logical reveal geometry, paired with
 the ancestor's published scroll position. Callback snapshots leave the owner
 borrow before invocation or retirement; delivery belongs to `SemanticsOwner`.
@@ -238,7 +244,9 @@ records the cross-crate contract. Existing public row
 `a_semantics_clip_drops_a_child_that_falls_entirely_outside_it` preserves explicit
 bounds, while widget row
 `show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse` exercises
-actual viewport addressability, advertised native actions and visible output.
+actual viewport addressability, advertised native actions and visible output;
+`a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in` pins the filter
+and the reveal of the row past the edge.
 
 ### Render storage and pipeline callbacks drop as std drops
 

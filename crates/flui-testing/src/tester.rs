@@ -473,6 +473,36 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"))
     }
 
+    /// Whether an element `locator` matches is visible: its bounds are not
+    /// empty and lie partly inside the window and every clipping ancestor, the
+    /// `visible` check an action makes. A row a list keeps past its viewport
+    /// is matched and not visible. `flutter_test` asks the same with
+    /// `any(finder.hitTestable())`.
+    ///
+    /// # Errors
+    ///
+    /// When the window cannot answer.
+    pub fn try_is_visible(&mut self, locator: &Locator) -> Result<bool, TestError> {
+        for found in self.try_find_all(locator)? {
+            if self.actionability(&found)?.visible {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether an element `locator` matches is visible.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_is_visible`] fails.
+    #[track_caller]
+    #[must_use]
+    pub fn is_visible(&mut self, locator: &Locator) -> bool {
+        self.try_is_visible(locator)
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
     /// The bounds of the one element `locator` names, in the window's logical
     /// pixels.
     ///
