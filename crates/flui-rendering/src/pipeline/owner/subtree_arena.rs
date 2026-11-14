@@ -126,7 +126,8 @@ impl HoldsChildParentData for crate::protocol::ErasedSliverChildState {
 /// which is the parent data's contract: the parent owns it.
 ///
 /// Only the child's own parent borrows it: a torn list that names a child another node owns gets
-/// a copy, as does a harness seed, and neither goes back. A child listed twice is lent to its first
+/// a copy of what the node holds (none while the owner's frame, above it, has it lent), as does a
+/// harness seed, and neither goes back. A child listed twice is lent to its first
 /// slot; the second reads none this pass, and whatever it creates never replaces the original.
 ///
 /// The render tree cannot change while the walk runs (the lease holds its `&mut RenderTree`, and
