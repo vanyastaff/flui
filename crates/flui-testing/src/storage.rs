@@ -234,8 +234,8 @@ impl MemoryStorage {
     /// starts and one it left at a [`CommitBarrier`] never commits, as a
     /// process killed before it replaced its files, and every later publish
     /// through its handles is refused with [`StorageError::Cancelled`], so
-    /// whatever its teardown or a handle the test kept still writes is lost
-    /// too. A future of a discarded write gets no answer, as the killed
+    /// whatever its teardown or a handle of the run that outlives it still
+    /// writes is lost too. A future of a discarded write gets no answer, as the killed
     /// process would get none. Another run's writes and the test's own are
     /// kept.
     pub(crate) fn kill_run(&self, run: RunId) {
@@ -675,5 +675,37 @@ impl Drop for CopyHold {
         };
         drop(state);
         wake_all(wakers);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
+
+    use flui_platform::{Storage, StorageError, StorageName, WriteMode};
+
+    use super::MemoryStorage;
+
+    const NAME: StorageName = StorageName::from_static("doc");
+
+    /// A storage handle of a killed run that outlives the run is refused: its
+    /// publish resolves to `Cancelled` and stores nothing, while the test's
+    /// own handle still writes.
+    #[test]
+    fn a_killed_runs_later_publish_is_refused() {
+        let storage = MemoryStorage::new();
+        let (run_handle, run) = storage.for_run();
+        storage.kill_run(run);
+        let mut ctx = Context::from_waker(Waker::noop());
+        let refused = run_handle.publish(&NAME, b"late".to_vec(), WriteMode::Replace);
+        assert!(matches!(
+            pin!(refused).poll(&mut ctx),
+            Poll::Ready(Err(StorageError::Cancelled))
+        ));
+        assert_eq!(storage.contents(&NAME), None);
+        let own = storage.publish(&NAME, b"own".to_vec(), WriteMode::Replace);
+        assert!(pin!(own).poll(&mut ctx).is_ready());
+        assert_eq!(storage.contents(&NAME).as_deref(), Some(&b"own"[..]));
     }
 }

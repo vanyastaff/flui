@@ -937,7 +937,7 @@ impl Tester {
     /// more is written, so a write the run accepted and had not carried out
     /// is lost, a write the storage holds unstarted or uncommitted included,
     /// and the storage refuses whatever the run still publishes, from its
-    /// teardown or a handle the test kept, with
+    /// teardown or a storage handle of the run that outlives it, with
     /// [`StorageError::Cancelled`](flui_platform::StorageError::Cancelled);
     /// another run's write over the same storage is kept, and so is the
     /// test's own. The old run is dropped as a host drops its UI runtime: its
