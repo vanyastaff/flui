@@ -18,6 +18,7 @@ use flui_foundation::inspect::{Fields, Inspect, Unit};
 mod blur;
 pub mod command;
 pub mod command_ops;
+pub(crate) mod fingerprint;
 mod finite;
 pub mod paragraph;
 mod payload;

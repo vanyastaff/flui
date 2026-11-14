@@ -22,7 +22,6 @@ use flui_foundation::inspect::{
 use super::content::{Bounds, Chunk, Entry, EntryIndex};
 use super::id::NodeKey;
 use super::version::{NodeRecord, SceneVersion};
-use crate::inspect::fingerprint;
 
 impl Inspect for NodeRecord {
     fn kind(&self) -> &'static str {
@@ -42,7 +41,7 @@ impl Inspect for Chunk {
 
     fn inspect(&self, out: &mut Fields<'_>) {
         out.field("commands", &self.commands().len());
-        out.field("content", &fingerprint(self.commands()))
+        out.field("content", &self.commands().fingerprint())
             .level(Level::Detail);
     }
 }

@@ -9822,6 +9822,7 @@ pub fn flui::painting::DisplayList::append_isolated(&mut self, other: flui::pain
 pub fn flui::painting::DisplayList::bounds(&self) -> Option<flui::geometry::Rect<f64>>
 pub fn flui::painting::DisplayList::clear(&mut self)
 pub fn flui::painting::DisplayList::damage_extent(&self) -> Option<flui_painting::display_list::command_ops::DamageExtent>
+pub fn flui::painting::DisplayList::fingerprint(&self) -> u64
 pub fn flui::painting::DisplayList::get(&self, index: usize) -> Option<flui::painting::DrawCommand<'_>>
 pub fn flui::painting::DisplayList::is_empty(&self) -> bool
 pub fn flui::painting::DisplayList::iter(&self) -> flui::painting::DrawCommands<'_>

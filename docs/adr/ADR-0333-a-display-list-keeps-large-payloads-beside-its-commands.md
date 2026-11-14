@@ -117,12 +117,14 @@ const _: () = assert!(size_of::<RecordedOp>() <= 120);
   `DrawOp::payload_index` and `DrawOp::is_finite` match with no wildcard.
 - `recording_contract` (`crates/flui-painting/tests/main.rs`):
   `re_recording_a_warm_list_with_payloads_allocates_nothing` (counts the blocks a second recording
-  into a cleared list asks for: zero; it fails when `clear` lets the payload room go) and
+  into a cleared list asks for: zero; it fails when `clear` lets the payload room go),
   `appended_payloads_follow_their_commands` (the shared card is one entry; after `append` and
   `append_isolated`, into a list with entries, one with only a transform and an empty one, every
   command reads the payload it was recorded with, and an id another command holds reads nothing),
-  and `a_command_describes_itself_wherever_its_payload_sits` (a command's Debug, which
-  `flui-layer`'s fingerprint hashes, prints the payload it names and not its position).
+  `a_command_describes_itself_wherever_its_payload_sits` (a command's Debug prints the payload it
+  names and not its position) and `a_fingerprint_reads_what_the_commands_draw`
+  (`DisplayList::fingerprint`, which inspection reports, hashes a payload by content: the same
+  drawing with its payloads at other positions reads alike, another path reads apart).
 - The control-cost rows (`packages/*/tests/perf.rs`) and `cargo xtask perf --check` hold the
   numbers above.
 

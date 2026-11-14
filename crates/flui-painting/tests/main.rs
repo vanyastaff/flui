@@ -590,6 +590,10 @@ fn recording_contract() {
                 recording::a_command_describes_itself_wherever_its_payload_sits,
             ),
             (
+                "a_fingerprint_reads_what_the_commands_draw",
+                recording::a_fingerprint_reads_what_the_commands_draw,
+            ),
+            (
                 "a_finished_display_list_is_sendable_to_another_thread",
                 recording::a_finished_display_list_is_sendable_to_another_thread,
             ),

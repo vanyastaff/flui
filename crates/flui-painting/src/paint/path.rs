@@ -10,6 +10,7 @@ use std::sync::{Arc, OnceLock};
 
 use kurbo::{Affine, ParamCurve, ParamCurveArclen, PathEl, Shape};
 
+use crate::display_list::fingerprint::Fingerprint;
 use crate::paint::PathFillType;
 use flui_foundation::geometry::{Offset, Point, RRect, Rect};
 
@@ -451,6 +452,37 @@ impl Path {
     fn geometry(&self) -> &kurbo::BezPath {
         self.curves
             .get_or_init(|| Self::build(self.hint, self.offset))
+    }
+
+    /// Feeds what the path draws to a display list's fingerprint, as equality
+    /// compares it: its curves (built here when unbuilt), the shape it still
+    /// is, which the engine draws by (an analytic shadow, a rounded fill), its
+    /// fill type and its finiteness.
+    pub(crate) fn fingerprint(&self, fp: &mut Fingerprint) {
+        let elements = self.geometry().elements();
+        fp.len(elements.len());
+        for element in elements {
+            fp.tag(element);
+            let points: &[kurbo::Point] = match element {
+                PathEl::MoveTo(p) | PathEl::LineTo(p) => std::slice::from_ref(p),
+                PathEl::QuadTo(p1, p2) => &[*p1, *p2],
+                PathEl::CurveTo(p1, p2, p3) => &[*p1, *p2, *p3],
+                PathEl::ClosePath => &[],
+            };
+            for point in points {
+                fp.f64(point.x);
+                fp.f64(point.y);
+            }
+        }
+        let shape = self.shape();
+        fp.tag(&shape);
+        match shape {
+            ShapeHint::None => {}
+            ShapeHint::Rect(rect) | ShapeHint::Oval(rect) => fp.rect(&rect),
+            ShapeHint::RRect(rrect) => fp.rrect(&rrect),
+        }
+        fp.tag(&self.fill_type);
+        fp.bool(self.finite);
     }
 
     /// The shape the path is: the constructor's shape, moved by any translate since.
