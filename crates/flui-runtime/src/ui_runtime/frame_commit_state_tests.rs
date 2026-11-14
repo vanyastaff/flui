@@ -112,14 +112,14 @@ pub(crate) fn every_presentation_takes_the_next_epoch_of_its_runtime() {
         .attach_root_widget_to_for_test(secondary, &SizedBox::new(10.0, 10.0))
         .expect("secondary root");
     assert!(ui_runtime.render_frame(&mut backend));
-    assert_eq!(
-        ui_runtime
-            .presentations
-            .get(secondary)
-            .expect("the secondary is installed")
-            .frame_commit_state(),
-        FrameCommitState::Committed,
-        "the secondary produced the second frame"
+    let secondary = ui_runtime
+        .presentations
+        .get(secondary)
+        .expect("the secondary is installed");
+    assert!(
+        secondary.tree_revision() > TreeRevision::ZERO
+            && secondary.frame_commit_state() == FrameCommitState::Committed,
+        "the secondary painted the second frame and the sink's verdict committed it"
     );
     let first = flui_foundation::FrameEpoch::ZERO.next();
     assert_eq!(backend.epochs, vec![first, first.next()]);

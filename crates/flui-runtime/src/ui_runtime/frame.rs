@@ -723,10 +723,6 @@ impl UiRuntime {
         primary() != before
     }
 
-    /// Commit a painted presentation after the sink accepts its scene.
-    ///
-    /// Returns the first panic a tracing subscriber raised for the `commit` span, for the caller to
-    /// resume once the verdict's own obligations have run.
     /// The epoch of the frame about to be handed to a sink: the one after the
     /// last frame any presentation of this runtime submitted.
     pub(crate) fn next_frame_epoch(&self) -> flui_foundation::FrameEpoch {
@@ -735,6 +731,10 @@ impl UiRuntime {
         epoch
     }
 
+    /// Commit a painted presentation after the sink accepts its scene.
+    ///
+    /// Returns the first panic a tracing subscriber raised for the `commit` span, for the caller to
+    /// resume once the verdict's own obligations have run.
     fn commit_painted_frame(&self, presentation: &PresentationState) -> FirstPanic {
         debug_assert!(
             self.presentations.get(presentation.id()).is_some(),
