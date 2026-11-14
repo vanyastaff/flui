@@ -64,36 +64,6 @@ pub struct MemoryStorage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RunId(NonZeroU64);
 
-/// Keeps one run of the application over a [`MemoryStorage`] live; see
-/// [`MemoryStorage::for_run`].
-#[derive(Debug)]
-pub(crate) struct RunLease {
-    storage: MemoryStorage,
-    run: RunId,
-}
-
-impl RunLease {
-    /// The run this lease keeps live.
-    pub(crate) const fn run(&self) -> RunId {
-        self.run
-    }
-
-    /// The storage the run publishes to, through a handle of no run.
-    pub(crate) const fn storage(&self) -> &MemoryStorage {
-        &self.storage
-    }
-}
-
-impl Drop for RunLease {
-    fn drop(&mut self) {
-        self.storage
-            .state
-            .lock()
-            .live_runs
-            .retain(|live| *live != self.run);
-    }
-}
-
 #[derive(Default)]
 struct State {
     /// The committed values: what a read returns.
@@ -103,9 +73,6 @@ struct State {
     next_write: u64,
     /// Mints the run of each [`MemoryStorage::for_run`] handle.
     runs: IdMint<NonZeroU64>,
-    /// The runs whose lease is alive; a write of any other run that still
-    /// waits is the storage's.
-    live_runs: Vec<RunId>,
     /// The answer slot of every write future not yet dropped.
     writes: HashMap<u64, WriteSlot>,
     /// Accepted while a [`WriteHold`] is alive; not started.
@@ -225,13 +192,12 @@ impl MemoryStorage {
     }
 
     /// Accept writes but start none while the returned hold is alive; a
-    /// newer value of a name replaces the one waiting, whose future resolves
-    /// to [`StorageError::Superseded`], when both come from one writer (the
-    /// same run of the application, or the test's own handles), and when
-    /// the waiting one is of a run that ended, as a quit write lands before
-    /// the next process reads. Two live runs are two processes, and
-    /// each value waits for its turn. Dropping the last hold starts the
-    /// waiting writes in the order they were accepted.
+    /// newer value of a name replaces the one waiting from the same writer,
+    /// whose future resolves to [`StorageError::Superseded`]. A writer is one
+    /// run of the application, or the test's own handles together; the
+    /// writes of different writers each wait their turn, as two processes'
+    /// would. Dropping the last hold starts the waiting writes in the order
+    /// they were accepted.
     #[must_use = "writes are held only while the hold is alive"]
     pub fn hold_writes(&self) -> WriteHold {
         self.state.lock().write_holds += 1;
@@ -240,35 +206,24 @@ impl MemoryStorage {
         }
     }
 
-    /// A handle on this storage for one run of the application, and the
-    /// lease that keeps the run live: the writes the handle publishes are
-    /// that run's, which [`discard_writes_of`](Self::discard_writes_of) finds
-    /// again when the run is killed. Dropping the lease ends the run, and its
-    /// writes still waiting become the storage's, which a later run's newer
-    /// value replaces, as one process's quit write lands before the next
-    /// process reads.
-    pub(crate) fn for_run(&self) -> (Self, RunLease) {
-        let mut state = self.state.lock();
+    /// A handle on this storage for one run of the application: the writes
+    /// it publishes are that run's, which
+    /// [`discard_writes_of`](Self::discard_writes_of) finds again when the
+    /// run is killed.
+    pub(crate) fn for_run(&self) -> (Self, RunId) {
         let run = RunId(
-            state
+            self.state
+                .lock()
                 .runs
                 .next()
                 .expect("BUG: a test launches fewer runs than u64 holds"),
         );
-        state.live_runs.push(run);
-        drop(state);
         (
             Self {
                 state: Arc::clone(&self.state),
                 run: Some(run),
             },
-            RunLease {
-                storage: Self {
-                    state: Arc::clone(&self.state),
-                    run: None,
-                },
-                run,
-            },
+            run,
         )
     }
 
@@ -475,13 +430,7 @@ impl Storage for MemoryStorage {
         } else if state.write_holds > 0 {
             let (superseded, waiting): (Vec<Write>, Vec<Write>) = std::mem::take(&mut state.queued)
                 .into_iter()
-                .partition(|queued| {
-                    queued.name == *name
-                        && (queued.run == self.run
-                            || queued
-                                .run
-                                .is_some_and(|run| !state.live_runs.contains(&run)))
-                });
+                .partition(|queued| queued.name == *name && queued.run == self.run);
             state.queued = waiting;
             for queued in superseded {
                 wakers.extend(state.answer(queued.id, Err(StorageError::Superseded)));

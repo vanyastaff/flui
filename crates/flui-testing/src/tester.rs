@@ -47,7 +47,7 @@ use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
 
 use crate::host::KitStorage;
-use crate::storage::{MemoryStorage, RunLease};
+use crate::storage::{MemoryStorage, RunId};
 use crate::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 
 /// One frame at 60 Hz: what [`Tester::pump`] advances and what an action or
@@ -271,9 +271,9 @@ pub struct Tester {
     /// The keys [`Tester::key_down`] holds, which a chord neither presses
     /// nor releases.
     held_keys: Vec<String>,
-    /// This run of the application over its storage, live until the host
-    /// above is dropped; a kill discards its held writes.
-    run: Option<RunLease>,
+    /// This run of the application over its storage, whose held writes a
+    /// kill discards.
+    run: Option<RunId>,
     /// Mounts the same view again in a window: what [`Tester::restart`] runs.
     relaunch: Rc<dyn Fn(TestWindow) -> Tester>,
 }
@@ -913,8 +913,9 @@ impl Tester {
     /// same storage, as when the application quits and is opened again: the
     /// window commits its composition and closes past every hold, what the
     /// documents published is written (a write the storage holds is not
-    /// waited for: the storage decides it when its hold ends, a newer value
-    /// the next run publishes replacing it, and what a
+    /// waited for: it lands when the hold ends, ahead of the next run's,
+    /// which read the storage without it and so conflicts with it, as on a
+    /// disk that had not finished the quit write; what a
     /// document still owes then is lost with the run), and the old
     /// tree, its states and its runtime are gone before the new one mounts.
     ///
@@ -951,7 +952,7 @@ impl Tester {
         /// Discards the killed run's held writes on every exit of its
         /// teardown, an unwinding one included, so a panic in a detach
         /// observer cannot let them reach the storage.
-        struct DiscardRunWrites(Option<(MemoryStorage, crate::storage::RunId)>);
+        struct DiscardRunWrites(Option<(MemoryStorage, RunId)>);
 
         impl Drop for DiscardRunWrites {
             fn drop(&mut self) {
@@ -963,11 +964,7 @@ impl Tester {
 
         let relaunch = Rc::clone(&self.relaunch);
         let config = self.config.clone();
-        let discard = DiscardRunWrites(
-            self.run
-                .as_ref()
-                .map(|lease| (lease.storage().clone(), lease.run())),
-        );
+        let discard = DiscardRunWrites(self.storage().cloned().zip(self.run));
         drop(self);
         drop(discard);
         relaunch(config)

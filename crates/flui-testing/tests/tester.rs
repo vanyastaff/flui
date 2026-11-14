@@ -960,59 +960,45 @@ fn a_relaunch_after_a_kill_whose_teardown_panics_loses_the_held_write() {
     );
 }
 
-/// A run that quit with its write held hands that write to the storage: the
-/// next run's newer value replaces it, as the quit write would have landed
-/// before the next run read, and nothing conflicts.
+/// A quit write the storage holds lands when the hold ends, ahead of the next
+/// run's newer value, which was based on the storage without it and so
+/// conflicts: what a disk that had not finished the quit write gives, and
+/// the same whether the next run publishes before or after the release.
 #[test]
-fn a_restart_under_a_write_hold_keeps_the_next_runs_newer_value() {
-    let (view, opened) = notebook(false);
-    let mut t = Tester::mount(view);
-    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
-    let storage = t
-        .storage()
-        .cloned()
-        .expect("a mounted window has a storage");
-    let hold = storage.hold_writes();
-    note(&opened)
-        .set(Note("quit".to_owned()))
-        .expect("a loaded note takes a value");
-    let mut t = t.restart();
-    let _ = settle(&mut t, note(&opened).load()).expect("the storage loads");
-    note(&opened)
-        .set(Note("next run".to_owned()))
-        .expect("a loaded note takes a value");
-    t.pump_for(Duration::from_secs(1));
-    drop(hold);
-    t.pump_for(Duration::from_secs(1));
-    let stored = storage
-        .contents(&<Note as flui_view::persist::Document>::NAME)
-        .expect("a value was written");
-    assert!(
-        String::from_utf8_lossy(&stored).contains("next run"),
-        "{}",
-        String::from_utf8_lossy(&stored)
-    );
-}
-
-/// Under a write hold a newer value of a name from the same writer replaces
-/// the waiting one, whose future resolves to `Superseded`.
-#[test]
-fn a_held_write_is_superseded_by_a_newer_value_from_the_same_writer() {
-    use flui_platform::{Storage as _, StorageError, StorageName, WriteMode};
-
-    const NAME: StorageName = StorageName::from_static("doc");
-    let storage = flui_testing::storage::MemoryStorage::new();
-    let hold = storage.hold_writes();
-    let mut first = storage.publish(&NAME, b"first".to_vec(), WriteMode::Replace);
-    let mut second = storage.publish(&NAME, b"second".to_vec(), WriteMode::Replace);
-    let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
-    assert!(matches!(
-        first.as_mut().poll(&mut ctx),
-        std::task::Poll::Ready(Err(StorageError::Superseded))
-    ));
-    drop(hold);
-    assert!(second.as_mut().poll(&mut ctx).is_ready());
-    assert_eq!(storage.contents(&NAME).as_deref(), Some(&b"second"[..]));
+fn a_restart_under_a_write_hold_lands_the_quit_write_first() {
+    for set_before_release in [true, false] {
+        let (view, opened) = notebook(false);
+        let mut t = Tester::mount(view);
+        let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+        let storage = t
+            .storage()
+            .cloned()
+            .expect("a mounted window has a storage");
+        let mut hold = Some(storage.hold_writes());
+        note(&opened)
+            .set(Note("quit".to_owned()))
+            .expect("a loaded note takes a value");
+        let mut t = t.restart();
+        let _ = settle(&mut t, note(&opened).load()).expect("the storage loads");
+        if !set_before_release {
+            hold = None;
+            t.pump_for(Duration::from_secs(1));
+        }
+        note(&opened)
+            .set(Note("next run".to_owned()))
+            .expect("a loaded note takes a value");
+        t.pump_for(Duration::from_secs(1));
+        drop(hold);
+        t.pump_for(Duration::from_secs(1));
+        let stored = storage
+            .contents(&<Note as flui_view::persist::Document>::NAME)
+            .expect("the quit write landed");
+        assert!(
+            String::from_utf8_lossy(&stored).contains("quit"),
+            "set before the release: {set_before_release}: {}",
+            String::from_utf8_lossy(&stored)
+        );
+    }
 }
 
 /// A value set twice before the restart is written as its latest: the first
