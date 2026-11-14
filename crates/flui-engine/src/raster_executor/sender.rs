@@ -297,11 +297,21 @@ impl Shared {
         self.health.store(DIED, Ordering::SeqCst);
         // An owner waiting on a slot's record learns of it now.
         self.note_turn();
-        if first {
+        if first && let Some(cause) = self.death.get() {
             // Logged once, by whichever side reached the death first, with
-            // no lock held: a subscriber is user code.
-            if let Some(cause) = self.death.get() {
+            // no lock held. A subscriber is user code: its panic is held for
+            // the owner as a turn's is, so a timeout still answers its typed
+            // cause and a handle dropped while unwinding does not abort.
+            let mut logged = FirstPanic::new();
+            logged.contain(|| {
                 tracing::error!(%cause, "the raster executor died; rendering stopped for every window");
+            });
+            if let Some(payload) = logged.into_payload() {
+                let message = flui_foundation::panic::payload_text(&*payload)
+                    .unwrap_or("a panic without a message")
+                    .to_owned();
+                flui_foundation::panic::discard_payload(payload);
+                let _kept = self.hold_failure(ExecutorFailure::TurnPanicked { message });
             }
         }
     }
@@ -998,6 +1008,76 @@ mod tests {
                 Err(crate::raster_executor::RasterSendError::Gone(_))
             ),
             "a send after the stop gets its command back"
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod death_log {
+    //! Beside the code, not in `tests/`: a thread-local subscriber sees an
+    //! event only if no other thread reached its callsite first, and the
+    //! integration suite's wedge tests reach this one concurrently.
+
+    use std::time::Duration;
+
+    use crossbeam_channel::bounded;
+    use tracing::{
+        Event, Metadata, Subscriber,
+        span::{Attributes, Id, Record},
+    };
+
+    use super::Shared;
+    use crate::raster_executor::{ExecutorFailure, LIFECYCLE_CAPACITY};
+
+    /// A subscriber that panics on every event.
+    struct PanickingSubscriber;
+
+    impl Subscriber for PanickingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, _event: &Event<'_>) {
+            panic!("the subscriber fails on purpose");
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    /// A subscriber that panics on the death's log does not unwind the side
+    /// that reached the death: the death stays, and the panic is held for the
+    /// owner behind no other failure.
+    ///
+    /// Red-check: without the containment the `die` call unwinds the test.
+    #[test]
+    fn a_subscriber_that_panics_on_the_deaths_log_is_held_for_the_owner() {
+        let (lifecycle, _queue) = bounded(LIFECYCLE_CAPACITY);
+        let shared = Shared::threaded(lifecycle);
+        let waited = Duration::from_millis(50);
+        tracing::subscriber::with_default(PanickingSubscriber, || {
+            shared.die(ExecutorFailure::Wedged { waited });
+        });
+        assert_eq!(shared.death(), Some(ExecutorFailure::Wedged { waited }));
+        let Some(ExecutorFailure::TurnPanicked { message }) = shared.take_failure() else {
+            panic!("the subscriber's panic is held");
+        };
+        assert!(
+            message.contains("the subscriber fails on purpose"),
+            "{message}"
+        );
+        assert_eq!(
+            shared.take_failure(),
+            Some(ExecutorFailure::Wedged { waited })
         );
     }
 }
