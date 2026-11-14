@@ -107,14 +107,10 @@ pub trait FrameSink {
     /// Submit one composited scene for rasterization and classify what
     /// happened.
     ///
-    /// `epoch` is the frame's place in the sequence of the presentation that
-    /// produced it, which the UI runtime mints for each frame it submits and
-    /// which only grows: the host stamps the frame with it and that
-    /// presentation's address, so what the frame becomes is matched to it by
-    /// stamp, not by being the latest (ADR-0305 §4). A sink serves one
-    /// presentation's window, so the epochs one sink is handed only grow; a
-    /// frame transaction produces one paintable presentation's scene, and
-    /// routing a secondary presentation's frames to a sink of its own comes
-    /// with per-presentation sinks.
+    /// `epoch` is the frame's place in its UI runtime's sequence, which the
+    /// runtime mints for each frame any of its presentations submits, so the
+    /// epochs a sink is handed only grow, whichever presentation produced
+    /// them: the host stamps the frame with it, so what the frame becomes is
+    /// matched to it by stamp, not by being the latest (ADR-0305 §4).
     fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict;
 }

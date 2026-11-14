@@ -1,5 +1,5 @@
-//! Each frame a UI runtime hands its sink carries the next epoch of its
-//! presentation, the stamp a frame's settlement is matched by (ADR-0305 §4).
+//! Each frame a UI runtime hands its sink carries the next epoch of the
+//! runtime, the stamp a frame's settlement is matched by (ADR-0305 §4).
 
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ impl FrameSink for Stamps {
 }
 
 #[test]
-fn each_submitted_frame_takes_the_next_epoch_of_its_presentation() {
+fn each_submitted_frame_takes_the_next_epoch_of_its_runtime() {
     let mut runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
     runtime
         .attach_root_widget_with_size(&flui_widgets::Text::new("stamped"), 400.0, 400.0)

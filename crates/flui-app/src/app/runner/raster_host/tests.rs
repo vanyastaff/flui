@@ -322,14 +322,7 @@ fn raster_host_damage_matrix() {
     );
 }
 
-/// A surface the platform takes away is released before the call returns,
-/// and the window's frames draw nothing and make no surface of their own
-/// until the platform gives it back, when one is made at once.
-///
-/// Red-check: let a frame restore a released surface (drop `Released` from
-/// `HostSlot::needs_surface`'s `available` gate) and the frame after the
-/// release makes one over a window the platform has taken away.
-/// The epoch of the settlement the host's last frame drained.
+/// The epochs of the settlements the host's last frame drained.
 fn settled_epochs(host: &RasterHost) -> Vec<flui_foundation::FrameEpoch> {
     host.placed
         .as_ref()
@@ -366,6 +359,13 @@ fn a_frame_settles_by_the_epoch_its_ui_runtime_gave_it() {
     );
 }
 
+/// A surface the platform takes away is released before the call returns,
+/// and the window's frames draw nothing and make no surface of their own
+/// until the platform gives it back, when one is made at once.
+///
+/// Red-check: let a frame restore a released surface (drop `Released` from
+/// `HostSlot::needs_surface`'s `available` gate) and the frame after the
+/// release makes one over a window the platform has taken away.
 #[test]
 fn a_released_surface_waits_for_the_platform_and_comes_back_when_it_does() {
     let (mut host, slots) = host();

@@ -727,6 +727,14 @@ impl UiRuntime {
     ///
     /// Returns the first panic a tracing subscriber raised for the `commit` span, for the caller to
     /// resume once the verdict's own obligations have run.
+    /// The epoch of the frame about to be handed to a sink: the one after the
+    /// last frame any presentation of this runtime submitted.
+    pub(crate) fn next_frame_epoch(&self) -> flui_foundation::FrameEpoch {
+        let epoch = self.frame_epoch.get().next();
+        self.frame_epoch.set(epoch);
+        epoch
+    }
+
     fn commit_painted_frame(&self, presentation: &PresentationState) -> FirstPanic {
         debug_assert!(
             self.presentations.get(presentation.id()).is_some(),
@@ -951,8 +959,8 @@ impl UiRuntime {
             // The version the sink is handed, acknowledged once it is shown so
             // the next publication's damage starts from it (ADR-0304 §7).
             let shown = publication.scene.id();
-            // The stamp the sink settles this frame by, in its presentation's sequence.
-            let epoch = producer.next_frame_epoch();
+            // The stamp the sink settles this frame by, in this runtime's sequence.
+            let epoch = self.next_frame_epoch();
             // The layer reads parked for this scene read it now and are answered once the sink
             // shows it. A sink that panics leaves them parked, with a repaint owed.
             producer.stage_agent_layer_reads(&publication.scene);

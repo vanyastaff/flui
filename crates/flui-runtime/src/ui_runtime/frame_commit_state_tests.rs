@@ -100,31 +100,29 @@ pub(crate) fn a_withheld_frame_takes_no_epoch() {
     );
 }
 
-/// Each presentation numbers its own frames: one presentation's submits do
-/// not move another's sequence.
-pub(crate) fn each_presentation_numbers_its_own_frames() {
-    use std::rc::Rc;
-
-    use flui_platform::PlatformWindow;
-
+/// The runtime numbers the frames of all its presentations in one sequence:
+/// a frame a secondary presentation produces takes the epoch after the
+/// primary's last, so the epochs one sink is handed only grow.
+pub(crate) fn every_presentation_takes_the_next_epoch_of_its_runtime() {
     let mut ui_runtime = mount_box();
-    let window: Rc<dyn PlatformWindow> = Rc::new(crate::testing::TestWindow::new());
-    let assembled = ui_runtime.assemble_presentation(Rc::clone(&window));
-    let secondary = ui_runtime.install_presentation(assembled);
     let mut backend = ScriptedSink::always_presents();
     assert!(ui_runtime.render_frame(&mut backend));
-    let first = flui_foundation::FrameEpoch::ZERO.next();
-    assert_eq!(backend.epochs, vec![first]);
-    // The secondary submitted nothing: its first frame is still its first.
-    let secondary = ui_runtime
-        .presentations
-        .get(secondary)
-        .expect("the secondary is installed");
-    assert_eq!(secondary.next_frame_epoch(), first);
+    let secondary = ui_runtime.install_second_presentation_for_test();
+    ui_runtime
+        .attach_root_widget_to_for_test(secondary, &SizedBox::new(10.0, 10.0))
+        .expect("secondary root");
+    assert!(ui_runtime.render_frame(&mut backend));
     assert_eq!(
-        ui_runtime.presentations.primary().next_frame_epoch(),
-        first.next()
+        ui_runtime
+            .presentations
+            .get(secondary)
+            .expect("the secondary is installed")
+            .frame_commit_state(),
+        FrameCommitState::Committed,
+        "the secondary produced the second frame"
     );
+    let first = flui_foundation::FrameEpoch::ZERO.next();
+    assert_eq!(backend.epochs, vec![first, first.next()]);
 }
 
 /// The withheld retry is BOUNDED: a drawable that never comes back stops

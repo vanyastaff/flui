@@ -6,7 +6,7 @@
 //! mixing them up (e.g. comparing a [`SurfaceGeneration`] to a
 //! [`ResourceGeneration`]) is a compile error, not a bug waiting to happen:
 //!
-//! - [`FrameEpoch`] — a presentation's per-frame counter. Meaningful only within
+//! - [`FrameEpoch`] — a runtime's per-frame counter. Meaningful only within
 //!   one `UiRuntime` lifetime; the raster side settles a frame by it.
 //! - [`SurfaceGeneration`] — bumped every time the raster surface is
 //!   (re)configured (resize, device-lost recovery); guards frames in flight
@@ -100,17 +100,17 @@ macro_rules! epoch_counters {
 }
 
 epoch_counters! {
-    /// A presentation's monotonic per-frame counter.
+    /// A `UiRuntime`'s monotonic per-frame counter.
     ///
-    /// The UI runtime mints the next one for each frame a presentation hands
-    /// its sink, so a frame that never reaches the sink takes none, and the
-    /// raster side settles a frame by the [`FrameStamp`](crate::FrameStamp)
-    /// that pairs it with the presentation's address (ADR-0305 §4).
-    /// Meaningful only within one `UiRuntime` lifetime: recreating a UI
-    /// runtime creates a new runtime whose presentations count from
-    /// [`FrameEpoch::ZERO`] again, and the address's generational runtime id
-    /// (not epoch comparison) is what keeps a stale runtime's results from
-    /// being mistaken for the new one's.
+    /// The UI runtime mints the next one for each frame any of its
+    /// presentations hands a sink, so a frame that never reaches a sink takes
+    /// none, and the raster side settles a frame by the
+    /// [`FrameStamp`](crate::FrameStamp) that pairs it with the presentation's
+    /// address (ADR-0305 §4). Meaningful only within one `UiRuntime`
+    /// lifetime: recreating a UI runtime creates a new runtime with a new
+    /// sequence starting at [`FrameEpoch::ZERO`] again, and the address's
+    /// generational runtime id (not epoch comparison) is what keeps a stale
+    /// runtime's results from being mistaken for the new one's.
     pub struct FrameEpoch;
 
     /// Generation counter bumped on every raster surface (re)configure:
