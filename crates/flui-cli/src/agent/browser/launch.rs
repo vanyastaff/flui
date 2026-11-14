@@ -836,6 +836,7 @@ mod linking {
         for (version, refused) in [
             (format!("{before}.0.1"), true),
             ("128.12.0esr".to_owned(), true),
+            (before.to_string(), true),
             (format!("{MIN_FIREFOX}.0"), false),
             (format!("{MIN_FIREFOX}.3.0esr"), false),
             (format!("{}.0a1", MIN_FIREFOX + 7), false),

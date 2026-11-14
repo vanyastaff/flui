@@ -14,7 +14,7 @@
 //! line by line as `run.app.log` so a tool driving `flui run` sees everything
 //! on one machine-readable stream.
 
-use crate::agent::browser::launch::LaunchedBrowser;
+use crate::agent::browser::launch::{LaunchError, LaunchedBrowser};
 use crate::agent::browser::relay::Relay;
 use crate::agent::browser::{self, Dialect};
 use crate::agent::{self, Session};
@@ -1290,8 +1290,22 @@ impl BrowserSession {
         let executable = browser::launch::executable(&self.browser.launch)
             .with_context(|| format!("find the executable of {}", self.browser.name))?;
         let (launched, mut link) =
-            LaunchedBrowser::start(&executable, dialect, self.options.headless)
-                .with_context(|| format!("start {} for the agent", self.browser.name))?;
+            match LaunchedBrowser::start(&executable, dialect, self.options.headless) {
+                Ok(linked) => linked,
+                // A browser too old for the link is refused as Safari is: an unsupported target.
+                Err(LaunchError::Unsupported(why)) => {
+                    return Err(CliError::Unsupported {
+                        what: format!("`flui run --agent` in {}", self.browser.name),
+                        reason: why.to_string(),
+                    });
+                }
+                Err(error) => {
+                    return Err(CliError::context(
+                        error,
+                        format!("start {} for the agent", self.browser.name),
+                    ));
+                }
+            };
         link.open(&browser::preload(&session.page_launch()), url)
             .context("open the app in the browser")?;
         let agent::Endpoint::Local(endpoint) = &session.credentials().endpoint else {

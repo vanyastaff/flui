@@ -61,7 +61,7 @@ impl Bidi {
             return Err(AttachError::at("session.new")(LinkError::Unsupported(
                 format!(
                     "Firefox {version} reports no navigation's commit; the link needs Firefox \
-                 {MIN_FIREFOX} or later"
+                     {MIN_FIREFOX} or later"
                 ),
             )));
         }
@@ -149,8 +149,7 @@ impl Bidi {
 /// The major version of a Firefox `browserVersion`: `128` of `128.12.0esr`, `147` of
 /// `147.0a1`.
 fn firefox_major(version: &str) -> Option<u32> {
-    let (major, _) = version.split_once('.')?;
-    major.parse::<u32>().ok()
+    version.split('.').next()?.parse::<u32>().ok()
 }
 
 /// `args` as BiDi's local values.
