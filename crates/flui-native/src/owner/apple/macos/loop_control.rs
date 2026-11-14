@@ -275,6 +275,7 @@ impl LoopControl {
             .opened(crate::owner::apple::opened_urls::opened_by_urls(
                 urls,
                 crate::owner::file_uri::PathConvention::HOST,
+                flui_platform::OpenTarget::Application,
                 launch,
             ))
             .or_contain((), "the URLs AppKit opened");
@@ -571,7 +572,7 @@ define_class!(
         fn open_urls(&self, _app: &NSApplication, urls: &NSArray<NSURL>) {
             os_entry("application:openURLs:", (), AfterPanic::Answer(|()| ()), || {
                 if let Some(control) = self.ivars().upgrade() {
-                    control.opened_urls(absolute_strings(urls));
+                    control.opened_urls(crate::owner::apple::opened_urls::absolute_strings(urls));
                 }
             });
         }
@@ -606,38 +607,6 @@ define_class!(
         }
     }
 );
-
-/// The absolute strings of `urls`, in AppKit's order: no more than an
-/// [`Opened`](flui_platform::Opened) carries, and none longer than the
-/// longest it keeps, measured before any is copied.
-fn absolute_strings(urls: &NSArray<NSURL>) -> Vec<String> {
-    let count = urls.count();
-    if count > flui_platform::MAX_OPENED_ITEMS {
-        tracing::warn!(
-            dropped = count - flui_platform::MAX_OPENED_ITEMS,
-            "AppKit opened more URLs than the application hears at once"
-        );
-    }
-    let mut kept = Vec::with_capacity(count.min(flui_platform::MAX_OPENED_ITEMS));
-    let mut too_long = 0_usize;
-    for url in urls.iter().take(flui_platform::MAX_OPENED_ITEMS) {
-        let Some(text) = url.absoluteString() else {
-            continue;
-        };
-        if text.len() > flui_platform::MAX_OPENED_URL_LEN {
-            too_long += 1;
-        } else {
-            kept.push(text.to_string());
-        }
-    }
-    if too_long > 0 {
-        tracing::warn!(
-            too_long,
-            "AppKit opened URLs longer than the application hears; they were dropped"
-        );
-    }
-    kept
-}
 
 /// What a log of the delegate's entries shows: which object it is.
 impl std::fmt::Debug for LoopDelegate {

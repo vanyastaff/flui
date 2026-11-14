@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC9. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC10), AC7, AC8.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC9. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC10), AC8.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -61,7 +61,7 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   проекта, чей манифест и фича объявляют ссылки, компилируется с фичей и без),
   `only_the_application_declares_the_links_it_opens` (схема или домен зависимости отказаны по
   имени, приложение под dev-зависимостью остаётся приложением).
-- **AC6.** `appkit_urls_split_into_links_and_documents` (модель `owner/apple/opened_urls.rs`:
+- **AC6.** `apple_urls_split_into_links_and_documents` (модель `owner/apple/opened_urls.rs`:
   ссылки своей схемы и `https` — URL, `file:` — документ по раскодированному пути без проверки
   диска (пакет — каталог), `file:` другого хоста ничего не открывает, порядок AppKit, `Launch`
   передаётся как есть), `file_uris_name_the_files_of_their_host` (`owner/file_uri.rs`, общий с
@@ -70,6 +70,15 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   `application:openURLs:` (до `applicationDidFinishLaunching:` — `Launch::Cold`, после —
   `Launch::Running`), не больше `MAX_OPENED_ITEMS` строк и ни одной длиннее
   `MAX_OPENED_URL_LEN` до копирования. Запуск на Mac — строка parity.
+- **AC7.** Та же модель `opened_by_urls` с `OpenTarget::Window` окна сцены
+  (`apple_urls_split_into_links_and_documents`: ссылки и документы сцены адресованы её окну),
+  `a_user_activity_opens_only_a_web_page` (`NSUserActivityTypeBrowsingWeb` открывает свой
+  `webpageURL`, иная активность и активность без страницы — ничего); `FluiSceneDelegate` читает
+  `URLContexts` и `userActivities` из `scene:willConnectToSession:options:` (`Launch::Cold`,
+  действие `SceneAction::Open` в очереди после `Connect`, так что окно уже подключено),
+  `scene:openURLContexts:` и `scene:continueUserActivity:` (`Launch::Running`, только для сцены,
+  которую делегат подключил); копируются не больше `MAX_OPENED_ITEMS` строк и ни одной длиннее
+  `MAX_OPENED_URL_LEN` (`absolute_strings`, общий с macOS). Запуск на симуляторе — строка parity.
 - **AC9 (Windows, Linux).** `launch_arguments_open_their_urls_and_existing_files` (модель разбора
   `argv` в `owner/launch_arguments.rs`: URL своей схемы и `https`, `file:` URI с `localhost` и
   процентами, относительный путь к существующему файлу; флаги, значения, несуществующий файл,

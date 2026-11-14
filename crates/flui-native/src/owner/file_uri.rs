@@ -1,6 +1,6 @@
 //! The file a `file:` URI names (RFC 8089): what a desktop launch's
-//! arguments carry for a file (a desktop entry's `%U`) and what AppKit hands
-//! `application:openURLs:` for a document, read the same way on every host.
+//! arguments carry for a file (a desktop entry's `%U`) and what AppKit and
+//! UIKit hand an application for a document, read the same way on every host.
 
 use std::path::PathBuf;
 
@@ -15,7 +15,13 @@ pub(crate) enum PathConvention {
     Unix,
 }
 
-#[cfg(any(windows, x11_host, wayland_host, target_os = "macos"))]
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios"
+))]
 impl PathConvention {
     /// The convention of the host this is built for.
     pub(crate) const HOST: Self = if cfg!(windows) {
