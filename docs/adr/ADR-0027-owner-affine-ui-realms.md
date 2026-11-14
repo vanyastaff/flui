@@ -10,7 +10,7 @@
   thread-affinity table) and §9's items on the public API's thread affinity and the
   cross-thread vocabulary: one record states what stays on the owner thread and what crosses.
 - **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) for
-  §4's shutdown-completion and frame-telemetry rows, §5's raster protocol and §7 steps 3 and 4: a
+  §4's former shutdown-completion and frame-telemetry rows, §5's raster protocol and §7 steps 3 and 4: a
   slot of the one raster executor settles each frame.
 - **Date:** 2026-07-11
 - **Revised:** 2026-11-03 — the title no longer calls FLUI a multi-threaded runtime: one owner
@@ -283,7 +283,7 @@ reintroducing `Send` on the layout arena's node pointers without a fresh soundne
 | **Native window == runtime** | Cannot express embedded views, headless UI, offscreen rendering, tabs, external displays or one session across surfaces. 1 UI runtime × 1 window is the default *policy*. |
 | **Fully sequential status quo** | Leaves broken foreground dispatch, unbounded queues and singleton test locks, and no seam for decode or multi-window. |
 | Epoch arithmetic across UI runtime recreation | Rests on cross-lifetime monotonicity nothing enforces; channel identity makes the question unaskable. |
-| One FIFO for all delivery guarantees | Shutdown drain-and-refuse would deadlock the completion handshake; telemetry could displace control messages. |
+| One FIFO for all delivery guarantees | A raster lifecycle command could wait behind coalesced frames, and a coalesced frame or invalidation would reorder or drop input, which must keep causal order. |
 | `Arc<Scene>` handoff | Invites retained references and defeats latest-frame-wins accounting. |
 | One god runtime object | `UiRuntime`/`AppRuntime` own, wire and vend capabilities; behavior stays in subsystems. |
 | Bevy's `NonSend`-in-a-`Send`-world | A natively `!Send` owner holding thread-affine state directly is simpler, and Bevy is moving away from the pattern. |
