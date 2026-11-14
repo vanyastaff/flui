@@ -336,6 +336,14 @@ impl OwnerEffects for HostState {
         };
         let mut first = FirstPanic::new();
         if outcome == InitializationOutcome::Ready {
+            // URLs that arrived before this presentation existed are queued
+            // ahead of its first frame, so its first Router opens on them.
+            if self.is_current()
+                && recovery == RecoveryState::Healthy
+                && let Some(routing) = super::host::current_open_routing()
+            {
+                first.contain(|| routing.deliver_held());
+            }
             first.contain(|| entry.window.native().request_redraw());
             if !first.is_held() && self.installation_is_live(&entry) {
                 first.contain(|| self.native.installed(address));

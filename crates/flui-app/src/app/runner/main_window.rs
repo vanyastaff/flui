@@ -930,14 +930,18 @@ where
         log: teardown_log,
         watchdog: Rc::clone(&watchdog),
     };
+    // The handler owns it from the start, so a URL the platform reports
+    // before `ready` finds the application's declarations.
+    let opening = std::mem::take(&mut application.opening);
     // A panic out of the platform's own loop is terminal (ADR-0258 §3): held
     // for the exit's end, and the teardown runs as after any other end.
     #[expect(
         clippy::disallowed_methods,
         reason = "ADR-0287: the platform loop's panic is held so the teardown still runs (ADR-0258)"
     )]
-    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        platform.run(crate::app::runner::app_handler(move |owner| {
+    let run =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            platform.run(crate::app::runner::opening_app_handler(opening, move |owner| {
             let DesktopRun {
                 mut factory,
                 config,
@@ -1074,7 +1078,7 @@ where
             with_owner_platform(flui_native::OwnerPlatform::request_exit_policy_reevaluation);
             Ok(())
         }))
-    }));
+        }));
     let result = run.unwrap_or_else(|payload| {
         super::terminal::hold_terminal(payload, "platform loop");
         Ok(())

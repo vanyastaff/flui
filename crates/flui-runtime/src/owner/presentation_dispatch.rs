@@ -431,6 +431,23 @@ impl PresentationDispatcher {
         core.deliver(RuntimeWork::TestCallback(self.address, run), effects)
     }
 
+    /// Open `url`, a URL the platform opened for the application, in this
+    /// presentation (`UiRuntime::open_url`), in order with the input and
+    /// frames already accepted: one admitted before the presentation's first
+    /// frame opens its first `Router` on it. A refusal is logged, by its kind
+    /// and not its text, and leaves the stack unchanged.
+    ///
+    /// # Errors
+    /// Refuses an expired or closing target, closed host or active publication.
+    pub fn open_url(
+        &self,
+        url: String,
+        effects: &dyn OwnerEffects,
+    ) -> Result<Delivery, DispatchError> {
+        let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
+        core.deliver(RuntimeWork::OpenUrl(self.address, url), effects)
+    }
+
     /// Fence new presentation work immediately and close after already accepted work.
     ///
     /// # Errors

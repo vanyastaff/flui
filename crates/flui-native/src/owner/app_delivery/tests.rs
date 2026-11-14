@@ -142,9 +142,15 @@ fn opened_reports_waiting_for_ready_are_bounded() {
     ));
     let run = bind(delivery, app.clone());
     run.delivery.ready(run.owner()).expect("bootstrap");
+    // A handler that did not take the launch hears it after `ready`, as one
+    // report of what launched the application.
+    let kept = links[..MAX_PENDING_OPENED]
+        .iter()
+        .flat_map(|opened| opened.urls.iter().cloned())
+        .collect::<Vec<_>>();
     assert_eq!(
         app.opens(),
-        links[..MAX_PENDING_OPENED],
+        [Opened::new(kept, [], OpenTarget::Application, Launch::Cold)],
         "the first, in order"
     );
     assert_eq!(app.calls().last(), Some(&SLEEP));
@@ -155,6 +161,52 @@ fn opened_reports_waiting_for_ready_are_bounded() {
         Called::Returned(())
     ));
     assert_eq!(app.opens().last(), Some(&next));
+}
+
+/// What launched the application is the handler's to take inside `ready`
+/// (`OwnerPlatform::take_launch_opened`): the cold reports for the first
+/// one's target, joined in order. Taken, they are not reported again; the
+/// cold report for another target and the reports of the running
+/// application still are, after `ready`.
+fn ready_takes_what_launched_the_application() {
+    let app = AppLog::new();
+    let delivery = Arc::new(AppDelivery::new());
+    let window = OpenTarget::Window(
+        flui_platform::WindowIdMint::new()
+            .next()
+            .expect("a fresh mint issues an id"),
+    );
+    let reports = [
+        link("myapp:///note/1", Launch::Cold),
+        Opened::new(["myapp:///note/2".to_owned()], [], window, Launch::Cold),
+        link("myapp:///later", Launch::Running),
+        link("myapp:///note/3", Launch::Cold),
+    ];
+    for opened in &reports {
+        assert!(matches!(delivery.opened(opened.clone()), Called::Vacant));
+    }
+    let taken = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let into = Rc::clone(&taken);
+    app.react(move |call, owner| {
+        if call == AppCall::Ready {
+            into.borrow_mut().extend(owner.take_launch_opened());
+            assert_eq!(owner.take_launch_opened(), None, "taken once");
+        }
+    });
+    let run = bind(delivery, app.clone());
+    run.delivery.ready(run.owner()).expect("bootstrap");
+    assert_eq!(
+        *taken.borrow(),
+        [Opened::new(
+            ["myapp:///note/1".to_owned(), "myapp:///note/3".to_owned()],
+            [],
+            OpenTarget::Application,
+            Launch::Cold,
+        )]
+    );
+    assert_eq!(app.opens(), [reports[1].clone(), reports[2].clone()]);
+    // Outside `ready` there is no launch to take.
+    assert_eq!(run.owner().take_launch_opened(), None);
 }
 /// A bootstrap that fails leaves what was reported queued, not dropped.
 fn a_failed_bootstrap_keeps_the_reports() {
@@ -455,6 +507,10 @@ fn app_delivery_contracts() {
             (
                 "opened reports waiting for ready are bounded",
                 opened_reports_waiting_for_ready_are_bounded,
+            ),
+            (
+                "ready takes what launched the application",
+                ready_takes_what_launched_the_application,
             ),
             (
                 "a failed bootstrap keeps the reports",

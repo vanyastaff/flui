@@ -64,6 +64,7 @@ impl Application {
         let Self {
             config,
             capabilities,
+            opening,
             ready,
             window_error,
         } = self;
@@ -74,6 +75,7 @@ impl Application {
             ready,
             window_error,
             capabilities,
+            opening,
             marker: std::marker::PhantomData,
         }
     }
@@ -88,6 +90,7 @@ pub(crate) struct DesktopRun<V, F> {
     pub(crate) ready: Option<ReadyObserver>,
     pub(crate) window_error: Option<WindowErrorObserver>,
     pub(crate) capabilities: super::capability::AppCapabilities,
+    pub(crate) opening: super::runner::OpenSettings,
     marker: std::marker::PhantomData<fn() -> V>,
 }
 

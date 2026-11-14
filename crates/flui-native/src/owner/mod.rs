@@ -159,6 +159,10 @@ use signal::{OwnerSignal, OwnerTurnSlot, SignalTransport};
 pub struct OwnerPlatform {
     platform: Rc<dyn Platform>,
     hooks: Rc<dyn OwnerHooks>,
+    /// What the operating system opened the application with before its
+    /// handler was ready; only the capability `AppHandler::ready` receives
+    /// has one, and what `ready` leaves is reported after it returns.
+    launch: Option<Rc<std::cell::Cell<Option<flui_platform::Opened>>>>,
     // `_owner_affine` makes the type `!Send + !Sync`, so owner-thread state stays
     // on the thread that created it; the fields stay private so a caller cannot
     // swap the backend or hooks out from under that affinity.
@@ -182,8 +186,33 @@ impl OwnerPlatform {
         Self {
             platform,
             hooks,
+            launch: None,
             _owner_affine: PhantomData,
         }
+    }
+
+    /// The capability `AppHandler::ready` receives, carrying what the
+    /// operating system opened the application with before it was ready.
+    pub(crate) fn with_launch(
+        mut self,
+        launch: Rc<std::cell::Cell<Option<flui_platform::Opened>>>,
+    ) -> Self {
+        self.launch = Some(launch);
+        self
+    }
+
+    /// What the operating system launched the application with: the links
+    /// and files it opened before the application was ready (AppKit's
+    /// `application:openURLs:` before `applicationDidFinishLaunching:`, a
+    /// launch's arguments), as Flutter's initial route is read at startup.
+    /// Only the capability [`AppHandler::ready`](crate::AppHandler::ready)
+    /// receives has it, taken once: a bootstrap that takes it before it
+    /// builds its first window opens that window on the link. What `ready`
+    /// does not take reaches [`AppHandler::opened`](crate::AppHandler::opened)
+    /// after it returns, so nothing the operating system opened is lost.
+    #[must_use]
+    pub fn take_launch_opened(&self) -> Option<flui_platform::Opened> {
+        self.launch.as_ref()?.take()
     }
 
     /// Install the loop's owner-turn callback. Worker proxies send only wake signals.

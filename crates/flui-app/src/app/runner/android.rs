@@ -22,6 +22,7 @@ use crate::app::AppConfig;
 pub(super) fn run_android<V>(
     root: V,
     config: AppConfig,
+    opening: super::OpenSettings,
     app: android_activity::AndroidApp,
 ) -> Result<(), crate::app::LaunchError>
 where
@@ -372,29 +373,34 @@ where
         std::rc::Rc::default();
     let refusal = std::rc::Rc::clone(&refused);
     let ended = Arc::clone(&disconnect);
-    let result = platform.run(crate::app::runner::app_handler(move |owner| {
-        // A driver that goes under `EXIT_ON_DISCONNECT` quits the loop.
-        let quit = owner.proxy();
-        ended.arm(move || {
-            let _ = quit.request_quit();
-        });
-        install_owner_platform(owner)?;
-        with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
+    let result = platform.run(crate::app::runner::opening_app_handler(
+        opening,
+        move |owner| {
+            // A driver that goes under `EXIT_ON_DISCONNECT` quits the loop.
+            let quit = owner.proxy();
+            ended.arm(move || {
+                let _ = quit.request_quit();
+            });
+            install_owner_platform(owner)?;
+            with_owner_platform(|owner| {
+                owner.on_wake(Box::new(super::host::drive_native_text_sizing))
+            })
             .expect("BUG: Android owner was just installed")?;
-        super::host::install_configured_executors(&config);
-        super::host::install_host_storage(&config);
-        // `?` converts `bootstrap_android`'s `anyhow::Error` into the
-        // callback's opaque `BootstrapError` (anyhow's own `From` impl),
-        // exactly as `run_desktop`'s closure does.
-        bootstrap_android(root, config, hot_reload).inspect_err(|error| {
-            refusal.set(
-                error
-                    .downcast_ref::<flui_engine::EngineError>()
-                    .and_then(|error| crate::app::UnsupportedSystem::from_renderer(error)),
-            );
-        })?;
-        Ok(())
-    }));
+            super::host::install_configured_executors(&config);
+            super::host::install_host_storage(&config);
+            // `?` converts `bootstrap_android`'s `anyhow::Error` into the
+            // callback's opaque `BootstrapError` (anyhow's own `From` impl),
+            // exactly as `run_desktop`'s closure does.
+            bootstrap_android(root, config, hot_reload).inspect_err(|error| {
+                refusal.set(
+                    error
+                        .downcast_ref::<flui_engine::EngineError>()
+                        .and_then(|error| crate::app::UnsupportedSystem::from_renderer(error)),
+                );
+            })?;
+            Ok(())
+        },
+    ));
     // The exit is bounded end to end, as on the desktop (ADR-0258 §7).
     let watchdog = ExitWatchdog::start();
     // The loop's hooks detach first, as on the desktop: an agent stops before

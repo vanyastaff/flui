@@ -93,6 +93,9 @@ pub(super) enum RuntimeWork {
     TextSizingInstall(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingService(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingWithdraw(PresentationAddress, flui_painting::TextSizingSource),
+    /// A URL the platform opened, for the presentation's URL owner
+    /// (`UiRuntime::open_url`).
+    OpenUrl(PresentationAddress, String),
     TextSizingSettled(
         PresentationAddress,
         crate::ui_runtime::TextSizingWork,
@@ -122,6 +125,7 @@ impl RuntimeWork {
             | Self::TextSizingInstall(address, _)
             | Self::TextSizingService(address, _)
             | Self::TextSizingWithdraw(address, _)
+            | Self::OpenUrl(address, _)
             | Self::TextSizingSettled(address, _, _)
             | Self::Input { address, .. } => *address,
             Self::Runtime(_, _) | Self::Preferences(_, _) => PresentationAddress {
@@ -172,6 +176,7 @@ impl RuntimeWork {
             | Self::TextSizingInstall(address, _)
             | Self::TextSizingService(address, _)
             | Self::TextSizingWithdraw(address, _)
+            | Self::OpenUrl(address, _)
             | Self::TextSizingSettled(address, _, _)
             | Self::Input { address, .. } => state.authorizer(*address),
             Self::Runtime(id, _) | Self::Preferences(id, _) => state.runtime_index(*id),
@@ -192,6 +197,7 @@ impl RuntimeWork {
             | Self::TextSizingInstall(address, _)
             | Self::TextSizingService(address, _)
             | Self::TextSizingWithdraw(address, _)
+            | Self::OpenUrl(address, _)
             | Self::TextSizingSettled(address, _, _)
             | Self::Input { address, .. } => state.presentation_index(*address),
             Self::Runtime(id, _) | Self::Preferences(id, _) => state.runtime_index(*id),
@@ -258,6 +264,18 @@ impl RuntimeWork {
                 runtime.enter(|runtime| {
                     runtime.withdraw_captured_text_sizing_for(address.presentation_id, &source);
                 });
+            }
+            Self::OpenUrl(address, url) => {
+                // `open_url` enters the runtime for the navigation itself. A
+                // refusal leaves the stack as it was; the URL's own text stays
+                // out of the log, since a link may carry a token.
+                if let Err(error) = runtime.open_url(address.presentation_id, &url) {
+                    tracing::info!(
+                        refusal = error.reason(),
+                        ?address,
+                        "an opened URL was not opened"
+                    );
+                }
             }
             Self::TextSizingSettled(_, work, outcome) => {
                 runtime.enter(|runtime| {
