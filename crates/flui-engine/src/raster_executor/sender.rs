@@ -239,7 +239,8 @@ impl Shared {
     }
 
     /// Keep `failure` for the owner unless an earlier one waits there; the
-    /// later one is dropped outside the lock.
+    /// later one is dropped outside the lock. Answers whether `failure` is
+    /// the one kept.
     #[cfg_attr(
         target_arch = "wasm32",
         expect(
@@ -247,7 +248,7 @@ impl Shared {
             reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
         )
     )]
-    pub(crate) fn hold_failure(&self, failure: ExecutorFailure) {
+    pub(crate) fn hold_failure(&self, failure: ExecutorFailure) -> bool {
         let refused = {
             let mut held = self.failure.lock();
             if held.is_some() {
@@ -257,7 +258,9 @@ impl Shared {
                 None
             }
         };
+        let kept = refused.is_none();
         drop(refused);
+        kept
     }
 
     /// The held failure, then the death's cause once: a turn's panic held
@@ -290,10 +293,17 @@ impl Shared {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn die(&self, failure: ExecutorFailure) {
         // The cause first, so whoever reads the health as died finds it.
-        let _first = self.death.set(failure);
+        let first = self.death.set(failure).is_ok();
         self.health.store(DIED, Ordering::SeqCst);
         // An owner waiting on a slot's record learns of it now.
         self.note_turn();
+        if first {
+            // Logged once, by whichever side reached the death first, with
+            // no lock held: a subscriber is user code.
+            if let Some(cause) = self.death.get() {
+                tracing::error!(%cause, "the raster executor died; rendering stopped for every window");
+            }
+        }
     }
 
     /// Why the executor died; `None` while it has not.

@@ -181,7 +181,9 @@ fn a_send_wakes_the_raster_thread_and_its_frame_settles_for_the_owner() {
 ///
 /// Red-check: at the inline depth the second frame waits for a drain that
 /// never comes; without the ring in `drain_settlements` the third frame waits
-/// for a send that never comes.
+/// for a send that never comes. That red-check rests on the pause after the
+/// trim: a drain that lands inside the turn holding the third frame lets
+/// that turn render it; the assertions hold either way.
 #[test]
 fn a_raster_thread_slot_renders_two_frames_before_the_owner_drains() {
     let thread = spawn();
@@ -211,7 +213,7 @@ fn a_raster_thread_slot_renders_two_frames_before_the_owner_drains() {
             .iter()
             .any(|call| matches!(call, SlotCall::Reclaim(_)))
     });
-    std::thread::sleep(Duration::from_millis(20));
+    std::thread::sleep(Duration::from_millis(100));
     assert_eq!(
         thread.backend.renders().len(),
         2,
@@ -428,10 +430,11 @@ impl flui_foundation::clock::MonotonicClock for BrokenClock {
 /// A clock that panics is the owner's failure, not the thread's: the first
 /// read is contained and reported, the thread serves, and a lost device's
 /// rebuild, which the clock can no longer pace, does not spin the thread on
-/// it.
+/// it. The owner is woken once a failure is held, the first read's included.
 ///
 /// Red-check: without the containment of the first read the thread never
-/// builds its executor, and the attach is never applied; with
+/// builds its executor, and the attach is never applied; without the wake
+/// for a failure held before the first turn, the owner is never woken; with
 /// `rebuild_due_in` answering a zero wait for a clock that panics, the thread
 /// turns in a loop and the reads climb.
 #[test]
@@ -451,6 +454,10 @@ fn a_clock_that_panics_is_reported_and_does_not_spin_the_raster_thread() {
         woken,
     };
     let at = attach(&thread.sender);
+    thread
+        .woken
+        .recv_timeout(PATIENCE)
+        .expect("the owner is woken for the first read's panic");
     let failure = thread.sender.take_executor_failure();
     let Some(ExecutorFailure::TurnPanicked { message }) = failure else {
         panic!("the clock's panic is reported: {failure:?}");

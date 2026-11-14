@@ -80,31 +80,36 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
         let thread = thread::Builder::new()
             .name(THREAD_NAME.to_owned())
             .spawn(move || {
+                // Shared on this thread only: the executor's turns wake
+                // through it, and so does a failure no turn reports.
+                let wake: Rc<dyn Fn()> = Rc::new(wake);
                 // The clock is the owner's code: a first read that panics
                 // starts the executor at the thread's own time.
                 let mut first_read = FirstPanic::new();
                 let read_at = first_read
                     .contain(|| clock.now())
                     .unwrap_or_else(web_time::Instant::now);
-                let _held = hand_over(first_read, &served);
+                let owed = hand_over(first_read, &served);
                 let mut caught = FirstPanic::new();
                 caught.contain(|| {
                     let clock: Rc<dyn MonotonicClock> = Rc::new(SharedClock(clock));
+                    let turned = Rc::clone(&wake);
                     let executor = Self::assemble(
                         backend,
                         read_at,
                         clock,
-                        Box::new(wake),
+                        Box::new(move || turned()),
                         Arc::clone(&served),
                         lifecycle,
                     );
-                    serve(executor, &served);
+                    serve(executor, &served, &*wake, owed);
                 });
                 // `serve` contains every turn and the stop, and building runs
                 // no code the executor does not own; a panic here left no
                 // executor to answer the sends, so it is dead, not stopped.
                 if let Some(failure) = turn_panicked(caught) {
                     served.die(failure);
+                    wake_owner(&*wake, &served);
                 }
                 // The owner may have stopped waiting; nobody to tell then.
                 let _told = stopped_tx.send(());
@@ -120,41 +125,50 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
     }
 }
 
-/// Turn the executor until it is stopped, then stop it.
-fn serve<B: RasterBackend>(mut executor: RasterExecutor<B>, shared: &Shared) {
+/// Turn the executor until it is stopped, then stop it. `owed` says a failure
+/// was held before the first turn, with no wake yet.
+///
+/// A turn's own wake, if it ran, came before its failure was held, and a turn
+/// that settled nothing woke nobody: whenever a failure is newly held, the
+/// owner is woken once it is there to take.
+fn serve<B: RasterBackend>(
+    mut executor: RasterExecutor<B>,
+    shared: &Shared,
+    wake: &dyn Fn(),
+    mut owed: bool,
+) {
     while shared.health() == ExecutorHealth::Running {
         let mut caught = FirstPanic::new();
         let _outcome = caught.contain(|| executor.turn());
-        if hand_over(caught, shared) {
-            // The turn's own wake, if it ran, came before the failure was
-            // held, and a turn that settled nothing woke nobody: the owner is
-            // woken once the failure is there to take. A wake that panics
-            // again is held behind the first failure, and not woken for.
-            let mut again = FirstPanic::new();
-            again.contain(|| (executor.wake)());
-            let _held = hand_over(again, shared);
-        }
+        owed |= hand_over(caught, shared);
         shared.note_turn();
-        let due = rebuild_due_in(&executor, shared);
+        let due = rebuild_due_in(&executor, shared, &mut owed);
+        if std::mem::take(&mut owed) {
+            wake_owner(wake, shared);
+        }
         shared.wait_for_ring(due);
     }
     let mut caught = FirstPanic::new();
-    caught.contain(|| {
-        executor.shut_down();
-        drop(executor);
-    });
-    let _held = hand_over(caught, shared);
+    caught.contain(|| executor.shut_down());
+    caught.contain(|| drop(executor));
+    if hand_over(caught, shared) {
+        wake_owner(wake, shared);
+    }
     shared.note_turn();
 }
 
-/// Give a contained turn's panic to the owner as its text; answers whether
-/// there was one.
+/// Give a contained panic to the owner as its text; answers whether it is
+/// newly held, so the owner is owed a wake.
 fn hand_over(caught: FirstPanic, shared: &Shared) -> bool {
-    let Some(failure) = turn_panicked(caught) else {
-        return false;
-    };
-    shared.hold_failure(failure);
-    true
+    turn_panicked(caught).is_some_and(|failure| shared.hold_failure(failure))
+}
+
+/// Wake the owner for a failure it has to take, contained. A wake that panics
+/// is held behind the failure it woke for, and not woken for again.
+fn wake_owner(wake: &dyn Fn(), shared: &Shared) {
+    let mut caught = FirstPanic::new();
+    caught.contain(wake);
+    let _behind = hand_over(caught, shared);
 }
 
 /// The failure a contained panic is reported as; its payload is discarded
@@ -173,15 +187,17 @@ fn turn_panicked(caught: FirstPanic) -> Option<ExecutorFailure> {
 ///
 /// The wait is the clock's distance in real time. A clock that panics paces
 /// nothing, so the thread waits for a ring rather than turning on it in a
-/// loop; a manual clock's owner rings by sending once it moved the clock.
+/// loop; a manual clock's owner rings by sending once it moved the clock. A
+/// panic newly held sets `owed`, so the owner is woken to take it.
 fn rebuild_due_in<B: RasterBackend>(
     executor: &RasterExecutor<B>,
     shared: &Shared,
+    owed: &mut bool,
 ) -> Option<Duration> {
     let due = shared.device().next_attempt_at?;
     let mut caught = FirstPanic::new();
     let now = caught.contain(|| executor.clock.now());
-    let _held = hand_over(caught, shared);
+    *owed |= hand_over(caught, shared);
     Some(due.saturating_duration_since(now?))
 }
 
@@ -254,7 +270,9 @@ impl ExecutorHandle {
     /// Stop the thread and wait for it, at most `timeout`. Every send answers
     /// [`RasterSendError::Gone`](super::RasterSendError::Gone) from the
     /// call on; the thread settles every pending frame and takes every slot
-    /// down before it ends. A second call answers at once.
+    /// down before it ends. A second call answers at once. A panic the stop
+    /// contained reaches the owner as the turns' do, through
+    /// [`RasterSender::take_executor_failure`].
     ///
     /// # Errors
     /// [`ExecutorFailure::Wedged`] when the thread did not end in time: the
@@ -293,26 +311,17 @@ impl ExecutorHandle {
     /// Mark the executor died of a wedge, and answer the cause it died of: the
     /// first one, which a death the thread itself reached may have set.
     fn die(&self, waited: Duration) -> ExecutorFailure {
-        let failure = ExecutorFailure::Wedged { waited };
-        self.shared.die(failure.clone());
-        let death = self
-            .shared
+        self.shared.die(ExecutorFailure::Wedged { waited });
+        self.shared
             .death()
-            .expect("BUG: a died executor keeps its cause");
-        if death == failure {
-            tracing::error!(
-                ?waited,
-                "the raster thread did not answer; rendering stopped for every window"
-            );
-        }
-        death
+            .expect("BUG: a died executor keeps its cause")
     }
 }
 
 impl Drop for ExecutorHandle {
     fn drop(&mut self) {
-        // A wedge is in the shared record for any sender still held, and was
-        // logged.
+        // A death is in the shared record for any sender still held, and was
+        // logged when it began.
         let _stopped = self.shut_down(DETACH_DEADLINE);
     }
 }
