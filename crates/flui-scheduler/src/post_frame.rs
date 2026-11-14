@@ -488,6 +488,30 @@ impl OwnerFrame {
         });
     }
 
+    /// Settle the segments of a frame that aborted before its post-frame dispatch. A completed
+    /// segment's geometry stays completed, so its callbacks stay eligible and the presentation
+    /// may enter its next segment; a segment still running keeps its callback debt as a
+    /// suspended one, which the next frame resumes. Returns whether a queued post-frame callback
+    /// can run on the next frame.
+    pub(crate) fn settle_aborted_segments(&self) -> bool {
+        self.post_frame.scopes.borrow_mut().retain(|scope| {
+            let Some(scope) = scope.upgrade() else {
+                return false;
+            };
+            match scope.phase.get() {
+                SegmentPhase::Completing => scope.phase.set(SegmentPhase::Idle),
+                SegmentPhase::Running => scope.phase.set(SegmentPhase::Suspended),
+                SegmentPhase::Idle | SegmentPhase::Suspended | SegmentPhase::Servicing => {}
+            }
+            true
+        });
+        self.post_frame
+            .queue
+            .borrow()
+            .iter()
+            .any(|entry| entry.target.eligible())
+    }
+
     /// Return an uninvoked tail to the already-validated queue. Original IDs
     /// retain FIFO order ahead of newer registrations on the next drain.
     pub(crate) fn restore_post_frame_queue(&self) {

@@ -92,6 +92,13 @@ entry returns to the queue with its original ID and cancellation record, while
 healthy siblings continue. An older completed epoch is also blocked while its
 presentation's current geometry is incomplete.
 
+A host frame that aborts skips the post-frame dispatch that returns each scope to
+idle, so the abort settles the scopes itself: a segment the pipeline completed
+stays completed and its scope idle, so its callbacks run at the next frame's end
+and the presentation enters its next segment; a segment left running is
+suspended with its debt, for the next frame to resume. When a queued callback can
+run on the next frame, the abort asks for that frame.
+
 `PresentationScopeFactory` is the weak assembly capability. It can mint scopes
 only for the original live owner; a scoped widget handle cannot mint siblings.
 Successor registration commits completion demand before requesting a host wake,
@@ -260,7 +267,7 @@ than draining it (they "cannot be unregistered", per their own doc), so a
 panic there costs nothing structurally — the same callback (including the
 one that panicked) simply runs again next frame, same as always.
 
-**The frame's post-frame callbacks do not run** for an aborted frame —
+**The frame's post-frame callbacks do not run** for an aborted frame; they wait for the next frame, which the abort asks for —
 see the private abort cleanup. **Completion
 waiters are woken with the aborted frame's outcome** — an aborted frame is a
 frame that finished, badly, and `end_of_frame()` must not hang forever
@@ -273,7 +280,8 @@ issue #1162 shaped it this way.
 **The `frame_scheduled` contract for a catcher:** `handle_begin_frame`
 cleared `frame_scheduled` before any callback ran. Abort cleanup re-arms it
 only for work accepted behind the failure (one-shot callbacks, microtasks,
-tasks), and a failed post-frame batch only for its queued tail: that work
+tasks, post-frame callbacks that can run on the next frame), and a failed
+post-frame batch only for its queued tail: that work
 was promised a frame and nothing else asks for one once the caller resumes
 the panic. The failed entry was already removed, so the request cannot
 re-drive it. It does not re-arm for the failure itself, which would hot-loop
