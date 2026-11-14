@@ -447,3 +447,72 @@ fn firefox_is_driven_over_webdriver_bidi() {
     };
     drives_a_page(&firefox, Dialect::Bidi);
 }
+
+/// A browser on a WebSocket of the test's own that speaks WebDriver BiDi: it started with the
+/// tab `started`, opens `opened` when asked for a tab, and answers every other command with an
+/// empty result. Returns the socket's URL and the commands it was sent, as they arrive.
+fn bidi_browser() -> (String, std::sync::mpsc::Receiver<serde_json::Value>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let url = format!(
+        "ws://{}/session",
+        listener.local_addr().expect("the port's address")
+    );
+    let (sent, commands) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("the link connects");
+        let mut ws = tungstenite::accept(stream).expect("the link's handshake");
+        while let Ok(message) = ws.read() {
+            let tungstenite::Message::Text(text) = message else {
+                continue;
+            };
+            let command = serde_json::from_str::<serde_json::Value>(&text).expect("JSON");
+            let result = match command["method"].as_str() {
+                Some("browsingContext.getTree") => {
+                    serde_json::json!({ "contexts": [{ "context": "started" }] })
+                }
+                Some("browsingContext.create") => serde_json::json!({ "context": "opened" }),
+                _ => serde_json::json!({}),
+            };
+            let answer =
+                serde_json::json!({ "id": command["id"], "type": "success", "result": result });
+            // Recorded before it is answered: the link reads the record once its command
+            // returns.
+            if sent.send(command).is_err() {
+                return;
+            }
+            if ws
+                .send(tungstenite::Message::text(answer.to_string()))
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
+    (url, commands)
+}
+
+#[test]
+fn firefox_loads_the_page_in_a_tab_the_link_opened_and_closes_the_one_it_started_with() {
+    let (url, commands) = bidi_browser();
+    let socket = socket::Socket::connect(&url, WAIT).expect("the link reaches the browser");
+    let mut link = bidi::Bidi::attach(socket, Instant::now() + WAIT).expect("the link attaches");
+    link.open("() => {}", "http://127.0.0.1:1/")
+        .expect("the page opens");
+    let commands = commands.try_iter().collect::<Vec<serde_json::Value>>();
+    let navigated = commands
+        .iter()
+        .filter(|command| command["method"] == "browsingContext.navigate")
+        .map(|command| command["params"]["context"].clone())
+        .collect::<Vec<serde_json::Value>>();
+    assert_eq!(
+        navigated,
+        ["opened"],
+        "the tab the browser started with may still load its command line's page"
+    );
+    let closed = commands
+        .iter()
+        .filter(|command| command["method"] == "browsingContext.close")
+        .map(|command| command["params"]["context"].clone())
+        .collect::<Vec<serde_json::Value>>();
+    assert_eq!(closed, ["started"]);
+}

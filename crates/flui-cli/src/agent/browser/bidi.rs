@@ -1,6 +1,6 @@
-//! The link in WebDriver BiDi: a session on the browser's WebSocket, the tab it opened with, and
-//! a channel the page reports through. A channel is handed to a function as an argument, so
-//! the page gets no global of the link's.
+//! The link in WebDriver BiDi: a session on the browser's WebSocket, a tab it opens for
+//! the link, and a channel the page reports through. A channel is handed to a function as an
+//! argument, so the page gets no global of the link's.
 
 use std::time::Instant;
 
@@ -28,9 +28,16 @@ pub(super) struct Bidi {
 }
 
 impl Bidi {
-    /// Starts a session on `socket` and takes the browser's first tab. A browser still starting
+    /// Starts a session on `socket` and opens a tab of the link's own. A browser still starting
     /// answers late (Firefox answers `session.new` once its first window is up), so every step
     /// may take until `ready_by`.
+    ///
+    /// The tab the browser started with is not used: when `session.new` answers, that tab may
+    /// still be loading the page of its command line, and a navigation of the link's would be
+    /// replaced by it, leaving the tab on `about:blank`. `browsingContext.create` answers only
+    /// once the new tab's first document has loaded, and nothing else navigates that tab.
+    /// The tabs the browser started with are closed, so a visible browser shows the app's
+    /// tab alone.
     pub(super) fn attach(socket: Socket, ready_by: Instant) -> Result<Self, AttachError> {
         let mut link = Self {
             socket,
@@ -45,26 +52,32 @@ impl Bidi {
                 ready_by,
             )
             .map_err(AttachError::at("browsingContext.getTree"))?;
-        let first = tree
+        let started_with = tree
             .get("contexts")
             .and_then(Value::as_array)
-            .and_then(|contexts| contexts.first())
-            .and_then(|context| context.get("context"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        link.context = match first {
-            Some(context) => context,
-            None => link
-                .command_by("browsingContext.create", json!({ "type": "tab" }), ready_by)
-                .and_then(|created| {
-                    created
-                        .get("context")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                        .ok_or_else(|| LinkError::Refused("the browser opened no tab".into()))
-                })
-                .map_err(AttachError::at("browsingContext.create"))?,
-        };
+            .into_iter()
+            .flatten()
+            .filter_map(|context| context.get("context").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect::<Vec<String>>();
+        link.context = link
+            .command_by("browsingContext.create", json!({ "type": "tab" }), ready_by)
+            .and_then(|created| {
+                created
+                    .get("context")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| LinkError::Refused("the browser opened no tab".into()))
+            })
+            .map_err(AttachError::at("browsingContext.create"))?;
+        for context in started_with {
+            // A tab left open only shows a blank page beside the app's.
+            let _ = link.command_by(
+                "browsingContext.close",
+                json!({ "context": context }),
+                ready_by,
+            );
+        }
         link.command_by("session.subscribe", json!({ "events": EVENTS }), ready_by)
             .map_err(AttachError::at("session.subscribe"))?;
         Ok(link)
