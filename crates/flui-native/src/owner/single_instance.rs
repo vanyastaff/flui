@@ -3,7 +3,7 @@
 //! app id gives the instance, and the inbox the launches wait in until the
 //! owner takes them. The transport is the host's: the session bus on Linux
 //! (`owner::linux::single_instance`), a named pipe on Windows
-//! (`owner::windows::single_instance`, whose frame is [`frame`]).
+//! (`owner::windows::single_instance`, whose frame the `frame` module writes and reads).
 //!
 //! A launch is accepted work: its process waits for the answer and ends only
 //! once the owner took the launch. Every launch posted here is either taken
@@ -42,7 +42,10 @@ pub(crate) fn instance_name(app_id: &str) -> Option<&str> {
 #[cfg(any(x11_host, wayland_host, windows))]
 mod inbox {
     use std::collections::VecDeque;
+    use std::future::Future as _;
+    use std::pin::Pin;
     use std::sync::Arc;
+    use std::task::Poll;
     use std::time::Duration;
 
     use parking_lot::Mutex;
@@ -216,11 +219,15 @@ mod inbox {
             let mut held = self
                 .timers
                 .spawn(async move { tokio::time::sleep(hold).await });
-            let taken = tokio::select! {
-                biased;
-                taken = &mut answer => Some(taken),
-                _ = &mut held => None,
-            };
+            // The answer first, so a launch taken as the hold ends counts as
+            // taken.
+            let taken = std::future::poll_fn(|ctx| {
+                if let Poll::Ready(taken) = Pin::new(&mut answer).poll(ctx) {
+                    return Poll::Ready(Some(taken));
+                }
+                Pin::new(&mut held).poll(ctx).map(|_| None)
+            })
+            .await;
             held.abort();
             if let Some(taken) = taken {
                 return taken.map_err(|_| ENDED);

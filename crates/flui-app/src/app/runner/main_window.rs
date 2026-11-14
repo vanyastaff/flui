@@ -783,14 +783,16 @@ where
 /// Start `host`, as one instance named `single` when it is given
 /// ([`CurrentHost::start_single`](flui_native::CurrentHost::start_single)).
 /// The Wayland and X11 hosts run their IO sources (XIM, IBus, logind, the
-/// settings portal, the session bus) on the application's IO runtime, so a
+/// settings portal, the session bus), and the Windows host its single-instance
+/// pipe, on the application's IO runtime, so a
 /// process runs one (ADR-0327 §3); every other host, and an application that
 /// brought its own executors, starts on the host's own.
 fn start_host(
     host: flui_native::CurrentHost,
     single: Option<&str>,
 ) -> Result<flui_native::HostStart, LaunchError> {
-    let executor = host_executor(host)?.unwrap_or_else(flui_native::NativeExecutor::own);
+    let executor =
+        host_executor(host, single.is_some())?.unwrap_or_else(flui_native::NativeExecutor::own);
     let started = match single {
         Some(app_id) => host.start_single(executor, app_id),
         None => host
@@ -801,23 +803,30 @@ fn start_host(
 }
 
 /// The executor `host` runs its IO on: the application's IO runtime for the
-/// Wayland and X11 hosts, when the application has one; `None` for the host's
-/// own.
+/// Wayland and X11 hosts, and for the Windows host when the application runs
+/// one instance (its pipe is served there), when the application has one;
+/// `None` for the host's own.
 #[cfg_attr(
-    not(target_os = "linux"),
+    not(any(target_os = "linux", windows)),
     expect(
         clippy::unnecessary_wraps,
-        reason = "only the Linux hosts take the application's IO runtime, which can fail to start"
+        reason = "only the Linux and Windows hosts take the application's IO runtime, which can \
+                  fail to start"
     )
 )]
 fn host_executor(
     host: flui_native::CurrentHost,
+    single: bool,
 ) -> Result<Option<flui_native::NativeExecutor>, LaunchError> {
     #[cfg(target_os = "linux")]
-    if matches!(
+    let takes_io = matches!(
         host,
         flui_native::CurrentHost::Wayland | flui_native::CurrentHost::X11
-    ) {
+    );
+    #[cfg(windows)]
+    let takes_io = single && matches!(host, flui_native::CurrentHost::Windows);
+    #[cfg(any(target_os = "linux", windows))]
+    if takes_io {
         let services = APP_RUNTIME.with(|slot| Arc::clone(slot.borrow_mut().ensure_execution()));
         let runtime = services
             .io_runtime()
@@ -826,7 +835,7 @@ fn host_executor(
             })?;
         return Ok(runtime.map(flui_native::NativeExecutor::from_tokio));
     }
-    let _ = host;
+    let _ = (host, single);
     Ok(None)
 }
 

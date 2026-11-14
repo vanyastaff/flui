@@ -156,8 +156,9 @@ windows = { workspace = true, features = [
 # `::windows_core` paths.
 windows-core = { workspace = true }
 # One instance per session: the first instance serves a named pipe on the
-# IO runtime, and a later launch writes its frame to it.
-tokio = { workspace = true, features = ["net", "io-util", "macros"] }
+# IO runtime, and a later launch writes its frame to it. `net` is tokio's named
+# pipes (with `mio` and `socket2`, which the Linux graph already has).
+tokio = { workspace = true, features = ["net", "io-util"] }
 
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]

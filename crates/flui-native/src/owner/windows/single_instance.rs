@@ -82,6 +82,10 @@ pub(crate) struct FirstInstance {
     inbox: Arc<Inbox<Forwarded>>,
     /// The mutex, closed after the task is told to end.
     _mutex: OwnedHandle,
+    /// The runtime the pipe is served on, kept while the instance lives:
+    /// `flui-app` hands a Windows host an executor of its own, whose last
+    /// clone shuts its runtime down, and the host keeps none. Dropped last.
+    _executor: NativeExecutor,
 }
 
 impl std::fmt::Debug for FirstInstance {
@@ -323,6 +327,7 @@ pub(crate) fn claim(
             serving,
             inbox,
             _mutex: mutex,
+            _executor: executor.clone(),
         }));
     }
     drop(mutex);
