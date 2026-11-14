@@ -454,9 +454,10 @@ impl Path {
             .get_or_init(|| Self::build(self.hint, self.offset))
     }
 
-    /// Feeds what the path draws to a display list's fingerprint: its curves,
-    /// built here when unbuilt, so a shape and the curves it builds read
-    /// alike, as equality has them; its fill type; its finiteness.
+    /// Feeds what the path draws to a display list's fingerprint, as equality
+    /// compares it: its curves (built here when unbuilt), the shape it still
+    /// is, which the engine draws by (an analytic shadow, a rounded fill), its
+    /// fill type and its finiteness.
     pub(crate) fn fingerprint(&self, fp: &mut Fingerprint) {
         let elements = self.geometry().elements();
         fp.len(elements.len());
@@ -472,6 +473,13 @@ impl Path {
                 fp.f64(point.x);
                 fp.f64(point.y);
             }
+        }
+        let shape = self.shape();
+        fp.tag(&shape);
+        match shape {
+            ShapeHint::None => {}
+            ShapeHint::Rect(rect) | ShapeHint::Oval(rect) => fp.rect(&rect),
+            ShapeHint::RRect(rrect) => fp.rrect(&rrect),
         }
         fp.tag(&self.fill_type);
         fp.bool(self.finite);

@@ -1190,7 +1190,13 @@ pub(crate) fn a_fingerprint_reads_what_the_commands_draw() {
         "a payload is read by content, not by position"
     );
 
+    // The same curves without the rounded-rectangle shape the engine draws
+    // the analytic shadow and the rounded fill from.
+    let unshaped = card
+        .transform(&Matrix4::IDENTITY)
+        .expect("the identity transforms a finite path");
     let changed = [
+        ("the path's shape", drawing(&unshaped, Color::BLUE, 5.0, 10)),
         ("the path's curves", drawing(&curve, Color::BLUE, 5.0, 10)),
         ("the paint", drawing(&card, Color::RED, 5.0, 10)),
         ("the transform", drawing(&card, Color::BLUE, 6.0, 10)),

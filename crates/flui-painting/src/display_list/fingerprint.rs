@@ -23,7 +23,8 @@ impl DisplayList {
     /// A hash of what the list's commands draw, so two lists of one length
     /// and bounds that draw differently read apart in inspection.
     ///
-    /// Equal for lists whose commands hold equal values, wherever each list
+    /// Equal for lists whose commands hold the same values bit for bit (so
+    /// `0.0` and `-0.0` read apart), wherever each list
     /// keeps its payloads; equal within one build of the program, not across
     /// builds. A path that has not built its curves builds them here.
     #[must_use]
@@ -65,7 +66,8 @@ impl Fingerprint {
     }
 
     /// Which variant `value` is: all an enum without fields holds, and the
-    /// first word of one with fields.
+    /// first word of one with fields, whose fields the caller feeds apart:
+    /// an enum fed by its tag alone is one without fields.
     pub(crate) fn tag<T>(&mut self, value: &T) {
         mem::discriminant(value).hash(&mut self.0);
     }
@@ -311,10 +313,21 @@ impl Fingerprint {
         for &baseline in &paragraph.baselines {
             self.f32(baseline);
         }
+        self.len(paragraph.faces.len());
+        for face in &paragraph.faces {
+            face.key().hash(&mut self.0);
+        }
+        self.len(paragraph.coords.len());
+        for &coord in &paragraph.coords {
+            self.0.write_i16(coord);
+        }
         self.len(paragraph.runs.len());
         for run in &paragraph.runs {
             self.0.write_u32(run.face);
             self.f32(run.font_size);
+            self.0.write_u32(run.coords.start);
+            self.0.write_u32(run.coords.end);
+            run.synthesis.hash(&mut self.0);
             self.colors(run.color.as_ref().map(std::slice::from_ref));
             self.f32(run.baseline);
             self.0.write_u32(run.glyphs.start);
