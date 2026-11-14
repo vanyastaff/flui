@@ -70,7 +70,7 @@ See [`crates.md`](crates.md) for the full inventory and current status of each c
 
 - **Tooling enforces the layout, not review.** Cargo rejects a dependency *cycle* at build time, but an upward edge that does not close a cycle (`flui-rendering → flui-devtools`, say) builds fine — which is how three placements in this diagram drifted from the code unnoticed. `cargo xtask workspace` closes that gap by comparing each manifest's declared tier and order against Cargo's normal and build edges.
 - **Public API discipline scales.** A consumer cannot reach into another crate's internals because they are `pub(crate)`. Reviewers reject changes that expose internals "just to make it compile" — that is the signal an abstraction is wrong.
-- **Backends slot in via traits.** `Platform`, `RasterBackend`, `RenderBox`, and similar are extension points. Implementations live in dedicated crates, not in widget code.
+- **Backends slot in via traits.** `Platform`, `RenderBox`, and similar are extension points. Implementations live in dedicated crates, not in widget code.
 
 ## Tree Pipeline
 

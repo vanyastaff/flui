@@ -126,7 +126,9 @@ pollster = { workspace = true }
 # fragile-send-sync-non-atomic-wasm: wgpu types are Rc/RefCell-based on the
 # WebGPU backend and therefore !Send; this feature marks them Send+Sync, which
 # is sound only while the wasm build has no threads (no atomics target
-# features). Required by flui-app's Send-bounded frame callbacks. `webgl`
+# features). Still required where the engine hands a wgpu value to a
+# Send-bounded position (the device domain's submitted-work callbacks, the
+# `GpuContext` its `Arc` shares); docs/gaps.md tracks its removal. `webgl`
 # is the WebGL2 fallback (ADR-0244 §1): `gles` alone builds no GL backend on
 # wasm32.
 wgpu = { workspace = true, default-features = false, features = [
@@ -155,8 +157,7 @@ criterion = { workspace = true }
 # support) — the only remaining `image` consumer, and it is a dev/test one.
 image = { workspace = true }
 # Compile-fail fixtures pinning ADR-0045 decision 1: an unwrapped raw
-# platform handle breaks `Renderer`'s derived `Send`, and a `!Send` backend
-# cannot implement `RasterBackend` now that `Send` is a supertrait. Same
+# platform handle breaks `Renderer`'s derived `Send`. Same
 # crate/version flui-painting uses for its compile-fail suite
 # (`crates/flui-painting/tests/compile_fail.rs`).
 trybuild = { workspace = true }

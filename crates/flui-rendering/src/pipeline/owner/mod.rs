@@ -220,6 +220,10 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Region identity authority survives semantics owner disposal/replacement.
     semantics_regions: semantics::RegionIdentities,
 
+    /// Scratch memory a walk lists into while it runs, reset as the next walk that uses it
+    /// begins (ADR-0328). The semantics assembly takes its fragment lists from it.
+    frame_arena: flui_foundation::arena::FrameArena,
+
     /// Semantics diagnostics the frame driver has not yet reported, moved
     /// here from the semantics owner after each flush so a disposed or
     /// replaced owner cannot take them with it.
@@ -444,6 +448,7 @@ where
         semantics_enabled: from.semantics_enabled,
         semantics_owner: from.semantics_owner,
         semantics_regions: from.semantics_regions,
+        frame_arena: from.frame_arena,
         semantics_diagnostics: from.semantics_diagnostics,
         assistive_focus: from.assistive_focus,
         #[cfg(any(test, feature = "testing"))]

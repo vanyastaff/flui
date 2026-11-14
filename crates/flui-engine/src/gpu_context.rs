@@ -33,7 +33,7 @@ use crate::{
     painter::WgpuPainter,
     pipeline_set::PipelineLibrary,
     raster::PresentDisposition,
-    raster_executor::{SlotBackend, SlotConfig, SlotId, SlotTarget},
+    raster_executor::{RasterBackend, SlotConfig, SlotId, SlotTarget},
     surface_factory::{SurfaceFactory, UnconfiguredSurface, checked_target, instance_descriptor},
     window_slot::{Gpu, WindowSlot},
 };
@@ -296,6 +296,9 @@ pub struct GpuContext {
     /// a slot's textures for the length of its frame. Kept from a slot's
     /// first update until it detaches, across device rebuilds.
     textures: FxHashMap<SlotId, KeptTextures>,
+    /// What the driver's report of a lost device wakes, besides marking the
+    /// device lost: the owner that replaces the context (the web).
+    loss_wake: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
     builds: ContextBuilds,
     /// Flush submissions of texture writes a frame did not submit.
@@ -525,7 +528,7 @@ impl GpuContext {
         recipe: DeviceRecipe,
     ) -> Self {
         let domain = DeviceDomain::new(Arc::new(device), Arc::new(queue));
-        install_device_diagnostics(&domain);
+        install_device_diagnostics(&domain, None);
         Self {
             instance,
             adapter,
@@ -538,6 +541,7 @@ impl GpuContext {
             blit: None,
             slots: SlotTable::default(),
             textures: FxHashMap::default(),
+            loss_wake: None,
             #[cfg(test)]
             texture_flushes: Cell::new(0),
             #[cfg(test)]
@@ -594,7 +598,7 @@ impl GpuContext {
         }
         self.adapter = adapter;
         self.domain = DeviceDomain::new(Arc::new(device), Arc::new(queue));
-        install_device_diagnostics(&self.domain);
+        install_device_diagnostics(&self.domain, self.loss_wake.clone());
         #[cfg(test)]
         {
             self.builds.devices += 1;
@@ -740,6 +744,16 @@ impl GpuContext {
             Some(SurfaceSlot::Window(window)) => window.resize(&gpu_of(adapter, domain), size),
             None => Err(not_attached()),
         }
+    }
+
+    /// Call `wake` whenever the driver reports this context's device lost,
+    /// after the device is marked lost: an owner that replaces a lost context
+    /// itself (the web, ADR-0305 §8) hears of the loss with no frame to find
+    /// it. `wake` only schedules the owner, since the driver may report the
+    /// loss from inside a call of the context.
+    pub fn on_device_lost(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        self.loss_wake = Some(Arc::clone(&wake));
+        install_device_diagnostics(&self.domain, Some(wake));
     }
 
     /// Detach `slot`; `false` for a stale id or one already detached.
@@ -1252,7 +1266,10 @@ fn offscreen_texture(
 /// wgpu's default turns an uncaptured error into a panic; the callbacks run on
 /// whichever thread wgpu reports from and reach the domain through a weak
 /// reference, since the device the domain holds owns them.
-fn install_device_diagnostics(domain: &Arc<DeviceDomain>) {
+fn install_device_diagnostics(
+    domain: &Arc<DeviceDomain>,
+    loss_wake: Option<Arc<dyn Fn() + Send + Sync>>,
+) {
     let device = domain.device();
     device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
         tracing::error!(
@@ -1263,8 +1280,13 @@ fn install_device_diagnostics(domain: &Arc<DeviceDomain>) {
     let lost = Arc::downgrade(domain);
     device.set_device_lost_callback(move |reason, message| {
         tracing::error!(?reason, %message, "wgpu device lost: the GPU context is gone");
-        if let Some(domain) = lost.upgrade() {
-            domain.mark_lost();
+        let Some(domain) = lost.upgrade() else {
+            return;
+        };
+        domain.mark_lost();
+        // After the mark, so the owner the wake runs reads the device lost.
+        if let Some(wake) = &loss_wake {
+            wake();
         }
     });
 }
@@ -1272,7 +1294,7 @@ fn install_device_diagnostics(domain: &Arc<DeviceDomain>) {
 /// The context as the raster executor's backend. An offscreen slot renders in
 /// full each frame and counts as presented once submitted; a window slot
 /// renders its damage and presents.
-impl SlotBackend for GpuContext {
+impl RasterBackend for GpuContext {
     fn attach(&mut self, slot: SlotId, target: SlotTarget, config: SlotConfig) -> EngineResult<()> {
         match target {
             SlotTarget::Window(surface) => self.attach_window(slot, surface, config),
@@ -1358,6 +1380,12 @@ impl SlotBackend for GpuContext {
         GpuContext::detach(self, slot);
     }
 
+    fn kept_textures(&self, slot: SlotId) -> TextureUpdates {
+        self.textures
+            .get(&slot)
+            .map_or_else(TextureUpdates::default, KeptTextures::newest)
+    }
+
     fn reclaim(&mut self, level: MemoryPressureLevel) {
         if let Some(painter) = self.painter.as_mut() {
             painter.reclaim(level);
@@ -1401,8 +1429,8 @@ fn device_extent(size: DeviceSize) -> EngineResult<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use flui_foundation::{
-        FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
-        SurfaceGeneration, UiRuntimeId,
+        FrameEpoch, FrameStamp, PresentationAddress, PresentationId, SurfaceGeneration,
+        UiRuntimeId,
         geometry::{DeviceSize, Offset, Rect},
     };
     use flui_layer::{DamageRegion, LayerTree, Scene, SceneBuilder, SceneSnapshot};
@@ -1494,12 +1522,7 @@ mod tests {
         RasterCommand::Frame {
             slot,
             snapshot: SceneSnapshot::new(
-                FrameStamp::new(
-                    address,
-                    FrameEpoch::ZERO,
-                    generation,
-                    GpuResourceGeneration::ZERO,
-                ),
+                FrameStamp::new(address, FrameEpoch::ZERO, generation),
                 DamageRegion::Full(flui_layer::FullReason::FirstFrame),
                 Scene::new(tree),
             ),
@@ -1977,6 +2000,13 @@ mod tests {
             expected,
             "the new device has each slot's image back"
         );
+        // What an owner that replaces the context gives each slot's next one.
+        for (slot, _, _, texture) in &presentations {
+            let kept = crate::RasterBackend::kept_textures(executor.backend(), *slot);
+            let ids: Vec<flui_painting::paint::TextureId> =
+                kept.frames.iter().map(|(id, _)| *id).collect();
+            assert_eq!(ids, vec![texture.id()], "the slot keeps its drawn image");
+        }
 
         let detached = presentations[0].0;
         let _receipt = sender
@@ -2379,7 +2409,7 @@ mod tests {
     fn a_window_its_adapter_cannot_present_to_is_refused_at_attach() {
         use std::sync::Arc;
 
-        use crate::raster_executor::SlotBackend;
+        use crate::raster_executor::RasterBackend;
         use crate::testing::{FakeDisplay, FakeWindow};
 
         let display: Arc<dyn flui_platform::DisplayConnection> = Arc::new(FakeDisplay);

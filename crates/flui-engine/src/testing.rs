@@ -1,5 +1,5 @@
 //! Test support for code that drives the raster executor without a GPU
-//! (ADR-0243: the fake sits beside its contract, [`SlotBackend`]).
+//! (ADR-0243: the fake sits beside its contract, [`RasterBackend`]).
 
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
@@ -12,7 +12,7 @@ use crate::{
     FrameLatency, UnconfiguredSurface,
     error::{EngineError, EngineResult},
     raster::PresentDisposition,
-    raster_executor::{SlotBackend, SlotConfig, SlotId, SlotTarget},
+    raster_executor::{RasterBackend, SlotConfig, SlotId, SlotTarget},
 };
 
 /// What a [`ScriptedSlots`] backend does on its next call of one kind.
@@ -90,6 +90,9 @@ struct Script {
     renders: VecDeque<ScriptedAnswer>,
     texture_answers: VecDeque<ScriptedAnswer>,
     textures: Vec<AppliedTextures>,
+    /// The newest image of each texture each slot was given, until it
+    /// retires or the slot detaches.
+    kept: Vec<(SlotId, TextureId, flui_painting::paint::Image)>,
     rebuilds: VecDeque<ScriptedAnswer>,
     /// The slots the next successful rebuild cannot present to.
     rebuild_refusals: Vec<(SlotId, EngineError)>,
@@ -100,7 +103,7 @@ struct Script {
     rebuild_takes: Option<(ManualClock, Duration)>,
 }
 
-/// A [`SlotBackend`] with no GPU: it logs every call and answers from a
+/// A [`RasterBackend`] with no GPU: it logs every call and answers from a
 /// script, presenting and succeeding once the script is spent.
 ///
 /// Clones share one script, so a test keeps a clone after handing one to the
@@ -254,7 +257,7 @@ impl ScriptedSlots {
     }
 }
 
-impl SlotBackend for ScriptedSlots {
+impl RasterBackend for ScriptedSlots {
     fn attach(
         &mut self,
         slot: SlotId,
@@ -299,8 +302,25 @@ impl SlotBackend for ScriptedSlots {
             retired: updates.retired.clone(),
         };
         self.script.borrow_mut().textures.push(applied);
+        let answered = self.succeed(SlotCall::Textures(slot), "textures");
+        {
+            // Kept as a context keeps them, for `kept_textures`: a refused
+            // update still applies its retirements and the frames that fit.
+            let mut script = self.script.borrow_mut();
+            script.kept.retain(|(kept_slot, id, _)| {
+                *kept_slot != slot
+                    || !(updates.retired.contains(id)
+                        || updates.frames.iter().any(|(newer, _)| newer == id))
+            });
+            script.kept.extend(
+                updates
+                    .frames
+                    .iter()
+                    .map(|(id, image)| (slot, *id, image.clone())),
+            );
+        }
         // The images drop here, after the script is released.
-        self.succeed(SlotCall::Textures(slot), "textures")
+        answered
     }
 
     fn render(
@@ -350,6 +370,22 @@ impl SlotBackend for ScriptedSlots {
 
     fn detach(&mut self, slot: SlotId) {
         let _none = self.answer(SlotCall::Detach(slot));
+        self.script
+            .borrow_mut()
+            .kept
+            .retain(|(kept_slot, _, _)| *kept_slot != slot);
+    }
+
+    fn kept_textures(&self, slot: SlotId) -> TextureUpdates {
+        TextureUpdates::from_frames(
+            self.script
+                .borrow()
+                .kept
+                .iter()
+                .filter(|(kept_slot, _, _)| *kept_slot == slot)
+                .map(|(_, id, image)| (*id, image.clone()))
+                .collect(),
+        )
     }
 
     fn reclaim(&mut self, level: MemoryPressureLevel) {

@@ -138,6 +138,7 @@ impl PipelineOwner<Idle> {
             semantics_enabled: AtomicBool::new(false),
             semantics_owner: None,
             semantics_regions: super::semantics::RegionIdentities::default(),
+            frame_arena: flui_foundation::arena::FrameArena::new(),
             semantics_diagnostics: std::collections::VecDeque::new(),
             assistive_focus: flui_semantics::AssistiveFocus::default(),
             #[cfg(any(test, feature = "testing"))]

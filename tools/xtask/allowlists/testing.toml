@@ -16,11 +16,6 @@ kind = "double"
 names = ["Scripted"]
 
 [[allow]]
-path = "crates/flui-app/src/app/direct_sink.rs"
-kind = "double"
-names = ["ScriptedBackend"]
-
-[[allow]]
 path = "crates/flui-app/src/app/runner/session_controller.rs"
 kind = "double"
 names = ["Probe"]

@@ -279,17 +279,12 @@ struct WindowedGpuStack {
 /// see `SurfaceLease`/`WindowTarget` in the sibling modules) — there is no
 /// manual `Send` assertion left anywhere in this file.
 ///
-/// Deliberately never `Sync`: the raster executor
-/// ([`crate::RasterExecutor`]) has sole mutable access to the
-/// `Renderer`/`Surface`/`Device`/`Queue` it wraps, and a shared `&Renderer`
-/// across threads would defeat that single-mutator contract. Before #1043
-/// this held only by accident, riding on `pre_present_hook`'s `Box<dyn
-/// FnMut() + Send>` field (a `!Sync` type with no `!Sync` marker of its
-/// own would have quietly gone `Sync` the day that field's type changed);
-/// the `_single_mutator` marker field below now states the contract as a
-/// field, not a side effect. The doctests below pin the contract so a
-/// future field addition that accidentally makes every field `Sync` fails
-/// loudly at compile time instead of silently reopening `Arc<Renderer>`
+/// Deliberately never `Sync`: one owner drives a renderer, and a shared
+/// `&Renderer` across threads would defeat that single-mutator contract. The
+/// `_single_mutator` marker field below states the contract as a field, not
+/// a side effect of another field's type. The doctests below pin it so a
+/// future field addition that makes every field `Sync` fails loudly at
+/// compile time instead of silently reopening `Arc<Renderer>`
 /// shared-mutation. The `assert_impl_all!`/`assert_not_impl_any!` pair after
 /// this struct pins the `Send`/`!Sync` split itself.
 ///
@@ -345,9 +340,6 @@ pub struct Renderer {
     /// into, and the one-frame promotion to full — the protocol the headless
     /// retained capture runs too (see [`crate::frame_protocol`]).
     frame: crate::frame_protocol::FrameProtocol,
-    /// Runs immediately before every `queue.present` — see
-    /// [`crate::RasterBackend::set_pre_present_hook`].
-    pre_present_hook: Option<crate::raster::PrePresentHook>,
     /// What the acquire path owes the surface before the next acquisition.
     surface_recovery: SurfaceRecovery,
     /// The owned window target and the surface built from it; the surface
@@ -548,7 +540,6 @@ impl Renderer {
             device_lost_hook,
             frame_latency: FrameLatency::default(),
             frame: crate::frame_protocol::FrameProtocol::new(),
-            pre_present_hook: None,
             surface_recovery: SurfaceRecovery::default(),
             lease,
             #[cfg(feature = "gpu-profiler")]
@@ -1230,12 +1221,6 @@ impl Renderer {
         wgpu::PresentMode::Fifo
     }
 
-    /// Install the hook run immediately before every present — see
-    /// [`crate::RasterBackend::set_pre_present_hook`].
-    pub fn set_pre_present_hook(&mut self, hook: Option<crate::raster::PrePresentHook>) {
-        self.pre_present_hook = hook;
-    }
-
     /// Set how many frames this window's swapchain holds ahead of the display (ADR-0257).
     ///
     /// Takes effect on the surface now, or when it is next configured while the surface is
@@ -1754,14 +1739,13 @@ impl Renderer {
     /// became of the frame.
     ///
     /// This is the entry point for a caller that holds no damage producer (a
-    /// direct-mode app, an example, a hot-reload plugin's scene). The frame
-    /// always repaints everything, and because it shows a scene the owner's
-    /// producer never saw, the retained target stops describing the screen
-    /// and the next frame renders in full too, even one the producer found
-    /// unchanged. The web's `DirectSink` goes through
-    /// [`RasterBackend::render_scene`](crate::RasterBackend::render_scene)
-    /// instead, after marking a full repaint: no producer applies a partial
-    /// damage region to a `Renderer` now.
+    /// direct-mode app, an example; a hot-reload plugin's scene goes through
+    /// [`Self::render_plugin_scene`]). The frame always repaints everything,
+    /// and because it shows a scene the owner's producer never saw, the
+    /// retained target stops describing the screen and the next frame renders
+    /// in full too, even one the producer found unchanged. No producer applies
+    /// a partial damage region to a `Renderer`: a window draws partially only
+    /// through its slot of the raster executor.
     ///
     /// [`PresentDisposition::Presented`] means `present()` ran. Whether that
     /// call paced the frame depends on the backend: under the default Fifo
@@ -1809,8 +1793,8 @@ impl Renderer {
         result
     }
 
-    /// Renders `scene` with the damage the tracker holds (`RasterBackend::render_scene`
-    /// reaches it; the web's `DirectSink` marks every frame full first).
+    /// Renders `scene` with the damage the tracker holds, which the unmanaged
+    /// entry points around it mark full.
     ///
     /// Traverses the scene's LayerTree depth-first, dispatching each layer's
     /// DisplayList commands through the GPU backend (WgpuPainter). For scenes
@@ -1835,8 +1819,8 @@ impl Renderer {
         scene: &flui_layer::Scene,
     ) -> Result<PresentDisposition, EngineError> {
         // Damage is what the tracker holds. No producer applies a partial
-        // `flui_layer::DamageRegion` to a `Renderer` now: the web's
-        // `DirectSink` marks every frame full. Widgets reporting their own
+        // `flui_layer::DamageRegion` to a `Renderer`: its unmanaged entry
+        // points mark every frame full. Widgets reporting their own
         // bounds does not work, and ADR-0061
         // records why: the objects that always repaint cover the screen.
         self.frame
@@ -1907,24 +1891,6 @@ impl Renderer {
         #[cfg(feature = "gpu-profiler")]
         profile_frame.complete();
 
-        // The platform's frame-pacing signal, armed strictly before the
-        // present that follows (see `RasterBackend::set_pre_present_hook`).
-        // The trace event is an ordering oracle: every
-        // `present_submitted` must be preceded by one of these.
-        // Nothing is read for a hook that is not there.
-        let statistics = if self.pre_present_hook.is_some() {
-            crate::surface_present::swap_chain_statistics(self.lease.surface())
-        } else {
-            flui_platform::SwapChainStatistics::None
-        };
-        if let Some(hook) = self.pre_present_hook.as_mut() {
-            hook(statistics);
-            tracing::trace!(
-                target: "flui.gpu",
-                event = "pre_present_notified",
-                "platform notified before present"
-            );
-        }
         let present_started = crate::frame_timing::now();
         self.queue.present(output);
         let present_us = present_started.elapsed().as_micros() as u64;
@@ -2478,7 +2444,6 @@ mod tests {
             device_lost_hook: Arc::default(),
             frame_latency: FrameLatency::default(),
             frame: crate::frame_protocol::FrameProtocol::new(),
-            pre_present_hook: None,
             surface_recovery: SurfaceRecovery::default(),
             lease: SurfaceLease::released_for_test(Arc::new(window)),
             _single_mutator: PhantomData,
@@ -2576,19 +2541,13 @@ mod tests {
         );
     }
 
-    /// A recreation the acquire path owes runs through the public
-    /// `RasterBackend::render_scene` of a real renderer: a window without a
+    /// A recreation the acquire path owes runs through the frame path of a
+    /// real renderer (`Renderer::render_frame`): a window without a
     /// handle for now reports the retryable `SurfaceLost` and keeps the
     /// obligation, one that can never answer reports its own fatal error,
     /// and the owner's release supersedes the obligation.
     #[cfg(not(target_arch = "wasm32"))]
-    #[expect(
-        deprecated,
-        reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-    )]
     fn an_owed_surface_recreation_runs_through_the_backend_render_path() {
-        use crate::RasterBackend;
-
         let scene = flui_layer::Scene::new(flui_layer::LayerTree::new(flui_layer::LayerNode::new(
             flui_layer::Layer::from(flui_layer::OffsetLayer::new(
                 flui_foundation::geometry::Offset::new(0.0, 0.0),
@@ -2598,9 +2557,9 @@ mod tests {
         let (mut renderer, _domain, _flag) =
             released_renderer(HandlelessWindow { supported: true });
         renderer.surface_recovery.recreate_owed = true;
-        RasterBackend::mark_full_repaint(&mut renderer);
+        renderer.mark_full_repaint();
         assert!(matches!(
-            RasterBackend::render_scene(&mut renderer, &scene),
+            renderer.render_frame(&scene),
             Err(EngineError::SurfaceLost)
         ));
         assert!(
@@ -2609,15 +2568,15 @@ mod tests {
         );
         renderer.release_surface();
         assert!(matches!(
-            RasterBackend::render_scene(&mut renderer, &scene),
+            renderer.render_frame(&scene),
             Ok(crate::raster::PresentDisposition::NotShown)
         ));
 
         let (mut renderer, _domain, _flag) =
             released_renderer(HandlelessWindow { supported: false });
         renderer.surface_recovery.recreate_owed = true;
-        RasterBackend::mark_full_repaint(&mut renderer);
-        let result = RasterBackend::render_scene(&mut renderer, &scene);
+        renderer.mark_full_repaint();
+        let result = renderer.render_frame(&scene);
         assert!(
             matches!(
                 result,
@@ -2630,23 +2589,16 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[expect(
-        deprecated,
-        reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-    )]
     fn quarantined_domain_reaches_the_backend_recovery_predicate() {
         // This tests the actual backend predicate in the released-surface state.
         let (mut renderer, domain, callback_flag) =
             released_renderer(HandlelessWindow { supported: true });
         let format = renderer.config.format;
-        assert!(!crate::RasterBackend::is_device_lost(&renderer));
+        assert!(!renderer.is_device_lost());
         // Domain quarantine can happen without a wgpu device-lost callback.
         domain.mark_lost();
         assert!(!callback_flag.load(std::sync::atomic::Ordering::Relaxed));
-        assert!(
-            crate::RasterBackend::is_device_lost(&renderer),
-            "native lane must enter recovery"
-        );
+        assert!(renderer.is_device_lost(), "native lane must enter recovery");
         assert!(matches!(
             domain.reserve(crate::device_domain::PreparedCost::default()),
             Err(crate::device_domain::DomainError::Unavailable)
@@ -2659,7 +2611,7 @@ mod tests {
         );
         (renderer.painter, renderer.offscreen) =
             Renderer::build_format_consumers(&renderer.frame, Arc::clone(&fresh), format, (16, 16));
-        assert!(!crate::RasterBackend::is_device_lost(&renderer));
+        assert!(!renderer.is_device_lost());
         let encoder = renderer
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

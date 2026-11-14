@@ -141,26 +141,26 @@ fn every_runner_frame_site_drives_the_ui_runtime_pump() {
         );
     }
 
-    // The desktop, Android and iOS sites pump through their window's raster
-    // slot (`RasterSlot::pump`), whose executor recovers the device; the
-    // slot and the web site call the pump with the wake's sampled clock.
+    // The desktop, Android, iOS and web sites pump through their window's raster
+    // slot (`RasterSlot::pump`), which calls the pump with the wake's sampled
+    // clock.
     let slot_pump_sites = code_lines
         .iter()
         .filter(|l| l.contains("self.raster.pump("))
         .count();
     assert_eq!(
-        slot_pump_sites, 3,
-        "expected exactly three PRODUCTION `self.raster.pump(` call sites (desktop, Android, \
-         iOS); found {slot_pump_sites}"
+        slot_pump_sites, 4,
+        "expected exactly four PRODUCTION `self.raster.pump(` call sites (desktop, Android, \
+         iOS, web); found {slot_pump_sites}"
     );
     let direct_pump_sites = code_lines
         .iter()
         .filter(|l| l.contains(".pump(&mut SampledClock"))
         .count();
     assert_eq!(
-        direct_pump_sites, 2,
-        "expected exactly two PRODUCTION `.pump(&mut SampledClock` sites (the raster slot and \
-         the web runner); found {direct_pump_sites}"
+        direct_pump_sites, 1,
+        "expected exactly one PRODUCTION `.pump(&mut SampledClock` site (the raster slot); \
+         found {direct_pump_sites}"
     );
 }
 
@@ -190,20 +190,17 @@ fn every_background_wake_calls_pump_background() {
     );
 }
 
-/// The native production frame paths hand every frame to the backend as an
-/// owned, stamped `SceneSnapshot`, never through the direct sink: the
-/// desktop, Android and iOS runners through their window's slot on the
-/// raster executor (ADR-0305). Only the web runner still pumps through a
-/// `DirectSink`, for a stated reason (its renderer arrives asynchronously
-/// and recovers across an `.await` — see `direct_sink.rs`).
+/// Every production frame path hands its frame to the backend as an owned,
+/// stamped `SceneSnapshot` through its window's slot on the raster executor
+/// (ADR-0305): the desktop, Android, iOS and web runners alike.
 ///
-/// Red-check: revert any native bootstrap to a renderer of its own and a
-/// `DirectSink`, and the corresponding count here breaks.
-fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend() {
+/// Red-check: give any runner a renderer of its own that it draws through
+/// directly, and the slot count here breaks.
+fn frame_sites_drive_the_raster_executor() {
     // `main` split the flat `runner.rs` into the `runner/` module, so this
     // pin scans every file in it (the shared `RUNNER_SOURCES` list) rather
-    // than one path — otherwise a native site that moved between submodules
-    // would drop out of the count silently.
+    // than one path — otherwise a site that moved between submodules would
+    // drop out of the count silently.
     let code_lines: Vec<&str> = RUNNER_SOURCES
         .iter()
         .flat_map(|source| production_lines(source))
@@ -214,32 +211,20 @@ fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend() {
         .filter(|l| l.contains("let raster = RasterSlot {"))
         .count();
     assert_eq!(
-        slot_attachments, 3,
-        "expected exactly three PRODUCTION `RasterSlot` constructions (the desktop, Android \
-         and iOS bootstraps each give their window a slot on the loop's raster executor); \
+        slot_attachments, 4,
+        "expected exactly four PRODUCTION `RasterSlot` constructions (the desktop, Android, \
+         iOS and web bootstraps each give their window a slot on the loop's raster executor); \
          found {slot_attachments}"
     );
 
     let slot_sites = code_lines
         .iter()
-        .filter(|l| l.contains("RasterCommand::Frame"))
+        .filter(|l| l.contains(".send(RasterCommand::Frame"))
         .count();
     assert_eq!(
         slot_sites, 1,
-        "expected exactly one PRODUCTION `RasterCommand::Frame` site (the raster host's \
-         submit, through which every native window draws); found {slot_sites}"
-    );
-
-    let direct_sink_sites = code_lines
-        .iter()
-        .filter(|l| l.contains("DirectSink::new("))
-        .count();
-    assert_eq!(
-        direct_sink_sites, 1,
-        "expected exactly one PRODUCTION `DirectSink::new(` site (the web runner's \
-         direct-backend path, the only one with a stated reason to bypass the mailbox); \
-         found {direct_sink_sites} — a second site means a native path regressed to the \
-         pre-mailbox direct call"
+        "expected exactly one PRODUCTION send of a `RasterCommand::Frame` (the raster host's \
+         submit, through which every window draws); found {slot_sites}"
     );
 }
 
@@ -257,8 +242,8 @@ fn runner_frame_ordering_scan() {
                 every_background_wake_calls_pump_background as fn(),
             ),
             (
-                "native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend",
-                native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend as fn(),
+                "frame_sites_drive_the_raster_executor",
+                frame_sites_drive_the_raster_executor as fn(),
             ),
         ],
     );

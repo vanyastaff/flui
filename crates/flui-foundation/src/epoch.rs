@@ -100,79 +100,6 @@ macro_rules! epoch_counters {
     };
 }
 
-/// Generational stamp for a GPU-resource stack construction
-/// (ADR-0045 decisions 2 and 4).
-///
-/// Lives here, not in `flui-engine`, for exactly the reason
-/// [`SurfaceGeneration`] does: decision 4 compares this axis at the same
-/// frame-freshness gate as `SurfaceGeneration` inside a [`crate::FrameStamp`],
-/// and `FrameStamp` (this crate, layer 1) cannot name a type declared in
-/// `flui-engine` (layer 4) without inverting the workspace's dependency
-/// direction — `flui-layer`'s `SceneSnapshot`, which carries a `FrameStamp`,
-/// cannot either (layer 3). `flui-engine` re-exports this type from its own
-/// root (`flui_engine::GpuResourceGeneration`) so its own call sites read
-/// unchanged; the definition here is the only one — no crate keeps a
-/// parallel copy.
-///
-/// # Named `GpuResourceGeneration`, not `ResourceGeneration`
-///
-/// [`ResourceGeneration`] already exists in this module for a different
-/// domain (worker-cache freshness); one identifier names one type across
-/// the framework crates, and the two
-/// concepts are genuinely different — see `flui-engine`'s
-/// `wgpu::gpu_services` module doc for the full reasoning this type's
-/// original home recorded.
-///
-/// # Not one of the `epoch_counters!` family
-///
-/// The macro's `next()` is an owner bumping an existing value **in place**;
-/// this type is minted **fresh** from a process-wide counter with no
-/// persistent owner (a GPU-resource stack never advances its own
-/// generation — a new one is a new construction), so it gets its own
-/// hand-written `mint()` instead of forcing that different mint model
-/// through `next()`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct GpuResourceGeneration(u64);
-
-impl GpuResourceGeneration {
-    /// The sentinel value: no GPU-resource stack bound yet. Never returned by
-    /// [`Self::mint`] (its counter starts at 1), so a frame stamped with
-    /// this value trivially matches only a checker that has likewise never
-    /// bound one — the same "typed absence" role [`SurfaceGeneration::ZERO`]
-    /// plays for "no surface configured", though (unlike that axis) ADR-0045
-    /// decision 4 does not reject this value outright: a backend with no
-    /// notion of shared GPU services at all is legitimately, permanently at
-    /// `ZERO` on both sides of the comparison.
-    pub const ZERO: Self = Self(0);
-
-    /// Mints the next generation from a process-wide monotonic counter.
-    ///
-    /// Public because minting crosses the `flui-foundation`/`flui-engine`
-    /// boundary: a raster lane binds a freshly minted value when it attaches
-    /// a new GPU resource stack, and `flui-engine`'s own test suites call
-    /// this directly to fabricate test values — exactly what a public
-    /// associated function allows. The tuple field stays private, so a
-    /// tuple-struct literal remains the one construction path this blocks
-    /// from outside this module.
-    #[must_use]
-    pub fn mint() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-
-    /// The raw counter value.
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-}
-
-impl fmt::Display for GpuResourceGeneration {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
 epoch_counters! {
     /// A `UiRuntime`'s monotonic per-frame counter.
     ///
@@ -315,8 +242,4 @@ mod tests {
         assert!(gate.is_current(fresh));
         assert!(!gate.is_current(stamp), "pre-bump stamp must go stale");
     }
-
-    // -----------------------------------------------------------------------
-    // GpuResourceGeneration tests
-    // -----------------------------------------------------------------------
 }
