@@ -1214,7 +1214,7 @@ pub(crate) fn a_fingerprint_reads_what_the_commands_draw() {
 
     // A paragraph reads apart by what its glyphs rasterize with, though its
     // text, glyphs and placement stay the same.
-    let shaped = shaped_roboto("Ag");
+    let shaped = flui_painting::ShapedParagraph::clone(&shaped_paragraph());
     let text = |paragraph: flui_painting::ShapedParagraph| {
         let paragraph = Arc::new(paragraph);
         flui_painting::testing::record(|canvas| {
@@ -1253,38 +1253,4 @@ pub(crate) fn a_fingerprint_reads_what_the_commands_draw() {
     for (what, before, after) in changed {
         assert_ne!(before, after, "a change of {what} reads apart");
     }
-}
-
-/// `text` shaped in Roboto at 16 logical pixels, one run on one line.
-fn shaped_roboto(text: &str) -> flui_painting::ShapedParagraph {
-    use flui_painting::parley_text::ParagraphSpec;
-    use flui_painting::typography::{TextAlign, TextDirection, TextStyle};
-    use flui_painting::{FontCollection, TextContext};
-
-    let fonts = FontCollection::new();
-    fonts
-        .register_font(include_bytes!("../assets/fonts/Roboto-Regular.ttf"))
-        .expect("the fixture font loads");
-    let mut context = TextContext::new(&fonts);
-    let style = TextStyle {
-        font_family: Some("Roboto".to_owned()),
-        ..Default::default()
-    };
-    let spans = [(text.to_owned(), None)];
-    context
-        .shape(&ParagraphSpec {
-            font_weight_adjustment: 0,
-            spans: &spans,
-            default_style: Some(&style),
-            font_size: 16.0,
-            max_width: None,
-            min_width: 0.0,
-            text_align: TextAlign::Start,
-            line_height: None,
-            direction: TextDirection::Ltr,
-            max_lines: None,
-            ellipsis: None,
-        })
-        .expect("the fixture shapes")
-        .to_shaped(None)
 }

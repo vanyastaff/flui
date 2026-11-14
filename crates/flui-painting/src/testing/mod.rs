@@ -156,9 +156,14 @@ pub fn paragraph_with_font_bytes(
     paragraph
 }
 
-/// The paragraph with every run drawn with `synthesis` and with the variation
-/// coordinates `coords`, so a test can tell paragraphs apart by what their
-/// glyphs rasterize with alone. Text, glyphs and placement stay unchanged.
+/// The paragraph with every run keyed by `synthesis` and the variation
+/// coordinates `coords`, as the glyph registry keys a run's rasterization, so a
+/// test can tell paragraphs apart by those keys alone. Text, glyphs and
+/// placement stay unchanged; the ink bounds, which shaping took with the old
+/// synthesis, are dropped, so the paragraph reports an unbounded damage extent
+/// rather than one that misses a synthetic overhang. Coordinates on a face
+/// without variation axes key a cache entry of their own and draw as the
+/// face does.
 ///
 /// # Errors
 ///
@@ -171,6 +176,7 @@ pub fn paragraph_with_run_styles(
     let end = u32::try_from(coords.len()).map_err(|_| "coordinates do not fit u32")?;
     let mut paragraph = paragraph.clone();
     paragraph.coords = coords.into();
+    paragraph.ink = None;
     for run in &mut paragraph.runs {
         run.synthesis = synthesis;
         run.coords = 0..end;
