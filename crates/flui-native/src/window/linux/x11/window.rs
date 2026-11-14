@@ -939,8 +939,10 @@ impl X11Window {
     }
 
     /// Map the window, fitted first to the rectangle it was opened at, and
-    /// minimized after when that is what it was last asked to be.
-    fn map(&self) {
+    /// minimized after when that is what it was last asked to be. Returns
+    /// whether a launch forwarded while no window was shown brought it
+    /// forward, at that launch's time.
+    fn map(&self) -> bool {
         self.fit_to_remembered_rectangle();
         if let Err(error) = self.xcb().map_window(self.xid) {
             tracing::debug!(%error, "cannot map an X11 window");
@@ -953,7 +955,13 @@ impl X11Window {
                 self.atoms.wm_change_state,
                 [ICONIC_STATE, 0, 0, 0, 0],
             ));
+            return false;
         }
+        let forwarded = self
+            .windows
+            .upgrade()
+            .and_then(|windows| windows.forwarded_activation.take());
+        forwarded.inspect(|time| self.activate_at(*time)).is_some()
     }
 
     /// Give a window opened at a remembered outer rectangle the content size
@@ -1047,10 +1055,11 @@ impl X11Window {
             }
             was_unmapped
         };
-        if was_unmapped || self.cell.published().mode == WindowMode::Minimized {
-            self.map();
+        let brought_forward =
+            (was_unmapped || self.cell.published().mode == WindowMode::Minimized) && self.map();
+        if !brought_forward {
+            self.activate();
         }
-        self.activate();
     }
 
     /// Withdraw the window (ICCCM 4.1.4): unmapped, with the synthetic
@@ -1684,6 +1693,10 @@ pub struct X11Windows {
     /// The window that had the focus last, whether or not it still has: the
     /// one a forwarded launch brings forward.
     last_focused: Cell<Option<WindowId>>,
+    /// The time of a launch forwarded while no window was shown: the next
+    /// window mapped comes forward at it, as the window the application
+    /// shows from the reopen it was asked.
+    forwarded_activation: Cell<Option<u32>>,
 }
 // Owner-local (ADR-0327 §5): the table is the owner thread's alone.
 static_assertions::assert_not_impl_any!(X11Windows: Send, Sync);
@@ -1727,6 +1740,7 @@ impl X11Windows {
             support: Cell::new(WindowManagerSupport::default()),
             appearance: Cell::new(WindowAppearance::Light),
             last_focused: Cell::new(None),
+            forwarded_activation: Cell::new(None),
             connection,
         };
         windows.read_support();
@@ -2167,9 +2181,14 @@ impl LoopWindows for X11Windows {
 
     /// The window that had the focus last comes forward, the one the
     /// runner routes the launch's links to; once it closed or was hidden,
-    /// any shown one. Activating a withdrawn window would not map it: the
-    /// application shows it, if it will, from the reopen it was asked.
+    /// any shown one. Activating a window not mapped yet would not bring it
+    /// forward: with none mapped, the time waits for the next window mapped,
+    /// the one the application shows from the reopen it was asked, or the
+    /// one waiting for its first frame.
     fn activate_forwarded(&self, token: Option<&str>) {
+        let time = token
+            .and_then(crate::owner::linux::single_instance::startup_time)
+            .unwrap_or(x11rb::CURRENT_TIME);
         let windows = self.open_windows();
         let open = |window: &&Rc<X11Window>| window.shown();
         let last = self.last_focused.get();
@@ -2178,11 +2197,9 @@ impl LoopWindows for X11Windows {
             .filter(open)
             .find(|window| Some(window.id) == last)
             .or_else(|| windows.iter().find(open));
-        if let Some(window) = window {
-            let time = token
-                .and_then(crate::owner::linux::single_instance::startup_time)
-                .unwrap_or(x11rb::CURRENT_TIME);
-            window.activate_at(time);
+        match window {
+            Some(window) if !window.unmapped() => window.activate_at(time),
+            _ => self.forwarded_activation.set(Some(time)),
         }
     }
 }

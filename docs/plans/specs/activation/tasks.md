@@ -119,9 +119,13 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   URI, пробуждение владельца, имя свободно после ухода первого), `an_app_id_names_the_bus_name_and_object_path`,
   `a_second_launch_forwards_what_it_opens`, `the_launchers_token_travels_with_the_launch` (и время
   `_TIME` в startup id X11); `CurrentHost::start_single` → `HostStart`, `Application::single_instance`
-  (сам включён при объявленной схеме URL, нужен app id). Окно вперёд выводит хост: последнее
-  активное окно Wayland с токеном, X11 `_NET_ACTIVE_WINDOW` со временем запуска. Запуск с рабочего
-  стола — строка parity. Остаток: Windows; включение по `file-types` ждёт их чтения в `#[flui::main]`.
+  (сам включён при объявленной схеме URL, нужен app id). `launches_waiting_for_the_owner_are_bounded`,
+  `a_launch_held_past_the_hold_is_handed_back_once` (запуск, не взятый за 15 с, возвращается и
+  второй раз не доставляется), `a_claim_made_inside_the_lent_runtime_answers` (вызов из
+  `#[tokio::main]`). Окно вперёд выводит хост: последнее активное окно Wayland с токеном, X11
+  `_NET_ACTIVE_WINDOW` со временем запуска; без показанного окна приходит `reopen`, а время ждёт
+  следующего показанного окна (`x11_window`: `a_later_launch_while_no_window_is_shown_asks_to_reopen`,
+  `the_window_reopened_for_a_later_launch_comes_forward`). Запуск с рабочего стола — строка parity. Остаток: Windows; включение по `file-types` ждёт их чтения в `#[flui::main]`.
 - **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`
   (схемы, домены, расширения, MIME, имена), `what_the_application_opens_is_joined_over_the_graph`
   (регистр, файл фичи только при включённой фиче), строки `a_malformed_declaration_is_refused_by_crate`

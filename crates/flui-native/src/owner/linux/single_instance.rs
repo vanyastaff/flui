@@ -192,6 +192,11 @@ mod bus {
     /// first may still be starting, and takes launches from its loop's
     /// first turn. D-Bus's own default for a call is 25 s.
     const FORWARD_TIMEOUT: Duration = Duration::from_secs(20);
+    /// How long the first holds a launch for its owner before it hands it
+    /// back: shorter than [`FORWARD_TIMEOUT`], so the caller hears the answer
+    /// before it stops waiting, and a launch handed back, which its process
+    /// then runs on its own, is never delivered here too.
+    const HOLD: Duration = Duration::from_secs(15);
     /// The longest activation token or startup id a call carries.
     const MAX_TOKEN_LEN: usize = 4096;
 
@@ -207,13 +212,31 @@ mod bus {
     type Waiting = (Forwarded, oneshot::Sender<()>);
 
     /// The launches waiting for the owner, and the way to wake it.
-    #[derive(Default)]
     pub(super) struct Inbox {
+        /// Each launch with its caller's answer. The owner takes and answers
+        /// under this lock, and a caller that stops waiting withdraws under
+        /// it, so a launch is either taken and answered or handed back.
         queue: Mutex<VecDeque<Waiting>>,
         signal: Mutex<Option<Weak<OwnerSignal>>>,
+        /// How long a launch waits for the owner before it is handed back.
+        hold: Duration,
+        /// The runtime whose timer measures the hold: the bus library runs
+        /// the interface's calls on an executor of its own, which has none.
+        timers: tokio::runtime::Handle,
     }
 
     impl Inbox {
+        /// An inbox that hands a launch back after `hold`, measured on
+        /// `timers`.
+        pub(super) fn new(hold: Duration, timers: tokio::runtime::Handle) -> Self {
+            Self {
+                queue: Mutex::default(),
+                signal: Mutex::default(),
+                hold,
+                timers,
+            }
+        }
+
         /// Queue `forwarded` and wake the owner, once it is attached: the
         /// receiver resolves once the owner takes it, and fails if the owner
         /// ends first.
@@ -264,18 +287,67 @@ mod bus {
         }
 
         /// The waiting launches, oldest first, each caller told its launch
-        /// was taken.
+        /// was taken. A launch whose caller stopped waiting (it disconnected
+        /// and, if it still runs, runs on its own) is not taken.
         pub(super) fn take(&self) -> Vec<Forwarded> {
-            let waiting = std::mem::take(&mut *self.queue.lock());
-            waiting
-                .into_iter()
-                .map(|(forwarded, taken)| {
-                    // A caller that stopped waiting has gone on as an
-                    // instance of its own; its launch is still the user's.
-                    let _ = taken.send(());
-                    forwarded
-                })
+            let mut queue = self.queue.lock();
+            // Answered under the lock a withdrawing caller takes: a oneshot's
+            // send wakes only the caller's task, no application code.
+            queue
+                .drain(..)
+                .filter_map(|(forwarded, taken)| taken.send(()).is_ok().then_some(forwarded))
                 .collect()
+        }
+
+        /// Wait until the owner takes the launch [`post`](Self::post) queued,
+        /// at most the inbox's hold; past it the launch is withdrawn and
+        /// refused, so its process runs on its own and the owner never takes
+        /// it.
+        ///
+        /// # Errors
+        ///
+        /// `post`'s refusal, `Failed` when the owner ended before taking the
+        /// launch or held it past the hold.
+        pub(super) async fn answer(
+            &self,
+            posted: zbus::fdo::Result<oneshot::Receiver<()>>,
+        ) -> zbus::fdo::Result<()> {
+            let mut answer = posted?;
+            let ended = || {
+                zbus::fdo::Error::Failed(
+                    "the running instance ended before it took the launch".to_owned(),
+                )
+            };
+            // The timer is made on its runtime, not on the bus library's executor.
+            let hold = self.hold;
+            let mut held = self
+                .timers
+                .spawn(async move { tokio::time::sleep(hold).await });
+            let taken = tokio::select! {
+                biased;
+                taken = &mut answer => Some(taken),
+                _ = &mut held => None,
+            };
+            held.abort();
+            if let Some(taken) = taken {
+                return taken.map_err(|_| ended());
+            }
+            let taken = {
+                let mut queue = self.queue.lock();
+                let taken = answer.try_recv();
+                // Closing the answer withdraws the launch: `take` skips it,
+                // and it leaves the queue now.
+                drop(answer);
+                queue.retain(|(_, waiting)| !waiting.is_closed());
+                taken
+            };
+            match taken {
+                Ok(()) => Ok(()),
+                Err(oneshot::error::TryRecvError::Closed) => Err(ended()),
+                Err(oneshot::error::TryRecvError::Empty) => Err(zbus::fdo::Error::Failed(
+                    "the running instance did not take the launch in time".to_owned(),
+                )),
+            }
         }
 
         /// Wake the owner, once it is attached: `false` when its loop no
@@ -295,15 +367,6 @@ mod bus {
         }
     }
 
-    /// Wait until the owner takes the launch `post` queued.
-    async fn taken(posted: zbus::fdo::Result<oneshot::Receiver<()>>) -> zbus::fdo::Result<()> {
-        posted?.await.map_err(|_| {
-            zbus::fdo::Error::Failed(
-                "the running instance ended before it took the launch".to_owned(),
-            )
-        })
-    }
-
     /// `org.freedesktop.Application` as a first instance serves it.
     struct Application(Arc<Inbox>);
 
@@ -315,11 +378,12 @@ mod bus {
             &self,
             platform_data: HashMap<String, OwnedValue>,
         ) -> zbus::fdo::Result<()> {
-            taken(self.0.post(Forwarded {
-                uris: Vec::new(),
-                token: token(&platform_data),
-            }))
-            .await
+            self.0
+                .answer(self.0.post(Forwarded {
+                    uris: Vec::new(),
+                    token: token(&platform_data),
+                }))
+                .await
         }
 
         /// The application was launched again with `uris`. Answered once
@@ -329,17 +393,18 @@ mod bus {
             uris: Vec<String>,
             platform_data: HashMap<String, OwnedValue>,
         ) -> zbus::fdo::Result<()> {
-            taken(
-                self.0.post(Forwarded {
-                    uris: uris
-                        .into_iter()
-                        .take(flui_platform::MAX_OPENED_ITEMS)
-                        .filter(|uri| uri.len() <= Forwarded::MAX_URI_LEN)
-                        .collect(),
-                    token: token(&platform_data),
-                }),
-            )
-            .await
+            self.0
+                .answer(
+                    self.0.post(Forwarded {
+                        uris: uris
+                            .into_iter()
+                            .take(flui_platform::MAX_OPENED_ITEMS)
+                            .filter(|uri| uri.len() <= Forwarded::MAX_URI_LEN)
+                            .collect(),
+                        token: token(&platform_data),
+                    }),
+                )
+                .await
         }
 
         /// An action of the application's: FLUI declares none, so the call
@@ -470,7 +535,7 @@ mod bus {
             Some(address) => zbus::connection::Builder::address(address),
             None => zbus::connection::Builder::session(),
         };
-        let inbox = Arc::new(Inbox::default());
+        let inbox = Arc::new(Inbox::new(HOLD, tokio::runtime::Handle::current()));
         let path = object_path(bus_name);
         let connection = builder
             .serve_at(path.as_str(), Application(Arc::clone(&inbox)))
@@ -838,11 +903,20 @@ mod bus_tests {
         );
     }
 
+    /// A runtime whose timer measures an inbox's hold.
+    fn timers() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("a runtime")
+    }
+
     /// At most sixteen launches wait for an owner that takes none; the next
     /// is refused, and the ones taken are answered.
     #[test]
     fn launches_waiting_for_the_owner_are_bounded() {
-        let inbox = super::bus::Inbox::default();
+        let runtime = timers();
+        let inbox = super::bus::Inbox::new(Duration::from_secs(15), runtime.handle().clone());
         let mut answers: Vec<_> = (0..super::bus::MAX_WAITING)
             .map(|_| inbox.post(launch(&[], None)).expect("room to wait"))
             .collect();
@@ -856,6 +930,25 @@ mod bus_tests {
             );
         }
         assert!(inbox.post(launch(&[], None)).is_ok(), "room again");
+    }
+
+    /// A launch the owner does not take within the hold is handed back: its
+    /// caller hears a refusal, runs on its own, and the owner never takes
+    /// it too. One taken in time is answered.
+    #[test]
+    fn a_launch_held_past_the_hold_is_handed_back_once() {
+        let runtime = timers();
+        let inbox = super::bus::Inbox::new(Duration::from_millis(20), runtime.handle().clone());
+        let handed_back = runtime.block_on(inbox.answer(inbox.post(launch(&["flui:a"], None))));
+        assert!(handed_back.is_err(), "the caller hears the refusal");
+        assert!(
+            inbox.take().is_empty(),
+            "a launch handed back is not delivered as well"
+        );
+
+        let posted = inbox.post(launch(&["flui:b"], None));
+        assert_eq!(inbox.take().len(), 1);
+        assert_eq!(runtime.block_on(inbox.answer(posted)), Ok(()));
     }
 
     /// The bus a second process claims on, which the test hands the copy of

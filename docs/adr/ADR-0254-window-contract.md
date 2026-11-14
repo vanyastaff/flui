@@ -373,14 +373,16 @@ route is; what `ready` leaves is reported first after it, on every exit.
 one instance of the application per user session, named by its reverse-DNS app id. The first
 process owns the name; a later one hands it what its own launch opens, with the activation token
 its launcher gave it, and ends once the first has taken the launch (`HostStart::Forwarded`, and
-`Application::run` returns `Ok(())`). A launch the first refuses or never takes (it holds sixteen
-waiting already, or it ends first) leaves the later process running as an instance of its own, as
-does a launch carrying a URI longer than the first would keep, so no launch is lost. The first hears
-the launch as `opened` with `Launch::Running` and `OpenTarget::Application`, after `reopen` when it
-shows no window (none is open, or each is hidden), and its host brings the shown window activated
-last forward with the token, without a command from above (Wayland `xdg_activation_v1`; on X11 at
-the time the startup id names). On Linux
-the name is owned on the session bus, and only there, where the first process serves
+`Application::run` returns `Ok(())`). A launch the first refuses or does not take within fifteen
+seconds (it holds sixteen waiting already, it ends first, or its loop is busy) is handed back and
+never delivered there, and the later process runs as an instance of its own, as does a launch
+carrying a URI longer than the first would keep, so no launch is lost or opened twice. The first
+hears the launch as `opened` with `Launch::Running` and `OpenTarget::Application`, after `reopen`
+when it shows no window (none is open, or each is hidden), and its host brings the shown window
+activated last forward with the token, without a command from above (Wayland `xdg_activation_v1`;
+on X11 at the time the startup id names); with no window shown, the token waits for the next window
+shown, the one the application opens or shows for the reopen. On Linux the name is owned on the
+session bus, and only there, where the first process serves
 `org.freedesktop.Application` (`Activate`, `Open`, `ActivateAction`) as GApplication does; files
 travel as absolute `file:` URIs and a call's URIs are bounded as `Opened`'s are. On Windows the
 first process holds a mutex and serves a named pipe, both named with the user's session id; the

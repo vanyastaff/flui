@@ -108,6 +108,10 @@ mod cases {
             "a_later_launch_while_no_window_is_shown_asks_to_reopen",
             a_later_launch_while_no_window_is_shown_asks_to_reopen,
         ),
+        (
+            "the_window_reopened_for_a_later_launch_comes_forward",
+            the_window_reopened_for_a_later_launch_comes_forward,
+        ),
     ];
 
     pub(super) fn main() {
@@ -1022,6 +1026,94 @@ mod cases {
             std::thread::sleep(after);
             let _ = proxy.request_quit();
         });
+    }
+
+    /// The window an application opens, a turn later, for the reopen a later
+    /// launch asked of it while it held none comes forward when it is
+    /// mapped: the host keeps the launch's activation for it, as Wayland's
+    /// table keeps a forwarded token for the first window. Read from the root
+    /// window, where the host sends `_NET_ACTIVE_WINDOW` and a client that
+    /// selects substructure notifies hears it.
+    fn the_window_reopened_for_a_later_launch_comes_forward() {
+        const APP_ID: &str = "org.flui.X11WindowCases.Reopened";
+        /// `_NET_ACTIVE_WINDOW`'s source indication for an application.
+        const SOURCE_APPLICATION: u32 = 1;
+        if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+            eprintln!("skipped: no dbus-daemon for a session bus of the harness's own");
+            return;
+        }
+        let watcher = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let root = watcher.setup().roots[0].root;
+        watcher
+            .change_window_attributes(
+                root,
+                &x11rb::protocol::xproto::ChangeWindowAttributesAux::new()
+                    .event_mask(EventMask::SUBSTRUCTURE_NOTIFY),
+            )
+            .expect("request")
+            .check()
+            .expect("the root's substructure notifies");
+        let active_window = atom(&watcher, "_NET_ACTIVE_WINDOW");
+
+        let HostStart::Started(platform) = CurrentHost::X11
+            .start_single(NativeExecutor::own(), APP_ID)
+            .expect("the X11 platform")
+        else {
+            panic!("the first launch owns the application's name");
+        };
+        let (later, forwarded) = std::sync::mpsc::channel();
+        let log = AppLog::new();
+        log.react(|call, owner| {
+            if call != AppCall::Reopen {
+                return;
+            }
+            // Opened a turn later, as the desktop runner opens its main
+            // window for a reopen.
+            let proxy = owner.proxy();
+            std::thread::spawn(move || {
+                let request = WindowRequest::new(WindowOptions::default(), || {
+                    RecordingWindowHandler::new() as Rc<dyn WindowHandler>
+                });
+                let _ = proxy
+                    .open_window(request)
+                    .expect("the loop takes the open")
+                    .wait();
+                std::thread::sleep(Duration::from_millis(500));
+                let _ = proxy.request_quit();
+            });
+        });
+        log.bootstrap(move |owner| {
+            quit_after(owner.proxy(), Duration::from_secs(10));
+            std::thread::spawn(move || {
+                let started = CurrentHost::X11.start_single(NativeExecutor::own(), APP_ID);
+                let _ = later.send(matches!(started, Ok(HostStart::Forwarded)));
+            });
+            Ok(())
+        });
+        platform
+            .run(Rc::clone(&log) as Rc<dyn AppHandler>)
+            .expect("the loop runs");
+        assert_eq!(
+            forwarded.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "the later launch forwards to the first and ends"
+        );
+        assert_eq!(log.count(AppCall::Reopen), 1, "{:?}", log.calls());
+        let mut activations = 0;
+        while let Some(event) = watcher.poll_for_event().expect("the X server answers") {
+            if let x11rb::protocol::Event::ClientMessage(message) = event
+                && message.type_ == active_window
+                && message.data.as_data32()[0] == SOURCE_APPLICATION
+            {
+                activations += 1;
+            }
+        }
+        assert_eq!(
+            activations, 1,
+            "the reopened window is brought forward once, as it is mapped"
+        );
     }
 
     /// An application that keeps one instance and shows no window (it holds
