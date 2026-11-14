@@ -5,43 +5,13 @@
 //! document comes as a `file:` URL and a link as any other.
 //!
 //! A document is not checked against the disk: the system opened it, and a
-//! document package (`.rtfd`, a bundle) is a directory.
-
-use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
-
-use crate::owner::file_uri::{PathConvention, file_uri_path};
+//! document package (`.rtfd`, a bundle) is a directory. The split into links
+//! and documents is [`opened_by_urls`](crate::owner::file_uri::opened_by_urls),
+//! which a Linux instance reads what a second one forwards with too.
 
 /// The activity type of a web link the system hands an application, a
 /// universal link: the value of Foundation's `NSUserActivityTypeBrowsingWeb`.
 const BROWSING_WEB: &str = "NSUserActivityTypeBrowsingWeb";
-
-/// What `urls`, the absolute strings of the `NSURL`s the platform handed
-/// over, in its order, open for `target`: each `file:` URL of this host
-/// (`convention`, Unix on every Apple platform) is a document, any other URL
-/// a link. A `file:` URL that names no local path (another host, a malformed
-/// escape) opens nothing.
-pub(crate) fn opened_by_urls(
-    urls: impl IntoIterator<Item = String>,
-    convention: PathConvention,
-    target: OpenTarget,
-    launch: Launch,
-) -> Opened {
-    let mut links = Vec::new();
-    let mut files = Vec::new();
-    for url in urls {
-        let is_file = url
-            .get(..5)
-            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"));
-        if !is_file {
-            links.push(url);
-        } else if let Some(path) = file_uri_path(&url, convention) {
-            files.push(OpenedFile::new(path));
-        } else {
-            tracing::debug!("a file URL the platform opened names no path on this host");
-        }
-    }
-    Opened::new(links, files, target, launch)
-}
 
 /// The link a user activity of `activity_type` opens: its `webpage_url` when
 /// it is a web browsing activity (a universal link), and nothing for any
@@ -96,8 +66,8 @@ pub(crate) fn absolute_strings(
 mod tests {
     use flui_platform::{Launch, OpenTarget, OpenedFile, WindowId};
 
-    use super::{browsing_web_url, opened_by_urls};
-    use crate::owner::file_uri::PathConvention;
+    use super::browsing_web_url;
+    use crate::owner::file_uri::{PathConvention, opened_by_urls};
 
     /// The platform's URLs split into links and documents in their order: a
     /// link of the application's scheme or the web is a link, a `file:` URL

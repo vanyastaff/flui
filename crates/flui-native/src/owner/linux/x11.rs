@@ -75,6 +75,7 @@ use crate::executor::NativeExecutor;
 use crate::host;
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::handlers::OpenWindows;
+use crate::owner::linux::single_instance::FirstInstance;
 use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::contain_owner_callback;
@@ -576,6 +577,16 @@ pub(crate) trait LoopWindows: OpenWindows {
     /// The loop ends: each window still open is let go of, its native window
     /// destroyed once its handler is.
     fn release(&self);
+
+    /// Whether a window is open and shown. A later launch made while none is
+    /// asks the application to reopen; a window the application hid stays
+    /// hidden until it shows the window itself.
+    fn shows_any(&self) -> bool;
+
+    /// Another instance of the application was launched and handed its
+    /// launch over: bring a shown window forward, at the time `token`, the
+    /// launcher's startup id, names, else now.
+    fn activate_forwarded(&self, token: Option<&str>);
 }
 
 /// The X11 host's loop: the connection, the doorbell, and what the table made
@@ -604,6 +615,9 @@ pub struct X11Loop {
     /// The thread that built the platform, which its windows belong to and
     /// which alone runs the loop.
     affinity: flui_foundation::OwnerAffinity,
+    /// The application's name on the session bus, while this process is its
+    /// one instance: the launches later processes hand over.
+    instance: Option<FirstInstance>,
 }
 // Owner-local (ADR-0327 §5): the loop, its input, input method and clipboard
 // never leave the thread that built them.
@@ -620,7 +634,9 @@ impl std::fmt::Debug for X11Loop {
 impl X11Loop {
     /// The loop of host `H` over `connection`, whose windows are `windows`,
     /// the window feature's. The calling thread owns it: the platform's
-    /// windows belong to it and it alone runs the loop.
+    /// windows belong to it and it alone runs the loop. `instance`, when this
+    /// process is its application's one instance, hands the loop the
+    /// launches later processes forward.
     ///
     /// # Errors
     /// [`PlatformError::Init`] when the doorbell cannot be made.
@@ -628,10 +644,14 @@ impl X11Loop {
         connection: Arc<X11Connection>,
         windows: Arc<dyn LoopWindows>,
         executor: NativeExecutor,
+        instance: Option<FirstInstance>,
     ) -> Result<Self, PlatformError> {
         let doorbell = Doorbell::try_new()?;
         let rung = doorbell.clone();
         let signal = OwnerSignal::new(Arc::new(move || rung.ring()));
+        if let Some(instance) = &instance {
+            instance.attach(&signal);
+        }
         let app = Arc::new(AppDelivery::new());
         // What launched the application waits for its `ready`.
         app.opened(crate::owner::launch_arguments::launched_by(
@@ -667,6 +687,7 @@ impl X11Loop {
             portal: PortalSlot::default(),
             exit_reevaluation: Cell::new(false),
             affinity,
+            instance,
         })
     }
 
@@ -817,6 +838,7 @@ impl X11Loop {
         if let Some(host_notices) = host_notices {
             host_notices.deliver(self);
         }
+        self.deliver_forwarded();
         self.deliver_appearance();
         match self.displays.snapshot() {
             Ok(snapshot) if turns.displays != Some(snapshot.revision()) => {
@@ -825,6 +847,32 @@ impl X11Loop {
             }
             Ok(_) => {}
             Err(error) => tracing::debug!(%error, "the displays cannot be read"),
+        }
+    }
+
+    /// Deliver the launches later processes forwarded: what each opens
+    /// reaches the application as running, then a window comes forward at
+    /// the time the launch's startup id names.
+    fn deliver_forwarded(&self) {
+        let Some(instance) = &self.instance else {
+            return;
+        };
+        for forwarded in instance.take() {
+            // An application that shows no window (one that outlives its
+            // last, or hid it) is asked to reopen, as a Dock click asks on
+            // macOS.
+            if !self.windows.shows_any() {
+                self.app
+                    .reopen()
+                    .or_contain((), "a launch another instance forwarded");
+            }
+            let opened = forwarded.opened();
+            if !opened.is_empty() {
+                self.app
+                    .opened(opened)
+                    .or_contain((), "a launch another instance forwarded");
+            }
+            self.windows.activate_forwarded(forwarded.token.as_deref());
         }
     }
 

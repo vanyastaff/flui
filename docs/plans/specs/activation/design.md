@@ -155,9 +155,10 @@ Fragment в `RoutePath` не входит: для ссылки он ничего
   LY95 (окно выходит вперёд, только если право передано).
 - **Linux.** Первый экземпляр берёт имя `<app-id>` на сессионной шине (`zbus` уже в
   `flui-native` для AT-SPI) и выставляет `org.freedesktop.Application` (`Activate`, `Open`,
-  `ActivateAction`), как GApplication. Второй, не получив имя, вызывает `Open(uris, "",
+  `ActivateAction`), как GApplication. Второй, не получив имя, вызывает `Open(uris,
   platform_data)` с `activation-token` из `XDG_ACTIVATION_TOKEN` (Wayland) или
-  `desktop-startup-id` (X11) и выходит. Первый передаёт токен в `WindowCommand::Activate`.
+  `desktop-startup-id` (X11) и выходит, когда первый взял запуск. Токен расходует хост первого: окно, активное последним,
+  выходит вперёд с ним (Wayland `xdg_activation_v1`, X11 — время из startup id).
   `.desktop` с `DBusActivatable=true` даёт тот же путь, когда ссылку открывает рабочий стол.
 - **macOS, iOS, Android.** ОС держит один экземпляр; ничего не строится. Web: каждая вкладка —
   своё приложение.

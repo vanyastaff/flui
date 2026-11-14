@@ -388,6 +388,7 @@ mod event_loop {
     use crate::executor::NativeExecutor;
     use crate::host;
     use crate::owner::app_delivery::AppDelivery;
+    use crate::owner::linux::single_instance::FirstInstance;
     use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
     use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
     use crate::owner::panic_boundary::contain_owner_callback;
@@ -1042,6 +1043,11 @@ mod event_loop {
 
         /// The loop ends: let go of the window's handler and its surface.
         fn release(&self);
+
+        /// Another instance of the application was launched and handed its
+        /// launch over: come forward with `token`, the one its launcher gave
+        /// it, or, without one, a token for the last user input.
+        fn activate_forwarded(&self, token: Option<ActivationToken>);
     }
 
     /// The windows a loop holds, by identity, on the owner thread, which
@@ -1050,6 +1056,9 @@ mod event_loop {
         windows: RefCell<FxHashMap<WindowId, Rc<dyn LoopWindow>>>,
         /// The window the compositor last activated.
         active: Cell<Option<WindowId>>,
+        /// The window the compositor activated last, whether or not it still
+        /// is: the one a forwarded launch brings forward.
+        last_active: Cell<Option<WindowId>>,
         /// The last window closed since the loop last looked: it asks the
         /// application's exit policy.
         emptied: Cell<bool>,
@@ -1066,6 +1075,7 @@ mod event_loop {
             Self {
                 windows: RefCell::default(),
                 active: Cell::new(None),
+                last_active: Cell::new(None),
                 emptied: Cell::new(false),
                 ids: RefCell::default(),
                 launch_token: RefCell::new(launch_token),
@@ -1132,8 +1142,34 @@ mod event_loop {
         pub(crate) fn activation(&self, id: WindowId, activated: bool) {
             if activated {
                 self.active.set(Some(id));
+                self.last_active.set(Some(id));
             } else if self.active.get() == Some(id) {
                 self.active.set(None);
+            }
+        }
+
+        /// Another instance handed its launch over: bring forward the window
+        /// activated last, or another one it still holds, with `token`.
+        /// Before the first window is held, `token` waits for it in place of
+        /// the launch's own, which the compositor may since have expired.
+        pub(crate) fn activate_forwarded(&self, token: Option<ActivationToken>) {
+            let window = {
+                let windows = self.windows.borrow();
+                self.last_active
+                    .get()
+                    .and_then(|id| windows.get(&id))
+                    .or_else(|| windows.values().next())
+                    .cloned()
+            };
+            match window {
+                // Called with the table's borrow released: a window may close
+                // or open another while it comes forward.
+                Some(window) => contain_owner_callback(|| window.activate_forwarded(token)),
+                None => {
+                    if let Some(token) = token {
+                        *self.launch_token.borrow_mut() = Some(token);
+                    }
+                }
             }
         }
 
@@ -1564,6 +1600,9 @@ mod event_loop {
         reevaluate: Cell<bool>,
         /// The loop ran once; a platform runs once.
         ran: Cell<bool>,
+        /// The application's name on the session bus, while this process is
+        /// its one instance: the launches later processes hand over.
+        instance: Option<FirstInstance>,
     }
     // Owner-local (ADR-0327 §5): the loop and its window table never leave the
     // thread that made them.
@@ -1599,7 +1638,9 @@ mod event_loop {
     impl WaylandLoop {
         /// Connect to the compositor the environment names and bind its
         /// globals, for host `H`, whose table makes the displays, the notice
-        /// channel and the sources the loop starts.
+        /// channel and the sources the loop starts. `instance`, when this
+        /// process is its application's one instance, hands the loop the
+        /// launches later processes forward.
         ///
         /// # Errors
         /// [`PlatformError::Init`] when no compositor answers, libwayland
@@ -1609,6 +1650,7 @@ mod event_loop {
         pub(crate) fn try_new<H: WaylandHost>(
             socket: &Path,
             executor: NativeExecutor,
+            instance: Option<FirstInstance>,
         ) -> Result<Self, PlatformError> {
             let init = |what: &str, error: &dyn std::fmt::Display| PlatformError::Init {
                 message: format!("Wayland: {what}: {error}"),
@@ -1709,6 +1751,9 @@ mod event_loop {
                     }),
                 )
             };
+            if let Some(instance) = &instance {
+                instance.attach(&signal);
+            }
             let app = Arc::new(AppDelivery::new());
             // What launched the application waits for its `ready`.
             app.opened(crate::owner::launch_arguments::launched_by(
@@ -1761,6 +1806,7 @@ mod event_loop {
                 frames: FrameCount::default(),
                 reevaluate: Cell::new(false),
                 ran: Cell::new(false),
+                instance,
             })
         }
 
@@ -2004,6 +2050,33 @@ mod event_loop {
             let source = self.sources.borrow_mut().host_notices.clone();
             if let Some(source) = source {
                 source.deliver(self);
+            }
+            self.deliver_forwarded();
+        }
+
+        /// Deliver the launches later processes forwarded: what each opens
+        /// reaches the application as running, then the window activated
+        /// last comes forward with the token the launch's launcher gave it.
+        fn deliver_forwarded(&self) {
+            let Some(instance) = &self.instance else {
+                return;
+            };
+            for forwarded in instance.take() {
+                // An application without a window (one that outlives its
+                // last) is asked to reopen, as a Dock click asks on macOS.
+                if self.windows.is_empty() {
+                    self.app
+                        .reopen()
+                        .or_contain((), "a launch another instance forwarded");
+                }
+                let opened = forwarded.opened();
+                if !opened.is_empty() {
+                    self.app
+                        .opened(opened)
+                        .or_contain((), "a launch another instance forwarded");
+                }
+                self.windows
+                    .activate_forwarded(forwarded.token.map(ActivationToken::new));
             }
         }
 
@@ -2367,6 +2440,7 @@ mod event_loop {
             }
             fn request_frame(&self) {}
             fn release(&self) {}
+            fn activate_forwarded(&self, _token: Option<ActivationToken>) {}
         }
 
         /// The launcher's token goes to the first window the table holds,

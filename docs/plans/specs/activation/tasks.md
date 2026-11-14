@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC10).
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9. AC10 частично: Linux (D-Bus); Windows впереди. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC10).
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -112,6 +112,20 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   поддомена `www`, порта 8443 и `http` отказ, origin страницы открывается, `myapp:` не origin),
   падает при откате проверки origin в `UiRuntime::open_url`; строки `port` и `origin` таблицы
   `opened_urls_split_into_scheme_host_and_route_location`.
+- **AC10 (Linux).** `a_second_process_forwards_its_arguments_and_ends` (тест запускает свою копию
+  вторым процессом на частном `dbus-daemon`: тот передаёт ссылку и файл по относительному пути как
+  абсолютный `file:` URI с токеном и выходит с кодом 0, первый слышит их как `Launch::Running` для
+  приложения), `a_second_launch_hands_the_first_what_it_opens` (`Open` с токеном, `Activate` без
+  URI, пробуждение владельца, имя свободно после ухода первого), `an_app_id_names_the_bus_name_and_object_path`,
+  `a_second_launch_forwards_what_it_opens`, `the_launchers_token_travels_with_the_launch` (и время
+  `_TIME` в startup id X11); `CurrentHost::start_single` → `HostStart`, `Application::single_instance`
+  (сам включён при объявленной схеме URL, нужен app id). `launches_waiting_for_the_owner_are_bounded`,
+  `a_launch_held_past_the_hold_is_handed_back_once` (запуск, не взятый за 15 с, возвращается и
+  второй раз не доставляется), `a_claim_made_inside_the_lent_runtime_answers` (вызов из
+  `#[tokio::main]`). Окно вперёд выводит хост: последнее активное окно Wayland с токеном, X11
+  `_NET_ACTIVE_WINDOW` со временем запуска; без показанного окна приходит `reopen`, а время ждёт
+  следующего показанного окна (`x11_window`: `a_later_launch_while_no_window_is_shown_asks_to_reopen`,
+  `the_window_reopened_for_a_later_launch_comes_forward`). Запуск с рабочего стола — строка parity. Остаток: Windows; включение по `file-types` ждёт их чтения в `#[flui::main]`.
 - **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`
   (схемы, домены, расширения, MIME, имена), `what_the_application_opens_is_joined_over_the_graph`
   (регистр, файл фичи только при включённой фиче), строки `a_malformed_declaration_is_refused_by_crate`

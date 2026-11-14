@@ -65,9 +65,10 @@ impl NativeExecutor {
     }
 
     /// The runtime `runtime` belongs to, which must have its IO and time
-    /// drivers enabled (`Builder::enable_all`); the host's sources wait on
-    /// sockets and timers there. `flui-app` passes its execution services'
-    /// IO runtime.
+    /// drivers enabled (`Builder::enable_all`) and run while the host runs: a
+    /// multi-thread runtime, or a current-thread one that a thread other than
+    /// the host's drives. The host's sources wait on sockets and timers
+    /// there. `flui-app` passes its execution services' IO runtime.
     #[must_use]
     pub fn from_tokio(runtime: Handle) -> Self {
         Self(Inner::Borrowed(runtime))

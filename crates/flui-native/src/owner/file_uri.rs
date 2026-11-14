@@ -5,6 +5,9 @@
 
 use std::path::PathBuf;
 
+#[cfg(any(target_os = "macos", target_os = "ios", x11_host, wayland_host, test))]
+use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
+
 /// How a `file:` URI's path names a file on the host the URI came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PathConvention {
@@ -126,6 +129,60 @@ fn percent_decoded(text: &str) -> Option<Vec<u8>> {
     Some(decoded)
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios", x11_host, wayland_host, test))]
+/// What `urls` open for `target`, in their order: the absolute strings of
+/// the `NSURL`s an Apple platform handed over, or the URIs a second Linux
+/// instance forwarded. Each `file:` URL of this host (`convention`) is a
+/// document, any other URL a link. A `file:` URL that names no local path
+/// (another host, a malformed escape) opens nothing.
+pub(crate) fn opened_by_urls(
+    urls: impl IntoIterator<Item = String>,
+    convention: PathConvention,
+    target: OpenTarget,
+    launch: Launch,
+) -> Opened {
+    let mut links = Vec::new();
+    let mut files = Vec::new();
+    for url in urls {
+        let is_file = url
+            .get(..5)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"));
+        if !is_file {
+            links.push(url);
+        } else if let Some(path) = file_uri_path(&url, convention) {
+            files.push(OpenedFile::new(path));
+        } else {
+            tracing::debug!("a file URL the platform opened names no path on this host");
+        }
+    }
+    Opened::new(links, files, target, launch)
+}
+
+/// The `file:` URI of `path`, an absolute Unix path: `file://` and the path
+/// with every byte but an unreserved character (RFC 3986 §2.3), `/` and the
+/// sub-delimiters a path keeps escaped, so [`file_uri_path`] reads `path`
+/// back; `None` for a relative path.
+#[cfg(any(x11_host, wayland_host, all(test, unix)))]
+pub(crate) fn file_uri(path: &std::path::Path) -> Option<String> {
+    use std::fmt::Write as _;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let bytes = path.as_os_str().as_bytes();
+    if !bytes.starts_with(b"/") {
+        return None;
+    }
+    let mut uri = String::with_capacity("file://".len() + bytes.len());
+    uri.push_str("file://");
+    for &byte in bytes {
+        if byte.is_ascii_alphanumeric() || b"/-._~!$&'()*+,;=:@".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            let _ = write!(uri, "%{byte:02X}");
+        }
+    }
+    Some(uri)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -157,5 +214,21 @@ mod tests {
             Some(PathBuf::from("\\\\server\\share\\a"))
         );
         assert_eq!(windows("file:///a/b"), None, "no drive");
+
+        // A path made a URI reads back as the same path, bytes included.
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+
+            for path in ["/a/b c/Plan #1.note", "/notes/50%?.txt", "/a/ü", "/a/[x]"] {
+                let uri = super::file_uri(std::path::Path::new(path)).expect("absolute");
+                assert_eq!(unix(&uri), Some(PathBuf::from(path)), "{uri}");
+            }
+            let bytes = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b"/a/\xff"));
+            let uri = super::file_uri(&bytes).expect("absolute");
+            assert_eq!(uri, "file:///a/%FF");
+            assert_eq!(unix(&uri), Some(bytes));
+            assert_eq!(super::file_uri(std::path::Path::new("a/b")), None);
+        }
     }
 }

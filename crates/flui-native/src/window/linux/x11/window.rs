@@ -833,6 +833,12 @@ impl X11Window {
         record.reveal_pending || !record.shown
     }
 
+    /// Whether the window is open and the application wants it shown,
+    /// mapped or waiting for its first frame to be.
+    fn shown(&self) -> bool {
+        !self.closed.get() && self.record.borrow().shown
+    }
+
     /// Write `mode` into `_NET_WM_STATE` of the unmapped window, when the
     /// window manager supports it: it reads the mode there as it maps the
     /// window, and ignores a request about a window it does not manage.
@@ -933,8 +939,10 @@ impl X11Window {
     }
 
     /// Map the window, fitted first to the rectangle it was opened at, and
-    /// minimized after when that is what it was last asked to be.
-    fn map(&self) {
+    /// minimized after when that is what it was last asked to be. Returns
+    /// whether a launch forwarded while no window was shown brought it
+    /// forward, at that launch's time.
+    fn map(&self) -> bool {
         self.fit_to_remembered_rectangle();
         if let Err(error) = self.xcb().map_window(self.xid) {
             tracing::debug!(%error, "cannot map an X11 window");
@@ -947,7 +955,13 @@ impl X11Window {
                 self.atoms.wm_change_state,
                 [ICONIC_STATE, 0, 0, 0, 0],
             ));
+            return false;
         }
+        let forwarded = self
+            .windows
+            .upgrade()
+            .and_then(|windows| windows.forwarded_activation.take());
+        forwarded.inspect(|time| self.activate_at(*time)).is_some()
     }
 
     /// Give a window opened at a remembered outer rectangle the content size
@@ -1041,10 +1055,11 @@ impl X11Window {
             }
             was_unmapped
         };
-        if was_unmapped || self.cell.published().mode == WindowMode::Minimized {
-            self.map();
+        let brought_forward =
+            (was_unmapped || self.cell.published().mode == WindowMode::Minimized) && self.map();
+        if !brought_forward {
+            self.activate();
         }
-        self.activate();
     }
 
     /// Withdraw the window (ICCCM 4.1.4): unmapped, with the synthetic
@@ -1072,12 +1087,19 @@ impl X11Window {
     /// (`_NET_ACTIVE_WINDOW`, which also raises it), else from the server
     /// directly.
     fn activate(&self) {
+        self.activate_at(x11rb::CURRENT_TIME);
+    }
+
+    /// [`activate`](Self::activate) at `time`, the server time of the user
+    /// action that asked for it: a window manager that prevents focus
+    /// stealing compares it with the user's last input.
+    fn activate_at(&self, time: u32) {
         if self.support().managed {
             self.send_to_root(ClientMessageEvent::new(
                 32,
                 self.xid,
                 self.atoms.net_active_window,
-                [SOURCE_APPLICATION, x11rb::CURRENT_TIME, 0, 0, 0],
+                [SOURCE_APPLICATION, time, 0, 0, 0],
             ));
             return;
         }
@@ -1087,7 +1109,7 @@ impl X11Window {
         );
         let focused = self
             .xcb()
-            .set_input_focus(InputFocus::PARENT, self.xid, x11rb::CURRENT_TIME);
+            .set_input_focus(InputFocus::PARENT, self.xid, time);
         if let Err(error) = raised.and(focused) {
             tracing::debug!(%error, "cannot focus an X11 window");
         }
@@ -1668,6 +1690,13 @@ pub struct X11Windows {
     frame_inset: Arc<FrameInset>,
     support: Cell<WindowManagerSupport>,
     appearance: Cell<WindowAppearance>,
+    /// The window that had the focus last, whether or not it still has: the
+    /// one a forwarded launch brings forward.
+    last_focused: Cell<Option<WindowId>>,
+    /// The time of a launch forwarded while no window was shown: the next
+    /// window mapped comes forward at it, as the window the application
+    /// shows from the reopen it was asked.
+    forwarded_activation: Cell<Option<u32>>,
 }
 // Owner-local (ADR-0327 §5): the table is the owner thread's alone.
 static_assertions::assert_not_impl_any!(X11Windows: Send, Sync);
@@ -1710,6 +1739,8 @@ impl X11Windows {
             frame_inset: Arc::new(FrameInset::default()),
             support: Cell::new(WindowManagerSupport::default()),
             appearance: Cell::new(WindowAppearance::Light),
+            last_focused: Cell::new(None),
+            forwarded_activation: Cell::new(None),
             connection,
         };
         windows.read_support();
@@ -1992,6 +2023,9 @@ impl X11Windows {
             _ => return,
         };
         if let Some(window) = self.window_of(xid) {
+            if matches!(event, Event::FocusIn(_)) {
+                self.last_focused.set(Some(window.id));
+            }
             window.handle(event);
         }
     }
@@ -2138,6 +2172,34 @@ impl LoopWindows for X11Windows {
         };
         for window in windows {
             window.release();
+        }
+    }
+
+    fn shows_any(&self) -> bool {
+        self.open_windows().iter().any(|window| window.shown())
+    }
+
+    /// The window that had the focus last comes forward, the one the
+    /// runner routes the launch's links to; once it closed or was hidden,
+    /// any shown one. Activating a window not mapped yet would not bring it
+    /// forward: with none mapped, the time waits for the next window mapped,
+    /// the one the application shows from the reopen it was asked, or the
+    /// one waiting for its first frame.
+    fn activate_forwarded(&self, token: Option<&str>) {
+        let time = token
+            .and_then(crate::owner::linux::single_instance::startup_time)
+            .unwrap_or(x11rb::CURRENT_TIME);
+        let windows = self.open_windows();
+        let open = |window: &&Rc<X11Window>| window.shown();
+        let last = self.last_focused.get();
+        let window = windows
+            .iter()
+            .filter(open)
+            .find(|window| Some(window.id) == last)
+            .or_else(|| windows.iter().find(open));
+        match window {
+            Some(window) if !window.unmapped() => window.activate_at(time),
+            _ => self.forwarded_activation.set(Some(time)),
         }
     }
 }
