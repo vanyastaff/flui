@@ -82,7 +82,8 @@ Environment:
   NO_COLOR, CLICOLOR_FORCE   colour policy when --color=auto
 
 flui sends no telemetry and never touches the network unless a command
-explicitly downloads something (`flui upgrade`, `cargo` fetching crates).")]
+explicitly downloads something (`flui upgrade`, `cargo` fetching crates,
+`flui doctor --domains` fetching each associated domain's files).")]
 pub(crate) struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
@@ -383,10 +384,16 @@ enum Commands {
         fix: bool,
 
         /// Check a manifest FLUI does not write (an embedding project's
-        /// AndroidManifest.xml or PrivacyInfo.xcprivacy) against what the
+        /// AndroidManifest.xml, PrivacyInfo.xcprivacy or Info.plist) against what the
         /// crates of the project in the current directory declare; repeatable
         #[arg(long = "manifest", value_name = "PATH")]
         manifests: Vec<std::path::PathBuf>,
+
+        /// Fetch each associated domain's apple-app-site-association and
+        /// assetlinks.json (the only network this command touches) and check
+        /// that they open the application
+        #[arg(long)]
+        domains: bool,
     },
 
     /// List available devices
@@ -852,6 +859,7 @@ fn main() {
             web,
             fix,
             manifests,
+            domains,
         } => commands::doctor::execute(commands::doctor::DoctorOptions {
             verbose: doctor_verbose || verbose,
             android,
@@ -859,6 +867,7 @@ fn main() {
             web,
             fix,
             manifests,
+            domains,
         }),
 
         Commands::Devices { details, platform } => commands::devices::execute(details, platform),

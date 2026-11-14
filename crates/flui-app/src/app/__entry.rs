@@ -1,15 +1,118 @@
 //! What `#[flui::main]` expands to. Not application surface: the attribute is.
 //!
+//! The attribute reads the crate's `[package.metadata.flui.declares]` as it
+//! compiles, and the function it marks starts with [`declare`]: the URL
+//! schemes and web domains the manifest registers with the operating system
+//! are the ones a run that function starts opens, unless the application
+//! gives its own with [`Application::declares`](crate::Application::declares).
+//!
 //! On Android the system loads the application's `cdylib` and calls the
 //! `android_main` the attribute writes with the `AndroidApp` it starts the
 //! application with. `android` hands that `AndroidApp` to the run on this
 //! thread and calls the application's entry function, whose
-//! [`Application::run`](crate::Application::run) takes it. On every other
-//! target the attribute adds nothing, and this module has nothing.
+//! [`Application::run`](crate::Application::run) takes it.
 
 /// The value the system starts an Android application with.
 #[cfg(target_os = "android")]
 pub use android_activity::AndroidApp;
+/// What the application opens.
+pub use flui_view::navigation::LinkDeclarations;
+
+/// How many entries [`join`] gives for `parts`.
+#[must_use]
+pub const fn joined_len(parts: &[&[&'static str]]) -> usize {
+    let mut len = 0;
+    let mut part = 0;
+    while part < parts.len() {
+        len += parts[part].len();
+        part += 1;
+    }
+    len
+}
+
+/// The entries of `parts` in order, in one array: the manifest's own list
+/// followed by the lists of the features the crate is compiled with, which
+/// the attribute chooses with `cfg!` and leaves empty otherwise.
+///
+/// # Panics
+///
+/// When `N` is not [`joined_len`] of `parts`, as the compilation of the
+/// attribute's constant.
+#[must_use]
+pub const fn join<const N: usize>(parts: &[&[&'static str]]) -> [&'static str; N] {
+    assert!(
+        joined_len(parts) == N,
+        "BUG: an array joins as many entries as its parts hold"
+    );
+    let mut joined = [""; N];
+    let mut at = 0;
+    let mut part = 0;
+    while part < parts.len() {
+        let mut entry = 0;
+        while entry < parts[part].len() {
+            joined[at] = parts[part][entry];
+            at += 1;
+            entry += 1;
+        }
+        part += 1;
+    }
+    joined
+}
+
+/// Record `declarations` for the runs started on this thread until the
+/// returned value drops, at the end of the entry function: a run reads them
+/// as it starts when its `Application` declares nothing itself.
+pub fn declare(declarations: LinkDeclarations) -> Declared {
+    let previous = match crate::app::runner::swap_entry_declarations(Some(declarations)) {
+        Ok(previous) => Restore::Previous(previous),
+        Err(_busy) => {
+            tracing::warn!(
+                "a `#[flui::main]` function was called from inside a run; \
+                 its manifest's declarations are not recorded"
+            );
+            Restore::Nothing
+        }
+    };
+    Declared {
+        previous,
+        _owner_thread: std::marker::PhantomData,
+    }
+}
+
+/// The record [`declare`] made, undone when it drops.
+#[must_use = "the declarations last while this value lives"]
+pub struct Declared {
+    /// What drop puts back.
+    previous: Restore,
+    /// The record lives on the thread that made it.
+    _owner_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+/// What a [`Declared`] puts back when it drops.
+enum Restore {
+    /// Nothing was recorded, so nothing is undone.
+    Nothing,
+    /// What was recorded before the entry started.
+    Previous(Option<LinkDeclarations>),
+}
+
+impl std::fmt::Debug for Declared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Declared").finish_non_exhaustive()
+    }
+}
+
+impl Drop for Declared {
+    fn drop(&mut self) {
+        if let Restore::Previous(previous) = std::mem::replace(&mut self.previous, Restore::Nothing)
+            && crate::app::runner::swap_entry_declarations(previous).is_err()
+        {
+            tracing::warn!(
+                "a `#[flui::main]` function returned inside a run; its declarations stay recorded"
+            );
+        }
+    }
+}
 
 /// What an entry function may return: nothing, or a `Result` whose error is
 /// logged, since `android_main` has no caller to return it to.

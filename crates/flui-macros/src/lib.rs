@@ -338,12 +338,19 @@ pub fn derive_routable(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// On the desktop, iOS and the web the function is left as it is: they start
+/// The desktop, iOS and the web start
 /// from the binary's `fn main`, which calls it. On Android, whose system
 /// loads the library as a `cdylib` and calls an exported `android_main`
 /// with its `AndroidApp`, the attribute writes that `android_main`: it hands
 /// the `AndroidApp` to the run the function starts and logs the function's
 /// `Err`. So an application writes no Android code.
+///
+/// The function starts by recording the URL schemes and web domains the
+/// crate's `[package.metadata.flui.declares]` lists (`url-schemes`,
+/// `associated-domains`, a feature's while the crate is compiled with it),
+/// read as the crate compiles: the run the function starts opens those, the
+/// ones `flui build` registers with the operating system, unless the
+/// application gives `Application::declares`.
 ///
 /// The function takes nothing and returns `()` or `Result<(), E>` with a
 /// displayable `E`; an `async`, `unsafe`, generic or argument-taking

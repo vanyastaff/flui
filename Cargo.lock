@@ -1858,6 +1858,7 @@ dependencies = [
  "predicates",
  "roxmltree",
  "rustix 1.1.6",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -1867,6 +1868,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "tungstenite",
+ "ureq",
  "which",
  "widestring",
  "windows 0.62.2",
@@ -2084,6 +2086,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+ "toml_edit",
 ]
 
 [[package]]

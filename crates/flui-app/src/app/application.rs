@@ -75,7 +75,7 @@ impl Application {
             ready,
             window_error,
             capabilities,
-            opening,
+            opening: opening.or_entry_declarations(),
             marker: std::marker::PhantomData,
         }
     }

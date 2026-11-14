@@ -392,7 +392,7 @@ pub(super) fn build_ui_runtime(
     // root mounts, so a link that launched the application opens its first
     // Router on the link.
     if let Some(routing) = current_open_routing() {
-        ui_runtime.set_link_declarations(routing.declarations());
+        routing.admit_in(&ui_runtime);
         routing.open_held_in(&ui_runtime, native.as_ref());
     }
     Ok(ui_runtime)
@@ -1215,6 +1215,9 @@ impl flui_native::AppHandler for RunnerHandler {
             // the link (Flutter's initial route) instead of navigating to it
             // after its initial page was built.
             let routing = self.route(|routes| routes.opened.clone());
+            if let (Some(routing), Some(origin)) = (&routing, owner.page_origin()) {
+                routing.set_page_origin(origin);
+            }
             let launch_files = match (&routing, owner.take_launch_opened()) {
                 (Some(routing), Some(launch)) => routing.hold_launch(launch),
                 _ => Vec::new(),

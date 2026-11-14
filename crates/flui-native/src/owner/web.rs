@@ -807,6 +807,21 @@ impl host::Loop for WebLoop {
             Rc::clone(&self.turn),
         ));
 
+        // The page's address is what opened it, reported before the handler
+        // is bound so it waits for `ready`: the bootstrap's first Router
+        // opens on it, as Flutter's web engine reads its initial route from
+        // the location.
+        if let Some(address) = web_sys::window().and_then(|window| window.location().href().ok()) {
+            self.app
+                .opened(flui_platform::Opened::new(
+                    [address],
+                    [],
+                    flui_platform::OpenTarget::Application,
+                    flui_platform::Launch::Cold,
+                ))
+                .or_contain((), "the page's address");
+        }
+
         // Run the bootstrap synchronously — the browser's event loop is
         // already running. On `Err`, do NOT install the RAF loop over a
         // half-built page — return the failure instead. The page outlives
@@ -852,6 +867,10 @@ impl host::Loop for WebLoop {
 impl host::Services for WebLoop {
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         self.launch.value(key)
+    }
+
+    fn page_origin(&self) -> Option<String> {
+        web_sys::window()?.location().origin().ok()
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {

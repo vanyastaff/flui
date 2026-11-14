@@ -89,13 +89,39 @@ application's. Rust links statically, so no per-SDK privacy bundle exists and th
 manifest carries the union. `flui-native` declares `systemUptime` (`35F9.1`) and file timestamps
 (`C617.1`), `flui-assets` file timestamps (`publication_contract`).
 
+What the application opens (schema 3: `url-schemes`, `associated-domains`, `file-types`, each
+value checked in `declarations/opening.rs`) becomes `FluiActivity`'s intent filters, a verified
+one for the domains' `https` links (`the_activity_filters_what_the_application_opens`), and the
+keys both Apple bundles' `Info.plist` take from `build/apple_opening.rs`: `CFBundleURLTypes`, and
+per file type an exported uniform type under the bundle identifier that the bundle opens as its
+owner (`a_bundle_registers_what_the_application_opens`). The macOS bundle's XML plist renders the
+same keys (`the_keys_render_as_xml_property_list_entries`). Schemes and domains are the
+application's own: a crate another crate of the build links by a normal or build edge is refused
+when it declares them (`only_the_application_declares_the_links_it_opens`), since the run admits
+what `#[flui::main]` reads from the crate it marks. A Linux build writes the desktop entry and the
+shared-mime-info package beside the executable (`build/linux_desktop.rs`,
+`a_linux_desktop_registers_what_the_application_opens`).
+
 `flui doctor` reads the same declarations for a manifest the CLI does not write
 (`declarations/verify.rs`, `commands/doctor/project.rs`): the project's hand-written Android
-manifest and each `--manifest` path, an `AndroidManifest.xml` or an XML `PrivacyInfo.xcprivacy`,
-named by its root element. Each missing entry is listed with the crates that declare it and the
+manifest and each `--manifest` path, an `AndroidManifest.xml` or an XML `PrivacyInfo.xcprivacy` or
+`Info.plist`, named by its root element and, for a property list, by whether it names a
+`CFBundleIdentifier`. An Android manifest is read for its permissions and the intent filters of
+what the application opens (a `VIEW` filter's MIME types, a `BROWSABLE` one's schemes, a verified
+one's `https` hosts), an `Info.plist` for its `CFBundleURLTypes` schemes and the extensions its
+document types open (`doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`).
+Each missing entry is listed with the crates that declare it and the
 line to add, under the stable ids `project.declarations`, `project.android-manifest` and
 `project.manifest`. The merger is not run: an Android file that is not Gradle's merged manifest
 carries a note saying so (`doctor_lists_what_a_manifest_lacks_of_the_crates_declarations`).
+
+`flui doctor --domains` (`commands/doctor/domains.rs`) fetches each associated domain's
+`apple-app-site-association` and `assetlinks.json` with `Https`: `ureq` over rustls with the
+platform's verifier, the client a Linux host's HTTP capability runs (ADR-0280), `https` only, no
+redirect, a 15-second deadline and 128 KiB. The fetch sits behind the `Fetch` trait, so
+`each_associated_domain_is_checked_for_both_files` answers from a table without a network, and
+`doctor_checks_the_associated_domains_only_when_asked` shows that nothing is fetched without
+the flag.
 
 `flui add <capability>` (`commands/add.rs`) links a capability crate: it enables the facade
 feature that carries it (`toml_edit`, the file's formatting kept) or, without the facade, runs

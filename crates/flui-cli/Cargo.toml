@@ -116,6 +116,12 @@ zip = { workspace = true }
 # list FLUI did not write, to list what the linked crates declare and it lacks.
 roxmltree = { workspace = true }
 
+# `flui doctor --domains`: fetches each associated domain's files with the
+# client the built-in HTTP capability runs on Linux (ADR-0280), rustls with
+# the platform's verifier, so the system's trust store decides.
+ureq = { workspace = true }
+rustls = { workspace = true, features = ["std", "aws_lc_rs"] }
+
 
 # Terminal mode for `flui run`'s hot-keys (see commands/run.rs `raw_mode`):
 # canonical mode and echo off for the session, restored on every exit path.

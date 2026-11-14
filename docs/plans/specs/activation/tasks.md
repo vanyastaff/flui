@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4; AC5 без чтения `[package.metadata.flui.declares]` в `#[flui::main]`. В работе: —; следующие остаток AC5, AC11.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC9. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC10), AC8.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -30,7 +30,7 @@
 | **AC6** | macOS: `application:openURLs:` (URL и `file:`), холодный до `applicationDidFinishLaunching:` | AC4 | `crates/flui-native/src/owner/apple/macos/` | модель разбора `NSURL` на Linux; запуск — строка parity |
 | **AC7** | iOS: `connectionOptions.URLContexts` и `userActivities` при подключении сцены, `scene:openURLContexts:`, `scene:continueUserActivity:`; адресат — окно сцены | AC4 | `crates/flui-native/src/owner/apple/ios.rs`, `ios/scene.rs` | модель сцены → `OpenTarget::Window`; запуск на симуляторе — nightly iOS Simulator |
 | **AC8** | Android: `getIntent()` в `onCreate`, `onNewIntent` + `setIntent`, `ACTION_VIEW`/`ACTION_SEND`, `content://` через SAF; `classes.dex` пересобран (`xtask android-dex`) | AC4 | `crates/flui-native/android/java/dev/flui/platform/FluiActivity.java`, `owner/android.rs` | модель intent → `Opened` на Linux; запуск на эмуляторе — nightly Android |
-| **AC9** | Windows и Linux: `argv` холодного старта (URL или существующий файл, остальное в журнал); Web: `location.pathname` как холодный URL страницы | AC4 | `owner/{windows,linux,web}*`, `flui-app` вход | модель разбора `argv` (кавычки, `%1`, не URL); Web — тест под `wasm32` на Node |
+| **AC9** | Windows и Linux: `argv` холодного старта (URL или существующий файл, остальное в журнал); Web: `location.href` как холодный URL страницы, URL её `location.origin` (схема, host и порт целиком) допущены без объявлений | AC4 | `owner/{windows,linux,web}*`, `flui-app` вход | модель разбора `argv` (кавычки, `%1`, не URL); Web — тест под `wasm32` на Node |
 | **AC10** | Один экземпляр: Windows (мьютекс, именованный канал, `AllowSetForegroundWindow`), Linux (`org.freedesktop.Application` на `zbus`, токен активации); `Application::single_instance(bool)` (включён сам при объявлениях, `false` отключает); ADR-0254 §4 переписан | AC9 | `crates/flui-native/src/owner/{windows,linux}/` | на Linux CI: второй процесс передаёт `argv` по D-Bus и выходит 0, первый получает `Launch::Running`; Windows — модель кадра канала и запуск двумя процессами (строка parity) |
 | **AC11** | Ключи ADR-0307 `url-schemes`, `associated-domains`, `file-types`: `Info.plist`, entitlements, `AndroidManifest.xml`, `.desktop`, регистрация Windows; `flui doctor` проверяет `apple-app-site-association` и `assetlinks.json` | AC5 | `crates/flui-cli`, ADR-0307 §2 таблица ключей | снимки сгенерированных манифестов в тестах CLI; отказ неизвестного ключа уже даёт строгость версии 1 |
 | **AC12** | Документы: parity `deep-links-url-schemes-file-associations` и `single-instance-forward-arguments` с тем, что запускалось; `docs/gaps.md`; раздел о ссылках в документации `Router` (форма `myapp:///note/3`); спека удаляется | AC2–AC11 | `crates/flui-native/platform-parity.toml`, `docs/platform-parity.md` (`FLUI_OVERWRITE=1`), `docs/gaps.md` | `parity_document_matches_its_source`, `xtask checks` |
@@ -52,3 +52,67 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   слиты по порядку, другой адресат и работающее приложение слышатся после `ready`) и
   `opened_reports_waiting_for_ready_are_bounded`. Холодный тест падает без
   `OwnerPlatform::take_launch_opened` (строится `initial`).
+- **AC5 (объявления из манифеста).** `the_entry_carries_what_the_manifest_declares_it_opens`
+  (`flui-macros`: списки крейта и фич, встроенные таблицы, отказ не-строки и не-таблицы),
+  строка `runner_open::the_entry_functions_manifest_declares_what_a_run_opens` (то, что пишет
+  `#[flui::main]`: схема манифеста открывается, схема фичи — только при включённой фиче,
+  `Application::declares` заменяет манифест, после выхода из функции объявлений нет; падает без
+  `OpenSettings::or_entry_declarations` в `into_run`), `generated_basic_project_compiles` (вход
+  проекта, чей манифест и фича объявляют ссылки, компилируется с фичей и без),
+  `only_the_application_declares_the_links_it_opens` (схема или домен зависимости отказаны по
+  имени, приложение под dev-зависимостью остаётся приложением).
+- **AC6.** `apple_urls_split_into_links_and_documents` (модель `owner/apple/opened_urls.rs`:
+  ссылки своей схемы и `https` — URL, `file:` — документ по раскодированному пути без проверки
+  диска (пакет — каталог), `file:` другого хоста ничего не открывает, порядок AppKit, `Launch`
+  передаётся как есть), `file_uris_name_the_files_of_their_host` (`owner/file_uri.rs`, общий с
+  аргументами запуска: `localhost`, регистр схемы, query и fragment, чужой хост, относительный
+  путь, escape не из двух hex-цифр, включая `%+1`); делегат `LoopDelegate` реализует
+  `application:openURLs:` (до `applicationDidFinishLaunching:` — `Launch::Cold`, после —
+  `Launch::Running`), не больше `MAX_OPENED_ITEMS` строк и ни одной длиннее
+  `MAX_OPENED_URL_LEN` до копирования. Запуск на Mac — строка parity.
+- **AC7.** Та же модель `opened_by_urls` с `OpenTarget::Window` окна сцены
+  (`apple_urls_split_into_links_and_documents`: ссылки и документы сцены адресованы её окну),
+  `a_user_activity_opens_only_a_web_page` (`NSUserActivityTypeBrowsingWeb` открывает свой
+  `webpageURL`, иная активность и активность без страницы — ничего); `FluiSceneDelegate` читает
+  `URLContexts` и `userActivities` из `scene:willConnectToSession:options:` (`Launch::Cold`,
+  действие `SceneAction::Open` в очереди после `Connect`, так что окно уже подключено),
+  `scene:openURLContexts:` и `scene:continueUserActivity:` (`Launch::Running`, только для сцены,
+  которую делегат подключил); копируются не больше `MAX_OPENED_ITEMS` строк и ни одной длиннее
+  `MAX_OPENED_URL_LEN` (`absolute_strings`, общий с macOS). Запуск на симуляторе — строка parity.
+- **AC9 (Windows, Linux).** `launch_arguments_open_their_urls_and_existing_files` (модель разбора
+  `argv` в `owner/launch_arguments.rs`: URL своей схемы и `https`, `file:` URI с `localhost` и
+  процентами, относительный путь к существующему файлу; флаги, значения, несуществующий файл,
+  `file:` другого хоста на Unix и буква диска не URL; на Windows `file:///C:/…` и
+  `file://server/share/…`), `a_launch_path_need_not_be_text`; хосты X11, Wayland и Win32
+  сообщают разобранное как холодный `Opened` до `ready` (`WindowsHost`, `X11Host`, `WaylandHost`
+  `::launch_arguments`, у тестового `QuietHost` пусто). Запуск по зарегистрированной схеме на
+  рабочем столе — строка parity.
+- **AC9 (Web).** `web_the_page_address_is_the_link_it_launched_with` на Node
+  (`flui-native/tests/wasm32/page_address.rs`: `location.href` — один холодный `Opened` для
+  приложения, услышан после `ready`; `page_origin` отвечает `location.origin`), падает при откате
+  отчёта в `owner/web.rs`; строка `url_owner::a_page_opens_the_urls_of_its_own_origin` таблицы
+  `router_and_widgets_app` через `HeadlessHost::set_page_origin` (до origin и для чужого домена,
+  поддомена `www`, порта 8443 и `http` отказ, origin страницы открывается, `myapp:` не origin),
+  падает при откате проверки origin в `UiRuntime::open_url`; строки `port` и `origin` таблицы
+  `opened_urls_split_into_scheme_host_and_route_location`.
+- **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`
+  (схемы, домены, расширения, MIME, имена), `what_the_application_opens_is_joined_over_the_graph`
+  (регистр, файл фичи только при включённой фиче), строки `a_malformed_declaration_is_refused_by_crate`
+  (ключ версии 3 при `schema = 2`, веб-схема, URL вместо домена, одно расширение с двумя MIME),
+  `the_activity_filters_what_the_application_opens`, `a_bundle_registers_what_the_application_opens`,
+  `the_keys_render_as_xml_property_list_entries`, строка «the info plist registers what the
+  application opens» `ios_package::tests::publication_contract`; `doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`
+  (фильтр без схемы, домен без `autoVerify`, фильтр с `tools:node="remove"`, `Info.plist` без схемы и
+  без типа документа, полные файлы), `a_linux_desktop_registers_what_the_application_opens` и
+  `desktop_entry_values_are_escaped`.
+- **AC11 (файлы доменов).** `each_associated_domain_is_checked_for_both_files` (`Fetch` отвечает
+  из таблицы: отданные `apple-app-site-association` и `assetlinks.json` проходят, редирект и
+  недоступный домен отказаны, проект без доменов ничего не запрашивает),
+  `doctor_checks_the_associated_domains_only_when_asked` (без `--domains` ничего не запрашивается
+  и проверка объявлений называет флаг, `--domains` вне проекта отказан; падает без примечания
+  проверки объявлений),
+  `an_apple_association_names_the_application_with_what_it_opens` (`appIDs` и старый `appID`,
+  редирект, 404, чужое приложение, без команды, без `components`/`paths`, не JSON),
+  `asset_links_grant_the_package_with_its_fingerprints` (тип не `application/json`, чужой пакет,
+  другое отношение, без отпечатка, плохой отпечаток). Остаток: entitlement доменов (iOS ещё не
+  подписывается) и регистрация Windows.

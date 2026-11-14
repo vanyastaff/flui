@@ -102,6 +102,10 @@ mod wayland {
     }
 
     impl WaylandHost for Wayland {
+        fn launch_arguments() -> Vec<std::ffi::OsString> {
+            crate::owner::launch_arguments::process_arguments()
+        }
+
         fn displays() -> Arc<dyn WaylandDisplays> {
             Arc::new(WaylandDisplaySource::new())
         }
@@ -227,6 +231,10 @@ mod x11 {
     }
 
     impl X11Host for X11 {
+        fn launch_arguments() -> Vec<std::ffi::OsString> {
+            crate::owner::launch_arguments::process_arguments()
+        }
+
         /// The X server's outputs, through RandR on a connection of their own.
         fn displays() -> Arc<dyn HostDisplays> {
             LinuxDisplays::new()

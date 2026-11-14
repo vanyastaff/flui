@@ -57,10 +57,10 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class};
 use objc2::{MainThreadMarker, Message};
-use objc2_foundation::{NSObjectProtocol, NSSet, NSString};
+use objc2_foundation::{NSObjectProtocol, NSSet, NSString, NSUserActivity};
 use objc2_ui_kit::{
-    UIApplication, UIApplicationDelegate, UIScene, UISceneActivationState, UISceneConfiguration,
-    UISceneDelegate, UISceneSession, UIWindowScene,
+    UIApplication, UIApplicationDelegate, UIOpenURLContext, UIScene, UISceneActivationState,
+    UISceneConfiguration, UISceneConnectionOptions, UISceneDelegate, UISceneSession, UIWindowScene,
 };
 
 use parking_lot::Mutex;
@@ -428,6 +428,10 @@ enum SceneAction {
     Disconnect(SceneOrigin),
     Discard(IOSSceneSessionId, bool),
     Rollback(SceneOrigin),
+    /// The scene was opened with these URLs (the absolute strings of its URL
+    /// contexts and web activities): the application hears them for the
+    /// scene's window.
+    Open(SceneOrigin, Vec<String>, flui_platform::Launch),
 }
 struct SceneState {
     terminal_sessions: HashSet<IOSSceneSessionId>,
@@ -1585,6 +1589,28 @@ impl IOSLoop {
                     }
                 }
             }
+            SceneAction::Open(origin, urls, launch) => {
+                if urls.is_empty() {
+                    return;
+                }
+                let Some((window, _)) = self.current(&origin) else {
+                    tracing::warn!(
+                        dropped = urls.len(),
+                        "URLs opened for a scene that is gone open nothing"
+                    );
+                    return;
+                };
+                let target =
+                    flui_platform::OpenTarget::Window(flui_platform::PlatformWindow::id(&*window));
+                self.app
+                    .opened(super::opened_urls::opened_by_urls(
+                        urls,
+                        crate::owner::file_uri::PathConvention::HOST,
+                        target,
+                        launch,
+                    ))
+                    .or_contain((), "the URLs UIKit opened");
+            }
             SceneAction::Rollback(origin) => {
                 let record = {
                     let mut state = self.state().borrow_mut();
@@ -1711,17 +1737,39 @@ define_class!(
             })
         }
         #[unsafe(method(scene:willConnectToSession:options:))]
-        fn connect(&self, scene: &UIScene, _session: &UISceneSession, _options: &AnyObject) {
+        fn connect(&self, scene: &UIScene, _session: &UISceneSession, options: &UISceneConnectionOptions) {
             os_entry("scene:willConnectToSession:options:", (), AfterPanic::Answer(|()| ()), || {
                 FluiAppDelegate::with_platform(|platform| {
                     if let Some(scene) = scene.downcast_ref::<UIWindowScene>() {
                         let origin = platform.connect(scene);
                         if let Some(origin) = origin {
                             *self.ivars().origin.borrow_mut() = Some((origin.clone(), objc2::rc::Weak::new(scene.as_super())));
-                            platform.enqueue(SceneAction::Connect(origin, scene.retain()));
+                            platform.enqueue(SceneAction::Connect(origin.clone(), scene.retain()));
+                            // What launched the scene opens in its window once
+                            // the window is connected, before its first frame.
+                            platform.enqueue(SceneAction::Open(
+                                origin,
+                                connection_urls(options),
+                                flui_platform::Launch::Cold,
+                            ));
                         }
                     }
                 });
+            });
+        }
+        /// A link or document reaches the running scene.
+        #[unsafe(method(scene:openURLContexts:))]
+        fn open_url_contexts(&self, scene: &UIScene, contexts: &NSSet<UIOpenURLContext>) {
+            Self::scene_event(self, scene, |origin| {
+                SceneAction::Open(origin, context_urls(contexts), flui_platform::Launch::Running)
+            });
+        }
+        /// A universal link reaches the running scene as a web browsing
+        /// activity; any other activity addresses no route.
+        #[unsafe(method(scene:continueUserActivity:))]
+        fn continue_user_activity(&self, scene: &UIScene, activity: &NSUserActivity) {
+            Self::scene_event(self, scene, |origin| {
+                SceneAction::Open(origin, activity_url(activity).into_iter().collect(), flui_platform::Launch::Running)
             });
         }
         #[unsafe(method(sceneDidDisconnect:))]
@@ -1741,6 +1789,39 @@ define_class!(
     // only those declared above, with UIKit's signatures, on the main thread.
     unsafe impl UISceneDelegate for FluiSceneDelegate {}
 );
+/// What a scene connects with: its URL contexts (a link of the application's
+/// scheme, a document handed over) and its web browsing activities (a
+/// universal link), bounded as [`absolute_strings`] bounds them.
+///
+/// [`absolute_strings`]: super::opened_urls::absolute_strings
+fn connection_urls(options: &UISceneConnectionOptions) -> Vec<String> {
+    let mut urls = context_urls(&options.URLContexts());
+    let activities = options.userActivities();
+    urls.extend(
+        activities
+            .iter()
+            .filter_map(|activity| activity_url(&activity))
+            .take(flui_platform::MAX_OPENED_ITEMS.saturating_sub(urls.len())),
+    );
+    urls
+}
+
+/// The URLs of `contexts`, bounded.
+fn context_urls(contexts: &NSSet<UIOpenURLContext>) -> Vec<String> {
+    super::opened_urls::absolute_strings(contexts.iter().map(|context| context.URL()))
+}
+
+/// The web page a web browsing `activity` continues, as its absolute string
+/// when it is no longer than an opened URL may be.
+fn activity_url(activity: &NSUserActivity) -> Option<String> {
+    let page = activity
+        .webpageURL()
+        .and_then(|url| url.absoluteString())
+        .filter(|text| text.len() <= flui_platform::MAX_OPENED_URL_LEN)
+        .map(|text| text.to_string());
+    super::opened_urls::browsing_web_url(&activity.activityType().to_string(), page)
+}
+
 impl FluiSceneDelegate {
     /// The boundary of the scene's lifecycle methods: `action` of the scene's
     /// origin is queued, while the scene is the one this delegate connected.

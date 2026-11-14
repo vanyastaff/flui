@@ -34,9 +34,23 @@ pub(crate) type OpenFilesCallback = Rc<dyn Fn(&[OpenedFile])>;
 #[derive(Clone, Default)]
 pub(crate) struct OpenSettings {
     /// The URL schemes and domains it opens.
-    pub(crate) declarations: LinkDeclarations,
+    pub(crate) declarations: Option<LinkDeclarations>,
     /// Where its opened files go.
     pub(crate) on_open_files: Option<OpenFilesCallback>,
+}
+
+impl OpenSettings {
+    /// These settings, declaring what the entry function `#[flui::main]`
+    /// marks declares when the application gave no
+    /// [`declares`](crate::Application::declares): what its crate's
+    /// `[package.metadata.flui.declares]` registers with the operating system.
+    /// Read as the run starts, while the entry function that starts it runs.
+    pub(crate) fn or_entry_declarations(mut self) -> Self {
+        if self.declarations.is_none() {
+            self.declarations = super::entry_declarations();
+        }
+        self
+    }
 }
 
 impl std::fmt::Debug for OpenSettings {
@@ -59,6 +73,9 @@ pub(crate) struct OpenRouting {
     /// URLs whose presentation did not exist when they arrived, with the
     /// target they were addressed to.
     held: RefCell<Option<(OpenTarget, Vec<String>)>>,
+    /// The origin of the page the run is in on the web, whose URLs every UI
+    /// runtime of the run admits beside the declarations.
+    page_origin: RefCell<Option<String>>,
 }
 
 impl OpenRouting {
@@ -67,13 +84,37 @@ impl OpenRouting {
             settings,
             active: Cell::new(None),
             held: RefCell::new(None),
+            page_origin: RefCell::new(None),
         }
     }
 
     /// The URL schemes and domains the application opens, which every UI
     /// runtime of the run is given before its first presentation opens.
     pub(crate) fn declarations(&self) -> LinkDeclarations {
-        self.settings.declarations
+        self.settings.declarations.unwrap_or_default()
+    }
+
+    /// The run is a page of `origin` on the web: the platform said so before
+    /// the bootstrap opened its first presentation.
+    pub(crate) fn set_page_origin(&self, origin: String) {
+        *self.page_origin.borrow_mut() = Some(origin);
+    }
+
+    /// Give `ui_runtime` what it admits: the declarations, and on the web
+    /// the page's origin. Before its first presentation can hear an opened
+    /// URL.
+    pub(crate) fn admit_in(&self, ui_runtime: &UiRuntime) {
+        ui_runtime.set_link_declarations(self.declarations());
+        // Cloned, so no borrow is held while the log line reaches its subscriber.
+        let origin = self.page_origin.borrow().clone();
+        if let Some(origin) = origin.as_deref()
+            && let Err(refused) = ui_runtime.set_page_origin(origin)
+        {
+            tracing::warn!(
+                reason = refused.reason(),
+                "the page's origin is not an origin; only the declarations admit its URLs"
+            );
+        }
     }
 
     /// The window of `address` gained focus.

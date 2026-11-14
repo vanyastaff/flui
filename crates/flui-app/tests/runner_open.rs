@@ -217,3 +217,64 @@ pub(crate) fn a_panic_in_the_first_urls_navigation_does_not_lose_the_second() {
     );
     drop(run);
 }
+
+/// Whether a run started with `application` opens `url` in its window.
+fn opens(application: Application, url: &str) -> bool {
+    let built = Built::default();
+    let run = HeadlessRun::start(application, router("main", &built));
+    run.run_owner_turn();
+    run.open(link(url, Launch::Running));
+    run.run_owner_turn();
+    let opened = built_page(&built, "main", &Page::Note { id: 3 });
+    drop(run);
+    opened
+}
+
+pub(crate) fn the_entry_functions_manifest_declares_what_a_run_opens() {
+    use flui_app::app::__entry::{LinkDeclarations, declare, join, joined_len};
+
+    // What `#[flui::main]` writes at the top of the function it marks for a
+    // manifest declaring `url-schemes = ["myapp"]`, and a scheme under each
+    // of two features: this test crate is compiled with `unstable-windows`
+    // and without `driver`.
+    const URL_SCHEME_PARTS: &[&[&str]] = &[
+        &["myapp"],
+        {
+            const PART: &[&str] = &["myapp-windows"];
+            if cfg!(feature = "unstable-windows") {
+                PART
+            } else {
+                &[]
+            }
+        },
+        {
+            const PART: &[&str] = &["myapp-driver"];
+            if cfg!(feature = "driver") { PART } else { &[] }
+        },
+    ];
+    const URL_SCHEMES: &[&str] = &join::<{ joined_len(URL_SCHEME_PARTS) }>(URL_SCHEME_PARTS);
+    let declared = declare(LinkDeclarations::new().url_schemes(URL_SCHEMES));
+    assert!(
+        opens(Application::new(), "myapp:///note/3"),
+        "a run the entry starts opens what its manifest declares"
+    );
+    assert_eq!(
+        (
+            opens(Application::new(), "myapp-windows:///note/3"),
+            opens(Application::new(), "myapp-driver:///note/3"),
+        ),
+        (cfg!(feature = "unstable-windows"), cfg!(feature = "driver")),
+        "a feature's scheme counts only when the crate is compiled with the feature"
+    );
+    let own = LinkDeclarations::new().url_schemes(&["other"]);
+    assert!(
+        !opens(Application::new().declares(own), "myapp:///note/3"),
+        "an application's own declarations replace the manifest's"
+    );
+    assert!(opens(Application::new().declares(own), "other:///note/3"));
+    drop(declared);
+    assert!(
+        !opens(Application::new(), "myapp:///note/3"),
+        "once the entry returned, a run declares nothing"
+    );
+}

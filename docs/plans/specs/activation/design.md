@@ -84,9 +84,11 @@ pub trait AppHandler: 'static {
   ворота `size` его бы посчитали.
 - Схема. `http`/`https` проходят, только если домен объявлен в `associated-domains`; своя схема —
   если объявлена в `url-schemes`. Объявления — один источник, метаданные крейта: `#[flui::main]`
-  читает `[package.metadata.flui.declares]` из `CARGO_MANIFEST_DIR` при компиляции и передаёт
-  `Application` константу; `UiRuntime` получает её при запуске (вопрос О5). Не объявленная схема,
-  и строка `argv`, которая не URL и не существующий файл, — отказ с журналом.
+  читает `[package.metadata.flui.declares]` из `CARGO_MANIFEST_DIR` при компиляции (списки фич под
+  `cfg!`) и записывает их на время своей функции; запуск, начатый в ней без `Application::declares`,
+  берёт их, `UiRuntime` получает их при запуске (вопрос О5). Схемы и домены объявляет только
+  приложение: у крейта, от которого зависит другой крейт сборки, `flui build` их отказывает.
+  Не объявленная схема и строка `argv`, которая не URL и не существующий файл, — отказ с журналом.
 - URL → `RoutePath`: путь URL, как у Flutter и go_router (`uri.path`). `myapp://note/3` даёт `/3`,
   потому что `note` — host; в документации — форма `myapp:///note/3` или `myapp://app/note/3`.
   Query входит в `RoutePath` (§3a); fragment отбрасывается с `tracing::debug`, пока его нет в
@@ -131,8 +133,8 @@ Fragment в `RoutePath` не входит: для ссылки он ничего
 | Android | `FluiActivity.onCreate`: `getIntent()` с `ACTION_VIEW` и `data`; `ACTION_SEND`/`content://` — файлы через SAF | `onNewIntent` (`launchMode="singleTop"` уже в шаблоне); `setIntent(intent)` | окно `Activity` |
 | macOS | `application:openURLs:` до `applicationDidFinishLaunching:` (AppKit доставляет его первым); файлы — те же `NSURL` с `file:` | `application:openURLs:` | `Application` |
 | Windows | `argv` процесса (`CommandLineToArgvW`), ключ регистрации `"%1"` | второй экземпляр → именованный канал первого (§5) | `Application` |
-| Linux | `argv` (`%u`/`%F` в `.desktop`) | второй экземпляр → D-Bus `org.freedesktop.Application.Open` (§5) | `Application` |
-| Web | `location.pathname` при запуске страницы | история браузера — вне объёма | страница |
+| Linux | `argv` (`%U` в `.desktop`: ссылки и файлы как `file:` URI) | второй экземпляр → D-Bus `org.freedesktop.Application.Open` (§5) | `Application` |
+| Web | `location.href` при запуске страницы; URL её `location.origin` допущены без объявлений | история браузера — вне объёма | страница |
 
 Каждый вход ОС — вызов `os_entry` (ADR-0151 §16): `xtask panic-boundary` это проверяет. Разбор
 `NSURL`, `Uri`, `argv` в `OpenedUrl`/`OpenedFile` — чистая часть файла хоста, `pub(crate)` модуль с
@@ -203,4 +205,5 @@ file-types = [{ extension = "note", mime = "application/x-myapp-note", name = "N
   ADR-0307 §2. Задачи переписывают разделы: ADR-0330 §1 (query, AC1) и §5 (начальный адрес, AC3),
   ADR-0254 §4 (один экземпляр, AC10).
 - **О5.** `#[flui::main]` читает `[package.metadata.flui.declares]` при компиляции; приложение
-  без него передаёт `Application::declares(flui::declares!())`.
+  без него передаёт `Application::declares(LinkDeclarations::new().url_schemes(&[…]))`, и эти
+  объявления заменяют манифест.

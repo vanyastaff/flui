@@ -169,6 +169,11 @@ pub trait Services {
     /// [`Platform::launch_value`].
     fn launch_value(&self, key: LaunchKey) -> Option<String>;
 
+    /// [`Platform::page_origin`]: `None` but on the web.
+    fn page_origin(&self) -> Option<String> {
+        None
+    }
+
     /// [`Platform::open_url`].
     fn open_url(&self, url: &str);
 

@@ -120,6 +120,23 @@ fn assert_generated_project_compiles(template: &str, hot_reload: bool) {
     std::fs::copy(root.join("Cargo.lock"), project.join("Cargo.lock"))
         .expect("seed the generated project with the workspace's resolved versions");
 
+    // `#[flui::main]` carries what the manifest declares the application
+    // opens into the run: the basic project declares links, its own and a
+    // feature's, so the attribute's expansion of them compiles with the
+    // feature off and on.
+    let declares_links = template == "basic" && !hot_reload;
+    if declares_links {
+        let manifest = project.join("Cargo.toml");
+        let mut text = std::fs::read_to_string(&manifest).expect("generated manifest");
+        text.push_str(
+            "\n[features]\nlinks = []\n\n\
+             [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"tmpl-check\"]\n\
+             associated-domains = [\"tmpl-check.example.com\"]\n\n\
+             [package.metadata.flui.declares.features.links]\nurl-schemes = [\"tmpl-check-links\"]\n",
+        );
+        std::fs::write(&manifest, text).expect("the manifest with its links");
+    }
+
     // Template checks share a separate target so the enclosing cargo test's
     // build lock cannot deadlock them. External output paths exercise the same
     // dependency resolution users get outside the framework checkout.
@@ -138,6 +155,20 @@ fn assert_generated_project_compiles(template: &str, hot_reload: bool) {
         "`flui create --template {template}` generated a project that does not compile:\n{}",
         String::from_utf8_lossy(&output.stderr),
     );
+    if declares_links {
+        let output = std::process::Command::new(&cargo)
+            .args(["check", "--offline", "--features", "links"])
+            .arg("--target-dir")
+            .arg(target.join("cli-template-check"))
+            .current_dir(&project)
+            .output()
+            .expect("run cargo check with the links feature");
+        assert!(
+            output.status.success(),
+            "the entry of a project whose feature declares links does not compile:\n{}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
     // A template names exactly the packages and features its source uses
     // (ADR-0088 §6). None uses a design system today, so none may pull one in
     // -- through a facade default included -- nor test support.

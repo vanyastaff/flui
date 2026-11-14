@@ -64,7 +64,7 @@ the ❌ cells of the new column.
 
 ᴺ after ✅: the row passed on that environment's hosted runner and runs there every night ([`nightly-platforms.yml`](../.github/workflows/nightly-platforms.yml)); its run evidence names the test.
 
-**Overall: ~36% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
+**Overall: ~37% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
 
 This document is rendered from
 [`crates/flui-native/platform-parity.toml`](../crates/flui-native/platform-parity.toml), and a hand
@@ -89,13 +89,13 @@ columns and is listed after them.
 
 | Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready | Nightly runner | Nightly ✅ |
 |:--|:--|--:|--:|--:|--:|--:|--:|:-:|:--|--:|
-| Windows | Win32 (native) | 11 | 53 | 33 | 19 | 10 | 39% | no | windows-latest | 2 |
-| macOS | AppKit (native) | 10 | 42 | 44 | 20 | 10 | 32% | no | macos-latest | 2 |
-| Wayland | Wayland (native) | 11 | 50 | 30 | 28 | 7 | 40% | no | — | 0 |
-| X11 | X11 (native) | 12 | 45 | 33 | 29 | 7 | 38% | no | — | 0 |
-| iOS | UIKit (native) | 6 | 37 | 42 | 33 | 8 | 29% | no | macos-latest, iOS Simulator | 0 |
+| Windows | Win32 (native) | 11 | 54 | 32 | 19 | 10 | 39% | no | windows-latest | 2 |
+| macOS | AppKit (native) | 10 | 43 | 43 | 20 | 10 | 33% | no | macos-latest | 2 |
+| Wayland | Wayland (native) | 11 | 51 | 29 | 28 | 7 | 40% | no | — | 0 |
+| X11 | X11 (native) | 12 | 46 | 32 | 29 | 7 | 39% | no | — | 0 |
+| iOS | UIKit (native) | 6 | 38 | 41 | 33 | 8 | 29% | no | macos-latest, iOS Simulator | 0 |
 | Android | android-activity (native) | 18 | 39 | 34 | 29 | 6 | 41% | no | ubuntu-24.04, Android emulator | 2 |
-| Web | wasm canvas (native) | 7 | 40 | 30 | 42 | 7 | 35% | no | — | 0 |
+| Web | wasm canvas (native) | 7 | 41 | 30 | 41 | 7 | 35% | no | — | 0 |
 | Headless | test double | 53 | 3 | 49 | 19 | 2 | 52% | — | — | 0 |
 
 Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partly; 3 not met (power and thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not audited (timestamps across a counter wrap or a clock-base change, platform-edge diagnostics free of secrets).
@@ -120,7 +120,7 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 | Memory pressure | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | — | ❌ | Delivered on Windows, macOS, iOS, Android and Linux; only Android's levels were driven on a device. |
 | Bring the app forward, request attention | 🟡 | ❌ | 🟡 | ❌ | — | — | — | ❌ | Windows: `WindowCommand::Activate` brings the window forward where the foreground rules allow and flashes its taskbar button where they refuse, run against a second process; attention has no request of its own. Wayland asks with an `xdg-activation` token (sway marks the window urgent), run by hand on sway only. |
 | Single instance, forward arguments | ❌ | — | ❌ | ❌ | — | — | — | ❌ | macOS enforces one instance itself |
-| Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | 🟡 | No native host reports an opened URL or file yet, at cold start or while running. The application handler hears `opened(&OwnerPlatform, Opened)`, bounded, and the headless host reports one (`HeadlessHostEvents::open`); the runner does not route it to a window yet, and `UiRuntime::open_url` opens a URL in a Router, the cold start included. The Web entry URL is under history routing |
+| Deep links, URL schemes, file associations | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | The application handler hears `opened(&OwnerPlatform, Opened)`, bounded, and `flui-app`'s runner routes it: files to `Application::on_open_files`, each URL to the window it addresses, else the one focused last, where `UiRuntime::open_url` admits it by the declared schemes and domains and opens it in that window's Router; a link that launched the application opens the first Router on it. The headless host reports one (`HeadlessHostEvents::open`). The Windows, Wayland and X11 hosts report the URLs and existing files of their launch arguments (a `file:` URI as a file) as a cold launch (`launch_arguments_open_their_urls_and_existing_files`), not run from a registered scheme on a desktop yet; a link or file reaching a running Windows or Linux application waits for single instance. The Web reports the page's address (`location.href`) as the cold link, and `UiRuntime::open_url` admits the URLs of the page's own origin (scheme, host and port) beside the declarations (`web_the_page_address_is_the_link_it_launched_with`, on Node; not run in a browser yet); the page's later history is under system back and history. macOS reports the links and documents AppKit hands `application:openURLs:`, as a cold launch until `applicationDidFinishLaunching:` and running after (`apple_urls_split_into_links_and_documents`), not run on a Mac yet. iOS reports the URL contexts and web browsing activities (universal links) of a scene for its window: what the scene connects with as a cold launch, later ones while it runs (`apple_urls_split_into_links_and_documents`, `a_user_activity_opens_only_a_web_page`), not run on a simulator yet. Android reports nothing yet |
 | State restoration | — | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | macOS window restoration, iOS scene restoration, Android state after process death, Web `history.state` |
 | Activation obeys the OS focus rules (Wayland `xdg-activation` token, Windows foreground rights handed to the activated process) | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | — | Windows: an activation never takes the foreground from another application and comes forward once that application hands the right over, run with two processes; opening a link or file hands the right to the handler process the shell started; no second launch hands it yet (single instance, in the activation spec). The Wayland token's whole path runs only on sway, by hand: CI's Weston has no `xdg_activation_v1`. A Wayland token names the seat and serial of the user input behind the activation. macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is not audited. |
 | App identity (AUMID, bundle ID, `.desktop` file) | ❔ | ❔ | ❔ | ❔ | — | — | — | — | Notifications, URL schemes, the tray, jump lists and portals need it; `flui-cli` packaging not audited |

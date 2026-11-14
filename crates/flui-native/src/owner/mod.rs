@@ -73,10 +73,21 @@ pub(crate) mod app_delivery;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
 pub(crate) mod call_point;
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    test
+))]
+pub(crate) mod file_uri;
 #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32", test))]
 pub(crate) mod frame_demand;
 pub mod handlers;
 pub(crate) mod headless;
+#[cfg(any(windows, x11_host, wayland_host, test))]
+pub(crate) mod launch_arguments;
 #[cfg(any(wayland_host, x11_host, test))]
 pub(crate) mod linux;
 #[cfg(any(test, windows))]
@@ -342,6 +353,13 @@ impl OwnerPlatform {
     #[must_use]
     pub fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         self.platform.launch_value(key)
+    }
+
+    /// The origin of the page the application runs in on the web; see
+    /// [`Platform::page_origin`].
+    #[must_use]
+    pub fn page_origin(&self) -> Option<String> {
+        self.platform.page_origin()
     }
 
     /// Where the application `app` keeps its data, or `None` when this

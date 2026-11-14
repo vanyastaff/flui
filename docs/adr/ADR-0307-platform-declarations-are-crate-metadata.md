@@ -95,7 +95,6 @@ reasons = ["C617.1"]
   in them, each a path inside the crate (relative, `/`-separated, never `..`) that must name a
   file or a directory. A crate stating `schema = 1` cannot use them, so an older CLI refuses such a
   crate by its version, not by an unknown key.
-  CLI refuses such a crate by its version, not by an unknown key.
 
 ```toml
 [package.metadata.flui.declares]
@@ -105,6 +104,37 @@ schema = 2
 dex = "android/classes.dex"
 java = "android/java"
 proguard = "android/proguard-rules.pro"
+```
+
+- Version 3 adds what the application opens, at the top of the table and under
+  `features.<feature>`:
+  - `url-schemes`, its own URL schemes: RFC 3986 schemes, kept in lower case, with no web or
+    system scheme (`http`, `https`, `file`, `content`, `data`, `javascript`, `about`);
+  - `associated-domains`, the web domains whose `https` links open it: host names without a
+    scheme, a path or `*`, kept in lower case;
+  - `file-types`, the file types it opens: each an `extension` (1 to 32 letters and digits), a
+    `mime` type (RFC 6838 restricted names) and the `name` the system shows.
+
+  Each value is checked before a manifest carries it, so none can break out of its attribute. Two
+  crates that give one extension two MIME types are refused, since the system opens a file as one
+  type. Without these keys the operating system never hands the application its links or files,
+  so a crate that uses them states `schema = 3`. The links are the application's own: `url-schemes`
+  and `associated-domains` (its own or a feature's) in a crate another crate of the build links,
+  by a normal or build edge, are refused by name. `#[flui::main]` reads the same `url-schemes` and
+  `associated-domains` of the crate it marks as it compiles, a feature's under `cfg!`, and the run
+  that function starts admits them unless the application gives `Application::declares`, so the
+  URLs the application admits (ADR-0330 §5) are the ones its manifests register.
+
+```toml
+[package.metadata.flui.declares]
+schema = 3
+url-schemes = ["notes"]
+associated-domains = ["notes.example.com"]
+
+[[package.metadata.flui.declares.file-types]]
+extension = "note"
+mime = "application/x-notes-note"
+name = "Note"
 ```
 
 - A key arrives with the first crate that needs it. A key an older CLI could safely ignore needs no
@@ -133,6 +163,28 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   script adds to its `main` source set, and the R8 rules (`android.proguard`) as
   `flui.proguardFiles`, which its release build type adds to its rules; a script that does not
   read either is refused.
+  What the application opens becomes intent filters on `FluiActivity`: one `VIEW` filter,
+  `BROWSABLE`, with a `<data android:scheme>` per URL scheme; one with `android:autoVerify="true"`
+  for the `https` links of the associated domains, a `<data android:host>` each, which Android
+  verifies against each domain's `/.well-known/assetlinks.json`; and one `VIEW` filter with a
+  `<data android:mimeType>` per file type.
+- **Apple, what the application opens.** Both bundles' `Info.plist`, the iOS packager's and the
+  macOS `.app`'s, take the same keys from one function (`build::apple_opening`): `CFBundleURLTypes`
+  with the URL schemes, and per file type a uniform type the bundle exports as
+  `<bundle identifier>.<extension>` (`UTExportedTypeDeclarations`, with its extension and MIME
+  type) and opens as its owner (`CFBundleDocumentTypes`, `LSHandlerRank` `Owner`); iOS adds
+  `LSSupportsOpeningDocumentsInPlace` `false`, so the application gets a copy of a handed file.
+  The associated domains are the entitlement `com.apple.developer.associated-domains`
+  (`applinks:<domain>`), which a signed build carries.
+- **Linux and Windows.** When the application opens a URL scheme or a file type, `flui build linux`
+  writes, beside the executable, the desktop entry
+  `share/applications/<id>.desktop` (`<id>` the application id; `Exec=<executable> %U`, so a file
+  arrives as a `file:` URI) and,
+  for file types, the shared-mime-info package `share/mime/packages/<id>.xml` giving each MIME type
+  its extension, at the paths a package installs them to below its prefix; the entry carries
+  `MimeType=x-scheme-handler/<scheme>;` and each file type's MIME type. An unpackaged Windows
+  application registers its schemes and extensions under `HKCU\Software\Classes`, and an MSIX
+  package declares them as `uap:Protocol` and `uap:FileTypeAssociation`.
 - **Apple.** The iOS packager writes the bundle's `PrivacyInfo.xcprivacy` from the accessed APIs
   the graph of the application's target declares, joined with the application's own
   `<project>/platforms/ios/PrivacyInfo.xcprivacy`: per category, the reasons of every crate and of the
@@ -145,14 +197,33 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
 - **Manifests the CLI does not write.** `flui doctor` reads the same declarations. In a FLUI
   project, `project.declarations` fails on a table `flui build` would refuse, and
   `project.android-manifest` fails on a hand-written Android manifest, listing what it lacks.
-  `flui doctor --manifest <PATH>`, repeatable, checks an `AndroidManifest.xml` or an XML
-  `PrivacyInfo.xcprivacy` the CLI does not write, such as an embedding project's, against the
+  `flui doctor --manifest <PATH>`, repeatable, checks an `AndroidManifest.xml`, an XML
+  `PrivacyInfo.xcprivacy` or an XML `Info.plist` (a property list naming `CFBundleIdentifier`) the
+  CLI does not write, such as an embedding project's, against the
   graph of the project in the current directory for that manifest's targets: one
   `project.manifest` check per path, each missing entry named with the crates that declare it and
   the line to add. The ids are stable, for `--json` readers. An Android file is read as written:
   Gradle's manifest merger is not run, so a file that is not the merged manifest carries a note
   saying entries library manifests merge in are not seen. A `uses-permission` marked
-  `tools:node="remove"` counts as absent.
+  `tools:node="remove"` counts as absent, as does an intent filter so marked. What the application
+  opens is checked in both: an Android `VIEW` filter's `mimeType`, a `BROWSABLE` one's schemes and
+  a verified one's `https` hosts, an `Info.plist`'s `CFBundleURLTypes` schemes and the extensions of
+  the types its `CFBundleDocumentTypes` list; the associated domains of an Apple bundle are an
+  entitlement the property list does not carry.
+- **The files on an associated domain.** `apple-app-site-association` and `assetlinks.json` live
+  with the domain's owner, so the CLI does not write them. `flui doctor --domains` fetches them,
+  which is the only network the command touches and why it runs only when asked: for each domain
+  the graph of the Apple targets declares, `https://<domain>/.well-known/apple-app-site-association`
+  must answer 200 without a redirect and name `<team>.<bundle identifier>` in an `applinks.details`
+  entry with its `components` or `paths` (`project.apple-app-site-association`); for each domain of
+  the Android targets, `https://<domain>/.well-known/assetlinks.json` must answer 200 as
+  `application/json` without a redirect with a `delegate_permission/common.handle_all_urls`
+  statement for the package and its SHA-256 certificate fingerprints (`project.assetlinks`). A
+  file over 128 KiB, Apple's bound, is refused. The team and the fingerprints are not compared with
+  the signing identity, which the CLI does not hold; a passing check carries a note saying so.
+  The fetch is `ureq` over rustls with the platform's verifier, the client a Linux host's HTTP
+  capability runs (ADR-0280), `https` only and no redirect, behind a trait the tests answer, so
+  they run without a network.
 
 ### 5. `flui add` links a capability crate, which states its plugin
 
@@ -210,8 +281,20 @@ a key arrives with its first consumer.
 - `cli_doctor::doctor_lists_what_a_manifest_lacks_of_the_crates_declarations` (the project's
   declarations and hand-written Android manifest; `--manifest` files lacking an entry, one removing
   it with `tools:node`, complete ones, a merged one without the note, privacy manifests, a binary
-  property list).
-- `cli_add::add_links_a_capability_and_shows_its_registration` (a facade feature enabled, a second
+  property list); `cli_doctor::doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`
+  (intent filters lacking a scheme, an unverified domain filter, a filter removed by the merger, an
+  `Info.plist` lacking a scheme and a document type, complete files),
+  `android_manifest::tests::the_doctor_finds_what_the_manifest_carries` and
+  `apple_opening::tests::the_doctor_finds_what_the_bundle_writes` (what the build writes reads back
+  complete);
+  `linux_desktop::tests::a_linux_desktop_registers_what_the_application_opens` and
+  `desktop_entry_values_are_escaped`;
+  `cli_doctor::doctor_checks_the_associated_domains_only_when_asked` (nothing fetched without
+  `--domains`, the declarations naming the flag, `--domains` outside a project refused),
+  `domains::tests::each_associated_domain_is_checked_for_both_files` (a served association and
+  asset links, a redirect, a domain that cannot be fetched, a project without domains fetching
+  nothing), `domains::tests::an_apple_association_names_the_application_with_what_it_opens` and
+  `domains::tests::asset_links_grant_the_package_with_its_fingerprints`.
   run, a crate without a plugin undone with its lockfile, an unknown name, a crate added from the
   checkout); `commands::add::tests::a_feature_joins_the_facade_dependency_in_any_shape`;
   `flui-system`'s `the_declared_plugin_is_the_crates_default_plugin`.
@@ -224,6 +307,20 @@ a key arrives with its first consumer.
   `gradle_project::tests::gradle_compiles_the_java_sources_the_crates_declare`.
 - `cargo xtask workspace` accepts `declares` and `capability` among the `[package.metadata.flui]`
   keys.
+- What the application opens: `declarations::opening::tests::what_an_application_opens_is_checked_before_a_manifest_carries_it`
+  (schemes, domains, extensions, MIME types and names, each refused when malformed);
+  `declarations::tests::what_the_application_opens_is_joined_over_the_graph` (case folded, a
+  feature's file type only while it is on); `declarations::tests::only_the_application_declares_the_links_it_opens`
+  (a dependency's domain under a feature refused, an application a test crate reaches as a
+  dev-dependency kept); the malformed cases include a version-3 key under
+  `schema = 2`, a web scheme, a URL given as a domain and one extension with two MIME types;
+  `android_manifest::tests::the_activity_filters_what_the_application_opens`;
+  `apple_opening::tests::a_bundle_registers_what_the_application_opens` and
+  `the_keys_render_as_xml_property_list_entries`; `ios_package::tests::publication_contract` ("the
+  info plist registers what the application opens"); `main_attr::declares::tests::the_entry_carries_what_the_manifest_declares_it_opens`
+  (flui-macros), `runner_open::the_entry_functions_manifest_declares_what_a_run_opens` (flui-app)
+  and `cli_create::generated_basic_project_compiles` (an entry whose manifest and feature declare
+  links compiles with the feature off and on).
 
 ## Pros and cons of the options
 
