@@ -6,22 +6,26 @@ use std::{
     rc::Rc,
     sync::{
         Arc,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
 };
 
 use crossbeam_channel::{Sender, TrySendError};
-use flui_foundation::{SurfaceGeneration, geometry::DeviceSize, memory::MemoryPressureLevel};
-use parking_lot::{Mutex, MutexGuard};
+use flui_foundation::{
+    SurfaceGeneration, geometry::DeviceSize, memory::MemoryPressureLevel, panic::FirstPanic,
+};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use web_time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
+use super::inbox::THREADED_DEPTH;
 use super::{
     DeviceHealth, SlotId, SurfaceEvent,
     command::{
-        ExecutorHealth, RasterCommand, RasterSendError, SendReceipt, SlotChange, SlotConfig,
-        SlotSettlement, SlotTarget,
+        ExecutorFailure, ExecutorHealth, RasterCommand, RasterSendError, SendReceipt, SlotChange,
+        SlotConfig, SlotSettlement, SlotTarget,
     },
-    inbox::{SlotFailure, SlotInbox, SlotPhase, SlotRecord},
+    inbox::{INLINE_DEPTH, SlotFailure, SlotInbox, SlotPhase, SlotRecord},
     slot::SlotMint,
 };
 use crate::{
@@ -103,19 +107,79 @@ pub(crate) struct Shared {
     /// The strongest trim asked for since the last turn: 0 for none.
     trim: AtomicU8,
     device: Mutex<DeviceRecord>,
+    /// How many settlements a slot holds undrained (ADR-0305 §5).
+    depth: usize,
+    /// What wakes a raster thread: rung by every accepted send and every
+    /// drain that frees a ring's place. `None` inline, where the owner turns.
+    doorbell: Option<Doorbell>,
+    /// Why the raster thread stopped serving or a turn of it failed, until
+    /// the owner takes it.
+    failure: Mutex<Option<ExecutorFailure>>,
+    /// Why the executor died, once it did: kept for every later wait.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    death: std::sync::OnceLock<ExecutorFailure>,
+    /// The owner took the death's cause.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    death_reported: AtomicBool,
+    /// Runs inside a lifecycle send, between its health read and its
+    /// queueing, so a test can land another thread's change in that window.
+    #[cfg(test)]
+    pub(crate) during_send: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
 const RUNNING: u8 = 0;
 const SHUT_DOWN: u8 = 1;
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        dead_code,
+        reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+    )
+)]
+const DIED: u8 = 2;
 
 impl Shared {
+    /// The state of an inline executor, which its owner turns.
     pub(crate) fn new(lifecycle: Sender<Lifecycle>) -> Self {
+        Self::with_placement(lifecycle, INLINE_DEPTH, None)
+    }
+
+    /// The state of an executor on a raster thread, which a send wakes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn threaded(lifecycle: Sender<Lifecycle>) -> Self {
+        Self::with_placement(lifecycle, THREADED_DEPTH, Some(Doorbell::default()))
+    }
+
+    fn with_placement(
+        lifecycle: Sender<Lifecycle>,
+        depth: usize,
+        doorbell: Option<Doorbell>,
+    ) -> Self {
         Self {
             lifecycle,
             health: AtomicU8::new(RUNNING),
             sending: AtomicUsize::new(0),
             trim: AtomicU8::new(0),
             device: Mutex::new(DeviceRecord::default()),
+            depth,
+            doorbell,
+            failure: Mutex::new(None),
+            death: std::sync::OnceLock::new(),
+            death_reported: AtomicBool::new(false),
+            #[cfg(test)]
+            during_send: Mutex::new(None),
         }
     }
 
@@ -127,28 +191,169 @@ impl Shared {
     pub(crate) fn health(&self) -> ExecutorHealth {
         match self.health.load(Ordering::Acquire) {
             RUNNING => ExecutorHealth::Running,
-            _ => ExecutorHealth::ShutDown,
+            SHUT_DOWN => ExecutorHealth::ShutDown,
+            _ => ExecutorHealth::Died,
         }
+    }
+
+    pub(crate) fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Wake the raster thread, if there is one.
+    pub(crate) fn ring(&self) {
+        if let Some(doorbell) = &self.doorbell {
+            doorbell.ring();
+        }
+    }
+
+    /// Wait until a send rings or `timeout` passes; `None` waits for a ring.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wait_for_ring(&self, timeout: Option<std::time::Duration>) {
+        if let Some(doorbell) = &self.doorbell {
+            doorbell.wait(timeout);
+        }
+    }
+
+    /// A raster thread finished a turn: an owner waiting on a slot's record
+    /// looks again.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn note_turn(&self) {
+        if let Some(doorbell) = &self.doorbell {
+            *doorbell.turns.lock() += 1;
+            doorbell.turned.notify_all();
+        }
+    }
+
+    /// How many turns the raster thread finished.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn turns(&self) -> u64 {
+        self.doorbell
+            .as_ref()
+            .map_or(0, |doorbell| *doorbell.turns.lock())
+    }
+
+    /// Wait until a turn after the `seen`th finished, at most `timeout`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wait_for_turn(&self, seen: u64, timeout: std::time::Duration) {
+        if let Some(doorbell) = &self.doorbell {
+            let mut turns = doorbell.turns.lock();
+            if *turns == seen {
+                let _timed_out = doorbell.turned.wait_for(&mut turns, timeout);
+            }
+        }
+    }
+
+    /// Keep `failure` for the owner unless an earlier one waits there; the
+    /// later one is dropped outside the lock. Answers whether `failure` is
+    /// the one kept.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    pub(crate) fn hold_failure(&self, failure: ExecutorFailure) -> bool {
+        let refused = {
+            let mut held = self.failure.lock();
+            if held.is_some() {
+                Some(failure)
+            } else {
+                *held = Some(failure);
+                None
+            }
+        };
+        let kept = refused.is_none();
+        drop(refused);
+        kept
+    }
+
+    /// The held failure, then the death's cause once: a turn's panic held
+    /// before the death does not hide it.
+    pub(crate) fn take_failure(&self) -> Option<ExecutorFailure> {
+        let held = self.failure.lock().take();
+        // The web has no raster thread to die (ADR-0305 §10).
+        #[cfg(not(target_arch = "wasm32"))]
+        if held.is_none() {
+            return self.take_death();
+        }
+        held
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn take_death(&self) -> Option<ExecutorFailure> {
+        if self.death_reported.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        let death = self.death.get().cloned();
+        if death.is_none() {
+            self.death_reported.store(false, Ordering::Release);
+        }
+        death
+    }
+
+    /// The raster thread is wedged past its deadline, or ended without an
+    /// executor: every send answers `Gone` from now on, whatever the thread
+    /// does next (ADR-0305 §9). The first cause is kept.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn die(&self, failure: ExecutorFailure) {
+        // The cause first, so whoever reads the health as died finds it.
+        let first = self.death.set(failure).is_ok();
+        self.health.store(DIED, Ordering::SeqCst);
+        // An owner waiting on a slot's record learns of it now.
+        self.note_turn();
+        if first && let Some(cause) = self.death.get() {
+            // Logged once, by whichever side reached the death first, with
+            // no lock held. A subscriber is user code: its panic is held for
+            // the owner as a turn's is, so a timeout still answers its typed
+            // cause and a handle dropped while unwinding does not abort.
+            let mut logged = FirstPanic::new();
+            logged.contain(|| {
+                tracing::error!(%cause, "the raster executor died; rendering stopped for every window");
+            });
+            if let Some(payload) = logged.into_payload() {
+                let message = flui_foundation::panic::payload_text(&*payload)
+                    .unwrap_or("a panic without a message")
+                    .to_owned();
+                flui_foundation::panic::discard_payload(payload);
+                let _kept = self.hold_failure(ExecutorFailure::TurnPanicked { message });
+            }
+        }
+    }
+
+    /// Why the executor died; `None` while it has not.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn death(&self) -> Option<ExecutorFailure> {
+        self.death.get().cloned()
     }
 
     /// Stop taking lifecycle commands. Returns once every send that saw the
     /// executor running has queued its message, so the queue the stop then
     /// drains holds every command a send accepted, and every later send
     /// answers `Gone` (ADR-0305 §9). A send runs no user code, so the wait
-    /// ends whatever thread the sends are on.
+    /// ends whatever thread the sends are on. An executor already marked
+    /// died stays died.
     pub(crate) fn shut_down(&self) {
         // Sequentially consistent with the send's increment and health read:
         // either the send sees the stop, or the stop sees the send.
-        self.health.store(SHUT_DOWN, Ordering::SeqCst);
+        let _was_running =
+            self.health
+                .compare_exchange(RUNNING, SHUT_DOWN, Ordering::SeqCst, Ordering::SeqCst);
         while self.sending.load(Ordering::SeqCst) != 0 {
             std::hint::spin_loop();
         }
+        self.ring();
     }
 
     /// Queue `message` while the executor runs, or hand its command back:
     /// `Full` while the queue is full, `Gone` once the executor stopped.
     pub(crate) fn send_lifecycle(&self, message: Lifecycle) -> Result<(), RasterSendError> {
         self.sending.fetch_add(1, Ordering::SeqCst);
+        #[cfg(test)]
+        if let Some(during) = &*self.during_send.lock() {
+            during();
+        }
         let sent = if self.health.load(Ordering::SeqCst) == RUNNING {
             self.lifecycle.try_send(message)
         } else {
@@ -184,6 +389,52 @@ impl Shared {
     }
 }
 
+/// A raster thread's wake: a flag a send sets and the thread clears when it
+/// wakes, so a ring between the thread's turn and its wait is not lost; and
+/// the count of its turns, which an owner waiting on a slot's record watches.
+#[derive(Default)]
+pub(crate) struct Doorbell {
+    rung: Mutex<bool>,
+    bell: Condvar,
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    turns: Mutex<u64>,
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    turned: Condvar,
+}
+
+impl Doorbell {
+    fn ring(&self) {
+        *self.rung.lock() = true;
+        self.bell.notify_one();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait(&self, timeout: Option<std::time::Duration>) {
+        let mut rung = self.rung.lock();
+        if !*rung {
+            match timeout {
+                Some(timeout) => {
+                    let _timed_out = self.bell.wait_for(&mut rung, timeout);
+                }
+                None => self.bell.wait(&mut rung),
+            }
+        }
+        *rung = false;
+    }
+}
+
 /// One slot as the owner knows it.
 struct OwnerSlot {
     id: SlotId,
@@ -197,6 +448,8 @@ struct OwnerSlot {
 struct OwnerSlots {
     mint: SlotMint,
     entries: Vec<Option<OwnerSlot>>,
+    /// The frames pending when the executor died were settled.
+    settled_after_death: bool,
 }
 
 impl OwnerSlots {
@@ -295,7 +548,7 @@ impl RasterSender {
         if self.shared.health() != ExecutorHealth::Running {
             return Err(RasterSendError::gone(command));
         }
-        match command {
+        let sent = match command {
             RasterCommand::Attach {
                 slot,
                 address,
@@ -315,7 +568,11 @@ impl RasterSender {
                 .shared
                 .send_lifecycle(Lifecycle::RetryDevice)
                 .map(|()| SendReceipt::Accepted),
+        };
+        if sent.is_ok() {
+            self.shared.ring();
         }
+        sent
     }
 
     /// Where the context's device stands, as the executor's last turn left
@@ -339,6 +596,14 @@ impl RasterSender {
         self.shared.device().failure.take()
     }
 
+    /// Why the raster thread stopped serving, or a turn of it failed, once:
+    /// the owner reports it as it reports a device's failure (ADR-0305 §9).
+    /// An inline executor holds none: its turn's panics resume on the owner.
+    #[must_use]
+    pub fn take_executor_failure(&self) -> Option<ExecutorFailure> {
+        self.shared.take_failure()
+    }
+
     /// The record of `slot`; `None` for an id the owner does not hold.
     #[must_use]
     pub fn record(&self, slot: SlotId) -> Option<SlotRecord> {
@@ -349,12 +614,20 @@ impl RasterSender {
     /// Move `slot`'s undrained settlements, oldest first, into `into`, and
     /// answer how many moved.
     pub fn drain_settlements(&self, slot: SlotId, into: &mut Vec<SlotSettlement>) -> usize {
+        if self.shared.health() == ExecutorHealth::Died {
+            self.settle_after_death();
+        }
         let Some(inbox) = self.inbox(slot) else {
             return 0;
         };
         let mut state = inbox.lock();
         let drained = state.settlements.len();
         into.extend(state.settlements.drain(..));
+        drop(state);
+        if drained > 0 {
+            // A full ring held the slot's next frame: a raster thread may start it.
+            self.shared.ring();
+        }
         drained
     }
 
@@ -363,6 +636,50 @@ impl RasterSender {
     pub fn take_failure(&self, slot: SlotId) -> Option<SlotFailure> {
         let inbox = self.inbox(slot)?;
         inbox.lock().failure.take()
+    }
+
+    /// The executor died: settle every frame still pending in an inbox
+    /// [`RasterVerdict::Failed`](super::RasterVerdict::Failed), since the
+    /// thread no longer can (ADR-0305 §9). Once; the frames are dropped with
+    /// no lock held. A slot keeps its phase: the wedged thread may still hold
+    /// its surface, so the owner keeps the window. A frame the wedged render
+    /// holds settles only if that render returns.
+    fn settle_after_death(&self) {
+        let inboxes: Vec<Arc<SlotInbox>> = {
+            let mut slots = self.slots.borrow_mut();
+            if std::mem::replace(&mut slots.settled_after_death, true) {
+                return;
+            }
+            slots
+                .entries
+                .iter()
+                .flatten()
+                .map(|owned| Arc::clone(&owned.inbox))
+                .collect()
+        };
+        let mut first = FirstPanic::new();
+        for inbox in inboxes {
+            let frame = {
+                let mut state = inbox.lock();
+                let frame = state.frame.take();
+                if let Some(frame) = frame.as_ref() {
+                    state.settle(frame, super::RasterVerdict::Failed);
+                }
+                frame
+            };
+            // A scene's destructor can be user code.
+            first.contain(move || drop(frame));
+        }
+        first.resume();
+    }
+
+    /// Whether the owner sent `slot`'s detach.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn detach_sent(&self, slot: SlotId) -> bool {
+        self.slots
+            .borrow()
+            .live(slot)
+            .is_some_and(|owned| owned.detaching)
     }
 
     fn inbox(&self, slot: SlotId) -> Option<Arc<SlotInbox>> {
@@ -409,7 +726,12 @@ impl RasterSender {
             if slots.entries.len() <= index {
                 slots.entries.resize_with(index + 1, || None);
             }
-            let inbox = Arc::new(SlotInbox::new(address, generation, size));
+            let inbox = Arc::new(SlotInbox::new(
+                address,
+                generation,
+                size,
+                self.shared.depth(),
+            ));
             slots.entries[index] = Some(OwnerSlot {
                 id: slot,
                 inbox: Arc::clone(&inbox),
@@ -444,22 +766,22 @@ impl RasterSender {
             return Err(RasterSendError::stale_slot(RasterCommand::Release { slot }));
         };
         // Released before the send, so a restore answered before the release
-        // is applied does not read as a surface the owner wants.
-        let hold = {
-            let mut state = inbox.lock();
-            if !state.phase.takes_commands() {
-                drop(state);
-                return Err(self.refusal(RasterCommand::Release { slot }));
-            }
-            let hold = state.surface.hold;
-            state.surface = state.surface.on(SurfaceEvent::ReleaseSent);
-            hold
-        };
+        // is applied does not read as a surface the owner wants. The record
+        // stays locked across the send, which runs no user code and never
+        // waits: a raster thread's surface change cannot land between the
+        // speculative release and its withdrawal and be undone by it.
+        let mut state = inbox.lock();
+        if !state.phase.takes_commands() {
+            drop(state);
+            return Err(self.refusal(RasterCommand::Release { slot }));
+        }
+        let hold = state.surface.hold;
+        state.surface = state.surface.on(SurfaceEvent::ReleaseSent);
         let sent = self.shared.send_lifecycle(Lifecycle::Release { slot });
         if sent.is_err() {
-            let mut state = inbox.lock();
             state.surface = state.surface.on(SurfaceEvent::ReleaseWithdrawn(hold));
         }
+        drop(state);
         sent.map(|()| SendReceipt::Accepted)
     }
 
@@ -475,37 +797,37 @@ impl RasterSender {
             }));
         };
         // Minted before the send, so the owner stamps its next frame with it,
-        // and taken back if the send fails, unless something minted since.
-        let (previous, generation, hold) = {
-            let mut state = inbox.lock();
-            if !state.phase.takes_commands() {
-                drop(state);
-                return Err(self.refusal(RasterCommand::Restore { slot, surface }));
-            }
-            let previous = state.generation;
-            let hold = state.surface.hold;
-            state.surface = state.surface.on(SurfaceEvent::RestoreSent);
-            if previous != SurfaceGeneration::ZERO {
-                state.generation = previous.next();
-            }
-            (previous, state.generation, hold)
-        };
+        // and taken back if the send fails. The record stays locked across
+        // the send, as in `release`: no surface change or rebuild's mint of
+        // the raster thread lands between the speculation and its withdrawal.
+        let mut state = inbox.lock();
+        if !state.phase.takes_commands() {
+            drop(state);
+            return Err(self.refusal(RasterCommand::Restore { slot, surface }));
+        }
+        let previous = state.generation;
+        let hold = state.surface.hold;
+        state.surface = state.surface.on(SurfaceEvent::RestoreSent);
+        if previous != SurfaceGeneration::ZERO {
+            state.generation = previous.next();
+        }
+        let generation = state.generation;
         let sent = self.shared.send_lifecycle(Lifecycle::Restore {
             slot,
             surface,
             generation,
         });
+        if sent.is_err() {
+            state.generation = previous;
+            state.surface = state.surface.on(SurfaceEvent::RestoreWithdrawn(hold));
+        }
+        // A refused restore hands its surface back inside the error, dropped
+        // by the caller with no lock held.
+        drop(state);
         match sent {
             Ok(()) if generation == SurfaceGeneration::ZERO => Ok(SendReceipt::Unconfigured),
             Ok(()) => Ok(SendReceipt::Configured(generation)),
-            Err(error) => {
-                let mut state = inbox.lock();
-                if state.generation == generation {
-                    state.generation = previous;
-                }
-                state.surface = state.surface.on(SurfaceEvent::RestoreWithdrawn(hold));
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 
@@ -696,6 +1018,151 @@ mod tests {
                 Err(crate::raster_executor::RasterSendError::Gone(_))
             ),
             "a send after the stop gets its command back"
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod death_log {
+    //! Beside the code, not in `tests/`: a thread-local subscriber sees an
+    //! event only if no other thread reached its callsite first, and the
+    //! integration suite's wedge tests reach this one concurrently.
+
+    use std::time::Duration;
+
+    use crossbeam_channel::bounded;
+    use tracing::{
+        Event, Metadata, Subscriber,
+        span::{Attributes, Id, Record},
+    };
+
+    use super::Shared;
+    use crate::raster_executor::{ExecutorFailure, LIFECYCLE_CAPACITY};
+
+    /// A subscriber that panics on every event.
+    struct PanickingSubscriber;
+
+    impl Subscriber for PanickingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, _event: &Event<'_>) {
+            panic!("the subscriber fails on purpose");
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    /// A subscriber that panics on the death's log does not unwind the side
+    /// that reached the death: the death stays, and the panic is held for the
+    /// owner behind no other failure.
+    ///
+    /// Red-check: without the containment the `die` call unwinds the test.
+    #[test]
+    fn a_subscriber_that_panics_on_the_deaths_log_is_held_for_the_owner() {
+        let (lifecycle, _queue) = bounded(LIFECYCLE_CAPACITY);
+        let shared = Shared::threaded(lifecycle);
+        let waited = Duration::from_millis(50);
+        tracing::subscriber::with_default(PanickingSubscriber, || {
+            shared.die(ExecutorFailure::Wedged { waited });
+        });
+        assert_eq!(shared.death(), Some(ExecutorFailure::Wedged { waited }));
+        let Some(ExecutorFailure::TurnPanicked { message }) = shared.take_failure() else {
+            panic!("the subscriber's panic is held");
+        };
+        assert!(
+            message.contains("the subscriber fails on purpose"),
+            "{message}"
+        );
+        assert_eq!(
+            shared.take_failure(),
+            Some(ExecutorFailure::Wedged { waited })
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod speculation {
+    //! The owner's speculative surface holds against the raster thread's
+    //! changes, landed inside a refused send through the send's test hook.
+
+    use std::{sync::Arc, thread, time::Duration};
+
+    use crossbeam_channel::bounded;
+    use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId, geometry::DeviceSize};
+
+    use super::{Lifecycle, RasterSender, Shared};
+    use crate::raster_executor::{
+        LIFECYCLE_CAPACITY, RasterCommand, RasterSendError, SlotConfig, SlotTarget, SurfaceEvent,
+        SurfaceHold,
+    };
+
+    /// A raster thread that drops a slot's surface while the owner's release
+    /// is being refused does not have the drop undone by the release's
+    /// withdrawal: the owner is still asked for a new surface.
+    ///
+    /// Red-check: with the record unlocked across the send, the drop lands on
+    /// the speculative `Released`, which ignores it, and the withdrawal puts
+    /// the hold back to `Held`.
+    #[test]
+    fn a_surface_drop_during_a_refused_release_still_asks_for_a_new_surface() {
+        let (queue, _drain) = bounded(LIFECYCLE_CAPACITY);
+        let shared = Arc::new(Shared::new(queue));
+        let sender = RasterSender::new(Arc::clone(&shared));
+        let slot = sender.mint_slot().expect("a slot id is left");
+        sender
+            .send(RasterCommand::Attach {
+                slot,
+                address: PresentationAddress {
+                    ui_runtime_id: UiRuntimeId::new(1),
+                    presentation_id: PresentationId::new(1),
+                },
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(8, 8),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        while shared.send_lifecycle(Lifecycle::RetryDevice).is_ok() {}
+        let inbox = sender.inbox(slot).expect("the slot is held");
+        let (landed_tx, landed) = std::sync::mpsc::channel();
+        let raster = Arc::new(parking_lot::Mutex::new(None));
+        let started = Arc::clone(&raster);
+        *shared.during_send.lock() = Some(Box::new(move || {
+            let inbox = Arc::clone(&inbox);
+            let landed_tx = landed_tx.clone();
+            *started.lock() = Some(thread::spawn(move || {
+                let mut state = inbox.lock();
+                state.surface = state.surface.on(SurfaceEvent::SurfaceDropped);
+                drop(state);
+                let _told = landed_tx.send(());
+            }));
+            // Unlocked, the drop lands here, inside the send; locked, it
+            // waits for the withdrawal.
+            let _landed = landed.recv_timeout(Duration::from_millis(200));
+        }));
+        assert!(matches!(
+            sender.send(RasterCommand::Release { slot }),
+            Err(RasterSendError::Full(_))
+        ));
+        *shared.during_send.lock() = None;
+        let thread = raster.lock().take().expect("the hook ran");
+        thread.join().expect("the drop does not panic");
+        assert_eq!(
+            sender.record(slot).map(|record| record.surface.hold),
+            Some(SurfaceHold::Wanted)
         );
     }
 }
