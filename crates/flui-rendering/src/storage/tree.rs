@@ -628,11 +628,14 @@ impl RenderTree {
         self.nodes.remove(id)
     }
 
-    /// Takes the nodes of `subtree`, a subtree's ids in the pre-order [`Self::collect_subtree`]
-    /// returns, out of the tree, children before their parent, and returns them for the caller to
-    /// drop after its own bookkeeping. Every id of the subtree is stale when this returns, and no
-    /// render object's destructor has run.
-    pub(crate) fn take_subtree(&mut self, subtree: &[RenderId]) -> Vec<RenderNode> {
+    /// Takes the nodes of `subtree` out of the tree, children before their parent, and returns
+    /// them for the caller to drop after its own bookkeeping. Every id of the subtree is stale when
+    /// this returns, and no render object's destructor has run.
+    ///
+    /// Only [`Self::collect_subtree`] makes a [`SubtreeIds`], so the order this relies on is the
+    /// walk's, never a caller's; taking it by value spends it, so a stale list cannot be reused.
+    pub(crate) fn take_subtree(&mut self, subtree: SubtreeIds) -> Vec<RenderNode> {
+        let subtree = subtree.order;
         // Iterative: the subtree comes collected up front (explicit-stack
         // pre-order with cycle protection), and is removed in REVERSE
         // collection order — in reversed pre-order every child comes
@@ -654,8 +657,7 @@ impl RenderTree {
     /// their parent's; a destructor that panics leaves the rest to drop
     /// during the unwind, as std drops a `Vec`.
     pub fn remove_recursive(&mut self, id: RenderId) -> usize {
-        let (subtree, _) = self.collect_subtree(id);
-        let nodes = self.take_subtree(&subtree);
+        let nodes = self.take_subtree(self.collect_subtree(id));
         let count = nodes.len();
         drop(nodes);
         count
@@ -757,21 +759,18 @@ impl RenderTree {
     /// node's `children()` slice is borrowed once. `visited` is an
     /// `FxHashSet<RenderId>` — O(1) amortised lookup + insert per id.
     pub fn collect_subtree_ids(&self, root_id: RenderId) -> Vec<RenderId> {
-        self.collect_subtree(root_id).0
+        self.collect_subtree(root_id).order
     }
 
     /// [`Self::collect_subtree_ids`], with the same ids as a set for a caller that also asks
     /// membership of them, from one walk.
-    pub(crate) fn collect_subtree(
-        &self,
-        root_id: RenderId,
-    ) -> (Vec<RenderId>, rustc_hash::FxHashSet<RenderId>) {
+    pub(crate) fn collect_subtree(&self, root_id: RenderId) -> SubtreeIds {
         let mut out = Vec::new();
         // If the root doesn't exist, return empty to mirror other
         // tree-walk methods (e.g., `depth()` returns None) — callers
         // should check before doing further work with the result.
         if self.get(root_id).is_none() {
-            return (out, rustc_hash::FxHashSet::default());
+            return SubtreeIds::default();
         }
         let mut stack: Vec<RenderId> = vec![root_id];
         // The visited-set short-circuits on repeated ids so a cyclic
@@ -799,7 +798,10 @@ impl RenderTree {
                 stack.push(child_id);
             }
         }
-        (out, visited)
+        SubtreeIds {
+            order: out,
+            members: visited,
+        }
     }
 
     /// Checks if `ancestor` is an ancestor of `descendant`.
@@ -1013,6 +1015,26 @@ impl RenderTree {
 // Tests
 // ============================================================================
 
+/// The live ids of one subtree, as one walk of [`RenderTree::collect_subtree`] found them: in
+/// pre-order, each once, and the same ids as a set.
+#[derive(Debug, Default)]
+pub(crate) struct SubtreeIds {
+    order: Vec<RenderId>,
+    members: rustc_hash::FxHashSet<RenderId>,
+}
+
+impl SubtreeIds {
+    /// The ids in pre-order, children in their stored order.
+    pub(crate) fn ids(&self) -> &[RenderId] {
+        &self.order
+    }
+
+    /// The same ids, for a membership question.
+    pub(crate) fn members(&self) -> &rustc_hash::FxHashSet<RenderId> {
+        &self.members
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
@@ -1181,6 +1203,54 @@ mod tests {
     // ========================================================================
     // collect_subtree_ids
     // ========================================================================
+
+    /// A subtree walk lists each live id once, in pre-order, and its set holds exactly those ids,
+    /// whether the tree is whole, cyclic, lists a child twice or names a removed node. Removing the
+    /// subtree then takes every node it listed and leaves the slab empty.
+    #[test]
+    fn a_subtree_walk_lists_each_live_id_once_in_pre_order() {
+        for shape in ["whole", "cycle", "duplicate child", "stale child"] {
+            let mut tree = RenderTree::new();
+            let root = tree.insert_box(make_leaf());
+            let a = tree
+                .insert_box_child(root, make_leaf())
+                .expect("live parent");
+            let a1 = tree.insert_box_child(a, make_leaf()).expect("live parent");
+            let b = tree
+                .insert_box_child(root, make_leaf())
+                .expect("live parent");
+            match shape {
+                "cycle" => tree.append_unlinked_child(a1, root),
+                "duplicate child" => tree.append_unlinked_child(root, b),
+                "stale child" => {
+                    let gone = tree.insert_box_child(a, make_leaf()).expect("live parent");
+                    assert_eq!(tree.remove_recursive(gone), 1);
+                    tree.append_unlinked_child(a, gone);
+                }
+                _ => {}
+            }
+
+            let subtree = tree.collect_subtree(root);
+            assert_eq!(subtree.ids(), [root, a, a1, b], "{shape}: the order");
+            assert_eq!(
+                *subtree.members(),
+                subtree
+                    .ids()
+                    .iter()
+                    .copied()
+                    .collect::<rustc_hash::FxHashSet<RenderId>>(),
+                "{shape}: the set holds the listed ids and no other",
+            );
+            assert_eq!(tree.collect_subtree_ids(root), subtree.ids(), "{shape}");
+
+            assert_eq!(
+                tree.take_subtree(subtree).len(),
+                4,
+                "{shape}: every listed node"
+            );
+            assert_eq!(tree.len(), 0, "{shape}: nothing left in the slab");
+        }
+    }
 
     // ========================================================================
     // adopt_child / drop_child
