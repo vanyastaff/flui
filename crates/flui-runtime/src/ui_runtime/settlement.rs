@@ -10,7 +10,7 @@ use flui_interaction::HapticCut;
 use flui_layer::SceneVersionId;
 use flui_platform::SystemUiOverlayStyle;
 use flui_platform::input_regions::InputRegion;
-use flui_scheduler::{FramePhaseDurations, Instant, PresentOutcome};
+use flui_scheduler::{FramePhaseDurations, FrameTelemetryCut, Instant, PresentOutcome};
 use std::panic::resume_unwind;
 
 use super::{EpochDisposition, MAX_NOT_SHOWN_RETRIES, StagedLayerRead, UiRuntime};
@@ -30,10 +30,8 @@ const MAX_PENDING_FRAMES: usize = 2;
 pub(crate) struct PendingFrame {
     /// The stamp the frame's settlement names.
     epoch: FrameEpoch,
-    /// The frame time of the pump that painted the frame.
-    frame_time: Instant,
-    /// The span and phases of the segment that painted the frame, for its telemetry.
-    segment: Option<(Instant, Instant, FramePhaseDurations)>,
+    /// What the frame's telemetry is recorded from.
+    telemetry: SubmittedTelemetry,
     /// The scene version the sink was handed, acknowledged once it is shown.
     shown: SceneVersionId,
     /// The tree revision the frame was painted from.
@@ -58,6 +56,16 @@ impl PendingFrame {
     pub(crate) fn into_layer_reads(self) -> Vec<StagedLayerRead> {
         self.layer_reads
     }
+}
+
+/// What a frame's telemetry is recorded from, taken when the frame was handed to its sink: the
+/// frame time of the pump that painted it, its segment's span and phases, and its cut of the
+/// presentation's frame ids and input epochs.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SubmittedTelemetry {
+    pub(super) frame_time: Instant,
+    pub(super) segment: Option<(Instant, Instant, FramePhaseDurations)>,
+    pub(super) cut: FrameTelemetryCut,
 }
 
 /// What a frame's verdict leaves for the rest of the frame's tail, and the first panic held on
@@ -95,8 +103,11 @@ impl UiRuntime {
         let layer_reads = producer.stage_agent_layer_reads(scene);
         PendingFrame {
             epoch: FrameEpoch::ZERO,
-            frame_time,
-            segment: producer.take_last_segment_span(),
+            telemetry: SubmittedTelemetry {
+                frame_time,
+                segment: producer.take_last_segment_span(),
+                cut: producer.clock().telemetry_cut(),
+            },
             shown: scene.id(),
             tree_revision: producer.tree_revision(),
             input_regions: producer.staged_input_regions(),
@@ -114,12 +125,13 @@ impl UiRuntime {
 
     /// The sink queued `frame`, stamped `epoch`: its record waits for the settlement that names
     /// it. A presentation already holding [`MAX_PENDING_FRAMES`] folds its oldest record into the
-    /// next, so the reads it holds wait for a later scene.
+    /// next, so the reads it holds wait for a later scene. Returns the first panic of that fold,
+    /// for the caller to resume after the frame's tail.
     pub(super) fn queue_pending_frame(
         producer: &PresentationState,
         epoch: FrameEpoch,
         mut frame: PendingFrame,
-    ) {
+    ) -> FirstPanic {
         frame.epoch = epoch;
         let folded = {
             let mut pending = producer.pending_frames.borrow_mut();
@@ -129,14 +141,20 @@ impl UiRuntime {
             pending.push_back(frame);
             folded
         };
+        let mut held = FirstPanic::new();
         if let Some(folded) = folded {
-            tracing::warn!(
-                target: "flui.frame",
-                epoch = folded.epoch.get(),
-                "BUG: a sink queued more frames than its settlement ring holds; the oldest is folded"
-            );
-            Self::abandon_pending_frame(producer, folded);
+            let epoch = folded.epoch.get();
+            // The reads wait again before a subscriber hears of it, and each step runs contained.
+            held.contain(|| Self::abandon_pending_frame(producer, folded));
+            held.contain(|| {
+                tracing::warn!(
+                    target: "flui.frame",
+                    epoch,
+                    "BUG: a sink queued more frames than its settlement ring holds; the oldest is folded"
+                );
+            });
         }
+        held
     }
 
     /// Settles one frame a sink queued (ADR-0305 §4): the frame whose record `settlement`'s
@@ -196,10 +214,13 @@ impl UiRuntime {
             return stale("no pending frame has its epoch");
         };
         // A superseded frame's scene never reaches the screen: what it read waits for the next.
+        // Each runs contained, so a visual-update callback that panics while one of them asks for
+        // a repaint still lets the settled frame commit; the first failure resumes after.
+        let mut held = FirstPanic::new();
         for superseded in superseded {
-            Self::abandon_pending_frame(producer, superseded);
+            held.contain(|| Self::abandon_pending_frame(producer, superseded));
         }
-        let tail = self.settle_pending_frame(producer, frame, verdict, FirstPanic::new());
+        let tail = self.settle_pending_frame(producer, frame, verdict, held);
         self.finish_settlement(producer, tail);
         Settled::Applied
     }
@@ -231,7 +252,9 @@ impl UiRuntime {
         if let Some(payload) = held.into_payload() {
             resume_unwind(payload);
         }
-        if replay_committed_input {
+        // Held input replays only against a tree the screen shows: a frame that settles while a
+        // later one is still pending commits an older revision, and the input waits for that one.
+        if replay_committed_input && producer.frame_commit_state() == FrameCommitState::Committed {
             self.replay_committed_held_pointer_input(producer);
         }
         if let Some(style) = overlay_style {
@@ -253,8 +276,7 @@ impl UiRuntime {
     ) -> VerdictTail {
         let PendingFrame {
             epoch: _,
-            frame_time,
-            segment,
+            telemetry,
             shown,
             tree_revision,
             input_regions,
@@ -329,8 +351,7 @@ impl UiRuntime {
                     // the others leave the queue to its deadline.
                     producer.haptics().frame_presented(haptics);
                     self.record_submit_telemetry(
-                        frame_time,
-                        segment,
+                        telemetry,
                         producer,
                         submit_at,
                         PresentOutcome::Presented,
@@ -456,8 +477,7 @@ impl UiRuntime {
                     tail.retry_needed = true;
                     tail.retry_needs_repaint = true;
                     self.record_submit_telemetry(
-                        frame_time,
-                        segment,
+                        telemetry,
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
@@ -497,11 +517,10 @@ impl UiRuntime {
                     // arrived before this failure — see
                     // `record_submit_telemetry`'s own doc. A subscriber's panic
                     // there is held until the failure is reported.
-                    let mut telemetry = FirstPanic::new();
-                    telemetry.contain(|| {
+                    let mut reported = FirstPanic::new();
+                    reported.contain(|| {
                         self.record_submit_telemetry(
-                            frame_time,
-                            segment,
+                            telemetry,
                             producer,
                             submit_at,
                             PresentOutcome::Errored,
@@ -509,17 +528,16 @@ impl UiRuntime {
                         );
                     });
                     if let Some(report) = report {
-                        telemetry.contain(|| self.deliver_failure_report(report));
+                        reported.contain(|| self.deliver_failure_report(report));
                     }
-                    if let Some(payload) = telemetry.into_payload() {
+                    if let Some(payload) = reported.into_payload() {
                         resume_unwind(payload);
                     }
                 }
                 SubmitVerdict::Failed => {
                     producer.record_frame_dropped();
                     self.record_submit_telemetry(
-                        frame_time,
-                        segment,
+                        telemetry,
                         producer,
                         submit_at,
                         PresentOutcome::Errored,

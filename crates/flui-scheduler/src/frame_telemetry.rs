@@ -149,6 +149,24 @@ impl InputEpochs {
         self.next = ((index + 1) % MAX_COALESCED_INPUT_EPOCHS) as u8;
     }
 
+    /// The epochs stamped before `cut` and the ones stamped at or after it, each oldest first.
+    /// An overflow is the oldest arrivals' loss, so it stays with the earlier half, or with the
+    /// later one when the earlier half is empty.
+    fn split_before(self, cut: u64) -> (Self, Self) {
+        let mut before = Self::EMPTY;
+        let mut after = Self::EMPTY;
+        for epoch in self.iter() {
+            if epoch.id.0 < cut {
+                before.push(*epoch);
+            } else {
+                after.push(*epoch);
+            }
+        }
+        before.overflowed = self.overflowed && !before.is_empty();
+        after.overflowed = self.overflowed && before.is_empty();
+        (before, after)
+    }
+
     /// Every coalesced epoch, oldest arrival first. Once
     /// [`MAX_COALESCED_INPUT_EPOCHS`] has been exceeded and the ring has
     /// wrapped, "oldest" means the oldest SURVIVING epoch — see
@@ -403,9 +421,20 @@ impl FrameHistory {
     }
 }
 
+/// What one frame's telemetry covers, taken when the frame is handed to its sink
+/// ([`FrameClock::telemetry_cut`](crate::frame_clock::FrameClock::telemetry_cut)): the produce
+/// that made it, which names its [`FrameId`], and the input epochs stamped before it. A frame
+/// recorded later, once its sink settles it, keeps that id and leaves the epochs stamped since
+/// pending for a later frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameTelemetryCut {
+    pub(crate) produced: u64,
+    pub(crate) next_epoch: u64,
+}
+
 /// Mints [`InputEpochId`]s and buffers pending [`InputEpoch`]s until the
-/// next [`FrameClock::record_frame`](crate::frame_clock::FrameClock::record_frame)
-/// drains them — the presentation-side coalescing half of input→present
+/// [`FrameClock::record_frame`](crate::frame_clock::FrameClock::record_frame) of a frame cut after
+/// them drains them — the presentation-side coalescing half of input→present
 /// attribution. Not `pub`: reached only through `FrameClock`.
 #[derive(Debug, Default)]
 pub(crate) struct PendingInputEpochs {
@@ -421,25 +450,29 @@ impl PendingInputEpochs {
         id
     }
 
-    /// Take every pending epoch, leaving the buffer empty — called exactly
-    /// when a frame that will actually be recorded is about to be built, so
-    /// an epoch that arrives while a segment ran but was NOT submitted this
-    /// pump (deferred, no damage) stays pending for whichever later pump
-    /// does submit, rather than being silently attributed to a frame that
-    /// never reached the screen.
-    pub(crate) fn drain(&mut self) -> InputEpochs {
-        core::mem::replace(&mut self.pending, InputEpochs::EMPTY)
+    /// The id the next stamped epoch takes: a frame cut here covers every epoch stamped before.
+    pub(crate) fn cut(&self) -> u64 {
+        self.next_id
     }
 
-    /// Read every pending epoch WITHOUT draining the buffer — for a submit
-    /// attempt that failed on a path its own caller has already armed a
-    /// retry for (e.g. `EngineError::SurfaceLost`). Draining here would
-    /// leave the eventual retry's own real [`Self::drain`] with nothing to
-    /// attribute to the inputs that arrived before the failed attempt, so
-    /// the frame that eventually reaches the screen would carry no
-    /// attribution for them at all. `InputEpochs` is `Copy`, so this is a
-    /// plain read, not a second live handle into the buffer.
-    pub(crate) fn peek(&self) -> InputEpochs {
-        self.pending
+    /// Take every pending epoch stamped before `cut`, leaving the later ones pending — called
+    /// when a frame cut at `cut` is recorded, so an epoch that arrives after the frame was
+    /// submitted (or while a segment ran that was not submitted: deferred, no damage) stays
+    /// pending for whichever later frame does carry its effect, rather than being attributed to
+    /// a frame that could not contain it.
+    pub(crate) fn drain_before(&mut self, cut: u64) -> InputEpochs {
+        let (before, after) = self.pending.split_before(cut);
+        self.pending = after;
+        before
+    }
+
+    /// Read every pending epoch stamped before `cut` WITHOUT draining it — for a submit
+    /// attempt that failed on a path its own caller has already armed a retry for (e.g.
+    /// `EngineError::SurfaceLost`). Draining here would leave the eventual retry's own real
+    /// [`Self::drain_before`] with nothing to attribute to the inputs that arrived before the
+    /// failed attempt, so the frame that eventually reaches the screen would carry no
+    /// attribution for them at all.
+    pub(crate) fn peek_before(&self, cut: u64) -> InputEpochs {
+        self.pending.split_before(cut).0
     }
 }

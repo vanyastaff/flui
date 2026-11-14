@@ -183,8 +183,8 @@ pub use frame_histogram::{
     input_to_present_histogram, produce_to_present_histogram,
 };
 pub use frame_telemetry::{
-    FRAME_HISTORY_CAPACITY, FramePhaseDurations, FrameSnapshot, InputEpoch, InputEpochId,
-    InputEpochs, MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
+    FRAME_HISTORY_CAPACITY, FramePhaseDurations, FrameSnapshot, FrameTelemetryCut, InputEpoch,
+    InputEpochId, InputEpochs, MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
 };
 pub use post_frame::{
     OwnerFrame, OwnerFrameError, PostFrameHandle, PostFrameRejection, PostFrameScheduleError,

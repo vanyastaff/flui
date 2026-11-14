@@ -192,6 +192,10 @@ fn update_scheduler_bounds_matrix() {
                 a_frame_budget_refuses_non_finite_samples as fn(),
             ),
             (
+                "a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs",
+                a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs as fn(),
+            ),
+            (
                 "a_late_frame_names_its_slowest_phase",
                 a_late_frame_names_its_slowest_phase as fn(),
             ),
@@ -406,6 +410,7 @@ fn a_late_frame_names_its_slowest_phase() {
     assert!(clock.poll(start).should_run_segment());
     let ms = Duration::from_millis;
     let snapshot = clock.record_frame(
+        clock.telemetry_cut(),
         address(),
         FrameTimes {
             clock_timestamp: start,
@@ -446,6 +451,7 @@ fn frame_pace_ignores_idle_gaps() {
             let begun = start + ms(at);
             assert!(clock.poll(begun).should_run_segment());
             clock.record_frame(
+                clock.telemetry_cut(),
                 address(),
                 FrameTimes {
                     clock_timestamp: begun,
@@ -462,4 +468,50 @@ fn frame_pace_ignores_idle_gaps() {
     let pace = frame_pace(&snapshots);
     assert!((pace.frames_per_second - 62.5).abs() < 1e-6, "{pace:?}");
     assert_eq!(pace.frame_work, ms(4));
+}
+
+/// A frame recorded after later frames were produced, as a queued frame is once its sink settles
+/// it, keeps the id of its own produce and takes only the inputs stamped before it was cut.
+fn a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs() {
+    let clock = FrameClock::new();
+    let start = Instant::now();
+    let times = FrameTimes {
+        clock_timestamp: start,
+        segment_start: start,
+        segment_end: start,
+        submit_at: start,
+        phases: FramePhaseDurations::default(),
+    };
+    let early = clock.stamp_input_epoch(start);
+    clock.mark_demand(DemandKind::Dirty);
+    assert!(clock.poll(start).should_run_segment());
+    let first = clock.telemetry_cut();
+    let late = clock.stamp_input_epoch(start);
+    clock.mark_demand(DemandKind::Dirty);
+    assert!(clock.poll(start).should_run_segment());
+    let second = clock.telemetry_cut();
+
+    let one = clock.record_frame(first, address(), times, PresentOutcome::Presented);
+    let two = clock.record_frame(second, address(), times, PresentOutcome::Presented);
+    assert!(
+        one.frame_id < two.frame_id,
+        "each frame keeps its own produce's id"
+    );
+    let ids = |snapshot: &flui_scheduler::FrameSnapshot| {
+        snapshot
+            .input_epochs
+            .iter()
+            .map(|epoch| epoch.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(&one),
+        [early],
+        "the first frame carries only the input before its cut"
+    );
+    assert_eq!(
+        ids(&two),
+        [late],
+        "the later input waited for the later frame"
+    );
 }

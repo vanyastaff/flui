@@ -21,6 +21,9 @@
 
 ### Changed
 
+- **`flui-scheduler`**: `FrameClock::record_frame` and `record_frame_retaining_epochs` take the
+  `FrameTelemetryCut` that `FrameClock::telemetry_cut` gave when the frame was submitted, so a
+  frame recorded after it settles keeps its own frame id and only the inputs that came before it.
 - **`flui-interaction`**: `HapticsHost::frame_presented` takes the `HapticCut` that
   `HapticsHost::frame_cut` gave when the frame was submitted, and plays only the requests queued
   before it.

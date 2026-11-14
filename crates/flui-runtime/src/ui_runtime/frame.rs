@@ -1015,7 +1015,7 @@ impl UiRuntime {
             if render_verdict == SubmitVerdict::Queued {
                 // The sink took the frame and settles it later, by its stamp: the record waits
                 // for that settlement, which arms whatever retry its verdict needs.
-                Self::queue_pending_frame(producer, epoch, pending);
+                hover_panic.absorb(Self::queue_pending_frame(producer, epoch, pending));
             } else {
                 // A frame the sink answered inline with a verdict that commits it supersedes every
                 // frame it queued before: what they read waits for a later scene, and a settlement
@@ -1032,7 +1032,7 @@ impl UiRuntime {
                     std::collections::VecDeque::new()
                 };
                 for superseded in superseded {
-                    Self::abandon_pending_frame(producer, superseded);
+                    hover_panic.contain(|| Self::abandon_pending_frame(producer, superseded));
                 }
                 let held = std::mem::replace(&mut hover_panic, FirstPanic::new());
                 let tail = self.settle_pending_frame(producer, pending, render_verdict, held);
@@ -1286,7 +1286,7 @@ impl UiRuntime {
 
     /// Finalize and record this pump's [`flui_scheduler::FrameSnapshot`] for
     /// `presentation`, IF a segment ran for `presentation` specifically and its span was taken
-    /// when the frame was submitted (`segment`, from `PresentationState::take_last_segment_span`,
+    /// when the frame was submitted (`telemetry.segment`, from `PresentationState::take_last_segment_span`,
     /// is `Some`) — a presentation whose
     /// segment was skipped entirely this pump (`draw_frame_entered`'s own
     /// gate) has nothing to record.
@@ -1324,20 +1324,21 @@ impl UiRuntime {
     /// nothing pending to attribute to the frame that actually reaches the
     /// screen.
     ///
-    /// `frame_time` is the frame time of the pump that painted the frame, recorded as the snapshot's
-    /// `clock_timestamp` so a late segment start shows against it.
+    /// `telemetry` was taken when the frame was handed to its sink: its frame time (the pump's,
+    /// recorded as the snapshot's `clock_timestamp` so a late segment start shows against it),
+    /// its segment's span, and its cut, so a frame settled after later ones were produced keeps
+    /// its own frame id and drains only the input epochs stamped before it was submitted.
     pub(super) fn record_submit_telemetry(
         &self,
-        frame_time: Instant,
-        segment: Option<(Instant, Instant, FramePhaseDurations)>,
+        telemetry: super::settlement::SubmittedTelemetry,
         presentation: &PresentationState,
         submit_at: Instant,
         present_outcome: PresentOutcome,
         epochs: EpochDisposition,
     ) {
-        if let Some((segment_start, segment_end, phases)) = segment {
+        if let Some((segment_start, segment_end, phases)) = telemetry.segment {
             let times = FrameTimes {
-                clock_timestamp: frame_time,
+                clock_timestamp: telemetry.frame_time,
                 segment_start,
                 segment_end,
                 submit_at,
@@ -1348,12 +1349,14 @@ impl UiRuntime {
                 presentation_id: presentation.id(),
             };
             let snapshot = match epochs {
-                EpochDisposition::Drain => {
-                    presentation
-                        .clock()
-                        .record_frame(address, times, present_outcome)
-                }
+                EpochDisposition::Drain => presentation.clock().record_frame(
+                    telemetry.cut,
+                    address,
+                    times,
+                    present_outcome,
+                ),
                 EpochDisposition::Retain => presentation.clock().record_frame_retaining_epochs(
+                    telemetry.cut,
                     address,
                     times,
                     present_outcome,

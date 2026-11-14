@@ -197,6 +197,55 @@ pub(crate) fn a_later_settlement_folds_the_frames_it_superseded() {
     assert_eq!(settle(&mut ui_runtime, first), Settled::Stale);
 }
 
+fn held_pointer_count(ui_runtime: &UiRuntime) -> usize {
+    ui_runtime
+        .presentations
+        .primary()
+        .held_pointer_input()
+        .borrow()
+        .len()
+}
+
+/// Input held while queued frames wait replays only once the screen shows the tree the latest
+/// of them was painted from: an older frame's settlement commits an older revision, and the
+/// input keeps waiting.
+pub(crate) fn held_input_waits_for_the_settlement_that_commits_the_tree() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(first, _), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    let id = ui_runtime.presentation_id();
+    ui_runtime.enter(|ui_runtime| {
+        ui_runtime.handle_input_addressed(
+            id,
+            flui_platform::PlatformInput::Pointer(
+                flui_interaction::events::make_down_event(
+                    flui_foundation::geometry::Offset::new(4.0, 6.0),
+                    flui_interaction::events::PointerKind::Touch,
+                )
+                .expect("finite test position"),
+            ),
+        );
+    });
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for a commit"
+    );
+
+    assert_eq!(settle(&mut ui_runtime, first), Settled::Applied);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the older frame's commit leaves the tree uncommitted, so the Down still waits"
+    );
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        0,
+        "the commit of the latest tree replays the Down"
+    );
+}
 /// The withheld retry is BOUNDED: a drawable that never comes back stops
 /// being retried instead of spinning at the fallback pace forever.
 ///
@@ -583,4 +632,49 @@ fn a_frame_answered_inline_without_a_commit_leaves_queued_frames_to_their_settle
     );
     assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
     assert_uncommitted_since(&ui_runtime, queued_revision.next());
+}
+
+/// A sink that queues more frames than the settlement ring holds folds the oldest, and a
+/// subscriber that panics on that fold's trace leaves the frame to finish: the newest record is
+/// queued, the folded reads wait again, and the frame settles as rendered before the panic
+/// continues.
+///
+/// Fails when the fold's panic leaves the frame before its tail.
+#[test]
+fn a_subscriber_that_panics_on_a_folded_frame_leaves_the_frame_finished() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let _ = queue_two_frames(&ui_runtime, &mut sink);
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "settlement ring",
+        },
+        || {
+            let _ = ui_runtime.render_frame(&mut sink);
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert_eq!(
+        ui_runtime
+            .presentations
+            .primary()
+            .pending_frames
+            .borrow()
+            .len(),
+        2,
+        "the ring keeps its bound"
+    );
+    assert!(
+        !ui_runtime.needs_redraw(),
+        "the frame settled as rendered before the panic continued"
+    );
+    let newest = *sink.epochs.last().expect("three frames were queued");
+    assert_eq!(
+        settle(&mut ui_runtime, newest),
+        Settled::Applied,
+        "the newest frame waits for its settlement"
+    );
 }

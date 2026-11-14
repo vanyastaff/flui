@@ -99,7 +99,7 @@ use std::cell::{Cell, RefCell};
 
 use crate::frame::FrameId;
 use crate::frame_telemetry::{
-    FrameHistory, FramePhaseDurations, FrameSnapshot, InputEpochId, InputEpochs,
+    FrameHistory, FramePhaseDurations, FrameSnapshot, FrameTelemetryCut, InputEpochId, InputEpochs,
     PendingInputEpochs, PresentOutcome,
 };
 use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress};
@@ -870,8 +870,20 @@ impl FrameClock {
         self.pending_input_epochs.borrow_mut().stamp(arrival)
     }
 
+    /// The cut of the frame about to be handed to its sink: the produce that made it and the
+    /// input epochs stamped so far. [`Self::record_frame`] and
+    /// [`Self::record_frame_retaining_epochs`] take it, so a frame whose sink settles it later
+    /// is recorded with its own id and only the inputs that arrived before it was submitted.
+    #[must_use]
+    pub fn telemetry_cut(&self) -> FrameTelemetryCut {
+        FrameTelemetryCut {
+            produced: self.produced_count(),
+            next_epoch: self.pending_input_epochs.borrow().cut(),
+        }
+    }
+
     /// Record that this clock's presentation produced and submitted a
-    /// frame: drains every pending input epoch into the new
+    /// frame cut at `cut`: drains every pending input epoch stamped before the cut into the new
     /// [`FrameSnapshot`], stores it in the fixed-capacity history ring, and
     /// returns it (handy for a caller that wants to trace-emit the exact
     /// value just recorded without a redundant `frames_since` pull).
@@ -885,7 +897,7 @@ impl FrameClock {
     /// must name whose clock this is, not default to "whichever
     /// presentation I happened to have a reference to."
     ///
-    /// `frame_id` is deliberately derived from [`Self::produced_count`]
+    /// `frame_id` is deliberately derived from [`Self::produced_count`] at the cut
     /// (`FrameId::from_count(produced_count())`, valid because `poll` has already
     /// incremented it by the time a caller reaches its own submit point) —
     /// not a second, independent counter minted here, which would drift
@@ -908,18 +920,22 @@ impl FrameClock {
     /// caller can reach a submit point at all.
     pub fn record_frame(
         &self,
+        cut: FrameTelemetryCut,
         address: PresentationAddress,
         times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
-        let input_epochs = self.pending_input_epochs.borrow_mut().drain();
-        self.record_frame_with_epochs(address, times, present_outcome, input_epochs)
+        let input_epochs = self
+            .pending_input_epochs
+            .borrow_mut()
+            .drain_before(cut.next_epoch);
+        self.record_frame_with_epochs(cut, address, times, present_outcome, input_epochs)
     }
 
     /// Like [`Self::record_frame`], but for a submit attempt that FAILED on
     /// a path its own caller has already armed a retry for (e.g.
-    /// `EngineError::SurfaceLost`) — reads the currently pending input
-    /// epochs into the recorded `FrameSnapshot` WITHOUT draining them, so
+    /// `EngineError::SurfaceLost`) — reads the input
+    /// epochs pending before `cut` into the recorded `FrameSnapshot` WITHOUT draining them, so
     /// the eventual retry's own real [`Self::record_frame`] still finds
     /// them and can attribute them to the frame that actually reaches the
     /// screen. Without this, [`Self::record_frame`]'s drain on the failed
@@ -937,12 +953,16 @@ impl FrameClock {
     /// Same panic precondition as [`Self::record_frame`].
     pub fn record_frame_retaining_epochs(
         &self,
+        cut: FrameTelemetryCut,
         address: PresentationAddress,
         times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
-        let input_epochs = self.pending_input_epochs.borrow().peek();
-        self.record_frame_with_epochs(address, times, present_outcome, input_epochs)
+        let input_epochs = self
+            .pending_input_epochs
+            .borrow()
+            .peek_before(cut.next_epoch);
+        self.record_frame_with_epochs(cut, address, times, present_outcome, input_epochs)
     }
 
     /// Shared core of [`Self::record_frame`]/[`Self::record_frame_retaining_epochs`]:
@@ -958,12 +978,13 @@ impl FrameClock {
     /// that precondition always holds by the time either is reached.
     fn record_frame_with_epochs(
         &self,
+        cut: FrameTelemetryCut,
         address: PresentationAddress,
         times: FrameTimes,
         present_outcome: PresentOutcome,
         input_epochs: InputEpochs,
     ) -> FrameSnapshot {
-        let frame_id = FrameId::from_count(self.produced_count()).expect(
+        let frame_id = FrameId::from_count(cut.produced).expect(
             "BUG: record_frame(_retaining_epochs) called before this clock's poll() ever \
              produced a frame -- only call this after a real submit attempt, whose produce \
              already incremented produced_count",

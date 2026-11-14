@@ -115,7 +115,12 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     clock.mark_demand(DemandKind::Dirty);
     let now = clock.now();
     assert_eq!(clock.poll(now), PollDecision::Produce, "warmup produce");
-    let _ = clock.record_frame(address(), frame_times(now), PresentOutcome::Presented);
+    let _ = clock.record_frame(
+        clock.telemetry_cut(),
+        address(),
+        frame_times(now),
+        PresentOutcome::Presented,
+    );
 
     const CYCLES: usize = 10_000;
     let mut cycles_with_allocation = 0usize;
@@ -133,7 +138,12 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
         let now = clock.now();
         let decision = clock.poll(now);
         assert_eq!(decision, PollDecision::Produce, "every cycle must produce");
-        let _snapshot = clock.record_frame(address(), frame_times(now), PresentOutcome::Presented);
+        let _snapshot = clock.record_frame(
+            clock.telemetry_cut(),
+            address(),
+            frame_times(now),
+            PresentOutcome::Presented,
+        );
 
         let calls_this_cycle = read(&ALLOC_COUNT) - count_before;
         let bytes_this_cycle = read(&ALLOC_BYTES) - bytes_before;
