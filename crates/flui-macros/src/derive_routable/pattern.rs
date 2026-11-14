@@ -29,8 +29,8 @@ pub(crate) fn parse(pattern: &str) -> Result<Vec<Segment>, String> {
     };
     if pattern.contains(['?', '#', '%']) {
         return Err(
-            "a route pattern has no `?` query, `#` fragment or `%` escape; write the literal \
-             text, and `RoutePath` encodes it"
+            "a route pattern has no `?` query, `#` fragment or `%` escape: a `#[query]` field \
+             reads the query, and literal text is written as is, since `RoutePath` encodes it"
                 .to_owned(),
         );
     }

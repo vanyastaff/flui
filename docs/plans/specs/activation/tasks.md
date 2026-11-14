@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: —. В работе: AC1.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1. В работе: —; следующие AC2, AC4, AC11.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -39,4 +39,4 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
 
 ## Свидетельства
 
-Пока нет.
+- **AC1.** `route_locations_preserve_encoded_segment_identity` (строки query: `+` как пробел, порядок и повторы, голый ключ, пустые пары, разделители в значении, отказ плохого escape, query только у последнего префикса, поля `#[query]` трёх видов и `Param`), `derived_routable_round_trips` с полями query, `routable_derive_ui` (`pass/query_fields.rs`; `fail/query_and_param.rs`, `fail/query_attr_arg.rs`, `fail/query_without_default.rs`, `fail/pattern_query.rs`); строка пустых пар падает при откате пропуска пустой пары в `push_query`.

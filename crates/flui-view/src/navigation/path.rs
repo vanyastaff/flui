@@ -23,16 +23,38 @@ const SEGMENT: &AsciiSet = &CONTROLS
     .add(b'{')
     .add(b'}');
 
-/// A normalized, percent-encoded route location.
+/// Bytes a query key or value percent-encodes: the segment set without `/`
+/// and `?`, which a query may hold as data, plus `&`, `=` and `+`, which
+/// delimit pairs or would read as a space.
+const QUERY_COMPONENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'&')
+    .add(b'+')
+    .add(b'<')
+    .add(b'=')
+    .add(b'>')
+    .add(b'\\')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
+
+/// A normalized, percent-encoded route location: a path and an optional
+/// query.
 ///
-/// It starts with `/`, has no empty segment, has no trailing `/` except the
-/// root's, and carries no `?` query or `#` fragment (those are a later step).
-/// Each segment is stored in one canonical encoding, so comparing two
-/// `RoutePath`s compares the locations they name: `/tag/a b`, `/tag/a%20b`
-/// and `/tag/a%20b/` are the same path.
+/// The path starts with `/`, has no empty segment and no trailing `/` except
+/// the root's. The query is a list of `key=value` pairs in the order given; a
+/// key may repeat, and an empty value prints as the bare key. There is no
+/// `#` fragment. Each segment, key and value is stored in one canonical
+/// encoding, so comparing two `RoutePath`s compares the locations they name:
+/// `/tag/a b`, `/tag/a%20b` and `/tag/a%20b/` are the same path, and so are
+/// `/search?q=a+b` and `/search?q=a%20b`.
 ///
-/// Escapes are decoded exactly once. A literal `+` stays `+`; it is not a form
-/// query's space. Encoded `/`, `?`, `#` and backslashes remain data within one
+/// Escapes are decoded exactly once. In the path a literal `+` stays `+`; in
+/// the query it is a space, as a form and Flutter's `Uri.queryParameters`
+/// read it. Encoded `/`, `?`, `#` and backslashes remain data within one
 /// segment, while malformed escapes and invalid UTF-8 are rejected. This is
 /// route-location normalization, not whole-URL parsing: `.` and `..` remain
 /// literal route values rather than resolving relative to another location.
@@ -43,6 +65,10 @@ const SEGMENT: &AsciiSet = &CONTROLS
 /// let path = RoutePath::root().join("note").join(7);
 /// assert_eq!(path.as_str(), "/note/7");
 /// assert_eq!(RoutePath::parse("/note/7/")?, path);
+///
+/// let search = RoutePath::root().join("search").with_query("q", "a b");
+/// assert_eq!(search.as_str(), "/search?q=a%20b");
+/// assert_eq!(RoutePath::parse("/search?q=a+b")?, search);
 /// # Ok::<(), flui_view::navigation::RouteParseError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -60,9 +86,8 @@ impl RoutePath {
     /// # Errors
     ///
     /// [`RouteParseError::Malformed`] when `location` is empty, does not start
-    /// with `/`, has an empty segment (`//x`), carries a query or fragment, or
-    /// holds an escape that is not `%` and two hex digits or does not decode to
-    /// UTF-8.
+    /// with `/`, has an empty segment (`//x`), carries a fragment, or holds an
+    /// escape that is not `%` and two hex digits or does not decode to UTF-8.
     pub fn parse(location: &str) -> Result<Self, RouteParseError> {
         let malformed = |reason| RouteParseError::Malformed {
             location: location.to_owned(),
@@ -71,33 +96,40 @@ impl RoutePath {
         if location.is_empty() {
             return Err(malformed("it is empty"));
         }
-        let Some(rest) = location.strip_prefix('/') else {
+        if location.contains('#') {
+            return Err(malformed("a fragment is not supported"));
+        }
+        let (path_part, query) = match location.split_once('?') {
+            Some((path, query)) => (path, Some(query)),
+            None => (location, None),
+        };
+        let Some(rest) = path_part.strip_prefix('/') else {
             return Err(malformed("it does not start with `/`"));
         };
-        if location.contains(['?', '#']) {
-            return Err(malformed("a query or fragment is not supported"));
-        }
         let mut path = Self::root();
-        if rest.is_empty() {
-            return Ok(path);
-        }
         let rest = rest.trim_suffix('/');
-        for segment in rest.split('/') {
-            if segment.is_empty() {
-                return Err(malformed("it has an empty segment"));
+        if !rest.is_empty() {
+            for segment in rest.split('/') {
+                if segment.is_empty() {
+                    return Err(malformed("it has an empty segment"));
+                }
+                path.push_encoded(&decode(segment, false).map_err(malformed)?);
             }
-            if !escapes_are_well_formed(segment) {
-                return Err(malformed("`%` is not followed by two hex digits"));
+        }
+        for pair in query.into_iter().flat_map(|query| query.split('&')) {
+            if pair.is_empty() {
+                continue;
             }
-            let decoded = percent_decode_str(segment)
-                .decode_utf8()
-                .map_err(|_| malformed("an escape does not decode to UTF-8"))?;
-            path.push_encoded(&decoded);
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let key = decode(key, true).map_err(malformed)?;
+            let value = decode(value, true).map_err(malformed)?;
+            path.push_query(&key, &value);
         }
         Ok(path)
     }
 
-    /// Append one segment, printed through `Display` and percent-encoded.
+    /// Append one path segment, printed through `Display` and
+    /// percent-encoded. A query, if any, stays after it.
     ///
     /// A value that prints as the empty string appends nothing: a location has
     /// no empty segment, so a route field that can print empty does not round
@@ -111,40 +143,88 @@ impl RoutePath {
         self
     }
 
+    /// Append the query pair `key=value`, each printed through `Display` and
+    /// percent-encoded, after the pairs already there. A pair whose key and
+    /// value both print empty appends nothing, as an empty segment does.
+    #[must_use]
+    pub fn with_query(mut self, key: impl fmt::Display, value: impl fmt::Display) -> Self {
+        self.push_query(&key.to_string(), &value.to_string());
+        self
+    }
+
     /// The location as text, percent-encoded.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// The decoded segments, first to last; the root has none.
+    /// The decoded path segments, first to last; the root has none.
     pub fn segments(&self) -> impl Iterator<Item = Cow<'_, str>> + '_ {
-        self.0
+        self.path_part()
             .split('/')
             .filter(|segment| !segment.is_empty())
             .map(|segment| percent_decode_str(segment).decode_utf8_lossy())
     }
 
-    /// Every prefix of this path, root first and this path last: `/`, `/a`,
-    /// `/a/b` for `/a/b`.
+    /// The decoded query pairs, in order; a repeated key appears once per
+    /// pair.
+    pub fn query(&self) -> impl Iterator<Item = (Cow<'_, str>, Cow<'_, str>)> + '_ {
+        self.query_part()
+            .into_iter()
+            .flat_map(|query| query.split('&'))
+            .map(|pair| {
+                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                (
+                    percent_decode_str(key).decode_utf8_lossy(),
+                    percent_decode_str(value).decode_utf8_lossy(),
+                )
+            })
+    }
+
+    /// Every prefix of this location, root first and this location last: `/`,
+    /// `/a`, `/a/b?q=1` for `/a/b?q=1`. Only the last carries the query.
     pub fn prefixes(&self) -> impl Iterator<Item = RoutePath> + '_ {
-        let ends = self
-            .0
-            .match_indices('/')
-            .map(|(index, _)| index)
-            .skip(1)
-            .chain(std::iter::once(self.0.len()));
-        std::iter::once(Self::root()).chain(
-            ends.filter(|&end| end > 1)
-                .map(|end| Self(self.0[..end].to_owned())),
-        )
+        let path = self.path_part();
+        let ends = path.match_indices('/').map(|(index, _)| index).skip(1);
+        let root = (path.len() > 1).then(Self::root);
+        root.into_iter()
+            .chain(ends.map(|end| Self(path[..end].to_owned())))
+            .chain(std::iter::once(self.clone()))
+    }
+
+    /// The path, without the query.
+    fn path_part(&self) -> &str {
+        self.0.split_once('?').map_or(&self.0, |(path, _)| path)
+    }
+
+    /// The encoded query, without its `?`; `None` when there is none.
+    fn query_part(&self) -> Option<&str> {
+        self.0.split_once('?').map(|(_, query)| query)
     }
 
     fn push_encoded(&mut self, decoded: &str) {
+        let query = self.0.find('?').map(|at| self.0.split_off(at));
         if self.0.len() > 1 {
             self.0.push('/');
         }
         self.0.extend(utf8_percent_encode(decoded, SEGMENT));
+        if let Some(query) = query {
+            self.0.push_str(&query);
+        }
+    }
+
+    fn push_query(&mut self, key: &str, value: &str) {
+        // A pair with neither key nor value would print a bare `?` or `&`,
+        // which parses back to no pair: it is no pair here either.
+        if key.is_empty() && value.is_empty() {
+            return;
+        }
+        self.0.push(if self.0.contains('?') { '&' } else { '?' });
+        self.0.extend(utf8_percent_encode(key, QUERY_COMPONENT));
+        if !value.is_empty() {
+            self.0.push('=');
+            self.0.extend(utf8_percent_encode(value, QUERY_COMPONENT));
+        }
     }
 }
 
@@ -154,6 +234,22 @@ impl fmt::Display for RoutePath {
     }
 }
 
+/// `text` with its escapes decoded once, and `+` read as a space when
+/// `plus_is_space` (a query component).
+fn decode(text: &str, plus_is_space: bool) -> Result<Cow<'_, str>, &'static str> {
+    if !escapes_are_well_formed(text) {
+        return Err("`%` is not followed by two hex digits");
+    }
+    let spaced = if plus_is_space && text.contains('+') {
+        Cow::Owned(text.replace('+', " "))
+    } else {
+        Cow::Borrowed(text)
+    };
+    let decoded = percent_decode_str(&spaced)
+        .decode_utf8()
+        .map_err(|_| "an escape does not decode to UTF-8")?;
+    Ok(Cow::Owned(decoded.into_owned()))
+}
 /// Whether every `%` in `segment` starts a `%XX` escape of two hex digits.
 fn escapes_are_well_formed(segment: &str) -> bool {
     let bytes = segment.as_bytes();

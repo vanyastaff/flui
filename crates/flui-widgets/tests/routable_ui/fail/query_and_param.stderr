@@ -1,0 +1,5 @@
+error: field `id` is both a path parameter and `#[query]`: drop `:id` from the pattern or the `#[query]` attribute
+ --> tests/routable_ui/fail/query_and_param.rs:8:9
+  |
+8 |         id: u32,
+  |         ^^

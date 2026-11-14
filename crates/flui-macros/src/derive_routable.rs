@@ -46,6 +46,28 @@ struct RouteField<'a> {
     ty: &'a Type,
     /// The field's name without `r#`, as a `:name` parameter spells it.
     name: String,
+    /// How a `#[query]` field reads the query; `None` for a path parameter.
+    query: Option<QueryField<'a>>,
+}
+
+/// A field read from the location's query.
+struct QueryField<'a> {
+    /// The query key: the field's name, or its `rename`.
+    key: String,
+    kind: QueryKind,
+    /// The type one value parses as: `T` of `Option<T>` and `Vec<T>`, else
+    /// the field's type.
+    value: &'a Type,
+}
+
+#[derive(Clone, Copy)]
+enum QueryKind {
+    /// `Option<T>`: `None` without the key.
+    Optional,
+    /// `Vec<T>`: every value of the key, in order.
+    Repeated,
+    /// Any other `T: Default`: its default without the key.
+    Defaulted,
 }
 
 /// Entry point for `#[proc_macro_derive(Routable, attributes(route))]`.
@@ -106,12 +128,28 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let candidates = pattern::match_order(&patterns)
         .into_iter()
         .map(|index| candidate(&routes[index]));
-    let assertions = routes.iter().flat_map(|route| &route.fields).map(|field| {
-        let ty = field.ty;
-        quote_spanned! {ty.span()=>
-            #widgets::router::__derive::assert_segment::<#ty>();
-        }
-    });
+    let assertions =
+        routes
+            .iter()
+            .flat_map(|route| &route.fields)
+            .map(|field| match &field.query {
+                None => {
+                    let ty = field.ty;
+                    quote_spanned! {ty.span()=>
+                        #widgets::router::__derive::assert_segment::<#ty>();
+                    }
+                }
+                Some(QueryField {
+                    kind: QueryKind::Defaulted,
+                    value,
+                    ..
+                }) => quote_spanned! {value.span()=>
+                    #widgets::router::__derive::assert_query_defaulted::<#value>();
+                },
+                Some(QueryField { value, .. }) => quote_spanned! {value.span()=>
+                    #widgets::router::__derive::assert_segment::<#value>();
+                },
+            });
 
     Ok(quote! {
         #[automatically_derived]
@@ -153,13 +191,15 @@ fn route(variant: &Variant) -> syn::Result<Route<'_>> {
                         .ident
                         .as_ref()
                         .expect("BUG: a named field has an ident");
-                    RouteField {
+                    let name = ident.unraw().to_string();
+                    Ok(RouteField {
                         ident,
                         ty: &field.ty,
-                        name: ident.unraw().to_string(),
-                    }
+                        query: query_attribute(field, &name)?,
+                        name,
+                    })
                 })
-                .collect(),
+                .collect::<syn::Result<Vec<RouteField<'_>>>>()?,
             true,
         ),
         Fields::Unnamed(_) => {
@@ -193,18 +233,34 @@ fn route(variant: &Variant) -> syn::Result<Route<'_>> {
             ));
         }
         seen.push(param);
-        if !fields.iter().any(|field| field.name == *param) {
-            return Err(syn::Error::new(
-                literal.span(),
-                format!("`:{param}` names no field of `{}`", variant.ident),
-            ));
+        match fields.iter().find(|field| field.name == *param) {
+            None => {
+                return Err(syn::Error::new(
+                    literal.span(),
+                    format!("`:{param}` names no field of `{}`", variant.ident),
+                ));
+            }
+            Some(field) if field.query.is_some() => {
+                return Err(syn::Error::new(
+                    field.ident.span(),
+                    format!(
+                        "field `{param}` is both a path parameter and `#[query]`: drop `:{param}` \
+                         from the pattern or the `#[query]` attribute"
+                    ),
+                ));
+            }
+            Some(_) => {}
         }
     }
-    if let Some(field) = fields.iter().find(|f| !seen.contains(&f.name.as_str())) {
+    if let Some(field) = fields
+        .iter()
+        .find(|f| f.query.is_none() && !seen.contains(&f.name.as_str()))
+    {
         return Err(syn::Error::new(
             field.ident.span(),
             format!(
-                "field `{}` is not in the pattern `{}`: add a `:{}` segment",
+                "field `{}` is not in the pattern `{}`: add a `:{}` segment, or mark it \
+                 `#[query]` to read it from the query",
                 field.name,
                 literal.value(),
                 field.name
@@ -267,6 +323,65 @@ fn route_attribute(variant: &Variant) -> syn::Result<LitStr> {
     })
 }
 
+/// The field's `#[query]` or `#[query(rename = "key")]`, read with the kind
+/// its type spells; `None` for a path parameter.
+fn query_attribute<'a>(field: &'a syn::Field, name: &str) -> syn::Result<Option<QueryField<'a>>> {
+    let mut attributes = field
+        .attrs
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("query"));
+    let Some(attribute) = attributes.next() else {
+        return Ok(None);
+    };
+    if let Some(second) = attributes.next() {
+        return Err(syn::Error::new(
+            second.span(),
+            "a field takes one `#[query]` attribute",
+        ));
+    }
+    let mut key = name.to_owned();
+    if !matches!(attribute.meta, syn::Meta::Path(_)) {
+        attribute.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                let renamed: LitStr = meta.value()?.parse()?;
+                if renamed.value().is_empty() {
+                    return Err(syn::Error::new(renamed.span(), "a query key is not empty"));
+                }
+                key = renamed.value();
+                Ok(())
+            } else {
+                Err(meta.error("`#[query]` takes only `rename = \"key\"`"))
+            }
+        })?;
+    }
+    let (kind, value) = match single_argument(&field.ty, "Option") {
+        Some(inner) => (QueryKind::Optional, inner),
+        None => match single_argument(&field.ty, "Vec") {
+            Some(inner) => (QueryKind::Repeated, inner),
+            None => (QueryKind::Defaulted, &field.ty),
+        },
+    };
+    Ok(Some(QueryField { key, kind, value }))
+}
+
+/// `T` when `ty` is spelled `Name<T>` (with any path before `Name`).
+fn single_argument<'a>(ty: &'a Type, name: &str) -> Option<&'a Type> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    let last = path.path.segments.last()?;
+    if last.ident != name {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &last.arguments else {
+        return None;
+    };
+    match arguments.args.iter().collect::<Vec<_>>().as_slice() {
+        [syn::GenericArgument::Type(inner)] => Some(inner),
+        _ => None,
+    }
+}
+
 /// `Self::V { a, b } => RoutePath::root().join("lit").join(a)…,`
 fn to_path_arm(route: &Route<'_>, widgets: &Path) -> TokenStream {
     let variant = &route.variant.ident;
@@ -288,8 +403,33 @@ fn to_path_arm(route: &Route<'_>, widgets: &Path) -> TokenStream {
     } else {
         quote!(Self::#variant)
     };
+    let queries = route.fields.iter().filter_map(|field| {
+        let query = field.query.as_ref()?;
+        let ident = field.ident;
+        let key = &query.key;
+        Some(match query.kind {
+            QueryKind::Optional => quote! {
+                let __flui_path = match #ident {
+                    ::core::option::Option::Some(value) => __flui_path.with_query(#key, value),
+                    ::core::option::Option::None => __flui_path,
+                };
+            },
+            QueryKind::Repeated => quote! {
+                let __flui_path = #ident
+                    .iter()
+                    .fold(__flui_path, |path, value| path.with_query(#key, value));
+            },
+            QueryKind::Defaulted => quote! {
+                let __flui_path = __flui_path.with_query(#key, #ident);
+            },
+        })
+    });
     quote! {
-        #pattern => #widgets::RoutePath::root() #(#joins)*,
+        #pattern => {
+            let __flui_path = #widgets::RoutePath::root() #(#joins)*;
+            #(#queries)*
+            __flui_path
+        }
     }
 }
 
@@ -312,6 +452,24 @@ fn candidate(route: &Route<'_>) -> TokenStream {
         });
     let value_of = |field: &RouteField<'_>| format_ident!("__flui_field_{}", field.name);
     let parses = route.fields.iter().map(|field| {
+        if let Some(query) = &field.query {
+            let value = value_of(field);
+            let ty = query.value;
+            let name = &field.name;
+            let key = &query.key;
+            let read = match query.kind {
+                QueryKind::Optional => quote!(query_optional),
+                QueryKind::Repeated => quote!(query_repeated),
+                QueryKind::Defaulted => quote!(query_defaulted),
+            };
+            return quote! {
+                let ::core::option::Option::Some(#value) =
+                    __flui_matcher.#read::<#ty>(#name, #key)
+                else {
+                    break '__flui_candidate;
+                };
+            };
+        }
         let index = route
             .segments
             .iter()

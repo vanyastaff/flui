@@ -46,6 +46,52 @@ impl<'a> Matcher<'a> {
         parsed
     }
 
+    /// The first value of the query key `key` parsed as the field `field`:
+    /// `Some(None)` without the key, `None` after recording a value that did
+    /// not parse.
+    pub fn query_optional<T: FromStr>(
+        &mut self,
+        field: &'static str,
+        key: &str,
+    ) -> Option<Option<T>> {
+        let path = self.path;
+        let value = path
+            .query()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value);
+        match value {
+            None => Some(None),
+            Some(value) => self.field(field, &value).map(Some),
+        }
+    }
+
+    /// Every value of the query key `key`, in order, parsed as the field
+    /// `field`; `None` after recording the first that did not parse.
+    pub fn query_repeated<T: FromStr>(&mut self, field: &'static str, key: &str) -> Option<Vec<T>> {
+        let path = self.path;
+        let values: Vec<Cow<'_, str>> = path
+            .query()
+            .filter(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value)
+            .collect();
+        values
+            .iter()
+            .map(|value| self.field(field, value))
+            .collect::<Option<Vec<T>>>()
+    }
+
+    /// The first value of the query key `key` parsed as the field `field`,
+    /// or `T::default()` without the key; `None` after recording a value that
+    /// did not parse.
+    pub fn query_defaulted<T: FromStr + Default>(
+        &mut self,
+        field: &'static str,
+        key: &str,
+    ) -> Option<T> {
+        self.query_optional(field, key)
+            .map(Option::unwrap_or_default)
+    }
+
     /// Why no candidate matched: the first field that did not parse in a
     /// candidate whose literals matched, else `NoMatch`.
     #[must_use]
@@ -61,3 +107,8 @@ impl<'a> Matcher<'a> {
 /// each field's span, so a missing bound is reported on the field.
 #[inline]
 pub fn assert_segment<T: FromStr + Display>() {}
+
+/// Compiles only when `T` can fill a `#[query]` field that is neither
+/// `Option` nor `Vec`, which takes its default without the key.
+#[inline]
+pub fn assert_query_defaulted<T: FromStr + Display + Default>() {}

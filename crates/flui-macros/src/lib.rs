@@ -294,12 +294,18 @@ pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
 /// segment, no trailing `/`, and no `?`, `#` or `%`. A `:name` segment fills
 /// the field `name` (`:type` fills `r#type`), which prints through `Display`
 /// and parses through `FromStr`; every other segment is literal text, encoded
-/// by `RoutePath`. Every field appears as exactly one parameter.
+/// by `RoutePath`. Every field appears as exactly one parameter, except a
+/// field marked `#[query]`, which is read from the location's query by its
+/// name (`#[query(rename = "k")]` names another key): `Option<T>` is `None`
+/// without the key, `Vec<T>` takes every value of the key, and any other
+/// `T: Default` is its default without it. `to_path` prints the query
+/// fields in declaration order and leaves out `None` and an empty `Vec`.
 ///
 /// Rejected at compile time: a struct, union or generic type; a tuple
 /// variant; a variant with no `#[route]`, two, or one with anything after the
 /// pattern; a malformed pattern; a parameter that names no field, or a field
-/// no parameter names; and two patterns of the same shape, since the second
+/// no parameter names, a parameter that names a `#[query]` field, a malformed
+/// `#[query]`; and two patterns of the same shape, since the second
 /// could never be parsed.
 ///
 /// `from_path` tries the patterns from the most specific: a literal segment
@@ -308,7 +314,7 @@ pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
 /// no pattern matches is `RouteParseError::NoMatch`; a path whose pattern
 /// matches but whose segment does not parse as its field is
 /// `RouteParseError::Param`.
-#[proc_macro_derive(Routable, attributes(route))]
+#[proc_macro_derive(Routable, attributes(route, query))]
 pub fn derive_routable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_routable::expand(&input)

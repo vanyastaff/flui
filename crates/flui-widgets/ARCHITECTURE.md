@@ -1299,6 +1299,10 @@ covers an observer failure followed by route-value and terminal retirement.
 decodes exactly once after splitting, so an escaped slash stays inside one route
 value. Malformed percent escapes and invalid decoded UTF-8 are rejected. Plus and
 dot segments are literal path data, not form decoding or relative-URL operations.
+A query is a list of pairs kept in order with repeats, each key and value encoded
+with its own set; in the query `+` is a space, an empty value prints as the bare
+key, and a pair with neither key nor value is no pair. Only the full location
+carries the query, so `back_stack` opens the pages below a deep link without it.
 `route_locations_preserve_encoded_segment_identity` pins canonical spellings and
 rejection through the public routing API.
 
