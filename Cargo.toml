@@ -373,7 +373,7 @@ wgpu-profiler = { version = "0.28", default-features = false }
 # `wayland-protocols` carries `zxdg_output_v1`, `xdg-decoration` and
 # `xdg-foreign` under `unstable`, and
 # `wp_fractional_scale_v1` and `wp_color_management_v1` under `staging`.
-x11rb = { version = "0.13", default-features = false, features = ["randr"] }
+x11rb = { version = "0.14", default-features = false, features = ["randr"] }
 # COMPOUND_TEXT, the encoding X Input Method servers send text in, for the
 # native X11 host's text input where no input method answers on D-Bus. The XIM
 # wire format itself is flui-native's own (`text::linux::x11::xim::wire`).
