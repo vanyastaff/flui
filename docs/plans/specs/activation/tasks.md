@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC9. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC10), AC8.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9. AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`. В работе: —; следующие остаток AC11 (entitlement после подписи iOS, Windows вместе с AC10).
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -79,6 +79,23 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   `scene:openURLContexts:` и `scene:continueUserActivity:` (`Launch::Running`, только для сцены,
   которую делегат подключил); копируются не больше `MAX_OPENED_ITEMS` строк и ни одной длиннее
   `MAX_OPENED_URL_LEN` (`absolute_strings`, общий с macOS). Запуск на симуляторе — строка parity.
+- **AC8.** `an_intent_opens_its_link_or_documents` (модель `owner/android/intent.rs`: данные
+  `VIEW` — ссылка схемы или проверенная app link, `file:` — документ по пути, `content:` —
+  документ провайдера; потоки `SEND_MULTIPLE` в порядке отправителя, поток, который не документ,
+  `MAIN` и пустое действие — ничего; `Launch::Cold` из `onCreate`, `Launch::Running` из
+  `onNewIntent`), `a_provider_document_opens_through_the_resolver_or_is_left_out` (документ
+  провайдера открывается через resolver, отказ пропущен, сверх границы `Opened` ничего не
+  открывается, цель `Application`), `a_held_descriptor_stays_open_until_its_last_file_drops`
+  (`OpenedFile::try_from_descriptor`: дубль с close-on-exec, читается, пока жив клон,
+  закрывается с последним; `OpenedFile::name()`), `an_intent_record_is_read_as_the_java_classes_lay_it_out`,
+  `the_host_queue_is_read_as_the_java_classes_lay_it_out` (Java объявляет `COLD`, `RUNNING`,
+  `MAX_OPENED`, `MAX_URI_LENGTH` как библиотека; `FluiActivity` передаёт intent из `onCreate` и
+  после `setIntent` из `onNewIntent`). Документ открывает `FluiHost.openDocument`
+  (`openFileDescriptor(uri, "r")`, `detachFd`) на потоке владельца, имя — `documentName`
+  (`OpenableColumns.DISPLAY_NAME`); отказ провайдера записан в журнал и пропущен. Пересозданная
+  Activity и запуск из «Недавних» (`FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY`) intent не повторяют;
+  протокол `FluiHost` 3; `classes.dex` пересобран (`xtask android-dex --write`, javac 21.0.12.1,
+  воспроизводит прежний dex байт в байт до правки). Запуск на эмуляторе — строка parity.
 - **AC9 (Windows, Linux).** `launch_arguments_open_their_urls_and_existing_files` (модель разбора
   `argv` в `owner/launch_arguments.rs`: URL своей схемы и `https`, `file:` URI с `localhost` и
   процентами, относительный путь к существующему файлу; флаги, значения, несуществующий файл,

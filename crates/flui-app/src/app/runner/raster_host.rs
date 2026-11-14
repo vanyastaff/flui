@@ -23,8 +23,8 @@ use std::sync::Arc;
 use web_time::Instant;
 
 use flui_engine::{
-    DeviceHealth, EngineError, RasterCommand, RasterExecutor, RasterSendError, RasterSender,
-    RasterVerdict, SendReceipt, SlotBackend, SlotChange, SlotConfig, SlotFailure, SlotId,
+    DeviceHealth, EngineError, RasterBackend, RasterCommand, RasterExecutor, RasterSendError,
+    RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId,
     SlotSettlement, SlotSize, SlotTarget, SlotVisibility, SurfaceFactory, SurfaceHold,
 };
 use flui_foundation::geometry::DeviceSize;
@@ -46,7 +46,7 @@ pub(crate) enum RasterFactory {
     /// A GPU-free stand-in, for an application run on the headless platform.
     #[cfg(all(
         feature = "testing",
-        not(any(target_os = "android", target_os = "ios"))
+        not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
     ))]
     StandIn(super::stand_in_renderer::StandInRenderers),
     /// The engine's scripted slots, which record what each command asked,
@@ -61,7 +61,7 @@ impl std::fmt::Debug for RasterFactory {
             Self::Gpu => f.write_str("Gpu"),
             #[cfg(all(
                 feature = "testing",
-                not(any(target_os = "android", target_os = "ios"))
+                not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
             ))]
             Self::StandIn(_) => f.write_str("StandIn"),
             #[cfg(all(test, feature = "testing"))]
@@ -130,12 +130,12 @@ impl SharedRasterHost {
     /// A host whose executor will be placed on `factory`'s backend.
     #[cfg_attr(
         all(
-            any(target_os = "android", target_os = "ios"),
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
             not(all(test, feature = "testing"))
         ),
         expect(
             dead_code,
-            reason = "the mobile runners keep the default GPU host; only the desktop loop picks a factory"
+            reason = "the mobile and web runners keep the default GPU host; only the desktop loop picks a factory"
         )
     )]
     pub(crate) fn new(factory: RasterFactory) -> Self {
@@ -203,6 +203,10 @@ impl SharedRasterHost {
 
     /// Trim the GPU memory behind every slot now, or when the turn that
     /// holds the host ends; the strongest of the trims asked meanwhile.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "no browser reports memory pressure to the page")
+    )]
     pub(crate) fn reclaim(&self, level: flui_foundation::memory::MemoryPressureLevel) {
         if self.try_with(|host| host.reclaim(level)).is_none() {
             let strongest = self
@@ -263,10 +267,13 @@ impl SharedRasterHost {
 pub(crate) struct RasterHost {
     factory: RasterFactory,
     placed: Option<Placed>,
+    /// The textures each window's slot kept on an executor its owner
+    /// retired, for the slot attached for it next (the web, ADR-0305 §8).
+    carried: rustc_hash::FxHashMap<PresentationAddress, flui_layer::TextureUpdates>,
 }
 
 struct Placed {
-    executor: RasterExecutor<Box<dyn SlotBackend>>,
+    executor: RasterExecutor<Box<dyn RasterBackend>>,
     sender: RasterSender,
     surfaces: SurfaceFactory,
     slots: rustc_hash::FxHashMap<PresentationAddress, HostSlot>,
@@ -294,6 +301,9 @@ struct HostSlot {
     /// not give it one.
     restore: RestorePace,
     textures: Option<flui_layer::TextureRegistry>,
+    /// The newest image of each texture the context this slot replaced
+    /// kept, given to the slot with its first frame.
+    carried: flui_layer::TextureUpdates,
     display: Option<DisplayColor>,
     visibility: SlotVisibility,
     /// The size the window's frames last asked for: a surface owed at a
@@ -392,18 +402,19 @@ impl RasterHost {
     /// A host whose executor will be placed on `factory`'s backend.
     #[cfg_attr(
         all(
-            any(target_os = "android", target_os = "ios"),
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
             not(all(test, feature = "testing"))
         ),
         expect(
             dead_code,
-            reason = "the mobile runners keep the default GPU host; only the desktop loop picks a factory"
+            reason = "the mobile and web runners keep the default GPU host; only the desktop loop picks a factory"
         )
     )]
     pub(crate) fn new(factory: RasterFactory) -> Self {
         Self {
             factory,
             placed: None,
+            carried: rustc_hash::FxHashMap::default(),
         }
     }
 
@@ -413,6 +424,13 @@ impl RasterHost {
     /// # Errors
     /// The window's surface cannot be made, no GPU gives a device for the
     /// first window, or the executor refuses the slot.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web attaches on a context it awaited, with attach_bootstrapped"
+        )
+    )]
     pub(crate) fn attach(
         &mut self,
         window: &dyn PlatformWindow,
@@ -427,6 +445,13 @@ impl RasterHost {
 
     /// Give the window whose surfaces are made over `surface_target` a slot,
     /// as [`attach`](Self::attach) does.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web attaches on a context it awaited, with attach_bootstrapped"
+        )
+    )]
     fn attach_target(
         &mut self,
         surface_target: Arc<dyn SurfaceTarget>,
@@ -435,10 +460,83 @@ impl RasterHost {
         textures: Option<flui_layer::TextureRegistry>,
         display: Option<DisplayColor>,
     ) -> Result<(), EngineError> {
+        let slot_config = SlotConfig::new()
+            .color(config.surface_color, display)
+            .latency(config.frame_latency);
+        self.attach_on(
+            surface_target,
+            address,
+            slot_config,
+            textures,
+            display,
+            None,
+        )
+    }
+
+    /// Give `window`, presenting `address`, the first slot of an executor
+    /// placed on `bootstrap`, a GPU context awaited over the window: the web
+    /// awaits its device, which the owner thread cannot block on (ADR-0305
+    /// §2).
+    ///
+    /// # Errors
+    /// The executor is placed already, or refuses the slot.
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(
+            dead_code,
+            reason = "only the web awaits its GPU context; a native runner blocks on it in `attach`"
+        )
+    )]
+    pub(crate) fn attach_bootstrapped(
+        &mut self,
+        bootstrap: flui_engine::GpuBootstrap,
+        window: &dyn PlatformWindow,
+        address: PresentationAddress,
+        slot_config: SlotConfig,
+        textures: Option<flui_layer::TextureRegistry>,
+        display: Option<DisplayColor>,
+    ) -> Result<(), EngineError> {
+        if self.placed.is_some() {
+            return Err(refused("the raster executor is placed already"));
+        }
+        let surface_target = self.surface_target(window);
+        let attached = self.attach_on(
+            surface_target,
+            address,
+            slot_config,
+            textures,
+            display,
+            Some(bootstrap),
+        );
+        // An executor placed for a slot it refused serves no window: it goes,
+        // so the next context awaited over the window is placed instead.
+        if attached.is_err()
+            && self
+                .placed
+                .as_ref()
+                .is_some_and(|placed| placed.slots.is_empty())
+        {
+            self.retire_executor();
+        }
+        attached
+    }
+
+    /// Give the window whose surfaces are made over `surface_target` a slot
+    /// configured by `slot_config`, placing the executor on `bootstrap`, or
+    /// on a context bootstrapped now, if this is the first window.
+    fn attach_on(
+        &mut self,
+        surface_target: Arc<dyn SurfaceTarget>,
+        address: PresentationAddress,
+        slot_config: SlotConfig,
+        textures: Option<flui_layer::TextureRegistry>,
+        display: Option<DisplayColor>,
+        bootstrap: Option<flui_engine::GpuBootstrap>,
+    ) -> Result<(), EngineError> {
         let target = if let Some(placed) = self.placed.as_ref() {
             SlotTarget::Window(placed.surfaces.create(Arc::clone(&surface_target))?)
         } else {
-            let (placed, first) = self.place(Arc::clone(&surface_target))?;
+            let (placed, first) = self.place(Arc::clone(&surface_target), bootstrap)?;
             self.placed = Some(placed);
             first
         };
@@ -447,9 +545,6 @@ impl RasterHost {
             .as_mut()
             .expect("BUG: the executor was placed above");
         let slot = placed.sender.mint_slot()?;
-        let slot_config = SlotConfig::new()
-            .color(config.surface_color, display)
-            .latency(config.frame_latency);
         placed
             .sender
             .send(RasterCommand::Attach {
@@ -491,6 +586,7 @@ impl RasterHost {
             caught.resume();
             return Err(error);
         }
+        let carried = self.carried.remove(&address).unwrap_or_default();
         let mut base = RasterBase::default();
         base.set_mode(damage_mode());
         placed.slots.insert(
@@ -501,6 +597,7 @@ impl RasterHost {
                 epoch: FrameEpoch::ZERO,
                 base,
                 textures,
+                carried,
                 display,
                 visibility: SlotVisibility::Shown,
                 wanted: None,
@@ -514,25 +611,28 @@ impl RasterHost {
     }
 
     /// The executor over the first window, whose surfaces are made over
-    /// `first`, and that window's target.
-    fn place(&self, first: Arc<dyn SurfaceTarget>) -> Result<(Placed, SlotTarget), EngineError> {
+    /// `first`, and that window's target: on `bootstrap` when the owner
+    /// awaited one over `first`, otherwise on a context bootstrapped now.
+    fn place(
+        &self,
+        first: Arc<dyn SurfaceTarget>,
+        bootstrap: Option<flui_engine::GpuBootstrap>,
+    ) -> Result<(Placed, SlotTarget), EngineError> {
         let clock: Rc<dyn flui_foundation::MonotonicClock> = Rc::new(flui_foundation::SystemClock);
         // Inline: the owner drains a slot's settlements right after its turn,
         // and reads the device's rebuild deadline for its wake.
         let wake = || {};
         match &self.factory {
             RasterFactory::Gpu => {
-                let display = super::host::with_owner_platform(
-                    flui_native::OwnerPlatform::display_connection,
-                )
-                .ok_or_else(|| refused("no platform owns this thread"))?;
-                let bootstrap =
-                    pollster::block_on(flui_engine::GpuContext::bootstrap(display, Some(first)))?;
+                let bootstrap = match bootstrap {
+                    Some(bootstrap) => bootstrap,
+                    None => Self::bootstrap_now(first)?,
+                };
                 let surface = bootstrap.first.ok_or_else(|| {
                     refused("the GPU context answered without the first window's surface")
                 })?;
                 let (executor, sender) = RasterExecutor::new(
-                    Box::new(bootstrap.context) as Box<dyn SlotBackend>,
+                    Box::new(bootstrap.context) as Box<dyn RasterBackend>,
                     clock,
                     wake,
                 );
@@ -543,7 +643,7 @@ impl RasterHost {
             }
             #[cfg(all(
                 feature = "testing",
-                not(any(target_os = "android", target_os = "ios"))
+                not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
             ))]
             RasterFactory::StandIn(renderers) => {
                 let surfaces = flui_engine::testing::noop_surface_factory(Arc::new(
@@ -551,7 +651,7 @@ impl RasterHost {
                 ));
                 let target = SlotTarget::Window(surfaces.create(first)?);
                 let (executor, sender) = RasterExecutor::new(
-                    Box::new(renderers.backend()) as Box<dyn SlotBackend>,
+                    Box::new(renderers.backend()) as Box<dyn RasterBackend>,
                     clock,
                     wake,
                 );
@@ -564,13 +664,88 @@ impl RasterHost {
                 ));
                 let target = SlotTarget::Window(surfaces.create(first)?);
                 let (executor, sender) = RasterExecutor::new(
-                    Box::new(slots.clone()) as Box<dyn SlotBackend>,
+                    Box::new(slots.clone()) as Box<dyn RasterBackend>,
                     clock,
                     wake,
                 );
                 Ok((Placed::new(executor, sender, surfaces), target))
             }
         }
+    }
+
+    /// The application's GPU context over `first`, the first window,
+    /// bootstrapped on the owner thread, which waits for it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bootstrap_now(
+        first: Arc<dyn SurfaceTarget>,
+    ) -> Result<flui_engine::GpuBootstrap, EngineError> {
+        let display =
+            super::host::with_owner_platform(flui_native::OwnerPlatform::display_connection)
+                .ok_or_else(|| refused("no platform owns this thread"))?;
+        pollster::block_on(flui_engine::GpuContext::bootstrap(display, Some(first)))
+    }
+
+    /// The web cannot wait on its owner thread: its runner awaits the
+    /// context and attaches with [`attach_bootstrapped`](Self::attach_bootstrapped).
+    #[cfg(target_arch = "wasm32")]
+    fn bootstrap_now(
+        _first: Arc<dyn SurfaceTarget>,
+    ) -> Result<flui_engine::GpuBootstrap, EngineError> {
+        Err(refused(
+            "the web awaits its GPU context before its first window attaches",
+        ))
+    }
+
+    /// Detach every window's slot and drop the executor with its GPU
+    /// context: the web's context was lost, and the next one is bootstrapped
+    /// over the canvas again (ADR-0305 §8). A panic of the slots' detach or
+    /// of the context's `Drop` is resumed once the executor is gone.
+    #[cfg_attr(
+        not(any(target_arch = "wasm32", all(test, feature = "testing"))),
+        expect(
+            dead_code,
+            reason = "only the web bootstraps its context again; a native device is rebuilt in place"
+        )
+    )]
+    pub(crate) fn retire_executor(&mut self) {
+        let mut caught = FirstPanic::new();
+        let addresses: Vec<PresentationAddress> = self
+            .placed
+            .as_ref()
+            .map_or_else(Vec::new, |placed| placed.slots.keys().copied().collect());
+        if let Some(placed) = self.placed.as_mut() {
+            // A frame still waiting in a slot's inbox hands its texture
+            // frames to the backend in this turn, so they are kept below.
+            let _turned = caught.contain(|| placed.executor.turn());
+            // The registry hands a frame over once, so the images the context
+            // kept are what the next one draws until their producers submit
+            // again; images carried here that no frame took yet are newer.
+            for (address, slot) in &mut placed.slots {
+                let mut kept = placed.executor.backend().kept_textures(slot.slot);
+                kept.merge(std::mem::take(&mut slot.carried));
+                self.carried.insert(*address, kept);
+            }
+        }
+        for address in addresses {
+            self.detach_held(address, &mut caught);
+        }
+        let retired = self.placed.take();
+        caught.contain(|| drop(retired));
+        resume_unless_unwinding(caught);
+    }
+
+    /// Whether `address`'s window has a slot.
+    #[cfg_attr(
+        not(any(target_arch = "wasm32", all(test, feature = "testing"))),
+        expect(
+            dead_code,
+            reason = "only the web attaches after its context arrives and asks whether it has"
+        )
+    )]
+    pub(crate) fn has_slot(&self, address: PresentationAddress) -> bool {
+        self.placed
+            .as_ref()
+            .is_some_and(|placed| placed.slots.contains_key(&address))
     }
 
     /// What `window`'s surfaces are made over: the window itself, or for the
@@ -581,7 +756,7 @@ impl RasterHost {
             RasterFactory::Gpu => window.surface_target(),
             #[cfg(all(
                 feature = "testing",
-                not(any(target_os = "android", target_os = "ios"))
+                not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
             ))]
             RasterFactory::StandIn(renderers) => {
                 renderers.expect_window(window.id());
@@ -642,6 +817,8 @@ impl RasterHost {
 
     /// Release `address`'s slot and its GPU target.
     pub(crate) fn detach(&mut self, address: PresentationAddress) {
+        // A window that closes before its next slot is attached draws nothing.
+        drop(self.carried.remove(&address));
         let mut caught = FirstPanic::new();
         self.detach_held(address, &mut caught);
         // Reached from a window's `Drop`, which may run during an unwind.
@@ -649,6 +826,10 @@ impl RasterHost {
     }
 
     /// Trim the GPU memory behind every slot.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "no browser reports memory pressure to the page")
+    )]
     pub(crate) fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
         let mut caught = FirstPanic::new();
         self.reclaim_held(level, &mut caught);
@@ -741,15 +922,32 @@ impl RasterHost {
     }
 
     /// Where the context's device stands.
+    ///
+    /// A backend that cannot rebuild where the executor runs (the web) is
+    /// replaced by its owner, which retires the executor (ADR-0305 §8): the
+    /// executor's give-up is then the rebuild the owner owes, not one the
+    /// application must ask for, and a device the backend reports lost is
+    /// lost before any turn has seen it.
     pub(crate) fn device_health(&self) -> DeviceHealth {
-        self.placed
-            .as_ref()
-            .map_or(DeviceHealth::Healthy, |placed| {
-                placed.sender.device_health()
-            })
+        let Some(placed) = self.placed.as_ref() else {
+            return DeviceHealth::Healthy;
+        };
+        let health = placed.sender.device_health();
+        let backend = placed.executor.backend();
+        if backend.rebuilds_inline() || !(health.is_lost() || backend.device_lost()) {
+            return health;
+        }
+        DeviceHealth::Rebuilding { attempts: 0 }
     }
 
     /// When the executor next rebuilds a lost device, for the loop's wake.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the browser's animation frames wake the page; no deadline does"
+        )
+    )]
     pub(crate) fn device_retry_at(&self) -> Option<web_time::Instant> {
         self.placed
             .as_ref()
@@ -793,6 +991,13 @@ impl RasterHost {
 
     /// Tell the executor whether `address`'s window can be seen: a slot
     /// that cannot is not drawn, and draws in full when it shows again.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "a hidden tab runs no frames, so the page's slot stays shown"
+        )
+    )]
     pub(crate) fn set_visibility(
         &mut self,
         address: PresentationAddress,
@@ -1102,6 +1307,13 @@ impl RasterHost {
     /// its own frame serves its surface, so its deadline would wake the loop
     /// for a past instant no wake moves; the device's next rebuild is still
     /// counted through every window whose frames run.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the browser's animation frames wake the page; no deadline does"
+        )
+    )]
     pub(crate) fn wake_deadline(
         &self,
         frames_run: impl Fn(PresentationAddress) -> bool,
@@ -1118,6 +1330,13 @@ impl RasterHost {
 
     /// When `address`'s own window may try for the surface it is owed: the
     /// deadline only that window's frame serves.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the browser's animation frames wake the page; no deadline does"
+        )
+    )]
     fn surface_retry_at_for(&self, address: PresentationAddress) -> Option<Instant> {
         let placed = self.placed.as_ref()?;
         let slot = placed.slots.get(&address)?;
@@ -1134,6 +1353,13 @@ impl RasterHost {
     /// this window is owed. Another window's surface deadline is that
     /// window's: counted here, it would render this window on every wake
     /// while the other's frames are off, and never move.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the browser's animation frames wake the page; no deadline does"
+        )
+    )]
     pub(crate) fn window_deadline(&self, address: PresentationAddress) -> Option<Instant> {
         super::host::merge_wake_deadlines(
             self.device_retry_at(),
@@ -1203,8 +1429,14 @@ impl RasterHost {
         let shown = publication.scene.id();
         let mut snapshot =
             SceneSnapshot::of_version(stamp, publication.base, damage, publication.scene);
+        // The images a replaced context kept go first, so the registry's
+        // newer frames replace them.
+        let mut updates = std::mem::take(&mut slot.carried);
         if let Some(textures) = &slot.textures {
-            snapshot = snapshot.textures(textures.take_updates());
+            updates.merge(textures.take_updates());
+        }
+        if !updates.is_empty() {
+            snapshot = snapshot.textures(updates);
         }
         let id = slot.slot;
         if let Err(error) = placed
@@ -1212,6 +1444,11 @@ impl RasterHost {
             .send(RasterCommand::Frame { slot: id, snapshot })
         {
             tracing::error!(%error, "raster host: a frame was refused");
+            // The texture frames it took from the registry and the carry
+            // reached no backend: the window's next frame takes them.
+            if let RasterCommand::Frame { snapshot, .. } = error.into_command() {
+                slot.carried = snapshot.textures;
+            }
             return SubmitVerdict::Failed;
         }
         // The turn runs code that is not ours; its settlements are drained
@@ -1310,7 +1547,7 @@ impl RasterHost {
 }
 impl Placed {
     fn new(
-        executor: RasterExecutor<Box<dyn SlotBackend>>,
+        executor: RasterExecutor<Box<dyn RasterBackend>>,
         sender: RasterSender,
         surfaces: SurfaceFactory,
     ) -> Self {
@@ -1443,6 +1680,13 @@ impl RasterSlot {
     /// The deadline this window's own frame serves, for its wake's dirty
     /// gate: [`RasterHost::window_deadline`], which the loop also wakes for
     /// while the window's frames run.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the browser's animation frames wake the page; no deadline does"
+        )
+    )]
     pub(crate) fn frame_deadline(&self) -> Option<Instant> {
         let address = self.address;
         self.host
@@ -1453,6 +1697,13 @@ impl RasterSlot {
     /// Tell the executor whether the window can be seen (`shown`): a slot
     /// that cannot is not drawn, and draws in full when it shows again. A host
     /// already turning is told on the next wake.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "a hidden tab runs no frames, so the page's slot stays shown"
+        )
+    )]
     pub(crate) fn show(&self, shown: bool) {
         let visibility = if shown {
             SlotVisibility::Shown

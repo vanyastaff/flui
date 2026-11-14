@@ -304,7 +304,7 @@ host.
   accepting local access to that same binding's pipeline.
 - **The UI runtime renders through a sink, never an engine.** `UiRuntime::pump`
   takes any `&mut dyn FrameSink`; the host picks one (`flui-app`'s raster
-  host's window slot, or its direct sink over a borrowed backend on the web runner), and
+  host's window slot, on every runner the web's included), and
   the UI runtime tests pick `testing::ScriptedSink`. How a host maps its
   backend's outcomes to verdicts is that host's to test.
 - **Internal, and only the hosts depend on it.** Tier K,
@@ -702,7 +702,7 @@ input (ADR-0101). A frame that
 rendered but could not be shown is retained rather than counted as done, and a
 frame with nothing to present falls back to no-present pacing (ADR-0068). The
 verdict is a crate contract. Pinned on the host side by `flui-engine`'s `window_slots`
-and `raster_executor` tests and `flui-app`'s `every_render_answer_maps_to_its_verdict`,
+and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_submit_verdict`,
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 `the_withheld_retry_is_bounded_and_then_parks`.
 

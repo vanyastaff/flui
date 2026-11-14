@@ -79,6 +79,7 @@ pub(crate) mod call_point;
     wayland_host,
     target_os = "macos",
     target_os = "ios",
+    target_os = "android",
     test
 ))]
 pub(crate) mod file_uri;

@@ -12738,14 +12738,15 @@ impl core::fmt::Debug for flui::platform::Opened
 impl core::marker::StructuralPartialEq for flui::platform::Opened
 pub fn flui::platform::Opened::is_empty(&self) -> bool
 pub fn flui::platform::Opened::new(urls: impl IntoIterator<Item = String>, files: impl IntoIterator<Item = flui::platform::OpenedFile>, target: flui::platform::OpenTarget, launch: flui::platform::Launch) -> Self
-#[non_exhaustive] pub struct flui::platform::OpenedFile
+#[non_exhaustive] pub struct flui::platform::OpenedFile { .. }
 field flui::platform::OpenedFile::path: std::path::PathBuf // at 0
 impl Clone for flui::platform::OpenedFile
 impl Eq for flui::platform::OpenedFile
 impl PartialEq for flui::platform::OpenedFile
 impl core::fmt::Debug for flui::platform::OpenedFile
-impl core::marker::StructuralPartialEq for flui::platform::OpenedFile
+pub fn flui::platform::OpenedFile::name(&self) -> Option<&str>
 pub fn flui::platform::OpenedFile::new(path: impl Into<std::path::PathBuf>) -> Self
+pub fn flui::platform::OpenedFile::try_from_descriptor(descriptor: std::os::fd::owned::OwnedFd, name: Option<String>) -> Result<Self>
 pub struct flui::platform::OsRelease(_)
 impl Clone for flui::platform::OsRelease
 impl Eq for flui::platform::OsRelease

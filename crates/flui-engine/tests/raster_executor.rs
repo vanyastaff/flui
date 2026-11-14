@@ -1370,7 +1370,7 @@ impl Drop for MintsOnDrop {
 /// A backend whose attach panics with a [`MintsOnDrop`] payload.
 struct PanicsAtAttach;
 
-impl flui_engine::SlotBackend for PanicsAtAttach {
+impl flui_engine::RasterBackend for PanicsAtAttach {
     fn attach(&mut self, _: SlotId, _: SlotTarget, _: SlotConfig) -> flui_engine::EngineResult<()> {
         std::panic::panic_any(MintsOnDrop)
     }
@@ -1426,6 +1426,10 @@ impl flui_engine::SlotBackend for PanicsAtAttach {
     }
 
     fn detach(&mut self, _: SlotId) {}
+
+    fn kept_textures(&self, _: SlotId) -> flui_layer::TextureUpdates {
+        flui_layer::TextureUpdates::default()
+    }
 
     fn reclaim(&mut self, _: MemoryPressureLevel) {}
 

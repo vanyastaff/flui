@@ -18,8 +18,6 @@ pub(crate) mod close_request;
 mod config;
 pub(crate) mod dev_agent;
 pub mod direct;
-#[cfg(any(target_arch = "wasm32", test))]
-pub(crate) mod direct_sink;
 pub(crate) mod host_memory;
 pub(crate) mod hot_reload;
 #[cfg(feature = "http")]

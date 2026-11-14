@@ -9,11 +9,6 @@
 //! repaint would overwrite, a pixel the old position left behind, a pixel
 //! whose colour depends on whether the partial clear ran first.
 
-#![expect(
-    deprecated,
-    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-)]
-
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_layer::{
@@ -27,7 +22,6 @@ use flui_painting::{Canvas, Paint, TextPainter};
 
 use crate::damage::FramePlan;
 use crate::headless::RetainedCapture;
-use crate::raster::RasterBackend;
 
 const SIDE: u32 = 128;
 

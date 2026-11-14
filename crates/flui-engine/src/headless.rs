@@ -611,16 +611,10 @@ impl RetainedCapture {
     ///
     /// # Errors
     /// The frame's failure.
-    #[expect(
-        deprecated,
-        reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-    )]
     pub(crate) fn render_unmanaged(
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<crate::raster::PresentDisposition, EngineError> {
-        use crate::raster::RasterBackend;
-
         self.frame.begin_unmanaged();
         let result = self.render_scene(scene);
         self.frame.end_unmanaged();
@@ -774,12 +768,10 @@ impl RetainedCapture {
 }
 
 #[cfg(test)]
-#[expect(
-    deprecated,
-    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-)]
-impl crate::raster::RasterBackend for RetainedCapture {
-    fn render_scene(
+/// The frame entry points a readback test drives, as the windowed renderer's.
+impl RetainedCapture {
+    /// Render `scene` with the damage the capture holds.
+    pub(crate) fn render_scene(
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<crate::raster::PresentDisposition, EngineError> {
@@ -791,34 +783,18 @@ impl crate::raster::RasterBackend for RetainedCapture {
         self.render_frame_inner(scene)
     }
 
-    fn resize(&mut self, _width: u32, _height: u32) {
+    pub(crate) fn resize(&mut self, _width: u32, _height: u32) {
         // The capture's size is fixed at construction; a resize is modelled
         // by what the windowed renderer does to its frame state.
         self.frame.surface_changed();
     }
 
-    fn is_device_lost(&self) -> bool {
-        false
-    }
-
-    fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
+    pub(crate) fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
         self.frame.mark_dirty(rect);
     }
 
-    fn mark_full_repaint(&mut self) {
+    pub(crate) fn mark_full_repaint(&mut self) {
         self.frame.mark_full_repaint();
-    }
-
-    fn has_damage(&self) -> bool {
-        self.frame.has_damage()
-    }
-
-    fn size(&self) -> (u32, u32) {
-        self.size
-    }
-
-    fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-        Ok(())
     }
 }
 

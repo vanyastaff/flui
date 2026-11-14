@@ -10,6 +10,7 @@
 //! (`UiRuntime::open_url`, ADR-0330 §5).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::WindowId;
 
@@ -91,18 +92,99 @@ impl Opened {
 }
 
 /// A file the operating system opened the application with.
+///
+/// A file the system hands over as an open descriptor rather than a path (an
+/// Android document a content provider serves) is held open by the value:
+/// its [`path`](Self::path) names the descriptor, which stays readable while
+/// any clone of the value lives and closes when the last one drops. Two
+/// values are equal when they name the same path by the same name.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct OpenedFile {
-    /// Where the file is.
+    /// Where the file is: for a held descriptor, the process's own name for
+    /// it (`/proc/self/fd/N` on Linux and Android).
     pub path: PathBuf,
+    /// What the file is called where it came from.
+    name: Option<String>,
+    /// What keeps the file reachable at `path`, shared by the clones.
+    access: Option<Arc<dyn Held>>,
 }
 
+/// What an [`OpenedFile`] holds to keep its file reachable: an open
+/// descriptor; it is released by its `Drop`.
+trait Held: Send + Sync + 'static {}
+
+impl<T: Send + Sync + 'static> Held for T {}
+
 impl OpenedFile {
-    /// The file at `path`.
+    /// The file at `path`, called by its file name.
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        let path = path.into();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned);
+        Self {
+            path,
+            name,
+            access: None,
+        }
+    }
+
+    /// The file `descriptor` reads, called `name` where it came from, held
+    /// open until the last clone drops. The descriptor is duplicated with
+    /// close-on-exec, so no process this one starts inherits it, and the one
+    /// passed in is closed.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error of the duplication, which closes `descriptor`.
+    #[cfg(unix)]
+    pub fn try_from_descriptor(
+        descriptor: std::os::fd::OwnedFd,
+        name: Option<String>,
+    ) -> std::io::Result<Self> {
+        use std::os::fd::AsRawFd as _;
+        // `try_clone` duplicates with `F_DUPFD_CLOEXEC`.
+        let held = descriptor.try_clone()?;
+        drop(descriptor);
+        let path = if cfg!(any(target_os = "linux", target_os = "android")) {
+            PathBuf::from(format!("/proc/self/fd/{}", held.as_raw_fd()))
+        } else {
+            PathBuf::from(format!("/dev/fd/{}", held.as_raw_fd()))
+        };
+        Ok(Self {
+            path,
+            name,
+            access: Some(Arc::new(held)),
+        })
+    }
+
+    /// What the file is called where it came from: its file name, or for a
+    /// document a provider serves, the name the provider shows; `None` when
+    /// it has none that is text.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+}
+
+impl PartialEq for OpenedFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.name == other.name
+    }
+}
+
+impl Eq for OpenedFile {}
+
+impl std::fmt::Debug for OpenedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenedFile")
+            .field("path", &self.path)
+            .field("name", &self.name)
+            .field("held", &self.access.is_some())
+            .finish()
     }
 }
 

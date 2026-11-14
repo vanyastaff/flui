@@ -370,7 +370,7 @@ struct ReentersOwner {
     resizes: std::rc::Rc<std::cell::RefCell<Vec<(RasterSender, SlotChange)>>>,
 }
 
-impl flui_engine::SlotBackend for ReentersOwner {
+impl flui_engine::RasterBackend for ReentersOwner {
     fn attach(
         &mut self,
         slot: SlotId,
@@ -448,6 +448,10 @@ impl flui_engine::SlotBackend for ReentersOwner {
 
     fn detach(&mut self, slot: SlotId) {
         self.inner.detach(slot);
+    }
+
+    fn kept_textures(&self, slot: SlotId) -> flui_layer::TextureUpdates {
+        self.inner.kept_textures(slot)
     }
 
     fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {

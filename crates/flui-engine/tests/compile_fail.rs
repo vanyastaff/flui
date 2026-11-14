@@ -1,8 +1,8 @@
 //! Compile-fail tests pinning ADR-0305 §2 (a `SurfaceFactory` stays on its
-//! owner thread and makes surfaces only of owned targets), ADR-0045 decision 1 (`Renderer: Send` is a
-//! compiler derivation, not a blanket `unsafe impl`; `RasterBackend` carries
-//! `Send` as a supertrait) and issue #1043 (`Renderer::new` accepts only an
-//! owned, `'static` `WindowTarget` — a borrowed window no longer type-checks).
+//! owner thread and makes surfaces only of owned targets), ADR-0045 decision 1
+//! (`Renderer: Send` is a compiler derivation, not a blanket `unsafe impl`) and
+//! that `Renderer::new` accepts only an owned, `'static` `WindowTarget`: a
+//! borrowed window does not type-check.
 //!
 //! Uses trybuild, the same harness as `flui-painting`'s compile-fail suite
 //! (`crates/flui-painting/tests/compile_fail.rs`).
