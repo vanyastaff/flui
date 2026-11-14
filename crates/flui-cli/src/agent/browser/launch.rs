@@ -73,6 +73,9 @@ pub(crate) enum LaunchError {
         command: &'static str,
         stderr: Vec<String>,
     },
+    /// The browser answered, but is one the link cannot drive. Its stderr says nothing of
+    /// that, so it is left out.
+    Unsupported(LinkError),
     /// The browser's protocol failed.
     Link {
         error: LinkError,
@@ -84,6 +87,7 @@ impl std::fmt::Display for LaunchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let stderr = match self {
             Self::Start(error) => return write!(f, "could not start the browser: {error}"),
+            Self::Unsupported(error) => return error.fmt(f),
             Self::Silent { why, stderr } => {
                 write!(f, "the browser opened no remote protocol: {why}")?;
                 stderr
@@ -114,13 +118,15 @@ impl std::fmt::Display for LaunchError {
 
 impl LaunchError {
     /// A failure of the link while the browser starts: a command it did not answer in time
-    /// ran out the start's deadline.
+    /// ran out the start's deadline, and a browser the link cannot drive is named as one,
+    /// without the stderr of a browser that is working.
     fn linking(failure: AttachError, stderr: Vec<String>) -> Self {
         match failure.error {
             LinkError::Timeout => Self::NotReady {
                 command: failure.command,
                 stderr,
             },
+            error @ LinkError::Unsupported(_) => Self::Unsupported(error),
             error => Self::Link { error, stderr },
         }
     }
@@ -629,15 +635,13 @@ mod linking {
     use super::*;
 
     /// How a browser of [`starting_browser`]'s answers.
-    #[derive(Clone, Copy)]
     struct Answers {
         /// How long its first command waits for an answer; never answered when `None`.
         first_after: Option<Duration>,
         /// A close is never answered, instead of refused.
         close_hangs: bool,
-        /// The Firefox major version it names: one before `MIN_FIREFOX` knows no
-        /// `browsingContext.navigationCommitted` and refuses a subscription to it.
-        firefox: u32,
+        /// The `browserVersion` its `session.new` names.
+        version: String,
     }
 
     impl Answers {
@@ -645,7 +649,7 @@ mod linking {
             Self {
                 first_after,
                 close_hangs: false,
-                firefox: MIN_FIREFOX,
+                version: format!("{MIN_FIREFOX}.0.1"),
             }
         }
     }
@@ -695,7 +699,7 @@ mod linking {
                     }
                     "Target.attachToTarget" => json!({ "sessionId": "session" }),
                     "session.new" => json!({
-                        "capabilities": { "browserVersion": format!("{}.0.1", answers.firefox) }
+                        "capabilities": { "browserVersion": answers.version }
                     }),
                     _ => json!({}),
                 };
@@ -706,11 +710,8 @@ mod linking {
                     .as_array()
                     .cloned()
                     .unwrap_or_default();
-                let unknown = answers.firefox < MIN_FIREFOX
-                    && events.contains(&json!("browsingContext.navigationCommitted"));
                 let refusal = match method.as_str() {
                     "browsingContext.close" => Some("the tab is still loading"),
-                    "session.subscribe" if unknown => Some("unknown event"),
                     _ => None,
                 };
                 let answer = match refusal {
@@ -831,23 +832,40 @@ mod linking {
 
     #[test]
     fn a_firefox_that_reports_no_commit_is_refused_naming_the_version_the_link_needs() {
-        let (url, _commands) = starting_browser(Answers {
-            firefox: MIN_FIREFOX - 1,
-            ..Answers::after(Some(Duration::ZERO))
-        });
-        let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
-        let refused = Bidi::attach(socket, Instant::now() + COMMAND_TIMEOUT)
-            .map(drop)
-            .expect_err("a link that would miss every reload is no link");
-        assert_eq!(refused.command, "session.new", "before anything is opened");
-        let LinkError::Refused(why) = &refused.error else {
-            panic!("refused, not {:?}", refused.error);
-        };
-        assert!(
-            why.starts_with(&format!("Firefox {}.0.1 ", MIN_FIREFOX - 1))
-                && why.ends_with(&format!("needs Firefox {MIN_FIREFOX} or later")),
-            "{why}"
-        );
+        let before = MIN_FIREFOX - 1;
+        for (version, refused) in [
+            (format!("{before}.0.1"), true),
+            ("128.12.0esr".to_owned(), true),
+            (format!("{MIN_FIREFOX}.0"), false),
+            (format!("{MIN_FIREFOX}.3.0esr"), false),
+            (format!("{}.0a1", MIN_FIREFOX + 7), false),
+        ] {
+            let (url, _commands) = starting_browser(Answers {
+                version: version.clone(),
+                ..Answers::after(Some(Duration::ZERO))
+            });
+            let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
+            let linked = Bidi::attach(socket, Instant::now() + COMMAND_TIMEOUT).map(drop);
+            if !refused {
+                assert_eq!(linked, Ok(()), "Firefox {version} reports the commit");
+                continue;
+            }
+            let failure = linked.expect_err("a link that would miss every reload is no link");
+            assert_eq!(failure.command, "session.new", "before anything is opened");
+            assert!(
+                matches!(&failure.error, LinkError::Unsupported(why)
+                    if why.starts_with(&format!("Firefox {version} "))
+                        && why.ends_with(&format!("needs Firefox {MIN_FIREFOX} or later"))),
+                "{:?}",
+                failure.error
+            );
+            // The browser's log says nothing of its version, and it refused nothing.
+            let told = LaunchError::linking(failure, vec!["a line of its log".to_owned()]);
+            assert!(
+                matches!(told, LaunchError::Unsupported(_)) && !told.to_string().contains("log"),
+                "{told}"
+            );
+        }
     }
 
     fn link(

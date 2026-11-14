@@ -59,6 +59,9 @@ pub(crate) enum LinkError {
     Refused(String),
     /// A function the link called threw in the page.
     Threw(String),
+    /// The browser answers, but lacks what the link needs of it: an older version than the
+    /// one the link names.
+    Unsupported(String),
     /// The browser did not answer a command in time.
     Timeout,
 }
@@ -69,6 +72,7 @@ impl fmt::Display for LinkError {
             Self::Gone(why) => write!(f, "the browser went: {why}"),
             Self::Refused(why) => write!(f, "the browser refused a command: {why}"),
             Self::Threw(why) => write!(f, "the page threw: {why}"),
+            Self::Unsupported(why) => write!(f, "the link cannot drive this browser: {why}"),
             Self::Timeout => write!(
                 f,
                 "the browser did not answer within {} s",

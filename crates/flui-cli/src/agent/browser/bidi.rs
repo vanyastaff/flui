@@ -51,21 +51,19 @@ impl Bidi {
         let session = link
             .command_by("session.new", json!({ "capabilities": {} }), ready_by)
             .map_err(AttachError::at("session.new"))?;
-        // A browser that names no version is left to refuse the subscription itself.
-        let version = session
+        // `session.new`'s result names the version in every WebDriver BiDi browser; one that
+        // names none, or none Firefox writes, is left to refuse the subscription itself.
+        if let Some(version) = session
             .pointer("/capabilities/browserVersion")
-            .and_then(Value::as_str);
-        if let Some(version) = version
-            && let Some(major) = version
-                .split('.')
-                .next()
-                .and_then(|major| major.parse::<u32>().ok())
-            && major < MIN_FIREFOX
+            .and_then(Value::as_str)
+            && firefox_major(version).is_some_and(|major| major < MIN_FIREFOX)
         {
-            return Err(AttachError::at("session.new")(LinkError::Refused(format!(
-                "Firefox {version} reports no navigation's commit; the link needs Firefox \
+            return Err(AttachError::at("session.new")(LinkError::Unsupported(
+                format!(
+                    "Firefox {version} reports no navigation's commit; the link needs Firefox \
                  {MIN_FIREFOX} or later"
-            ))));
+                ),
+            )));
         }
         let tree = link
             .command_by(
@@ -146,6 +144,13 @@ impl Bidi {
             .unwrap_or("an exception");
         Err(LinkError::Threw(text.to_owned()))
     }
+}
+
+/// The major version of a Firefox `browserVersion`: `128` of `128.12.0esr`, `147` of
+/// `147.0a1`.
+fn firefox_major(version: &str) -> Option<u32> {
+    let (major, _) = version.split_once('.')?;
+    major.parse::<u32>().ok()
 }
 
 /// `args` as BiDi's local values.

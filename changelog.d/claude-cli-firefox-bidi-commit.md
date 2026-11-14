@@ -4,4 +4,4 @@
 
 ### Fixed
 
-- `flui run --agent` in Firefox ends a page's agent connections when the reloaded document commits, not when the reload starts. A client that connects while the reload runs has its connection ended at the commit and connects again to the reloaded page, instead of being left on a connection the old page took with it.
+- `flui run --agent` in Firefox ends a page's agent connections when the reloaded document commits, not when the reload starts. A connection opened while the reload runs is no longer left on the old page, which takes it with it: it is ended at the commit, and `flui mcp` connects again to the reloaded page.
