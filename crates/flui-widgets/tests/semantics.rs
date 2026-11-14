@@ -3422,12 +3422,17 @@ fn a_button_over_a_labelled_image_is_pressed_by_its_name() {
 /// from assistive technology, so the published tree follows the switch: each
 /// step publishes what building that behavior afresh publishes.
 ///
+/// The viewports' content overflows them, so each clips its paint as well as
+/// its semantics while a clip applies.
+///
 /// Red-check: report no `SEMANTICS` from `RenderClip::set_clip_behavior`
-/// or `RenderViewport::set_clip_behavior` (the label keeps the hidden flag
-/// of the previous behavior).
+/// or either viewport's `set_clip_behavior` (the label keeps the hidden
+/// flag of the previous behavior).
 pub(crate) fn a_clip_behavior_switch_republishes_what_the_clip_hides() {
     use flui_painting::paint::Clip;
-    use flui_widgets::{ClipRect, ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    use flui_widgets::{
+        ClipRect, ScrollPosition, ShrinkWrappingViewport, SliverToBoxAdapter, Transform, Viewport,
+    };
 
     fn published(laid: &crate::common::LaidOut) -> Vec<(accesskit::NodeId, accesskit::Node)> {
         let mut nodes = laid
@@ -3469,7 +3474,17 @@ pub(crate) fn a_clip_behavior_switch_republishes_what_the_clip_hides() {
         SizedBox::new(100.0, 100.0).child(
             Viewport::new(
                 position.clone(),
-                (SliverToBoxAdapter::new().child(SizedBox::new(100.0, 100.0).child(outside())),),
+                (SliverToBoxAdapter::new().child(SizedBox::new(100.0, 300.0).child(outside())),),
+            )
+            .clip_behavior(clip),
+        )
+    });
+    let position = ScrollPosition::fixed(0.0);
+    follows_the_switch("shrink-wrapping viewport", |clip| {
+        SizedBox::new(100.0, 100.0).child(
+            ShrinkWrappingViewport::new(
+                position.clone(),
+                (SliverToBoxAdapter::new().child(SizedBox::new(100.0, 300.0).child(outside())),),
             )
             .clip_behavior(clip),
         )
