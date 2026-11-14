@@ -219,9 +219,9 @@ that `adb forward` carries to it; the forward is removed when the run ends. In
 a browser the command starts the browser itself, in a profile of its own
 (without a window under `--headless`), installs the page's launch object before
 the app's module runs, and serves the session's local endpoint by carrying each
-connection to the page: Firefox 140 or later through WebDriver BiDi, Chrome, Chromium, Edge,
-Brave and Opera through the DevTools protocol, neither needing a driver of its
-own. A reload ends the page's connections and `flui mcp` connects again. It
+connection to the page: Firefox 140 or later through WebDriver BiDi, Chrome,
+Chromium, Edge, Brave and Opera through the DevTools protocol, neither needing a
+driver of its own. A reload ends the page's connections and `flui mcp` connects again. It
 refuses Safari, which has neither protocol without `safaridriver`, and the iOS
 Simulator. With `--json` it emits `run.agent.ready {endpoint, session}`, with
 `forwarded` (the port's address) on Android and `relayed` (the endpoint this

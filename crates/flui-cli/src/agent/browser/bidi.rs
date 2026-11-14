@@ -14,7 +14,7 @@ use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
 const CHANNEL: &str = "flui-agent";
 
 /// The first Firefox that reports `browsingContext.navigationCommitted`.
-const MIN_FIREFOX: u32 = 140;
+pub(super) const MIN_FIREFOX: u32 = 140;
 
 /// The events the link reads. A navigation is reported once it commits, as the DevTools
 /// protocol's `Page.frameNavigated` is: until then the tab still shows the document it
@@ -48,8 +48,25 @@ impl Bidi {
             socket,
             context: String::new(),
         };
-        link.command_by("session.new", json!({ "capabilities": {} }), ready_by)
+        let session = link
+            .command_by("session.new", json!({ "capabilities": {} }), ready_by)
             .map_err(AttachError::at("session.new"))?;
+        // A browser that names no version is left to refuse the subscription itself.
+        let version = session
+            .pointer("/capabilities/browserVersion")
+            .and_then(Value::as_str);
+        if let Some(version) = version
+            && let Some(major) = version
+                .split('.')
+                .next()
+                .and_then(|major| major.parse::<u32>().ok())
+            && major < MIN_FIREFOX
+        {
+            return Err(AttachError::at("session.new")(LinkError::Refused(format!(
+                "Firefox {version} reports no navigation's commit; the link needs Firefox \
+                 {MIN_FIREFOX} or later"
+            ))));
+        }
         let tree = link
             .command_by(
                 "browsingContext.getTree",
@@ -87,13 +104,6 @@ impl Bidi {
             }
         }
         link.command_by("session.subscribe", json!({ "events": EVENTS }), ready_by)
-            .map_err(|error| match error {
-                // A Firefox before 140 knows no `browsingContext.navigationCommitted`.
-                LinkError::Refused(why) => LinkError::Refused(format!(
-                    "{why} (the link needs Firefox {MIN_FIREFOX} or later)"
-                )),
-                other => other,
-            })
             .map_err(AttachError::at("session.subscribe"))?;
         Ok(link)
     }

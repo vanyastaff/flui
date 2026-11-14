@@ -624,6 +624,7 @@ mod linking {
     use serde_json::{Value, json};
     use tungstenite::Message;
 
+    use super::super::bidi::MIN_FIREFOX;
     use super::super::{COMMAND_TIMEOUT, LinkEvent};
     use super::*;
 
@@ -634,7 +635,7 @@ mod linking {
         first_after: Option<Duration>,
         /// A close is never answered, instead of refused.
         close_hangs: bool,
-        /// The Firefox it stands for: before 140 it knows no
+        /// The Firefox major version it names: one before `MIN_FIREFOX` knows no
         /// `browsingContext.navigationCommitted` and refuses a subscription to it.
         firefox: u32,
     }
@@ -644,7 +645,7 @@ mod linking {
             Self {
                 first_after,
                 close_hangs: false,
-                firefox: 146,
+                firefox: MIN_FIREFOX,
             }
         }
     }
@@ -693,6 +694,9 @@ mod linking {
                         json!({ "targetInfos": [{ "type": "page", "targetId": "tab" }] })
                     }
                     "Target.attachToTarget" => json!({ "sessionId": "session" }),
+                    "session.new" => json!({
+                        "capabilities": { "browserVersion": format!("{}.0.1", answers.firefox) }
+                    }),
                     _ => json!({}),
                 };
                 if method == "browsingContext.close" && answers.close_hangs {
@@ -702,7 +706,7 @@ mod linking {
                     .as_array()
                     .cloned()
                     .unwrap_or_default();
-                let unknown = answers.firefox < 140
+                let unknown = answers.firefox < MIN_FIREFOX
                     && events.contains(&json!("browsingContext.navigationCommitted"));
                 let refusal = match method.as_str() {
                     "browsingContext.close" => Some("the tab is still loading"),
@@ -828,19 +832,20 @@ mod linking {
     #[test]
     fn a_firefox_that_reports_no_commit_is_refused_naming_the_version_the_link_needs() {
         let (url, _commands) = starting_browser(Answers {
-            firefox: 139,
+            firefox: MIN_FIREFOX - 1,
             ..Answers::after(Some(Duration::ZERO))
         });
         let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
         let refused = Bidi::attach(socket, Instant::now() + COMMAND_TIMEOUT)
             .map(drop)
             .expect_err("a link that would miss every reload is no link");
-        assert_eq!(refused.command, "session.subscribe");
+        assert_eq!(refused.command, "session.new", "before anything is opened");
         let LinkError::Refused(why) = &refused.error else {
             panic!("refused, not {:?}", refused.error);
         };
         assert!(
-            why.ends_with("(the link needs Firefox 140 or later)"),
+            why.starts_with(&format!("Firefox {}.0.1 ", MIN_FIREFOX - 1))
+                && why.ends_with(&format!("needs Firefox {MIN_FIREFOX} or later")),
             "{why}"
         );
     }

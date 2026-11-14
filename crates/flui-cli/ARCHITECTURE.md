@@ -266,9 +266,12 @@ each method's parameter type.
   asks of a tab: install a preload and load a URL, call a function that gets a
   report function last and keep what it returns, call a function on what was
   kept, and read the tab's events. Each browser is spoken to in the protocol it
-  has without a driver: WebDriver BiDi in Firefox 140 or later (`bidi`, the report function
-  is a channel; 140 added `browsingContext.navigationCommitted`), the DevTools protocol in the Chromium family (`cdp`, a
-  binding); the session and the relay never see which. The preload installs
+  has without a driver: WebDriver BiDi in Firefox (`bidi`, the report function
+  is a channel), the DevTools protocol in the Chromium family (`cdp`, a
+  binding); the session and the relay never see which. Both report a
+  navigation once its document commits (`browsingContext.navigationCommitted`,
+  `Page.frameNavigated`), so a Firefox older than `bidi::MIN_FIREFOX`, which
+  reports no commit, is refused at `session.new`. The preload installs
   `PAGE_LAUNCH_GLOBAL` in top-level documents only, so every reload is given
   the launch again. The relay (`agent::browser::relay`) serves the session's
   usual local endpoint on one polling thread and carries each client to a
