@@ -11,7 +11,7 @@
 //! consumed) reuses its memory within the frame. Any other block waits for `reset`. After a reset
 //! the arena keeps one chunk large enough for the frames it served recently, so a steady frame
 //! takes nothing from the global allocator, and a chunk one heavy frame grew is released once
-//! [`RECENT_RESETS`] resets have passed without needing it.
+//! 120 resets that used the arena have passed without needing it.
 //!
 //! ```
 //! use flui_foundation::arena::{FrameArena, FrameVec};
@@ -36,7 +36,7 @@ pub type FrameVec<'f, T> = Vec<T, &'f FrameArena>;
 
 /// How many resets the arena remembers when it decides what to keep: a chunk more than
 /// [`RELEASE_FACTOR`] times larger than any of these resets needed is released.
-pub const RECENT_RESETS: usize = 120;
+const RECENT_RESETS: usize = 120;
 
 /// The smallest chunk the arena takes from the global allocator.
 const MIN_CHUNK: usize = 4 * 1024;
@@ -139,8 +139,8 @@ impl FrameArena {
     ///
     /// Keeps the newest chunk when it holds the most this frame had handed out at once, so the
     /// next frame of the same shape allocates nothing from the global allocator; releases the
-    /// others, and a chunk larger than [`RELEASE_FACTOR`] times the most any of the last
-    /// [`RECENT_RESETS`] frames that used the arena needed. A frame that handed out nothing
+    /// others, and a chunk larger than four times the most any of the last 120 frames that used
+    /// the arena needed. A frame that handed out nothing
     /// changes nothing. A reset never allocates: when it keeps no chunk, the next allocation
     /// opens one sized for the recent frames.
     pub fn reset(&mut self) {
