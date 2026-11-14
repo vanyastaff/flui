@@ -275,7 +275,7 @@ impl ExecutorHandle {
     }
 
     /// Stop the thread and wait for it, at most `timeout`. Every send answers
-    /// [`RasterSendError::Gone`](super::RasterSendError::Gone) from the
+    /// [`RasterSendError::Gone`] from the
     /// call on; the thread settles every pending frame and takes every slot
     /// down before it ends. A second call answers at once. A panic the stop
     /// contained reaches the owner as the turns' do, through
