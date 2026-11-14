@@ -4,7 +4,7 @@
 //! application with the link or the file as an argument (Windows' `"%1"`,
 //! a desktop entry's `%U`, which gives a file as a `file:` URI). The host
 //! reports what they open before `ready`, as a cold
-//! [`Opened`](flui_platform::Opened) for the application as a whole.
+//! [`Opened`] for the application as a whole.
 //!
 //! An argument is a URL when it starts with a scheme of two or more
 //! characters and a colon (RFC 3986 §3.1; one letter is a Windows drive),
@@ -29,6 +29,7 @@ pub(crate) enum PathConvention {
     Unix,
 }
 
+#[cfg(any(windows, x11_host, wayland_host))]
 impl PathConvention {
     /// The convention of the host this is built for.
     pub(crate) const HOST: Self = if cfg!(windows) {
@@ -65,12 +66,14 @@ pub(crate) fn opened_by_arguments(
 
 /// The process's launch arguments, without its own name: what a desktop
 /// host table hands its loop.
+#[cfg(any(windows, x11_host, wayland_host))]
 pub(crate) fn process_arguments() -> Vec<OsString> {
     std::env::args_os().skip(1).collect()
 }
 
 /// What `arguments`, a desktop host table's launch arguments, open on this
 /// host, judged against its file system.
+#[cfg(any(windows, x11_host, wayland_host))]
 pub(crate) fn launched_by(arguments: Vec<OsString>) -> Opened {
     opened_by_arguments(arguments, PathConvention::HOST, Path::is_file, |path| {
         std::path::absolute(path).ok()
@@ -208,7 +211,7 @@ fn percent_decoded(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use flui_platform::{Launch, OpenTarget, OpenedFile};
 
@@ -313,6 +316,7 @@ mod tests {
     #[test]
     fn a_launch_path_need_not_be_text() {
         use std::os::unix::ffi::OsStringExt as _;
+        use std::path::PathBuf;
         let path = OsString::from_vec(b"/tmp/caf\xe9.note".to_vec());
         let expected = PathBuf::from(path.clone());
         let opened = opened_by_arguments(
