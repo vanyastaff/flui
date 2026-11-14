@@ -254,8 +254,8 @@ note = 'macOS enforces one instance itself'
 [[group.section.row]]
 id = "deep-links-url-schemes-file-associations"
 feature = 'Deep links, URL schemes, file associations'
-status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "na", headless = "missing" }
-note = 'No host reports an opened URL or file, at cold start or while running (`opened(urls, files)` joins the application handler with the activation feature); the Web entry URL is under history routing'
+status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "na", headless = "partial" }
+note = 'No native host reports an opened URL or file yet, at cold start or while running. The application handler hears `opened(&OwnerPlatform, Opened)`, bounded, and the headless host reports one (`HeadlessHostEvents::open`); the runner does not route it to a window yet, and `UiRuntime::open_url` opens a URL in a Router, the cold start included. The Web entry URL is under history routing'
 
 [[group.section.row]]
 id = "state-restoration"

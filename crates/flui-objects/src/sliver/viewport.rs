@@ -423,13 +423,21 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     ///
     /// `Clip::None` clips nothing, so a child may paint outside the
     /// viewport's bounds; every other behaviour clips to them, and only when
-    /// the content actually overflows.
+    /// the content actually overflows. Switching to or from `Clip::None` also
+    /// changes which children's semantics the viewport clips, so it reports
+    /// semantics too.
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
+        let clips_semantics = (self.clip_behavior == Clip::None) != (clip_behavior == Clip::None);
         self.clip_behavior = clip_behavior;
-        flui_rendering::RenderUpdateImpact::PAINT
+        if clips_semantics {
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        } else {
+            flui_rendering::RenderUpdateImpact::PAINT
+        }
     }
 
     /// How overflowing content is clipped when this viewport paints.
@@ -1401,13 +1409,21 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     ///
     /// `Clip::None` clips nothing, so a child may paint outside the
     /// viewport's bounds; every other behaviour clips to them, and only when
-    /// the content actually overflows.
+    /// the content actually overflows. Switching to or from `Clip::None` also
+    /// changes which children's semantics the viewport clips, so it reports
+    /// semantics too.
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
+        let clips_semantics = (self.clip_behavior == Clip::None) != (clip_behavior == Clip::None);
         self.clip_behavior = clip_behavior;
-        flui_rendering::RenderUpdateImpact::PAINT
+        if clips_semantics {
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        } else {
+            flui_rendering::RenderUpdateImpact::PAINT
+        }
     }
 
     /// How overflowing content is clipped when this viewport paints.

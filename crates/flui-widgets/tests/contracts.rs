@@ -957,6 +957,7 @@ fn semantics_translation_and_routing() {
             ("semantics::flow_repaint_and_delegate_replacement_update_accessible_children", crate::semantics::flow_repaint_and_delegate_replacement_update_accessible_children),
             ("semantics::custom_painter_regions_follow_semantics_only_updates_and_layout_size", crate::semantics::custom_painter_regions_follow_semantics_only_updates_and_layout_size),
             ("semantics::a_fields_runs_keep_their_identities_until_their_text_changes", crate::semantics::a_fields_runs_keep_their_identities_until_their_text_changes),
+            ("semantics::a_clip_behavior_switch_republishes_what_the_clip_hides", crate::semantics::a_clip_behavior_switch_republishes_what_the_clip_hides as fn()),
             ("semantics::retained_visibility_hides_child_semantics_by_default", crate::semantics::retained_visibility_hides_child_semantics_by_default as fn()),
             ("semantics::retained_visibility_updates_semantics_without_changing_layout", crate::semantics::retained_visibility_updates_semantics_without_changing_layout as fn()),
             ("semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer", crate::semantics::queued_directional_actions_and_numeric_values_reach_the_frame_producer as fn()),
@@ -1294,6 +1295,9 @@ fn router_and_widgets_app() {
             ("url_owner::a_pop_intent_honours_the_pages_pop_scope", crate::url_owner::a_pop_intent_honours_the_pages_pop_scope),
             ("url_owner::an_unmounted_router_lets_go_of_its_unknown_hook", crate::url_owner::an_unmounted_router_lets_go_of_its_unknown_hook),
             ("url_owner::an_opened_url_navigates_only_when_declared", crate::url_owner::an_opened_url_navigates_only_when_declared),
+            ("url_owner::a_url_opened_before_the_first_frame_opens_the_router_on_it", crate::url_owner::a_url_opened_before_the_first_frame_opens_the_router_on_it),
+            ("url_owner::a_cold_url_no_route_matches_reaches_on_unknown_after_the_frame", crate::url_owner::a_cold_url_no_route_matches_reaches_on_unknown_after_the_frame),
+            ("url_owner::a_cold_url_no_router_took_is_dropped_after_the_first_frame", crate::url_owner::a_cold_url_no_router_took_is_dropped_after_the_first_frame),
         ],
     );
 }

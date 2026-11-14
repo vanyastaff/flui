@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
-use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform::{Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
 
 use crate::host::{self, Host};
 use crate::owner::app_delivery::AppDelivery;
@@ -71,7 +71,8 @@ impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
     }
 }
 
-/// Reports session ends, system notices and reopens to the application's
+/// Reports session ends, system notices, reopens and what the operating
+/// system opened to the application's
 /// handler of the headless platform after `run` has consumed it — obtained
 /// from [`HeadlessPlatform::host_events`](crate::HeadlessPlatform::host_events)
 /// before `run`.
@@ -132,6 +133,17 @@ impl HeadlessHostEvents {
     pub fn reopen(&self) {
         if let Some(app) = self.app.upgrade() {
             app.reopen().or_resume(());
+        }
+    }
+
+    /// The operating system opened URLs or files with the application, as a
+    /// link, a launch argument or a document does: the application's handler
+    /// hears them ([`AppHandler::opened`](crate::AppHandler::opened)), bounded
+    /// as every host bounds them ([`Opened::new`]). Nothing happens once the
+    /// platform is gone, and an empty `opened` reports nothing.
+    pub fn open(&self, opened: Opened) {
+        if let Some(app) = self.app.upgrade() {
+            app.opened(opened).or_resume(());
         }
     }
 

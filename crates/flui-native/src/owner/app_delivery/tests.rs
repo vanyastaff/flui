@@ -3,13 +3,28 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform::{Launch, OpenTarget, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
 
 use super::testing::{AppCall, AppLog, Bound, bind, bound};
 use super::*;
 
 const SLEEP: AppCall = AppCall::Notice(SystemNotice::Sleep);
 const WAKE: AppCall = AppCall::Notice(SystemNotice::Wake);
+const LINK: AppCall = AppCall::Opened {
+    urls: 1,
+    files: 0,
+    launch: Launch::Running,
+};
+const COLD_LINK: AppCall = AppCall::Opened {
+    urls: 1,
+    files: 0,
+    launch: Launch::Cold,
+};
+
+/// A link the operating system opened the application with.
+fn link(url: &str, launch: Launch) -> Opened {
+    Opened::new([url.to_owned()], [], OpenTarget::Application, launch)
+}
 
 /// A report raised from inside a method is queued behind it and heard after
 /// it returns, in order, never recursed into.
@@ -24,6 +39,10 @@ fn a_report_raised_inside_a_method_is_heard_after_it() {
         if call == SLEEP {
             assert!(matches!(
                 delivery.host_notice(SystemNotice::Wake),
+                Called::Vacant
+            ));
+            assert!(matches!(
+                delivery.opened(link("myapp:///a", Launch::Running)),
                 Called::Vacant
             ));
             assert!(matches!(delivery.quit_requested(), Called::Vacant));
@@ -41,6 +60,7 @@ fn a_report_raised_inside_a_method_is_heard_after_it() {
             ("start", SLEEP),
             ("end", SLEEP),
             ("start", WAKE),
+            ("start", LINK),
             ("start", AppCall::Quit),
         ]
     );
@@ -80,6 +100,11 @@ fn a_report_raised_inside_a_question_is_heard_after_the_answer() {
 fn a_report_before_ready_waits_for_it() {
     let app = AppLog::new();
     let delivery = Arc::new(AppDelivery::new());
+    // A link that launched the application, reported before the run binds
+    // its handler, as AppKit delivers `application:openURLs:` before
+    // `applicationDidFinishLaunching:`.
+    let cold = link("myapp:///note/3", Launch::Cold);
+    assert!(matches!(delivery.opened(cold.clone()), Called::Vacant));
     assert!(matches!(
         delivery.host_notice(SystemNotice::Sleep),
         Called::Vacant
@@ -95,9 +120,42 @@ fn a_report_before_ready_waits_for_it() {
     });
     let run = bind(delivery, app.clone());
     run.delivery.ready(run.owner()).expect("bootstrap");
-    assert_eq!(app.calls(), [AppCall::Ready, SLEEP, WAKE]);
+    assert_eq!(app.calls(), [AppCall::Ready, COLD_LINK, SLEEP, WAKE]);
+    assert_eq!(app.opens(), [cold], "the link arrives whole");
 }
 
+/// Opened URLs that wait for the handler are bounded: past
+/// `MAX_PENDING_OPENED` the newest is dropped, the others still arrive in
+/// order, and the other reports are not counted against it.
+fn opened_reports_waiting_for_ready_are_bounded() {
+    let app = AppLog::new();
+    let delivery = Arc::new(AppDelivery::new());
+    let links = (0..=MAX_PENDING_OPENED)
+        .map(|n| link(&format!("myapp:///note/{n}"), Launch::Cold))
+        .collect::<Vec<_>>();
+    for opened in &links {
+        assert!(matches!(delivery.opened(opened.clone()), Called::Vacant));
+    }
+    assert!(matches!(
+        delivery.host_notice(SystemNotice::Sleep),
+        Called::Vacant
+    ));
+    let run = bind(delivery, app.clone());
+    run.delivery.ready(run.owner()).expect("bootstrap");
+    assert_eq!(
+        app.opens(),
+        links[..MAX_PENDING_OPENED],
+        "the first, in order"
+    );
+    assert_eq!(app.calls().last(), Some(&SLEEP));
+    // Once heard, the queue has room again.
+    let next = link("myapp:///later", Launch::Running);
+    assert!(matches!(
+        run.delivery.opened(next.clone()),
+        Called::Returned(())
+    ));
+    assert_eq!(app.opens().last(), Some(&next));
+}
 /// A bootstrap that fails leaves what was reported queued, not dropped.
 fn a_failed_bootstrap_keeps_the_reports() {
     struct Failing(Rc<AppLog>);
@@ -107,6 +165,9 @@ fn a_failed_bootstrap_keeps_the_reports() {
         }
         fn quit_requested(&self, owner: &OwnerPlatform) {
             self.0.quit_requested(owner);
+        }
+        fn opened(&self, owner: &OwnerPlatform, opened: Opened) {
+            self.0.opened(owner, opened);
         }
         fn reopen(&self, owner: &OwnerPlatform) {
             self.0.reopen(owner);
@@ -147,6 +208,7 @@ fn a_panicking_method_loses_no_report_and_keeps_the_first_panic() {
     app.react(move |call, _| match call {
         SLEEP => {
             let _ = delivery.host_notice(SystemNotice::Wake);
+            let _ = delivery.opened(link("myapp:///a", Launch::Running));
             let _ = delivery.quit_requested();
             std::panic::panic_any("first");
         }
@@ -158,7 +220,11 @@ fn a_panicking_method_loses_no_report_and_keeps_the_first_panic() {
     };
     let payload = catch_unwind(AssertUnwindSafe(|| failure.resume())).expect_err("resumed");
     assert_eq!(payload.downcast_ref::<&str>(), Some(&"first"));
-    assert_eq!(app.calls(), [AppCall::Ready, SLEEP, WAKE, AppCall::Quit]);
+    assert_eq!(
+        app.calls(),
+        [AppCall::Ready, SLEEP, WAKE, LINK, AppCall::Quit],
+        "the link queued behind two panics is heard"
+    );
     // The delivery carries on.
     assert!(matches!(run.delivery.reopen(), Called::Returned(())));
 }
@@ -179,21 +245,26 @@ fn a_report_from_another_thread_waits_for_an_owner_turn() {
             delivery.host_notice(SystemNotice::Sleep),
             Called::Vacant
         ));
+        // A second instance's arguments arrive on a reader thread.
+        assert!(matches!(
+            delivery.opened(link("myapp:///a", Launch::Running)),
+            Called::Vacant
+        ));
         assert!(matches!(delivery.exit_policy(), Called::Vacant));
     })
     .join()
     .expect("the other thread reports");
     assert_eq!(
         turns.load(Ordering::SeqCst),
-        1,
-        "it asked for an owner turn"
+        2,
+        "each report asked for an owner turn"
     );
     assert_eq!(app.calls(), [AppCall::Ready]);
     assert!(matches!(
         run.delivery.deliver_queued(),
         Called::Returned(())
     ));
-    assert_eq!(app.calls(), [AppCall::Ready, SLEEP]);
+    assert_eq!(app.calls(), [AppCall::Ready, SLEEP, LINK]);
 }
 
 /// The quit is one per run, however many times the platform reports it.
@@ -285,6 +356,7 @@ fn a_released_handler_drops_outside_the_delivery_lock() {
         }
         fn quit_requested(&self, _: &OwnerPlatform) {}
         fn reopen(&self, _: &OwnerPlatform) {}
+        fn opened(&self, _: &OwnerPlatform, _: Opened) {}
         fn session_end(&self, _: &OwnerPlatform, _: SessionEndPhase) -> SessionEndAnswer {
             SessionEndAnswer::Proceed
         }
@@ -379,6 +451,10 @@ fn app_delivery_contracts() {
             (
                 "a report before ready waits for it",
                 a_report_before_ready_waits_for_it,
+            ),
+            (
+                "opened reports waiting for ready are bounded",
+                opened_reports_waiting_for_ready_are_bounded,
             ),
             (
                 "a failed bootstrap keeps the reports",

@@ -180,6 +180,9 @@ impl flui_native::AppHandler for Page {
 
     fn reopen(&self, _: &flui_native::OwnerPlatform) {}
 
+    // It registers no URL scheme and no file type, so nothing is opened with it.
+    fn opened(&self, _: &flui_native::OwnerPlatform, _: flui_platform::Opened) {}
+
     fn session_end(
         &self,
         _: &flui_native::OwnerPlatform,

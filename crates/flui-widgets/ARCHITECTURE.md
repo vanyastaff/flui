@@ -2129,7 +2129,12 @@ shared state for its whole commit, observers and route clones included, so an
 intent that arrives inside one is `Busy`, as is one during a build; an intent
 holds its own count from before it parses its path to its commit. A URL the
 platform opens reaches it the same way: `UiRuntime::open_url` hands it an
-admitted URL's path as a `Go`.
+admitted URL's path as a `Go`. A URL opened before the first frame is
+held in the slot, and the Router that registers first takes it in
+`create_state` and opens on its `back_stack`; a location no route matches
+keeps the initial stack and reaches `on_unknown` from a post-frame callback,
+where the hook may navigate. The first frame that builds a tree drops a
+location nobody took.
 
 **Pinned by:** the `url_owner::` rows of `router_and_widgets_app`
 (`tests/url_owner.rs`), through `HeadlessHost::navigate` and

@@ -133,6 +133,7 @@ pub mod keyboard;
 pub mod launch;
 mod launch_key;
 mod locale;
+mod opened;
 pub mod os_options;
 mod placement;
 mod platform_window;
@@ -181,6 +182,7 @@ pub use input::{
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
 pub use locale::{InvalidLocale, Locale};
+pub use opened::{Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile};
 pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{
