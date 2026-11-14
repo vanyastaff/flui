@@ -1047,6 +1047,7 @@ pub(crate) fn appended_payloads_follow_their_commands() {
             canvas.translate(0.0, 9.0);
             canvas.draw_shadow(&square_again(), Color::BLACK, 2.0);
             canvas.draw_path(&square_again(), &Paint::fill(Color::BLUE));
+            canvas.clip_path(&curve);
         })
     };
     let lifted_square = || (Matrix4::translation(0.0, 9.0, 0.0), square_again());
@@ -1095,4 +1096,57 @@ pub(crate) fn appended_payloads_follow_their_commands() {
         placed(&after_moved_plainly),
         [lifted_square(), lifted_square()]
     );
+    let kinds: Vec<&str> = after_moved
+        .iter()
+        .map(|command| match command.op {
+            DrawOp::Rect { .. } => "rect",
+            DrawOp::Save => "save",
+            DrawOp::Shadow { .. } => "shadow",
+            DrawOp::Path { .. } => "path",
+            DrawOp::ClipPath { .. } => "clip",
+            DrawOp::Restore => "restore",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["rect", "save", "shadow", "path", "clip", "restore"],
+        "a run that clips is scoped where it lands"
+    );
+    let clip = after_moved.get(4).expect("the scoped clip");
+    assert_eq!(*clip.transform, Matrix4::translation(0.0, 9.0, 0.0));
+}
+
+/// A command describes what it draws, not where its list keeps the payload:
+/// the same run reads the same alone and appended after other payloads, and
+/// a command reads the same from its list, as an owned copy and borrowed
+/// back from that copy.
+pub(crate) fn a_command_describes_itself_wherever_its_payload_sits() {
+    let (card, curve) = sample_paths();
+    let run = || {
+        flui_painting::testing::record(|canvas| {
+            canvas.draw_path(&card, &Paint::fill(Color::BLUE));
+            canvas.clip_path(&curve);
+        })
+    };
+    let texts = |list: &DisplayList| -> Vec<String> {
+        list.iter().map(|command| format!("{command:?}")).collect()
+    };
+    let alone = run();
+    let mut after = flui_painting::testing::record(|canvas| {
+        canvas.draw_path(&curve, &Paint::fill(Color::RED));
+    });
+    after.append(run());
+    assert_eq!(
+        texts(&alone),
+        texts(&after)[1..],
+        "a moved payload reads the same"
+    );
+
+    for command in &alone {
+        let owned = command.to_buf();
+        let text = format!("{command:?}");
+        assert_eq!(format!("{owned:?}"), text);
+        assert_eq!(format!("{:?}", owned.command()), text);
+    }
 }

@@ -586,6 +586,10 @@ fn recording_contract() {
                 recording::appended_payloads_follow_their_commands,
             ),
             (
+                "a_command_describes_itself_wherever_its_payload_sits",
+                recording::a_command_describes_itself_wherever_its_payload_sits,
+            ),
+            (
                 "a_finished_display_list_is_sendable_to_another_thread",
                 recording::a_finished_display_list_is_sendable_to_another_thread,
             ),

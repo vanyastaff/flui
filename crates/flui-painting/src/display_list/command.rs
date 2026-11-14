@@ -46,19 +46,23 @@ pub struct DrawCommand<'a> {
 /// op names, never the rest of its list's buffer.
 impl fmt::Debug for DrawCommand<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The op prints with its id at position 0 and the payload beside it,
-        // so the text names what is drawn, not where the list keeps it.
-        let mut op = self.op.clone();
-        op.map_payloads(|_| 0);
-        let payload = self
-            .op
-            .payload_index()
-            .and_then(|index| self.payloads.get(index));
-        f.debug_struct("DrawCommand")
-            .field("transform", self.transform)
-            .field("op", &op)
-            .field("payload", &payload)
-            .finish()
+        let mut debug = f.debug_struct("DrawCommand");
+        debug.field("transform", self.transform);
+        match self.op.payload_index() {
+            // The op prints with its id at position 0 and the payload beside
+            // it, so the text names what is drawn, not where the list keeps
+            // it. Such an op holds only `Arc`s and values, so its clone is
+            // cheap; an op without a payload prints as it is.
+            Some(index) => {
+                let mut op = self.op.clone();
+                op.map_payloads(|_| 0);
+                debug
+                    .field("op", &op)
+                    .field("payload", &self.payloads.get(index))
+            }
+            None => debug.field("op", self.op).field("payload", &None::<()>),
+        }
+        .finish()
     }
 }
 
