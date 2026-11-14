@@ -139,21 +139,17 @@ impl PendingBuilds {
         self.reasons.clear();
     }
 
-    /// Remove every request, first queued first.
-    pub(crate) fn take(&mut self) -> Vec<(ElementId, RebuildReasons)> {
+    /// Move every request into `out`, first queued first. `out` is the
+    /// caller's kept buffer, so a steady drain allocates nothing.
+    pub(crate) fn take_into(&mut self, out: &mut Vec<(ElementId, RebuildReasons)>) {
         let reasons = &mut self.reasons;
-        let taken = self
-            .order
-            .drain(..)
-            .map(|id| {
-                let queued = reasons
-                    .remove(&id)
-                    .expect("BUG: every queued id has its reasons");
-                (id, queued)
-            })
-            .collect();
+        out.extend(self.order.drain(..).map(|id| {
+            let queued = reasons
+                .remove(&id)
+                .expect("BUG: every queued id has its reasons");
+            (id, queued)
+        }));
         debug_assert!(reasons.is_empty(), "BUG: every id with reasons is queued");
-        taken
     }
 }
 
@@ -377,14 +373,16 @@ mod tests {
         let exhausted = inbox.premise();
         assert!(!inbox.accepts_premise(&exhausted));
         assert!(!inbox.accepts_premise(&last_tracked));
-        let delivered = inbox.lock().take();
+        let mut delivered = Vec::new();
+        inbox.lock().take_into(&mut delivered);
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].0, first);
         inbox.lock().merge(first, reasons);
         inbox.note_local_admission();
         assert!(!inbox.accepts_premise(&exhausted));
         assert!(inbox.admit_batch(&[second], reasons));
-        let delivered = inbox.lock().take();
+        let mut delivered = Vec::new();
+        inbox.lock().take_into(&mut delivered);
         assert_eq!(delivered.len(), 2);
         assert_eq!(delivered[0].0, first);
         assert_eq!(delivered[1].0, second);
