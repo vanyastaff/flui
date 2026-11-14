@@ -85,7 +85,7 @@ returns `OwnerGone`.
 Owners on different threads exchange owned `Send` data through bounded
 channels or dedicated one-shot completions — never UI closures or a generic
 "run this on the UI thread" job. `RuntimeEvent` (native/host observations → UI runtime) and
-`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shipped instances. The rules:
+`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shapes of that traffic; the one placement shipped is the inline executor on the owner thread, so a command and a frame go through a mutex-guarded slot inbox, not a channel to another thread. The rules:
 
 - every routable message carries, or is structurally bound to, its exact
   `PresentationAddress`;
@@ -165,8 +165,8 @@ The event-loop side reports native size, scale and lifecycle changes; it never
 touches a GPU surface. `PresentationState` requests surface operations; it
 never increments `SurfaceGeneration`. Only the raster executor's slot, in the command stream
 that actually attaches or reconfigures the surface, mints the next generation
-and returns it in its acknowledgement. A snapshot carrying a stale generation
-is rejected before render as `SurfaceOutdated`.
+and publishes it in its `SlotRecord`. A snapshot carrying a stale generation
+is rejected before render and settles as `RasterVerdict::SurfaceStale`.
 
 ### 9. Lifecycle is explicit and monotonic
 

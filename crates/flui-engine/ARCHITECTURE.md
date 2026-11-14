@@ -64,7 +64,7 @@ oversized radii against the same public path commands without a shape hint.
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
-| Raster protocol | `raster_executor/`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (the one lock, held only to swap values) and settlement ring, the inline turn, and `SlotBackend`, its GPU-free seam; the deprecated per-window `RasterBackend` the web's direct sink draws through until it moves to slots; frame timers |
+| Raster protocol | `raster_executor/`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn, and `SlotBackend`, its GPU-free seam; the deprecated per-window `RasterBackend` the web's direct sink draws through until it moves to slots; frame timers |
 | Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The dirty-rect accumulator behind `render_scene`'s scissor (ADR-0061), `plan_frame` (where a frame renders), `begin_partial` (the scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
 | Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `SlotBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
@@ -322,7 +322,7 @@ shared handle is a wgpu ref-count.
 | `Renderer::painter`, `Renderer::offscreen` | `WgpuPainter`, `OffscreenRenderer` | Owned outright; the painter records content and the offscreen renderer blits retained presentation |
 | `Renderer::_single_mutator` | `PhantomData<Cell<()>>` | Makes `Renderer: !Sync` by declaration rather than by whichever field happens to be `!Sync`; pinned by `assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` |
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
-| `RasterExecutor` slot inboxes and device record | one `Mutex` per slot inbox and one for the device's record | Held only to swap values; nothing that can run user code runs under them (`raster_executor` module doc) |
+| `RasterExecutor` shared state | one `Mutex` per slot inbox (`SlotInbox`); in `Shared` (`raster_executor/sender.rs`) one `Mutex` for the device's record, the atomics `health`, `sending` and `trim`, and the bounded `crossbeam_channel` lifecycle queue | The mutexes are held only to swap values and nothing that can run user code runs under them (`raster_executor` module doc); the atomics and the queue take no lock |
 
 **Unsafe.** `#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`, and one
 production exception with its own `expect`: `renderer::dxgi_frame_statistics`
@@ -1068,8 +1068,10 @@ stays: with the correct previous frame outside the damage, it bounds a
 straddling shape's out-of-damage slice to one frame. The full clear and the
 partial clear paint one constant, `frame_protocol::BACKGROUND`.
 
-Only frames a producer accounted for render damage: `RasterBackend::render_scene`
-calls `Renderer::render_frame`. The public `Renderer::render_scene` is the
+Only the web's `DirectSink` reaches `Renderer::render_frame`, through
+`RasterBackend::render_scene`, and it forces a full repaint first, so no producer
+applies a partial region to a `Renderer` now. Native slots draw through `SlotBackend`.
+The public `Renderer::render_scene` is the
 entry point for a frame no producer accounted for (direct mode, a hot-reload
 plugin's scene): it renders in full, invalidates the target and makes the
 next frame full, because the owner's differ compares against scenes it

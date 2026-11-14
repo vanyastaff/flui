@@ -99,7 +99,7 @@ engine (`crates/flui-engine/src/damage.rs:22`) with `mark_dirty`, `mark_full_rep
 - The Command IR, `DrawBatcher`, `GpuReplay` and everything else in ADR-0006 §1-§4 and §6 stay in
   `flui-engine`. This is not the "separate IR crate" ADR-0006 rejected: the IR does not move, and
   the lowering that does move gains a second consumer (§2).
-- `RasterOwner` stays in `flui-engine` through H0. Moving it out is a separate, optional
+- The raster executor (the former `RasterOwner`) stays in `flui-engine` through H0. Moving it out is a separate, optional
   decision, and is possible only once nothing in it names wgpu.
 
 ### 2. Two equal backends
@@ -206,8 +206,8 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   it did not forbid moves to `flui-layer`.
 - **Breaks.** `flui_engine::{RasterBackend, PresentDisposition}` become
   `flui_layer::{RasterBackend, PresentDisposition}`; every implementation changes its error type
-  to `RasterError` (one production impl, eight test doubles, the `raster_backpressure` bench and
-  the `raster_backend_requires_send` compile-fail test). A match on `DamageRegion` must handle
+  to `RasterError` (one production impl, the test doubles, and
+  the `raster_backend_requires_send` compile-fail test; the `raster_backpressure` bench is deleted with the former raster owner). A match on `DamageRegion` must handle
   `Partial` or keep its wildcard arm.
 - A new crate to maintain, gated by the conformance suite; the cost of every new layer or effect
   now includes its CPU lowering or a named gap.

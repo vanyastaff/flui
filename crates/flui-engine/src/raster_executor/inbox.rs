@@ -85,8 +85,8 @@ impl fmt::Debug for SlotFailure {
 pub struct SlotRecord {
     /// Where the slot is in its life.
     pub phase: SlotPhase,
-    /// Frames accepted and not settled yet: the count the owner's in-flight
-    /// gate paces production by.
+    /// Frames accepted and not settled yet. The slot carries the count for the
+    /// owner's in-flight gate; no production gate reads it yet.
     pub in_flight: u32,
     /// Settlements written and not drained yet.
     pub undrained: usize,

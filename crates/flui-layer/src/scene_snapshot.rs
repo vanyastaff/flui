@@ -389,8 +389,8 @@ pub struct SceneSnapshot {
     /// textures before this frame renders, whether or not it is shown (the
     /// slot keeps the frames and uploads them when it draws), and a
     /// frame that supersedes another unshown one carries the other's too
-    /// ([`TextureUpdates::merge`]). The deprecated raster owner reads none of
-    /// them: its lane takes the registry's updates itself.
+    /// ([`TextureUpdates::merge`]). The web's `DirectSink` takes the
+    /// registry's updates itself and reads none of them.
     pub textures: TextureUpdates,
 }
 

@@ -1750,17 +1750,18 @@ impl Renderer {
         Ok(())
     }
 
-    /// Renders `scene` in full, outside the damage protocol a raster owner
-    /// drives, and reports what became of the frame.
+    /// Renders `scene` in full, outside the damage protocol, and reports what
+    /// became of the frame.
     ///
     /// This is the entry point for a caller that holds no damage producer (a
     /// direct-mode app, an example, a hot-reload plugin's scene). The frame
     /// always repaints everything, and because it shows a scene the owner's
     /// producer never saw, the retained target stops describing the screen
     /// and the next frame renders in full too, even one the producer found
-    /// unchanged. A frame the raster executor renders goes through
+    /// unchanged. The web's `DirectSink` goes through
     /// [`RasterBackend::render_scene`](crate::RasterBackend::render_scene)
-    /// instead, which renders the damage the frame carries.
+    /// instead, after marking a full repaint: no producer applies a partial
+    /// damage region to a `Renderer` now.
     ///
     /// [`PresentDisposition::Presented`] means `present()` ran. Whether that
     /// call paced the frame depends on the backend: under the default Fifo
@@ -1808,8 +1809,8 @@ impl Renderer {
         result
     }
 
-    /// Renders `scene` with the damage applied since the last presented
-    /// frame: the raster owner's path (`RasterBackend::render_scene`).
+    /// Renders `scene` with the damage the tracker holds (`RasterBackend::render_scene`
+    /// reaches it; the web's `DirectSink` marks every frame full first).
     ///
     /// Traverses the scene's LayerTree depth-first, dispatching each layer's
     /// DisplayList commands through the GPU backend (WgpuPainter). For scenes
@@ -1833,10 +1834,10 @@ impl Renderer {
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<PresentDisposition, EngineError> {
-        // Damage arrives from the raster owner, which applies each frame's
-        // `flui_layer::DamageRegion` (the footprint of the scene patches since
-        // the version on screen, ADR-0304 §5) to the tracker before calling
-        // this. Widgets reporting their own bounds does not work, and ADR-0061
+        // Damage is what the tracker holds. No producer applies a partial
+        // `flui_layer::DamageRegion` to a `Renderer` now: the web's
+        // `DirectSink` marks every frame full. Widgets reporting their own
+        // bounds does not work, and ADR-0061
         // records why: the objects that always repaint cover the screen.
         self.frame
             .include_backdrop_dependencies(scene, (self.config.width, self.config.height));

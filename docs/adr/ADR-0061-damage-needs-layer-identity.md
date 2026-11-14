@@ -91,8 +91,8 @@ the field is always `None` in production. Populating it, or an equivalent
 ## Consequences
 
 - `DamageRegion` stays `#[non_exhaustive]` with only `Full`, and
-  `raster_owner`'s comment about revisiting when a `Partial` variant lands stays
-  accurate.
+  the former `raster_owner`'s comment about revisiting when a `Partial` variant lands is gone with it; the question stays
+  open.
 - `Renderer::mark_dirty` stays without a production caller. It is not dead code
   to be removed: the consuming half of damage is written, tested, and correct,
   and this ADR records what the producing half requires.

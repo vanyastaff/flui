@@ -195,8 +195,8 @@ epoch_counters! {
     /// invalidates the previously-configured surface.
     ///
     /// Owned by the engine seam. A frame in flight declares the
-    /// `SurfaceGeneration` it was produced for; the raster owner rejects (and
-    /// acks `SurfaceOutdated`) a frame whose generation no longer matches the
+    /// `SurfaceGeneration` it was produced for; the raster executor refuses
+    /// (and settles `SurfaceStale`) a frame whose generation no longer matches the
     /// currently-configured surface instead of presenting into a torn-down
     /// swapchain.
     pub struct SurfaceGeneration;
