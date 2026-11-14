@@ -488,28 +488,33 @@ impl OwnerFrame {
         });
     }
 
-    /// Settle the segments of a frame that aborted before its post-frame dispatch. A completed
-    /// segment's geometry stays completed, so its callbacks stay eligible and the presentation
-    /// may enter its next segment; a segment still running keeps its callback debt as a
-    /// suspended one, which the next frame resumes. Returns whether a queued post-frame callback
-    /// can run on the next frame.
+    /// Settle the segments of a frame that aborted before its post-frame dispatch. A segment the
+    /// frame completed stays completed, so its callbacks stay eligible and the presentation may
+    /// enter its next segment. A segment still running keeps its callback debt as a suspended
+    /// one, which the presentation's next segment resumes; like any suspended debt it asks for no
+    /// frame, which would re-drive the failure. Returns whether a segment the frame completed
+    /// owes a callback, for which the next frame is asked.
     pub(crate) fn settle_aborted_segments(&self) -> bool {
+        let mut completed = Vec::new();
         self.post_frame.scopes.borrow_mut().retain(|scope| {
             let Some(scope) = scope.upgrade() else {
                 return false;
             };
             match scope.phase.get() {
-                SegmentPhase::Completing => scope.phase.set(SegmentPhase::Idle),
+                SegmentPhase::Completing => {
+                    scope.phase.set(SegmentPhase::Idle);
+                    completed.push(scope);
+                }
                 SegmentPhase::Running => scope.phase.set(SegmentPhase::Suspended),
                 SegmentPhase::Idle | SegmentPhase::Suspended | SegmentPhase::Servicing => {}
             }
             true
         });
-        self.post_frame
-            .queue
-            .borrow()
-            .iter()
-            .any(|entry| entry.target.eligible())
+        !completed.is_empty()
+            && self.post_frame.queue.borrow().iter().any(|entry| {
+                entry.target.eligible()
+                    && completed.iter().any(|scope| entry.target.belongs_to(scope))
+            })
     }
 
     /// Return an uninvoked tail to the already-validated queue. Original IDs

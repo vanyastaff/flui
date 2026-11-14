@@ -471,6 +471,10 @@ fn an_aborted_frame_suspends_the_segment_it_left_running() {
         )
     }));
     assert!(aborted.is_err(), "the pipeline's panic aborts the frame");
+    assert!(
+        !scheduler.is_frame_scheduled(),
+        "a segment left running asks for no frame, which would re-drive the failure"
+    );
 
     let resumed = owner
         .drive_frame(
@@ -488,6 +492,41 @@ fn an_aborted_frame_suspends_the_segment_it_left_running() {
         .expect("live owner frame");
     resumed.expect("the next frame resumes the suspended segment");
     assert_eq!(log.get(), ["resumed geometry"]);
+}
+
+/// A runtime-frame post-frame callback waits for a frame that reaches its end, and an aborted
+/// frame does not ask for another on its behalf: a pipeline that panics every frame would be
+/// re-driven at once, forever.
+///
+/// Fails when the abort asks for a frame for every eligible callback instead of for the ones a
+/// segment completed in that frame.
+fn an_aborted_frame_asks_no_frame_for_runtime_frame_callbacks() {
+    let scheduler = UpdateScheduler::new();
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
+    let log = Log::default();
+    let ran = log.clone();
+    scheduler.add_post_frame_callback(Box::new(move |_| ran.push("runtime frame")));
+    let aborted = catch_unwind(AssertUnwindSafe(|| {
+        owner.drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            || panic!("pipeline — intentional test panic"),
+        )
+    }));
+    assert!(aborted.is_err(), "the pipeline's panic aborts the frame");
+    assert!(
+        !scheduler.is_frame_scheduled(),
+        "the abort re-arms no frame for the failure itself"
+    );
+    owner
+        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .expect("live owner frame");
+    assert_eq!(
+        log.get(),
+        ["runtime frame"],
+        "the next frame that ends runs it"
+    );
 }
 
 fn cancelled_geometry_transfers_completion_debt_to_replacement() {
@@ -1197,6 +1236,10 @@ fn post_frame_ordering_matrix() {
             (
                 "an_aborted_frame_suspends_the_segment_it_left_running",
                 an_aborted_frame_suspends_the_segment_it_left_running as fn(),
+            ),
+            (
+                "an_aborted_frame_asks_no_frame_for_runtime_frame_callbacks",
+                an_aborted_frame_asks_no_frame_for_runtime_frame_callbacks as fn(),
             ),
             (
                 "an_aborted_frame_leaves_a_completed_segment_free_to_begin_the_next",
