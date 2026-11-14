@@ -3059,6 +3059,28 @@ fn a_node_moved_out_of_its_clip_comes_back() {
     assert_eq!(seen[0], seen[2], "moving back restores the node");
 }
 
+/// Inside a scrollable, whose content past the viewport stays revealable,
+/// the move carries the painted part of the node out of its holder while the
+/// viewport's clip still paints it: the holder clips its children before the
+/// move and not after.
+fn a_node_moved_past_its_holder_in_a_viewport_ends_its_clipping() {
+    use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    let position = ScrollPosition::fixed(0.0);
+    publishes_as_built_afresh(
+        |dy| {
+            SizedBox::new(100.0, 100.0).child(Viewport::new(
+                position.clone(),
+                (SliverToBoxAdapter::new().child(
+                    Semantics::new().container(true).label("holder").child(
+                        SizedBox::new(100.0, 50.0)
+                            .child(Transform::translate(0.0, dy).child(labelled("moved", 40.0))),
+                    ),
+                ),),
+            ))
+        },
+        &[0.0, 60.0, 0.0],
+    );
+}
 /// A clip the move carries with it decides whether the node above clips its
 /// children: inside the holder it does, carried past the holder's edge it
 /// does not, and the node above is published as a rebuild publishes it.
@@ -3213,6 +3235,10 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
             (
                 "a clip moved past its holder",
                 a_clip_moved_past_its_holder_ends_its_clipping,
+            ),
+            (
+                "a node moved past its holder in a viewport",
+                a_node_moved_past_its_holder_in_a_viewport_ends_its_clipping,
             ),
             (
                 "a wrapper moved into the cache extent",

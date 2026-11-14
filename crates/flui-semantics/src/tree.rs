@@ -563,7 +563,9 @@ impl SemanticsTree {
             attrs: node.config().attributes(),
             actions: node.config().effective_actions_as_bits(),
             rect: node.rect(),
-            clips_children: node.clips_children(),
+            // The window clips the root anyway, and AccessKit would count the
+            // owner's announcer nodes, which have no area, as outside it.
+            clips_children: node.clips_children() && node.parent().is_some(),
             children: {
                 // AccessKit requires a child list without repeats; its consumer
                 // panics on one. A repeat is an assembly defect, so the first

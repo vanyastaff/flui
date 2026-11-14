@@ -23033,6 +23033,7 @@ variant flui::testing::TestError::NotFound { locator: Box<flui::testing::Locator
 variant flui::testing::TestError::NotSettled { frames: usize } // at 5
 variant flui::testing::TestError::Timeout { expected: String, locator: Box<flui::testing::Locator>, found: String, timeout: core::time::Duration, shown: String } // at 4
 variant flui::testing::TestError::Unanswered { frames: u32 } // at 6
+variant flui::testing::TestError::Unsettled { reads: usize } // at 8
 pub struct flui::testing::TestWindow { .. }
 impl Clone for flui::testing::TestWindow
 impl Default for flui::testing::TestWindow

@@ -233,6 +233,13 @@ pub enum TestError {
     /// The window's agent refused or failed a call.
     #[error("the window's agent answered {}: {}", .0.code, .0.message)]
     Agent(Box<ErrorObject>),
+    /// Frames kept changing the semantics tree between a locate and the
+    /// readings of what it found, every time it was read.
+    #[error("the semantics tree changed between a locate and its readings {reads} times")]
+    Unsettled {
+        /// The locates made.
+        reads: usize,
+    },
 }
 
 impl From<ErrorObject> for TestError {
@@ -494,7 +501,7 @@ impl Tester {
     ///
     /// # Errors
     ///
-    /// When the window cannot answer, and [`TestError::NotSettled`] when
+    /// When the window cannot answer, and [`TestError::Unsettled`] when
     /// frames keep changing the tree between the locate and its readings.
     pub fn try_is_visible(&mut self, locator: &Locator) -> Result<bool, TestError> {
         'read: for _ in 0..VISIBLE_READS {
@@ -509,8 +516,8 @@ impl Tester {
             }
             return Ok(false);
         }
-        Err(TestError::NotSettled {
-            frames: VISIBLE_READS,
+        Err(TestError::Unsettled {
+            reads: VISIBLE_READS,
         })
     }
 

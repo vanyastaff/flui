@@ -305,7 +305,7 @@ own ID (`ElementId`, `RenderId`, `LayerId`), so identity follows the "Identity i
 - `visible`: shown by the filtered tree, non-empty and intersecting the window's visible region
   and every ancestor that clips its children. The semantics assembly narrows a node to the paint
   clips above it and does not publish one clipped out, except content a scrollable keeps past its
-  viewport for a reveal: that keeps its bounds, and the node that covers its paint clip publishes
+  viewport for a reveal: that keeps its bounds, and the node that holds every painted part of it publishes
   `clips_children`, AccessKit's form of Flutter's `isHidden`;
 - `stable`: rect equal to the previous frame's;
 - `enabled`: not `disabled`, no disabled ancestor;

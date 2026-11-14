@@ -5304,7 +5304,6 @@ pub(crate) fn scroll_physics_refuse_coefficients_outside_the_unit_range() {
 /// tree through AccessKit's filter, reaches the first row past the edge and
 /// none beyond it, and moving there scrolls that row into the viewport.
 pub(crate) fn a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in() {
-    use accesskit_consumer::{FilterResult, common_filter};
     use flui_testing::a11y::{Action, ActionRequest, TreeId};
     use flui_widgets::{Center, ListView, Text};
 
@@ -5321,27 +5320,8 @@ pub(crate) fn a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in() {
     laid.enable_semantics();
     laid.tick();
 
-    let reached = |laid: &LaidOut| -> Vec<String> {
-        let tree = accesskit_consumer::Tree::new(
-            laid.a11y_tree().expect("semantics enabled").raw().clone(),
-            true,
-        );
-        let mut names = Vec::new();
-        let mut pending = vec![tree.state().root()];
-        while let Some(node) = pending.pop() {
-            if common_filter(&node) == FilterResult::ExcludeSubtree {
-                continue;
-            }
-            if let Some(label) = node.label().filter(|label| label.starts_with("row ")) {
-                names.push(label);
-            }
-            pending.extend(node.children());
-        }
-        names.sort();
-        names
-    };
     assert_eq!(
-        reached(&laid),
+        rows_a_reader_reaches(&laid),
         ["row 0", "row 1", "row 2"],
         "the two rows in view and the first past the edge; the cache's \
          rows beyond it are left out"
@@ -5369,8 +5349,65 @@ pub(crate) fn a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in() {
         "the row is scrolled just into view"
     );
     assert_eq!(
-        reached(&laid),
+        rows_a_reader_reaches(&laid),
         ["row 0", "row 1", "row 2", "row 3"],
         "row 0 is now the row past the top edge, row 3 the one past the bottom"
+    );
+}
+
+/// The rows of a list a screen reader reaches: what AccessKit's filter keeps
+/// of the published tree, by label.
+fn rows_a_reader_reaches(laid: &LaidOut) -> Vec<String> {
+    use accesskit_consumer::{FilterResult, common_filter};
+
+    let tree = accesskit_consumer::Tree::new(
+        laid.a11y_tree().expect("semantics enabled").raw().clone(),
+        true,
+    );
+    let mut names = Vec::new();
+    let mut pending = vec![tree.state().root()];
+    while let Some(node) = pending.pop() {
+        if common_filter(&node) == FilterResult::ExcludeSubtree {
+            continue;
+        }
+        if let Some(label) = node.label().filter(|label| label.starts_with("row ")) {
+            names.push(label);
+        }
+        pending.extend(node.children());
+    }
+    names.sort();
+    names
+}
+
+/// A list under a header fills only part of its viewport: the list node's
+/// rect starts below the header while its rows lie under the viewport's
+/// whole clip. The list node still clips its rows, so a screen reader
+/// reaches the rows in view and the first past the edge, as it does for a
+/// list that fills the viewport.
+pub(crate) fn a_reader_stops_past_the_edge_of_a_list_under_a_header() {
+    use flui_widgets::{Center, CustomScrollView, SliverList, SliverToBoxAdapter, Text};
+
+    let rows: Rc<dyn Fn(usize) -> Option<flui_view::BoxedView>> = Rc::new(|index| {
+        (index < 40).then(|| {
+            SizedBox::new(100.0, 50.0)
+                .child(Text::new(format!("row {index}")))
+                .boxed()
+        })
+    });
+    let view = Center::new().child(
+        SizedBox::new(100.0, 100.0).child(CustomScrollView::new(vec![
+            SliverToBoxAdapter::new()
+                .child(SizedBox::new(100.0, 30.0))
+                .boxed(),
+            SliverList::new(40, 50.0, rows).boxed(),
+        ])),
+    );
+    let mut laid = lay_out(view, tight(400.0, 400.0));
+    laid.enable_semantics();
+    laid.tick();
+    assert_eq!(
+        rows_a_reader_reaches(&laid),
+        ["row 0", "row 1", "row 2"],
+        "the rows in view under the header and the first past the edge"
     );
 }

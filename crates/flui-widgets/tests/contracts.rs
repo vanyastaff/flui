@@ -1007,6 +1007,7 @@ fn scroll_physics_and_activity() {
             ("scroll::scrollable_accessibility_ranges_follow_the_actual_axis", crate::scroll::scrollable_accessibility_ranges_follow_the_actual_axis),
             ("scroll::scroll_offsets_reach_platforms_from_the_top_or_left_edge", crate::scroll::scroll_offsets_reach_platforms_from_the_top_or_left_edge),
             ("scroll::a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in", crate::scroll::a_reader_reaches_the_row_past_a_lists_edge_and_scrolls_it_in),
+            ("scroll::a_reader_stops_past_the_edge_of_a_list_under_a_header", crate::scroll::a_reader_stops_past_the_edge_of_a_list_under_a_header),
             ("scroll::hover_holds_while_a_touch_scroll_is_latched", crate::scroll::hover_holds_while_a_touch_scroll_is_latched),
             ("scroll::constrained_sliver_updates_layout_without_replacing_the_child", crate::scroll::constrained_sliver_updates_layout_without_replacing_the_child),
             ("scroll::cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics", crate::scroll::cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics),

@@ -665,10 +665,11 @@ normalization. The direction check reads the last committed tree, which lags the
 the adapter's copy does; that lag matters only for a click-only expandable node (mapping
 decision 5, Limit).
 
-**Rows past a viewport.** Every agent operation (read, locate, wait, an action's resolution, the
-MCP tools) uses that one filter, as `flutter_test`'s `find` sees built rows past the viewport.
-Whether such a row is shown is the actionability `visible` check, so a tap on it fails with
-`not_actionable` (`visible`). Test: `tests/actionability.rs`
+**Rows past a viewport.** Every agent operation that names elements (read, locate, wait, an
+action's resolution, the MCP tools) uses that one filter, as `flutter_test`'s `find` sees built
+rows past the viewport. Whether such a row is shown is the actionability `visible` check, which
+alone reads `common_filter` with its clip rule and narrows the rect by every ancestor that clips
+its children, so a tap on it fails with `not_actionable` (`visible`). Test: `tests/actionability.rs`
 `a_reader_stops_past_a_scroll_views_edge_and_an_agent_reads_every_row`; `flui-testing`
 `a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible`.
 

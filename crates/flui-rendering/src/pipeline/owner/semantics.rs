@@ -859,18 +859,29 @@ struct PendingSemanticsNode {
 
 impl PendingSemanticsNode {
     /// The node as published. It clips its children when each of them lies
-    /// under a paint clip its own rect covers: nothing of a child is painted
-    /// outside the node, so a child wholly outside it is off screen. That is
-    /// a scrollable's content past its viewport, which Flutter marks
+    /// under a paint clip and the part of it the clip paints, if any, lies
+    /// inside the node's rect: nothing of a child is painted outside the
+    /// node, so a child wholly outside it is off screen. That is a
+    /// scrollable's content past its viewport, which Flutter marks
     /// `isHidden`, and AccessKit's filter leaves it out of navigation except
     /// the first child past each edge, which a reader moves to in order to
-    /// scroll it in.
+    /// scroll it in. The list node of a sliver that fills only part of its
+    /// viewport (under a header, inside padding, in an overscroll) clips its
+    /// rows too, though the viewport's clip is larger than its rect.
+    ///
+    /// A child with an empty or non-finite rect keeps the flag off: AccessKit
+    /// counts a child with no area as outside its clipping parent and drops
+    /// it unless a sibling next to it lies inside.
     fn form(self) -> BuiltSemanticsNode {
         let clips_children = !self.children.is_empty()
             && self.children.iter().all(|child| {
-                child
-                    .paint_clip
-                    .is_some_and(|clip| covers(&self.rect, &clip))
+                has_area(&child.rect)
+                    && child.paint_clip.is_some_and(|clip| {
+                        child
+                            .rect
+                            .intersect(&clip)
+                            .is_none_or(|painted| covers(&self.rect, &painted))
+                    })
             });
         BuiltSemanticsNode {
             source: self.source,
@@ -882,6 +893,16 @@ impl PendingSemanticsNode {
             children: self.children,
         }
     }
+}
+
+/// Whether `rect` is finite and has an area.
+fn has_area(rect: &Rect<f64>) -> bool {
+    let [left, top, right, bottom] = [rect.left(), rect.top(), rect.right(), rect.bottom()];
+    [left, top, right, bottom]
+        .iter()
+        .all(|edge| edge.is_finite())
+        && right > left
+        && bottom > top
 }
 
 /// Whether `outer` holds all of `inner`.
