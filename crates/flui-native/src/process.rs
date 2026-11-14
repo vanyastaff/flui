@@ -49,96 +49,160 @@ pub fn end_process(code: i32) -> ! {
 /// The system's error when the token or its user cannot be read.
 #[cfg(windows)]
 pub fn current_user_sid() -> std::io::Result<String> {
-    use windows::Win32::System::Threading::GetCurrentProcess;
+    use windows::Win32::Security::TokenUser;
 
-    // SAFETY: the current-process pseudo-handle is valid for the process's
-    // whole life and needs no closing.
-    user_sid_of(unsafe { GetCurrentProcess() })
+    token_sid(&Token::of_current()?, TokenUser)
 }
 
-/// The SID, in string form, of the user the process `pid` runs as: what the
-/// later launch of a single-instance application compares with its own
-/// before it hands its launch to the process serving the application's pipe.
+/// Who a process runs as: its user and its mandatory integrity level, each
+/// named by its SID in string form (`S-1-5-21-…`, `S-1-16-<level>`).
 ///
-/// # Errors
-///
-/// The system's error when the process cannot be opened for a query, or its
-/// token or user cannot be read.
-#[cfg(windows)]
-#[cfg(feature = "single-instance")]
-pub(crate) fn process_user_sid(pid: u32) -> std::io::Result<String> {
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+/// A single-instance application's later launch hands its launch only to a
+/// process of its own user at its own integrity level or above, and the
+/// first instance grants its mutex and pipe to its user and refuses writes
+/// from below its level, so an unelevated process of the same user cannot
+/// hand an elevated instance links and files.
+#[cfg(all(windows, feature = "single-instance"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TokenIdentity {
+    /// The user's SID.
+    pub(crate) user: String,
+    /// The integrity level's SID.
+    pub(crate) integrity: String,
+}
 
-    /// Closes the process handle on every path out.
-    struct Process(HANDLE);
-    impl Drop for Process {
-        fn drop(&mut self) {
-            // SAFETY: `self.0` is the handle `OpenProcess` opened below,
-            // owned by this guard alone and closed only here.
-            let _: windows::core::Result<()> = unsafe { CloseHandle(self.0) };
-        }
+#[cfg(all(windows, feature = "single-instance"))]
+impl TokenIdentity {
+    /// This process's identity.
+    ///
+    /// # Errors
+    ///
+    /// The system's error when the token cannot be read.
+    pub(crate) fn current() -> std::io::Result<Self> {
+        Self::of_token(&Token::of_current()?)
     }
 
-    // SAFETY: plain values; the handle returned is owned by the guard.
-    let process = Process(
-        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
-            .map_err(std::io::Error::from)?,
-    );
-    user_sid_of(process.0)
+    /// The identity of the process `pid`.
+    ///
+    /// # Errors
+    ///
+    /// The system's error when the process cannot be opened for a query, or
+    /// its token cannot be read.
+    pub(crate) fn of_process(pid: u32) -> std::io::Result<Self> {
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+        // SAFETY: plain values; the handle returned is owned by the guard.
+        let process = Handle(
+            unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+                .map_err(std::io::Error::from)?,
+        );
+        Self::of_token(&Token::of_process(&process)?)
+    }
+
+    fn of_token(token: &Token) -> std::io::Result<Self> {
+        use windows::Win32::Security::{TokenIntegrityLevel, TokenUser};
+
+        Ok(Self {
+            user: token_sid(token, TokenUser)?,
+            integrity: token_sid(token, TokenIntegrityLevel)?,
+        })
+    }
+
+    /// The integrity level: the last sub-authority of its SID, such as
+    /// `0x2000` for medium and `0x3000` for high. `None` for a SID that is
+    /// not a mandatory label's.
+    pub(crate) fn level(&self) -> Option<u32> {
+        self.integrity.strip_prefix("S-1-16-")?.parse::<u32>().ok()
+    }
 }
 
-/// The SID, in string form, of the user `process`'s token names.
+/// A handle closed on every path out.
 #[cfg(windows)]
-fn user_sid_of(process: windows::Win32::Foundation::HANDLE) -> std::io::Result<String> {
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
+struct Handle(windows::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for Handle {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is a handle the system opened for this guard,
+        // owned by it alone and closed only here.
+        let _: windows::core::Result<()> =
+            unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+/// A process token opened for a query.
+#[cfg(windows)]
+struct Token(Handle);
+
+#[cfg(windows)]
+impl Token {
+    /// This process's token.
+    fn of_current() -> std::io::Result<Self> {
+        use windows::Win32::System::Threading::GetCurrentProcess;
+
+        // SAFETY: the current-process pseudo-handle is valid for the
+        // process's whole life and needs no closing.
+        Self::of_raw(unsafe { GetCurrentProcess() })
+    }
+
+    /// The token of `process`, which the guard keeps open for the call.
+    #[cfg(feature = "single-instance")]
+    fn of_process(process: &Handle) -> std::io::Result<Self> {
+        Self::of_raw(process.0)
+    }
+
+    fn of_raw(process: windows::Win32::Foundation::HANDLE) -> std::io::Result<Self> {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Security::TOKEN_QUERY;
+        use windows::Win32::System::Threading::OpenProcessToken;
+
+        let mut raw = HANDLE::default();
+        // SAFETY: `process` is a process handle the caller keeps open for the
+        // call, and `raw` is a live out-pointer for it.
+        unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut raw) }
+            .map_err(std::io::Error::from)?;
+        Ok(Self(Handle(raw)))
+    }
+}
+
+/// The SID, in string form, that `token`'s `class` names: `TokenUser` and
+/// `TokenIntegrityLevel` both answer a `SID_AND_ATTRIBUTES` at the head of
+/// their buffer (`TOKEN_USER`, `TOKEN_MANDATORY_LABEL`).
+#[cfg(windows)]
+fn token_sid(
+    token: &Token,
+    class: windows::Win32::Security::TOKEN_INFORMATION_CLASS,
+) -> std::io::Result<String> {
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
     use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
-    use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
-    use windows::Win32::System::Threading::OpenProcessToken;
+    use windows::Win32::Security::{GetTokenInformation, SID_AND_ATTRIBUTES};
     use windows::core::PWSTR;
-
-    /// Closes the token on every path out.
-    struct Token(HANDLE);
-    impl Drop for Token {
-        fn drop(&mut self) {
-            // SAFETY: `self.0` is the token `OpenProcessToken` opened below,
-            // owned by this guard alone and closed only here.
-            let _: windows::core::Result<()> = unsafe { CloseHandle(self.0) };
-        }
-    }
-
-    let mut raw = HANDLE::default();
-    // SAFETY: `process` is a process handle the caller keeps open for the
-    // call, and `raw` is a live out-pointer for it.
-    unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut raw) }
-        .map_err(std::io::Error::from)?;
-    let token = Token(raw);
 
     let mut len = 0_u32;
     // SAFETY: a size query: no buffer, `len` a live out-pointer. It fails
     // with ERROR_INSUFFICIENT_BUFFER by design; `len` says whether it sized.
     let _: windows::core::Result<()> =
-        unsafe { GetTokenInformation(token.0, TokenUser, None, 0, &raw mut len) };
+        unsafe { GetTokenInformation(token.0.0, class, None, 0, &raw mut len) };
     if len == 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // `u64` storage keeps the TOKEN_USER at the head of the buffer aligned.
+    // `u64` storage keeps the structure at the head of the buffer aligned.
     let mut buffer = vec![0_u64; (len as usize).div_ceil(8)];
     // SAFETY: `buffer` holds at least `len` writable bytes, as passed.
     unsafe {
         GetTokenInformation(
-            token.0,
-            TokenUser,
+            token.0.0,
+            class,
             Some(buffer.as_mut_ptr().cast()),
             len,
             &raw mut len,
         )
     }
     .map_err(std::io::Error::from)?;
-    // SAFETY: the call succeeded, so the buffer starts with an initialised
-    // TOKEN_USER (aligned by the `u64` storage) whose SID points into the
-    // same buffer, which outlives this borrow.
-    let sid = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() }.User.Sid;
+    // SAFETY: the call succeeded for a class whose answer starts with a
+    // `SID_AND_ATTRIBUTES` (aligned by the `u64` storage), whose SID points
+    // into the same buffer, which outlives this borrow.
+    let sid = unsafe { &*buffer.as_ptr().cast::<SID_AND_ATTRIBUTES>() }.Sid;
     let mut text = PWSTR::null();
     // SAFETY: `sid` is valid while `buffer` lives; `text` is a live
     // out-pointer the call fills with a LocalAlloc'd string.

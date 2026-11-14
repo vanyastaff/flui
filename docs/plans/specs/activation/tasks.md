@@ -128,8 +128,10 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   `the_window_reopened_for_a_later_launch_comes_forward`). Запуск с рабочего стола — строка parity. Включение по `file-types` ждёт их чтения в `#[flui::main]`.
 - **AC10 (Windows).** Первый держит мьютекс `Local\flui-<app-id>-<session>` и сервер канала
   `\\.\pipe\flui-<app-id>-<session>` с DACL на SID пользователя и `PIPE_REJECT_REMOTE_CLIENTS`;
-  второй проверяет пользователя процесса сервера (`GetNamedPipeServerProcessId`), передаёт право на
-  передний план и кадр. Модель кадра на Linux CI: `a_launch_crosses_the_pipe_as_it_left` (ссылки,
+  метка целостности уровня первого (`S:(ML;;NW;;;<уровень>)`) не даёт писать процессу ниже уровнем;
+  второй проверяет пользователя и уровень процесса сервера (`GetNamedPipeServerProcessId`, не ниже
+  своего), передаёт право на передний план и кадр.
+  Модель кадра на Linux CI: `a_launch_crosses_the_pipe_as_it_left` (ссылки,
   пути не в UTF-16, пустой запуск, пределы), `a_launch_past_its_bounds_is_not_sent`,
   `a_malformed_frame_is_refused_whole` (длина до чтения тела, версия, вид, обрезка, хвост, NUL,
   не текст, больше 64 элементов); общая очередь с Linux: `the_owner_is_woken_once_attached_and_refuses_once_ended`

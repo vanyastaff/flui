@@ -42,6 +42,7 @@ use crate::executor::NativeExecutor;
 pub(crate) use crate::owner::single_instance::frame::Forwarded;
 use crate::owner::single_instance::frame::{self, FrameError};
 use crate::owner::single_instance::{HOLD, Inbox, MAX_WAITING, OwnerWake, hand_on};
+use crate::process::TokenIdentity;
 
 /// The first instance's answer to a launch it took.
 const TAKEN: u8 = 1;
@@ -311,10 +312,13 @@ pub(crate) fn claim(
     launch: &Forwarded,
 ) -> std::io::Result<Claim> {
     let session = session_id()?;
-    let user = crate::process::current_user_sid()?;
+    let me = TokenIdentity::current()?;
     let (mutex_name, pipe_name) = object_names(name, session);
-    // The current user alone, named by SID (`current_user_sid` says why).
-    let sddl = format!("D:P(A;;GA;;;{user})");
+    // The current user alone, named by SID (`current_user_sid` says why),
+    // and no write from a process below this one's integrity level: an
+    // unelevated process of the same user cannot open an elevated
+    // instance's mutex or write to its pipe (`TokenIdentity` says why).
+    let sddl = format!("D:P(A;;GA;;;{})S:(ML;;NW;;;{})", me.user, me.integrity);
     let (mutex, existed) = open_mutex(&mutex_name, &sddl)?;
     if !existed {
         let host = executor.handle();
@@ -351,7 +355,7 @@ pub(crate) fn claim(
                     .enable_all()
                     .build()?
                     .block_on(async {
-                        tokio::time::timeout(FORWARD_TIMEOUT, forward(&pipe_name, &user, &frame))
+                        tokio::time::timeout(FORWARD_TIMEOUT, forward(&pipe_name, &me, &frame))
                             .await
                             .map_err(|_| {
                                 std::io::Error::new(
@@ -369,18 +373,31 @@ pub(crate) fn claim(
 }
 
 /// Hand `frame` to the process serving `pipe_name`, once it is known to run
-/// as `user`, with the right to come to the foreground.
-async fn forward(pipe_name: &str, user: &str, frame: &[u8]) -> std::io::Result<()> {
+/// as `me`'s user at `me`'s integrity level or above, with the right to come
+/// to the foreground.
+async fn forward(pipe_name: &str, me: &TokenIdentity, frame: &[u8]) -> std::io::Result<()> {
     let mut pipe = connect(pipe_name).await?;
     let mut server = 0_u32;
     // SAFETY: the handle is the open client end of the pipe, which `pipe`
     // keeps open past the call; `server` is a live out-pointer for it.
     unsafe { GetNamedPipeServerProcessId(HANDLE(pipe.as_raw_handle()), &raw mut server) }
         .map_err(std::io::Error::from)?;
-    if crate::process::process_user_sid(server)? != user {
+    let serving = TokenIdentity::of_process(server)?;
+    if serving.user != me.user {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "the application's pipe is served by another user",
+        ));
+    }
+    // A process below this launch's level (one that took the name before an
+    // elevated launch) is handed nothing of it.
+    if serving
+        .level()
+        .is_none_or(|level| me.level().is_none_or(|mine| level < mine))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "the application's pipe is served below this launch's integrity level",
         ));
     }
     // The right goes with the launch: the first brings its window forward
