@@ -1622,7 +1622,12 @@ impl PresentationState {
         let regions = self
             .pipeline
             .with(flui_rendering::pipeline::PipelineOwner::input_regions);
-        *self.staged_input_regions.borrow_mut() = regions.into();
+        let mut staged = self.staged_input_regions.borrow_mut();
+        // A frame whose regions did not change keeps the staged slice, so a
+        // steady frame allocates no new one.
+        if **staged != *regions {
+            *staged = Rc::<[flui_platform::input_regions::InputRegion]>::from(regions);
+        }
     }
 
     /// Hands the window the staged input regions of a frame the sink accepted. Called on
@@ -1632,7 +1637,10 @@ impl PresentationState {
     /// The regions are committed before the backend runs, and no borrow is held while it
     /// does: a backend that panics or reenters leaves them committed for the next move.
     pub(crate) fn publish_input_regions(&self) {
-        let regions = self.staged_input_regions.take();
+        // The staged slice stays staged: the next frame compares its regions
+        // with it, and a scene that reaches the sink without a new stage hands
+        // the same regions again.
+        let regions = Rc::clone(&self.staged_input_regions.borrow());
         *self.published_input_regions.borrow_mut() = Rc::clone(&regions);
         self.hand_input_regions(&regions);
     }

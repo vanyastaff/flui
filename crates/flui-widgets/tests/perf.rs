@@ -465,6 +465,11 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         laid.pump_report(FRAME)
     });
     record("slide_transition_tick", &report, allocations);
+    assert_eq!(
+        allocations,
+        HeapCounts::default(),
+        "a steady slide tick allocates nothing"
+    );
 
     assert_eq!(report.build.elements_built, 0, "{report:#?}");
     assert!(
