@@ -181,7 +181,7 @@ Compositing produces an owned, immutable `SceneSnapshot` per presentation per fr
 
 ```rust
 pub struct SceneSnapshot {           // Send + Sync; moves by value; never Arc<Scene>
-    pub stamp: FrameStamp,           // presentation, epoch, surface and GPU-resource generation
+    pub stamp: FrameStamp,           // presentation, epoch and surface generation
     pub damage: DamageRegion,
     pub base: Option<SceneVersionId>,
     pub scene: Scene,

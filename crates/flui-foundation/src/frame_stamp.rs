@@ -1,17 +1,17 @@
 //! [`FrameStamp`] bundles the typed presentation address, per-UI runtime frame
-//! epoch, raster surface generation and GPU resource generation that cross
-//! the raster boundary together.
+//! epoch and raster surface generation that cross the raster boundary
+//! together.
 //!
-//! Every axis is required. In particular, [`GpuResourceGeneration`] and
-//! [`SurfaceGeneration`] protect different failure boundaries and must both
-//! be checked before rendering (ADR-0045 decision 4).
+//! A frame carries CPU data only: every GPU object it needs is derived inside
+//! the raster executor, which derives them again after a device rebuild, so no
+//! axis of the stamp names a device (ADR-0305 §6).
 //!
-//! [`FrameStamp::new`] takes these four values directly. A builder would not
+//! [`FrameStamp::new`] takes these three values directly. A builder would not
 //! make adding another required value compatible with existing callers:
 //! each caller must still supply it. The plain constructor exposes that
 //! requirement without another construction protocol.
 
-use crate::epoch::{FrameEpoch, GpuResourceGeneration, SurfaceGeneration};
+use crate::epoch::{FrameEpoch, SurfaceGeneration};
 use crate::id::PresentationAddress;
 
 /// The identity group that stamps one frame: which presentation produced it,
@@ -28,13 +28,9 @@ use crate::id::PresentationAddress;
 /// only the full pair safely distinguishes them. `surface_generation` is a
 /// separate axis, scoped *per presentation*: it is minted by that
 /// presentation's own raster seam (ADR-0037 §8), never by the UI runtime or by
-/// frame counting. `gpu_resource_generation` is a third, independent axis
-/// (ADR-0045 decision 4): `surface_generation` guards against a torn-down
-/// swapchain, `gpu_resource_generation` guards against a torn-down
-/// `wgpu::Device` — a shared device loss invalidates every surface on its
-/// owner thread at once, which is a materially different failure than one
-/// surface being resized, so the two are checked as separate clauses rather
-/// than folded into one counter.
+/// frame counting. A device rebuild advances the generation of every slot on
+/// the rebuilt device, so a frame stamped before it is refused by the same
+/// comparison (ADR-0305 §8).
 ///
 /// # `#[non_exhaustive]`, and what it does and does not do here
 ///
@@ -55,34 +51,29 @@ pub struct FrameStamp {
     pub epoch: FrameEpoch,
     /// The raster surface generation this frame was produced against.
     pub surface_generation: SurfaceGeneration,
-    /// The GPU-resource generation this frame was produced
-    /// against (ADR-0045 decision 4). See the type doc above for why this
-    /// is a separate axis from `surface_generation` rather than folded into
-    /// it.
-    pub gpu_resource_generation: GpuResourceGeneration,
 }
 
 impl FrameStamp {
-    /// Packages the four identity/versioning fields the raster boundary
+    /// Packages the three identity/versioning fields the raster boundary
     /// needs to accept, reject, or reconcile a frame.
     ///
-    /// All four fields are distinct newtypes (never the same underlying
-    /// type as one another), so transposing two arguments is a compile-time
-    /// type error, not a silent bug — see the second example below.
+    /// The fields are distinct newtypes (never the same underlying type as
+    /// one another), so transposing two arguments is a compile-time type
+    /// error, not a silent bug — see the second example below.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use flui_foundation::{
-    ///     FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
-    ///     UiRuntimeId, SurfaceGeneration,
+    ///     FrameEpoch, FrameStamp, PresentationAddress, PresentationId, UiRuntimeId,
+    ///     SurfaceGeneration,
     /// };
     ///
     /// let address = PresentationAddress {
     ///     ui_runtime_id: UiRuntimeId::new(1),
     ///     presentation_id: PresentationId::new(1),
     /// };
-    /// let stamp = FrameStamp::new(address, FrameEpoch::ZERO, SurfaceGeneration::ZERO, GpuResourceGeneration::ZERO);
+    /// let stamp = FrameStamp::new(address, FrameEpoch::ZERO, SurfaceGeneration::ZERO);
     ///
     /// assert_eq!(stamp.epoch, FrameEpoch::ZERO);
     /// ```
@@ -93,15 +84,15 @@ impl FrameStamp {
     ///
     /// ```compile_fail
     /// use flui_foundation::{
-    ///     FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
-    ///     UiRuntimeId, SurfaceGeneration,
+    ///     FrameEpoch, FrameStamp, PresentationAddress, PresentationId, UiRuntimeId,
+    ///     SurfaceGeneration,
     /// };
     ///
     /// let address = PresentationAddress {
     ///     ui_runtime_id: UiRuntimeId::new(1),
     ///     presentation_id: PresentationId::new(1),
     /// };
-    /// let stamp = FrameStamp::new(address, SurfaceGeneration::ZERO, FrameEpoch::ZERO, GpuResourceGeneration::ZERO);
+    /// let stamp = FrameStamp::new(address, SurfaceGeneration::ZERO, FrameEpoch::ZERO);
     ///
     /// assert_eq!(stamp.epoch, FrameEpoch::ZERO);
     /// ```
@@ -110,13 +101,11 @@ impl FrameStamp {
         address: PresentationAddress,
         epoch: FrameEpoch,
         surface_generation: SurfaceGeneration,
-        gpu_resource_generation: GpuResourceGeneration,
     ) -> Self {
         Self {
             address,
             epoch,
             surface_generation,
-            gpu_resource_generation,
         }
     }
 }

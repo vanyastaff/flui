@@ -41,6 +41,8 @@ mod frame_unwind;
 #[path = "leader_watch.rs"]
 mod leader_watch;
 
+#[path = "child_geometry.rs"]
+mod child_geometry;
 #[path = "child_parent_data.rs"]
 mod child_parent_data;
 #[path = "layout_poison.rs"]
@@ -84,6 +86,8 @@ mod sliver_hit_direction_matrix;
 mod sliver_to_box_adapter;
 #[path = "structural_invalidation.rs"]
 mod structural_invalidation;
+#[path = "subtree_removal.rs"]
+mod subtree_removal;
 #[path = "text_context.rs"]
 mod text_context;
 #[path = "transform_to.rs"]

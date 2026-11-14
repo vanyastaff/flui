@@ -18,8 +18,8 @@ use flui_engine::{
     testing::{ScriptedAnswer, ScriptedSlots, SlotCall},
 };
 use flui_foundation::{
-    FrameEpoch, FrameStamp, GpuResourceGeneration, ManualClock, MonotonicClock,
-    PresentationAddress, PresentationId, SurfaceGeneration, UiRuntimeId,
+    FrameEpoch, FrameStamp, ManualClock, MonotonicClock, PresentationAddress, PresentationId,
+    SurfaceGeneration, UiRuntimeId,
     geometry::{DeviceSize, Rect},
     memory::MemoryPressureLevel,
     panic::FirstPanic,
@@ -119,12 +119,7 @@ fn snapshot(at: Attached, epoch: u64, damage: DamageRegion, scene: Scene) -> Sce
         frame_epoch = frame_epoch.next();
     }
     SceneSnapshot::new(
-        FrameStamp::new(
-            at.address,
-            frame_epoch,
-            at.generation,
-            GpuResourceGeneration::ZERO,
-        ),
+        FrameStamp::new(at.address, frame_epoch, at.generation),
         damage,
         scene,
     )

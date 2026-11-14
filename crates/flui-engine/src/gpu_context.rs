@@ -1429,8 +1429,8 @@ fn device_extent(size: DeviceSize) -> EngineResult<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use flui_foundation::{
-        FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
-        SurfaceGeneration, UiRuntimeId,
+        FrameEpoch, FrameStamp, PresentationAddress, PresentationId, SurfaceGeneration,
+        UiRuntimeId,
         geometry::{DeviceSize, Offset, Rect},
     };
     use flui_layer::{DamageRegion, LayerTree, Scene, SceneBuilder, SceneSnapshot};
@@ -1522,12 +1522,7 @@ mod tests {
         RasterCommand::Frame {
             slot,
             snapshot: SceneSnapshot::new(
-                FrameStamp::new(
-                    address,
-                    FrameEpoch::ZERO,
-                    generation,
-                    GpuResourceGeneration::ZERO,
-                ),
+                FrameStamp::new(address, FrameEpoch::ZERO, generation),
                 DamageRegion::Full(flui_layer::FullReason::FirstFrame),
                 Scene::new(tree),
             ),
