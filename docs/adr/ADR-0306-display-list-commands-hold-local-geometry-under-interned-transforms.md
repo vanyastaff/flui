@@ -3,8 +3,8 @@
 - **Status:** Accepted (2026-11-03)
 - **Date:** 2026-11-03
 - **Superseded-by:** [ADR-0333](ADR-0333-a-display-list-keeps-large-payloads-beside-its-commands.md) for
-  §3's boxed payloads, `Path` as one pointer and the `size_of::<Path>()` assertion; §3's two size
-  assertions and the other sections remain in force
+  how §3's large payloads are held (beside the op, not boxed, and `Path` not one pointer); §3 below
+  states the current rule
 - **Supersedes:** [ADR-0066](ADR-0066-display-list-command-representation.md) "The command is
   `{ transform, op }`" and "The op has a budget" only (the absolute matrix stored in every command,
   `draw_picture` as a per-command re-stamp, and the unasserted 128- and 192-byte budget with a
@@ -14,7 +14,8 @@
   [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md) (a retained
   chunk holds one render object's list, and its recording cache keys on the composed placement);
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md) §4 (the paragraph payload, unchanged);
-  [ADR-0115](ADR-0115-image-source-affine-paint-boundary.md) (the image-region op, now boxed);
+  [ADR-0115](ADR-0115-image-source-affine-paint-boundary.md) (the image-region op, whose placement is
+  a payload beside it);
   [ADR-0149](ADR-0149-interpolation-contracts.md) §1 (an interpolation carries NaN into geometry);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) §1 (state is committed
   before user code runs); [ADR-0006](ADR-0006-c-ir-record-replay-seam.md) §4 (the one
@@ -130,30 +131,19 @@ origin in `f64` before narrowing (`text.rs:67-83`). Image source rectangles stay
 in `f64`; stroke widths, dash intervals and shader coordinates stay in `Paint`, in the op's local
 space.
 
-§3. **The op has an asserted size; fat payloads are boxed; `Path` is one pointer.**
+§3. **The op has an asserted size; its large payloads live beside it.**
 
 ```rust
-pub enum DrawOp {
-    // …
-    DRRect(Box<DRRectOp>),                  // 200 bytes inline before
-    ImageRegion(Box<ImageRegionOp>),        // 216
-    ImageFiltered(Box<ImageFilteredOp>),    // 144
-    // …
-}
-pub struct DRRectOp { pub outer: RRect, pub inner: RRect, pub paint: Arc<Paint> }
-// `ImageRegionOp` and `ImageFilteredOp` carry their variants' former fields, `pub` for reading.
-
-pub struct Path(Arc<PathData>);             // geometry, hint, fill type and bounds; mutators
-                                            // go through `Arc::make_mut`
 const _: () = assert!(size_of::<DrawOp>() <= 112);
 const _: () = assert!(size_of::<RecordedOp>() <= 120);
-const _: () = assert!(size_of::<Path>() == size_of::<usize>());
 ```
 
+An op whose data is larger than the rest (a path, `DRRect`'s two rounded rectangles, an image
+region's placement, a colour filter) holds a `PayloadId` into its list's payload buffer, which the
+list clears and keeps with its commands ([ADR-0333](ADR-0333-a-display-list-keeps-large-payloads-beside-its-commands.md)).
 The largest inline payloads are then `RRect`, `ClipRRect`, `ClipRSuperellipse`, `Vertices` and
-`Atlas`, 104 bytes each. A variant that grows past them boxes its payload, and the assertions make
-a forgotten box a build failure. `Vertices` and `Atlas` stay inline: boxing them saves nothing
-while `RRect` is 104 bytes inline. `Path::shares_commands_with` compares the one pointer.
+`Atlas`, 104 bytes each, and the assertions make a variant that grows past them a build failure.
+`Vertices` and `Atlas` stay inline: moving them out saves nothing while `RRect` is 104 bytes inline.
 
 §4. **Non-finite input is refused at record, by kind, and counted.**
 
@@ -170,7 +160,7 @@ impl DrawOp { fn is_finite(&self) -> bool; }    // exhaustive, no wildcard
 
 `DrawOp::is_finite` checks every `f64` the op holds (coordinates, radii, angles, elevation,
 opacity, source and tile rectangles, an atlas's transforms, vertices and texture coordinates), its
-path's points (through a flag `PathData` keeps current in its mutators: its bounds cannot
+path's points (through a flag `Path` keeps current in its mutators: its bounds cannot
 stand in, since kurbo 0.13.1, the locked version, folds a path's segment boxes with `f64::min` and
 `max` (its src/bezpath.rs lines 953-964 and src/rect.rs lines 198-205), which drop a NaN operand), and its paint's
 values (stroke width, dash intervals and
@@ -245,13 +235,12 @@ code, after the list is complete.
 - Good, because one painter's NaN, which an interpolation can produce (ADR-0149 §1), costs that op
   and not the frame.
 - Good, because the budget cannot drift again: the assertions fail the build.
-- Bad, because a uniform rounded border (`crates/flui-painting/src/decoration.rs:570`), a focus ring
-  and Material's switch, checkbox and chip outlines allocate one box per recorded `DRRect`, and an
-  image region or a filtered image one each; a retained chunk pays it once per recording.
+- Bad, because a cold list pays one allocation for its payload buffer the first time it stores a
+  payload (ADR-0333); a warm one records again into the room it keeps.
 - Bad, because 120 bytes is not option 4's 72: about 9.6 MB more at 200,000 operations.
 - Bad, because the reader is a view: code that took `commands()` as a slice, indexed a list, or used
   `commands().as_ptr()` as identity
-  moves to `iter`, `get` and the address of a yielded `op`, and every match on the three boxed
+  moves to `iter`, `get` and the address of a yielded `op`, and every match on the payload-holding
   variants changes, the engine's dispatch included.
 - Bad, because `append` adds a base to each appended id: a pass over the appended commands instead
   of one copy.
@@ -262,7 +251,7 @@ code, after the list is complete.
 
 ### Confirmation
 
-- The compiler: the three `const` assertions of §3; `TransformId` and `RecordedOp` are private to
+- The compiler: the two `const` assertions of §3; `TransformId` and `RecordedOp` are private to
   `flui_painting::display_list`; `DrawOp::is_finite` and the kind match of §4 have no wildcard, so
   a new variant states its check.
 - `recording_contract` (`crates/flui-painting/tests/main.rs:511`), with rows to be added in
@@ -337,7 +326,7 @@ code, after the list is complete.
   them at the first build.
 - `display_list_record` (`crates/flui-painting/benches/display_list_record.rs`) measures recording;
   its `draw_picture_replay` case becomes an `append_isolated` case, and a `DRRect` joins
-  `record_mixed_scene` so the box's cost is visible.
+  `record_mixed_scene` so the payload buffer's cost is visible.
 - An `f32` form relative to a chunk's origin belongs, if anywhere, in the engine's cached IR of a
   chunk (ADR-0304), where the composed device scale is known. Revisit option 4 for the list itself
   only if a measured scene of 100,000 nodes, with retained chunks in place, holds more than a third
