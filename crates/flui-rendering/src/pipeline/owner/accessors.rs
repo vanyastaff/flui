@@ -713,7 +713,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         );
 
         let former_parent = self.render_tree.parent(id);
-        let subtree = self.render_tree.collect_subtree_ids(id);
+        let (subtree, removed) = self.render_tree.collect_subtree(id);
         if subtree.is_empty() {
             return 0;
         }
@@ -735,7 +735,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
         }
 
-        let removed: rustc_hash::FxHashSet<RenderId> = subtree.iter().copied().collect();
         self.scheduler.evict(&removed);
         // Layout-poison records for the removed subtree die here too, so
         // the map does not accumulate entries for nodes that no longer
@@ -753,7 +752,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
         }
 
-        let removed_nodes = self.render_tree.take_subtree(id);
+        let removed_nodes = self.render_tree.take_subtree(&subtree);
         let count = removed_nodes.len();
         if self.root_id == Some(id) {
             self.root_id = None;
