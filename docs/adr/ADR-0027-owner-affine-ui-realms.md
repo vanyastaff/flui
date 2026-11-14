@@ -283,7 +283,7 @@ reintroducing `Send` on the layout arena's node pointers without a fresh soundne
 | **Native window == runtime** | Cannot express embedded views, headless UI, offscreen rendering, tabs, external displays or one session across surfaces. 1 UI runtime × 1 window is the default *policy*. |
 | **Fully sequential status quo** | Leaves broken foreground dispatch, unbounded queues and singleton test locks, and no seam for decode or multi-window. |
 | Epoch arithmetic across UI runtime recreation | Rests on cross-lifetime monotonicity nothing enforces; channel identity makes the question unaskable. |
-| One FIFO for all delivery guarantees | A raster lifecycle command could wait behind coalesced frames, and a coalesced frame or invalidation would reorder or drop input, which must keep causal order. |
+| One FIFO for all delivery guarantees | Frames could not be coalesced, so a lifecycle command would queue behind stale frames, and coalescing a frame or invalidation in place would reorder it against input, which must keep causal order. |
 | `Arc<Scene>` handoff | Invites retained references and defeats latest-frame-wins accounting. |
 | One god runtime object | `UiRuntime`/`AppRuntime` own, wire and vend capabilities; behavior stays in subsystems. |
 | Bevy's `NonSend`-in-a-`Send`-world | A natively `!Send` owner holding thread-affine state directly is simpler, and Bevy is moving away from the pattern. |
