@@ -115,10 +115,10 @@ mod announce;
 mod device_loss;
 #[path = "contracts/display_timing.rs"]
 mod display_timing;
-#[path = "contracts/frame_settlement.rs"]
-mod frame_settlement;
 #[path = "contracts/frame_rate_demand.rs"]
 mod frame_rate_demand;
+#[path = "contracts/frame_settlement.rs"]
+mod frame_settlement;
 #[path = "contracts/input_tap.rs"]
 mod input_tap;
 #[path = "contracts/io_runtime.rs"]
