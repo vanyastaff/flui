@@ -2,7 +2,7 @@
 //!
 //! This crate is where a UI runtime and its per-presentation frame machinery live,
 //! below the hosts that drive it: the runners, the platform wiring and the
-//! raster lane stay in `flui-app`, which is its only normal dependent. It is
+//! raster executor host stay in `flui-app`, which is its only normal dependent. It is
 //! internal: nothing here is an embedder API (ADR-0027 §9) except the
 //! host-injection seam in [`execution`] and the frame-failure vocabulary in
 //! [`frame_failure`], which `flui-app` and the `flui` facade re-export and

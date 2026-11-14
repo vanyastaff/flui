@@ -6,8 +6,8 @@
 //! `Renderer::render_scene`). The producer is the retained scene: each
 //! publication carries the footprint of its patches since the version on screen,
 //! held to that base by `flui_layer::RasterBase` (ADR-0304 §5, §7), and reaches the tracker through
-//! `RasterOwner::pump`, which marks every frame it retires — presented or not
-//! — so debt a frame did not present stays here until one does.
+//! the raster executor's slot when the frame renders. A frame that is hidden or
+//! stale never reaches the tracker: its slot owes the next frame a full repaint instead.
 //!
 //! The accumulator keeps one bounding rectangle, because the one consumer
 //! ([`damage_rect`](crate::damage::DamageTracker::damage_rect)) reads exactly that. A multi-rect scissor

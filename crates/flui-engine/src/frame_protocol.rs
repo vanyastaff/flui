@@ -381,7 +381,7 @@ impl FrameProtocol {
     }
 
     /// Opens a frame that no damage producer accounted for (a scene rendered
-    /// straight through `Renderer::render_scene` instead of a raster owner):
+    /// straight through `Renderer::render_scene` instead of an executor slot):
     /// it renders in full.
     pub(crate) fn begin_unmanaged(&mut self) {
         self.damage.mark_full_repaint();

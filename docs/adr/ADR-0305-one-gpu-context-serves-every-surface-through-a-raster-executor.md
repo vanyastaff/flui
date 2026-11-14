@@ -16,6 +16,10 @@
     `Renderer::recreate_surface` as the window's entry points).
   - [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 1's delivery only
     (the pre-present hook installed through `RasterBackend::set_pre_present_hook`).
+  - [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §4's former shutdown-completion and
+    frame-telemetry rows, §5's raster protocol and §7 steps 3 and 4 only (acknowledgements on a
+    lossy telemetry lane, a one-shot shutdown completion, a raster owner per presentation): a slot
+    of the one executor settles each frame with a verdict.
 - **Amends:** [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §3, §4 and §7
   (their shape: the executor owns the context, and a slot per presentation holds what §4 calls
   its raster owner state and §7's external textures);
@@ -59,7 +63,7 @@ has neither. Evidence is at `e5ba8fe8f`.
 | A retired window's target answers `Unavailable` from then on, so an instance holding it panics at the next surface it creates | `crates/flui-platform/src/surface_target.rs:28-56`; `crates/flui-native/src/window/linux/wayland.rs:2547-2575`; `crates/flui-native/src/window/linux/x11/window.rs:1180-1230` |
 | A surface is made only on the main thread (Apple) or the looper thread (Android) | `surface_target.rs:18-25` |
 | The lane sits behind `Arc<Mutex<_>>`, justified by callbacks that "require `Send` closures"; the registrations take none, and the frame driver beside it already holds a `std::rc::Weak` | `desktop.rs:245-252`, `:419-425`; the former `raster_lane.rs:72-81`; `crates/flui-app/src/app/runner/window_routes.rs:185-237`; `crates/flui-app/src/app/runner/window_install.rs:269` |
-| Eight production calls reach past the raster protocol into the backend | `crates/flui-engine/src/raster_owner.rs:1258` and the table in §12 |
+| Eight production calls reach past the raster protocol into the backend | the former `raster_owner.rs:1258` and the table in §12 |
 | The GPU-resource axis of a frame stamp is `ZERO` on both sides, and its rejection is unreachable | `raster_lane.rs:344-348`, `:398-407` |
 | A presented `Fifo` frame on the Vulkan and Wayland path blocks its thread until vsync (Windows is unmeasured), and a device rebuild blocks on `pollster` — today on the one owner thread every runtime shares | `renderer.rs:1751-1760`; the former `runner/device_recovery.rs:33`; ADR-0266 |
 | wgpu's acquire timeout is a fixed second, and Metal ignores it | `wgpu-core/src/present.rs:32`, `:178`; `wgpu-hal/src/metal/surface.rs:349` |
@@ -242,7 +246,7 @@ pub enum RasterSendError { Full(RasterCommand), StaleSlot(RasterCommand), Gone(R
   reports it detached, and an index whose generation would overflow is retired, never reused. A
   command naming a stale `SlotId` is refused with `StaleSlot`. A slot is bound to the
   `PresentationAddress` it was attached with, and a frame stamped with another address is refused
-  as today (`RasterSubmitError::AddressMismatch`).
+  with `StaleSlot`, as the former raster owner refused it with `AddressMismatch`.
 - **Carriers.** `Attach`, `Release`, `Restore`, `Detach` and `RetryDevice` travel in order on a
   bounded lifecycle queue (`LIFECYCLE_CAPACITY`, 64); a full queue answers `Full` with the command,
   and the owner sends it again after the executor's next wake. `Frame` and `Configure` coalesce
@@ -257,7 +261,7 @@ pub enum RasterSendError { Full(RasterCommand), StaleSlot(RasterCommand), Gone(R
 - **Locks.** The inbox's lock is held only to swap values; the raster side never holds it across
   acquire, render or present, and no drop and no wake runs under it: a superseded scene is dropped
   after the lock is released, since its destructor can be user code.
-- `with_backend` (`raster_owner.rs:1258`, `raster_lane.rs:283-284`) is deleted; §12 maps each of
+- The former raster owner's `with_backend` is deleted; §12 maps each of
   its production callers to a command.
 - A `SlotTarget::Offscreen` slot renders to a texture the executor reads back, so the headless
   renderer becomes a `GpuContext` with offscreen slots, on the path windows use
@@ -287,7 +291,7 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
   of a slot whose ring is full, so none is overwritten. A frame superseded in the inbox gets no
   settlement of its own: the settlement of the frame that superseded it settles it too, and the
   UI runtime folds its record into that frame's. Then the executor calls the host's wake, with no lock held
-  and contained (`raster_owner.rs:205-227`); the owner drains the record on its own thread and
+  and contained (`RasterExecutor::turn`); the owner drains the record on its own thread and
   calls `settle_frame` after its own borrows are released (ADR-0287 §1).
 - A settlement whose address or epoch no pending record holds is `Stale`, traced and ignored:
   `FrameEpoch` counts within one runtime's life, and the address carries the runtime's
@@ -325,7 +329,7 @@ holds per slot: the counter lives in the slot's inbox state and changes only und
 the raster side mints there on a lost surface, and a frame renders only when its stamp equals the
 applied configuration's generation. `SurfaceGeneration::ZERO` still means no surface, and a size
 with a zero or negative side mints no generation and leaves the slot unconfigured, as `resize`
-answers `None` for it today (`raster_owner.rs:928`). Where the slot's surface and size stand is
+answered `None` for it in the former raster owner. Where the slot's surface and size stand is
 one state, `SlotSurface { hold: SurfaceHold, size: SlotSize }`, which changes only through its
 transition function under the inbox lock and which `SlotRecord::surface` publishes; the owner
 decides from it (a new surface, another size, nothing until the window changes), and a failure the
@@ -344,8 +348,8 @@ after the backend's answer is in the state: neither a lost surface, a `Restore` 
 cannot configure the size authorises frames laid out for a size the slot does not have. The transition table is in `raster_executor/surface.rs`, and
 `window_slots::each_surface_event_reaches_the_record` drives each row through the executor.
 `GpuResourceGeneration`, `FrameStamp::gpu_resource_generation`,
-`RasterHandle::bind_gpu_resource_generation` (`raster_owner.rs:954`) and
-`PumpOutcome::ResourceOutdated` are deleted: a frame carries CPU data only, every GPU object it
+the former `RasterHandle::bind_gpu_resource_generation` and
+the former `PumpOutcome::ResourceOutdated` are deleted: a frame carries CPU data only, every GPU object it
 needs is derived inside the executor, and the executor re-derives all of them after a rebuild
 (§8), so no frame can be stale against a device. ADR-0037 §8 holds with the slot as the
 presentation's raster owner.
@@ -565,20 +569,18 @@ the facade. Every production use of `with_backend` becomes:
 - Conformance, to be added in `flui-native`: `a_surface_targets_display_equals_the_platforms_connection`,
   one row per host, in `flui-native`'s Linux suites: the Wayland row under a headless `weston`,
   the X11 row under `Xvfb`, the winit and headless rows without a display server.
-- Kept and rewritten per slot: the raster owner's protocol tests
-  `latest_frame_wins_supersedes_pending`, `stale_surface_generation_is_rejected_before_render`,
+- The raster protocol's tests, per slot, in `crates/flui-engine/tests/raster_executor.rs`:
+  `latest_frame_wins_and_superseded_damage_folds_into_the_survivor`,
+  `stale_surface_generation_is_rejected_before_render`,
   `trims_coalesce_to_the_strongest_level_and_apply_before_the_frame`,
-  `superseded_damage_folds_into_the_survivor`, `device_lost_completion_retires_the_ticket`,
-  `quarantined_domain_requests_device_recovery`,
-  `panic_mid_render_retires_the_ticket_and_capacity_is_usable_again`,
-  `every_failure_boundary_retires_its_ticket`,
-  `stalled_capacity_then_released_wakes_with_no_external_trigger`,
-  `transient_render_failure_is_durable_without_a_telemetry_ack` and
-  `shutdown_and_backpressure_are_typed_and_live`; ADR-0244's `gpu_backend_fallback_order`; and
+  `every_render_outcome_settles_its_frame`,
+  `a_stopped_executor_settles_every_pending_frame_failed`,
+  `a_full_settlement_ring_holds_the_next_frame`,
+  `a_full_lifecycle_queue_returns_the_command` and
+  `a_command_sent_during_the_stop_comes_back_gone`; ADR-0244's `gpu_backend_fallback_order`; and
   ADR-0267's `a_frame_dropped_on_a_lost_device_waits_out_the_backoff`,
   `a_failed_rebuild_is_reported_with_the_dropped_frame`,
   `a_given_up_rebuild_holds_frames_until_the_application_asks_again`,
-  `a_rebuild_failing_at_the_ceiling_is_given_up_until_the_application_asks`,
   `a_lost_device_waits_out_its_rebuild_backoff` and
   `a_given_up_device_renders_again_when_the_application_asks`.
 - Runs: a platform's placement becomes threaded only with its row in `docs/platform-parity.md`

@@ -9,6 +9,9 @@
 - **Superseded-by:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md) for §2 (the
   thread-affinity table) and §9's items on the public API's thread affinity and the
   cross-thread vocabulary: one record states what stays on the owner thread and what crosses.
+- **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) for
+  §4's former shutdown-completion and frame-telemetry rows, §5's raster protocol and §7 steps 3 and 4: a
+  slot of the one raster executor settles each frame.
 - **Date:** 2026-07-11
 - **Revised:** 2026-11-03 — the title no longer calls FLUI a multi-threaded runtime: one owner
   thread hosts every UI runtime (ADR-0266), and the parallelism is outside the UI transaction.
@@ -107,7 +110,7 @@ AppRuntime — process/application host (one per process)
         ├── element tree + BuildOwner, PipelineOwner + render tree
         ├── focus tree + gesture/input state
         ├── FrameClock (vsync, refresh rate, visibility, throttling)
-        └── SceneSnapshot producer → raster owner (SurfaceGeneration authority)
+        └── SceneSnapshot producer → its `RasterExecutor` slot (SurfaceGeneration authority)
 ```
 
 Instantiation is **policy, not architecture**: desktop default is one UI runtime per window; fully
@@ -163,11 +166,10 @@ preparation; asset I/O; heavy user computation.
 
 | Lane | Guarantee | Mechanism | When full |
 |---|---|---|---|
-| Control / shutdown completion | exactly once | one-shot channel per handshake | cannot fill |
+| Raster lifecycle commands (attach, release, restore, detach, device retry) | in order, bounded | the executor's bounded channel (`LIFECYCLE_CAPACITY`), drained before each turn's frames | typed `RasterSendError::Full` returning the command |
 | Owner inbox: worker results, framework commands | bounded, typed backpressure | bounded channel (256 default), bounded drain pass per batch | `try_send` → typed `ChannelFull` returning the rejected command |
 | Coalesced invalidations (redraw/rebuild/repaint) | idempotent, latest state | atomic flag / set-dedup inbox | n/a |
-| Frame snapshots | latest frame wins | single-slot mailbox; replacing an unstarted frame acks `Dropped{Superseded}` | never full |
-| Frame telemetry acks | explicitly lossy | bounded `try_send`; drops traced | lossy by contract |
+| Frame snapshots | latest frame wins, each settled once | each slot's single-frame inbox; a frame superseded before it renders is settled by the verdict of the frame that replaced it | never full |
 | Input | causal order, never coalesced or reordered | direct dispatch + the reentrancy FIFO (§3) | n/a |
 
 No unbounded channels on runtime paths, no `Arc<Mutex<Vec<_>>>` mailboxes, no public generic
@@ -178,24 +180,24 @@ No unbounded channels on runtime paths, no `Arc<Mutex<Vec<_>>>` mailboxes, no pu
 Compositing produces an owned, immutable `SceneSnapshot` per presentation per frame:
 
 ```rust
-pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
-    pub ui_runtime_id: UiRuntimeId,
-    pub epoch: FrameEpoch,
-    pub surface_generation: SurfaceGeneration,
+pub struct SceneSnapshot {           // Send + Sync; moves by value; never Arc<Scene>
+    pub stamp: FrameStamp,           // presentation, epoch, surface and GPU-resource generation
     pub damage: DamageRegion,
+    pub base: Option<SceneVersionId>,
     pub scene: Scene,
+    pub textures: TextureUpdates,
 }
 ```
 
-- The raster owner solely owns the renderer (surface, device, queue).
-- It is bound to one presentation and is the `SurfaceGeneration` authority: a
+- The presentation's slot of the `RasterExecutor` (`flui-engine`) owns its surface and frame
+  protocol; the executor owns the one `GpuContext` (device, queue, shared painter) the slots draw with.
+- A slot is bound to one presentation and is the `SurfaceGeneration` authority: a
   reconfigure/resize bumps the generation before the next frame is accepted, and a frame whose
-  generation mismatches is rejected before rendering with `SurfaceOutdated`.
-- Acks (`Presented`, `Dropped`, `SurfaceOutdated`, `DeviceLost`) carry the frame identity and
-  travel on the lossy telemetry lane; shutdown completion has its own one-shot channel.
-- Which thread the raster owner runs on is ADR-0045's decision. The protocol is exercised by a
-  threaded test harness, because under a synchronous raster owner its drop, stale-generation and
-  shutdown paths are unreachable.
+  generation mismatches is refused before rendering with the verdict `SurfaceStale`.
+- The slot answers each frame with a `RasterVerdict` (`Presented`, `NoPresent`, `NotShown`,
+  `Retry`, `SurfaceStale`, `DeviceLost`, `Failed`).
+- The executor runs inline on the owner thread (ADR-0305); no raster thread ships, and a threaded
+  placement would keep this protocol.
 
 ### 6. Identity, versioning, cancellation — freshness is per work class
 
@@ -223,9 +225,8 @@ pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
 0. `AppRuntime` detaches the UI runtime's platform callbacks — delivery stops before teardown.
 1. The UI runtime stops accepting frames; the owner inbox flips to drain-and-refuse (`OwnerGone`).
 2. Worker jobs are cancelled; in-flight results hit the refused inbox or fail freshness.
-3. The snapshot mailbox closes; the raster owner finishes or drops in-flight work and fires the
-   one-shot shutdown completion.
-4. Renderer and surface teardown happen in the raster owner before the window handle is
+3. The slot's inbox closes with `Detach`; the executor finishes or drops the in-flight work.
+4. Renderer and surface teardown happen in the slot before the window handle is
    destroyed.
 5. The UI runtime drops; surviving handles turn `OwnerGone`.
 
@@ -282,7 +283,7 @@ reintroducing `Send` on the layout arena's node pointers without a fresh soundne
 | **Native window == runtime** | Cannot express embedded views, headless UI, offscreen rendering, tabs, external displays or one session across surfaces. 1 UI runtime × 1 window is the default *policy*. |
 | **Fully sequential status quo** | Leaves broken foreground dispatch, unbounded queues and singleton test locks, and no seam for decode or multi-window. |
 | Epoch arithmetic across UI runtime recreation | Rests on cross-lifetime monotonicity nothing enforces; channel identity makes the question unaskable. |
-| One FIFO for all delivery guarantees | Shutdown drain-and-refuse would deadlock the completion handshake; telemetry could displace control messages. |
+| One FIFO for all delivery guarantees | Frames could not be coalesced, so a lifecycle command would queue behind stale frames, and coalescing a frame or invalidation in place would reorder it against input, which must keep causal order. |
 | `Arc<Scene>` handoff | Invites retained references and defeats latest-frame-wins accounting. |
 | One god runtime object | `UiRuntime`/`AppRuntime` own, wire and vend capabilities; behavior stays in subsystems. |
 | Bevy's `NonSend`-in-a-`Send`-world | A natively `!Send` owner holding thread-affine state directly is simpler, and Bevy is moving away from the pattern. |

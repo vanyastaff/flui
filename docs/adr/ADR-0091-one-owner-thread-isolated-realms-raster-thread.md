@@ -5,7 +5,7 @@
   thread is the model, not a stage before per-runtime threads; the spike and `OwnerExecutor` are
   withdrawn)
 - **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
-  for §6 only (the optional move of `RasterOwner` into the runtime once ADR-0087 §1 lands: ADR-0087
+  for §6 only (the optional move of the raster owner into the runtime once ADR-0087 §1 lands: ADR-0087
   §1 is withdrawn, and the raster executor stays in `flui-engine`)
 - **Amended by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   for §3, §4 and §7, which it gives their shape: one raster executor owns the `GpuContext`, inline or on the raster
@@ -107,7 +107,7 @@ Parallel layout within one UI runtime is not a goal, and the barrier is named: `
 
 `GpuContext` holds the instance, adapter, device, queue, `wgpu::PipelineCache`, the closed effect
 catalogue with its pre-warm, and the atlases. There is one per application. It is owned by the
-runtime host and handed to each presentation's raster owner at construction; it is never a
+runtime host and handed once to the raster executor, which owns it; the context holds every slot and lends each the device as it draws; it is never a
 `static` and never reached ambiently ([ADR-0097](ADR-0097-no-process-global-state-gate.md) gates
 that). This is what distinguishes it from the process-global resource ADR-0045 rejected: sharing
 is a constructor decision, as ADR-0027 §1 already describes `SharedEngineServices`.
@@ -124,9 +124,9 @@ this per owner thread; there is now one owner thread).
 
 One raster thread serves every presentation of a `GpuContext` through H2. The glyph atlas and the
 image atlas live on that thread with exactly one owner and no lock. Each presentation keeps its
-own raster owner state — its mailbox, its `SurfaceGeneration` counter (ADR-0045 decision 4), its
-surface — so ADR-0027 §5's "bound to one presentation" still holds per raster owner; what changes
-is that several raster owners share one thread. Per-window raster threads with per-window atlas
+own slot state — its inbox, its `SurfaceGeneration` counter (ADR-0045 decision 4), its
+surface — so ADR-0027 §5's "bound to one presentation" still holds per slot; what changes
+is that several slots share one executor. Per-window raster threads with per-window atlas
 preparation and a merged upload are the alternative the H2 spike measures, with an atlas
 contention counter as its metric.
 
@@ -134,7 +134,7 @@ contention counter as its metric.
 
 ADR-0045's single criterion becomes a table. A platform is threaded when surface acquisition and
 present run on the raster thread and the ADR-0045 pacing budget (median, p90 and max
-inter-present interval against the display period) holds on that platform.
+inter-present interval against the display period) holds on that platform. No platform is threaded today: every native window draws through the inline executor (ADR-0305), so the Lane column is the target a threaded placement has to meet.
 
 | Platform | Lane | Reason recorded |
 |---|---|---|
@@ -144,9 +144,9 @@ inter-present interval against the display period) holds on that platform.
 | wasm | inline | no raster thread; web moves onto the lane protocol and `DirectSink` is deleted |
 | Android, iOS | inline until measured | no platform reason is recorded against threading; the lane is threaded once a device run meets the budget |
 
-### 6. `RasterOwner` stays in `flui-engine`
+### 6. The raster owner stays in `flui-engine`
 
-`RasterOwner` moves into the runtime only after [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)
+The raster owner moves into the runtime only after [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)
 has moved `RasterBackend`, `PresentDisposition` and a wgpu-free `RasterError` into `flui-layer`,
 so the runtime can hold it without reaching wgpu. The move is optional and not part of H0.
 
@@ -188,9 +188,7 @@ first consumer (the external-content spike), not here.
 
 ## Verification
 
-None of these exist yet, apart from the threaded protocol harness in
-`crates/flui-engine/src/raster_owner.rs`'s tests, which already spawns `run_until_shutdown` on a
-thread.
+None of these exist yet.
 
 - A two-window test that asserts one device and one glyph atlas are created.
 - The process-global state gate of [ADR-0097](ADR-0097-no-process-global-state-gate.md) finds no

@@ -142,7 +142,7 @@ fn scene(root: &ContentToken, boundaries: &[Boundary<'_>], backdrop: Option<Rect
     Scene::new(tree)
 }
 
-/// Hands `region` to the capture the way `RasterOwner::pump` hands it to a
+/// Hands `region` to the capture the way the raster executor hands it to a
 /// backend.
 fn apply(capture: &mut RetainedCapture, region: DamageRegion) {
     match region {

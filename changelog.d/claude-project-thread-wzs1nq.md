@@ -44,7 +44,7 @@
 - Also `#[non_exhaustive]` (ADR-0329): the rendering `UsageByParent`, `SemanticsClip`, `DrawKind`
   and `ParentDataSeed`, and the engine's raster-executor commands, slot states, health, failures and
   errors (`RasterCommand`, `SlotTarget`, `SlotChange`, `SlotVisibility`, `SlotPhase`, `SlotFailure`,
-  `ExecutorHealth`, `DeviceHealth`, `RasterSendError`, `RasterSubmitError`, `FrameDropReason`) and
+  `ExecutorHealth`, `DeviceHealth`, `RasterSendError`) and
   its testing enums.
 - Also `#[non_exhaustive]` (ADR-0329): the painting `TextAlign`, `TextAlignVertical`, `TextOverflow`,
   `TextWidthBasis`, `TextLeadingDistribution`, `PlaceholderAlignment`, `FontStyle`, `FilterQuality`,

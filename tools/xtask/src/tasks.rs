@@ -631,7 +631,7 @@ fn gpu_test_plan(backend: Option<GpuBackend>) -> Vec<Step> {
         "testing",
         "--lib",
         "--test",
-        "raster_backpressure_allocation",
+        "painter_warm_path_allocation",
     ]);
     let facade = Cmd::cargo(["nextest", "run", "-p", "flui", "--no-default-features"])
         .args(["--run-ignored", "all"])
@@ -1389,14 +1389,14 @@ mod tests {
         assert_eq!(
             lines(&gpu_test_plan(None)),
             [
-                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1",
                 "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
         assert_eq!(
             lines(&gpu_test_plan(Some(GpuBackend::Gl))),
             [
-                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui-engine --features testing --lib --test raster_backpressure_allocation --locked --no-fail-fast --test-threads 1",
+                "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1",
                 "$ FLUI_REQUIRE_GPU=1 WGPU_BACKEND=gl cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );

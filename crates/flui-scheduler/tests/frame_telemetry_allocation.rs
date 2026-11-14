@@ -7,10 +7,7 @@
 //! tests, and never a criterion bench) specifically so installing a
 //! counting `#[global_allocator]` here cannot affect any other test binary
 //! in this workspace — each `tests/*.rs` file compiles to its own process,
-//! and `#[global_allocator]` is process-wide. Same pattern as
-//! `flui-engine/tests/raster_backpressure_allocation.rs`, which proved the
-//! equivalent claim for the raster in-flight accounting path this issue
-//! also added.
+//! and `#[global_allocator]` is process-wide.
 //!
 //! # One test, not two, and why
 //!

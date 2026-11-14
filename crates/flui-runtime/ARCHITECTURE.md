@@ -674,7 +674,7 @@ so two windows never share an enablement count or a platform callback.
 ### The owner host is scheduling state, not a fourth physical owner
 
 ADR-0037 keeps three physical owners: the event-loop/native-window side in
-`flui-app`, the UI runtime/presentation state here, and the raster owner in
+`flui-app`, the UI runtime/presentation state here, and the raster executor in
 `flui-engine`. `OwnerHost` is the owner-thread non-reentrant operation
 mechanism for the middle owner, not a facade that forwards platform or raster
 operations.

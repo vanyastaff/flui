@@ -171,7 +171,7 @@ fn counting_sink(submits: &Arc<AtomicU32>) -> ScriptedSink {
 }
 
 /// A sink that keeps the damage each published frame carries, as the
-/// raster lane reads it.
+/// raster host reads it.
 fn damage_sink(damage: &Arc<Mutex<Vec<DamageRegion>>>) -> ScriptedSink {
     let damage = Arc::clone(damage);
     ScriptedSink::new(move |_, publication| {

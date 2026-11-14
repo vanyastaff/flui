@@ -48,7 +48,7 @@ UI runtime owner lane    UiRuntime (!Send + !Sync)
                        input, focus, semantics, text input
                          │ owned snapshots / closed commands
                          ▼
-raster owner lane   RasterOwner: surface, renderer, GPU submission,
+raster executor     RasterExecutor slot: surface, renderer, GPU submission,
                     SurfaceGeneration authority
 ```
 
@@ -56,7 +56,7 @@ raster owner lane   RasterOwner: surface, renderer, GPU submission,
 |---|---|---|
 | Event-loop side: the backend's `PlatformWindow` plus `AppRuntime`'s `WindowRegistry` | platform/event-loop lane | native window lifetime, event delivery, OS callback registration, redraw requests, the native-window → presentation map |
 | `PresentationState` | stored by value in its `UiRuntime`; `!Send + !Sync` (statically asserted) | the presentation's UI root and pipeline, frame/input state, focus, gestures, mouse tracking, text-input session, semantics |
-| `RasterOwner` (`flui-engine`) | raster owner lane | renderer, GPU surface, configure/present ordering, `SurfaceGeneration` |
+| `RasterExecutor` slot (`flui-engine`) | raster executor (inline on the owner thread) | renderer, GPU surface, configure/present ordering, `SurfaceGeneration` |
 
 `PresentationRuntime` survives only as the name of the contract those owners
 form. It is not a public struct, a crate, an `Arc` shared among lanes, a bundle
@@ -85,12 +85,13 @@ returns `OwnerGone`.
 Owners on different threads exchange owned `Send` data through bounded
 channels or dedicated one-shot completions — never UI closures or a generic
 "run this on the UI thread" job. `RuntimeEvent` (native/host observations → UI runtime) and
-`RasterAck` (raster → UI) are the shipped instances. The rules:
+`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shapes of that traffic; the one placement shipped is the inline executor on the owner thread, so a `Frame` and a `Configure` go through the slot's mutex-guarded inbox, and the lifecycle commands (`Attach`, `Release`, `Restore`, `Detach`, `RetryDevice`) through one bounded channel (`LIFECYCLE_CAPACITY`) that the executor drains with `try_recv` on the owner thread; the channel is a queue the bounded-queue rule below covers. The rules:
 
 - every routable message carries, or is structurally bound to, its exact
   `PresentationAddress`;
 - every queue is bounded per ADR-0027's reliability classes;
-- shutdown completion uses a dedicated one-shot, never a lane that can be full;
+- a shutdown never waits on a lane that can be full: the executor's stop settles every pending
+  frame `Failed` itself;
 - no payload contains `dyn Any`, an opaque native window, `Box<dyn FnOnce()>`
   or an executor job;
 - when lanes are co-located, dispatch may be a direct call, but it consumes the
@@ -159,14 +160,14 @@ target, release, then invoke through the normal action path. No action runs
 while the render tree is borrowed. An identity from another presentation or a
 recycled generation is rejected and traced.
 
-### 8. `RasterOwner` is the sole `SurfaceGeneration` authority
+### 8. The raster executor is the sole `SurfaceGeneration` authority
 
 The event-loop side reports native size, scale and lifecycle changes; it never
 touches a GPU surface. `PresentationState` requests surface operations; it
-never increments `SurfaceGeneration`. Only `RasterOwner`, in the command stream
+never increments `SurfaceGeneration`. Only the raster executor's slot, in the command stream
 that actually attaches or reconfigures the surface, mints the next generation
-and returns it in its acknowledgement. A snapshot carrying a stale generation
-is rejected before render as `SurfaceOutdated`.
+and publishes it in its `SlotRecord`. A snapshot carrying a stale generation
+is rejected before render and settles as `RasterVerdict::SurfaceStale`.
 
 ### 9. Lifecycle is explicit and monotonic
 
@@ -183,8 +184,12 @@ SurfaceAttached/Suspended ──close──▶ Closing ──teardown ack──�
 | `Closing` | no new input or frames; mapping removed, callbacks cancelled, IME disabled, owner jobs cancelled, raster shutdown awaited |
 | `Closed` | terminal; capabilities fail with `OwnerGone`; the slot is recycled only with a new generation |
 
-Resume does not claim `SurfaceAttached` until the raster owner acknowledges a
-valid generation.
+Resume returns a `Suspended` presentation to `SurfaceAttached` at once. The
+raster host makes the window's surface again on its own pace and sends the slot
+its `Restore`; until the restore is sent the host answers each frame `NotShown`
+without sending it to the slot. The executor applies the restore before the
+frames of the same turn, and the slot's first frame after it redraws in full, so
+no frame is shown on a stale surface.
 
 ### 10. Platform callbacks are owned and cancellable
 

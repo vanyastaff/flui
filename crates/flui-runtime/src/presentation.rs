@@ -4,7 +4,7 @@
 //! is not an embedder API (ADR-0027 §9). It is the UI-owner domain, not a
 //! cross-thread god object: native event-loop ownership remains in the
 //! runner/window host and raster/surface ownership remains in
-//! `flui_engine::RasterOwner`.
+//! `flui_engine::RasterExecutor`.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -395,7 +395,7 @@ pub struct PresentationState {
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// The retained scene its frames patch and its sink draws (ADR-0304 §8).
     pub(crate) scene: crate::presentation_scene::SceneSlot,
-    /// External textures its widgets register; the raster lane drains it.
+    /// External textures its widgets register; the host drains it before each frame renders.
     textures: flui_layer::TextureRegistry,
     lifecycle: Cell<PresentationLifecycle>,
     close_mode: Cell<flui_interaction::__runtime::CloseMode>,
@@ -886,7 +886,7 @@ impl PresentationState {
             text_store_host,
         ));
 
-        // Frames and retirements wake the runtime so the raster lane applies them.
+        // Frames and retirements wake the runtime so the raster executor applies them.
         let textures = flui_layer::TextureRegistry::new(Arc::clone(&capabilities.wake));
         let close_guard = CloseGuardSource::new(
             &capabilities.close.vetoes,

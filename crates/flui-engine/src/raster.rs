@@ -1,10 +1,11 @@
 //! The frame-driver trait the application layer calls on a renderer.
 //!
-//! [`RasterBackend`] has one production implementor, [`Renderer`], and
-//! exists so `flui-app`'s frame loop, raster lane, and device-recovery
-//! paths can be driven by a scripted fake with no GPU (every other
-//! implementor is a test double). It is a test seam, not a plugin point:
-//! wgpu is the engine and no second backend is planned.
+//! [`RasterBackend`] has one production implementor, [`Renderer`], and one
+//! production user: the web's `DirectSink`, which draws on the owner thread
+//! through `size`, `apply_texture_updates`, `mark_full_repaint` and
+//! `render_scene`. Native surfaces draw through `RasterExecutor` slots. The
+//! trait is deprecated and goes once the web draws through slots. It is a test
+//! seam, not a plugin point: wgpu is the engine and no second backend is planned.
 //!
 //! [`Renderer`]: crate::Renderer
 //! # Design notes
@@ -101,16 +102,16 @@ impl PresentDisposition {
 /// without a GPU.
 ///
 /// The trait is dyn-compatible (no generic parameters, no `async` methods).
-/// `Send` is a supertrait (ADR-0045 decision 1): the raster owner moves the
-/// backend onto its own thread once at lane construction, so every backend
-/// implementation must cross that boundary. Note that this does **not** make
+/// `Send` is a supertrait (ADR-0045 decision 1): a backend may be built on one
+/// thread and handed to another, so every backend implementation must cross
+/// that boundary. Note that this does **not** make
 /// `dyn RasterBackend` itself `Send`: Rust never infers an auto-trait bound
 /// onto a trait object from a supertrait, so a use site that needs the
 /// object to cross a thread must spell out `dyn RasterBackend + Send`. A use
 /// site that does not — a `Box<dyn RasterBackend>` staying on one thread —
 /// needs nothing extra.
 #[deprecated(
-    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the window runners move to it"
+    note = "use `RasterExecutor` and its slots (ADR-0305); removed once the web draws through its slots"
 )]
 pub trait RasterBackend: Send {
     /// Render a [`Scene`] to the surface.
@@ -197,10 +198,8 @@ pub trait RasterBackend: Send {
     /// passes [`SwapChainStatistics::None`](flui_platform::SwapChainStatistics::None)
     /// elsewhere, and reads nothing while no hook is installed.
     ///
-    /// Runs on whichever thread presents — the owner thread on the inline
-    /// lane. A threaded lane would run it on the raster thread; ADR-0045
-    /// decision 5's rule against raster-thread platform calls is about
-    /// AppKit main-thread affinity, and this hook is inert there.
+    /// Runs on whichever thread presents. No production path installs a hook
+    /// today: the web's `DirectSink` never calls it.
     ///
     /// Default: ignored. A backend that never presents (offscreen,
     /// scripted doubles) has nothing to notify.
@@ -210,10 +209,11 @@ pub trait RasterBackend: Send {
 
     /// Give back GPU memory the next frames can rebuild.
     ///
-    /// The raster owner calls this on its own thread, between frames, when a
-    /// [`RasterHandle`](crate::RasterHandle) was asked to trim. Default:
-    /// ignored; a backend that holds no GPU memory (scripted doubles) has
-    /// nothing to give back.
+    /// No production path calls this: the web's `DirectSink` reaches only
+    /// `size`, `apply_texture_updates`, `mark_full_repaint` and `render_scene`,
+    /// and the executor trims through `SlotBackend::reclaim`. Default: ignored;
+    /// a backend that holds no GPU memory (scripted doubles) has nothing to
+    /// give back.
     fn reclaim(&mut self, level: MemoryPressureLevel) {
         let _ = level;
     }
@@ -224,8 +224,8 @@ pub trait RasterBackend: Send {
 // ---------------------------------------------------------------------------
 impl RasterBackend for crate::Renderer {
     fn render_scene(&mut self, scene: &Scene) -> Result<PresentDisposition, EngineError> {
-        // The owner applied this frame's damage; Renderer::render_scene is
-        // the entry point for frames no producer accounted for.
+        // Renders the damage the tracker holds: the web's `DirectSink` marks a
+        // full repaint before it calls this.
         self.render_frame(scene)
     }
 

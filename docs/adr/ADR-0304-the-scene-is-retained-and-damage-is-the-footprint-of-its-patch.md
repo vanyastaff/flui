@@ -314,7 +314,7 @@ above `full_above` of the surface (`DamageMode`, one half by default) the region
 `Full(AboveThreshold)`. `union` keeps the first `Full` reason. `try_covering` refuses a
 non-finite rect with `NonFinite`, which becomes `Full(NonFinite)`; `Ok(None)` means empty or off
 the surface, nothing else. `DamageRegion` is exhaustive, as `PresentDisposition` is (ADR-0068 §2):
-the wildcard arm that turns an unknown variant into a full repaint (`raster_owner.rs:1690-1697`) is
+the wildcard arm of the former raster owner that turned an unknown variant into a full repaint is
 deleted, and a new variant is a compile error in every consumer. `Region::MAX` and `full_above`
 are hypotheses the perf scenario under Confirmation measures.
 
@@ -379,7 +379,8 @@ impl ReleasedContents {
 // flui-runtime; `surface_size` is unchanged
 pub trait FrameSink { fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict; }
 // flui-engine
-pub struct RasterCompletion { /* … */ pub rastered: Option<SceneVersionId> }
+pub struct SlotSettlement { pub address: PresentationAddress, pub epoch: FrameEpoch, pub verdict: RasterVerdict,
+                            pub rastered: Option<SceneVersionId> }   // `rastered` is the addition
 ```
 
 The UI runtime holds one `SceneOwner` per presentation. The pending log keeps, per applied version
@@ -400,9 +401,8 @@ carries the lineage, so no separate lineage pair is kept.
 `SceneSnapshot` carries `base` and `scene: SceneVersion` (`scene_snapshot.rs:172-180`). It still
 moves by value; what it shares with the owner is immutable, and its doc's "ownership transfer, not
 reference counting" (`scene_snapshot.rs:155-159`) now means that the snapshot is moved and its
-nodes are shared. The raster mailbox stays latest-wins (`raster_owner.rs:3-8`); a superseded
-frame's damage folds into the survivor as it does now (`raster_owner.rs:791-797`), and the survivor
-takes the older base.
+nodes are shared. A slot's inbox stays latest-wins; a superseded frame's damage folds into the
+survivor (`raster_executor/sender.rs`). The executor reads no `base`: the owner planned the damage against `RasterBase` before the send, so the fold unions the damage and the texture updates and keeps the survivor's other fields.
 
 The raster side holds, per presentation, the version whose image it last committed and the
 `SurfaceKey` that image is on (`RasterBase`). A publication for another key, a surface recreated at
@@ -413,8 +413,8 @@ because damage from an older base covers every change since a newer one; otherwi
 `Full(Resync(BaseMismatch))`, or `Full(Resync(RasterReset))` when it holds nothing. After a
 successful submission (ADR-0100) it holds the new version; a failed or unshown frame leaves the held
 version as it was, so its damage stays owed through the base, not through an accumulator a reset can
-clear. `RasterCompletion::rastered` reports the held version through the reliable coalesced slot
-(`raster_owner.rs:88-109`, `:147`).
+clear. The slot's settlement is where the held version is reported: `SlotSettlement` gains
+`rastered` when the owner acknowledges versions, and no settlement names one today.
 
 `completed` moves `acked` forward only, ignores an id of another lineage, drops the log entries at
 or below `acked`, and hands back the contents they replaced as `ReleasedContents`, which a caller
@@ -591,7 +591,8 @@ consecutive versions. The patch damage must cover the diff damage.
   `region_frames_match_a_full_frame`, whose two damaged rects sit in opposite corners with
   translucent content between them, so a plan that clears the gap without redrawing it, or blends
   it twice, fails. The existing
-  `superseded_damage_folds_into_the_survivor` (`raster_owner.rs:2324`) and
+  `latest_frame_wins_and_superseded_damage_folds_into_the_survivor`
+  (`crates/flui-engine/tests/raster_executor.rs`) and
   `a_moved_box_repaints_its_old_and_new_positions_only`
   (`crates/flui-engine/src/damage_readback_tests.rs:209`) stay.
 - `flui-runtime` (to be added): `a_refused_submit_keeps_its_damage_owed`,

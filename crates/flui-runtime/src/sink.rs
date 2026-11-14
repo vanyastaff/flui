@@ -80,7 +80,7 @@ pub enum SubmitVerdict {
 /// The seam a UI runtime's frame transaction submits through: the surface size
 /// layout must use, and the submit itself.
 ///
-/// Implemented by the host: `flui-app`'s raster lane and its direct sink; a
+/// Implemented by the host: `flui-app`'s raster executor host and its direct sink; a
 /// headless sink arrives with the UI runtime core. Every implementation feeds the
 /// same UI runtime-side classification arms via [`SubmitVerdict`], so the
 /// retry/telemetry semantics cannot drift between them.

@@ -16,9 +16,9 @@ last update of a static scene until unrelated input arrives.
 ## Decision
 
 After surface and device recovery are classified, other recoverable engine errors
-produce `FrameDropReason::RetryableRenderError`. The reliable completion slot also
-publishes `retry_required` before retiring the ticket and waking the owner. A full
-telemetry acknowledgment channel cannot erase that fact.
+settle the frame as `RasterVerdict::Retry`. The slot's record carries that verdict
+before the executor wakes the owner, so a frame's retry cannot be lost to a full
+channel.
 
 The application's raster lane and direct web sink map transient rendering failure
 to the exhaustive, GPU-free `SubmitVerdict::Retry`. The UI runtime retains input epochs,

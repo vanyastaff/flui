@@ -137,7 +137,7 @@ before `flui-testing` and `flui-sdk`. It owns:
 `flui-runtime` depends only on crates in tiers V–K and on `flui-platform` (ADR-0082). Its
 normal graph must not reach `flui-native`, `winit`, `wgpu`, `flui-engine` or `flui-app`
 (ADR-0081's K set). It talks to windows through `Arc<dyn PlatformWindow>` handles the runner
-passes in, and hands frames out through `FrameSink`; the wgpu raster lane and `RasterOwner` stay
+passes in, and hands frames out through `FrameSink`; the wgpu raster lane and `RasterExecutor` stay
 in `flui-app` and `flui-engine`.
 
 **Types stay low, instances move up.** `LifecycleContext` lives in `flui-view` and cannot name a
@@ -268,7 +268,7 @@ it removes (ADR-0075's effects that never ran in the product) comes from two imp
 one frame, not from a missing second product. It is not the forbidden `flui-presentation` crate: it owns
 the UI runtime state rather than handles to it, it does not depend on application policy (runners,
 backends and the GPU stay in H), and it is not a fourth owner forwarding operations; the UI runtime,
-the platform backend and the raster owner remain the three owners of ADR-0037 §1.
+the platform backend and the raster executor remain the three owners of ADR-0037 §1.
 
 ### Not decided here
 

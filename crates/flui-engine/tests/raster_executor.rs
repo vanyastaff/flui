@@ -902,11 +902,16 @@ fn every_render_outcome_settles_its_frame() {
             panicked,
             "a panic, and only a panic, goes into the record: {failure:?}"
         );
-        let required = rig
+        let record = rig
             .sender
             .record(at.slot)
-            .expect("the owner holds the slot")
-            .required_generation;
+            .expect("the owner holds the slot");
+        assert_eq!(
+            record.in_flight, 0,
+            "a settled frame is no longer in flight, a panicking one too: {:?}",
+            case.verdict
+        );
+        let required = record.required_generation;
         assert_eq!(
             required != at.generation,
             case.restamp,
