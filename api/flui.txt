@@ -32803,6 +32803,7 @@ variant flui_protocol::inspect::NonFinite::PosInf // at 0
 #[non_exhaustive] pub struct flui_protocol::locator::LocateParams
 field flui_protocol::locator::LocateParams::locator: flui::testing::Locator // at 0
 field flui_protocol::locator::LocateParams::max_matches: Option<u32> // at 1
+field flui_protocol::locator::LocateParams::offscreen: bool // at 2
 impl Clone for flui_protocol::locator::LocateParams
 impl Eq for flui_protocol::locator::LocateParams
 impl PartialEq for flui_protocol::locator::LocateParams
@@ -32813,6 +32814,7 @@ impl schemars::JsonSchema for flui_protocol::locator::LocateParams
 impl serde_core::ser::Serialize for flui_protocol::locator::LocateParams
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::locator::LocateParams
 pub fn flui_protocol::locator::LocateParams::new(locator: flui::testing::Locator) -> Self
+pub fn flui_protocol::locator::LocateParams::offscreen(self, offscreen: bool) -> Self
 #[non_exhaustive] pub struct flui_protocol::locator::Matches
 field flui_protocol::locator::Matches::matches: Vec<flui::testing::Match> // at 0
 field flui_protocol::locator::Matches::truncated: u32 // at 1
@@ -34075,6 +34077,7 @@ impl core::marker::StructuralPartialEq for flui_protocol::tree::ParseHandleError
 #[non_exhaustive] pub struct flui_protocol::tree::ReadQuery
 field flui_protocol::tree::ReadQuery::max_depth: Option<usize> // at 1
 field flui_protocol::tree::ReadQuery::max_nodes: Option<usize> // at 2
+field flui_protocol::tree::ReadQuery::offscreen: bool // at 3
 field flui_protocol::tree::ReadQuery::root: Option<flui_protocol::tree::ElementId> // at 0
 impl Clone for flui_protocol::tree::ReadQuery
 impl Copy for flui_protocol::tree::ReadQuery
@@ -34089,6 +34092,7 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::tree::ReadQuery
 pub fn flui_protocol::tree::ReadQuery::new() -> Self
 pub fn flui_protocol::tree::ReadQuery::with_max_depth(self, depth: usize) -> Self
 pub fn flui_protocol::tree::ReadQuery::with_max_nodes(self, nodes: usize) -> Self
+pub fn flui_protocol::tree::ReadQuery::with_offscreen(self, offscreen: bool) -> Self
 pub fn flui_protocol::tree::ReadQuery::with_root(self, root: flui_protocol::tree::ElementId) -> Self
 pub struct flui_protocol::tree::Rect
 field flui_protocol::tree::Rect::height: u32 // at 3

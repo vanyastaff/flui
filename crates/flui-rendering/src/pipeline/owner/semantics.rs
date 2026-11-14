@@ -2007,6 +2007,13 @@ fn placement_anchors(
                 return false;
             };
             let (local_paint, local_semantics) = child_clips_of(node, transform, child_slot);
+            // Whether the node above clips its children is read from the
+            // paint clip each child lies under. A paint clip at or below the
+            // moved node moves with it, so the walk, which leaves the node
+            // above as it was, refuses.
+            if local_paint.is_some() {
+                return false;
+            }
             walk.push(PlacementStep {
                 id: child_id,
                 transform: child_transform,

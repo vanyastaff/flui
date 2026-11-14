@@ -377,3 +377,52 @@ fn a_reader_reaches_the_row_past_a_scroll_views_edge_and_no_further() {
         .collect();
     assert_eq!(rows, [Some("In view"), Some("Past the edge")]);
 }
+
+/// An off-screen read sees every row the scroll view keeps, as a test's
+/// locators do; the default read and locate stay where a reader stops.
+#[test]
+fn an_offscreen_read_reaches_every_row_the_scroll_view_keeps() {
+    use flui_protocol::{LocateParams, Locator, ReadQuery};
+
+    let f = window();
+    let rows = |offscreen: bool| -> Vec<Option<String>> {
+        let tree = f
+            .owner
+            .read_wire(
+                &ReadQuery::new()
+                    .with_root(element(13).element)
+                    .with_offscreen(offscreen),
+                placement(),
+            )
+            .expect("the tree reads");
+        tree.roots[0]
+            .children
+            .iter()
+            .map(|row| row.name.clone())
+            .collect()
+    };
+    assert_eq!(
+        rows(true),
+        [
+            Some("In view".to_owned()),
+            Some("Past the edge".to_owned()),
+            Some("Beyond the edge".to_owned()),
+        ]
+    );
+    let found = |offscreen: bool| -> usize {
+        f.owner
+            .locate_wire(
+                &LocateParams::new(Locator::named("Beyond the edge")).offscreen(offscreen),
+                placement(),
+            )
+            .expect("the tree reads")
+            .matches
+            .len()
+    };
+    assert_eq!(
+        found(false),
+        0,
+        "a reader stops at the first row past the edge"
+    );
+    assert_eq!(found(true), 1, "an off-screen locate finds every built row");
+}

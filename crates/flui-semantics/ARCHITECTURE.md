@@ -644,8 +644,9 @@ in `src/accesskit_translation/coverage_matrix.rs`; `collection_places_conflict_o
 **Rule.** `SemanticsOwner::read_wire` (`src/agent.rs`) answers an agent with ADR-0080 wire
 nodes projected from `to_accesskit_tree_update`, the update the platform adapter is handed,
 read through `accesskit_consumer`: `common_filter` decides which nodes appear (a hidden node
-drops its subtree, a `GenericContainer` is lifted into its parent, a focused node is kept), a
-static text is named by its value, and the actions follow UI Automation's pattern predicates
+drops its subtree, a `GenericContainer` is lifted into its parent, a focused node is kept, and
+under a node that clips its children a child wholly outside it is left out except the first one
+past each edge), a static text is named by its value, and the actions follow UI Automation's pattern predicates
 (`is_invocable`; `Toggle` for a toggled node that is not a selection item; `SelectionItem` as
 `accesskit_windows` 0.35 offers it). `set_value`, `expand`, `collapse`, `scroll_into_view` and
 `focus` are listed only when the node carries the AccessKit action that performs them, and a
@@ -663,6 +664,15 @@ vocabulary is the desktop server's, and ADR-0095 §4 compares the two backends a
 normalization. The direction check reads the last committed tree, which lags the request as
 the adapter's copy does; that lag matters only for a click-only expandable node (mapping
 decision 5, Limit).
+
+**Off-screen reads.** A locate or read that sets `offscreen` (protocol 0.13) applies the same
+filter without its clip rule, so it reaches every row a scrollable keeps built past its
+viewport. `flui_testing::Tester` sets it on every locate and read, as `flutter_test`'s `find`
+sees built rows past the viewport; whether such a row is shown is the `visible` check an action
+makes, so a tap on it fails with `not_actionable` (`visible`). An agent that leaves it unset reads
+what a screen reader reaches. Test: `tests/actionability.rs`
+`an_offscreen_read_reaches_every_row_the_scroll_view_keeps`; `flui-testing`
+`a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible`.
 
 **Geometry and dialog roles.** The rectangles are
 surface-relative physical pixels, reported as `surface_rect` with no screen `rect`: the UI runtime

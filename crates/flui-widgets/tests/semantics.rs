@@ -3059,6 +3059,24 @@ fn a_node_moved_out_of_its_clip_comes_back() {
     assert_eq!(seen[0], seen[2], "moving back restores the node");
 }
 
+/// A clip the move carries with it decides whether the node above clips its
+/// children: inside the holder it does, carried past the holder's edge it
+/// does not, and the node above is published as a rebuild publishes it.
+fn a_clip_moved_past_its_holder_ends_its_clipping() {
+    use flui_widgets::{ClipRect, Transform};
+    publishes_as_built_afresh(
+        |dx| {
+            Semantics::new().container(true).label("holder").child(
+                SizedBox::new(100.0, 100.0).child(
+                    Transform::translate(dx, 0.0)
+                        .child(ClipRect::new().child(labelled("clipped", 40.0))),
+                ),
+            )
+        },
+        &[0.0, 200.0, 0.0],
+    );
+}
+
 /// A layout wrapper the move takes from the visible part of a viewport into
 /// its cache extent is painted nowhere yet still published, so assembly marks
 /// it hidden, and a hidden wrapper forms a node of its own. The label inside
@@ -3192,6 +3210,10 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
             ("sibling stays", a_sibling_outside_the_transform_stays),
             ("partial clip", a_partly_clipped_node_stays_published),
             ("full clip", a_node_moved_out_of_its_clip_comes_back),
+            (
+                "a clip moved past its holder",
+                a_clip_moved_past_its_holder_ends_its_clipping,
+            ),
             (
                 "a wrapper moved into the cache extent",
                 a_wrapper_moved_into_the_cache_extent_is_hidden_with_it,

@@ -40,7 +40,7 @@ use flui_protocol::{
     ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ErrorObject,
     ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams,
     Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
-    ReadParams, Tree, WindowParams, outline,
+    ReadParams, ReadQuery, Tree, WindowParams, outline,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
@@ -63,6 +63,10 @@ const ANSWER_FRAMES: u32 = 64;
 
 /// Outline lines a failure lists.
 const SHOWN_LINES: usize = 15;
+
+/// How often [`Tester::try_is_visible`] locates and reads again when a frame
+/// changed what it found in between.
+const VISIBLE_READS: usize = 4;
 
 /// At most this many zero-length frames run work due now before a read: a
 /// woken completion, the rebuild it schedules and the semantics it commits.
@@ -426,7 +430,11 @@ impl Tester {
 
     // --- Reading ----------------------------------------------------------
 
-    /// Every element `locator` matches now, in tree order.
+    /// Every element `locator` matches now, in tree order: the whole built
+    /// tree, rows a list keeps past its viewport included, as `flutter_test`'s
+    /// `find` sees them. Whether a match is shown is
+    /// [`is_visible`](Self::is_visible), and an action on one that is not
+    /// fails with `visible`.
     ///
     /// # Errors
     ///
@@ -435,7 +443,7 @@ impl Tester {
         self.run_due_now();
         let call = self
             .window
-            .call::<SemanticsLocate>(LocateParams::new(locator.clone()))?;
+            .call::<SemanticsLocate>(LocateParams::new(locator.clone()).offscreen(true))?;
         Ok(self.answered(call)?.matches)
     }
 
@@ -476,19 +484,36 @@ impl Tester {
     /// Whether an element `locator` matches is visible: its bounds are not
     /// empty and lie partly inside the window and every clipping ancestor, the
     /// `visible` check an action makes. A row a list keeps past its viewport
-    /// is matched and not visible. `flutter_test` asks the same with
-    /// `any(finder.hitTestable())`.
+    /// is matched and not visible. Whether a pointer there reaches it, past a
+    /// barrier or a popup over it, is an action's `receives` check, not this.
+    ///
+    /// The locate and the reading of each match are separate reads, and a
+    /// frame due between them may rebuild or relabel what the locate found:
+    /// the answer counts only when a second locate finds the same elements,
+    /// and is taken again otherwise, a few times at most.
     ///
     /// # Errors
     ///
     /// When the window cannot answer.
     pub fn try_is_visible(&mut self, locator: &Locator) -> Result<bool, TestError> {
-        for found in self.try_find_all(locator)? {
-            if self.actionability(&found)?.visible {
-                return Ok(true);
+        let mut visible = false;
+        for _ in 0..VISIBLE_READS {
+            let found = self.try_find_all(locator)?;
+            visible = false;
+            for one in &found {
+                visible |= self.actionability(one)?.visible;
+            }
+            let again = self.try_find_all(locator)?;
+            let same = again.len() == found.len()
+                && again
+                    .iter()
+                    .zip(&found)
+                    .all(|(again, found)| again.element == found.element);
+            if same {
+                break;
             }
         }
-        Ok(false)
+        Ok(visible)
     }
 
     /// Whether an element `locator` matches is visible.
@@ -547,9 +572,9 @@ impl Tester {
 
     fn try_semantics(&mut self) -> Result<Tree, TestError> {
         self.run_due_now();
-        let call = self
-            .window
-            .call::<SemanticsRead>(ReadParams::new(self.window.id()))?;
+        let call = self.window.call::<SemanticsRead>(
+            ReadParams::new(self.window.id()).query(ReadQuery::new().with_offscreen(true)),
+        )?;
         self.answered(call)
     }
 

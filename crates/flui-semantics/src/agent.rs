@@ -427,9 +427,13 @@ fn wire_actions(node: &NodeRef<'_>) -> Vec<ActionName> {
 /// AccessKit's common filter, which also leaves out the owner's announcer
 /// nodes: they carry what assistive technology speaks, not an element of the
 /// interface, so an agent neither reads nor acts on them.
+///
+/// With `offscreen`, a child a clipping ancestor keeps off screen is kept as
+/// well: the whole built tree, as `flutter_test`'s finders search it.
 #[derive(Clone, Copy)]
 struct AgentFilter {
     announcers: Option<[NodeId; 2]>,
+    offscreen: bool,
 }
 
 impl AgentFilter {
@@ -438,6 +442,16 @@ impl AgentFilter {
             announcers: owner
                 .announcer_node_ids()
                 .map(|ids| ids.map(|id| NodeId(id.as_u64()))),
+            offscreen: false,
+        }
+    }
+
+    /// As [`Self::of`], keeping what a clipping ancestor holds off screen
+    /// when `offscreen` is set.
+    fn reading(owner: &SemanticsOwner, offscreen: bool) -> Self {
+        Self {
+            offscreen,
+            ..Self::of(owner)
         }
     }
 
@@ -450,10 +464,40 @@ impl AgentFilter {
                 .is_some_and(|announcers| announcers.contains(&node.locate().0))
         {
             FilterResult::ExcludeSubtree
+        } else if self.offscreen {
+            unclipped_filter(node)
         } else {
             common_filter(node)
         }
     }
+}
+
+/// AccessKit's common filter without its clipping rule: a focused node is
+/// kept, a hidden one and every node under it are left out, and a graft, a
+/// generic container or a text run is passed through. Matches
+/// `accesskit_consumer`'s `common_filter_base` and its walk up the parents.
+fn unclipped_filter(node: &NodeRef<'_>) -> FilterResult {
+    if node.is_focused() {
+        return FilterResult::Include;
+    }
+    if node.is_hidden() {
+        return FilterResult::ExcludeSubtree;
+    }
+    if node.is_graft()
+        || matches!(
+            node.role(),
+            accesskit::Role::GenericContainer | accesskit::Role::TextRun
+        )
+    {
+        return FilterResult::ExcludeNode;
+    }
+    if node
+        .parent()
+        .is_some_and(|parent| unclipped_filter(&parent) == FilterResult::ExcludeSubtree)
+    {
+        return FilterResult::ExcludeSubtree;
+    }
+    FilterResult::Include
 }
 
 /// A read's budget and what it left out.
@@ -717,7 +761,10 @@ impl SemanticsOwner {
                 Some(id) => {
                     let node = state
                         .node_by_tree_local_id(NodeId(id.get()), TreeId::ROOT)
-                        .filter(|node| AgentFilter::of(self).apply(node) == FilterResult::Include)
+                        .filter(|node| {
+                            AgentFilter::reading(self, query.offscreen).apply(node)
+                                == FilterResult::Include
+                        })
                         .ok_or(WireReadError::NotFound { element: id })?;
                     (node, id, node.is_root())
                 }
@@ -730,7 +777,7 @@ impl SemanticsOwner {
                 truncated: false,
                 root_claims_focus,
                 diagnostics: Vec::new(),
-                filter: AgentFilter::of(self),
+                filter: AgentFilter::reading(self, query.offscreen),
             };
             if walk.remaining == 0 {
                 return Ok(Tree::new(Vec::new(), true));

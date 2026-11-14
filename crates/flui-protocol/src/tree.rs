@@ -576,6 +576,15 @@ pub struct ReadQuery {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub max_nodes: Option<usize>,
+    /// Also read what a clipping ancestor keeps off screen, such as a list's
+    /// rows past its viewport, which assistive technology and the default
+    /// read leave out but for the first past each edge: the tree
+    /// `flutter_test`'s finders search.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
+    pub offscreen: bool,
 }
 
 impl ReadQuery {
@@ -603,6 +612,13 @@ impl ReadQuery {
     #[must_use]
     pub fn with_max_nodes(mut self, nodes: usize) -> Self {
         self.max_nodes = Some(nodes);
+        self
+    }
+
+    /// Also read what a clipping ancestor keeps off screen.
+    #[must_use]
+    pub fn with_offscreen(mut self, offscreen: bool) -> Self {
+        self.offscreen = offscreen;
         self
     }
 }
@@ -776,7 +792,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&tree).ok(),
             Some(serde_json::json!({
-                "protocol": "0.12",
+                "protocol": "0.13",
                 "roots": [{"id": "e1", "role": "window", "native_role": "Window"}],
                 "count": 1,
                 "truncated": false

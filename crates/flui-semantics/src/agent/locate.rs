@@ -97,7 +97,7 @@ impl SemanticsOwner {
             let flat = Flat::new(
                 state,
                 self.device_pixel_ratio(),
-                super::AgentFilter::of(self),
+                super::AgentFilter::reading(self, params.offscreen),
                 root_claims_focus,
                 placement,
             );

@@ -307,15 +307,15 @@ fn a_drag_scrolls_a_default_scroll_view() {
         .map(|index| Text::new(format!("Item {index}")))
         .collect();
     let mut t = Tester::mount_in(ListView::new(50.0, items), TestWindow::new(200, 300));
-    let before = t.rect(&find::text("Item 4"));
+    let before = t.rect(&find::text("Item 1"));
     t.drag(
-        &find::text("Item 4"),
+        &find::text("Item 1"),
         0.0,
         -100.0,
         Duration::from_millis(200),
     );
     t.pump_and_settle();
-    let after = t.rect(&find::text("Item 4"));
+    let after = t.rect(&find::text("Item 1"));
     assert!(after.y < before.y - 50.0, "{before:?} -> {after:?}");
 }
 
@@ -1216,11 +1216,13 @@ fn a_session_end_writes_even_when_committing_the_composition_panics() {
     assert_eq!(*loaded, Note("draft".to_owned()));
 }
 
-/// A row a list keeps past its viewport is matched and not visible, though
-/// the window shows the spot it lies on: the list sits in the middle of a
-/// larger window.
+/// Locators search the whole built tree, as `flutter_test`'s `find` does: a
+/// row a list keeps in its cache past its viewport is found, though the
+/// window shows the spot it lies on, and a tap on it fails its `visible`
+/// check, as `flutter_test` warns that it is not hit-testable.
 #[test]
-fn a_row_past_a_lists_viewport_is_found_and_not_visible() {
+fn a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible() {
+    use flui_protocol::ActionabilityCheck;
     use flui_widgets::ListView;
 
     let items: Vec<_> = (0..40)
@@ -1229,14 +1231,20 @@ fn a_row_past_a_lists_viewport_is_found_and_not_visible() {
     let list = Center::new().child(SizedBox::new(100.0, 100.0).child(ListView::new(50.0, items)));
     let mut t = Tester::mount_in(list, TestWindow::new(400, 400));
     assert!(t.is_visible(&find::text("Item 1")), "in view");
-    assert_eq!(
-        t.find_all(&find::text("Item 2")).len(),
-        1,
-        "a reader reaches it"
-    );
-    assert!(
-        !t.is_visible(&find::text("Item 2")),
-        "past the viewport's edge"
-    );
-    assert!(!t.is_visible(&find::text("Item 39")), "matches nothing");
+    for row in ["Item 2", "Item 4"] {
+        let past = find::text(row);
+        assert_eq!(t.find_all(&past).len(), 1, "{row} is built and found");
+        assert!(!t.is_visible(&past), "{row} lies past the viewport's edge");
+        assert!(
+            matches!(
+                t.try_tap(&past),
+                Err(TestError::NotActionable {
+                    check: ActionabilityCheck::Visible,
+                    ..
+                })
+            ),
+            "{row}: a tap on it is not visible"
+        );
+    }
+    assert!(t.find_all(&find::text("Item 39")).is_empty(), "never built");
 }
