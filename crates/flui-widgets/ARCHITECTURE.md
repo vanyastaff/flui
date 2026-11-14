@@ -2127,10 +2127,13 @@ then refused as `NoMatch`; the Router lets go of the hook when it unmounts. A
 page. Every handle edit holds an `Editing` count on the
 shared state for its whole commit, observers and route clones included, so an
 intent that arrives inside one is `Busy`, as is one during a build; an intent
-holds its own count from before it parses its path to its commit.
+holds its own count from before it parses its path to its commit. A URL the
+platform opens reaches it the same way: `UiRuntime::open_url` hands it an
+admitted URL's path as a `Go`.
 
 **Pinned by:** the `url_owner::` rows of `router_and_widgets_app`
-(`tests/url_owner.rs`), through `HeadlessHost::navigate`.
+(`tests/url_owner.rs`), through `HeadlessHost::navigate` and
+`HeadlessHost::open_url`.
 
 ### 22. A page reaches its own route through `PageHandle`, and pushes only pageless popups
 

@@ -48,8 +48,10 @@ pub struct Opened {
   ждёт и доставляется сразу после `ready`; холодный URL поэтому всегда приходит после того, как
   приложение создало основное окно, но до первого кадра (см. §4).
 - Границы (R7): `MAX_OPENED_ITEMS = 64` элементов на одно `Opened`, `MAX_URL_BYTES = 8192`;
-  лишнее отбрасывается в хосте с `tracing::warn`, до разбора. Числа живут в одном месте,
-  в `flui-native`, и headless применяет те же.
+  лишнее отбрасывается в хосте с `tracing::warn`, до разбора, и headless применяет те же. Предел
+  длины URL уже есть выше хоста: `OpenedUrl::MAX_LEN` (`flui-view`), который `UiRuntime::open_url`
+  проверяет до копирования; `flui-native` не видит `flui-view`, поэтому AC4 переносит это одно
+  число в `flui-foundation`, ниже обоих, и оба читают его оттуда.
 - Headless: `HeadlessPlatform::open(Opened)` ставит строку в ту же очередь; это вход для тестов и
   для `flui_testing`.
 
@@ -71,7 +73,7 @@ pub struct Opened {
 `UiRuntime::open_url` (новый, рядом с `navigate`) владеет политикой, чтобы headless и все хосты
 делили её (AGENTS, «Before each push», 7):
 
-- Разбор. `flui_view::navigation::OpenedUrl::try_parse(&str)` делит строку по RFC 3986,
+- Разбор. `flui_view::navigation::OpenedUrl::parse(&str)` делит строку по RFC 3986,
   приложение B (схема, authority, путь, query, fragment) и отдаёт путь в `RoutePath::parse`.
   Зависимости `url` нет: WHATWG-разбор с `idna` не нужен для сравнения схемы и домена с
   объявлениями (домен сравнивается без учёта регистра, punycode приходит от ОС готовым), а

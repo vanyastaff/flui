@@ -17,6 +17,7 @@ use std::time::Duration;
 use flui_foundation::ChangeNotifier;
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::CloseReason;
+use flui_view::navigation::{LinkDeclarations, OpenUrlRefused, OpenedUrl};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     AnimatedBuilder, NavigationIntent, NavigationOp, NavigationRefused, PopScope, RouteParseError,
@@ -559,4 +560,239 @@ impl ViewState<NavigatesInBuild> for NavigatesInBuildState {
         }
         SizedBox::new(10.0, 10.0)
     }
+}
+
+/// What [`OpenedUrl::parse`] makes of `url`: its scheme, host and route
+/// location, or the refusal.
+fn split(url: &str) -> Result<(String, Option<String>, String), OpenUrlRefused> {
+    OpenedUrl::parse(url).map(|url| {
+        (
+            url.scheme().to_owned(),
+            url.host().map(str::to_owned),
+            url.path().to_string(),
+        )
+    })
+}
+
+fn opened(url: &str, scheme: &str, host: Option<&str>, location: &str) {
+    assert_eq!(
+        split(url),
+        Ok((
+            scheme.to_owned(),
+            host.map(str::to_owned),
+            location.to_owned()
+        )),
+        "{url:?}"
+    );
+}
+
+fn malformed_url(url: &str) {
+    assert!(
+        matches!(split(url), Err(OpenUrlRefused::Malformed { url: given, .. }) if given == url),
+        "{url:?} is not a URL"
+    );
+}
+
+fn not_a_location(url: &str) {
+    assert!(
+        matches!(
+            split(url),
+            Err(OpenUrlRefused::Path(RouteParseError::Malformed { .. }))
+        ),
+        "{url:?} has no route location"
+    );
+}
+
+fn three_slashes_open_the_whole_path() {
+    opened("myapp:///note/3", "myapp", None, "/note/3");
+}
+fn the_authority_is_not_part_of_the_path() {
+    opened("myapp://note/3", "myapp", Some("note"), "/3");
+}
+fn a_scheme_without_authority_opens_its_path() {
+    opened("myapp:/note/3", "myapp", None, "/note/3");
+    opened("myapp:note/3", "myapp", None, "/note/3");
+}
+fn an_empty_path_opens_the_root() {
+    opened("https://example.com", "https", Some("example.com"), "/");
+    opened("myapp:", "myapp", None, "/");
+}
+fn scheme_and_host_compare_in_lower_case() {
+    opened(
+        "HTTPS://user:pw@Example.COM.:443/a",
+        "https",
+        Some("example.com"),
+        "/a",
+    );
+    opened("https://[::1]:8080/x", "https", Some("[::1]"), "/x");
+}
+fn escapes_and_query_reach_the_location() {
+    opened(
+        "myapp:///tag/a%2fb?q=a+b#top",
+        "myapp",
+        None,
+        "/tag/a%2Fb?q=a%20b",
+    );
+    opened("myapp:///s?next=/a#x?y", "myapp", None, "/s?next=/a");
+}
+fn text_without_a_scheme_is_refused() {
+    malformed_url("/note/3");
+    malformed_url(":note");
+    malformed_url("//example.com/note");
+    malformed_url("3app:///x");
+    malformed_url("my_app:///x");
+}
+fn a_path_that_is_no_location_is_refused() {
+    not_a_location("myapp:///a//b");
+    not_a_location("myapp:///a%");
+    not_a_location("myapp:///a?q=%FF");
+}
+fn a_url_over_the_bound_is_refused_unread() {
+    let prefix = "myapp:///";
+    let fits = format!("{prefix}{}", "a".repeat(OpenedUrl::MAX_LEN - prefix.len()));
+    assert!(OpenedUrl::parse(&fits).is_ok(), "a URL of the bound opens");
+    let over = format!("{fits}a");
+    assert_eq!(
+        OpenedUrl::parse(&over),
+        Err(OpenUrlRefused::TooLong {
+            len: OpenedUrl::MAX_LEN + 1
+        })
+    );
+}
+fn declarations_admit_by_scheme_and_by_domain() {
+    let declared = LinkDeclarations::new()
+        .url_schemes(&["myapp", "https"])
+        .associated_domains(&["Example.com"]);
+    let admit = |url: &str| declared.admit(&OpenedUrl::parse(url).expect("a URL"));
+    assert_eq!(admit("MyApp:///note/1"), Ok(()));
+    assert_eq!(admit("https://EXAMPLE.com./note/1"), Ok(()));
+    assert_eq!(
+        admit("other:///note/1"),
+        Err(OpenUrlRefused::UndeclaredScheme {
+            scheme: "other".to_owned()
+        })
+    );
+    assert_eq!(
+        admit("https://evil.example/note/1"),
+        Err(OpenUrlRefused::UndeclaredDomain {
+            host: Some("evil.example".to_owned())
+        }),
+        "a declared `https` scheme admits no web URL by itself"
+    );
+    assert_eq!(
+        admit("http://www.example.com/"),
+        Err(OpenUrlRefused::UndeclaredDomain {
+            host: Some("www.example.com".to_owned())
+        }),
+        "a subdomain is a domain of its own"
+    );
+    assert_eq!(
+        admit("https:///note/1"),
+        Err(OpenUrlRefused::UndeclaredDomain { host: None })
+    );
+    assert_eq!(
+        LinkDeclarations::default().admit(&OpenedUrl::parse("myapp:///").expect("a URL")),
+        Err(OpenUrlRefused::UndeclaredScheme {
+            scheme: "myapp".to_owned()
+        }),
+        "an application that declares nothing opens nothing"
+    );
+}
+
+#[test]
+fn opened_urls_split_into_scheme_host_and_route_location() {
+    crate::common::cases::run_cases(
+        "opened URL",
+        &[
+            ("three slashes", three_slashes_open_the_whole_path),
+            ("authority", the_authority_is_not_part_of_the_path),
+            ("no authority", a_scheme_without_authority_opens_its_path),
+            ("empty path", an_empty_path_opens_the_root),
+            ("lower case", scheme_and_host_compare_in_lower_case),
+            ("escapes and query", escapes_and_query_reach_the_location),
+            ("no scheme", text_without_a_scheme_is_refused),
+            ("no location", a_path_that_is_no_location_is_refused),
+            ("length bound", a_url_over_the_bound_is_refused_unread),
+            ("declarations", declarations_admit_by_scheme_and_by_domain),
+        ],
+    );
+}
+
+pub(crate) fn an_opened_url_navigates_only_when_declared() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(400, 400));
+    let window = host.primary_window();
+    let captured = Captured::default();
+    host.attach(&router(AppRoute::Home, &captured))
+        .expect("a fresh window");
+    settle(&mut host);
+
+    assert_eq!(
+        host.open_url(window, "myapp:///note/3"),
+        Err(OpenUrlRefused::UndeclaredScheme {
+            scheme: "myapp".to_owned()
+        }),
+        "a fresh host declares nothing"
+    );
+    host.set_link_declarations(
+        LinkDeclarations::new()
+            .url_schemes(&["myapp"])
+            .associated_domains(&["example.com"]),
+    );
+
+    assert_eq!(host.open_url(window, "myapp:///note/3"), Ok(()));
+    settle(&mut host);
+    assert_eq!(stack(&captured), [AppRoute::Home, AppRoute::Note { id: 3 }]);
+
+    for (url, refused) in [
+        (
+            "other:///note/4",
+            OpenUrlRefused::UndeclaredScheme {
+                scheme: "other".to_owned(),
+            },
+        ),
+        (
+            "https:///note/4",
+            OpenUrlRefused::UndeclaredDomain { host: None },
+        ),
+        (
+            "https://example.org/note/4",
+            OpenUrlRefused::UndeclaredDomain {
+                host: Some("example.org".to_owned()),
+            },
+        ),
+        (
+            "myapp:///nowhere",
+            OpenUrlRefused::Navigation(NavigationRefused::NoMatch(path("/nowhere"))),
+        ),
+    ] {
+        assert_eq!(host.open_url(window, url), Err(refused), "{url:?}");
+        settle(&mut host);
+        assert_eq!(
+            stack(&captured),
+            [AppRoute::Home, AppRoute::Note { id: 3 }],
+            "{url:?} leaves the stack"
+        );
+    }
+
+    // A web link of the associated domain opens as a `go`: the page it shares
+    // with the stack stays, the fragment is dropped.
+    assert_eq!(
+        host.open_url(window, "https://Example.com/note/5?from=mail#top"),
+        Ok(())
+    );
+    settle(&mut host);
+    assert_eq!(stack(&captured), [AppRoute::Home, AppRoute::Note { id: 5 }]);
+
+    let second = host.open_window(HeadlessWindow::new(400, 400));
+    host.attach_to(second, &router(AppRoute::Home, &Captured::default()))
+        .expect("a fresh window");
+    settle(&mut host);
+    assert!(host.request_close(second, CloseReason::Program));
+    assert_eq!(
+        host.open_url(second, "myapp:///note/6"),
+        Err(OpenUrlRefused::Navigation(
+            NavigationRefused::NoPresentation
+        )),
+        "a closed window"
+    );
 }
