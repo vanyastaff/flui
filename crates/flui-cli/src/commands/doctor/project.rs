@@ -20,12 +20,19 @@ const SECTION: &str = "project";
 const NOT_MERGED: &str = "checked as written, not as Gradle's merged manifest: entries that \
                           library manifests merge in are not seen";
 
+/// The note on declarations naming an associated domain when the run does
+/// not fetch the domains' files.
+const DOMAINS_NOT_FETCHED: &str = "`flui doctor --domains` fetches each associated domain's \
+                                   apple-app-site-association and assetlinks.json";
+
 /// The project checks for `dir`: the declarations and the project's own
-/// Android manifest when `dir` is a FLUI project, then each of `manifests`.
-pub(super) fn project_checks(dir: &Path, manifests: &[PathBuf]) -> Vec<Check> {
+/// Android manifest when `dir` is a FLUI project, then each of `manifests`,
+/// then, when `domains` asks for it, each associated domain's files.
+pub(super) fn project_checks(dir: &Path, manifests: &[PathBuf], domains: bool) -> Vec<Check> {
     let mut checks = Vec::new();
-    if dir.join("flui.toml").is_file() {
-        checks.push(declarations_check(dir));
+    let project = dir.join("flui.toml").is_file();
+    if project {
+        checks.push(declarations_check(dir, domains));
         if dir.join("platforms").join("android").is_dir() {
             checks.push(android_manifest_check(dir));
         }
@@ -33,10 +40,24 @@ pub(super) fn project_checks(dir: &Path, manifests: &[PathBuf]) -> Vec<Check> {
     for path in manifests {
         checks.push(manifest_check(dir, path).with_path(Some(path.clone())));
     }
+    if domains {
+        if project {
+            checks.extend(super::domains::domain_checks(dir, &super::domains::curl));
+        } else {
+            checks.push(Check::failing(
+                "project.domains",
+                SECTION,
+                "Associated domains",
+                Status::Error,
+                "the current directory is not a FLUI project: it has no flui.toml".to_owned(),
+                None,
+            ));
+        }
+    }
     checks
 }
 
-fn declarations_check(dir: &Path) -> Check {
+fn declarations_check(dir: &Path, domains_fetched: bool) -> Check {
     const ID: &str = "project.declarations";
     const TITLE: &str = "Manifest declarations";
     let targets: Vec<&str> = [ManifestKind::Android, ManifestKind::ApplePrivacy]
@@ -62,7 +83,7 @@ fn declarations_check(dir: &Path) -> Check {
                      domain(s), {file_types} file type(s)"
                 )
             };
-            Check::ok(
+            let check = Check::ok(
                 ID,
                 SECTION,
                 TITLE,
@@ -70,7 +91,12 @@ fn declarations_check(dir: &Path) -> Check {
                     "{permissions} Android permission(s), {reasons} Apple accessed-API \
                      reason(s){opens}"
                 ),
-            )
+            );
+            if domains > 0 && !domains_fetched {
+                check.with_note(DOMAINS_NOT_FETCHED)
+            } else {
+                check
+            }
         }
         Err(error) => Check::failing(
             ID,

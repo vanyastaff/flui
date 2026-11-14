@@ -210,6 +210,19 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   a verified one's `https` hosts, an `Info.plist`'s `CFBundleURLTypes` schemes and the extensions of
   the types its `CFBundleDocumentTypes` list; the associated domains of an Apple bundle are an
   entitlement the property list does not carry.
+- **The files on an associated domain.** `apple-app-site-association` and `assetlinks.json` live
+  with the domain's owner, so the CLI does not write them. `flui doctor --domains` fetches them,
+  which is the only network the command touches and why it runs only when asked: for each domain
+  the graph of the Apple targets declares, `https://<domain>/.well-known/apple-app-site-association`
+  must answer 200 without a redirect and name `<team>.<bundle identifier>` in an `applinks.details`
+  entry with its `components` or `paths` (`project.apple-app-site-association`); for each domain of
+  the Android targets, `https://<domain>/.well-known/assetlinks.json` must answer 200 as
+  `application/json` without a redirect with a `delegate_permission/common.handle_all_urls`
+  statement for the package and its SHA-256 certificate fingerprints (`project.assetlinks`). A
+  file over 128 KiB, Apple's bound, is refused. The team and the fingerprints are not compared with
+  the signing identity, which the CLI does not hold; a passing check carries a note saying so.
+  The fetch is `curl` with `--proto =https` and no redirect; the reading of the answer is apart
+  from it, so the tests run without a network.
 
 ### 5. `flui add` links a capability crate, which states its plugin
 
@@ -274,7 +287,11 @@ a key arrives with its first consumer.
   `apple_opening::tests::the_doctor_finds_what_the_bundle_writes` (what the build writes reads back
   complete);
   `linux_desktop::tests::a_linux_desktop_registers_what_the_application_opens` and
-  `desktop_entry_values_are_escaped`.
+  `desktop_entry_values_are_escaped`;
+  `cli_doctor::doctor_fetches_what_each_associated_domain_serves_only_when_asked` (a served
+  association and asset links, a redirect, a domain that cannot be fetched, nothing fetched without
+  `--domains`), `domains::tests::an_apple_association_names_the_application_with_what_it_opens` and
+  `domains::tests::asset_links_grant_the_package_with_its_fingerprints`.
 - `cli_add::add_links_a_capability_and_shows_its_registration` (a facade feature enabled, a second
   run, a crate without a plugin undone with its lockfile, an unknown name, a crate added from the
   checkout); `commands::add::tests::a_feature_joins_the_facade_dependency_in_any_shape`;

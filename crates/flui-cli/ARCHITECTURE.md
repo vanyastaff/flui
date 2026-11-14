@@ -115,6 +115,12 @@ line to add, under the stable ids `project.declarations`, `project.android-manif
 `project.manifest`. The merger is not run: an Android file that is not Gradle's merged manifest
 carries a note saying so (`doctor_lists_what_a_manifest_lacks_of_the_crates_declarations`).
 
+`flui doctor --domains` (`commands/doctor/domains.rs`) fetches each associated domain's
+`apple-app-site-association` and `assetlinks.json` with `curl` (`--proto =https`, no redirect,
+128 KiB) and reads the answer apart from the fetch, so the integration test puts a `curl` that
+answers from files first on `PATH`
+(`doctor_fetches_what_each_associated_domain_serves_only_when_asked`).
+
 `flui add <capability>` (`commands/add.rs`) links a capability crate: it enables the facade
 feature that carries it (`toml_edit`, the file's formatting kept) or, without the facade, runs
 `cargo add` from the FLUI checkout the app already depends on. It then reads the crate's

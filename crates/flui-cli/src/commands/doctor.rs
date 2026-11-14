@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::Duration;
 
+mod domains;
 mod project;
 
 /// The budget for `rustup target add`, which downloads a component.
@@ -42,6 +43,9 @@ pub(crate) struct DoctorOptions {
     /// `AndroidManifest.xml`, `PrivacyInfo.xcprivacy` or `Info.plist`) to check against what
     /// the crates of the project in the current directory declare.
     pub(crate) manifests: Vec<PathBuf>,
+    /// Fetch each associated domain's `apple-app-site-association` and
+    /// `assetlinks.json` and check that they open the application.
+    pub(crate) domains: bool,
 }
 
 /// Severity of one [`Check`].
@@ -99,6 +103,8 @@ struct Check {
     path: Option<PathBuf>,
     /// What the check could not see, such as entries a manifest merger adds.
     note: Option<&'static str>,
+    /// The address the check fetched.
+    url: Option<String>,
 }
 
 impl Check {
@@ -112,6 +118,7 @@ impl Check {
             fix: None,
             path: None,
             note: None,
+            url: None,
         }
     }
 
@@ -122,6 +129,11 @@ impl Check {
 
     fn with_note(mut self, note: &'static str) -> Self {
         self.note = Some(note);
+        self
+    }
+
+    fn with_url(mut self, url: String) -> Self {
+        self.url = Some(url);
         self
     }
 
@@ -143,6 +155,7 @@ impl Check {
             fix,
             path: None,
             note: None,
+            url: None,
         }
     }
 
@@ -164,6 +177,7 @@ struct CheckEvent<'a> {
     fix: Option<String>,
     path: &'a Option<PathBuf>,
     note: Option<&'a str>,
+    url: Option<&'a str>,
 }
 
 impl<'a> From<&'a Check> for CheckEvent<'a> {
@@ -177,6 +191,7 @@ impl<'a> From<&'a Check> for CheckEvent<'a> {
             fix: check.fix.as_ref().map(Fix::rendered),
             path: &check.path,
             note: check.note,
+            url: check.url.as_deref(),
         }
     }
 }
@@ -269,6 +284,7 @@ fn run_checks(options: &DoctorOptions) -> Vec<Check> {
         web,
         fix: _,
         ref manifests,
+        domains,
     } = *options;
 
     let installed_targets = rustup_installed_targets();
@@ -294,8 +310,8 @@ fn run_checks(options: &DoctorOptions) -> Vec<Check> {
     }
 
     match std::env::current_dir() {
-        Ok(dir) => checks.extend(project::project_checks(&dir, manifests)),
-        Err(error) if !manifests.is_empty() => checks.push(Check::failing(
+        Ok(dir) => checks.extend(project::project_checks(&dir, manifests, domains)),
+        Err(error) if !manifests.is_empty() || domains => checks.push(Check::failing(
             "project.manifest",
             "project",
             "Manifest",

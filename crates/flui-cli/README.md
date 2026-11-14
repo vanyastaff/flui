@@ -96,7 +96,7 @@ it. Inside the FLUI checkout, generate against the local source instead:
 | `flui format` | `cargo fmt --all` (`--check` exits 4 when unformatted). |
 | `flui clean` | Cargo artifacts and every platform's build output; `--platform <android\|ios\|web\|desktop>` cleans one platform's output instead, and `--deep` adds what platform build tools write in `platforms/`. A directory given to `flui build --output` is yours to clean. |
 | `flui add <capability>` | Link a capability crate (`flui add system`): enables its facade feature, prints the `.plugin(…)` line that registers it and what it declares for the manifests. |
-| `flui doctor` | Environment and project checks with fix hints; `--fix` installs missing `rustup` targets, `--manifest` checks a manifest FLUI does not write. |
+| `flui doctor` | Environment and project checks with fix hints; `--fix` installs missing `rustup` targets, `--manifest` checks a manifest FLUI does not write, `--domains` fetches what each associated domain serves. |
 | `flui devices` | Desktop, Android (`adb`), iOS simulators and browsers, with the ids `--device` takes. |
 | `flui emulators list|launch` | List and start Android AVDs and iOS simulators. |
 | `flui platform add|remove|list` | Manage the platforms declared in `flui.toml` (`remove --yes` for scripts). |
@@ -337,6 +337,15 @@ lines to add. An Android file that is not Gradle's merged manifest carries a
 ```bash
 flui doctor --json --manifest ../host/app/src/main/AndroidManifest.xml
 ```
+
+`--domains` fetches, for each associated domain the crates declare, the file
+an Apple platform (`/.well-known/apple-app-site-association`) and the one
+Android (`/.well-known/assetlinks.json`) read to verify the application's
+`https` links, with `curl` and without following a redirect, as the platforms
+do: one `project.apple-app-site-association` and one `project.assetlinks`
+check per domain, the address in the event's `url`. It is the only network
+`flui doctor` touches, so it runs only when asked; the team identifier and the
+certificate fingerprints are not compared with the signing identity.
 
 ## Devices and emulators
 
