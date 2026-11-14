@@ -88,7 +88,8 @@ unsafe impl Allocator for &FrameArena { /* bump; free and grow the last block in
   reverse order of allocation reuses its memory within the frame.
 - The arena records the most bytes it had handed out at once since the last reset (its peak).
   `reset` keeps the newest chunk when it holds that peak and is at most four times the largest
-  peak of the last 120 resets that followed an allocation, and releases every other chunk. A
+  peak of the last 120 resets that followed an allocation, and releases every other chunk; keeping
+  none, it frees its list of chunks as well, so nothing of a grown chain stays live. A
   reset that follows no allocation changes nothing, so passes with no scratch to list neither age
   the recent peaks nor release the chunk they sized. `reset` never allocates: when it keeps no
   chunk, the next allocation opens one sized for the largest recent peak. So a steady frame bumps
