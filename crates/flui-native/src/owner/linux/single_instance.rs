@@ -15,9 +15,6 @@ use flui_platform::{Launch, OpenTarget, Opened};
 
 use crate::owner::file_uri::{PathConvention, opened_by_urls};
 
-/// The D-Bus interface a first instance serves.
-pub(crate) const INTERFACE: &str = "org.freedesktop.Application";
-
 /// The `platform_data` key of a Wayland activation token.
 const ACTIVATION_TOKEN: &str = "activation-token";
 /// The `platform_data` key of an X11 startup notification id.
@@ -178,10 +175,13 @@ mod bus {
     use zbus::fdo::{RequestNameFlags, RequestNameReply};
     use zbus::{OwnedVariant as OwnedValue, Variant as Value};
 
-    use super::{Forwarded, INTERFACE, object_path, platform_data, token_of};
+    use super::{Forwarded, object_path, platform_data, token_of};
     use crate::executor::NativeExecutor;
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::OwnerSignal;
+
+    /// The D-Bus interface a first instance serves.
+    const INTERFACE: &str = "org.freedesktop.Application";
 
     /// The most launches that wait for the owner at once; a later one is
     /// refused, and its process runs as an instance of its own.

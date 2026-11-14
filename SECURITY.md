@@ -38,3 +38,11 @@ On X11, every client on the same display is inside the trust boundary: the
 protocol lets it inject input (XTest), send events to any window and read the
 keyboard. The native X11 host bounds the memory a selection or drag request
 can make it hold, but it does not throttle the work another client asks of it.
+
+On Linux, every process that can reach the user's session bus is inside the
+trust boundary too: the bus admits only the user's own processes, which can
+already signal the application. A single-instance application's
+`org.freedesktop.Application` service bounds what it holds (the launches
+waiting for the owner, the URIs it keeps, a token's length), but the bus
+library decodes a message, up to the D-Bus size limit, before those bounds
+apply.
