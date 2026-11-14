@@ -15,7 +15,10 @@
 //! arrive with their first consumer: version 1 has `android.permissions` and
 //! `apple.privacy.accessed-apis`, version 2 adds `android.dex`,
 //! `android.java` and `android.proguard`: the compiled Java classes a crate
-//! ships, their sources and the R8 rules that keep what native code reaches.
+//! ships, their sources and the R8 rules that keep what native code reaches,
+//! and version 3 adds `url-schemes`, `associated-domains` and `file-types`:
+//! what the application opens, which the operating system has to know before
+//! it hands the application a link or a file.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display, Formatter};
@@ -25,12 +28,14 @@ use cargo_metadata::{Metadata, Package, PackageId};
 use serde::Deserialize;
 
 use crate::build::error::{BuildError, BuildResult};
+pub(crate) use opening::{AssociatedDomain, FileType, UrlScheme};
 
 pub(crate) mod capability;
+pub(crate) mod opening;
 pub(crate) mod verify;
 
 /// The newest `schema` this CLI reads.
-pub(crate) const SCHEMA: u32 = 2;
+pub(crate) const SCHEMA: u32 = 3;
 
 /// The key under `[package.metadata.flui]` that holds a crate's
 /// declarations.
@@ -90,7 +95,7 @@ impl Display for AndroidPermission {
 
 /// One crate's `[package.metadata.flui.declares]`.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Declares {
     /// The version of the keys the crate uses.
     schema: u32,
@@ -102,6 +107,15 @@ struct Declares {
     /// What the crate needs from Apple's manifests whatever its features.
     #[serde(default)]
     apple: ApplePart,
+    /// The application's own URL schemes (schema 3).
+    #[serde(default)]
+    url_schemes: Vec<UrlScheme>,
+    /// The web domains whose links open the application (schema 3).
+    #[serde(default)]
+    associated_domains: Vec<AssociatedDomain>,
+    /// The file types the application opens (schema 3).
+    #[serde(default)]
+    file_types: Vec<FileType>,
     /// What each feature of the crate adds when it is enabled.
     #[serde(default)]
     features: BTreeMap<String, Part>,
@@ -109,12 +123,51 @@ struct Declares {
 
 /// The declarations of one crate, or of one of its features.
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Part {
     #[serde(default)]
     android: AndroidPart,
     #[serde(default)]
     apple: ApplePart,
+    #[serde(default)]
+    url_schemes: Vec<UrlScheme>,
+    #[serde(default)]
+    associated_domains: Vec<AssociatedDomain>,
+    #[serde(default)]
+    file_types: Vec<FileType>,
+}
+
+/// What a crate's table, or one feature's part of it, says the application
+/// opens.
+#[derive(Clone, Copy)]
+struct Opening<'a> {
+    url_schemes: &'a [UrlScheme],
+    associated_domains: &'a [AssociatedDomain],
+    file_types: &'a [FileType],
+}
+
+impl<'a> Opening<'a> {
+    fn of_declares(declares: &'a Declares) -> Self {
+        Self {
+            url_schemes: &declares.url_schemes,
+            associated_domains: &declares.associated_domains,
+            file_types: &declares.file_types,
+        }
+    }
+
+    fn of_part(part: &'a Part) -> Self {
+        Self {
+            url_schemes: &part.url_schemes,
+            associated_domains: &part.associated_domains,
+            file_types: &part.file_types,
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.url_schemes.is_empty()
+            && self.associated_domains.is_empty()
+            && self.file_types.is_empty()
+    }
 }
 
 /// What a crate needs from Apple's manifests.
@@ -312,6 +365,9 @@ pub(crate) struct Declarations {
     /// Each R8 rules file, by crate and then path.
     android_proguard: BTreeSet<(String, PathBuf)>,
     apple_accessed_apis: BTreeMap<PrivacyCategory, BTreeMap<PrivacyReason, BTreeSet<String>>>,
+    url_schemes: BTreeMap<UrlScheme, BTreeSet<String>>,
+    associated_domains: BTreeMap<AssociatedDomain, BTreeSet<String>>,
+    file_types: BTreeMap<FileType, BTreeSet<String>>,
 }
 
 impl Declarations {
@@ -421,11 +477,70 @@ impl Declarations {
         }
         self.add_android(package, declares.schema, &declares.android)?;
         self.add_apple(name, &declares.apple)?;
+        self.add_opening(name, declares.schema, Opening::of_declares(&declares))?;
         for (feature, part) in &declares.features {
             if features.contains(&feature.as_str()) {
                 self.add_android(package, declares.schema, &part.android)?;
                 self.add_apple(name, &part.apple)?;
+                self.add_opening(name, declares.schema, Opening::of_part(part))?;
             }
+        }
+        Ok(())
+    }
+
+    /// Add what `crate_name`'s table, which states `schema`, says the
+    /// application opens. Two crates giving one extension two types is
+    /// refused: the system can open a file by one type only.
+    fn add_opening(
+        &mut self,
+        crate_name: &str,
+        schema: u32,
+        opening: Opening<'_>,
+    ) -> BuildResult<()> {
+        if opening.is_empty() {
+            return Ok(());
+        }
+        let refused = |reason: String| {
+            BuildError::invalid_config(
+                format!("{crate_name}'s [package.metadata.flui.{KEY}]"),
+                reason,
+            )
+        };
+        if schema < 3 {
+            return Err(refused(
+                "declares what the application opens (`url-schemes`, `associated-domains`, \
+                 `file-types`), which schema 3 introduced; state `schema = 3`"
+                    .to_owned(),
+            ));
+        }
+        for file_type in opening.file_types {
+            if let Some((other, crates)) = self.file_types.iter().find(|(other, _)| {
+                other.extension() == file_type.extension() && *other != file_type
+            }) {
+                return Err(refused(format!(
+                    "declares `.{}` as {}, and {} declares it as {}",
+                    file_type.extension(),
+                    file_type.mime(),
+                    crates.iter().cloned().collect::<Vec<_>>().join(", "),
+                    other.mime()
+                )));
+            }
+            self.file_types
+                .entry(file_type.clone())
+                .or_default()
+                .insert(crate_name.to_owned());
+        }
+        for scheme in opening.url_schemes {
+            self.url_schemes
+                .entry(scheme.clone())
+                .or_default()
+                .insert(crate_name.to_owned());
+        }
+        for domain in opening.associated_domains {
+            self.associated_domains
+                .entry(domain.clone())
+                .or_default()
+                .insert(crate_name.to_owned());
         }
         Ok(())
     }
@@ -527,6 +642,55 @@ impl Declarations {
                 joined.entry(reason).or_default().extend(crates);
             }
         }
+        for (scheme, crates) in other.url_schemes {
+            self.url_schemes.entry(scheme).or_default().extend(crates);
+        }
+        for (domain, crates) in other.associated_domains {
+            self.associated_domains
+                .entry(domain)
+                .or_default()
+                .extend(crates);
+        }
+        for (file_type, crates) in other.file_types {
+            self.file_types.entry(file_type).or_default().extend(crates);
+        }
+    }
+
+    /// What one crate's `[package.metadata.flui.declares]`, given as TOML,
+    /// declares of the parts no crate directory resolves: what the
+    /// application opens and its accessed APIs.
+    #[cfg(test)]
+    pub(crate) fn of_table(crate_name: &str, table: &str) -> Self {
+        let declares: Declares =
+            toml::from_str(table).expect("BUG: a test's declarations table parses");
+        let mut declarations = Self::default();
+        declarations
+            .add_apple(crate_name, &declares.apple)
+            .expect("BUG: a test's accessed APIs are well formed");
+        declarations
+            .add_opening(crate_name, declares.schema, Opening::of_declares(&declares))
+            .expect("BUG: a test's opened types are well formed");
+        declarations
+    }
+
+    /// Every URL scheme the application opens, in order, with the crates
+    /// that declare it.
+    pub(crate) fn url_schemes(&self) -> impl Iterator<Item = (&UrlScheme, &BTreeSet<String>)> {
+        self.url_schemes.iter()
+    }
+
+    /// Every web domain whose links open the application, in order, with the
+    /// crates that declare it.
+    pub(crate) fn associated_domains(
+        &self,
+    ) -> impl Iterator<Item = (&AssociatedDomain, &BTreeSet<String>)> {
+        self.associated_domains.iter()
+    }
+
+    /// Every file type the application opens, in order of extension, with
+    /// the crates that declare it.
+    pub(crate) fn file_types(&self) -> impl Iterator<Item = (&FileType, &BTreeSet<String>)> {
+        self.file_types.iter()
     }
 
     /// Every Android permission declared, in order, with the crates that ask
@@ -738,6 +902,66 @@ mod tests {
     /// turns on `flui/driver`, brings in what it enables, named by the
     /// application's feature or by the dependency's.
     #[test]
+    fn what_the_application_opens_is_joined_over_the_graph() {
+        let project = fixture(&[
+            (
+                "app",
+                &manifest(
+                    "app",
+                    "[workspace]\n[dependencies]\nviewer = { path = \"../viewer\", features = \
+                     [\"notes\"] }\n\
+                     [package.metadata.flui.declares]\nschema = 3\n\
+                     url-schemes = [\"Notes\", \"notes-beta\"]\n\
+                     associated-domains = [\"notes.example.com\"]\n",
+                ),
+            ),
+            (
+                "viewer",
+                &manifest(
+                    "viewer",
+                    "[features]\nnotes = []\nsketch = []\n\
+                     [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n\
+                     [[package.metadata.flui.declares.features.notes.file-types]]\n\
+                     extension = \"note\"\nmime = \"application/x-notes-note\"\nname = \"Note\"\n\
+                     [[package.metadata.flui.declares.features.sketch.file-types]]\n\
+                     extension = \"sketch\"\nmime = \"image/x-sketch\"\nname = \"Sketch\"\n",
+                ),
+            ),
+        ]);
+        let declarations =
+            collect(&project.path().join("app"), "aarch64-linux-android").expect("declarations");
+        let schemes: Vec<(String, Vec<String>)> = declarations
+            .url_schemes()
+            .map(|(scheme, crates)| (scheme.to_string(), crates.iter().cloned().collect()))
+            .collect();
+        assert_eq!(
+            schemes,
+            [
+                (
+                    "notes".to_owned(),
+                    vec!["app".to_owned(), "viewer".to_owned()]
+                ),
+                ("notes-beta".to_owned(), vec!["app".to_owned()]),
+            ],
+            "a scheme compares without regard to case"
+        );
+        let domains: Vec<String> = declarations
+            .associated_domains()
+            .map(|(domain, _)| domain.to_string())
+            .collect();
+        assert_eq!(domains, ["notes.example.com"]);
+        let file_types: Vec<(&str, &str)> = declarations
+            .file_types()
+            .map(|(file_type, _)| (file_type.extension(), file_type.mime()))
+            .collect();
+        assert_eq!(
+            file_types,
+            [("note", "application/x-notes-note")],
+            "only the enabled feature's file type"
+        );
+    }
+
+    #[test]
     fn the_features_a_build_turns_on_count() {
         let project = fixture(&[
             (
@@ -893,7 +1117,31 @@ mod tests {
                 "[package.metadata.flui.declares.android]\npermissions = [\"a.B\"]\n",
                 "missing field `schema`",
             ),
-            ("schema = 3\n", "states schema 3"),
+            ("schema = 4\n", "states schema 4"),
+            (
+                "schema = 2\nurl-schemes = [\"notes\"]\n",
+                "which schema 3 introduced",
+            ),
+            (
+                "schema = 3\nurl-schemes = [\"https\"]\n",
+                "not the application's own scheme",
+            ),
+            (
+                "schema = 3\nassociated-domains = [\"https://example.com\"]\n",
+                "is not a domain",
+            ),
+            (
+                "schema = 3\nurl_schemes = [\"notes\"]\n",
+                "unknown field `url_schemes`",
+            ),
+            (
+                "schema = 3\n[[package.metadata.flui.declares.file-types]]\nextension = \"note\"\n\
+                 mime = \"text/plain\"\n\
+                 name = \"Note\"\n[[package.metadata.flui.declares.file-types]]\n\
+                 extension = \"note\"\nmime = \"text/x-note\"\n\
+                 name = \"Note\"\n",
+                "declares `.note` as text/x-note, and lib declares it as text/plain",
+            ),
             ("schema = 0\n", "states schema 0"),
             (
                 "schema = 1\n[package.metadata.flui.declares.android]\ndex = \"src/lib.rs\"\n",

@@ -95,7 +95,6 @@ reasons = ["C617.1"]
   in them, each a path inside the crate (relative, `/`-separated, never `..`) that must name a
   file or a directory. A crate stating `schema = 1` cannot use them, so an older CLI refuses such a
   crate by its version, not by an unknown key.
-  CLI refuses such a crate by its version, not by an unknown key.
 
 ```toml
 [package.metadata.flui.declares]
@@ -105,6 +104,34 @@ schema = 2
 dex = "android/classes.dex"
 java = "android/java"
 proguard = "android/proguard-rules.pro"
+```
+
+- Version 3 adds what the application opens, at the top of the table and under
+  `features.<feature>`:
+  - `url-schemes`, its own URL schemes: RFC 3986 schemes, kept in lower case, with no web or
+    system scheme (`http`, `https`, `file`, `content`, `data`, `javascript`, `about`);
+  - `associated-domains`, the web domains whose `https` links open it: host names without a
+    scheme, a path or `*`, kept in lower case;
+  - `file-types`, the file types it opens: each an `extension` (1 to 32 letters and digits), a
+    `mime` type (RFC 6838 restricted names) and the `name` the system shows.
+
+  Each value is checked before a manifest carries it, so none can break out of its attribute. Two
+  crates that give one extension two MIME types are refused, since the system opens a file as one
+  type. Without these keys the operating system never hands the application its links or files,
+  so a crate that uses them states `schema = 3`. `#[flui::main]` reads the same `url-schemes` and
+  `associated-domains` of the application's own crate, so the URLs the application admits
+  (ADR-0330 §5) are the ones its manifests register.
+
+```toml
+[package.metadata.flui.declares]
+schema = 3
+url-schemes = ["notes"]
+associated-domains = ["notes.example.com"]
+
+[[package.metadata.flui.declares.file-types]]
+extension = "note"
+mime = "application/x-notes-note"
+name = "Note"
 ```
 
 - A key arrives with the first crate that needs it. A key an older CLI could safely ignore needs no
@@ -133,6 +160,23 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   script adds to its `main` source set, and the R8 rules (`android.proguard`) as
   `flui.proguardFiles`, which its release build type adds to its rules; a script that does not
   read either is refused.
+  What the application opens becomes intent filters on `FluiActivity`: one `VIEW` filter,
+  `BROWSABLE`, with a `<data android:scheme>` per URL scheme; one with `android:autoVerify="true"`
+  for the `https` links of the associated domains, a `<data android:host>` each, which Android
+  verifies against each domain's `/.well-known/assetlinks.json`; and one `VIEW` filter with a
+  `<data android:mimeType>` per file type.
+- **Apple, what the application opens.** Both bundles' `Info.plist`, the iOS packager's and the
+  macOS `.app`'s, take the same keys from one function (`build::apple_opening`): `CFBundleURLTypes`
+  with the URL schemes, and per file type a uniform type the bundle exports as
+  `<bundle identifier>.<extension>` (`UTExportedTypeDeclarations`, with its extension and MIME
+  type) and opens as its owner (`CFBundleDocumentTypes`, `LSHandlerRank` `Owner`); iOS adds
+  `LSSupportsOpeningDocumentsInPlace` `false`, so the application gets a copy of a handed file.
+  The associated domains are the entitlement `com.apple.developer.associated-domains`
+  (`applinks:<domain>`), which a signed build carries.
+- **Linux and Windows.** The `.desktop` entry an installed Linux application ships carries
+  `MimeType=x-scheme-handler/<scheme>;` and each file type's MIME type. An unpackaged Windows
+  application registers its schemes and extensions under `HKCU\Software\Classes`, and an MSIX
+  package declares them as `uap:Protocol` and `uap:FileTypeAssociation`.
 - **Apple.** The iOS packager writes the bundle's `PrivacyInfo.xcprivacy` from the accessed APIs
   the graph of the application's target declares, joined with the application's own
   `<project>/platforms/ios/PrivacyInfo.xcprivacy`: per category, the reasons of every crate and of the
@@ -224,6 +268,15 @@ a key arrives with its first consumer.
   `gradle_project::tests::gradle_compiles_the_java_sources_the_crates_declare`.
 - `cargo xtask workspace` accepts `declares` and `capability` among the `[package.metadata.flui]`
   keys.
+- What the application opens: `declarations::opening::tests::what_an_application_opens_is_checked_before_a_manifest_carries_it`
+  (schemes, domains, extensions, MIME types and names, each refused when malformed);
+  `declarations::tests::what_the_application_opens_is_joined_over_the_graph` (case folded, a
+  feature's file type only while it is on); the malformed cases include a version-3 key under
+  `schema = 2`, a web scheme, a URL given as a domain and one extension with two MIME types;
+  `android_manifest::tests::the_activity_filters_what_the_application_opens`;
+  `apple_opening::tests::a_bundle_registers_what_the_application_opens` and
+  `the_keys_render_as_xml_property_list_entries`; `ios_package::tests::publication_contract` ("the
+  info plist registers what the application opens").
 
 ## Pros and cons of the options
 

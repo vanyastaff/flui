@@ -89,6 +89,14 @@ application's. Rust links statically, so no per-SDK privacy bundle exists and th
 manifest carries the union. `flui-native` declares `systemUptime` (`35F9.1`) and file timestamps
 (`C617.1`), `flui-assets` file timestamps (`publication_contract`).
 
+What the application opens (schema 3: `url-schemes`, `associated-domains`, `file-types`, each
+value checked in `declarations/opening.rs`) becomes `FluiActivity`'s intent filters, a verified
+one for the domains' `https` links (`the_activity_filters_what_the_application_opens`), and the
+keys both Apple bundles' `Info.plist` take from `build/apple_opening.rs`: `CFBundleURLTypes`, and
+per file type an exported uniform type under the bundle identifier that the bundle opens as its
+owner (`a_bundle_registers_what_the_application_opens`). The macOS bundle's XML plist renders the
+same keys (`the_keys_render_as_xml_property_list_entries`).
+
 `flui doctor` reads the same declarations for a manifest the CLI does not write
 (`declarations/verify.rs`, `commands/doctor/project.rs`): the project's hand-written Android
 manifest and each `--manifest` path, an `AndroidManifest.xml` or an XML `PrivacyInfo.xcprivacy`,

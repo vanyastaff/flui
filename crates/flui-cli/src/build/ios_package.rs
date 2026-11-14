@@ -552,7 +552,7 @@ pub(crate) async fn package_application(
         let staged = work.path().join(&filename);
         fs::create_dir(&staged)?;
         fs::copy(&executable, staged.join("flui_app"))?;
-        let plist = application_info_plist(&bundle, &numeric, &minimum, platform);
+        let plist = application_info_plist(&bundle, &numeric, &minimum, platform, &declarations);
         let info = staged.join("Info.plist");
         fs::write(
             &info,
@@ -700,7 +700,28 @@ fn privacy_manifest(
 /// `UIApplicationSupportsIndirectInputEvents` makes UIKit report an iPad's
 /// trackpad and mouse as an indirect pointer, with its buttons, instead of
 /// as a finger.
+///
+/// What the application opens joins it (`apple_opening`): its URL schemes
+/// and file types, from the crates' declarations.
 fn application_info_plist(
+    bundle: &crate::build::AppBundle,
+    numeric: &str,
+    minimum: &str,
+    platform: &str,
+    declarations: &Declarations,
+) -> serde_json::Value {
+    let mut plist = application_base_plist(bundle, numeric, minimum, platform);
+    if let serde_json::Value::Object(keys) = &mut plist {
+        keys.extend(crate::build::apple_opening::info_plist_keys(
+            &bundle.identifier,
+            declarations,
+            crate::build::apple_opening::ApplePlatform::Ios,
+        ));
+    }
+    plist
+}
+
+fn application_base_plist(
     bundle: &crate::build::AppBundle,
     numeric: &str,
     minimum: &str,
@@ -848,11 +869,39 @@ mod tests {
         drop(CancelOnDrop(Arc::clone(&state)));
         assert_eq!(state.load(Ordering::Acquire), COMMITTING);
     }
+    fn the_info_plist_registers_what_the_application_opens() {
+        let bundle = crate::build::AppBundle::new("Notes", "com.example.notes".to_owned());
+        let declarations = Declarations::of_table(
+            "notes",
+            "schema = 3\nurl-schemes = [\"notes\"]\n[[file-types]]\nextension = \"note\"\n\
+             mime = \"application/x-notes-note\"\nname = \"Note\"\n",
+        );
+        let plist = application_info_plist(&bundle, "1.0.0", "15.0", "IOS", &declarations);
+        assert_eq!(
+            plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"],
+            serde_json::json!(["notes"])
+        );
+        assert_eq!(
+            plist["CFBundleDocumentTypes"][0]["LSItemContentTypes"],
+            serde_json::json!(["com.example.notes.note"])
+        );
+        assert_eq!(plist["CFBundleIdentifier"], "com.example.notes");
+        let plain =
+            application_info_plist(&bundle, "1.0.0", "15.0", "IOS", &Declarations::default());
+        assert!(plain.get("CFBundleURLTypes").is_none(), "{plain}");
+    }
+
     fn info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer() {
         let mut bundle = crate::build::AppBundle::new("Demo", "dev.flui.demo".to_owned());
         bundle.version = "1.2.3".into();
         for platform in ["IOS", "IOSSIMULATOR"] {
-            let plist = application_info_plist(&bundle, "1.2.3", "15.0", platform);
+            let plist = application_info_plist(
+                &bundle,
+                "1.2.3",
+                "15.0",
+                platform,
+                &Declarations::default(),
+            );
             assert_eq!(
                 plist["CADisableMinimumFrameDurationOnPhone"],
                 serde_json::Value::Bool(true),
@@ -986,6 +1035,10 @@ mod tests {
             (
                 "privacy manifest joins the application's own",
                 privacy_manifest_joins_the_applications_own,
+            ),
+            (
+                "the info plist registers what the application opens",
+                the_info_plist_registers_what_the_application_opens,
             ),
             (
                 "info plist lifts the phone frame duration cap and reads the pointer",
