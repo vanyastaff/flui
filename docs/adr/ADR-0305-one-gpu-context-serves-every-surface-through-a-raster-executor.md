@@ -423,9 +423,9 @@ executor runs each command under its own catch, in both placements.
   first, so no two contexts present to one canvas, and no frame runs until the new context has
   attached the canvas's slot. Each slot's kept texture images go to the slot attached for its
   window next, and the driver's report of a lost device wakes the owner without waiting for new
-  content. A loss is a rebuild the owner owes, asked again at each animation frame; only when the
-  builds of a new context have failed for twelve seconds is it reported abandoned (ADR-0267), and
-  the application's retry, or the browser restoring the context, asks again.
+  content. A loss is a rebuild the owner owes, asked again at each animation frame and never given
+  up, since the page has no `retry_render_device` to ask again with; the application is not told
+  of builds that keep failing.
 
 §9. **Teardown is bounded and the executor's health is typed.** ADR-0045 decision 7 stands per
 executor and slot.

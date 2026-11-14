@@ -271,19 +271,6 @@ impl WebFrameDriver {
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         liveness: super::frame_driver::FrameLiveness,
     ) {
-        // A rebuild given up after its builds kept failing is the
-        // application's to ask for again (ADR-0267): it is told once, and its
-        // `retry_render_device` takes the presentation off `Abandoned`, which
-        // owes the rebuild again here.
-        use flui_runtime::frame_failure::DeviceRecovery;
-        if let Some(attempts) = self.gpu_loss.take_given_up() {
-            ui_runtime.note_primary_device_recovery(Some(DeviceRecovery::Abandoned { attempts }));
-        } else if !ui_runtime
-            .primary_device_recovery()
-            .is_some_and(DeviceRecovery::is_abandoned)
-        {
-            let _asked_again = self.gpu_loss.retry();
-        }
         // Before the dirty gate: a lost device or context needs no animation
         // frame of new content to be acted on.
         self.start_rebuild_if_owed(&liveness);
@@ -472,7 +459,7 @@ impl WebFrameDriver {
                         return;
                     }
                     log_failed_build(&error);
-                    claim.fail(web_time::Instant::now());
+
                     // No frame comes unasked, and the retry runs in one.
                     window.request_redraw();
                     return;
@@ -502,7 +489,7 @@ impl WebFrameDriver {
                 .unwrap_or_else(|| Err(super::raster_host::host_busy()));
             if let Err(error) = attached {
                 log_failed_build(&error);
-                claim.fail(web_time::Instant::now());
+
                 window.request_redraw();
                 return;
             }
