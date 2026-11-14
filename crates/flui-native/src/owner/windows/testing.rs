@@ -108,6 +108,14 @@ impl ClassWindows for NoWindows {
     fn redraw_for_deadline(&self) {}
 
     fn paint_invalid(&self) {}
+
+    #[cfg(feature = "single-instance")]
+    fn shows_any(&self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "single-instance")]
+    fn activate_forwarded(&self) {}
 }
 
 /// An input that holds no window.

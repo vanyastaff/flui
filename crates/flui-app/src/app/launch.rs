@@ -140,10 +140,13 @@ impl Application {
     /// so a link opens in the instance that runs; `false` turns it off.
     ///
     /// Linux keeps it on the session bus (`org.freedesktop.Application`, as
-    /// GApplication does); Windows does not keep it yet. macOS, iOS and
-    /// Android keep one instance themselves, and each page on the Web is an
-    /// application of its own: there it does nothing. Without an application
-    /// id it is off, with a warning.
+    /// GApplication does), Windows with a mutex and a named pipe of the user's
+    /// session. macOS, iOS and Android keep one instance themselves, and each
+    /// page on the Web is an application of its own: there it does nothing.
+    /// Without an application id it is off, with a warning. It needs flui's
+    /// `single-instance` feature, without which an application runs as many
+    /// instances as it is launched.
+    #[cfg(feature = "single-instance")]
     pub fn single_instance(mut self, single_instance: bool) -> Self {
         self.opening.single_instance = Some(single_instance);
         self

@@ -1,0 +1,3 @@
+### Added
+
+- `Application::single_instance(bool)` on Windows: a later launch of the application hands the running instance its right to the foreground, its links and its files, and ends; the running instance hears them as a running launch and brings its front window forward, restored if minimized. The instance holds a mutex and serves a named pipe of the user's session, granted to the user alone and refusing writes from below the instance's integrity level; a later launch hands its launch only to a pipe served by its own user at its own integrity level or above. On by itself when the application declares a URL scheme, as on Linux.

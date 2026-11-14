@@ -39,6 +39,7 @@ pub(crate) struct OpenSettings {
     pub(crate) on_open_files: Option<OpenFilesCallback>,
     /// Whether the application runs as one instance; `None` leaves it to
     /// the declarations.
+    #[cfg(feature = "single-instance")]
     pub(crate) single_instance: Option<bool>,
 }
 
@@ -61,16 +62,16 @@ impl OpenSettings {
     /// URL scheme, whose links a second launch would otherwise open in a
     /// second process. `None` without an application id in `identity`,
     /// which is warned about: the bus name and the pipe are named by it.
-    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    #[cfg(all(
+        feature = "single-instance",
+        not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+    ))]
     pub(crate) fn single_instance_id(&self, identity: &flui_log::AppIdentity) -> Option<String> {
-        let declared = self
-            .declarations
-            .is_some_and(|declarations| !declarations.declared_url_schemes().is_empty());
-        // Only the Linux hosts keep one instance yet; macOS, iOS and Android
-        // keep one themselves, and each page on the Web is an application of
-        // its own.
-        let kept_here = cfg!(target_os = "linux");
-        if !kept_here || !self.single_instance.unwrap_or(declared) {
+        // The Linux and Windows hosts keep one instance; macOS, iOS and
+        // Android keep one themselves, and each page on the Web is an
+        // application of its own.
+        let kept_here = cfg!(any(target_os = "linux", windows));
+        if !kept_here || !self.single_instance.unwrap_or(self.declares_a_scheme()) {
             return None;
         }
         let app_id = identity.app_id().map(|app_id| app_id.as_str().to_owned());
@@ -82,15 +83,42 @@ impl OpenSettings {
         }
         app_id
     }
+
+    /// None: a build without `single-instance` keeps no instance. An
+    /// application that declares a URL scheme, whose links a second launch
+    /// then opens in a second process, is warned about on the hosts that
+    /// would keep one (`flui build` refuses such a build of its project).
+    #[cfg(all(
+        not(feature = "single-instance"),
+        not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+    ))]
+    pub(crate) fn single_instance_id(&self, _identity: &flui_log::AppIdentity) -> Option<String> {
+        if cfg!(any(target_os = "linux", windows)) && self.declares_a_scheme() {
+            tracing::warn!(
+                "the application declares a URL scheme but is built without flui's \
+                 `single-instance` feature: each link it is launched with opens a second process"
+            );
+        }
+        None
+    }
+
+    /// Whether the application declares a URL scheme.
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    fn declares_a_scheme(&self) -> bool {
+        self.declarations
+            .is_some_and(|declarations| !declarations.declared_url_schemes().is_empty())
+    }
 }
 
 impl std::fmt::Debug for OpenSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OpenSettings")
+        let mut debug = f.debug_struct("OpenSettings");
+        debug
             .field("declarations", &self.declarations)
-            .field("on_open_files", &self.on_open_files.is_some())
-            .field("single_instance", &self.single_instance)
-            .finish()
+            .field("on_open_files", &self.on_open_files.is_some());
+        #[cfg(feature = "single-instance")]
+        debug.field("single_instance", &self.single_instance);
+        debug.finish()
     }
 }
 
@@ -333,7 +361,7 @@ fn open_urls(
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, feature = "single-instance", any(target_os = "linux", windows)))]
 mod tests {
     use flui_log::{AppId, AppIdentity};
     use flui_view::navigation::LinkDeclarations;

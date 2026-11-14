@@ -173,12 +173,30 @@ pub(crate) struct OwnerWindow {
     hwnd: HWND,
     signal: Weak<OwnerSignal>,
     frames: std::rc::Weak<ModalFrames>,
+    #[cfg(feature = "single-instance")]
+    app: Weak<AppDelivery>,
+    #[cfg(feature = "single-instance")]
+    windows: Weak<dyn ClassWindows>,
 }
 
 impl OwnerWindow {
     /// The owner window's handle.
     pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    /// The delivery to the application's handler, while the owner's state
+    /// lives and the platform accepts work.
+    #[cfg(feature = "single-instance")]
+    pub(crate) fn app(&self) -> Option<Arc<AppDelivery>> {
+        self.signal.upgrade().filter(|signal| signal.accepting())?;
+        self.app.upgrade()
+    }
+
+    /// The platform's windows, while they live.
+    #[cfg(feature = "single-instance")]
+    pub(crate) fn windows(&self) -> Option<Arc<dyn ClassWindows>> {
+        self.windows.upgrade()
     }
 
     /// While a modal loop run from the owner window stands in for the message
@@ -815,6 +833,10 @@ unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                     hwnd,
                     signal: Arc::downgrade(&context.signal),
                     frames: Rc::downgrade(&context.modal_frames),
+                    #[cfg(feature = "single-instance")]
+                    app: Arc::downgrade(&context.app_hooks.borrow().app),
+                    #[cfg(feature = "single-instance")]
+                    windows: context.windows.clone(),
                 };
                 (Rc::clone(&context.owner_hooks), owner)
             };

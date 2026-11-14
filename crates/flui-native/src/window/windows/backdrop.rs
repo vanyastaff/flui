@@ -707,8 +707,8 @@ mod material_tests {
     /// `NotOnThisDevice`, and the Win32 view's own backdrop is refused the
     /// same way: no write reaches the attribute.
     fn below_the_gate_a_material_is_not_on_this_device() {
-        let platform =
-            crate::WindowsPlatform::at_build(WindowsBuild::from_number(22000)).expect("platform");
+        let platform = crate::WindowsPlatform::at_build(WindowsBuild::from_number(22000), None)
+            .expect("platform");
         let (window, hwnd) = open(&platform);
         assert_eq!(
             platform.window_capabilities().material,

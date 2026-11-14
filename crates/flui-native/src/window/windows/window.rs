@@ -1628,6 +1628,25 @@ impl WindowsWindow {
         )
     }
 
+    /// Bring the window forward for a launch another process of the
+    /// application handed over: a minimized window is restored first, then
+    /// activated as [`WindowCommand::Activate`] activates it, with the
+    /// foreground right the launch handed over.
+    #[cfg(feature = "single-instance")]
+    pub(crate) fn activate_forwarded(&self) {
+        // SAFETY: `IsIconic` reads the state of a handle and dereferences no
+        // memory of ours.
+        if unsafe { IsIconic(self.hwnd) }.as_bool() {
+            self.show_native(SW_RESTORE);
+            // The restore ran user callbacks, which may have closed this
+            // window and opened another on its handle.
+            if !self.owns_handle() {
+                return;
+            }
+        }
+        self.activate_window();
+    }
+
     /// Bring the window to the foreground where Windows' foreground rules let
     /// this process, and ask for the user's attention where they do not: the
     /// window never takes the focus from the application the user works

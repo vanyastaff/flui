@@ -4,8 +4,10 @@
 //!
 //! Check ids are stable, for agents and CI reading `--json`:
 //! `project.declarations` (the graph's declarations read), `project.android-manifest`
-//! (the project's own Android manifest) and `project.manifest` (one per
-//! `--manifest` path, the path in the event's `path`).
+//! (the project's own Android manifest), `project.single-instance` (a Linux or
+//! Windows build that opens links or files keeps one instance) and
+//! `project.manifest` (one per `--manifest` path, the path in the event's
+//! `path`).
 
 use std::path::{Path, PathBuf};
 
@@ -25,14 +27,16 @@ const NOT_MERGED: &str = "checked as written, not as Gradle's merged manifest: e
 const DOMAINS_NOT_FETCHED: &str = "`flui doctor --domains` fetches each associated domain's \
                                    apple-app-site-association and assetlinks.json";
 
-/// The project checks for `dir`: the declarations and the project's own
-/// Android manifest when `dir` is a FLUI project, then each of `manifests`,
-/// then, when `domains` asks for it, each associated domain's files.
+/// The project checks for `dir`: the declarations, whether its desktop builds
+/// keep one instance and the project's own Android manifest when `dir` is a
+/// FLUI project, then each of `manifests`, then, when `domains` asks for it,
+/// each associated domain's files.
 pub(super) fn project_checks(dir: &Path, manifests: &[PathBuf], domains: bool) -> Vec<Check> {
     let mut checks = Vec::new();
     let project = dir.join("flui.toml").is_file();
     if project {
         checks.push(declarations_check(dir, domains));
+        checks.push(one_instance_check(dir));
         if dir.join("platforms").join("android").is_dir() {
             checks.push(android_manifest_check(dir));
         }
@@ -111,6 +115,52 @@ fn declarations_check(dir: &Path, domains_fetched: bool) -> Check {
                 "correct the crate's [package.metadata.flui.declares]; `flui build` refuses it too",
             )),
         ),
+    }
+}
+
+/// The Linux and Windows targets whose builds keep one instance of an
+/// application that opens links or files.
+const ONE_INSTANCE_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"];
+
+/// What `flui build` and `flui run` refuse of a desktop build: an
+/// application that opens URL schemes or file types on Linux or Windows
+/// without flui's `single-instance` feature.
+fn one_instance_check(dir: &Path) -> Check {
+    const ID: &str = "project.single-instance";
+    const TITLE: &str = "One desktop instance";
+    let mut refused = Vec::new();
+    for target in ONE_INSTANCE_TARGETS {
+        let declarations = match Declarations::collect(dir, &[target]) {
+            Ok(declarations) => declarations,
+            Err(error) => {
+                return Check::failing(ID, SECTION, TITLE, Status::Error, error.to_string(), None);
+            }
+        };
+        if let Err(error) = declarations.require_one_instance(target) {
+            refused.push(error.to_string());
+        }
+    }
+    if refused.is_empty() {
+        Check::ok(
+            ID,
+            SECTION,
+            TITLE,
+            "a later launch on Linux or Windows reaches the running instance, or the \
+             application opens no link or file there"
+                .to_owned(),
+        )
+    } else {
+        Check::failing(
+            ID,
+            SECTION,
+            TITLE,
+            Status::Error,
+            refused.join("; "),
+            Some(Fix::manual(
+                "add `features = [\"single-instance\"]` to the `flui` dependency in Cargo.toml; \
+                 `flui build` and `flui run` refuse the desktop build until then",
+            )),
+        )
     }
 }
 
