@@ -955,8 +955,9 @@ impl UiRuntime {
         let mut retry_needs_repaint = false;
         let mut replay_committed_input = false;
         // Only a scene the screen shows (or already showed: no damage) may
-        // change the system bars; a withheld one keeps its style staged.
-        let mut deliver_overlay_style = false;
+        // change the system bars; a withheld one takes its style with it, and the next
+        // painted frame probes its own.
+        let mut overlay_style = None;
         // The first panic of a layer read's reply, resumed with the rest of this tail's panics.
         let mut hover_panic = FirstPanic::new();
         use crate::sink::SubmitVerdict;
@@ -980,6 +981,7 @@ impl UiRuntime {
                 let epoch = self.next_frame_epoch();
                 submitted = Some((epoch, sink.submit(epoch, publication)));
             }));
+            Self::land_pending_frame(producer);
             let (epoch, render_verdict) = match (submitted, span_outcome) {
                 (Some(submitted), Ok(())) => submitted,
                 // The sink answered and only the subscriber failed: settle what the verdict owes,
@@ -1016,13 +1018,20 @@ impl UiRuntime {
                 // for that settlement, which arms whatever retry its verdict needs.
                 Self::queue_pending_frame(producer, epoch, pending);
             } else {
+                // A frame the sink answered inline supersedes every frame it queued before: what
+                // they read waits for a later scene, and a settlement of theirs that still
+                // arrives is stale, so it cannot commit an older tree or older input regions.
+                let superseded = std::mem::take(&mut *producer.pending_frames.borrow_mut());
+                for superseded in superseded {
+                    Self::abandon_pending_frame(producer, superseded);
+                }
                 let held = std::mem::replace(&mut hover_panic, FirstPanic::new());
                 let tail = self.settle_pending_frame(producer, pending, render_verdict, held);
                 presented = tail.presented;
                 retry_needed |= tail.retry_needed;
                 retry_needs_repaint = tail.retry_needs_repaint;
                 replay_committed_input = tail.replay_committed_input;
-                deliver_overlay_style = tail.deliver_overlay_style;
+                overlay_style = tail.overlay_style;
                 hover_panic = tail.held;
             }
         }
@@ -1176,10 +1185,10 @@ impl UiRuntime {
         // obligations; this frame's mark_rendered must not erase accepted
         // sampling debt either, so the wakes still run before it resumes.
         let mut delivery_panic = FirstPanic::new();
-        if deliver_overlay_style {
+        if let Some(style) = overlay_style {
             // A chrome callback's panic is held so the frame's obligations run.
             delivery_panic.contain(|| {
-                producer.with_window(|window| producer.overlay_style.deliver(window));
+                producer.with_window(|window| producer.overlay_style.deliver(window, style));
             });
         }
         let wake_panic = self.wake_pending_pointer_samples();

@@ -276,7 +276,10 @@ impl tracing::Subscriber for PanicsOnSpan {
 }
 
 /// Runs `render` under `subscriber` and returns whether it panicked.
-fn render_under(subscriber: PanicsOnSpan, render: impl FnOnce()) -> bool {
+fn render_under(
+    subscriber: impl tracing::Subscriber + Send + Sync + 'static,
+    render: impl FnOnce(),
+) -> bool {
     // A second dispatcher keeps the callsite interest from being cached against this thread's
     // subscriber alone.
     let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
@@ -406,4 +409,114 @@ fn a_subscriber_that_panics_in_the_commit_span_of_a_withheld_frame_keeps_the_ret
         ui_runtime.render_frame(&mut succeeding),
         "the withheld scene is painted again"
     );
+}
+
+/// A subscriber, scoped to the current thread, that panics on the event whose message holds
+/// `needle`.
+struct PanicsOnEvent {
+    needle: &'static str,
+}
+
+impl tracing::Subscriber for PanicsOnEvent {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::TRACE)
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        assert!(
+            !message.0.contains(self.needle),
+            "a subscriber that cannot record {}",
+            self.needle
+        );
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A settlement whose verdict arms a retry keeps it when a subscriber panics on the verdict's
+/// own trace: the panic resumes once the repaint and the wake are in place.
+///
+/// Fails when the settlement resumes the panic before its tail arms the retry.
+#[test]
+fn a_subscriber_that_panics_in_a_settlement_keeps_its_retry() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let [epoch] = sink.epochs[..] else {
+        panic!("one frame was queued, got {:?}", sink.epochs);
+    };
+    assert!(!ui_runtime.needs_redraw());
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "never shown",
+        },
+        || {
+            let _ = ui_runtime.settle_frame(FrameSettlement::new(
+                address,
+                epoch,
+                SubmitVerdict::NotShown,
+            ));
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert!(ui_runtime.needs_redraw(), "the retry is armed");
+    let mut succeeding = ScriptedSink::always_presents();
+    assert!(
+        ui_runtime.render_frame(&mut succeeding),
+        "the withheld scene is painted again"
+    );
+}
+
+/// A frame the sink answers inline supersedes the frames it queued before: a settlement of
+/// theirs that arrives after it is stale and cannot commit an older tree.
+#[test]
+fn an_inline_frame_supersedes_the_frames_queued_before_it() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|call, _| {
+        if call == 0 {
+            SubmitVerdict::Queued
+        } else {
+            SubmitVerdict::Presented
+        }
+    });
+    assert!(!ui_runtime.render_frame(&mut sink));
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(
+        ui_runtime.render_frame(&mut sink),
+        "the second frame presents inline"
+    );
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert!(
+        ui_runtime
+            .presentations
+            .primary()
+            .pending_frames
+            .borrow()
+            .is_empty(),
+        "the queued frame's record went with the inline one"
+    );
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Stale);
 }

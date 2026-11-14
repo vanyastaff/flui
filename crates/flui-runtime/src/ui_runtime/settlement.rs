@@ -8,6 +8,7 @@ use flui_foundation::FrameEpoch;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::HapticCut;
 use flui_layer::SceneVersionId;
+use flui_platform::SystemUiOverlayStyle;
 use flui_platform::input_regions::InputRegion;
 use flui_scheduler::{FramePhaseDurations, Instant, PresentOutcome};
 use std::panic::resume_unwind;
@@ -43,6 +44,8 @@ pub(crate) struct PendingFrame {
     layer_reads: Vec<StagedLayerRead>,
     /// The frame-aligned haptic requests the frame confirms.
     haptics: HapticCut,
+    /// The system-bar style the frame's scene asks for, delivered once the frame is shown.
+    overlay_style: Option<SystemUiOverlayStyle>,
 }
 
 impl PendingFrame {
@@ -64,7 +67,7 @@ pub(super) struct VerdictTail {
     pub(super) retry_needed: bool,
     pub(super) retry_needs_repaint: bool,
     pub(super) replay_committed_input: bool,
-    pub(super) deliver_overlay_style: bool,
+    pub(super) overlay_style: Option<SystemUiOverlayStyle>,
     pub(super) held: FirstPanic,
 }
 
@@ -75,7 +78,7 @@ impl VerdictTail {
             retry_needed: false,
             retry_needs_repaint: false,
             replay_committed_input: false,
-            deliver_overlay_style: false,
+            overlay_style: None,
             held,
         }
     }
@@ -83,12 +86,15 @@ impl VerdictTail {
 
 impl UiRuntime {
     /// Captures what `producer`'s frame of `shown` owes once its verdict is known, before the
-    /// frame is handed to its sink: the layer reads parked for the scene are read from it here.
+    /// frame is handed to its sink: the layer reads parked for the scene are read from it here,
+    /// and count against the parking bound until [`Self::land_pending_frame`].
     pub(super) fn capture_pending_frame(
         producer: &PresentationState,
         frame_time: Instant,
         scene: &flui_layer::SceneVersion,
     ) -> PendingFrame {
+        let layer_reads = producer.stage_agent_layer_reads(scene);
+        producer.layer_reads_in_flight.set(layer_reads.len());
         PendingFrame {
             epoch: FrameEpoch::ZERO,
             frame_time,
@@ -96,9 +102,16 @@ impl UiRuntime {
             shown: scene.id(),
             tree_revision: producer.tree_revision(),
             input_regions: producer.staged_input_regions(),
-            layer_reads: producer.stage_agent_layer_reads(scene),
+            layer_reads,
             haptics: producer.haptics().frame_cut(),
+            overlay_style: producer.overlay_style.take_staged(),
         }
+    }
+
+    /// The frame being handed to `producer`'s sink came back from the call: its layer reads are
+    /// counted where it goes next (its record, the parked list, or their replies).
+    pub(super) fn land_pending_frame(producer: &PresentationState) {
+        producer.layer_reads_in_flight.set(0);
     }
 
     /// The sink never answered (it panicked, or a subscriber stopped the submit before it was
@@ -206,7 +219,7 @@ impl UiRuntime {
             retry_needed,
             retry_needs_repaint,
             replay_committed_input,
-            deliver_overlay_style,
+            overlay_style,
             mut held,
             ..
         } = tail;
@@ -229,15 +242,16 @@ impl UiRuntime {
         if replay_committed_input {
             self.replay_committed_held_pointer_input(producer);
         }
-        if deliver_overlay_style {
-            producer.with_window(|window| producer.overlay_style.deliver(window));
+        if let Some(style) = overlay_style {
+            producer.with_window(|window| producer.overlay_style.deliver(window, style));
         }
     }
 
     /// Applies `verdict` to `frame`, the frame `producer` handed its sink: the commit, the
     /// replies, the telemetry and the retry each verdict owes. `held` carries a panic held
-    /// before the verdict was known (a subscriber that failed as the `submit` span closed); a
-    /// panic of the work after the commit resumes here, with the first failure kept.
+    /// before the verdict was known (a subscriber that failed as the `submit` span closed); the
+    /// first panic of the work after the commit joins it in the returned tail, for the caller to
+    /// resume once the retry the verdict armed is in place.
     pub(super) fn settle_pending_frame(
         &self,
         producer: &PresentationState,
@@ -254,6 +268,7 @@ impl UiRuntime {
             input_regions,
             layer_reads,
             haptics,
+            overlay_style,
         } = frame;
         // The frame this scene becomes once presented.
         let frame_number = producer.frames_rendered() + 1;
@@ -307,17 +322,20 @@ impl UiRuntime {
             match render_verdict {
                 SubmitVerdict::Presented => {
                     held.absorb(self.commit_painted_frame(producer, tree_revision, &input_regions));
-                    // The frame reached `present()`: frame-aligned haptics
-                    // play with it (ADR-0210 §4). Only this arm plays them;
-                    // the others leave the queue to its deadline.
-                    producer.haptics().frame_presented(haptics);
-                    tail.deliver_overlay_style = true;
+                    // What the tail owes is recorded before the code below that the runtime does
+                    // not own (a haptic backend, telemetry, a subscriber) can panic.
+                    tail.overlay_style = overlay_style;
                     tail.presented = true;
+                    tail.replay_committed_input = true;
                     producer.record_frame_rendered();
                     // The surface is demonstrably available: any withheld
                     // streak ends here, so a later withdrawal gets the full
                     // retry budget again.
                     producer.clear_not_shown_streak();
+                    // The frame reached `present()`: frame-aligned haptics
+                    // play with it (ADR-0210 §4). Only this arm plays them;
+                    // the others leave the queue to its deadline.
+                    producer.haptics().frame_presented(haptics);
                     self.record_submit_telemetry(
                         frame_time,
                         segment,
@@ -331,7 +349,6 @@ impl UiRuntime {
                         total = producer.frames_rendered(),
                         "Frame rendered successfully"
                     );
-                    tail.replay_committed_input = true;
                 }
                 SubmitVerdict::NoPresent => {
                     held.absorb(self.commit_painted_frame(producer, tree_revision, &input_regions));
@@ -340,7 +357,8 @@ impl UiRuntime {
                     // queued request confirms never showed. A request queued
                     // before that previous frame already resolved with it; the
                     // rest resolve `Suppressed` at their deadline.
-                    tail.deliver_overlay_style = true;
+                    tail.overlay_style = overlay_style;
+                    tail.replay_committed_input = true;
                     // Nothing was owed and nothing was lost — the surface was
                     // never asked to show anything, so a withheld streak is
                     // over just as it is on a present.
@@ -349,7 +367,6 @@ impl UiRuntime {
                         frame = frame_number,
                         "Frame skipped: no damage (no present)"
                     );
-                    tail.replay_committed_input = true;
                 }
                 // The backend had content in hand and could not put it on
                 // screen. Everything `NoPresent` does about the TREE still
@@ -401,14 +418,15 @@ impl UiRuntime {
                     let streak = producer.record_frame_withheld();
                     tail.replay_committed_input = true;
                     if streak <= MAX_NOT_SHOWN_RETRIES {
+                        // Armed before the trace: a subscriber's panic there keeps the retry.
+                        tail.retry_needed = true;
+                        tail.retry_needs_repaint = true;
                         tracing::debug!(
                             frame = frame_number,
                             streak,
                             "Frame rendered but never shown (surface unavailable); \
                          retaining it — retry armed via wake_frame()"
                         );
-                        tail.retry_needed = true;
-                        tail.retry_needs_repaint = true;
                     } else {
                         // Budget exhausted: park rather than retry. The tree
                         // stays committed (the scene above is still the latest
@@ -439,6 +457,12 @@ impl UiRuntime {
                 }
                 SubmitVerdict::Retry | SubmitVerdict::SurfaceStale => {
                     producer.record_frame_dropped();
+                    // The failed submit consumed painting work. A wake alone
+                    // cannot repaint a clean static tree, so retain its epochs
+                    // and dirty the producer for the ordinary paced retry,
+                    // armed before the telemetry's subscriber can panic.
+                    tail.retry_needed = true;
+                    tail.retry_needs_repaint = true;
                     self.record_submit_telemetry(
                         frame_time,
                         segment,
@@ -447,11 +471,6 @@ impl UiRuntime {
                         PresentOutcome::Errored,
                         EpochDisposition::Retain,
                     );
-                    // The failed submit consumed painting work. A wake alone
-                    // cannot repaint a clean static tree, so retain its epochs
-                    // and dirty the producer for the ordinary paced retry.
-                    tail.retry_needed = true;
-                    tail.retry_needs_repaint = true;
                     tracing::debug!(
                         ?render_verdict,
                         "Transient render failure; paced retry armed"
@@ -459,6 +478,10 @@ impl UiRuntime {
                 }
                 SubmitVerdict::DeviceLost => {
                     producer.record_frame_dropped();
+                    // The submit consumed the paint demand, so the frame the
+                    // rebuilt device shows needs a full repaint whenever it
+                    // comes; marked before the telemetry's subscriber can panic.
+                    self.mark_needs_full_repaint_for(producer);
                     // `Retain`, not `Drain`: the frame is tried again, and the
                     // eventual real submit must still find the epochs that
                     // arrived before this failure — see
@@ -471,10 +494,6 @@ impl UiRuntime {
                         PresentOutcome::Errored,
                         EpochDisposition::Retain,
                     );
-                    // The submit consumed the paint demand, so the frame the
-                    // rebuilt device shows needs a full repaint whenever it
-                    // comes.
-                    self.mark_needs_full_repaint_for(producer);
                     // Paced like any dropped frame (ADR-0267): a frame asked
                     // for at once would run again before the renderer's owner
                     // next rebuilds the device, and fail the same way. A
@@ -515,15 +534,9 @@ impl UiRuntime {
         if let Some(Some(released)) = released {
             post_submit.contain(|| producer.scene.restock(released));
         }
-        if post_submit.is_held() {
-            // A panic here must not drop the first panic of a layer read's reply: the first
-            // one is the one resumed.
-            held.absorb(post_submit);
-            resume_unwind(
-                held.into_payload()
-                    .expect("BUG: the post-submit panic was just stored"),
-            );
-        }
+        // A panic of the work after the commit is held behind the first one, a layer read's reply
+        // included: the caller resumes it once the retry the verdict armed is in place.
+        held.absorb(post_submit);
         tail.held = held;
         tail
     }

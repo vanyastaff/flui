@@ -507,6 +507,7 @@ fn frame_pacing_and_pump_matrix() {
             ("external_textures::unmounting_the_owner_retires_its_texture", external_textures::unmounting_the_owner_retires_its_texture as fn()),
             ("overlay_style::a_refused_frame_announces_nothing", overlay_style::a_refused_frame_announces_nothing as fn()),
             ("overlay_style::a_detached_presentation_resends_its_style", overlay_style::a_detached_presentation_resends_its_style as fn()),
+            ("overlay_style::a_queued_frame_announces_the_style_it_was_painted_with", overlay_style::a_queued_frame_announces_the_style_it_was_painted_with as fn()),
             ("overlay_style::a_panicking_chrome_is_retried_on_the_next_frame", overlay_style::a_panicking_chrome_is_retried_on_the_next_frame as fn()),
         ],
     );

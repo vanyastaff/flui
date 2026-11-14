@@ -477,6 +477,9 @@ pub struct PresentationState {
     /// The frames handed to a sink that answered `Queued`, oldest first: what each commits once
     /// its settlement arrives (ADR-0305 §4). Owner thread only.
     pub(crate) pending_frames: RefCell<std::collections::VecDeque<crate::ui_runtime::PendingFrame>>,
+    /// How many layer reads the frame being handed to the sink holds, counted against the
+    /// parking bound until the frame is queued or settled. Owner thread only.
+    pub(crate) layer_reads_in_flight: Cell<usize>,
     /// The subscriptions an agent holds to this presentation's events, and how far they have
     /// been reported. Ended when the presentation closes. Owner thread only.
     pub(crate) agent_events: RefCell<crate::ui_runtime::EventHub>,
@@ -1117,6 +1120,7 @@ impl PresentationState {
             url_owner,
             agent_layer_reads: RefCell::default(),
             pending_frames: RefCell::default(),
+            layer_reads_in_flight: Cell::new(0),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1261,6 +1265,7 @@ impl PresentationState {
             url_owner,
             agent_layer_reads: RefCell::default(),
             pending_frames: RefCell::default(),
+            layer_reads_in_flight: Cell::new(0),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
