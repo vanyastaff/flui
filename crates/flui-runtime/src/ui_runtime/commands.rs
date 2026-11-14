@@ -4,9 +4,7 @@ use super::UiRuntime;
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::sequence::AtomicIdMint;
 use flui_scheduler::SchedulerPhase;
-use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -209,13 +207,12 @@ pub struct DrainReport {
 ///
 /// A boolean is insufficient because senders are concurrent: an older wake
 /// may return successfully after a newer wake panics, and must not clear the
-/// newer demand. Each request therefore mints a newer ticket, and a wake
+/// newer demand. Each request therefore takes the next ticket, and a wake
 /// acknowledges only through the ticket it captured: the debt is paid once
 /// the newest acknowledged ticket reaches the newest requested one. A ticket
 /// is two integers, so requesting a wake allocates nothing.
 #[derive(Default)]
 pub(super) struct WakeDebt {
-    tickets: AtomicIdMint<NonZeroU64>,
     /// The newest ticket a request minted.
     requested: AtomicU64,
     /// The newest ticket a normally returning wake acknowledged.
@@ -236,13 +233,14 @@ impl std::fmt::Debug for WakeDebt {
 
 impl WakeDebt {
     fn request(&self) -> WakeTicket {
-        let ticket = self
-            .tickets
-            .next()
-            .expect("BUG: a runtime requests fewer than 2^64 wakes")
-            .get();
-        self.requested.fetch_max(ticket, Ordering::AcqRel);
-        WakeTicket(ticket)
+        // Minting and publishing are one read-modify-write on `requested`, so
+        // the release sequence on it orders every earlier request's send before
+        // the wake that acknowledges a newer ticket.
+        let previous = self
+            .requested
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
+            .expect("BUG: a runtime requests fewer than 2^64 wakes");
+        WakeTicket(previous + 1)
     }
 
     fn pending_token(&self) -> Option<WakeTicket> {
@@ -466,11 +464,11 @@ impl UiCommandSender {
 
     /// Deliver one platform wake while retaining failed-delivery debt.
     ///
-    /// The demand itself is already durable in the inbox/redraw flags. This
-    /// identity token records that the host has not yet accepted the owner
+    /// The demand itself is already durable in the inbox/redraw flags. The
+    /// wake's ticket records that the host has not yet accepted the owner
     /// turn needed to observe that demand. Only a normally returning wake
-    /// acknowledges its captured token; unwinding therefore leaves
-    /// the next ingress or owner boundary responsible for retrying it.
+    /// acknowledges its ticket; unwinding therefore leaves the debt for the
+    /// next ingress or owner boundary to retry.
     pub(super) fn wake_owner(&self) {
         let token = self.wake_debt.request();
         self.deliver_wake(token);
@@ -479,7 +477,7 @@ impl UiCommandSender {
     fn deliver_wake(&self, token: WakeTicket) {
         #[expect(
             clippy::disallowed_methods,
-            reason = "ADR-0287: the platform wake is user code; a panic clears the pending token"
+            reason = "ADR-0287: the platform wake is user code; a panic leaves its ticket unacknowledged"
         )]
         let outcome = catch_unwind(AssertUnwindSafe(|| (self.wake)()));
         match outcome {
