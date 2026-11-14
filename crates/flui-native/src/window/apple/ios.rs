@@ -400,11 +400,20 @@ define_class!(
                             link.timestamp(),
                             link.targetTimestamp(),
                         );
-                        self.delivery()
-                            .dispatch_frame(crate::frame_request_timed(age, until_present));
+                        // A frame that unwinds still counted as run: the
+                        // loop's deadline is armed again and the link
+                        // settles before its panic resumes.
+                        let mut first = flui_foundation::panic::FirstPanic::new();
+                        first.contain(|| {
+                            self.delivery()
+                                .dispatch_frame(crate::frame_request_timed(age, until_present));
+                        });
                         crate::owner::apple::ios::after_frame();
-                    }
-                    if !demand.pending() {
+                        if !demand.pending() {
+                            link.setPaused(true);
+                        }
+                        first.resume();
+                    } else if !demand.pending() {
                         link.setPaused(true);
                     }
                 }

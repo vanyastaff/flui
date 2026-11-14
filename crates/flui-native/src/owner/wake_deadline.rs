@@ -133,6 +133,19 @@ impl WakeDeadline {
         };
         self.armed.as_ref().map(|arm| arm.deadline)
     }
+
+    /// Whether a frame that ran since the last delivery, counted at
+    /// `frames`, is what the loop waits on to arm again: the deadline last
+    /// delivered is not re-armed, and a frame ran after it. A loop that no
+    /// turn follows a frame on (UIKit's) asks the handler again only then.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn awaits_frame(&self, frames: u64) -> bool {
+        self.armed.is_none()
+            && self
+                .delivered
+                .as_ref()
+                .is_some_and(|last| last.frames != frames)
+    }
 }
 
 #[cfg(test)]
@@ -185,6 +198,35 @@ mod tests {
             deadline.arm(Some(at), 1),
             Some(at),
             "after a quiet answer, the old instant is new again"
+        );
+    }
+
+    /// A loop that no turn follows a frame on waits for a frame only while
+    /// the deadline it delivered is not armed again, and asks again once one
+    /// ran: not before the frame, not while a deadline is armed, not after a
+    /// quiet answer.
+    #[test]
+    fn a_delivered_deadline_awaits_only_a_frame_since() {
+        let start = Instant::now();
+        let at = start + Duration::from_millis(5);
+        let later = start + Duration::from_millis(9);
+        let mut deadline = WakeDeadline::default();
+
+        assert!(!deadline.awaits_frame(1), "nothing delivered yet");
+        deadline.arm(Some(at), 0);
+        assert!(!deadline.awaits_frame(1), "armed, not delivered");
+        assert!(deadline.take_due(at, 0));
+        assert!(!deadline.awaits_frame(0), "no frame since the delivery");
+        assert_eq!(deadline.arm(Some(at), 0), None, "the same instant waits");
+        assert!(!deadline.awaits_frame(0), "still no frame");
+        assert!(deadline.awaits_frame(1), "a frame ran since");
+        assert_eq!(deadline.arm(Some(later), 1), Some(later));
+        assert!(!deadline.awaits_frame(2), "another instant is armed");
+        assert!(deadline.take_due(later, 2));
+        assert_eq!(deadline.arm(None, 2), None);
+        assert!(
+            !deadline.awaits_frame(3),
+            "nothing asked for after a quiet answer"
         );
     }
 }

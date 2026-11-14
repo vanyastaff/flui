@@ -349,7 +349,8 @@ pub(crate) trait SceneWindows: Send + Sync {
 pub(crate) struct SceneDelivery {
     /// The application's handler for the window.
     pub(crate) handler: Rc<dyn flui_platform::WindowHandler>,
-    /// The loop's frame count, raised once per frame the handler produces.
+    /// The loop's frame count, raised once per frame the handler ran
+    /// (produced, failed or unwound); a declined frame leaves it.
     pub(crate) frames: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -1611,11 +1612,17 @@ impl IOSLoop {
     }
 }
 
-/// A scene's window delivered a frame: the loop's wake deadline is armed
-/// again, since the frame may have served the deadline last delivered or
-/// left a new one, and no owner turn need follow a frame.
+/// A scene's window delivered a frame, which may have unwound: when the
+/// wake deadline last delivered waits on a frame to be armed again, the
+/// handler is asked now, since no owner turn need follow a frame. Any other
+/// frame asks nothing, so a running animation does not consult the handler
+/// once per tick.
 pub(crate) fn after_frame() {
-    FluiAppDelegate::with_platform(IOSLoop::arm_deadline);
+    FluiAppDelegate::with_platform(|platform| {
+        if platform.wake.borrow().awaits_frame(platform.frames.get()) {
+            platform.arm_deadline();
+        }
+    });
 }
 
 pub(crate) fn request_close(id: WindowId) {

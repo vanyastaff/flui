@@ -2672,8 +2672,9 @@ newer request. After a frame that left nothing marked, the producer stops.
   separate from the demand, and a release always owes a frame. A wake deadline
   that came due is a frame request to the scene window, made once and armed
   again only after a frame ran (`owner::wake_deadline::WakeDeadline`, the
-  Win32, X11 and Wayland loops' rule); the display link arms the next deadline
-  after each tick, since no owner turn follows a frame.
+  Win32, X11 and Wayland loops' rule). Since no owner turn follows a frame,
+  a display-link frame that ran (produced, failed or unwound) after such a
+  delivery asks the handler for the next deadline; other frames ask nothing.
 - **The Web** loop asks the browser for the next frame only when one is marked,
   or while the refresh estimate is still measuring. The estimate measures for a
   window of intervals from start and after each restart (scale, screen,
