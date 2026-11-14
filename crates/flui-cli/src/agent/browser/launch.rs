@@ -215,7 +215,8 @@ pub(crate) struct LaunchedBrowser {
 
 impl LaunchedBrowser {
     /// Starts the browser at `executable`, which speaks `dialect`, on a blank tab (without a
-    /// window when `headless`), and links to that tab.
+    /// window when `headless`), and links to a tab: that one in a Chromium, a tab Firefox
+    /// opens for the link in its place (`Bidi::attach` says why).
     pub(crate) fn start(
         executable: &Path,
         dialect: Dialect,
@@ -628,13 +629,16 @@ mod linking {
 
     /// A browser's WebSocket on the loopback that answers its first command `first_after` it
     /// came (never when `None`), as Firefox answers `session.new` once its window is up, and
-    /// every later one at once. Returns its URL.
-    fn starting_browser(first_after: Option<Duration>) -> String {
+    /// every later one at once. It started with the tab `started`, opens `opened` when asked
+    /// for a tab and refuses to close a tab. Returns its URL and the commands it answers, each
+    /// sent before its answer.
+    fn starting_browser(first_after: Option<Duration>) -> (String, mpsc::Receiver<Value>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let url = format!(
             "ws://{}/session",
             listener.local_addr().expect("the port's address")
         );
+        let (answered, commands) = mpsc::channel();
         thread::spawn(move || {
             let Ok((stream, _)) = listener.accept() else {
                 return;
@@ -656,21 +660,72 @@ mod linking {
                 let command = serde_json::from_str::<Value>(&text).expect("a command is JSON");
                 let result = match command["method"].as_str() {
                     Some("browsingContext.getTree") => {
-                        json!({ "contexts": [{ "context": "tab" }] })
+                        json!({ "contexts": [{ "context": "started" }] })
                     }
+                    Some("browsingContext.create") => json!({ "context": "opened" }),
                     Some("Target.getTargets") => {
                         json!({ "targetInfos": [{ "type": "page", "targetId": "tab" }] })
                     }
                     Some("Target.attachToTarget") => json!({ "sessionId": "session" }),
                     _ => json!({}),
                 };
-                let answer = json!({ "id": command["id"], "type": "success", "result": result });
+                let answer = if command["method"] == "browsingContext.close" {
+                    json!({ "id": command["id"], "type": "error", "error": "unknown error",
+                            "message": "the tab is still loading" })
+                } else {
+                    json!({ "id": command["id"], "type": "success", "result": result })
+                };
+                let _ = answered.send(command);
                 if ws.send(Message::text(answer.to_string())).is_err() {
                     return;
                 }
             }
         });
-        url
+        (url, commands)
+    }
+
+    /// `command`'s `params` at `pointer` for each command named `method`, in order.
+    fn sent(commands: &[Value], method: &str, pointer: &str) -> Vec<Value> {
+        commands
+            .iter()
+            .filter(|command| command["method"] == method)
+            .filter_map(|command| command["params"].pointer(pointer).cloned())
+            .collect()
+    }
+
+    #[test]
+    fn a_bidi_link_loads_the_page_in_a_tab_it_opened_and_closes_the_ones_the_browser_started_with()
+    {
+        let (url, commands) = starting_browser(Some(Duration::ZERO));
+        let socket = Socket::connect(&url, CONNECT_TIMEOUT).expect("the browser's socket");
+        let mut link = Bidi::attach(socket, Instant::now() + COMMAND_TIMEOUT)
+            .expect("a refused close leaves the link attached");
+        link.open("() => {}", "http://127.0.0.1:1/")
+            .expect("the page opens");
+        let commands = commands.try_iter().collect::<Vec<Value>>();
+        assert_eq!(
+            sent(&commands, "browsingContext.navigate", "/context"),
+            [json!("opened")],
+            "the tab the browser started with may still load its command line's page"
+        );
+        assert_eq!(
+            sent(&commands, "script.addPreloadScript", "/contexts"),
+            [json!(["opened"])]
+        );
+        assert_eq!(
+            sent(&commands, "browsingContext.close", "/context"),
+            [json!("started")]
+        );
+        let position = |method: &str| {
+            commands
+                .iter()
+                .position(|command| command["method"] == method)
+                .expect("the command was sent")
+        };
+        assert!(
+            position("browsingContext.close") < position("session.subscribe"),
+            "the closed tab's events come before the link listens"
+        );
     }
 
     fn link(
@@ -678,7 +733,7 @@ mod linking {
         first_after: Option<Duration>,
         ready_by: Instant,
     ) -> Result<(), AttachError> {
-        let socket = Socket::connect(&starting_browser(first_after), CONNECT_TIMEOUT)
+        let socket = Socket::connect(&starting_browser(first_after).0, CONNECT_TIMEOUT)
             .expect("the browser's socket is reached");
         attach(dialect, socket, ready_by).map(drop)
     }

@@ -71,12 +71,15 @@ impl Bidi {
             })
             .map_err(AttachError::at("browsingContext.create"))?;
         for context in started_with {
-            // A tab left open only shows a blank page beside the app's.
-            let _ = link.command_by(
+            match link.command_by(
                 "browsingContext.close",
                 json!({ "context": context }),
                 ready_by,
-            );
+            ) {
+                // A tab the browser keeps only shows a blank page beside the app's.
+                Ok(_) | Err(LinkError::Refused(_)) => {}
+                Err(error) => return Err(AttachError::at("browsingContext.close")(error)),
+            }
         }
         link.command_by("session.subscribe", json!({ "events": EVENTS }), ready_by)
             .map_err(AttachError::at("session.subscribe"))?;
