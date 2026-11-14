@@ -364,7 +364,7 @@ impl DamageRect {
 /// # Frame identity
 ///
 /// `stamp` carries the full identity/versioning group — which presentation,
-/// which epoch, against which surface and GPU-resource generation. See
+/// which epoch, against which surface generation. See
 /// [`FrameStamp`]'s own doc for why those are one value rather than fields
 /// here.
 ///
@@ -374,7 +374,7 @@ impl DamageRect {
 #[derive(Debug)]
 pub struct SceneSnapshot {
     /// This frame's identity: which presentation, which epoch, against which
-    /// surface and GPU-resource generation.
+    /// surface generation.
     pub stamp: FrameStamp,
     /// Which regions changed since the image the raster side holds.
     pub damage: DamageRegion,
