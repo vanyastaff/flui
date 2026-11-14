@@ -5,7 +5,7 @@ use flui_widgets::SizedBox;
 
 use super::{SegmentPhase, UiRuntime};
 use crate::epoch::{FrameCommitState, TreeRevision};
-use crate::sink::SubmitVerdict;
+use crate::sink::{FrameSettlement, Settled, SubmitVerdict};
 use crate::testing::ScriptedSink;
 
 fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
@@ -125,6 +125,127 @@ pub(crate) fn every_presentation_takes_the_next_epoch_of_its_runtime() {
     assert_eq!(backend.epochs, vec![first, first.next()]);
 }
 
+/// Paints and queues two frames, the second after the tree moved on, and returns their epochs
+/// and the revisions they were painted from.
+fn queue_two_frames(
+    ui_runtime: &UiRuntime,
+    sink: &mut ScriptedSink,
+) -> [(flui_foundation::FrameEpoch, TreeRevision); 2] {
+    let primary = || ui_runtime.presentations.primary();
+    assert!(
+        !ui_runtime.render_frame(sink),
+        "a queued frame is not presented yet"
+    );
+    let first = primary().tree_revision();
+    ui_runtime.mark_needs_full_repaint_for(primary());
+    assert!(!ui_runtime.render_frame(sink));
+    let second = primary().tree_revision();
+    assert!(
+        second > first,
+        "the second frame was painted from a later tree"
+    );
+    let [one, two] = sink.epochs[..] else {
+        panic!("two frames were submitted, got {:?}", sink.epochs);
+    };
+    [(one, first), (two, second)]
+}
+
+fn settle(ui_runtime: &mut UiRuntime, epoch: flui_foundation::FrameEpoch) -> Settled {
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+    ui_runtime.settle_frame(FrameSettlement::new(
+        address,
+        epoch,
+        SubmitVerdict::Presented,
+    ))
+}
+
+/// A queued frame that settles after a later one was painted commits the revision it was painted
+/// from, not the tree as it is when its settlement arrives.
+pub(crate) fn a_settlement_commits_the_revision_its_frame_was_painted_from() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(first, first_revision), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    assert_uncommitted_since(&ui_runtime, TreeRevision::ZERO.next());
+
+    assert_eq!(settle(&mut ui_runtime, first), Settled::Applied);
+    assert_uncommitted_since(&ui_runtime, first_revision.next());
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+}
+
+/// A settlement of a later frame folds the frames queued before it and still pending, which get
+/// no settlement of their own: one that still arrives is stale.
+pub(crate) fn a_later_settlement_folds_the_frames_it_superseded() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(first, _), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert!(
+        ui_runtime
+            .presentations
+            .primary()
+            .pending_frames
+            .borrow()
+            .is_empty(),
+        "the superseded frame's record folded into the settled one"
+    );
+    assert_eq!(settle(&mut ui_runtime, first), Settled::Stale);
+}
+
+fn held_pointer_count(ui_runtime: &UiRuntime) -> usize {
+    ui_runtime
+        .presentations
+        .primary()
+        .held_pointer_input()
+        .borrow()
+        .len()
+}
+
+/// Input held while queued frames wait replays only once the screen shows the tree the latest
+/// of them was painted from: an older frame's settlement commits an older revision, and the
+/// input keeps waiting.
+pub(crate) fn held_input_waits_for_the_settlement_that_commits_the_tree() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(first, _), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    let id = ui_runtime.presentation_id();
+    ui_runtime.enter(|ui_runtime| {
+        ui_runtime.handle_input_addressed(
+            id,
+            flui_platform::PlatformInput::Pointer(
+                flui_interaction::events::make_down_event(
+                    flui_foundation::geometry::Offset::new(4.0, 6.0),
+                    flui_interaction::events::PointerKind::Touch,
+                )
+                .expect("finite test position"),
+            ),
+        );
+    });
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for a commit"
+    );
+
+    assert_eq!(settle(&mut ui_runtime, first), Settled::Applied);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the older frame's commit leaves the tree uncommitted, so the Down still waits"
+    );
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        0,
+        "the commit of the latest tree replays the Down"
+    );
+}
 /// The withheld retry is BOUNDED: a drawable that never comes back stops
 /// being retried instead of spinning at the fallback pace forever.
 ///
@@ -204,7 +325,10 @@ impl tracing::Subscriber for PanicsOnSpan {
 }
 
 /// Runs `render` under `subscriber` and returns whether it panicked.
-fn render_under(subscriber: PanicsOnSpan, render: impl FnOnce()) -> bool {
+fn render_under(
+    subscriber: impl tracing::Subscriber + Send + Sync + 'static,
+    render: impl FnOnce(),
+) -> bool {
     // A second dispatcher keeps the callsite interest from being cached against this thread's
     // subscriber alone.
     let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
@@ -334,4 +458,652 @@ fn a_subscriber_that_panics_in_the_commit_span_of_a_withheld_frame_keeps_the_ret
         ui_runtime.render_frame(&mut succeeding),
         "the withheld scene is painted again"
     );
+}
+
+/// A subscriber, scoped to the current thread, that panics on the event whose message holds
+/// `needle`.
+struct PanicsOnEvent {
+    needle: &'static str,
+}
+
+impl tracing::Subscriber for PanicsOnEvent {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::TRACE)
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        assert!(
+            !message.0.contains(self.needle),
+            "a subscriber that cannot record {}",
+            self.needle
+        );
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A settlement whose verdict arms a retry keeps it when a subscriber panics on the verdict's
+/// own trace: the panic resumes once the repaint and the wake are in place.
+///
+/// Fails when the settlement resumes the panic before its tail arms the retry.
+#[test]
+fn a_subscriber_that_panics_in_a_settlement_keeps_its_retry() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let [epoch] = sink.epochs[..] else {
+        panic!("one frame was queued, got {:?}", sink.epochs);
+    };
+    assert!(!ui_runtime.needs_redraw());
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "never shown",
+        },
+        || {
+            let _ = ui_runtime.settle_frame(FrameSettlement::new(
+                address,
+                epoch,
+                SubmitVerdict::NotShown,
+            ));
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert!(ui_runtime.needs_redraw(), "the retry is armed");
+    let mut succeeding = ScriptedSink::always_presents();
+    assert!(
+        ui_runtime.render_frame(&mut succeeding),
+        "the withheld scene is painted again"
+    );
+}
+
+/// A frame the sink answers inline supersedes the frames it queued before: a settlement of
+/// theirs that arrives after it is stale and cannot commit an older tree.
+#[test]
+fn an_inline_frame_supersedes_the_frames_queued_before_it() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|call, _| {
+        if call == 0 {
+            SubmitVerdict::Queued
+        } else {
+            SubmitVerdict::Presented
+        }
+    });
+    assert!(!ui_runtime.render_frame(&mut sink));
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(
+        ui_runtime.render_frame(&mut sink),
+        "the second frame presents inline"
+    );
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert!(
+        ui_runtime
+            .presentations
+            .primary()
+            .pending_frames
+            .borrow()
+            .is_empty(),
+        "the queued frame's record went with the inline one"
+    );
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Stale);
+}
+
+/// A lost device's retry is armed before code the runtime does not own runs: a subscriber that
+/// panics on the frame's telemetry leaves the paced retry in place.
+///
+/// Fails when the telemetry runs before the retry is armed.
+#[test]
+fn a_subscriber_that_panics_on_a_lost_devices_telemetry_keeps_its_retry() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let [epoch] = sink.epochs[..] else {
+        panic!("one frame was queued, got {:?}", sink.epochs);
+    };
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "frame telemetry",
+        },
+        || {
+            let _ = ui_runtime.settle_frame(FrameSettlement::new(
+                address,
+                epoch,
+                SubmitVerdict::DeviceLost,
+            ));
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert!(
+        ui_runtime
+            .presentations
+            .primary()
+            .failure_retry_at()
+            .is_some(),
+        "the paced retry is armed"
+    );
+}
+
+/// A frame the sink answers inline with a verdict that commits nothing leaves the frames it
+/// queued before to their own settlements: one that still shows commits its revision.
+#[test]
+fn a_frame_answered_inline_without_a_commit_leaves_queued_frames_to_their_settlements() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|call, _| {
+        if call == 0 {
+            SubmitVerdict::Queued
+        } else {
+            SubmitVerdict::Retry
+        }
+    });
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let queued_revision = ui_runtime.presentations.primary().tree_revision();
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(
+        !ui_runtime.render_frame(&mut sink),
+        "the second frame is refused"
+    );
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
+    assert_uncommitted_since(&ui_runtime, queued_revision.next());
+}
+
+/// Queues `frames` more frames, each painted from a later tree.
+fn queue_more(ui_runtime: &UiRuntime, sink: &mut ScriptedSink, frames: usize) {
+    for _ in 0..frames {
+        ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+        assert!(!ui_runtime.render_frame(sink));
+    }
+}
+
+/// Every queued frame keeps its record until a settlement names it or a later frame: a frame
+/// the raster side may be rendering is never folded on a guess, whichever frame the inbox
+/// superseded. A settlement of the second of three folds only the first.
+///
+/// Fails when queueing a third frame folds a record.
+#[test]
+fn a_queued_frame_keeps_its_record_until_a_settlement_reaches_it() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(first, _), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    queue_more(&ui_runtime, &mut sink, 1);
+    let third = *sink.epochs.last().expect("three frames were queued");
+
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert_eq!(settle(&mut ui_runtime, first), Settled::Stale);
+    assert_eq!(settle(&mut ui_runtime, third), Settled::Applied);
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+}
+
+/// Queues one frame through a sink that answers `verdict`, and returns the frame's stamp.
+fn queue_one(ui_runtime: &UiRuntime, verdict: SubmitVerdict) -> flui_foundation::FrameEpoch {
+    let mut sink = ScriptedSink::new(move |_, _| verdict);
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(!ui_runtime.render_frame(&mut sink));
+    *sink.epochs.last().expect("the frame was submitted")
+}
+
+/// A raster side that renders one frame for long while the owner keeps producing replaces each
+/// unrendered frame in its inbox and names it: that record folds by its stamp, so the ring stays
+/// at the frame rendering and the one waiting. When the rendering frame settles undelivered and
+/// the executor takes the waiting one, the next frame queues beside them and folds nothing: the
+/// frame on the GPU keeps its record and settles `Applied`.
+///
+/// Fails when a replaced frame's record waits for a later settlement, or when a frame queued
+/// into a long pile folds the one the executor took.
+#[test]
+fn a_replaced_frame_folds_by_its_stamp_and_never_the_frame_being_rendered() {
+    let mut ui_runtime = mount_box();
+    let rendering = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    let mut waiting = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    let mut replaced = Vec::new();
+    for _ in 0..super::settlement::MAX_PENDING_FRAMES {
+        replaced.push(waiting);
+        waiting = queue_one(&ui_runtime, SubmitVerdict::QueuedReplacing(waiting));
+    }
+    let pending = || {
+        ui_runtime
+            .presentations
+            .primary()
+            .pending_frames
+            .borrow()
+            .len()
+    };
+    assert_eq!(pending(), 2, "the frame rendering and the one waiting");
+    // The executor took the waiting frame; the next one finds the inbox empty.
+    let next = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    assert_eq!(pending(), 3);
+
+    assert_eq!(settle(&mut ui_runtime, rendering), Settled::Applied);
+    for replaced in replaced {
+        assert_eq!(settle(&mut ui_runtime, replaced), Settled::Stale);
+    }
+    assert_eq!(
+        settle(&mut ui_runtime, waiting),
+        Settled::Applied,
+        "the frame the executor took keeps its record"
+    );
+    assert_eq!(settle(&mut ui_runtime, next), Settled::Applied);
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+}
+
+/// A subscriber that panics while a replaced frame's record folds leaves the frame that replaced
+/// it queued and finished: its record waits for its settlement, the replaced one is gone, and
+/// the panic continues after the frame's tail.
+///
+/// Fails when the fold runs uncontained, so its panic leaves the frame before its tail.
+#[test]
+fn a_subscriber_that_panics_on_a_replaced_frame_leaves_the_replacing_frame_queued() {
+    let mut ui_runtime = mount_box();
+    let rendering = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    let replaced = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    let mut sink = ScriptedSink::new(move |_, _| SubmitVerdict::QueuedReplacing(replaced));
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "abandoned before it was shown",
+        },
+        || {
+            let _ = ui_runtime.render_frame(&mut sink);
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert!(
+        !ui_runtime.needs_redraw(),
+        "the frame was queued before the panic continued"
+    );
+    let replacing = *sink.epochs.last().expect("the frame was submitted");
+    assert_eq!(settle(&mut ui_runtime, replaced), Settled::Stale);
+    assert_eq!(settle(&mut ui_runtime, rendering), Settled::Applied);
+    assert_eq!(settle(&mut ui_runtime, replacing), Settled::Applied);
+}
+
+/// A sink that answers `Queued` past the ring's bound without naming the frame it replaced
+/// broke its contract: the newest record, the frame it most likely replaced, folds, and the
+/// oldest keeps its record. A subscriber that panics on the fold's error leaves the frame to
+/// finish: it settles as rendered before the panic continues.
+///
+/// Fails when the fold drops the frame being rendered, or when its panic leaves the frame
+/// before its tail.
+#[test]
+fn a_subscriber_that_panics_on_a_folded_frame_leaves_the_frame_finished() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(rendering, _), _] = queue_two_frames(&ui_runtime, &mut sink);
+    queue_more(
+        &ui_runtime,
+        &mut sink,
+        super::settlement::MAX_PENDING_FRAMES - 2,
+    );
+    let superseded = *sink.epochs.last().expect("frames were queued");
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "the newest record folds",
+        },
+        || {
+            let _ = ui_runtime.render_frame(&mut sink);
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert_eq!(
+        ui_runtime
+            .presentations
+            .primary()
+            .pending_frames
+            .borrow()
+            .len(),
+        super::settlement::MAX_PENDING_FRAMES,
+        "the ring keeps its bound"
+    );
+    assert!(
+        !ui_runtime.needs_redraw(),
+        "the frame settled as rendered before the panic continued"
+    );
+    assert_eq!(
+        settle(&mut ui_runtime, rendering),
+        Settled::Applied,
+        "the frame being rendered keeps its record"
+    );
+    assert_eq!(
+        settle(&mut ui_runtime, superseded),
+        Settled::Stale,
+        "the frame the inbox replaced folded"
+    );
+    let newest = *sink.epochs.last().expect("frames were queued");
+    assert_eq!(settle(&mut ui_runtime, newest), Settled::Applied);
+}
+
+fn press_primary(ui_runtime: &UiRuntime) {
+    let id = ui_runtime.presentation_id();
+    ui_runtime.enter(|ui_runtime| {
+        ui_runtime.handle_input_addressed(
+            id,
+            flui_platform::PlatformInput::Pointer(
+                flui_interaction::events::make_down_event(
+                    flui_foundation::geometry::Offset::new(4.0, 6.0),
+                    flui_interaction::events::PointerKind::Touch,
+                )
+                .expect("finite test position"),
+            ),
+        );
+    });
+}
+
+/// Queues one frame, then answers the next inline with `later`.
+fn queue_then_answer_inline(ui_runtime: &UiRuntime, later: SubmitVerdict) -> ScriptedSink {
+    let mut sink = ScriptedSink::new(move |call, _| {
+        if call == 0 {
+            SubmitVerdict::Queued
+        } else {
+            later
+        }
+    });
+    assert!(!ui_runtime.render_frame(&mut sink));
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    let _ = ui_runtime.render_frame(&mut sink);
+    sink
+}
+
+/// Input held while an older frame settles, after the later frame was answered without a
+/// commit, is not stranded: the settlement asks for the frame that shows the current tree, and
+/// that frame's commit replays it.
+///
+/// Fails when an older frame's settlement leaves held input with no frame owed.
+#[test]
+fn held_input_behind_a_failed_frame_asks_for_the_frame_that_shows_the_tree() {
+    let mut ui_runtime = mount_box();
+    let sink = queue_then_answer_inline(&ui_runtime, SubmitVerdict::Failed);
+    press_primary(&ui_runtime);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for a commit"
+    );
+    assert!(!ui_runtime.needs_redraw(), "a failed frame arms no retry");
+
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the older frame does not show the tree the Down was aimed at"
+    );
+    assert!(
+        ui_runtime.needs_redraw(),
+        "the settlement asks for the frame the Down waits for"
+    );
+    assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        0,
+        "that frame's commit replays it"
+    );
+}
+
+/// The inputs a queued frame was cut after are that frame's to report: a frame answered inline
+/// with a failure while it waits reads them without taking them.
+///
+/// Fails when the failed frame drains the queued frame's inputs.
+#[test]
+fn a_failed_frame_leaves_a_queued_frames_inputs_to_its_settlement() {
+    let mut ui_runtime = mount_box();
+    let clock = ui_runtime.presentations.primary().clock();
+    let input = clock.stamp_input_epoch(clock.now());
+    let sink = queue_then_answer_inline(&ui_runtime, SubmitVerdict::Failed);
+
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
+    let frames = ui_runtime
+        .presentations
+        .primary()
+        .clock()
+        .frames_since(None);
+    let presented = frames
+        .iter()
+        .find(|frame| frame.present_outcome == flui_scheduler::PresentOutcome::Presented)
+        .expect("the queued frame was recorded when it settled");
+    assert!(
+        presented.input_epochs.iter().any(|epoch| epoch.id == input),
+        "the queued frame reports the input it was cut after: {frames:?}"
+    );
+}
+
+/// A subscriber that panics on the trace of a superseded frame's cleanup leaves the frame that
+/// superseded it to finish: it commits, the input held for it replays, and the panic continues
+/// after.
+///
+/// Fails when the superseded frame's cleanup runs uncontained, at the settlement or inline.
+#[test]
+fn a_subscriber_that_panics_on_a_superseded_frame_leaves_the_settled_frame_finished() {
+    let needle = "abandoned before it was shown";
+
+    // A settlement folds the frame queued before it.
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(first, _), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    press_primary(&ui_runtime);
+    let panicked = render_under(PanicsOnEvent { needle }, || {
+        let _ = settle(&mut ui_runtime, second);
+    });
+    assert!(panicked, "the subscriber's panic continues");
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert_eq!(held_pointer_count(&ui_runtime), 0, "the held Down replays");
+    assert_eq!(settle(&mut ui_runtime, first), Settled::Stale);
+
+    // An inline frame folds the frame queued before it.
+    let ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|call, _| {
+        if call == 0 {
+            SubmitVerdict::Queued
+        } else {
+            SubmitVerdict::Presented
+        }
+    });
+    assert!(!ui_runtime.render_frame(&mut sink));
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    press_primary(&ui_runtime);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for a commit"
+    );
+    let panicked = render_under(PanicsOnEvent { needle }, || {
+        let _ = ui_runtime.render_frame(&mut sink);
+    });
+    assert!(panicked, "the subscriber's panic continues");
+    assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        0,
+        "the held Down replays before the panic continues"
+    );
+    assert!(
+        ui_runtime
+            .presentations
+            .primary()
+            .pending_frames
+            .borrow()
+            .is_empty()
+    );
+}
+
+/// Input held while a queued frame waits stays held when that frame settles but the
+/// presentation is still uncommitted for another reason (a text sizing replacement withdrew its
+/// layout): the replay follows the rule that held the input.
+///
+/// Fails when the settlement replays against a presentation that is not committed.
+#[test]
+fn a_settlement_leaves_input_held_while_the_presentation_is_not_committed() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let (_policy, writer) = flui_painting::TextSizing::captured();
+    assert!(
+        ui_runtime.install_captured_text_sizing_for(ui_runtime.presentation_id(), writer.source())
+    );
+    press_primary(&ui_runtime);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for a commit"
+    );
+
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
+    assert_ne!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for the commit the text replacement owes"
+    );
+}
+
+/// An input stamped after a queued frame was cut and before a frame that failed inline belongs
+/// to the failed frame alone: it is reported once, not again by the next frame that presents.
+///
+/// Fails when the failed frame reads its inputs without taking them.
+#[test]
+fn a_failed_frame_takes_the_inputs_stamped_since_the_queued_frame() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|call, _| {
+        if call == 0 {
+            SubmitVerdict::Queued
+        } else {
+            SubmitVerdict::Failed
+        }
+    });
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let clock = ui_runtime.presentations.primary().clock();
+    let late = clock.stamp_input_epoch(clock.now());
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(!ui_runtime.render_frame(&mut sink));
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
+
+    let frames = ui_runtime
+        .presentations
+        .primary()
+        .clock()
+        .frames_since(None);
+    let reporting = frames
+        .iter()
+        .filter(|frame| frame.input_epochs.iter().any(|epoch| epoch.id == late))
+        .map(|frame| frame.present_outcome)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reporting,
+        [flui_scheduler::PresentOutcome::Errored],
+        "the failed frame reports the input once: {frames:?}"
+    );
+}
+
+/// A sink that panics loses its frame: the frame's cleanup and the repaint it owes run
+/// contained, so a subscriber that panics on the cleanup's trace still leaves the repaint armed
+/// before the sink's panic continues.
+///
+/// Fails when the cleanup runs uncontained before the repaint.
+#[test]
+fn a_subscriber_that_panics_on_a_lost_frames_cleanup_leaves_the_repaint_armed() {
+    let ui_runtime = mount_box();
+    let mut sink =
+        ScriptedSink::new(|_, _| -> SubmitVerdict { panic!("sink — intentional panic") });
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "abandoned before it was shown",
+        },
+        || {
+            let _ = ui_runtime.render_frame(&mut sink);
+        },
+    );
+    assert!(panicked, "the sink's panic continues");
+    assert!(
+        ui_runtime.render_frame(&mut ScriptedSink::always_presents()),
+        "the lost scene is painted again"
+    );
+}
+
+/// A withheld frame that settles after its retry budget is spent parks: it asks for no repaint,
+/// not even for pointer input held for a later tree, since a repaint the surface still withholds
+/// would open a new retry burst and the park would never hold.
+///
+/// Fails when a parked settlement owes a repaint for held input.
+#[test]
+fn a_parked_withheld_settlement_asks_for_no_repaint_for_held_input() {
+    let budget = super::MAX_NOT_SHOWN_RETRIES;
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(move |call, _| match call {
+        call if call < budget => SubmitVerdict::NotShown,
+        call if call == budget => SubmitVerdict::Queued,
+        _ => SubmitVerdict::Failed,
+    });
+    for _ in 0..budget {
+        assert!(
+            !ui_runtime.render_frame(&mut sink),
+            "each attempt is withheld"
+        );
+    }
+    assert!(
+        !ui_runtime.render_frame(&mut sink),
+        "the next frame is queued"
+    );
+    let queued = *sink.epochs.last().expect("a frame was queued");
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(
+        !ui_runtime.render_frame(&mut sink),
+        "a later frame fails inline"
+    );
+    press_primary(&ui_runtime);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for a commit"
+    );
+    assert!(!ui_runtime.needs_redraw());
+
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+    assert_eq!(
+        ui_runtime.settle_frame(FrameSettlement::new(
+            address,
+            queued,
+            SubmitVerdict::NotShown,
+        )),
+        Settled::Applied
+    );
+    assert!(
+        !ui_runtime.needs_redraw(),
+        "the parked frame asks for no repaint"
+    );
+    assert_eq!(held_pointer_count(&ui_runtime), 1);
 }

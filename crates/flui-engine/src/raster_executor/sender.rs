@@ -904,10 +904,17 @@ impl RasterSender {
             }
             state.frame.replace(snapshot)
         };
+        // The owner learns which frame it replaced by its stamp, so the record
+        // it folds is that frame's and never one the executor took.
+        let receipt = superseded
+            .as_ref()
+            .map_or(SendReceipt::Accepted, |replaced| {
+                SendReceipt::Replaced(replaced.stamp.epoch)
+            });
         // After the lock: a scene's destructor can be user code, and it may
         // send to this slot again.
         drop(superseded);
-        Ok(SendReceipt::Accepted)
+        Ok(receipt)
     }
 
     fn configure(&self, slot: SlotId, change: SlotChange) -> Result<SendReceipt, RasterSendError> {

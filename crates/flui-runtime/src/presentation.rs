@@ -474,7 +474,9 @@ pub struct PresentationState {
     pub(crate) url_owner: flui_view::__runtime::UrlOwnerSlot,
     /// Reads of the layer tree parked for the next scene this window shows (owner thread only).
     pub(crate) agent_layer_reads: RefCell<Vec<crate::ui_runtime::PendingLayerRead>>,
-    pub(crate) agent_layer_staged: RefCell<Vec<crate::ui_runtime::StagedLayerRead>>,
+    /// The frames handed to a sink that answered `Queued`, oldest first: what each commits once
+    /// its settlement arrives (ADR-0305 §4). Owner thread only.
+    pub(crate) pending_frames: RefCell<std::collections::VecDeque<crate::ui_runtime::PendingFrame>>,
     /// The subscriptions an agent holds to this presentation's events, and how far they have
     /// been reported. Ended when the presentation closes. Owner thread only.
     pub(crate) agent_events: RefCell<crate::ui_runtime::EventHub>,
@@ -1114,7 +1116,7 @@ impl PresentationState {
             agent_waits: RefCell::default(),
             url_owner,
             agent_layer_reads: RefCell::default(),
-            agent_layer_staged: RefCell::default(),
+            pending_frames: RefCell::default(),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1258,7 +1260,7 @@ impl PresentationState {
             agent_waits: RefCell::default(),
             url_owner,
             agent_layer_reads: RefCell::default(),
-            agent_layer_staged: RefCell::default(),
+            pending_frames: RefCell::default(),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1630,16 +1632,22 @@ impl PresentationState {
         }
     }
 
-    /// Hands the window the staged input regions of a frame the sink accepted. Called on
+    /// The input regions the frame about to be submitted carries: the slice the window gets
+    /// once that frame is shown ([`Self::publish_input_regions`]).
+    pub(crate) fn staged_input_regions(&self) -> Rc<[flui_platform::input_regions::InputRegion]> {
+        Rc::clone(&self.staged_input_regions.borrow())
+    }
+
+    /// Hands the window `regions`, the input regions of a frame the sink accepted. Called on
     /// every composited frame, changed or not: the backend compares its projection with
     /// what the OS holds (ADR-0217 §5).
     ///
     /// The regions are committed before the backend runs, and no borrow is held while it
     /// does: a backend that panics or reenters leaves them committed for the next move.
-    pub(crate) fn publish_input_regions(&self) {
-        // The staged slice stays staged, for the next frame to compare its
-        // regions with.
-        let regions = Rc::clone(&self.staged_input_regions.borrow());
+    pub(crate) fn publish_input_regions(
+        &self,
+        regions: Rc<[flui_platform::input_regions::InputRegion]>,
+    ) {
         *self.published_input_regions.borrow_mut() = Rc::clone(&regions);
         self.hand_input_regions(&regions);
     }
@@ -2020,13 +2028,19 @@ impl PresentationState {
         tree_revision
     }
 
-    /// Acknowledge every terminal tree revision through the current one.
+    /// Acknowledge every terminal tree revision through `through`, the revision a frame the sink
+    /// accepted was painted from. A frame that settles after later ones were painted commits only
+    /// its own revision, and an acknowledgement never moves back.
     ///
     /// This method is the single commit point where input replay attaches:
     /// callers invoke it only after a painted frame receives a successful
     /// submit classification.
-    pub(crate) fn commit_tree_revision(&self) -> TreeRevision {
-        let committed_revision = self.tree_revision.get();
+    pub(crate) fn commit_tree_revision(&self, through: TreeRevision) -> TreeRevision {
+        debug_assert!(
+            through <= self.tree_revision.get(),
+            "BUG: a frame commits a revision the tree has reached"
+        );
+        let committed_revision = through.max(self.presented_revision.get());
         self.presented_revision.set(committed_revision);
         committed_revision
     }

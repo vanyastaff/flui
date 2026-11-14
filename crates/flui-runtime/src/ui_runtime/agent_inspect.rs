@@ -29,6 +29,7 @@ use flui_protocol::{
 
 use super::UiRuntime;
 use super::agent::{AgentError, ReplySender, send_reply};
+use super::settlement::PendingFrame;
 use crate::presentation::PresentationState;
 
 /// The most nodes one inspection reports when the caller names no limit, and at most.
@@ -99,8 +100,8 @@ impl UiRuntime {
         };
         {
             let mut parked = state.agent_layer_reads.borrow_mut();
-            // Reads staged for a scene whose submit never settled still owe a reply.
-            if parked.len() + state.agent_layer_staged.borrow().len() >= MAX_PARKED_LAYER_READS {
+            // Reads staged with a frame whose settlement has not arrived still owe a reply.
+            if parked.len() + state.staged_agent_layer_read_count() >= MAX_PARKED_LAYER_READS {
                 drop(parked);
                 send_reply(
                     &reply,
@@ -142,41 +143,43 @@ pub(crate) fn deliver_each<T>(items: Vec<T>, mut deliver: impl FnMut(T)) -> Firs
 }
 
 impl PresentationState {
-    /// Reads the scene the window is about to submit for every layer read parked on it, and holds
-    /// the readings: they are delivered only if the scene is shown ([`Self::settle_agent_layer_reads`]).
-    /// The version is read in place, and only when a read is parked.
-    pub(crate) fn stage_agent_layer_reads(&self, scene: &flui_layer::SceneVersion) {
-        // A scene that was staged and never submitted shows nothing: its reads wait again.
-        drop(self.settle_agent_layer_reads(false));
+    /// Reads the scene the window is about to submit for every layer read parked on it, and
+    /// returns the readings, which travel with that frame: they are delivered only if its scene
+    /// is shown ([`Self::settle_agent_layer_reads`]). The version is read in place, and only when
+    /// a read is parked.
+    pub(crate) fn stage_agent_layer_reads(
+        &self,
+        scene: &flui_layer::SceneVersion,
+    ) -> Vec<StagedLayerRead> {
         let parked = std::mem::take(&mut *self.agent_layer_reads.borrow_mut());
-        if parked.is_empty() {
-            return;
-        }
-
-        let staged = parked.into_iter().map(|read| {
-            let reading = reading_from(snapshot(scene, read.query));
-            StagedLayerRead { read, reading }
-        });
-        self.agent_layer_staged.borrow_mut().extend(staged);
+        parked
+            .into_iter()
+            .map(|read| {
+                let reading = reading_from(snapshot(scene, read.query));
+                StagedLayerRead { read, reading }
+            })
+            .collect()
     }
 
-    /// The submit was classified. A scene the window showed (or already showed) answers the reads
-    /// staged for it; a scene it did not show returns them to the parked list, for the next one.
+    /// The frame `staged` was read from settled. A scene the window showed (or already showed)
+    /// answers them; a scene it did not show returns them to the parked list, for the next one.
     /// Returns the first panic of a reply's delivery, after every reply was attempted.
-    pub(crate) fn settle_agent_layer_reads(&self, shown: bool) -> FirstPanic {
+    pub(crate) fn settle_agent_layer_reads(
+        &self,
+        staged: Vec<StagedLayerRead>,
+        shown: bool,
+    ) -> FirstPanic {
         if !shown {
-            self.repark_staged_agent_layer_reads();
+            self.repark_staged_agent_layer_reads(staged);
             return FirstPanic::new();
         }
-        let staged = std::mem::take(&mut *self.agent_layer_staged.borrow_mut());
         deliver_each(staged, |staged| {
             send_reply(&staged.read.reply, None, staged.reading);
         })
     }
 
     /// The staged reads wait again, ahead of any parked since. Returns whether there were any.
-    fn repark_staged_agent_layer_reads(&self) -> bool {
-        let staged = std::mem::take(&mut *self.agent_layer_staged.borrow_mut());
+    fn repark_staged_agent_layer_reads(&self, staged: Vec<StagedLayerRead>) -> bool {
         if staged.is_empty() {
             return false;
         }
@@ -187,10 +190,11 @@ impl PresentationState {
         true
     }
 
-    /// The submit never returned a verdict (the sink panicked): the staged reads wait for the next
-    /// scene, and a repaint is owed to produce one.
-    pub(crate) fn restore_staged_agent_layer_reads(&self) {
-        if self.repark_staged_agent_layer_reads() {
+    /// The scene `staged` was read from never reaches the screen (the sink panicked, or a later
+    /// frame superseded it): the reads wait for the next scene, and a repaint is owed to produce
+    /// one.
+    pub(crate) fn restore_staged_agent_layer_reads(&self, staged: Vec<StagedLayerRead>) {
+        if self.repark_staged_agent_layer_reads(staged) {
             self.pipeline().with_mut(|pipeline| {
                 if let Some(root) = pipeline.root_id() {
                     pipeline.mark_needs_paint(root);
@@ -199,13 +203,24 @@ impl PresentationState {
         }
     }
 
-    /// The window closes: every read parked or staged is answered `gone`. Returns the first panic
-    /// of a reply's delivery, after every reply was attempted.
+    /// How many layer reads the frames still pending hold, which still owe a reply.
+    fn staged_agent_layer_read_count(&self) -> usize {
+        self.pending_frames
+            .borrow()
+            .iter()
+            .map(PendingFrame::staged_layer_reads)
+            .sum::<usize>()
+    }
+
+    /// The window closes: every read parked, or staged with a frame still pending, is answered
+    /// `gone`. Returns the first panic of a reply's delivery, after every reply was attempted.
     pub(crate) fn abandon_agent_layer_reads(&self) -> FirstPanic {
-        let mut owed = std::mem::take(&mut *self.agent_layer_staged.borrow_mut())
+        let pending = std::mem::take(&mut *self.pending_frames.borrow_mut());
+        let mut owed = pending
             .into_iter()
+            .flat_map(PendingFrame::into_layer_reads)
             .map(|staged| staged.read)
-            .collect::<Vec<_>>();
+            .collect::<Vec<PendingLayerRead>>();
         owed.append(&mut *self.agent_layer_reads.borrow_mut());
         deliver_each(owed, PendingLayerRead::abandon)
     }

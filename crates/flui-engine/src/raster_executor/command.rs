@@ -228,11 +228,16 @@ impl SlotVisibility {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "the owner stamps the next frame from a changed configuration, and a `_` arm would drop the generation"
+    reason = "the owner stamps the next frame from a changed configuration and folds a replaced frame's record, and a `_` arm would drop the generation or the fold"
 )]
 pub enum SendReceipt {
-    /// Queued or coalesced; nothing for the owner to stamp.
+    /// Queued, or a change coalesced with one queued before it; nothing for
+    /// the owner to stamp.
     Accepted,
+    /// A frame accepted in place of the slot's unrendered frame stamped with
+    /// this epoch, which never renders and gets no settlement: the owner folds
+    /// its record by that stamp (ADR-0305 §4).
+    Replaced(FrameEpoch),
     /// The slot's configuration changed: its next frame is stamped with this
     /// generation.
     Configured(SurfaceGeneration),

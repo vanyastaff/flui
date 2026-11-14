@@ -1081,7 +1081,11 @@ impl RasterHost {
                 change: SlotChange::Size(size),
             }) {
                 Ok(SendReceipt::Configured(_)) => {}
-                Ok(SendReceipt::Unconfigured | SendReceipt::Accepted) => return None,
+                Ok(
+                    SendReceipt::Unconfigured | SendReceipt::Accepted | SendReceipt::Replaced(_),
+                ) => {
+                    return None;
+                }
                 Err(error) => {
                     tracing::warn!(%error, "raster host: a window's size was refused");
                     return None;

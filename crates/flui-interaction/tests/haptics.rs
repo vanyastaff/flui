@@ -140,7 +140,7 @@ fn the_frame_is_requested_and_the_ticket_matched() {
     let ticket = f.queue();
     assert_eq!(f.frames.get(), 1, "queueing requests a frame");
     assert_eq!(f.played(), 0, "nothing plays before the frame");
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     assert_eq!(f.played(), 1);
     assert!(delivered.borrow().is_empty(), "the frame runs no observer");
     f.service();
@@ -165,7 +165,7 @@ fn an_expired_request_is_suppressed_and_never_played_late() {
     f.clock.advance(Duration::from_nanos(1));
     f.service();
     assert_eq!(*delivered.borrow(), [(ticket, HapticOutcome::Suppressed)]);
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     assert_eq!(f.played(), 0, "an expired request never plays");
     assert_eq!(f.host.next_wake(), None);
 }
@@ -175,10 +175,33 @@ fn a_frame_presented_exactly_at_the_deadline_plays() {
     let delivered = f.observe();
     let ticket = f.queue();
     f.clock.advance(DEADLINE);
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     f.service();
     assert_eq!(*delivered.borrow(), [(ticket, HapticOutcome::Submitted)]);
     assert_eq!(f.played(), 1);
+}
+
+fn a_request_queued_after_the_frame_was_cut_waits_for_its_own_frame() {
+    let f = fixture();
+    let delivered = f.observe();
+    let first = f.queue();
+    let cut = f.host.frame_cut();
+    let second = f.queue();
+    f.host.frame_presented(cut);
+    f.service();
+    assert_eq!(
+        *delivered.borrow(),
+        [(first, HapticOutcome::Submitted)],
+        "the frame confirms only what was queued before it was submitted"
+    );
+    assert_eq!(f.played(), 1);
+    f.host.frame_presented(f.host.frame_cut());
+    f.service();
+    assert_eq!(f.played(), 2);
+    assert_eq!(
+        delivered.borrow().last(),
+        Some(&(second, HapticOutcome::Submitted))
+    );
 }
 
 fn a_frame_after_the_deadline_suppresses_whichever_wake_comes_first() {
@@ -186,7 +209,7 @@ fn a_frame_after_the_deadline_suppresses_whichever_wake_comes_first() {
     let delivered = f.observe();
     let ticket = f.queue();
     f.clock.advance(DEADLINE + Duration::from_nanos(1));
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     f.service();
     assert_eq!(*delivered.borrow(), [(ticket, HapticOutcome::Suppressed)]);
     assert_eq!(f.played(), 0);
@@ -207,7 +230,7 @@ fn hiding_drains_the_queue_and_nothing_plays_while_hidden() {
         HapticOutcome::Suppressed,
         "a hidden window queues nothing"
     );
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     f.service();
     assert_eq!(
         *delivered.borrow(),
@@ -251,7 +274,7 @@ fn turning_haptics_off_drains_the_queue_and_nothing_plays_while_off() {
             (second, HapticOutcome::Suppressed)
         ]
     );
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     f.service();
     assert_eq!(f.played(), 0, "a frame presented while off plays nothing");
     assert_eq!(delivered.borrow().len(), 2);
@@ -261,7 +284,7 @@ fn turning_haptics_off_drains_the_queue_and_nothing_plays_while_off() {
         HapticOutcome::Submitted
     );
     let third = f.queue();
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     f.service();
     assert_eq!(
         delivered.borrow().last(),
@@ -311,7 +334,7 @@ fn both_tiers_queue() {
     else {
         panic!("a pattern queues too");
     };
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     f.service();
     assert_eq!(*delivered.borrow(), [(ticket, HapticOutcome::Submitted)]);
 }
@@ -332,6 +355,10 @@ fn frame_presented_haptics_play_with_the_frame() {
             (
                 "a_frame_presented_exactly_at_the_deadline_plays",
                 a_frame_presented_exactly_at_the_deadline_plays,
+            ),
+            (
+                "a_request_queued_after_the_frame_was_cut_waits_for_its_own_frame",
+                a_request_queued_after_the_frame_was_cut_waits_for_its_own_frame,
             ),
             (
                 "a_frame_after_the_deadline_suppresses_whichever_wake_comes_first",
@@ -487,7 +514,7 @@ fn unknown_refresh_period_uses_the_60_hz_fallback() {
 /// the mailbox.
 fn resolved(f: &Fixture, count: usize) -> Vec<HapticTicket> {
     let tickets = (0..count).map(|_| f.queue()).collect();
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     tickets
 }
 
@@ -701,7 +728,7 @@ fn closing_delivers_pending_outcomes_in_a_final_pass() {
     let f = fixture();
     let delivered = f.observe();
     let played = f.queue();
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     let pending = f.queue();
     f.close();
     assert_eq!(
@@ -742,7 +769,7 @@ fn sustained_requests_with_no_observer_degrade_to_immediate_when_the_mailbox_is_
     );
     assert_eq!(f.played(), played + 1);
     let delivered = f.observe();
-    f.host.frame_presented();
+    f.host.frame_presented(f.host.frame_cut());
     f.service();
     assert_eq!(delivered.borrow().len(), MAILBOX_CAPACITY);
     assert!(
@@ -791,7 +818,7 @@ fn hiding_the_window_while_a_frame_plays_suppresses_the_request_once() {
         )
         .collect();
     hide.set(true);
-    host.frame_presented();
+    host.frame_presented(host.frame_cut());
     RecoveryScope::boundary(|recovery| host.service(recovery));
     assert_eq!(
         *delivered.borrow(),
@@ -839,7 +866,7 @@ fn closing_while_a_frame_plays_reports_every_outcome() {
         ));
     }
     close.set(true);
-    let ((), log) = flui_testing::log_capture::capture(|| host.frame_presented());
+    let ((), log) = flui_testing::log_capture::capture(|| host.frame_presented(host.frame_cut()));
     assert_eq!(
         log.count_containing("not delivered before its presentation closed"),
         2,
@@ -935,7 +962,7 @@ fn a_backend_panic_in_a_frame_keeps_every_other_request() {
             },
         )
         .collect();
-    let failure = catch_unwind(AssertUnwindSafe(|| host.frame_presented()))
+    let failure = catch_unwind(AssertUnwindSafe(|| host.frame_presented(host.frame_cut())))
         .expect_err("the backend's panic propagates");
     assert_eq!(panic_text(failure.as_ref()), "backend failed");
     RecoveryScope::boundary(|recovery| host.service(recovery));
@@ -944,7 +971,7 @@ fn a_backend_panic_in_a_frame_keeps_every_other_request() {
         [(tickets[0], HapticOutcome::Submitted)],
         "the outcome resolved before the panic was kept"
     );
-    host.frame_presented();
+    host.frame_presented(host.frame_cut());
     RecoveryScope::boundary(|recovery| host.service(recovery));
     let expected: Vec<_> = tickets
         .into_iter()

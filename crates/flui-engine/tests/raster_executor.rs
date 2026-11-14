@@ -513,7 +513,8 @@ fn a_command_sent_during_the_stop_comes_back_gone() {
     );
 }
 
-/// A later frame supersedes a pending one: one render, of the survivor, with
+/// A later frame supersedes a pending one: the send names the superseded
+/// frame's stamp, and one render, of the survivor, with
 /// the superseded frame's damage folded in, and one settlement naming it.
 #[test]
 fn latest_frame_wins_and_superseded_damage_folds_into_the_survivor() {
@@ -523,18 +524,25 @@ fn latest_frame_wins_and_superseded_damage_folds_into_the_survivor() {
     let _ = rig.executor.turn();
     let _ = verdicts(&rig.sender, at.slot);
 
-    for (epoch, damage) in [
+    let receipts = [
         (2, partial(0.0, 0.0, 10.0, 10.0)),
         (3, partial(20.0, 20.0, 30.0, 30.0)),
-    ] {
-        let _ = rig
-            .sender
+    ]
+    .map(|(epoch, damage)| {
+        rig.sender
             .send(RasterCommand::Frame {
                 slot: at.slot,
                 snapshot: snapshot(at, epoch, damage, scene()),
             })
-            .expect("accepted");
-    }
+            .expect("accepted")
+    });
+    assert!(
+        matches!(
+            receipts,
+            [SendReceipt::Accepted, SendReceipt::Replaced(replaced)] if replaced.get() == 2
+        ),
+        "the owner learns the stamp of the frame the inbox replaced: {receipts:?}"
+    );
     assert_eq!(
         rig.sender
             .record(at.slot)

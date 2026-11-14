@@ -425,7 +425,7 @@ impl UiRuntime {
         }
     }
 
-    fn frame_failure_report(
+    pub(super) fn frame_failure_report(
         &self,
         presentation: &PresentationState,
         kind: FrameFailureKind,
@@ -469,7 +469,7 @@ impl UiRuntime {
         }
     }
 
-    fn deliver_failure_report(&self, report: FrameFailureReport) {
+    pub(super) fn deliver_failure_report(&self, report: FrameFailureReport) {
         Self::deliver_failure_report_to(
             &self.frame_failure_handler,
             self.frame_failure_detail.get(),
