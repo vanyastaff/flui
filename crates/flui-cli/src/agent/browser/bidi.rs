@@ -13,6 +13,9 @@ use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
 /// The channel every report comes back on.
 const CHANNEL: &str = "flui-agent";
 
+/// The first Firefox that reports `browsingContext.navigationCommitted`.
+const MIN_FIREFOX: u32 = 140;
+
 /// The events the link reads. A navigation is reported once it commits, as the DevTools
 /// protocol's `Page.frameNavigated` is: until then the tab still shows the document it
 /// leaves, and a connection made there would go with it.
@@ -84,6 +87,13 @@ impl Bidi {
             }
         }
         link.command_by("session.subscribe", json!({ "events": EVENTS }), ready_by)
+            .map_err(|error| match error {
+                // A Firefox before 140 knows no `browsingContext.navigationCommitted`.
+                LinkError::Refused(why) => LinkError::Refused(format!(
+                    "{why} (the link needs Firefox {MIN_FIREFOX} or later)"
+                )),
+                other => other,
+            })
             .map_err(AttachError::at("session.subscribe"))?;
         Ok(link)
     }

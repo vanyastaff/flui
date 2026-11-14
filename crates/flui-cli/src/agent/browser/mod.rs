@@ -90,8 +90,9 @@ pub(crate) struct Remote(String);
 pub(crate) enum LinkEvent {
     /// A string the page passed to the report function of a [`BrowserLink::call`].
     Report(String),
-    /// The tab started on another document: everything the calls left in the page goes with
-    /// the one it leaves.
+    /// Another document replaced the tab's: it committed, so everything the calls left in the
+    /// page went with the one it replaced, and the next call reaches the new one. Not the
+    /// start of a navigation, while the document it leaves still answers.
     Navigated,
 }
 
