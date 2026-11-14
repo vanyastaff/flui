@@ -734,9 +734,8 @@ fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
 /// Frames requested with nothing changed in the tree, as a ticker that
 /// changes nothing asks for them, driven through the UI runtime's frame
 /// transaction: none publishes or submits a scene, because the retained scene
-/// already holds what the window shows (ADR-0304 §8). What the frames still
-/// ask of the heap is held to its baseline, which `cargo xtask perf` ratchets
-/// down as the frame's per-frame buffers become kept ones.
+/// already holds what the window shows (ADR-0304 §8), and none asks anything
+/// of the heap: every buffer a frame uses is one the runtime keeps.
 #[test]
 fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
     const IDLE_FRAMES: usize = 4;
@@ -765,6 +764,11 @@ fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
         }
     });
     record_counts("idle_frame_retained_scene", &heap_counts(allocations));
+    assert_eq!(
+        allocations,
+        HeapCounts::default(),
+        "an idle frame allocates nothing"
+    );
 
     assert!(
         host.sink()
