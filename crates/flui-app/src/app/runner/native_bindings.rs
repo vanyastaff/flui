@@ -140,6 +140,16 @@ impl NativeBindings {
         self.0.windows.borrow().contains_address(address)
     }
 
+    /// The presentation what the operating system opened for `target` goes
+    /// to ([`WindowRegistry::open_target`]).
+    pub(super) fn open_target(
+        &self,
+        target: flui_platform::OpenTarget,
+        active: Option<PresentationAddress>,
+    ) -> Option<PresentationAddress> {
+        self.0.windows.borrow().open_target(target, active)
+    }
+
     /// Lease the presentation's driver, first applying a resize that arrived
     /// while it was out.
     fn checkout(&self, address: PresentationAddress) -> Option<FrameDriverLease> {

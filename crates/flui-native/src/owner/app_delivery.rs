@@ -35,7 +35,7 @@ use std::collections::VecDeque;
 use std::rc::{Rc, Weak as RcWeak};
 use std::sync::Arc;
 
-use flui_platform::{Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform::{Launch, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
 use parking_lot::Mutex;
 
 use super::call_point::{Called, Failure, HandlerSlot, call, retire};
@@ -282,9 +282,22 @@ impl AppDelivery {
     /// # Errors
     /// What `ready` returned. The reports wait for a later delivery then.
     pub(crate) fn ready(&self, owner: OwnerPlatform) -> Result<(), BootstrapError> {
-        self.state.lock().delivering = true;
+        let launch = {
+            let mut state = self.state.lock();
+            state.delivering = true;
+            take_launch(&mut state.pending)
+        };
+        // `ready` may take what launched the application
+        // (`OwnerPlatform::take_launch_opened`); what it leaves is reported
+        // first after it, on every exit, so it is never lost.
+        let launch = Rc::new(std::cell::Cell::new(launch));
+        let owner = owner.with_launch(Rc::clone(&launch));
         let walk = Walk(self);
-        match call(&Resident(self), |handler| handler.ready(owner)) {
+        let called = call(&Resident(self), |handler| handler.ready(owner));
+        if let Some(left) = launch.take() {
+            self.state.lock().pending.push_front(Report::Opened(left));
+        }
+        match called {
             Called::Returned(result) => result?,
             Called::Panicked(failure) => failure.resume(),
             Called::Vacant => {
@@ -571,6 +584,28 @@ impl AppDelivery {
         };
         Some(OwnerPlatform::new(platform, hooks))
     }
+}
+
+/// Take what launched the application out of the reports queued before
+/// `ready`: every [`Launch::Cold`] report of what was opened for the first
+/// one's target, joined in order and bounded again ([`Opened::new`]). The
+/// reports for another target stay queued.
+fn take_launch(pending: &mut VecDeque<Report>) -> Option<Opened> {
+    let target = pending.iter().find_map(|report| match report {
+        Report::Opened(opened) if opened.launch == Launch::Cold => Some(opened.target),
+        _ => None,
+    })?;
+    let mut urls = Vec::new();
+    let mut files = Vec::new();
+    pending.retain(|report| match report {
+        Report::Opened(opened) if opened.launch == Launch::Cold && opened.target == target => {
+            urls.extend(opened.urls.iter().cloned());
+            files.extend(opened.files.iter().cloned());
+            false
+        }
+        _ => true,
+    });
+    Some(Opened::new(urls, files, target, Launch::Cold))
 }
 
 #[cfg(test)]

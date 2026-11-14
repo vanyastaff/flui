@@ -308,6 +308,13 @@ impl WindowInstall {
         });
         let seed = window.state();
         *seen.lock() = Some(seed.clone());
+        // A window that opens focused is the one focused last, as one that
+        // gains focus later is (`RuntimeEvent::WindowFocus`).
+        if seed.focused
+            && let Some(routing) = super::host::current_open_routing()
+        {
+            routing.focused(dispatcher.address);
+        }
         self.observe(WindowObservation::Snapshot {
             execution: seed.execution,
             focused: seed.focused,

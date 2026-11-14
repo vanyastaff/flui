@@ -209,6 +209,15 @@ impl HeadlessRunHandle {
         self.renderers.of(flui_platform::PlatformWindow::id(window))
     }
 
+    /// Report what the operating system opened the application with, as a
+    /// link the user followed or a document opened with it does: the
+    /// application's handler hears it in order with the other reports, and
+    /// the runner routes it ([`Application::declares`],
+    /// [`Application::on_open_files`]).
+    pub fn open(&self, opened: flui_platform::Opened) {
+        self.host_events.open(opened);
+    }
+
     /// Report one phase of the user's session ending, as the operating system
     /// does, and return the application's answer.
     pub fn end_session(&self, phase: SessionEndPhase) -> SessionEndAnswer {

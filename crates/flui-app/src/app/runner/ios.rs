@@ -176,7 +176,11 @@ fn stop_process() {
     teardown_platform_ui_runtime();
 }
 
-pub(super) fn run_ios<V>(root: V, config: AppConfig) -> Result<(), LaunchError>
+pub(super) fn run_ios<V>(
+    root: V,
+    config: AppConfig,
+    opening: super::OpenSettings,
+) -> Result<(), LaunchError>
 where
     V: View + Clone + 'static,
 {
@@ -222,48 +226,51 @@ where
         }
     })?;
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
-    let result = Box::new(platform).run(crate::app::runner::app_handler(move |owner| {
-        install_owner_platform(owner)?;
-        with_owner_platform(|owner| owner.on_wake(Box::new(drive_owner)))
-            .expect("BUG: owner installed above")?;
-        super::host::route_quit(stop_process);
-        APP_RUNTIME.with(|slot| {
-            let mut runtime = slot.borrow_mut();
-            runtime.ios_running = true;
-            if let Some(executors) = config.executors.clone() {
-                runtime.install_host_executors(executors);
+    let result = Box::new(platform).run(crate::app::runner::opening_app_handler(
+        opening,
+        move |owner| {
+            install_owner_platform(owner)?;
+            with_owner_platform(|owner| owner.on_wake(Box::new(drive_owner)))
+                .expect("BUG: owner installed above")?;
+            super::host::route_quit(stop_process);
+            APP_RUNTIME.with(|slot| {
+                let mut runtime = slot.borrow_mut();
+                runtime.ios_running = true;
+                if let Some(executors) = config.executors.clone() {
+                    runtime.install_host_executors(executors);
+                }
+                runtime.reopen_lifecycles();
+                runtime.ensure_execution();
+            });
+            super::host::install_host_storage(&config);
+            for service in &config.services {
+                super::host::start_service(service)?;
             }
-            runtime.reopen_lifecycles();
-            runtime.ensure_execution();
-        });
-        super::host::install_host_storage(&config);
-        for service in &config.services {
-            super::host::start_service(service)?;
-        }
-        // The driver agent (ADR-0239), beside the application's own hooks, when
-        // the simulator launch named an endpoint. A driver ends the app with
-        // `simctl terminate`, so a disconnect asks no quit here.
-        let mut config = config;
-        let served = crate::app::agent::install_from_launch(
-            &mut config,
-            |key| with_owner_platform(|owner| owner.launch_value(key)).flatten(),
-            &std::sync::Arc::default(),
-            super::journals_native(),
-        );
-        super::keep_native_journal(served);
-        let reload = WorkerReload::from_config(&config);
-        let watcher = reload.spawn_watcher(runtime_wake_callback());
-        // The loop takes the hooks and owns them until the process stops
-        // (`stop_process`).
-        super::dev_agents::start(&config);
-        let installer = Box::new(move |window| {
-            bootstrap_ios(root.clone(), config.clone(), reload.clone(), window)
-        });
-        APP_RUNTIME.with(|slot| {
-            slot.borrow_mut().ios_controller = Some(IOSController::new(installer, watcher));
-        });
-        Ok(())
-    }));
+            // The driver agent (ADR-0239), beside the application's own hooks, when
+            // the simulator launch named an endpoint. A driver ends the app with
+            // `simctl terminate`, so a disconnect asks no quit here.
+            let mut config = config;
+            let served = crate::app::agent::install_from_launch(
+                &mut config,
+                |key| with_owner_platform(|owner| owner.launch_value(key)).flatten(),
+                &std::sync::Arc::default(),
+                super::journals_native(),
+            );
+            super::keep_native_journal(served);
+            let reload = WorkerReload::from_config(&config);
+            let watcher = reload.spawn_watcher(runtime_wake_callback());
+            // The loop takes the hooks and owns them until the process stops
+            // (`stop_process`).
+            super::dev_agents::start(&config);
+            let installer = Box::new(move |window| {
+                bootstrap_ios(root.clone(), config.clone(), reload.clone(), window)
+            });
+            APP_RUNTIME.with(|slot| {
+                slot.borrow_mut().ios_controller = Some(IOSController::new(installer, watcher));
+            });
+            Ok(())
+        },
+    ));
     result.map_err(|error| {
         tracing::error!(%error, "iOS platform failed");
         LaunchError::Platform {

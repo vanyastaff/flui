@@ -65,10 +65,13 @@ pub trait AppHandler: 'static {
 `RunnerHandler::opened`:
 
 1. Адресат. `Window(id)` → презентация этого окна. `Application` → презентация, чьё окно было
-   активным последним (`window_focused` с отметкой порядка), иначе основная. Нет ни одной
-   презентации → `opened` ждёт первую установленную (держатель на один `Opened`, не очередь).
-2. Файлы → `Application::on_open_files(|ctx: &AppContext, files: &[OpenedFile]|)`; без колбэка —
-   `tracing::info` со счётом.
+   активным последним (фокус окна), иначе открытая первой. Нет такой презентации → URL ждут её
+   в держателе одного адресата (новый адресат заменяет старого, до `MAX_OPENED_ITEMS`) и
+   открываются в её `UiRuntime` до монтирования корня. Холодную ссылку `RunnerHandler::ready`
+   забирает до bootstrap (`OwnerPlatform::take_launch_opened`), поэтому первое окно строится
+   сразу на ней.
+2. Файлы → `Application::on_open_files(|files: &[OpenedFile]|)`; без колбэка — `tracing::info`
+   со счётом.
 3. URL → `UiRuntime::open_url(presentation, &str)` по одному, в порядке ОС.
 
 `UiRuntime::open_url` (новый, рядом с `navigate`) владеет политикой, чтобы headless и все хосты

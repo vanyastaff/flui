@@ -99,7 +99,9 @@ impl Default for flui::Application
 impl core::fmt::Debug for flui::Application
 pub fn flui::Application::capability<C: flui::platform::capability::Capability>(self, provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
 pub fn flui::Application::config(self, config: flui::AppConfig) -> Self
+pub fn flui::Application::declares(self, declarations: flui::view::navigation::LinkDeclarations) -> Self
 pub fn flui::Application::new() -> Self
+pub fn flui::Application::on_open_files(self, callback: impl Fn(&[flui::platform::OpenedFile]) + 'static) -> Self
 pub fn flui::Application::on_ready(self, callback: impl FnOnce(&flui::AppHandle) + 'static) -> Self
 pub fn flui::Application::on_window_error(self, callback: impl FnMut(&flui::AppWindowError) + 'static) -> Self
 pub fn flui::Application::plugin(self, plugin: impl flui::platform::capability::Plugin) -> Self
@@ -25305,6 +25307,7 @@ impl core::error::Error for flui::view::navigation::OpenUrlRefused
 impl core::fmt::Debug for flui::view::navigation::OpenUrlRefused
 impl core::fmt::Display for flui::view::navigation::OpenUrlRefused
 impl core::marker::StructuralPartialEq for flui::view::navigation::OpenUrlRefused
+pub fn flui::view::navigation::OpenUrlRefused::reason(&self) -> &'static str
 variant flui::view::navigation::OpenUrlRefused::Malformed { url: String, reason: &'static str } // at 1
 variant flui::view::navigation::OpenUrlRefused::Navigation(flui::widgets::NavigationRefused) // at 5
 variant flui::view::navigation::OpenUrlRefused::Path(flui::widgets::RouteParseError) // at 2

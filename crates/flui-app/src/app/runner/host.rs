@@ -388,6 +388,13 @@ pub(super) fn build_ui_runtime(
     let native = Rc::clone(window.window());
     let ui_runtime = crate::app::ui_runtime::UiRuntime::try_new(window, scale_factor, host)?;
     attach_window_control(&ui_runtime, &native);
+    // Before its first presentation can hear an opened URL, and before its
+    // root mounts, so a link that launched the application opens its first
+    // Router on the link.
+    if let Some(routing) = current_open_routing() {
+        ui_runtime.set_link_declarations(routing.declarations());
+        routing.open_held_in(&ui_runtime, native.as_ref());
+    }
     Ok(ui_runtime)
 }
 
@@ -1043,6 +1050,9 @@ pub(crate) struct AppRoutes {
     reopen: Option<Rc<dyn Fn()>>,
     exit_policy: Option<Rc<dyn Fn() -> bool>>,
     wake_deadline: Option<Rc<dyn Fn() -> Option<web_time::Instant>>>,
+    /// Where what the operating system opens goes; set when the handler is
+    /// made, so it is there before `ready` and the first window.
+    opened: Option<Rc<super::opened::OpenRouting>>,
 }
 
 /// Replace one route of the innermost run on this thread whose handler is
@@ -1060,6 +1070,23 @@ fn set_route<T: ?Sized>(project: fn(&mut AppRoutes) -> &mut Option<Rc<T>>, route
     };
     let displaced = project(&mut routes.borrow_mut()).replace(route);
     drop(displaced);
+}
+
+/// The routing of what the operating system opens, of the innermost run on
+/// this thread whose handler is alive.
+pub(super) fn current_open_routing() -> Option<Rc<super::opened::OpenRouting>> {
+    let routes = APP_RUNTIME.with(|slot| {
+        let state = slot.try_borrow().ok()?;
+        state
+            .run_routes
+            .iter()
+            .rev()
+            .find_map(std::rc::Weak::upgrade)
+    })?;
+    routes
+        .try_borrow()
+        .ok()
+        .and_then(|routes| routes.opened.clone())
 }
 
 /// Send the platform's quit to `route`.
@@ -1133,14 +1160,29 @@ struct RunnerHandler {
 }
 
 /// The application handler a runner passes to `Platform::run`, with
-/// `bootstrap` as its `ready`.
+/// `bootstrap` as its `ready`, for a run that declares nothing it opens
+/// ([`opening_app_handler`] with the default settings).
 pub(crate) fn app_handler(
     bootstrap: impl FnOnce(flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError>
     + 'static,
 ) -> Rc<dyn flui_native::AppHandler> {
+    opening_app_handler(super::opened::OpenSettings::default(), bootstrap)
+}
+
+/// The application handler of an application's run, which routes what the
+/// operating system opens it with by `opening`.
+pub(crate) fn opening_app_handler(
+    opening: super::opened::OpenSettings,
+    bootstrap: impl FnOnce(flui_native::OwnerPlatform) -> Result<(), flui_native::BootstrapError>
+    + 'static,
+) -> Rc<dyn flui_native::AppHandler> {
+    let routes = AppRoutes {
+        opened: Some(Rc::new(super::opened::OpenRouting::new(opening))),
+        ..AppRoutes::default()
+    };
     Rc::new(RunnerHandler {
         bootstrap: std::cell::RefCell::new(Some(Box::new(bootstrap))),
-        routes: Rc::default(),
+        routes: Rc::new(std::cell::RefCell::new(routes)),
     })
 }
 
@@ -1171,7 +1213,20 @@ impl flui_native::AppHandler for RunnerHandler {
                     .run_routes
                     .push(Rc::downgrade(&self.routes));
             });
-            bootstrap(owner)
+            // What launched the application is taken before the bootstrap
+            // opens its first window, so that window's first Router opens on
+            // the link (Flutter's initial route) instead of navigating to it
+            // after its initial page was built.
+            let routing = self.route(|routes| routes.opened.clone());
+            let launch_files = match (&routing, owner.take_launch_opened()) {
+                (Some(routing), Some(launch)) => routing.hold_launch(launch),
+                _ => Vec::new(),
+            };
+            bootstrap(owner)?;
+            if let Some(routing) = routing {
+                routing.open_files(launch_files);
+            }
+            Ok(())
         })
     }
 
@@ -1191,16 +1246,14 @@ impl flui_native::AppHandler for RunnerHandler {
         });
     }
 
-    /// No host reports an opened URL or file yet, and the runner does not
-    /// route one to a presentation yet ([gaps](../../../../../docs/gaps.md),
-    /// "No deep links, URL schemes, file associations or single instance"):
-    /// what arrives is logged, not opened.
+    /// Files to the application's callback, URLs to the presentation they
+    /// address ([`OpenRouting::deliver`](super::opened::OpenRouting::deliver)).
     fn opened(&self, _: &flui_native::OwnerPlatform, opened: flui_platform::Opened) {
-        tracing::info!(
-            urls = opened.urls.len(),
-            files = opened.files.len(),
-            "the platform opened URLs or files, which this runner does not route yet"
-        );
+        contained((), "application open", || {
+            if let Some(routing) = self.route(|routes| routes.opened.clone()) {
+                routing.deliver(opened);
+            }
+        });
     }
 
     fn session_end(

@@ -27,6 +27,7 @@ use super::{AppConfig, capability::AppCapabilities};
 pub struct Application {
     pub(crate) config: AppConfig,
     pub(crate) capabilities: AppCapabilities,
+    pub(crate) opening: super::runner::OpenSettings,
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -53,6 +54,7 @@ impl Application {
         Self {
             config: AppConfig::default(),
             capabilities: AppCapabilities::default(),
+            opening: super::runner::OpenSettings::default(),
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -91,6 +93,32 @@ impl Application {
     /// [`LaunchError::CapabilityConflict`] before the platform starts.
     pub fn plugin(mut self, plugin: impl Plugin) -> Self {
         self.capabilities = std::mem::take(&mut self.capabilities).plugin(plugin);
+        self
+    }
+
+    /// The URLs the application opens: its own schemes and the web domains it
+    /// is associated with, the ones its `[package.metadata.flui.declares]`
+    /// registers with the operating system (ADR-0307). A URL the operating
+    /// system opens the application with is opened in the `Router` of the
+    /// window it addresses only when it is declared here; the default
+    /// declares nothing, so an application opens no URL.
+    pub fn declares(mut self, declarations: flui_view::navigation::LinkDeclarations) -> Self {
+        self.opening.declarations = declarations;
+        self
+    }
+
+    /// Called on the owner thread with the files the operating system opened
+    /// the application with: a document opened with it from the file
+    /// manager, or one another application shared, at launch or while it
+    /// runs, in the operating system's order. Without it, opened files are
+    /// logged and dropped. A panic in it ends the run, as one in the
+    /// platform handler's other methods does (ADR-0258 §4), once the URLs
+    /// that came with the files are opened.
+    pub fn on_open_files(
+        mut self,
+        callback: impl Fn(&[flui_platform::OpenedFile]) + 'static,
+    ) -> Self {
+        self.opening.on_open_files = Some(std::rc::Rc::new(callback));
         self
     }
 
