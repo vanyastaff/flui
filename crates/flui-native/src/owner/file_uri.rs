@@ -162,7 +162,10 @@ pub(crate) fn opened_by_urls(
 /// with every byte but an unreserved character (RFC 3986 §2.3), `/` and the
 /// sub-delimiters a path keeps escaped, so [`file_uri_path`] reads `path`
 /// back; `None` for a relative path.
-#[cfg(any(x11_host, wayland_host, all(test, unix)))]
+#[cfg(any(
+    all(any(x11_host, wayland_host), feature = "single-instance"),
+    all(test, unix)
+))]
 pub(crate) fn file_uri(path: &std::path::Path) -> Option<String> {
     use std::fmt::Write as _;
     use std::os::unix::ffi::OsStrExt as _;

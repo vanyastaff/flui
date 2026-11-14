@@ -18,6 +18,7 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::NoticeChannel;
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::{OwnerLifecycle, OwnerObjects, OwnerPreferences, OwnerSeeds};
+use crate::owner::windows::single_instance::FirstInstance;
 use crate::owner::windows::{
     HostDisplays, HostDrag, WindowClass, WindowHooks, WindowMessages, WindowsHost, WindowsLoop,
 };
@@ -135,18 +136,29 @@ impl HostPlatform<Windows> {
     /// [`PlatformError::Init`] when the owner thread's COM apartment, window
     /// class or owner window cannot be set up.
     pub fn try_new() -> Result<Self, PlatformError> {
+        Self::try_new_with(None)
+    }
+
+    /// [`try_new`](Self::try_new) as the application's one instance in the
+    /// session, which takes the launches later processes hand it, as
+    /// `CurrentHost::start_single`
+    /// starts it.
+    pub(crate) fn try_new_with(instance: Option<FirstInstance>) -> Result<Self, PlatformError> {
         let build = WindowsBuild::read();
         crate::version::gate::refuse_below_floor(build)?;
-        Self::at_build(build)
+        Self::at_build(build, instance)
     }
 
     /// The platform as it runs on `build`, which its windows' version gates
     /// read: [`try_new`](Self::try_new) with the build the process runs on, and a
     /// test with the build it names.
-    pub(crate) fn at_build(build: WindowsBuild) -> Result<Self, PlatformError> {
+    pub(crate) fn at_build(
+        build: WindowsBuild,
+        instance: Option<FirstInstance>,
+    ) -> Result<Self, PlatformError> {
         Self::try_from_parts(
             |positions| WindowSet::new(WindowConfiguration::default(), positions, build),
-            |windows| WindowsLoop::try_new::<Windows>(Arc::clone(windows) as _),
+            |windows| WindowsLoop::try_new::<Windows>(Arc::clone(windows) as _, instance),
         )
     }
 }

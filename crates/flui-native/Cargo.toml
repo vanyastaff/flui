@@ -148,10 +148,17 @@ windows = { workspace = true, features = [
     # Session lock and unlock: `WTSRegisterSessionNotification` on the hidden
     # top-level receiver.
     "Win32_System_RemoteDesktop",
+    # One instance per session: the process serving the pipe
+    # (`GetNamedPipeServerProcessId`).
+    "Win32_System_Pipes",
 ] }
 # `#[implement]` (the COM objects the text services hand TSF) expands to
 # `::windows_core` paths.
 windows-core = { workspace = true }
+# One instance per session: the first instance serves a named pipe on the
+# IO runtime, and a later launch writes its frame to it. `net` is tokio's named
+# pipes (with `mio` and `socket2`, which the Linux graph already has).
+tokio = { workspace = true, features = ["net", "io-util"] }
 
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -624,6 +631,13 @@ x11 = [
 # flui-app's `http` feature turns it on.
 http = ["dep:ureq", "dep:rustls"]
 
+# One instance of an application per user session (`CurrentHost::start_single`,
+# ADR-0254 §4): on Wayland and X11 the first process owns its app id on the
+# session bus, on Windows it serves a named pipe, and a later launch hands it
+# what it opens. Off, no host carries either and `start_single` does not exist.
+# flui-app's `single-instance` turns it on.
+single-instance = []
+
 # Debug builds only: `journal::capture` journals every pointer registry call
 # on a thread as a native recording (ADR-0215 §4), for turning a session on a
 # native host into a checked-in test; with it comes the recording codec.
@@ -656,7 +670,7 @@ roxmltree.workspace = true
 # The host's own test support, the `testing` module, and the `http` client its
 # tests run against a loopback server. Checkout-only test edge:
 # versionless, so Cargo drops it from the published manifest.
-flui-native = { path = ".", features = ["testing", "http"] }
+flui-native = { path = ".", features = ["testing", "http", "single-instance"] }
 # `panicking_waker` for a request whose waker fails as it is answered.
 flui-foundation = { path = "../flui-foundation", features = ["testing"] }
 # `WindowId::try_from_raw`, by which a test of a backend's pure part names a

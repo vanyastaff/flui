@@ -250,6 +250,60 @@ impl ClassWindows for WindowSet {
             let _ = unsafe { UpdateWindow(window.hwnd()) };
         }
     }
+
+    #[cfg(feature = "single-instance")]
+    fn shows_any(&self) -> bool {
+        self.by_handle.borrow().values().any(|window| {
+            // SAFETY: a query of a handle this set holds; a closed one answers
+            // false.
+            unsafe { IsWindowVisible(window.hwnd()) }.as_bool()
+        })
+    }
+
+    #[cfg(feature = "single-instance")]
+    fn activate_forwarded(&self) {
+        // Taken out of the set before it is activated: an activation runs
+        // user code, which may open or close windows.
+        let front = self.front_shown();
+        if let Some(window) = front {
+            window.activate_forwarded();
+        }
+    }
+}
+
+impl WindowSet {
+    /// How many top-level windows the walk down the screen's order looks at
+    /// for one of the set's before it takes any shown one.
+    #[cfg(feature = "single-instance")]
+    const FRONT_WALK: usize = 4096;
+
+    /// The shown window of the set highest in the order of the windows on the
+    /// screen (the one activated last comes to the top), else any shown one.
+    #[cfg(feature = "single-instance")]
+    fn front_shown(&self) -> Option<Rc<WindowsWindow>> {
+        use windows::Win32::UI::WindowsAndMessaging::{GW_HWNDNEXT, GetTopWindow, GetWindow};
+
+        let windows = self.by_handle.borrow();
+        let shown = |window: &&Rc<WindowsWindow>| {
+            // SAFETY: a query of a handle this set holds.
+            unsafe { IsWindowVisible(window.hwnd()) }.as_bool()
+        };
+        // SAFETY: `GetTopWindow` and `GetWindow` read the order of the
+        // desktop's windows and dereference nothing of ours; a handle that
+        // closed during the walk ends it with an error.
+        let mut next = unsafe { GetTopWindow(None) }.ok();
+        for _ in 0..Self::FRONT_WALK {
+            let Some(hwnd) = next else {
+                break;
+            };
+            if let Some(window) = windows.get(&(hwnd.0 as isize)).filter(shown) {
+                return Some(Rc::clone(window));
+            }
+            // SAFETY: as above.
+            next = unsafe { GetWindow(hwnd, GW_HWNDNEXT) }.ok();
+        }
+        windows.values().find(shown).cloned()
+    }
 }
 
 impl crate::host::Window<WindowsLoop> for WindowsWindow {
