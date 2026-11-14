@@ -236,7 +236,7 @@ pub enum TestError {
     /// Frames kept changing the semantics tree between a locate and the
     /// readings of what it found, every time it was read.
     #[error("the semantics tree changed between a locate and its readings {reads} times")]
-    Unsettled {
+    KeptChanging {
         /// The locates made.
         reads: usize,
     },
@@ -501,7 +501,7 @@ impl Tester {
     ///
     /// # Errors
     ///
-    /// When the window cannot answer, and [`TestError::Unsettled`] when
+    /// When the window cannot answer, and [`TestError::KeptChanging`] when
     /// frames keep changing the tree between the locate and its readings.
     pub fn try_is_visible(&mut self, locator: &Locator) -> Result<bool, TestError> {
         'read: for _ in 0..VISIBLE_READS {
@@ -516,7 +516,7 @@ impl Tester {
             }
             return Ok(false);
         }
-        Err(TestError::Unsettled {
+        Err(TestError::KeptChanging {
             reads: VISIBLE_READS,
         })
     }

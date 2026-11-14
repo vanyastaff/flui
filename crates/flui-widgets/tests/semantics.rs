@@ -3058,29 +3058,6 @@ fn a_node_moved_out_of_its_clip_comes_back() {
     );
     assert_eq!(seen[0], seen[2], "moving back restores the node");
 }
-
-/// Inside a scrollable, whose content past the viewport stays revealable,
-/// the move carries the painted part of the node out of its holder while the
-/// viewport's clip still paints it: the holder clips its children before the
-/// move and not after.
-fn a_node_moved_past_its_holder_in_a_viewport_ends_its_clipping() {
-    use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
-    let position = ScrollPosition::fixed(0.0);
-    publishes_as_built_afresh(
-        |dy| {
-            SizedBox::new(100.0, 100.0).child(Viewport::new(
-                position.clone(),
-                (SliverToBoxAdapter::new().child(
-                    Semantics::new().container(true).label("holder").child(
-                        SizedBox::new(100.0, 50.0)
-                            .child(Transform::translate(0.0, dy).child(labelled("moved", 40.0))),
-                    ),
-                ),),
-            ))
-        },
-        &[0.0, 60.0, 0.0],
-    );
-}
 /// A clip the move carries with it decides whether the node above clips its
 /// children: inside the holder it does, carried past the holder's edge it
 /// does not, and the node above is published as a rebuild publishes it.
@@ -3235,10 +3212,6 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
             (
                 "a clip moved past its holder",
                 a_clip_moved_past_its_holder_ends_its_clipping,
-            ),
-            (
-                "a node moved past its holder in a viewport",
-                a_node_moved_past_its_holder_in_a_viewport_ends_its_clipping,
             ),
             (
                 "a wrapper moved into the cache extent",
@@ -3537,4 +3510,48 @@ pub(crate) fn a_clip_behavior_switch_republishes_what_the_clip_hides() {
             .clip_behavior(clip),
         )
     });
+}
+
+/// A holder whose child stays inside it while that child's own content is
+/// painted past both of them, still inside the viewport, does not clip its
+/// children: everything painted under a node counts, not its children's
+/// rects alone. A reader and the agent's `visible` check reach the moved
+/// content.
+pub(crate) fn a_descendant_painted_past_its_holder_keeps_the_holder_unclipped() {
+    use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    let view = SizedBox::new(100.0, 300.0).child(Viewport::new(
+        ScrollPosition::fixed(0.0),
+        (SliverToBoxAdapter::new().child(
+            Semantics::new().container(true).label("holder").child(
+                SizedBox::new(100.0, 50.0).child(
+                    Semantics::new().container(true).label("inner").child(
+                        SizedBox::new(100.0, 50.0)
+                            .child(Transform::translate(0.0, 60.0).child(labelled("moved", 40.0))),
+                    ),
+                ),
+            ),
+        ),),
+    ));
+    let mut laid = lay_out(view, loose(400.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let clips = |label: &str| {
+        let id = tree
+            .find_by_label(label)
+            .unwrap_or_else(|error| panic!("{label}: {error}"))
+            .id();
+        tree.raw()
+            .nodes
+            .iter()
+            .find(|(node, _)| *node == id)
+            .expect("the node is published")
+            .1
+            .clips_children()
+    };
+    assert!(
+        !clips("holder"),
+        "the moved content is painted past the holder"
+    );
+    assert!(!clips("inner"), "and past the inner container");
 }

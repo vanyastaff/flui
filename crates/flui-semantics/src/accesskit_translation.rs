@@ -1030,6 +1030,11 @@ pub(crate) fn to_published_node(
     if is_root && data.attrs.role == SemanticsRole::None && node.role() == Role::GenericContainer {
         node.set_role(Role::Window);
     }
+    // The window clips the root anyway, and AccessKit would count the owner's
+    // announcer nodes, which have no area, as outside it.
+    if is_root {
+        node.clear_clips_children();
+    }
     node
 }
 

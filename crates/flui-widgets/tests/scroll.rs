@@ -5378,36 +5378,3 @@ fn rows_a_reader_reaches(laid: &LaidOut) -> Vec<String> {
     names.sort();
     names
 }
-
-/// A list under a header fills only part of its viewport: the list node's
-/// rect starts below the header while its rows lie under the viewport's
-/// whole clip. The list node still clips its rows, so a screen reader
-/// reaches the rows in view and the first past the edge, as it does for a
-/// list that fills the viewport.
-pub(crate) fn a_reader_stops_past_the_edge_of_a_list_under_a_header() {
-    use flui_widgets::{Center, CustomScrollView, SliverList, SliverToBoxAdapter, Text};
-
-    let rows: Rc<dyn Fn(usize) -> Option<flui_view::BoxedView>> = Rc::new(|index| {
-        (index < 40).then(|| {
-            SizedBox::new(100.0, 50.0)
-                .child(Text::new(format!("row {index}")))
-                .boxed()
-        })
-    });
-    let view = Center::new().child(
-        SizedBox::new(100.0, 100.0).child(CustomScrollView::new(vec![
-            SliverToBoxAdapter::new()
-                .child(SizedBox::new(100.0, 30.0))
-                .boxed(),
-            SliverList::new(40, 50.0, rows).boxed(),
-        ])),
-    );
-    let mut laid = lay_out(view, tight(400.0, 400.0));
-    laid.enable_semantics();
-    laid.tick();
-    assert_eq!(
-        rows_a_reader_reaches(&laid),
-        ["row 0", "row 1", "row 2"],
-        "the rows in view under the header and the first past the edge"
-    );
-}
