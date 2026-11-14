@@ -15,6 +15,10 @@
 //! - a key without the marker, or marked by another application, belongs to
 //!   someone else and is never touched: the scheme is refused, with a
 //!   warning;
+//! - a key marked with this application's id for a scheme it no longer
+//!   declares is deleted when it registers the others; an application that
+//!   declares no scheme any more registers nothing, so its keys stay until
+//!   it is unregistered;
 //! - [`unregister`] deletes only the user's keys marked with this
 //!   application's id, so an uninstaller that runs the executable with
 //!   `--flui-unregister-links` removes what registration wrote and nothing
@@ -82,7 +86,8 @@ pub(crate) trait Classes {
     fn marked_by(&self, app_id: &str) -> std::io::Result<Vec<String>>;
 }
 
-/// What one registration did with the schemes it was given.
+/// What one registration did with the schemes it was given and the keys it
+/// wrote before.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Registered {
@@ -94,6 +99,9 @@ pub struct Registered {
     /// Schemes left alone: not a scheme, reserved, another application's
     /// key, or a write the registry refused. Each was warned about.
     pub refused: usize,
+    /// Keys this application registered for a scheme it no longer declares,
+    /// deleted.
+    pub removed: usize,
 }
 
 /// Why a scheme was not registered.
@@ -197,13 +205,15 @@ fn step(scheme: &str, found: Found, application: &Application<'_>) -> Step {
 
 /// Register `url_schemes` for `application` in `classes`, scheme by scheme:
 /// a scheme that cannot be registered is warned about, and the next one is
-/// still registered.
+/// still registered. A key this application marked for a scheme it no
+/// longer declares is deleted.
 pub(crate) fn register_in(
     classes: &mut impl Classes,
     application: &Application<'_>,
     url_schemes: &[&str],
 ) -> Registered {
     let mut registered = Registered::default();
+    let mut declared = Vec::with_capacity(url_schemes.len());
     for scheme in url_schemes {
         let key = match scheme_key(scheme) {
             Ok(key) => key,
@@ -213,6 +223,7 @@ pub(crate) fn register_in(
                 continue;
             }
         };
+        declared.push(key.clone());
         let found = match classes.find(&key) {
             Ok(found) => found,
             Err(error) => {
@@ -236,7 +247,30 @@ pub(crate) fn register_in(
             },
         }
     }
+    registered.removed = remove_undeclared(classes, application.app_id, &declared);
     registered
+}
+
+/// Delete the keys marked with `app_id` whose scheme is not in `declared`:
+/// a scheme an earlier version declared stops opening this application.
+fn remove_undeclared(classes: &mut impl Classes, app_id: &str, declared: &[String]) -> usize {
+    let marked = match classes.marked_by(app_id) {
+        Ok(marked) => marked,
+        Err(error) => {
+            tracing::warn!(%error, "the application's registered keys cannot be listed");
+            return 0;
+        }
+    };
+    let mut removed = 0;
+    for key in marked.iter().filter(|key| !declared.contains(key)) {
+        match classes.delete(key) {
+            Ok(()) => removed += 1,
+            Err(error) => {
+                tracing::warn!(%error, key = %key, "a key of a scheme no longer declared cannot be deleted");
+            }
+        }
+    }
+    removed
 }
 
 /// Delete every key of the user's classes marked with `app_id`, and say how
@@ -543,6 +577,37 @@ mod tests {
                 refused: 2,
                 ..Registered::default()
             }
+        );
+    }
+
+    /// A scheme an earlier version declared and this one does not stops
+    /// opening the application: its marked key is deleted, while another
+    /// application's key and an unmarked one stay.
+    #[test]
+    fn a_scheme_no_longer_declared_is_removed() {
+        let mut classes = Map::default();
+        let _ = register_in(&mut classes, &NOTES, &["notes", "jot"]);
+        classes.user.insert(
+            "other".to_owned(),
+            vec![entry("", MARKER, "com.example.other")],
+        );
+        classes.user.insert(
+            "foreign".to_owned(),
+            vec![entry("shell\\open\\command", "", "x")],
+        );
+        let registered = register_in(&mut classes, &NOTES, &["Notes"]);
+        assert_eq!(
+            registered,
+            Registered {
+                current: 1,
+                removed: 1,
+                ..Registered::default()
+            }
+        );
+        assert_eq!(
+            classes.user.keys().collect::<Vec<_>>(),
+            ["foreign", "notes", "other"],
+            "only the undeclared scheme of this application is gone"
         );
     }
 

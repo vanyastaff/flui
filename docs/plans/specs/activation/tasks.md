@@ -188,6 +188,7 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   пользователя без метки, ключ машины и ключ другого приложения не трогаются),
   `a_scheme_that_cannot_be_registered_does_not_stop_the_next` (`http`, `https`, `file` и не-схема
   отказаны, отказанная схема не останавливает следующую, отказ записи реестра считается отказом),
+  `a_scheme_no_longer_declared_is_removed` (свой ключ необъявленной схемы удалён, чужие остаются),
   `unregistering_deletes_only_this_applications_keys` (чужие ключи остаются; ключ, который реестр
   не удалил, возвращается ошибкой после удаления остальных); `a_release_build_registers_unless_the_application_says_otherwise`,
   `the_unregister_argument_is_read_whole` (`flui-app`), строка `register_links_sets_the_application_variable`

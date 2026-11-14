@@ -103,6 +103,7 @@ impl PendingRegistration {
                 written = registered.written,
                 current = registered.current,
                 refused = registered.refused,
+                removed = registered.removed,
                 "registered the application's URL schemes"
             );
         }));
