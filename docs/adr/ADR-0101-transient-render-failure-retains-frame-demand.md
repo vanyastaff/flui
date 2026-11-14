@@ -46,8 +46,7 @@ does not introduce a timeout that silently drops owed content.
   wake delivery, then successfully renders the next frame.
 - flui-engine's `window_slots` and `raster_executor` tests check transient,
   terminal and device failures of a window slot, followed by successful
-  submissions; `every_render_answer_maps_to_its_verdict` checks the web's
-  `DirectSink`.
+  submissions; the web draws through the same slots.
 - `surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`
   covers both stale-surface and transient verdicts: the second attempt presents
   without another dirty event and still reports the original input epoch.

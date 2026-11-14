@@ -473,6 +473,20 @@ pub(crate) struct KeptTextures {
 }
 
 impl KeptTextures {
+    /// The newest image of each texture, the waiting one over the drawn one,
+    /// for a slot of another context to be given: the images are shared,
+    /// not copied.
+    pub(crate) fn newest(&self) -> flui_layer::TextureUpdates {
+        let frames: Vec<(TextureId, flui_painting::paint::Image)> = self
+            .drawn
+            .iter()
+            .filter(|(id, _)| !self.waiting.contains_key(id))
+            .chain(self.waiting.iter())
+            .map(|(id, image)| (*id, image.clone()))
+            .collect();
+        flui_layer::TextureUpdates::from_frames(frames)
+    }
+
     /// Keep each frame of `updates` that a texture of `domain`'s device can
     /// hold as its texture's waiting image, and release the retired textures.
     ///

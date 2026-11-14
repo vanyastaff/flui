@@ -7,11 +7,6 @@
 //! same frame drawn from the version's flattened tree, which is how the
 //! engine drew a version before it walked one.
 
-#![expect(
-    deprecated,
-    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-)]
-
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
@@ -25,7 +20,6 @@ use flui_painting::{Canvas, Paint};
 
 use crate::damage::FramePlan;
 use crate::headless::RetainedCapture;
-use crate::raster::RasterBackend;
 
 const SIDE: u32 = 128;
 const SURFACE: SurfaceKey = SurfaceKey {

@@ -27,8 +27,9 @@ so the library does not choose a blocking strategy on the caller's behalf:
 - `HeadlessRenderer::new()` — rasterizes a `LayerTree` to RGBA8 without a
   window.
 
-- `RasterBackend` — the frame-driver trait `flui-app`'s runners call;
-  `Renderer` implements it, and a GPU-free test double can stand in for it.
+- `RasterExecutor` — presents every window of an application over one
+  `GpuContext`; its `RasterBackend` parameter lets a GPU-free test double
+  stand in for the context.
 - `WgpuPainter` — the per-frame painter, for embedders driving draw calls
   directly (see `examples/painting_demo`).
 

@@ -38,20 +38,6 @@ impl FrameLiveness {
                 )
         })
     }
-
-    /// Publishes an async result only into its still-open native binding.
-    /// Both refusal and replacement return owned values after all guards end.
-    pub(super) fn publish<T>(
-        &self,
-        slot: &parking_lot::Mutex<Option<T>>,
-        value: T,
-    ) -> Result<Option<T>, T> {
-        if self.is_live() {
-            Ok(slot.lock().replace(value))
-        } else {
-            Err(value)
-        }
-    }
 }
 
 pub(super) enum FrameDriver {

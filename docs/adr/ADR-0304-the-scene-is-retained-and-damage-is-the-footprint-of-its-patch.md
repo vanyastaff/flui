@@ -324,9 +324,9 @@ cache (§9), so the switch stays the field fallback for stale pixels it is today
 (`raster_lane.rs:163-166`). The scene stays retained: it is the frame's input, not an optimisation
 of it.
 
-Every sink applies the publication's damage, the web's `DirectSink` included: it marks a full
-repaint every frame today (`raster_lane.rs:550-561`), and the region policy lives at the seam, so
-a backend that ignores it is the defect this section removes, not a platform choice.
+Every sink applies the publication's damage, the web's included (it draws through the raster
+executor's slots, ADR-0305), and the region policy lives at the seam, so a backend that ignores it
+is the defect this section removes, not a platform choice.
 
 §6. **One function says what an effect reads.**
 

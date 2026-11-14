@@ -56,9 +56,8 @@ inline:
   (`crates/flui-app/src/app/runner/raster_host.rs`, ADR-0305), turned on the owner thread with no
   lock.
 - No production raster thread exists.
-- Web renders through `DirectSink`, the pre-mailbox path with no stamping or generation checks
-  (`crates/flui-app/src/app/direct_sink.rs`, over the UI runtime's `UiRuntime::render_frame`),
-  with the renderer in an `Arc<Mutex<Option<Renderer>>>` (`crates/flui-app/src/app/runner/web.rs`).
+- The web's canvas is a slot on the same inline executor, attached once the page's GPU context
+  has been awaited (`crates/flui-app/src/app/runner/web.rs`).
 - Every renderer creates its own `wgpu::Instance`, surface and adapter
   (`crates/flui-engine/src/renderer.rs:1140-1168`), and every painter builds its own glyph atlas
   over the process-wide font system (`crates/flui-engine/src/painter/mod.rs:73`, `:163-167`).
@@ -141,7 +140,7 @@ inter-present interval against the display period) holds on that platform. No pl
 | Win32 | threaded | — |
 | Linux (winit) | threaded | — |
 | macOS | inline | `wgpu-hal`'s Metal `acquire_texture` messages `NSWindow` from the acquiring thread; ADR-0045 decision 1 and its reopen condition (tracked as issue #653) |
-| wasm | inline | no raster thread; web moves onto the lane protocol and `DirectSink` is deleted |
+| wasm | inline | no raster thread; the canvas is a slot of the inline executor |
 | Android, iOS | inline until measured | no platform reason is recorded against threading; the lane is threaded once a device run meets the budget |
 
 ### 6. The raster owner stays in `flui-engine`

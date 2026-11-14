@@ -52,7 +52,8 @@ impl GpuLossLedger {
         state.rebuild_owed = true;
     }
 
-    /// The graphics device is lost (`GPUDevice.lost`, or the renderer says so).
+    /// The graphics device is lost (`GPUDevice.lost`, which the GPU context
+    /// reports to the raster host).
     /// A new one can be asked for at once.
     pub(super) fn record_device_loss(&self) {
         self.state.lock().rebuild_owed = true;
