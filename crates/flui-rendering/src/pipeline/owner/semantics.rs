@@ -36,6 +36,7 @@
 use std::num::NonZeroUsize;
 
 use flui_foundation::RenderId;
+use flui_foundation::arena::{FrameArena, FrameVec};
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsCollectionOrigin, SemanticsConfiguration, SemanticsIndexOrigin,
@@ -128,6 +129,8 @@ impl PipelineOwner<Semantics> {
 
     /// The body of [`Self::run_semantics`], entered with the phase set.
     fn run_semantics_in_phase(&mut self) -> crate::error::RenderResult<()> {
+        // The last pass's scratch lists are gone with its regions; this one starts empty.
+        self.frame_arena.reset();
         let mut callbacks = AssemblyCallbacks::default();
         // The rebuild check's own retained handlers, retired with the pass's.
         #[cfg_attr(
@@ -167,8 +170,10 @@ impl PipelineOwner<Semantics> {
                 // Stage every anchor and all authored key scopes before reserving
                 // identities or touching the current arena. A failed later anchor
                 // cannot partially commit an earlier subtree.
-                let mut regions =
-                    AssemblyRegions::reusing(std::mem::take(&mut self.semantics_regions.visited));
+                let mut regions = AssemblyRegions::reusing(
+                    &self.frame_arena,
+                    std::mem::take(&mut self.semantics_regions.visited),
+                );
                 if !tree_is_empty {
                     // A moved subtree re-assembles the semantics nodes inside it,
                     // each in its own slot. One the walk cannot place that way is
@@ -407,8 +412,9 @@ pub(super) struct RegionIdentities {
     skip_placement_check: bool,
 }
 
-#[derive(Default)]
-struct AssemblyRegions {
+struct AssemblyRegions<'f> {
+    /// Where the pass's scratch lists come from (ADR-0328).
+    arena: &'f FrameArena,
     /// The render nodes this pass walked, in the table the previous pass grew:
     /// emptying it writes its control bytes, which costs less than regrowing.
     visited: FxHashSet<RenderId>,
@@ -418,13 +424,18 @@ struct AssemblyRegions {
     callbacks: AssemblyCallbacks,
 }
 
-impl AssemblyRegions {
-    /// Regions for a pass that walks into the table of `visited`, emptied.
-    fn reusing(mut visited: FxHashSet<RenderId>) -> Self {
+impl<'f> AssemblyRegions<'f> {
+    /// Regions for a pass that takes its scratch lists from `arena` and walks into the table
+    /// of `visited`, emptied.
+    fn reusing(arena: &'f FrameArena, mut visited: FxHashSet<RenderId>) -> Self {
         visited.clear();
         Self {
+            arena,
             visited,
-            ..Self::default()
+            authored: FxHashSet::default(),
+            duplicate: None,
+            invalid_sort_key: None,
+            callbacks: AssemblyCallbacks::default(),
         }
     }
 }
@@ -573,7 +584,7 @@ impl RegionIdentities {
 
     fn prepare(
         &mut self,
-        regions: &AssemblyRegions,
+        regions: &AssemblyRegions<'_>,
         tree: &RenderTree,
     ) -> Result<(), SemanticsAssemblyError> {
         if let Some(host) = regions.invalid_sort_key {
@@ -860,10 +871,19 @@ enum SemanticsFragment {
 /// A subtree's contribution and its still-unconsumed sibling barrier.
 /// Transparent render wrappers forward the barrier; a formed boundary consumes
 /// descendant barriers while keeping its own directive for its parent.
-#[derive(Default)]
-struct SemanticsFragments {
-    nodes: Vec<SemanticsFragment>,
+struct SemanticsFragments<'f> {
+    nodes: FrameVec<'f, SemanticsFragment>,
     blocks_previous_siblings: bool,
+}
+
+impl<'f> SemanticsFragments<'f> {
+    /// No fragment and no barrier; allocates nothing.
+    fn none(arena: &'f FrameArena) -> Self {
+        Self {
+            nodes: Vec::new_in(arena),
+            blocks_previous_siblings: false,
+        }
+    }
 }
 
 /// The clips an ancestor chain imposes on a node, in ROOT coordinates.
@@ -1127,7 +1147,7 @@ enum SemanticsAssemblyError {
 fn assemble_semantics_root(
     tree: &RenderTree,
     root: Option<RenderId>,
-    regions: &mut AssemblyRegions,
+    regions: &mut AssemblyRegions<'_>,
 ) -> Result<Option<BuiltSemanticsNode>, SemanticsAssemblyError> {
     let Some(root) = root else {
         return Ok(None);
@@ -1155,7 +1175,7 @@ fn assemble_semantics_root(
 
 fn extract_formed_root(
     root: RenderId,
-    fragments: Vec<SemanticsFragment>,
+    fragments: FrameVec<'_, SemanticsFragment>,
 ) -> Result<BuiltSemanticsNode, SemanticsAssemblyError> {
     if fragments.len() != 1 {
         return Err(SemanticsAssemblyError::InvalidRootFragmentCount {
@@ -1170,15 +1190,15 @@ fn extract_formed_root(
     }
 }
 
-fn build_semantics_fragments(
+fn build_semantics_fragments<'f>(
     tree: &RenderTree,
     id: RenderId,
     transform: Matrix4,
     clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     ancestor_blocks_user_actions: bool,
-    regions: &mut AssemblyRegions,
-) -> Option<SemanticsFragments> {
+    regions: &mut AssemblyRegions<'f>,
+) -> Option<SemanticsFragments<'f>> {
     ensure_stack(|| {
         build_semantics_fragments_impl(
             tree,
@@ -1252,15 +1272,15 @@ fn assembly_decisions(
 }
 
 /// Body of [`build_semantics_fragments`].
-fn build_semantics_fragments_impl(
+fn build_semantics_fragments_impl<'f>(
     tree: &RenderTree,
     id: RenderId,
     transform: Matrix4,
     clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     ancestor_blocks_user_actions: bool,
-    regions: &mut AssemblyRegions,
-) -> Option<SemanticsFragments> {
+    regions: &mut AssemblyRegions<'f>,
+) -> Option<SemanticsFragments<'f>> {
     #[cfg(test)]
     ASSEMBLY_VISITS.with(|counter| counter.set(counter.get() + 1));
 
@@ -1319,7 +1339,8 @@ fn build_semantics_fragments_impl(
 
     // Most nodes of a large subtree contribute no fragment (a decoration, a
     // layout box): the list allocates on its first fragment, not per node.
-    let mut child_fragments: Vec<SemanticsFragment> = Vec::new();
+    let arena = regions.arena;
+    let mut child_fragments: FrameVec<'f, SemanticsFragment> = Vec::new_in(arena);
     let mut children_block_previous = append_region_fragments(
         &mut child_fragments,
         authored.before_children,
@@ -1370,7 +1391,7 @@ fn build_semantics_fragments_impl(
                 blocks_user_actions,
                 regions,
             )
-            .unwrap_or_default();
+            .unwrap_or_else(|| SemanticsFragments::none(arena));
             if fragments.blocks_previous_siblings {
                 // Every handler in discarded drafts is pinned by AssemblyCallbacks
                 // until phase completion, outside the pipeline borrow.
@@ -1446,12 +1467,14 @@ fn build_semantics_fragments_impl(
         children,
     };
 
+    let mut nodes = Vec::with_capacity_in(1, arena);
+    nodes.push(if decisions.forms_node {
+        SemanticsFragment::Formed(pending.form())
+    } else {
+        SemanticsFragment::Pending(pending)
+    });
     Some(SemanticsFragments {
-        nodes: vec![if decisions.forms_node {
-            SemanticsFragment::Formed(pending.form())
-        } else {
-            SemanticsFragment::Pending(pending)
-        }],
+        nodes,
         blocks_previous_siblings,
     })
 }
@@ -1493,7 +1516,7 @@ fn debug_assert_hosted_runs(authored_runs: Option<usize>, authored: &SemanticsRe
     reason = "uses the same assembly context as real child fragments"
 )]
 fn append_region_fragments(
-    fragments: &mut Vec<SemanticsFragment>,
+    fragments: &mut FrameVec<'_, SemanticsFragment>,
     authored: Vec<flui_semantics::SemanticsRegion>,
     host: RenderId,
     placement: RegionPlacement,
@@ -1501,7 +1524,7 @@ fn append_region_fragments(
     clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     blocks_user_actions: bool,
-    regions: &mut AssemblyRegions,
+    regions: &mut AssemblyRegions<'_>,
 ) -> bool {
     let mut blocks_previous = false;
     for region in authored {
@@ -1557,7 +1580,7 @@ fn append_region_fragments(
 
 fn merge_child_fragments(
     config: &mut SemanticsConfiguration,
-    mut fragments: Vec<SemanticsFragment>,
+    mut fragments: FrameVec<'_, SemanticsFragment>,
     suppress_conflicts: bool,
     names_a_control: bool,
 ) -> Vec<BuiltSemanticsNode> {
@@ -1572,8 +1595,9 @@ fn merge_child_fragments(
         }
         by_sort_key(key(a), key(b))
     });
-    let conflicts = (!suppress_conflicts)
-        .then(|| mark_configuration_conflicts(config, &fragments, names_a_control));
+    let conflicts = (!suppress_conflicts).then(|| {
+        mark_configuration_conflicts(config, &fragments, names_a_control, fragments.allocator())
+    });
     let mut children = Vec::with_capacity(fragments.len());
 
     for (index, fragment) in fragments.into_iter().enumerate() {
@@ -1672,23 +1696,22 @@ impl FragmentPlace {
 /// where the fragments name a control (ADR-0332), a check box beside an
 /// icon does not keep the icon from naming the button around both.
 ///
-/// One allocation, a byte per fragment: this runs for every node of every
-/// assembly.
-fn mark_configuration_conflicts(
+/// A byte per fragment, from the frame arena: this runs for every node of every assembly.
+fn mark_configuration_conflicts<'f>(
     parent: &SemanticsConfiguration,
     fragments: &[SemanticsFragment],
     names_a_control: bool,
-) -> Vec<FragmentPlace> {
+    arena: &'f FrameArena,
+) -> FrameVec<'f, FragmentPlace> {
     let pending = |index: usize| match &fragments[index] {
         SemanticsFragment::Pending(pending) => Some(&pending.config),
         SemanticsFragment::Formed(_) => None,
     };
-    let mut places: Vec<FragmentPlace> = (0..fragments.len())
-        .map(|index| match pending(index) {
-            Some(config) if !parent.can_absorb(config, names_a_control) => FragmentPlace::Refused,
-            _ => FragmentPlace::Absorbed,
-        })
-        .collect();
+    let mut places: FrameVec<'f, FragmentPlace> = Vec::with_capacity_in(fragments.len(), arena);
+    places.extend((0..fragments.len()).map(|index| match pending(index) {
+        Some(config) if !parent.can_absorb(config, names_a_control) => FragmentPlace::Refused,
+        _ => FragmentPlace::Absorbed,
+    }));
 
     for index in 0..fragments.len() {
         let Some(config) = pending(index) else {
@@ -1779,7 +1802,7 @@ fn plan_graft_pass(
     owner: &SemanticsOwner,
     marked: &[RenderId],
     placed: &[RenderId],
-    regions: &mut AssemblyRegions,
+    regions: &mut AssemblyRegions<'_>,
 ) -> Option<Vec<(flui_foundation::SemanticsId, BuiltSemanticsNode)>> {
     let pipeline_root = pipeline_root?;
     let marked_set: FxHashSet<RenderId> = marked.iter().copied().collect();
@@ -1859,7 +1882,7 @@ fn placement_anchors(
     moved: RenderId,
     scratch: &mut PlacementScratch,
     anchors: &mut Vec<RenderId>,
-    regions: &mut AssemblyRegions,
+    regions: &mut AssemblyRegions<'_>,
 ) -> bool {
     let Some(pipeline_root) = pipeline_root else {
         return false;
@@ -2057,7 +2080,7 @@ fn assembly_inputs_for(
     tree: &RenderTree,
     pipeline_root: RenderId,
     target: RenderId,
-    regions: &mut AssemblyRegions,
+    regions: &mut AssemblyRegions<'_>,
 ) -> Option<(SemanticsAssemblyContext, Matrix4, SemanticsClips, bool)> {
     assembly_inputs_into(tree, pipeline_root, target, regions, &mut Vec::new())
 }
@@ -2067,7 +2090,7 @@ fn assembly_inputs_into(
     tree: &RenderTree,
     pipeline_root: RenderId,
     target: RenderId,
-    regions: &mut AssemblyRegions,
+    regions: &mut AssemblyRegions<'_>,
     chain: &mut Vec<RenderId>,
 ) -> Option<(SemanticsAssemblyContext, Matrix4, SemanticsClips, bool)> {
     chain.clear();
@@ -2143,7 +2166,7 @@ fn plan_graft_anchor(
     pipeline_root: RenderId,
     owner: &SemanticsOwner,
     anchor: RenderId,
-    regions: &mut AssemblyRegions,
+    regions: &mut AssemblyRegions<'_>,
 ) -> Option<(flui_foundation::SemanticsId, BuiltSemanticsNode)> {
     let anchor_sid = owner
         .tree()
@@ -2266,7 +2289,8 @@ fn check_placement_against_rebuild(
     owner: &SemanticsOwner,
     identities: &mut RegionIdentities,
 ) -> AssemblyCallbacks {
-    let mut regions = AssemblyRegions::default();
+    let arena = FrameArena::new();
+    let mut regions = AssemblyRegions::reusing(&arena, FxHashSet::default());
     let announcers: Vec<accesskit::NodeId> =
         identities
             .existing_announcements()
@@ -2338,7 +2362,7 @@ fn check_placement_against_rebuild(
 fn describe_semantics_configuration(
     id: RenderId,
     node: &RenderNode,
-    regions: &mut AssemblyRegions,
+    regions: &mut AssemblyRegions<'_>,
 ) -> SemanticsConfiguration {
     let mut config = SemanticsConfiguration::new();
     match node {

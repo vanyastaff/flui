@@ -77,6 +77,17 @@ mints again; the signal graph re-lists nothing there, the element tree
 refuses the removal with the occupant kept. The render slab keeps its
 hand-rolled ledger until #2241 ([Accepted ADR sections not built yet](../../docs/gaps.md#accepted-adr-sections-not-built-yet)).
 
+## The frame arena (`arena`)
+
+`FrameArena` is the crate's only `unsafe`: an `unsafe impl Allocator for &FrameArena` over
+chunks taken from the global allocator (ADR-0328). A block is handed out at most once between two
+resets, because the bump cursor moves back only over the last block when that block is freed or
+shrunk; a block stays valid while the `&FrameArena` that handed it out lives, because only `reset`
+(`&mut self`) and the arena's drop free a chunk. A `FrameVec` alive across `reset` is a borrow
+error, pinned by the `compile_fail` doctest on `FrameArena`. `reset` never allocates, so an idle
+frame that resets its arena asks nothing of the heap (`a_reset_never_allocates`). Miri runs
+`arena::tests` with the crate's other unit tests.
+
 ## The geometry values (`geometry`)
 
 `Matrix4::project_plane_point` checks the forward projection of the local
