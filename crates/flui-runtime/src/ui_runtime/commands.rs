@@ -210,7 +210,7 @@ pub struct DrainReport {
 /// newer demand. Each request therefore takes the next ticket, and a wake
 /// acknowledges only through the ticket it captured: the debt is paid once
 /// the newest acknowledged ticket reaches the newest requested one. A ticket
-/// is two integers, so requesting a wake allocates nothing.
+/// is one integer and the debt two, so requesting a wake allocates nothing.
 #[derive(Default)]
 pub(super) struct WakeDebt {
     /// The newest ticket a request minted.
@@ -226,7 +226,7 @@ pub(super) struct WakeTicket(u64);
 impl std::fmt::Debug for WakeDebt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WakeDebt")
-            .field("pending", &self.pending_token().is_some())
+            .field("pending", &self.pending_ticket().is_some())
             .finish()
     }
 }
@@ -243,7 +243,7 @@ impl WakeDebt {
         WakeTicket(previous + 1)
     }
 
-    fn pending_token(&self) -> Option<WakeTicket> {
+    fn pending_ticket(&self) -> Option<WakeTicket> {
         let requested = self.requested.load(Ordering::Acquire);
         (self.acknowledged.load(Ordering::Acquire) < requested).then_some(WakeTicket(requested))
     }
@@ -264,8 +264,8 @@ pub struct UiCommandSender {
     pub(super) tx: Sender<UiCommand>,
     pub(super) capacity: usize,
     pub(super) redraw_pending: Arc<AtomicBool>,
-    /// A platform wake accepts each command/redraw token only once that exact
-    /// token is acknowledged. A panicking wake leaves debt so the
+    /// A platform wake accepts each command/redraw ticket only once that exact
+    /// ticket is acknowledged. A panicking wake leaves debt so the
     /// next command ingress or completed owner-inbox drain retries delivery
     /// instead of mistaking durable queue/dirty flags for event-loop progress.
     pub(super) wake_debt: Arc<WakeDebt>,
@@ -291,7 +291,7 @@ impl std::fmt::Debug for UiCommandSender {
                 "redraw_pending",
                 &self.redraw_pending.load(Ordering::Relaxed),
             )
-            .field("wake_debt", &self.wake_debt.pending_token().is_some())
+            .field("wake_debt", &self.wake_debt.pending_ticket().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -395,7 +395,7 @@ impl UiCommandSender {
         // wake; a pending frame absorbs repeated wakes anyway, this just
         // skips redundant platform calls.
         if !self.redraw_pending.swap(true, Ordering::AcqRel)
-            || self.wake_debt.pending_token().is_some()
+            || self.wake_debt.pending_ticket().is_some()
         {
             self.wake_owner();
         }
@@ -470,26 +470,26 @@ impl UiCommandSender {
     /// acknowledges its ticket; unwinding therefore leaves the debt for the
     /// next ingress or owner boundary to retry.
     pub(super) fn wake_owner(&self) {
-        let token = self.wake_debt.request();
-        self.deliver_wake(token);
+        let ticket = self.wake_debt.request();
+        self.deliver_wake(ticket);
     }
 
-    fn deliver_wake(&self, token: WakeTicket) {
+    fn deliver_wake(&self, ticket: WakeTicket) {
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: the platform wake is user code; a panic leaves its ticket unacknowledged"
         )]
         let outcome = catch_unwind(AssertUnwindSafe(|| (self.wake)()));
         match outcome {
-            Ok(()) => self.wake_debt.acknowledge(token),
+            Ok(()) => self.wake_debt.acknowledge(ticket),
             Err(payload) => resume_unwind(payload),
         }
     }
 
     /// Retry a wake that a prior owner-turn rearm failed to deliver.
     fn retry_wake_debt(&self) {
-        if let Some(token) = self.wake_debt.pending_token() {
-            self.deliver_wake(token);
+        if let Some(ticket) = self.wake_debt.pending_ticket() {
+            self.deliver_wake(ticket);
         }
     }
 }
