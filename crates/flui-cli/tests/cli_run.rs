@@ -349,6 +349,10 @@ fn a_desktop_run_that_opens_links_needs_one_instance() {
                  [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n"
             ),
         );
+        // CI denies warnings, and an application that names no item of
+        // `flui` warns of an unused dependency.
+        std::fs::write(app.join("src/main.rs"), "use flui as _;\nfn main() {}\n")
+            .expect("application main");
         let output = run(&app)
             .timeout(std::time::Duration::from_secs(120))
             .output()

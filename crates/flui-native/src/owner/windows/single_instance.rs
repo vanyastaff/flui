@@ -314,11 +314,14 @@ pub(crate) fn claim(
     let session = session_id()?;
     let me = TokenIdentity::current()?;
     let (mutex_name, pipe_name) = object_names(name, session);
-    // The current user alone, named by SID (`current_user_sid` says why),
-    // and no write from a process below this one's integrity level: an
-    // unelevated process of the same user cannot open an elevated
-    // instance's mutex or write to its pipe (`TokenIdentity` says why).
-    let sddl = format!("D:P(A;;GA;;;{})S:(ML;;NW;;;{})", me.user, me.integrity);
+    // This logon of the user alone, named by its logon SID: another logon
+    // of the same user (Remote Desktop, a second console sign-in) holds the
+    // user's SID but not this one (`current_logon_sid` says why). No write
+    // from a process below this one's integrity level either: an unelevated
+    // process of the same logon cannot open an elevated instance's mutex or
+    // write to its pipe (`TokenIdentity` says why).
+    let logon = crate::process::current_logon_sid()?;
+    let sddl = format!("D:P(A;;GA;;;{logon})S:(ML;;NW;;;{})", me.integrity);
     let (mutex, existed) = open_mutex(&mutex_name, &sddl)?;
     if !existed {
         let host = executor.handle();
@@ -329,7 +332,13 @@ pub(crate) fn claim(
             pipe_instance(&pipe_name, &sddl, true)?
         };
         let inbox = Arc::new(Inbox::new(HOLD, host.clone()));
-        let serving = host.spawn(serve(server, pipe_name, sddl, Arc::clone(&inbox)));
+        let serving = host.spawn(serve(
+            server,
+            pipe_name,
+            sddl,
+            Arc::clone(&inbox),
+            executor.clone(),
+        ));
         return Ok(Claim::First(FirstInstance {
             serving,
             inbox,
@@ -461,6 +470,7 @@ async fn serve(
     name: String,
     sddl: String,
     inbox: Arc<Inbox<Forwarded>>,
+    executor: NativeExecutor,
 ) {
     let answering = Arc::new(tokio::sync::Semaphore::new(MAX_WAITING));
     loop {
@@ -479,7 +489,7 @@ async fn serve(
                      their own"
                 );
                 if connected.is_ok() {
-                    tokio::spawn(answer(server, Arc::clone(&inbox), room));
+                    tokio::spawn(answer(server, Arc::clone(&inbox), room, executor));
                 }
                 return;
             }
@@ -487,7 +497,7 @@ async fn serve(
         let reached = std::mem::replace(&mut server, next);
         match connected {
             Ok(()) => {
-                tokio::spawn(answer(reached, Arc::clone(&inbox), room));
+                tokio::spawn(answer(reached, Arc::clone(&inbox), room, executor.clone()));
             }
             Err(error) => {
                 tracing::debug!(%error, "a later launch left before it was read");
@@ -497,11 +507,15 @@ async fn serve(
 }
 
 /// Read the launch on `pipe`, hand it to the owner and answer whether the
-/// owner took it, holding `_room`, its place among the launches under way.
+/// owner took it, holding `_room`, its place among the launches under way,
+/// and `_executor`, the runtime it runs on: an executor the host owns shuts
+/// its runtime down with its last clone, which the instance and the host may
+/// drop before the answer is sent.
 async fn answer(
     mut pipe: NamedPipeServer,
     inbox: Arc<Inbox<Forwarded>>,
     _room: tokio::sync::OwnedSemaphorePermit,
+    _executor: NativeExecutor,
 ) {
     let read = tokio::time::timeout(READ_TIMEOUT, read_launch(&mut pipe)).await;
     let answered = match read {

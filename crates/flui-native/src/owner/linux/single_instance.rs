@@ -290,6 +290,7 @@ mod bus {
         path: String,
         inbox: Arc<Inbox>,
         mut calls: zbus::MessageStream,
+        executor: NativeExecutor,
     ) {
         let answering = Arc::new(tokio::sync::Semaphore::new(MAX_READ));
         loop {
@@ -304,9 +305,14 @@ mod bus {
                     let asked = ask(&inbox, &path, &call);
                     let answer = Answer::of(call, asked);
                     let (connection, inbox) = (connection.clone(), Arc::clone(&inbox));
+                    // The answer keeps the runtime it runs on: an executor the
+                    // host owns shuts its runtime down with its last clone,
+                    // which the instance and the host may drop first.
+                    let executor = executor.clone();
                     tokio::spawn(async move {
                         respond(connection, inbox, answer).await;
                         drop(room);
+                        drop(executor);
                     });
                 }
                 Some(Err(error)) => {
@@ -599,7 +605,7 @@ mod bus {
                                 "no runtime to claim the bus name on: {error}"
                             ))
                         })?
-                        .block_on(claim_on(&host, address, bus_name, launch, hold))
+                        .block_on(claim_on(&host, executor, address, bus_name, launch, hold))
                 })
                 .map_err(|error| {
                     zbus::Error::Failure(format!("no thread to claim the bus name on: {error}"))
@@ -617,6 +623,7 @@ mod bus {
 
     async fn claim_on(
         host: &tokio::runtime::Handle,
+        executor: &NativeExecutor,
         address: Option<&str>,
         bus_name: &str,
         launch: Forwarded,
@@ -649,7 +656,13 @@ mod bus {
         match reply {
             Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {
                 let inbox = Arc::new(Inbox::new(hold, host.clone()));
-                let serving = host.spawn(serve(connection, path, Arc::clone(&inbox), calls));
+                let serving = host.spawn(serve(
+                    connection,
+                    path,
+                    Arc::clone(&inbox),
+                    calls,
+                    executor.clone(),
+                ));
                 Ok(Claim::First(FirstInstance { serving, inbox }))
             }
             Ok(RequestNameReply::Exists | RequestNameReply::InQueue)

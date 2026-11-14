@@ -127,7 +127,8 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   следующего показанного окна (`x11_window`: `a_later_launch_while_no_window_is_shown_asks_to_reopen`,
   `the_window_reopened_for_a_later_launch_comes_forward`). Запуск с рабочего стола — строка parity. Включение по `file-types` ждёт их чтения в `#[flui::main]`.
 - **AC10 (Windows).** Первый держит мьютекс `Local\flui-<app-id>-<session>` и сервер канала
-  `\\.\pipe\flui-<app-id>-<session>` с DACL на SID пользователя и `PIPE_REJECT_REMOTE_CLIENTS`;
+  `\\.\pipe\flui-<app-id>-<session>` с DACL на SID входа (logon SID: другой вход того же пользователя не допускается) и
+  `PIPE_REJECT_REMOTE_CLIENTS`;
   метка целостности уровня первого (`S:(ML;;NW;;;<уровень>)`) не даёт писать процессу ниже уровнем;
   второй проверяет пользователя и уровень процесса сервера (`GetNamedPipeServerProcessId`, не ниже
   своего), передаёт право на передний план и кадр.
@@ -142,12 +143,16 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   Запуск отвечается «взят», только когда приложение его приняло (`AppDelivery::try_opened`, на обоих
   хостах): `a_taken_launch_is_answered_by_its_delivery`, `opened_reports_waiting_for_ready_are_bounded`
   (переполненная очередь отчётов возвращает запуск его процессу); запуски берутся по одному, и стоящий
-  за заблокированным обработчиком всё ещё возвращается по сроку: `a_launch_behind_a_taken_one_is_still_handed_back`.
+  за заблокированным обработчиком всё ещё возвращается по сроку: `a_launch_behind_a_taken_one_is_still_handed_back`;
+  задача ответа держит клон исполнителя, пока не ответит (на обоих хостах; гонку с остановкой runtime
+  тест не упорядочивает).
 - **Фича `single-instance`.** Выключена по умолчанию; `a_desktop_that_opens_links_needs_one_instance`
   (Linux и Windows без фичи отказ с названием схемы, типа и фичи, фича только у dev-зависимости не
-  считается: её читает `cargo tree` по рёбрам normal и build; с фичей и без объявлений сборка,
+  считается, как и фича зависимости сборочного скрипта: её читает `cargo tree` по рёбрам normal без
+  процедурных макросов; с фичей и без объявлений сборка,
   Android, macOS и wasm не затронуты), `a_desktop_run_that_opens_links_needs_one_instance` (`flui run`
-  отказывает до сборки), проверка `project.single-instance` в
+  отказывает до сборки), `a_workspace_member_is_read_without_its_siblings` (участник workspace
+  читается без соседей, `flui build --package` проверяет выбранный пакет), проверка `project.single-instance` в
   `doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`; clippy `flui-native` и
   `flui-app` для Linux (без фичи, `wayland`, `x11`, с фичей) и `x86_64-pc-windows-msvc` с фичей и без.
 - **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`

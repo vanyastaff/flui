@@ -389,21 +389,22 @@ is owned on the session bus, and only there, where the first process serves
 `org.freedesktop.Application` (`Activate`, `Open`, `ActivateAction`) as GApplication does; files
 travel as absolute `file:` URIs and a call's URIs are bounded as `Opened`'s are. On Windows the
 first process holds a mutex and serves a named pipe, both named with the app id and the user's
-session id and granted to the current user's SID alone, with a mandatory label at the first's own
-integrity level that refuses writes from below it, so an unelevated process of the same user cannot
-hand an elevated instance links and files; the pipe rejects remote clients, and its frame (the
-launch's links and absolute paths, its length first) is bounded and read as untrusted input. A later
-launch hands its right and its frame only to a pipe served by a process of its own user at its own
-integrity level or above. An app id outside reverse DNS, or a session that cannot keep one instance
-(no bus, a mutex or pipe it cannot open), is warned about and the process runs as an instance of its
-own. macOS, iOS and Android keep one instance themselves and each Web page is an application of its
-own: `start_single` starts their host as `start_with` does. `flui-app` asks for one instance when
-the application declares a URL scheme or calls `Application::single_instance(true)`, and
-`single_instance(false)` turns it off. All of it is `flui`'s `single-instance` feature, off by
-default: without it the session-bus and pipe code is not linked and `Application::single_instance`
-is absent, so each launch is a process of its own, and `flui build` and `flui run` refuse a Linux
-or Windows build of an application that declares URL schemes or file types (`flui doctor` reports
-it as `project.single-instance`).
+session id and granted to the first's logon SID alone (another logon of the same user, over Remote
+Desktop or a second sign-in, holds the user's SID but not that one), with a mandatory label at its
+own integrity level that refuses writes from below it, so an unelevated process of the same user
+cannot hand an elevated instance links and files; the pipe rejects remote clients, and its frame
+(the launch's links and absolute paths, its length first) is bounded and read as untrusted input.
+A later launch hands its right and its frame only to a pipe served by a process of its own user
+at its own integrity level or above. An app id outside reverse DNS, or a session that cannot
+keep one instance (no bus, a mutex or pipe it cannot open), is warned about and the process
+runs as an instance of its own. macOS, iOS and Android keep one instance themselves and
+each Web page is an application of its own: `start_single` starts their host as `start_with`
+does. `flui-app` asks for one instance when the application declares a URL scheme or calls
+`Application::single_instance(true)`, and `single_instance(false)` turns it off. All of it is
+`flui`'s `single-instance` feature, off by default: without it the session-bus and pipe code is
+not linked and `Application::single_instance` is absent, so each launch is a process of its own,
+and `flui build` and `flui run` refuse a Linux or Windows build of an application that declares URL
+schemes or file types (`flui doctor` reports it as `project.single-instance`).
 
 System preferences are not a registration:
 ADR-0172's delivery stands. The notices, the session-end hold and their fan-out are ADR-0237's and

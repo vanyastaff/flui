@@ -59,7 +59,7 @@ pub fn current_user_sid() -> std::io::Result<String> {
 ///
 /// A single-instance application's later launch hands its launch only to a
 /// process of its own user at its own integrity level or above, and the
-/// first instance grants its mutex and pipe to its user and refuses writes
+/// first instance grants its mutex and pipe to its logon and refuses writes
 /// from below its level, so an unelevated process of the same user cannot
 /// hand an elevated instance links and files.
 #[cfg(all(windows, feature = "single-instance"))]
@@ -114,6 +114,19 @@ impl TokenIdentity {
     pub(crate) fn level(&self) -> Option<u32> {
         self.integrity.strip_prefix("S-1-16-")?.parse::<u32>().ok()
     }
+}
+
+/// This process's logon SID, in string form (`logon_sid` says what it
+/// names). A single-instance application grants its mutex and pipe to it:
+/// another logon of the same user, over Remote Desktop or a second console
+/// sign-in, holds the user's SID and not this one.
+///
+/// # Errors
+///
+/// As `logon_sid`.
+#[cfg(all(windows, feature = "single-instance"))]
+pub(crate) fn current_logon_sid() -> std::io::Result<String> {
+    logon_sid(&Token::of_current()?)
 }
 
 /// A handle closed on every path out.
@@ -173,10 +186,63 @@ fn token_sid(
     token: &Token,
     class: windows::Win32::Security::TOKEN_INFORMATION_CLASS,
 ) -> std::io::Result<String> {
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
-    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
-    use windows::Win32::Security::{GetTokenInformation, SID_AND_ATTRIBUTES};
-    use windows::core::PWSTR;
+    use windows::Win32::Security::SID_AND_ATTRIBUTES;
+
+    let buffer = token_information(token, class)?;
+    // SAFETY: the buffer holds the answer of a class that starts with a
+    // `SID_AND_ATTRIBUTES` (aligned by the `u64` storage), whose SID points
+    // into the same buffer, which outlives this borrow.
+    let sid = unsafe { &*buffer.as_ptr().cast::<SID_AND_ATTRIBUTES>() }.Sid;
+    // SAFETY: `sid` points into `buffer`, alive for the call.
+    unsafe { sid_text(sid) }
+}
+
+/// The logon SID of `token`, in string form (`S-1-5-5-X-Y`): the group the
+/// system gives each logon session, which tells two logons of one user apart
+/// where the user's SID does not.
+///
+/// # Errors
+///
+/// The system's error when the token's groups cannot be read, and
+/// [`std::io::ErrorKind::NotFound`] for a token in no logon session.
+#[cfg(all(windows, feature = "single-instance"))]
+fn logon_sid(token: &Token) -> std::io::Result<String> {
+    use windows::Win32::Security::{SID_AND_ATTRIBUTES, TOKEN_GROUPS, TokenGroups};
+    use windows::Win32::System::SystemServices::SE_GROUP_LOGON_ID;
+
+    let buffer = token_information(token, TokenGroups)?;
+    let groups = buffer.as_ptr().cast::<TOKEN_GROUPS>();
+    // SAFETY: the call answered a `TOKEN_GROUPS` (aligned by the `u64`
+    // storage): its count, then that many `SID_AND_ATTRIBUTES` laid out from
+    // `Groups` on, all inside `buffer`, which outlives these borrows.
+    let groups: &[SID_AND_ATTRIBUTES] = unsafe {
+        std::slice::from_raw_parts(
+            (&raw const (*groups).Groups).cast::<SID_AND_ATTRIBUTES>(),
+            (*groups).GroupCount as usize,
+        )
+    };
+    let logon = SE_GROUP_LOGON_ID.cast_unsigned();
+    let group = groups
+        .iter()
+        .find(|group| group.Attributes & logon == logon)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "the process runs in no logon session",
+            )
+        })?;
+    // SAFETY: the group's SID points into `buffer`, alive for the call.
+    unsafe { sid_text(group.Sid) }
+}
+
+/// What `token` answers for `class`, in `u64` storage, which keeps the
+/// structure at the head of the buffer aligned.
+#[cfg(windows)]
+fn token_information(
+    token: &Token,
+    class: windows::Win32::Security::TOKEN_INFORMATION_CLASS,
+) -> std::io::Result<Vec<u64>> {
+    use windows::Win32::Security::GetTokenInformation;
 
     let mut len = 0_u32;
     // SAFETY: a size query: no buffer, `len` a live out-pointer. It fails
@@ -186,7 +252,6 @@ fn token_sid(
     if len == 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // `u64` storage keeps the structure at the head of the buffer aligned.
     let mut buffer = vec![0_u64; (len as usize).div_ceil(8)];
     // SAFETY: `buffer` holds at least `len` writable bytes, as passed.
     unsafe {
@@ -199,13 +264,23 @@ fn token_sid(
         )
     }
     .map_err(std::io::Error::from)?;
-    // SAFETY: the call succeeded for a class whose answer starts with a
-    // `SID_AND_ATTRIBUTES` (aligned by the `u64` storage), whose SID points
-    // into the same buffer, which outlives this borrow.
-    let sid = unsafe { &*buffer.as_ptr().cast::<SID_AND_ATTRIBUTES>() }.Sid;
+    Ok(buffer)
+}
+
+/// `sid` in string form (`S-1-…`).
+///
+/// # Safety
+///
+/// `sid` points to a valid SID for the call.
+#[cfg(windows)]
+unsafe fn sid_text(sid: windows::Win32::Security::PSID) -> std::io::Result<String> {
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows::core::PWSTR;
+
     let mut text = PWSTR::null();
-    // SAFETY: `sid` is valid while `buffer` lives; `text` is a live
-    // out-pointer the call fills with a LocalAlloc'd string.
+    // SAFETY: `sid` is valid for the call, as the caller states; `text` is a
+    // live out-pointer the call fills with a LocalAlloc'd string.
     unsafe { ConvertSidToStringSidW(sid, &raw mut text) }.map_err(std::io::Error::from)?;
     // SAFETY: the call succeeded, so `text` is a NUL-terminated UTF-16
     // string this code owns until the `LocalFree` below.

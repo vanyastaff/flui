@@ -88,15 +88,20 @@ impl DesktopBuilder {
             "Building desktop target '{target}' ({:?})",
             ctx.target
         ));
+        let selected = cargo::select_target(&ctx.workspace_root, &ctx.target).await?;
         // Before the build: a Linux or Windows application that opens links
-        // or files needs the code that keeps one instance of it.
+        // or files needs the code that keeps one instance of it, read from
+        // the member the build compiles.
         if target.contains("-linux-") || target.contains("-windows-") {
-            crate::declarations::Declarations::collect(&ctx.workspace_root, &[&target])?
-                .require_one_instance(&target)?;
+            crate::declarations::Declarations::collect_package(
+                &ctx.workspace_root,
+                &[&target],
+                selected.package_name(),
+            )?
+            .require_one_instance(&target)?;
         }
 
         let mut args = vec!["build".to_string(), "--target".to_string(), target.clone()];
-        let selected = cargo::select_target(&ctx.workspace_root, &ctx.target).await?;
         args.extend(selected.cargo_args());
         if let Some(profile_flag) = ctx.profile.cargo_flag() {
             args.push(profile_flag.to_string());
@@ -111,6 +116,7 @@ impl DesktopBuilder {
             metadata: serde_json::json!({
                 "target": target,
                 "kind": "executable",
+                "package": selected.package_name(),
             }),
         })
     }
@@ -132,7 +138,7 @@ impl DesktopBuilder {
         // launched from a terminal is not equivalent.
         #[cfg(target_os = "macos")]
         if let Some(bundle) = &ctx.bundle {
-            return Self::stage_macos_app(ctx, executable, bundle);
+            return Self::stage_macos_app(ctx, artifacts, executable, bundle);
         }
 
         std::fs::create_dir_all(&ctx.output_dir)?;
@@ -167,8 +173,7 @@ impl DesktopBuilder {
         // A Linux desktop learns what the application opens from its desktop
         // entry and MIME package, staged beside the executable.
         if let (Some(triple), Some(bundle)) = (Self::linux_target(ctx)?, &ctx.bundle) {
-            let declarations =
-                crate::declarations::Declarations::collect(&ctx.workspace_root, &[&triple])?;
+            let declarations = Self::declarations(ctx, artifacts, &triple)?;
             let executable_name = file_name.to_string_lossy();
             for path in crate::build::linux_desktop::stage(
                 &ctx.output_dir,
@@ -188,6 +193,28 @@ impl DesktopBuilder {
 }
 
 impl DesktopBuilder {
+    /// What the application `artifacts` were built from declares for
+    /// `triple`: the member the build compiled, else the project at the
+    /// workspace root.
+    fn declarations(
+        ctx: &BuilderContext,
+        artifacts: &BuildArtifacts,
+        triple: &str,
+    ) -> BuildResult<crate::declarations::Declarations> {
+        match artifacts
+            .metadata
+            .get("package")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(package) => crate::declarations::Declarations::collect_package(
+                &ctx.workspace_root,
+                &[triple],
+                package,
+            ),
+            None => crate::declarations::Declarations::collect(&ctx.workspace_root, &[triple]),
+        }
+    }
+
     /// The Linux triple `ctx` builds for: its named target when that is a
     /// Linux one, else the host's when the build names none and runs on
     /// Linux; `None` for any other desktop.
@@ -219,6 +246,7 @@ impl DesktopBuilder {
     #[cfg(target_os = "macos")]
     fn stage_macos_app(
         ctx: &BuilderContext,
+        artifacts: &BuildArtifacts,
         executable: &Path,
         bundle: &crate::build::platform::AppBundle,
     ) -> BuildResult<FinalArtifacts> {
@@ -268,8 +296,7 @@ impl DesktopBuilder {
             _ => format!("{}-apple-darwin", std::env::consts::ARCH),
         };
         // What the application opens, from the crates it links for this target.
-        let declarations =
-            crate::declarations::Declarations::collect(&ctx.workspace_root, &[triple.as_str()])?;
+        let declarations = Self::declarations(ctx, artifacts, &triple)?;
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

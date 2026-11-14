@@ -20,6 +20,10 @@ pub(crate) struct CargoTarget {
 }
 
 impl CargoTarget {
+    /// The workspace member the build compiles.
+    pub(crate) fn package_name(&self) -> &str {
+        &self.package_name
+    }
     pub(crate) fn metadata(&self) -> serde_json::Value {
         serde_json::json!({"package_name": self.package_name, "package_version": self.version})
     }
