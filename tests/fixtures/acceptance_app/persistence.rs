@@ -229,20 +229,30 @@ fn list_offset_and_route_are_restored_on_the_first_loaded_frame() {
         run.pump();
     }
     assert!(!run.shows("Loading notes"), "the documents load");
-    // A read runs the frames due when it is made, so the screens the first
-    // loaded frame built are what the screens recorded before its post-frame
-    // callbacks ran.
+    // A read runs the frames due when it is made, so what the first loaded
+    // frame showed is what the probe sealed in that frame's post-frame
+    // callback: the screens built before it, the draft and the offset.
     assert_eq!(
         opened.routes(),
         [Route::Home, Route::Note { id: NoteId(40) }],
         "the first loaded frame builds the restored route"
     );
+    assert_eq!(
+        opened.draft().as_deref(),
+        Some("Last"),
+        "with the restored draft"
+    );
+    let first_offset = opened.offset().expect("the first loaded frame was sealed");
+    assert!(
+        (first_offset - offset).abs() <= 1.0,
+        "and the restored offset: {first_offset} for {offset}"
+    );
     assert!(run.shows("Editing note 40"), "and shows it");
-    assert_eq!(run.title(), "Last", "and the restored draft");
+    assert_eq!(run.title(), "Last", "and keeps the draft");
     let restored = run.list_offset();
     assert!(
         (restored - offset).abs() <= 1.0,
-        "and the restored offset: {restored} for {offset}"
+        "and the offset: {restored} for {offset}"
     );
 
     run.tap("Back");
