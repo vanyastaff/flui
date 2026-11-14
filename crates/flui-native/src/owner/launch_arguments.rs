@@ -17,27 +17,7 @@ use std::path::{Path, PathBuf};
 
 use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
 
-/// How a `file:` URI's path names a file on the host the arguments came
-/// from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PathConvention {
-    /// `file:///C:/dir/name` is `C:\dir\name`, and `file://server/share/name`
-    /// is `\\server\share\name`.
-    Windows,
-    /// `file:///dir/name` is `/dir/name`; a URI naming another host names no
-    /// file here.
-    Unix,
-}
-
-#[cfg(any(windows, x11_host, wayland_host))]
-impl PathConvention {
-    /// The convention of the host this is built for.
-    pub(crate) const HOST: Self = if cfg!(windows) {
-        Self::Windows
-    } else {
-        Self::Unix
-    };
-}
+use crate::owner::file_uri::{PathConvention, file_uri_path};
 
 /// What `arguments` (without the program's own name) open, where `is_file`
 /// says whether a path names an existing file and `absolute` makes a path
@@ -122,90 +102,6 @@ fn scheme(text: &str) -> Option<&str> {
         .is_some_and(|first| first.is_ascii_alphabetic())
         && characters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
     (well_formed && scheme.len() >= 2).then_some(scheme)
-}
-
-/// The file a `file:` URI names under `convention`: its authority, empty or
-/// `localhost` for this host, and its percent-decoded path.
-fn file_uri_path(uri: &str, convention: PathConvention) -> Option<PathBuf> {
-    let rest = &uri["file:".len()..];
-    // A query or fragment names nothing on disk.
-    let rest = rest.split(['?', '#']).next().unwrap_or_default();
-    let (host, path) = match rest.strip_prefix("//") {
-        Some(authority_and_path) => match authority_and_path.find('/') {
-            Some(at) => authority_and_path.split_at(at),
-            None => (authority_and_path, ""),
-        },
-        // `file:/dir/name`, without an authority.
-        None => ("", rest),
-    };
-    let local = host.is_empty() || host.eq_ignore_ascii_case("localhost");
-    let decoded = percent_decoded(path)?;
-    match convention {
-        PathConvention::Unix => {
-            if !local || !decoded.starts_with(b"/") {
-                return None;
-            }
-            unix_path(decoded)
-        }
-        PathConvention::Windows => {
-            let decoded = String::from_utf8(decoded).ok()?;
-            let windows = if local {
-                // `/C:/dir/name`: the drive follows the leading slash.
-                let drive = decoded.strip_prefix('/')?;
-                let mut letters = drive.chars();
-                let lettered = letters.next().is_some_and(|c| c.is_ascii_alphabetic())
-                    && letters.next() == Some(':');
-                if !lettered {
-                    return None;
-                }
-                drive.replace('/', "\\")
-            } else {
-                format!("\\\\{host}{}", decoded.replace('/', "\\"))
-            };
-            Some(PathBuf::from(windows))
-        }
-    }
-}
-
-/// The path of `bytes`, a Unix path: the bytes themselves on a host whose
-/// paths are bytes, only text elsewhere.
-#[cfg_attr(
-    unix,
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "a host whose paths are not bytes refuses a path that is not text"
-    )
-)]
-fn unix_path(bytes: Vec<u8>) -> Option<PathBuf> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStringExt as _;
-        Some(PathBuf::from(OsString::from_vec(bytes)))
-    }
-    #[cfg(not(unix))]
-    {
-        String::from_utf8(bytes).ok().map(PathBuf::from)
-    }
-}
-
-/// `text` with each `%XX` replaced by its byte, or `None` when an escape is
-/// malformed.
-fn percent_decoded(text: &str) -> Option<Vec<u8>> {
-    let bytes = text.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut at = 0;
-    while let Some(&byte) = bytes.get(at) {
-        if byte == b'%' {
-            let digits = bytes.get(at + 1..at + 3)?;
-            let hex = std::str::from_utf8(digits).ok()?;
-            decoded.push(u8::from_str_radix(hex, 16).ok()?);
-            at += 3;
-        } else {
-            decoded.push(byte);
-            at += 1;
-        }
-    }
-    Some(decoded)
 }
 
 #[cfg(test)]

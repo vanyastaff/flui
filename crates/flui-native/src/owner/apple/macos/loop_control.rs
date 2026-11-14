@@ -12,13 +12,13 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
     NSApplicationTerminateReply, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
 };
-use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint};
+use objc2_foundation::{NSArray, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSURL};
 use parking_lot::Mutex;
 use std::ptr::NonNull;
 
 use std::time::Duration;
 
-use flui_platform::{SessionEndAnswer, SessionEndPhase};
+use flui_platform::{Launch, SessionEndAnswer, SessionEndPhase};
 
 use super::owner_lane::{
     exec_async_on_owner, owner_queue, report_contained_panic, run_cleanup_guarded as cleanup_step,
@@ -63,6 +63,9 @@ struct State {
     pending_reopens: usize,
     reopen_queued: bool,
     reopen_active: bool,
+    /// `applicationDidFinishLaunching:` has come: what AppKit opens from
+    /// here on reached a running application, not its launch.
+    launched: bool,
 }
 
 /// Contains only thread-safe Rust state. AppKit objects never cross the queue.
@@ -127,6 +130,7 @@ impl LoopControl {
                     pending_reopens: 0,
                     reopen_queued: false,
                     reopen_active: false,
+                    launched: false,
                 }),
                 windows,
                 app,
@@ -250,6 +254,30 @@ impl LoopControl {
         self.app
             .session_end(phase)
             .or_contain(SessionEndAnswer::Proceed, "the session-end handler")
+    }
+
+    /// `applicationDidFinishLaunching:`: what AppKit opens from here on
+    /// reaches a running application.
+    fn finished_launching(&self) {
+        self.state.lock().launched = true;
+    }
+
+    /// `application:openURLs:`: the application hears what `urls`, the
+    /// absolute strings of AppKit's `NSURL`s, open, as its launch until
+    /// `applicationDidFinishLaunching:` and as reaching it running after.
+    fn opened_urls(&self, urls: Vec<String>) {
+        let launch = if self.state.lock().launched {
+            Launch::Running
+        } else {
+            Launch::Cold
+        };
+        self.app
+            .opened(crate::owner::apple::opened_urls::opened_by_urls(
+                urls,
+                crate::owner::file_uri::PathConvention::HOST,
+                launch,
+            ))
+            .or_contain((), "the URLs AppKit opened");
     }
 
     pub(crate) fn accepts_windows(&self) -> bool {
@@ -535,6 +563,28 @@ define_class!(
             )
         }
 
+        // What AppKit opens: the links and documents that launched the
+        // application come before `applicationDidFinishLaunching:`, later
+        // ones while it runs. Implementing this, AppKit hands documents here
+        // as `file:` URLs and calls no `application:openFiles:`.
+        #[unsafe(method(application:openURLs:))]
+        fn open_urls(&self, _app: &NSApplication, urls: &NSArray<NSURL>) {
+            os_entry("application:openURLs:", (), AfterPanic::Answer(|()| ()), || {
+                if let Some(control) = self.ivars().upgrade() {
+                    control.opened_urls(absolute_strings(urls));
+                }
+            });
+        }
+
+        #[unsafe(method(applicationDidFinishLaunching:))]
+        fn did_finish_launching(&self, _notification: &NSNotification) {
+            os_entry("applicationDidFinishLaunching:", (), AfterPanic::Answer(|()| ()), || {
+                if let Some(control) = self.ivars().upgrade() {
+                    control.finished_launching();
+                }
+            });
+        }
+
         // An ordinary quit never runs user teardown inside the Objective-C
         // callback: it queues the request and cancels this one. A session
         // end is answered here, since the system waits for the answer. After
@@ -556,6 +606,38 @@ define_class!(
         }
     }
 );
+
+/// The absolute strings of `urls`, in AppKit's order: no more than an
+/// [`Opened`](flui_platform::Opened) carries, and none longer than the
+/// longest it keeps, measured before any is copied.
+fn absolute_strings(urls: &NSArray<NSURL>) -> Vec<String> {
+    let count = urls.count();
+    if count > flui_platform::MAX_OPENED_ITEMS {
+        tracing::warn!(
+            dropped = count - flui_platform::MAX_OPENED_ITEMS,
+            "AppKit opened more URLs than the application hears at once"
+        );
+    }
+    let mut kept = Vec::with_capacity(count.min(flui_platform::MAX_OPENED_ITEMS));
+    let mut too_long = 0_usize;
+    for url in urls.iter().take(flui_platform::MAX_OPENED_ITEMS) {
+        let Some(text) = url.absoluteString() else {
+            continue;
+        };
+        if text.len() > flui_platform::MAX_OPENED_URL_LEN {
+            too_long += 1;
+        } else {
+            kept.push(text.to_string());
+        }
+    }
+    if too_long > 0 {
+        tracing::warn!(
+            too_long,
+            "AppKit opened URLs longer than the application hears; they were dropped"
+        );
+    }
+    kept
+}
 
 /// What a log of the delegate's entries shows: which object it is.
 impl std::fmt::Debug for LoopDelegate {

@@ -3,6 +3,8 @@
 //!
 //! - `macos`: the `NSApplication` loop, the owner lane every thread-affine
 //!   AppKit call travels through, and the wake pump;
+//! - `opened_urls`: what `application:openURLs:` opens, links and documents,
+//!   as a pure rule;
 //! - `terminate_gate`: how the macOS loop answers `applicationShouldTerminate:`
 //!   while the user's session is ending, as a pure rule every host checks;
 //! - `ios`: the UIKit loop, its delegates and the scene sessions they connect;
@@ -27,6 +29,8 @@ pub(crate) mod macos;
 pub(crate) mod metal_layer;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod native_owner;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod opened_urls;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod terminate_gate;
 
