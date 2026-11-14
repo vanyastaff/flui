@@ -49,8 +49,8 @@ surface format change), which drops imported allocations.
 `texture_registry` (flui-layer) pins unique ids, newest-frame delivery, retirement and
 reentrant listeners. `registry_frames_upload_replace_resize_and_retire` (flui-engine)
 reads back each upload path and the retired id's refusal.
-`texture_updates_reach_the_backend_before_their_frame` (flui-app) pins the lane's
-ordering. The `external_textures` rows of `frame_pacing_and_pump_matrix`
+`a_frames_texture_updates_apply_before_it_whether_shown_or_superseded` (flui-engine) pins the
+raster executor's ordering. The `external_textures` rows of `frame_pacing_and_pump_matrix`
 (flui-runtime) pin a cross-thread frame repainting the widget and unmount retiring
 the texture, and `harness_texture_fills_its_box_and_repaints_per_frame` pins the
 render object. The re-upload after a device rebuild is not exercised by a test.

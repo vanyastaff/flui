@@ -613,7 +613,7 @@ impl RetainedCapture {
     /// The frame's failure.
     #[expect(
         deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+        reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
     )]
     pub(crate) fn render_unmanaged(
         &mut self,
@@ -776,7 +776,7 @@ impl RetainedCapture {
 #[cfg(test)]
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
 )]
 impl crate::raster::RasterBackend for RetainedCapture {
     fn render_scene(

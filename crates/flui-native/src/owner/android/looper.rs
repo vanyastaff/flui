@@ -111,8 +111,8 @@ use crate::{
 /// `true` already caused a dispatch — it has no memory of ever being
 /// called before. Something else has to be the actuator that stops asking:
 /// either the deadline source's own consumer advances `deadline` in
-/// response to acting on it (the desktop/Android device-recovery backoff
-/// does this — see `DeviceRecoveryBackoff`'s two paired obligations), or
+/// response to acting on it (the raster host's device-rebuild and
+/// surface-restore paces do this: an attempt moves the deadline on), or
 /// the CALLER stops treating "due" as "act now" once acting is impossible
 /// (`run`'s loop does this by gating this answer's effect on `should_render`
 /// on `resumed` — see that call site's own comment for the busy-spin this

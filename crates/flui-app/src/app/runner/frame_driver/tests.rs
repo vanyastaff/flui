@@ -907,6 +907,11 @@ fn installed_frame_driver_contract() {
                 "deadlines_survive_a_sibling_install_and_close",
                 deadlines_survive_a_sibling_install_and_close as fn(),
             ),
+            #[cfg(all(feature = "testing", not(target_os = "ios")))]
+            (
+                "a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface",
+                a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface as fn(),
+            ),
             #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
             (
                 "agent_notification_follows_live_native_initialization",
@@ -1068,6 +1073,93 @@ fn deadlines_survive_a_sibling_install_and_close() {
         "closed presentations contribute no deadline"
     );
     teardown_platform_ui_runtime();
+}
+
+/// A window whose frames are off wakes the loop for none of its raster work:
+/// the surface it is owed is served only by its own frame, so the loop's
+/// wake reporting it would hand the platform a past instant that no wake
+/// moves. Its frames back on, the loop wakes for it again.
+///
+/// Red-check: let `AppRuntime::next_wake` count every window's raster work
+/// (`wake_deadline(|_| true)`) and the hidden window's deadline is reported.
+#[cfg(all(feature = "testing", not(target_os = "ios")))]
+fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
+    use super::super::{
+        desktop::DesktopWakeDeadlines,
+        first_reveal::FirstReveal,
+        frame_pacing::FallbackWake,
+        raster_host::{
+            RasterFactory, SharedRasterHost,
+            tests::{attach_a_window, owe_a_surface},
+        },
+    };
+    let _clear = OwnerHostClearGuard::arm();
+    let mut installed = Vec::new();
+    for _ in 0..2 {
+        let sources = Arc::new(DesktopWakeDeadlines {
+            fallback: Arc::new(FallbackWake::new()),
+            first_reveal: Arc::new(FirstReveal::new()),
+        });
+        let mut installation = super::super::owner_dispatch::prepare_ui_runtime_alongside(
+            UiRuntime::for_test(),
+            crate::app::window_test_support::headless_test_window(),
+        );
+        let dispatcher = installation.dispatcher();
+        let frame = installation
+            .frame_driver(FrameDriver::TestDeadlines(sources))
+            .expect("deadline driver");
+        installation
+            .submit()
+            .outcome()
+            .expect("settled")
+            .expect("installed");
+        installed.push((dispatcher, frame));
+    }
+    let slots = flui_engine::testing::ScriptedSlots::new();
+    let shared = SharedRasterHost::new(RasterFactory::Scripted(slots.clone()));
+    /// Puts the loop's raster host back however the row ends.
+    struct LoopRasterHost(Option<SharedRasterHost>);
+    impl Drop for LoopRasterHost {
+        fn drop(&mut self) {
+            if let Some(host) = self.0.take() {
+                super::super::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = host);
+            }
+        }
+    }
+    let _previous =
+        LoopRasterHost(Some(super::super::host::APP_RUNTIME.with(|slot| {
+            std::mem::replace(&mut slot.borrow_mut().raster_host, shared.clone())
+        })));
+    let (hidden, shown) = (installed[1].0.address, installed[0].0.address);
+    attach_a_window(&shared, shown, 1);
+    let owed = owe_a_surface(&shared, &slots, hidden, 2);
+    let earliest = || super::super::host::APP_RUNTIME.with(|slot| slot.borrow().next_wake());
+    let lifecycle = |state| {
+        installed[1]
+            .0
+            .runtime()
+            .lifecycle(state)
+            .expect("the window's lifecycle changes");
+    };
+
+    lifecycle(flui_scheduler::AppLifecycleState::Hidden);
+    let while_hidden = earliest();
+    lifecycle(flui_scheduler::AppLifecycleState::Resumed);
+    let once_resumed = earliest();
+
+    // Everything the row installed goes before it asserts, so a failed
+    // assertion leaves the table's later rows the loop they expect; the
+    // loop's own raster host comes back however the row ends.
+    close_this_window(installed[1].0);
+    close_this_window(installed[0].0);
+    teardown_platform_ui_runtime();
+
+    assert_ne!(
+        while_hidden,
+        Some(owed),
+        "no other window's wake reports the hidden window's surface"
+    );
+    assert_eq!(once_resumed, Some(owed), "its own wake reports it again");
 }
 
 fn unpublished_window_retires_native_resources_independently() {

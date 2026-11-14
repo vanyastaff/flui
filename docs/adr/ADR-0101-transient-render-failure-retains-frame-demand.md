@@ -44,8 +44,10 @@ does not introduce a timeout that silently drops owed content.
 - `every_failure_boundary_retires_its_ticket` fills the lossy ack channel, fails
   with backpressure or a missing retained source, observes reliable retry debt and
   wake delivery, then successfully renders the next frame.
-- `raster_lane_outcome_matrix` checks transient, terminal and device failures in
-  both application sinks, followed by successful submissions.
+- flui-engine's `window_slots` and `raster_executor` tests check transient,
+  terminal and device failures of a window slot, followed by successful
+  submissions; `every_render_answer_maps_to_its_verdict` checks the web's
+  `DirectSink`.
 - `surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`
   covers both stale-surface and transient verdicts: the second attempt presents
   without another dirty event and still reports the original input epoch.

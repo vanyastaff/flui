@@ -499,13 +499,13 @@ pub use external_texture_registry::{
 // only the wgpu impl is feature-gated.
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
 )]
 pub use raster::{PrePresentHook, PresentDisposition, RasterBackend};
 // Raster mailbox + dedicated ack channel boundary.
 #[expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
 )]
 pub use raster_owner::{
     FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner,

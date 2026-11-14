@@ -21,6 +21,9 @@
 //! | a restore that panics | `Wanted` | unchanged |
 //! | a restore or a rebuild that cannot configure at `s` (over the device's limit) | `Held`: the surface is kept, unconfigured | `Refused(s)` if it was `Applied(s)` |
 //! | the device is rebuilt | unchanged | `Pending(s)` if it was `Refused(s)`: the new device answers it |
+//! | the owner sends a release | `Released` | unchanged |
+//! | the release's send fails | what it was before, if still `Released` | unchanged |
+//! | while `Released`: a dropped surface, a restore taken, refused or panicked | `Released`: a release sent after the restore is still to come | unchanged, or `Refused(s)` for a restore over the limit as above |
 //!
 //! A frame renders only on a held surface configured at the size its stamp
 //! was laid out for: a new surface generation authorises frames only while
@@ -46,6 +49,10 @@ pub enum SurfaceHold {
     /// The newest surface the owner sent was refused, and the slot has
     /// none: a frame has nowhere to go until the owner sends another.
     Refused,
+    /// The owner released the surface (the platform took the window's
+    /// surface away): the slot wants none until the owner restores one when
+    /// the platform gives the window back, and its frames settle not shown.
+    Released,
 }
 
 /// The newest size a slot was sent, and the backend's answer to it.
@@ -109,6 +116,10 @@ pub(crate) enum SurfaceEvent {
     RestoreSent,
     /// The restore's send failed: the hold goes back to what it was.
     RestoreWithdrawn(SurfaceHold),
+    /// The owner sent a release.
+    ReleaseSent,
+    /// The release's send failed: the hold goes back to what it was.
+    ReleaseWithdrawn(SurfaceHold),
     /// The backend no longer presents to the window's surface.
     SurfaceDropped,
     /// The backend took a restored surface.
@@ -164,7 +175,34 @@ impl SlotSurface {
             SurfaceEvent::RestoreWithdrawn(before) if hold == SurfaceHold::Restoring => {
                 Self { hold: before, size }
             }
-            SurfaceEvent::RestoreWithdrawn(_) => self,
+            SurfaceEvent::ReleaseSent => Self {
+                hold: SurfaceHold::Released,
+                size,
+            },
+            SurfaceEvent::ReleaseWithdrawn(before) if hold == SurfaceHold::Released => {
+                Self { hold: before, size }
+            }
+            // A withdrawal the record has already moved past changes nothing.
+            SurfaceEvent::RestoreWithdrawn(_) | SurfaceEvent::ReleaseWithdrawn(_) => self,
+            // A release on its way, or done, outlasts what the backend says
+            // of the surface before it: the owner wants none until it
+            // restores one.
+            SurfaceEvent::SurfaceDropped
+            | SurfaceEvent::Restored
+            | SurfaceEvent::RestoreRefused
+            | SurfaceEvent::RestorePanicked
+                if hold == SurfaceHold::Released =>
+            {
+                self
+            }
+            SurfaceEvent::OverLimit(over) if hold == SurfaceHold::Released => Self {
+                hold,
+                size: if size == SlotSize::Applied(over) {
+                    SlotSize::Refused(over)
+                } else {
+                    size
+                },
+            },
             // The restore on its way replaces the dropped surface.
             SurfaceEvent::SurfaceDropped if hold == SurfaceHold::Restoring => self,
             SurfaceEvent::SurfaceDropped | SurfaceEvent::RestorePanicked => Self {
@@ -215,8 +253,8 @@ mod tests {
     fn every_transition_of_the_table() {
         use SlotSize::{Applied, Pending, Refused, Unsized};
         use SurfaceEvent as E;
-        use SurfaceHold::{Held, Refused as Gone, Restoring, Wanted};
-        let rows: [(SlotSurface, SurfaceEvent, SlotSurface); 27] = [
+        use SurfaceHold::{Held, Refused as Gone, Released, Restoring, Wanted};
+        let rows: [(SlotSurface, SurfaceEvent, SlotSurface); 38] = [
             // A size sent replaces whatever the newest was.
             (
                 state(Held, Unsized),
@@ -354,6 +392,63 @@ mod tests {
                 state(Held, Applied(S)),
             ),
             (state(Held, Unsized), E::DeviceRebuilt, state(Held, Unsized)),
+            // A release holds until the owner restores, whatever the backend
+            // answers of a restore sent before it.
+            (
+                state(Held, Applied(S)),
+                E::ReleaseSent,
+                state(Released, Applied(S)),
+            ),
+            (
+                state(Restoring, Pending(T)),
+                E::ReleaseSent,
+                state(Released, Pending(T)),
+            ),
+            (
+                state(Released, Applied(S)),
+                E::ReleaseWithdrawn(Held),
+                state(Held, Applied(S)),
+            ),
+            (
+                state(Restoring, Applied(S)),
+                E::ReleaseWithdrawn(Held),
+                state(Restoring, Applied(S)),
+            ),
+            (
+                state(Released, Applied(S)),
+                E::Restored,
+                state(Released, Applied(S)),
+            ),
+            (
+                state(Released, Applied(S)),
+                E::RestoreRefused,
+                state(Released, Applied(S)),
+            ),
+            (
+                state(Released, Applied(S)),
+                E::RestorePanicked,
+                state(Released, Applied(S)),
+            ),
+            (
+                state(Released, Applied(S)),
+                E::SurfaceDropped,
+                state(Released, Applied(S)),
+            ),
+            (
+                state(Released, Applied(S)),
+                E::OverLimit(S),
+                state(Released, Refused(S)),
+            ),
+            (
+                state(Released, Applied(S)),
+                E::RestoreSent,
+                state(Restoring, Applied(S)),
+            ),
+            (
+                state(Released, Refused(S)),
+                E::DeviceRebuilt,
+                state(Released, Pending(S)),
+            ),
         ];
         for (before, event, after) in rows {
             assert_eq!(before.on(event), after, "{before:?} on {event:?}");

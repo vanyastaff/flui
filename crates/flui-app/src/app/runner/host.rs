@@ -127,25 +127,6 @@ const SANDBOXED: bool = cfg!(any(
 /// data roots are its own.
 pub(crate) const SANDBOXED_STORAGE_DIR: &str = "app";
 
-/// Have the host trim the GPU memory behind a new raster lane on a
-/// memory-pressure notice, for as long as the lane exists.
-#[cfg(not(target_arch = "wasm32"))]
-#[expect(
-    deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
-)]
-#[cfg_attr(
-    not(any(target_os = "android", target_os = "ios")),
-    allow(
-        dead_code,
-        reason = "the Android and iOS runners keep the raster lane until they move to the raster executor (ADR-0305)"
-    )
-)]
-pub(super) fn track_raster_lane(lane: flui_engine::RasterHandle) {
-    let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
-    memory.track_raster_lane(lane);
-}
-
 /// Shared host services cannot depend on a desktop window-request error.
 #[derive(Debug, thiserror::Error)]
 pub(super) enum HostServicesError {
@@ -961,11 +942,7 @@ pub(crate) fn install_owner_platform(
     let data_transfer = owner.data_transfer();
     // The outgoing loop's raster host, whose GPU context retires below,
     // outside the composition-root borrow.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
+    #[cfg(not(target_arch = "wasm32"))]
     let mut previous_raster_host = None;
     let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
         APP_RUNTIME.with(|slot| {
@@ -995,10 +972,13 @@ pub(crate) fn install_owner_platform(
             ))]
             {
                 state.quit_notification = crate::app::runtime::QuitNotification::Active;
-                // A loop that wants other renderers says so after this install.
-                previous_raster_host = Some(std::mem::take(&mut state.raster_host));
                 state.pending_window_reservations =
                     Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            }
+            // A loop that wants other renderers says so after this install.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                previous_raster_host = Some(std::mem::take(&mut state.raster_host));
             }
             (
                 previous,
@@ -1028,11 +1008,7 @@ pub(crate) fn install_owner_platform(
     });
     first.contain(|| previous_host.shutdown());
     first.contain(|| drop(previous_host));
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
+    #[cfg(not(target_arch = "wasm32"))]
     first.contain(|| drop(previous_raster_host));
     first.contain(|| drop(previous_owner_turn_wake));
     first.contain(|| drop(previous_clipboard));
@@ -1437,8 +1413,8 @@ pub(super) fn merge_wake_deadlines(
 /// `frames_enabled == false` suppresses the deadline unconditionally,
 /// regardless of how soon it is due: while frames are disabled
 /// (`AppLifecycleState::Hidden`/`Paused`/`Detached`), the frame closure's
-/// `WakeAction::PumpBackground` arm returns before the device-recovery render
-/// (`attempt_device_recovery`) ever runs, so nothing on that path would consume a reported
+/// `WakeAction::PumpBackground` arm returns before the raster host's turn
+/// (`RasterSlot::pump`) ever runs, so nothing on that path would consume a reported
 /// deadline — reporting it anyway hands the idle wait the SAME past
 /// instant on every idle iteration once it comes due, which is a
 /// `WaitUntil(past)` busy-spin, forced by this hook instead of a stale UI
@@ -1598,11 +1574,7 @@ impl Drop for OwnerHostClearGuard {
         // The loop's GPU context retires with the loop, before the platform
         // whose display it was created on, and never in the thread's
         // teardown, where the GPU driver's own thread-locals are gone.
-        #[cfg(all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        ))]
+        #[cfg(not(target_arch = "wasm32"))]
         if removed.is_some() {
             let raster_host =
                 APP_RUNTIME.with(|slot| std::mem::take(&mut slot.borrow_mut().raster_host));

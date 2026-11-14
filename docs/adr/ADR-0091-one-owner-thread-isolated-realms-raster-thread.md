@@ -52,18 +52,13 @@ not `Send + Sync`. The flip of §1 removed that bound (`crates/flui-view/src/vie
 On the raster side, [ADR-0045](ADR-0045-raster-lane.md) is still Proposed, and production runs
 inline:
 
-- A desktop window is a slot on the loop's one inline raster executor
-  (`crates/flui-app/src/app/runner/raster_host.rs`, ADR-0305). Android (`runner/android.rs`) and
-  iOS (`runner/ios.rs`) build one lane per window and wrap it in a lock, `Arc<Mutex<RasterLane>>`.
-  The lane pumps on the owner thread (`crates/flui-app/src/app/raster_lane.rs`).
-- `RasterOwner::run_until_shutdown` (`crates/flui-engine/src/raster_owner.rs:1519`) has callers
-  only inside that file's test module, which starts at `raster_owner.rs:1668`. No production
-  raster thread exists.
+- Every native window (desktop, Android, iOS) is a slot on the loop's one inline raster executor
+  (`crates/flui-app/src/app/runner/raster_host.rs`, ADR-0305), turned on the owner thread with no
+  lock.
+- No production raster thread exists.
 - Web renders through `DirectSink`, the pre-mailbox path with no stamping or generation checks
-  (`crates/flui-app/src/app/raster_lane.rs:394-406`, constructed at
-  `RuntimeRaster::render_frame_entered` in the same file, over the UI runtime's
-  `UiRuntime::render_frame`), with the renderer in an
-  `Arc<Mutex<Option<Renderer>>>` (`crates/flui-app/src/app/runner/web.rs:85`).
+  (`crates/flui-app/src/app/direct_sink.rs`, over the UI runtime's `UiRuntime::render_frame`),
+  with the renderer in an `Arc<Mutex<Option<Renderer>>>` (`crates/flui-app/src/app/runner/web.rs`).
 - Every renderer creates its own `wgpu::Instance`, surface and adapter
   (`crates/flui-engine/src/renderer.rs:1140-1168`), and every painter builds its own glyph atlas
   over the process-wide font system (`crates/flui-engine/src/painter/mod.rs:73`, `:163-167`).
@@ -184,9 +179,8 @@ first consumer (the external-content spike), not here.
 - One raster thread presents several surfaces in turn. A present that blocks on one surface
   (`Fifo`, an occluded window) can delay another window's present; how much is unmeasured and is
   what the H2 spike and the per-platform budget measure.
-- The lock around each lane (`Arc<Mutex<RasterLane>>`) goes away once the lane is threaded; the
-  inline platforms keep an owner-thread lane with no lock once the callbacks stop requiring
-  `Send`.
+- No window's raster path holds a lock: the owner talks to the executor through its commands, and
+  the inline platforms turn it on the owner thread (ADR-0305 §12).
 - Glyph rasterization moves to the raster thread, which needs a rasterizer that does not take the
   shaping lock; [ADR-0092](ADR-0092-per-realm-text-over-parley.md) provides it.
 - [ADR-0067](ADR-0067-engine-owned-glyph-atlas.md)'s atlas moves from each painter to the

@@ -207,9 +207,9 @@ The former `RasterOptions` configuration type is removed. Current renderer
 surface configuration uses `desired_maximum_frame_latency: 2`; that swapchain
 setting is not a production `FrameClock` backpressure permit.
 
-**Current boundary:** `flui-app`'s `app/raster_lane.rs` drives a production
-`RasterOwner` synchronously through the inline mailbox protocol. This is a real
-consumer; it does not establish the proposed threaded raster lane. Production
+**Current boundary:** `flui-app`'s raster host (`app/runner/raster_host.rs`) turns
+an inline `RasterExecutor` (ADR-0305) synchronously on the owner thread. This is a
+real consumer; it does not establish the proposed threaded raster lane. Production
 frame-clock backpressure integration remains separate work: the current producer
 does not report that accounting to the frame clock, which no longer counts frames in flight.
 The retire→wake accounting edge is implemented and tested; a threaded pacing or

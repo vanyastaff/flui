@@ -1332,7 +1332,7 @@ impl UiRuntime {
                 // exact per-presentation catch) gates
                 // [`Self::mark_needs_full_repaint_for`], the same fix #630
                 // already established for the pre-frame device-recovery-success
-                // arm (`flui-app`'s `device_recovery::attempt_device_recovery`) —
+                // arm (`flui-app`'s `RasterSlot::pump`) —
                 // shared rather than duplicated via that one function, since
                 // both are "a retry needs the pipeline to actually have work to
                 // redo, not just a wake"; see that function's own doc for why
@@ -1348,7 +1348,7 @@ impl UiRuntime {
                 //
                 // Steady-state cost of a PERMANENTLY failing submit: unlike the
                 // pre-frame device-recovery path, this arm is not gated by
-                // `DeviceRecoveryBackoff` — a surface that keeps failing every
+                // the raster executor's rebuild backoff — a surface that keeps failing every
                 // submit now retries every wake, throttled only by
                 // `frame_pacing.rs`'s fallback wake (one display period after
                 // the last present), running a full-tree paint each time,

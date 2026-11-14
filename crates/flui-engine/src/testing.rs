@@ -57,6 +57,9 @@ pub enum SlotCall {
     Textures(SlotId),
     /// `render`, with the damage it was asked to repaint.
     Render(SlotId, DamageRegion),
+    /// `render_lent`, with whether it dropped the earlier lent scene's
+    /// fonts; answered from the same script as `render`.
+    Lent(SlotId, bool),
     /// `detach`.
     Detach(SlotId),
     /// `reclaim`.
@@ -172,6 +175,13 @@ impl ScriptedSlots {
         self.script.borrow_mut().no_inline_rebuild = true;
     }
 
+    /// Undo [`cannot_rebuild_inline`](Self::cannot_rebuild_inline): device
+    /// rebuilds can succeed where the executor runs again, as a driver that
+    /// came back does.
+    pub fn can_rebuild_inline(&self) {
+        self.script.borrow_mut().no_inline_rebuild = false;
+    }
+
     /// Every device rebuild from now on advances `clock` by `took`, as a
     /// driver that blocks the attempt does.
     pub fn rebuilds_take(&self, clock: &ManualClock, took: Duration) {
@@ -220,7 +230,7 @@ impl ScriptedSlots {
         script.calls.push(call);
         match call {
             SlotCall::Attach(..) => script.attaches.pop_front(),
-            SlotCall::Render(..) => script.renders.pop_front(),
+            SlotCall::Render(..) | SlotCall::Lent(..) => script.renders.pop_front(),
             SlotCall::Textures(_) => script.texture_answers.pop_front(),
             SlotCall::Resize(..) => script.resizes.pop_front(),
             SlotCall::Restore(_) => script.restores.pop_front(),
@@ -314,6 +324,27 @@ impl SlotBackend for ScriptedSlots {
             Some(ScriptedAnswer::Answer(disposition)) => Ok(disposition),
             Some(ScriptedAnswer::Fail(error)) => Err(error),
             Some(ScriptedAnswer::Panic) => panic!("scripted render panic"),
+        }
+    }
+
+    fn render_lent(
+        &mut self,
+        slot: SlotId,
+        _scene: &Scene,
+        reset_fonts: bool,
+    ) -> EngineResult<PresentDisposition> {
+        if self.script.borrow().device_lost {
+            self.script
+                .borrow_mut()
+                .calls
+                .push(SlotCall::Lent(slot, reset_fonts));
+            return Err(EngineError::DeviceLost);
+        }
+        match self.answer(SlotCall::Lent(slot, reset_fonts)) {
+            None => Ok(PresentDisposition::Presented),
+            Some(ScriptedAnswer::Answer(disposition)) => Ok(disposition),
+            Some(ScriptedAnswer::Fail(error)) => Err(error),
+            Some(ScriptedAnswer::Panic) => panic!("scripted lent render panic"),
         }
     }
 

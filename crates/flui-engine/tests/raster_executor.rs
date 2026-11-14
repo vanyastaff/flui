@@ -1383,6 +1383,15 @@ impl flui_engine::SlotBackend for PanicsAtAttach {
         Ok(PresentDisposition::Presented)
     }
 
+    fn render_lent(
+        &mut self,
+        _: SlotId,
+        _: &Scene,
+        _: bool,
+    ) -> flui_engine::EngineResult<PresentDisposition> {
+        Ok(PresentDisposition::Presented)
+    }
+
     fn release(&mut self, _: SlotId) {}
 
     fn restore(

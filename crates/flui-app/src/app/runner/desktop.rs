@@ -1,7 +1,6 @@
 use crate::app::hot_reload::WorkerReload;
 use flui_native::HostWindow;
 use flui_platform::PlatformWindow;
-use flui_runtime::pump::SampledClock;
 use flui_scheduler::AppLifecycleState;
 use flui_view::View;
 use flui_widgets::app_root;
@@ -17,9 +16,8 @@ use super::owner_dispatch::{
     PresentationDispatcher, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
     install_input_wiring, prepare_ui_runtime_alongside,
 };
-use super::raster_host::{RasterSlot, device_retry_at};
+use super::raster_host::RasterSlot;
 use crate::app::AppConfig;
-use flui_engine::SlotVisibility;
 
 pub(super) struct RenderedMain {
     pub(super) window: Rc<dyn PlatformWindow>,
@@ -190,9 +188,10 @@ where
 
     // 3d. The window's wall-clock wake sources: the owner loop consults them
     // every idle iteration instead of blocking forever, so the pacing
-    // fallback, the first reveal and the executor's next device rebuild
-    // still wake the loop while nothing else is dirty. Read only while this
-    // presentation's frames are enabled.
+    // fallback and the first reveal still wake the loop while nothing else
+    // is dirty (the raster work of the window is the loop's own term, in
+    // `AppRuntime::next_wake`). Read only while this presentation's frames
+    // are enabled.
     let deadlines = Arc::new(DesktopWakeDeadlines {
         fallback: Arc::clone(&fallback),
         first_reveal: Arc::clone(&first_reveal),
@@ -246,7 +245,6 @@ where
                 deadlines,
                 reveal_window: Rc::downgrade(&window),
                 device_retry,
-                retry_pending: false,
             },
         ))
         .map_err(|error| crate::app::AppWindowError::Mount {
@@ -367,9 +365,6 @@ pub(super) struct DesktopFrameDriver {
     worker_reload: WorkerReload,
     reveal_window: std::rc::Weak<dyn PlatformWindow>,
     device_retry: Option<crate::app::application_control::DeviceRetryWatch>,
-    /// The application asked for a rebuild of a given-up device while the
-    /// host was turning; sent on the next wake.
-    retry_pending: bool,
 }
 
 /// Presentation-owned pacing sources, retained even while its driver is leased.
@@ -394,10 +389,11 @@ impl DesktopWakeDeadlines {
             .arm_after_no_present(now, ui_runtime.refresh_interval(presentation))
     }
 
-    /// The earliest armed deadline: the device's next rebuild, the pacing
-    /// fallback and the first reveal. `period` is the presentation's current
-    /// refresh interval, which the pacing fallback needs to tell a late wake
-    /// from one that is never coming.
+    /// The earliest armed deadline: the pacing fallback and the first
+    /// reveal; the loop counts the raster work of each window whose frames
+    /// run itself (`RasterHost::wake_deadline`). `period` is the
+    /// presentation's current refresh interval, which the pacing fallback
+    /// needs to tell a late wake from one that is never coming.
     pub(super) fn next_wake(
         &self,
         frames_enabled: bool,
@@ -407,10 +403,7 @@ impl DesktopWakeDeadlines {
             return None;
         }
         let deadline = merge_wake_deadlines(
-            merge_wake_deadlines(
-                device_retry_at(),
-                self.fallback.next_wake(web_time::Instant::now(), period),
-            ),
+            self.fallback.next_wake(web_time::Instant::now(), period),
             self.first_reveal.next_deadline(),
         );
         desktop_secondary_wake_deadline(deadline, frames_enabled)
@@ -438,17 +431,20 @@ impl DesktopFrameDriver {
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         presentation: flui_foundation::PresentationId,
     ) {
-        self.retry_pending |= self
+        // The application's request to rebuild a given-up device: it takes
+        // the device out of the runtime's abandoned state, which the frame's
+        // slot reads as the request (`RasterSlot::pump`).
+        let retry_requested = self
             .device_retry
             .as_mut()
             .is_some_and(crate::app::application_control::DeviceRetryWatch::take_request);
-        let retry_requested = self.retry_pending;
         let worker_reload_frame = &self.worker_reload;
         let fallback = &self.deadlines.fallback;
         let first_reveal = &self.deadlines.first_reveal;
         let reveal_window = &self.reveal_window;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
+        let raster_deadline = self.raster.frame_deadline();
         let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
             worker_reload_frame.poll_and_apply(ui_runtime);
 
@@ -483,7 +479,7 @@ impl DesktopFrameDriver {
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
                 ui_runtime.has_pending_work(),
-                merge_wake_deadlines(device_retry_at(), first_reveal.next_deadline()),
+                merge_wake_deadlines(raster_deadline, first_reveal.next_deadline()),
                 fallback_gate,
             );
             let action = wake_action(
@@ -504,17 +500,7 @@ impl DesktopFrameDriver {
         // A window whose frames are off cannot be seen: its slot is not
         // drawn, and draws in full when frames come back (ADR-0305).
         if action != WakeAction::Skip {
-            let visibility = if action == WakeAction::Render {
-                SlotVisibility::Shown
-            } else {
-                SlotVisibility::Hidden
-            };
-            let address = self.raster.address;
-            // A host already turning is told on the next wake.
-            let _told = self
-                .raster
-                .host
-                .try_with(|host| host.set_visibility(address, visibility));
+            self.raster.show(action == WakeAction::Render);
         }
         match action {
             WakeAction::Skip => return,
@@ -531,45 +517,11 @@ impl DesktopFrameDriver {
             WakeAction::Render => {}
         }
 
-        // Before the frame: the application's rebuild request, a changed
-        // display colour profile (HDR switched, a move to another monitor,
-        // ADR-0256 §6), and a turn of the executor, which rebuilds a device
-        // that is lost and due even when this frame has nothing new to draw.
-        // A device that came back repaints the window in full, so this frame
-        // submits a fresh scene.
-        let address = self.raster.address;
-        let retry_pending = self.retry_pending;
-        let turned = self.raster.host.try_with(|host| {
-            if retry_pending {
-                host.retry_device();
-            }
-            let changed = host.follow_display(address, display_color);
-            host.service(address);
-            changed
-        });
-        // A host already turning is asked again on the next wake.
-        if turned.is_some() {
-            self.retry_pending = false;
-        }
-        let display_changed = turned.unwrap_or(false);
-        if display_changed | self.raster.settle_device(ui_runtime) {
-            ui_runtime.mark_primary_needs_full_repaint();
-        }
-
-        // The frame: `UiRuntime::pump` at `now` (apply commands -> begin ->
-        // persistent callbacks -> the pipeline and its submit through the
-        // window's slot -> post-frame callbacks -> Idle).
-        let mut sink = self.raster.frame();
-        let presented = ui_runtime
-            .pump(&mut SampledClock(now), &mut sink)
-            .presented();
-        // A panic of the frame's GPU work, held by the host, reaches the
-        // application's frame-failure handler.
-        self.raster.report_frame_panic(ui_runtime);
-        // A device the frame itself lost is reported with the frames it
-        // drops; its rebuild is due at the executor's deadline, which the
-        // wake hook and the dirty predicate above both read.
-        let _ = self.raster.settle_device(ui_runtime);
+        // The frame: `UiRuntime::pump` at `now` through the window's slot,
+        // after the application's rebuild request, a changed display colour
+        // profile (HDR switched, a move to another monitor, ADR-0256 §6) and
+        // a turn of the executor (`RasterSlot::pump`).
+        let presented = self.raster.pump(ui_runtime, now, display_color);
 
         // Frame-pacing fallback (ADR-0058). A frame that reached `present()`
         // needs no bound: the present blocked at vsync or the compositor is

@@ -443,12 +443,24 @@ impl RasterSender {
         let Some(inbox) = self.commanded(slot) else {
             return Err(RasterSendError::stale_slot(RasterCommand::Release { slot }));
         };
-        if !inbox.lock().phase.takes_commands() {
-            return Err(self.refusal(RasterCommand::Release { slot }));
+        // Released before the send, so a restore answered before the release
+        // is applied does not read as a surface the owner wants.
+        let hold = {
+            let mut state = inbox.lock();
+            if !state.phase.takes_commands() {
+                drop(state);
+                return Err(self.refusal(RasterCommand::Release { slot }));
+            }
+            let hold = state.surface.hold;
+            state.surface = state.surface.on(SurfaceEvent::ReleaseSent);
+            hold
+        };
+        let sent = self.shared.send_lifecycle(Lifecycle::Release { slot });
+        if sent.is_err() {
+            let mut state = inbox.lock();
+            state.surface = state.surface.on(SurfaceEvent::ReleaseWithdrawn(hold));
         }
-        self.shared
-            .send_lifecycle(Lifecycle::Release { slot })
-            .map(|()| SendReceipt::Accepted)
+        sent.map(|()| SendReceipt::Accepted)
     }
 
     fn restore(

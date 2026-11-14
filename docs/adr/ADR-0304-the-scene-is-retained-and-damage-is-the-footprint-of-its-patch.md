@@ -45,7 +45,7 @@ paint still works per frame and per scene:
 |------|----------|
 | Each paint pass builds a new `LayerTree` and pushes a clone of every layer of every clean boundary into it | `crates/flui-rendering/src/pipeline/owner/paint.rs:55-61`, `:197`, `:1128-1131`, `:1469-1471` |
 | The tree is append-only, its ids follow insertion order, and it lives for one frame | `crates/flui-layer/src/tree/layer_tree.rs:1-11`, `:218-237`; `crates/flui-layer/ARCHITECTURE.md:46-57` |
-| Damage is a walk of the whole frozen scene against the previous one, about 200 µs per 1,000 boundaries | `crates/flui-app/src/app/raster_lane.rs:359`; `crates/flui-layer/src/damage/differ.rs:92-108`, `:221`; `crates/flui-layer/ARCHITECTURE.md:172-173` |
+| Damage is a walk of the whole frozen scene against the previous one, about 200 µs per 1,000 boundaries | the former `flui-app` `raster_lane.rs:359`; `crates/flui-layer/src/damage/differ.rs:92-108`, `:221`; `crates/flui-layer/ARCHITECTURE.md:172-173` |
 | Damage is one rectangle: a caret and a clock in opposite corners repaint everything between them | `crates/flui-layer/src/scene_snapshot.rs:20-29`; `crates/flui-engine/src/damage.rs:11-14`, `:29-33` |
 | Content under a follower, textures, canvas layers, platform views and the performance overlay are damaged on every frame they exist | `differ.rs:230-239`, `:326-341`, `:477-478` |
 | A boundary that holds a `Leader` or `Follower` is never retained, because its capture does not carry the follower's render object | `paint.rs:1603-1609`, `:1650-1652` |

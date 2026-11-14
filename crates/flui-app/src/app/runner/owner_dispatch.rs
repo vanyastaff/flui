@@ -764,7 +764,7 @@ impl NoticeDelivery {
 }
 
 /// Ask the host's shared memory to give back for `level`: the application's
-/// receivers and every raster lane's pools.
+/// receivers and the raster host's pools.
 fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
     use flui_foundation::memory::ReclaimMemory as _;
     // Cloned out of the cell: a receiver's destructors may touch the host.
@@ -778,11 +778,7 @@ fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
     }
     // The GPU memory behind every window's slot. A host already turning (a
     // notice delivered from inside the GPU work) is trimmed when that turn ends.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let host = APP_RUNTIME.with(|slot| {
             slot.try_borrow()

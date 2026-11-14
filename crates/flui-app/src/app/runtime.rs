@@ -375,11 +375,7 @@ pub(crate) struct AppRuntime {
     ))]
     pub(super) main_controller: Option<super::runner::main_window::MainController>,
     /// Where this loop's windows get their renderers.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) raster_host: super::runner::raster_host::SharedRasterHost,
     #[cfg(target_os = "ios")]
     pub(super) ios_controller: Option<super::runner::ios::IOSController>,
@@ -572,11 +568,7 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             main_controller: None,
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
+            #[cfg(not(target_arch = "wasm32"))]
             raster_host: super::runner::raster_host::SharedRasterHost::default(),
             #[cfg(target_os = "ios")]
             ios_controller: None,
@@ -1055,13 +1047,15 @@ impl AppRuntime {
     /// resident slot, same discipline as [`Self::installed_ui_runtime_phase`] —
     /// a UI runtime currently checked out for dispatch (`slot.ui_runtime` is `None`)
     /// contributes nothing to this call, which is correct: this is only
-    /// ever consulted from `about_to_wait`, after every dispatch for this
+    /// ever consulted from a loop's wake hook, after every dispatch for this
     /// iteration has already returned and every UI runtime slot is back in
     /// place.
     ///
-    /// Folds logical runtime, native text-sizing and desktop presentation
-    /// deadlines. Logical runtime checkout must have returned; desktop pacing
-    /// metadata remains readable while a native frame driver is leased.
+    /// Folds logical runtime, native text-sizing, window placement, desktop
+    /// presentation deadlines and the raster work of each window whose frames
+    /// run (`RasterHost::wake_deadline`). Logical runtime checkout must have
+    /// returned; desktop pacing metadata remains readable while a native frame
+    /// driver is leased. The wake hook of every native loop asks it.
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
@@ -1098,15 +1092,34 @@ impl AppRuntime {
         );
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let placement = None;
+        // The raster work a window's own frame serves (its owed surface, the
+        // device's next rebuild), for each window whose frames run: a window
+        // whose frames are off would hand the loop a deadline no wake moves.
+        // `None` while the raster host is turning: that turn answers it.
+        let raster = self
+            .raster_host
+            .try_read(|host| host.wake_deadline(|address| self.frames_run(address)))
+            .flatten();
         [
             runtime,
             frame,
+            raster,
             self.installed_host.native().text_sizing_deadline(),
             placement,
         ]
         .into_iter()
         .flatten()
         .min()
+    }
+
+    /// Whether `address`'s UI runtime runs frames, which is what serves the
+    /// raster work of its window.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn frames_run(&self, address: flui_foundation::PresentationAddress) -> bool {
+        self.installed_host
+            .logical()
+            .runtime_status(address.ui_runtime_id)
+            .is_ok_and(|status| status.frames_enabled)
     }
 
     pub(super) fn close_requests(&self) -> Rc<super::close_request::CloseRequestRouter> {

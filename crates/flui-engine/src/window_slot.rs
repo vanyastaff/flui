@@ -344,6 +344,29 @@ impl WindowSlot {
         self.present(gpu, painter, offscreen, scene)
     }
 
+    /// Render `scene`, lent outside the slot's frames, in full with the fonts
+    /// it carries (`reset_fonts` drops the ones an earlier lent scene
+    /// registered), and present it. The screen then shows a scene no frame
+    /// described, so the slot's next frame renders in full.
+    ///
+    /// # Errors
+    /// As [`Self::render`].
+    pub(crate) fn render_lent(
+        &mut self,
+        gpu: &Gpu<'_>,
+        painter: &mut WgpuPainter,
+        offscreen: &mut OffscreenRenderer,
+        scene: &Scene,
+        reset_fonts: bool,
+    ) -> EngineResult<PresentDisposition> {
+        self.frame
+            .select_font_source(painter, FontSource::Plugin, reset_fonts);
+        self.frame.begin_unmanaged();
+        let presented = self.present(gpu, painter, offscreen, scene);
+        self.frame.end_unmanaged();
+        presented
+    }
+
     fn present(
         &mut self,
         gpu: &Gpu<'_>,

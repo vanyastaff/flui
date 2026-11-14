@@ -1704,8 +1704,7 @@ impl Renderer {
         // into `vkDeviceWaitIdle` (see `release_surface`'s doc for what that
         // wait costs and why it is accepted); a create that then fails leaves
         // the lease released, which is the documented post-state. The caller
-        // owns the log line for that failure — see `surface_lifecycle.rs`'s
-        // `a_failed_recreation_carries_the_error_and_leaves_the_presentation_released`.
+        // owns the log line for that failure.
         let released = lease.release();
 
         let surface = self
@@ -2584,7 +2583,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[expect(
         deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+        reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
     )]
     fn an_owed_surface_recreation_runs_through_the_backend_render_path() {
         use crate::RasterBackend;
@@ -2632,7 +2631,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[expect(
         deprecated,
-        reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+        reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
     )]
     fn quarantined_domain_reaches_the_backend_recovery_predicate() {
         // This tests the actual backend predicate in the released-surface state.

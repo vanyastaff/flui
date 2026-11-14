@@ -86,6 +86,20 @@ pub trait SlotBackend {
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition>;
 
+    /// Render `scene`, which the caller lends for this call alone, into
+    /// window slot `slot` in full, with the fonts it carries: the development
+    /// reload plugin's scene, drawn outside the slot's frames. `reset_fonts`
+    /// drops the fonts an earlier lent scene registered.
+    ///
+    /// # Errors
+    /// As [`render`](Self::render).
+    fn render_lent(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        reset_fonts: bool,
+    ) -> EngineResult<PresentDisposition>;
+
     /// Take `slot` down; a slot the backend does not hold is ignored.
     fn detach(&mut self, slot: SlotId);
 
@@ -157,6 +171,15 @@ impl<B: SlotBackend + ?Sized> SlotBackend for Box<B> {
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
         (**self).render(slot, scene, damage)
+    }
+
+    fn render_lent(
+        &mut self,
+        slot: SlotId,
+        scene: &Scene,
+        reset_fonts: bool,
+    ) -> EngineResult<PresentDisposition> {
+        (**self).render_lent(slot, scene, reset_fonts)
     }
 
     fn detach(&mut self, slot: SlotId) {

@@ -107,15 +107,17 @@ pub(super) fn wake_action(
 /// Four sources, all required: `inbox_redraw` (a command drained this frame
 /// boundary asked for a redraw), `needs_redraw`/`has_pending_work` (the
 /// UI runtime's own pre-existing dirty state), and `next_attempt_at.is_some()` —
-/// an armed device-recovery retry deadline. Dropping that last term is
-/// exactly the bug `DeviceRecoveryBackoff`'s own doc describes: a deadline
-/// wired into the wake-deadline hook but invisible to this gate reaches
-/// `WakeAction::Skip` and returns before the device-recovery render
-/// (`attempt_device_recovery`) is ever called, no matter how faithfully the
+/// an armed raster deadline of the window's own (`RasterSlot::frame_deadline`:
+/// a device rebuild, or a restore of this window's surface the raster host
+/// paces; the loop wakes for it while the window's frames run,
+/// `RasterHost::wake_deadline`). Dropping that last term loses the
+/// deadline: wired into the wake-deadline hook but invisible to this gate,
+/// it reaches `WakeAction::Skip` and returns before the raster host's turn
+/// (`RasterSlot::pump`) is ever reached, no matter how faithfully the
 /// platform actuates the wake.
-// Absent on wasm: its two production callers are the desktop and Android
-// frame closures, neither of which exists there, and the web runner has
-// no `DeviceRecoveryBackoff` deadline term to fold in.
+// Absent on wasm: its production callers are the desktop, Android and iOS
+// frame closures, none of which exists there, and the web runner has no
+// raster host deadline to fold in.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn frame_is_dirty(
     inbox_redraw: bool,

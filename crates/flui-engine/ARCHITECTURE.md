@@ -937,7 +937,7 @@ hashes `R::Key` and owns `R`, taking it by `&mut` on a miss and on a grow. The
 painter's is a `TextAtlas`, `GlyphAtlas<SwashRasterizer>`: the rasterizer owns
 the registry of every face a paragraph drawn through it named, so a key stays
 valid while the atlas lives, and rasterization takes no lock and shares no
-font state with any UI runtime. `Renderer::render_plugin_scene` selects a plugin
+font state with any UI runtime. `Renderer::render_plugin_scene` and a window slot's lent render (`WindowSlot::render_lent`) select a plugin
 font source; the first scene from a hook and every successful image reload
 request a reset. Switching ordinary ↔ plugin sources also replaces the complete
 `TextAtlas` between frames, including its registry and bitmap entries. Blob ids

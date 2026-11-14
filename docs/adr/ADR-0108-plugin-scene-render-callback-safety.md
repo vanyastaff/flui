@@ -34,7 +34,8 @@ the borrowed scene reference alone does not discharge it. `ScenePluginHook`
 implements that contract through the SDK seam and drops its local scene before
 returning. No layer or scene is made non-cloneable merely to hide the escape.
 
-The Android host supplies only the synchronous `Renderer::render_plugin_scene` callback.
+The Android host supplies only a synchronous callback that lends the scene to the window's raster
+slot for one render (`RasterHost::render_lent` over `RasterExecutor::render_lent`, ADR-0305 §10).
 That engine path ignores annotation payloads and records concrete geometry,
 matrices, instances and GPU leases. Its texture cache may retain concrete `Image`
 allocations backed by host-compatible byte vectors; these do not carry a plugin's

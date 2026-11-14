@@ -2,7 +2,7 @@
 
 #![expect(
     deprecated,
-    reason = "ADR-0305: the old raster lane, until the window runners move to `RasterExecutor`"
+    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
 )]
 use crate::headless::HeadlessRenderer;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};

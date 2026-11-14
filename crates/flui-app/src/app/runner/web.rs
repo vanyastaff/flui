@@ -247,7 +247,7 @@ impl WebFrameDriver {
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         liveness: super::frame_driver::FrameLiveness,
     ) {
-        use crate::app::raster_lane::DirectSink;
+        use crate::app::direct_sink::DirectSink;
         use flui_runtime::pump::SampledClock;
         // Before the dirty gate: a lost device or context needs no frame to be
         // noticed, and a hidden tab runs none.
