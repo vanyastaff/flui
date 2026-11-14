@@ -134,7 +134,7 @@ Fragment в `RoutePath` не входит: для ссылки он ничего
 | macOS | `application:openURLs:` до `applicationDidFinishLaunching:` (AppKit доставляет его первым); файлы — те же `NSURL` с `file:` | `application:openURLs:` | `Application` |
 | Windows | `argv` процесса (`CommandLineToArgvW`), ключ регистрации `"%1"` | второй экземпляр → именованный канал первого (§5) | `Application` |
 | Linux | `argv` (`%U` в `.desktop`: ссылки и файлы как `file:` URI) | второй экземпляр → D-Bus `org.freedesktop.Application.Open` (§5) | `Application` |
-| Web | `location.pathname` при запуске страницы | история браузера — вне объёма | страница |
+| Web | `location.href` при запуске страницы; URL её `location.origin` допущены без объявлений | история браузера — вне объёма | страница |
 
 Каждый вход ОС — вызов `os_entry` (ADR-0151 §16): `xtask panic-boundary` это проверяет. Разбор
 `NSURL`, `Uri`, `argv` в `OpenedUrl`/`OpenedFile` — чистая часть файла хоста, `pub(crate)` модуль с
