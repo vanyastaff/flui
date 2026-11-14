@@ -329,6 +329,43 @@ fn raster_host_damage_matrix() {
 /// Red-check: let a frame restore a released surface (drop `Released` from
 /// `HostSlot::needs_surface`'s `available` gate) and the frame after the
 /// release makes one over a window the platform has taken away.
+/// The epoch of the settlement the host's last frame drained.
+fn settled_epochs(host: &RasterHost) -> Vec<flui_foundation::FrameEpoch> {
+    host.placed
+        .as_ref()
+        .expect("the executor is placed")
+        .settlements
+        .iter()
+        .map(|settlement| settlement.epoch)
+        .collect()
+}
+
+/// A frame is stamped with the epoch its UI runtime gave it, however its
+/// runtime numbered the frames before: one that starts past the slot's first
+/// frame, or skips frames the host never saw, settles by that epoch.
+#[test]
+fn a_frame_settles_by_the_epoch_its_ui_runtime_gave_it() {
+    let (mut host, _slots) = host();
+    let mut scene = TestScene::new(AT);
+    // The runtime submitted four frames to another sink before this one.
+    for _ in 0..4 {
+        let _ = scene.next_epoch();
+    }
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    let fifth = scene.epoch;
+    assert_eq!(settled_epochs(&host), vec![fifth]);
+    // Two frames the host never saw (refused before they reached it).
+    let _ = scene.next_epoch();
+    let _ = scene.next_epoch();
+    scene.republish_child(AT, 4);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    assert_eq!(
+        settled_epochs(&host),
+        vec![fifth.next().next().next()],
+        "the frame settles by the epoch it was given, not by a count of the slot's frames"
+    );
+}
+
 #[test]
 fn a_released_surface_waits_for_the_platform_and_comes_back_when_it_does() {
     let (mut host, slots) = host();

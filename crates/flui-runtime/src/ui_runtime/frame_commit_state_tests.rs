@@ -83,6 +83,50 @@ pub(crate) fn deferred_painted_frame_waits_for_the_later_present_to_commit() {
     assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
 }
 
+/// A frame withheld from the sink takes no epoch: the first frame the sink
+/// sees is its presentation's first.
+pub(crate) fn a_withheld_frame_takes_no_epoch() {
+    let ui_runtime = mount_box();
+    ui_runtime.defer_first_frame();
+    let mut backend = ScriptedSink::always_presents();
+    assert!(!ui_runtime.render_frame(&mut backend));
+    assert!(!ui_runtime.render_frame(&mut backend));
+    ui_runtime.allow_first_frame();
+    assert!(ui_runtime.render_frame(&mut backend));
+    assert_eq!(
+        backend.epochs,
+        vec![flui_foundation::FrameEpoch::ZERO.next()],
+        "the frames painted while deferred never reached the sink"
+    );
+}
+
+/// Each presentation numbers its own frames: one presentation's submits do
+/// not move another's sequence.
+pub(crate) fn each_presentation_numbers_its_own_frames() {
+    use std::rc::Rc;
+
+    use flui_platform::PlatformWindow;
+
+    let mut ui_runtime = mount_box();
+    let window: Rc<dyn PlatformWindow> = Rc::new(crate::testing::TestWindow::new());
+    let assembled = ui_runtime.assemble_presentation(Rc::clone(&window));
+    let secondary = ui_runtime.install_presentation(assembled);
+    let mut backend = ScriptedSink::always_presents();
+    assert!(ui_runtime.render_frame(&mut backend));
+    let first = flui_foundation::FrameEpoch::ZERO.next();
+    assert_eq!(backend.epochs, vec![first]);
+    // The secondary submitted nothing: its first frame is still its first.
+    let secondary = ui_runtime
+        .presentations
+        .get(secondary)
+        .expect("the secondary is installed");
+    assert_eq!(secondary.next_frame_epoch(), first);
+    assert_eq!(
+        ui_runtime.presentations.primary().next_frame_epoch(),
+        first.next()
+    );
+}
+
 /// The withheld retry is BOUNDED: a drawable that never comes back stops
 /// being retried instead of spinning at the fallback pace forever.
 ///
