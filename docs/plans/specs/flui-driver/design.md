@@ -280,8 +280,8 @@ Gesture-arena `Decision` rows from the same tap feed the inspector timeline.
   narrows to the one match `first`, `last` or `nth` names; strictness bites where one element is
   needed (an action, an expectation about one element), which answers `ambiguous`. Matches carry
   the tree revision. `TextMatch` is exact/contains/prefix only, so no regex engine enters the app.
-  Both read the tree a screen reader reaches unless `offscreen` is set; with it they read every
-  built node, rows a scrollable keeps past its viewport included, which `Tester` asks for.
+  Both read every built node, rows a scrollable keeps past its viewport included, through
+  AccessKit's filter without its clip rule; `visible` says whether one is shown.
 All three trees are walked through ADR-0242's `InspectTree` and answer the owned `Inspect`
 snapshot, so every property arrives typed:
 

@@ -643,10 +643,10 @@ in `src/accesskit_translation/coverage_matrix.rs`; `collection_places_conflict_o
 
 **Rule.** `SemanticsOwner::read_wire` (`src/agent.rs`) answers an agent with ADR-0080 wire
 nodes projected from `to_accesskit_tree_update`, the update the platform adapter is handed,
-read through `accesskit_consumer`: `common_filter` decides which nodes appear (a hidden node
-drops its subtree, a `GenericContainer` is lifted into its parent, a focused node is kept, and
-under a node that clips its children a child wholly outside it is left out except the first one
-past each edge), a static text is named by its value, and the actions follow UI Automation's pattern predicates
+read through `accesskit_consumer`: `common_filter` without its clip rule decides which nodes
+appear (a hidden node drops its subtree, a `GenericContainer` is lifted into its parent, a
+focused node is kept), so an agent reads every built node, a row a scrollable keeps past its
+viewport included, while a screen reader stops at the first row past each edge. A static text is named by its value, and the actions follow UI Automation's pattern predicates
 (`is_invocable`; `Toggle` for a toggled node that is not a selection item; `SelectionItem` as
 `accesskit_windows` 0.35 offers it). `set_value`, `expand`, `collapse`, `scroll_into_view` and
 `focus` are listed only when the node carries the AccessKit action that performs them, and a
@@ -665,13 +665,11 @@ normalization. The direction check reads the last committed tree, which lags the
 the adapter's copy does; that lag matters only for a click-only expandable node (mapping
 decision 5, Limit).
 
-**Off-screen reads.** A locate or read that sets `offscreen` (protocol 0.13) applies the same
-filter without its clip rule, so it reaches every row a scrollable keeps built past its
-viewport. `flui_testing::Tester` sets it on every locate and read, as `flutter_test`'s `find`
-sees built rows past the viewport; whether such a row is shown is the `visible` check an action
-makes, so a tap on it fails with `not_actionable` (`visible`). An agent that leaves it unset reads
-what a screen reader reaches. Test: `tests/actionability.rs`
-`an_offscreen_read_reaches_every_row_the_scroll_view_keeps`; `flui-testing`
+**Rows past a viewport.** Every agent operation (read, locate, wait, an action's resolution, the
+MCP tools) uses that one filter, as `flutter_test`'s `find` sees built rows past the viewport.
+Whether such a row is shown is the actionability `visible` check, so a tap on it fails with
+`not_actionable` (`visible`). Test: `tests/actionability.rs`
+`a_reader_stops_past_a_scroll_views_edge_and_an_agent_reads_every_row`; `flui-testing`
 `a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible`.
 
 **Geometry and dialog roles.** The rectangles are
@@ -840,7 +838,7 @@ a merged parent would collect its children's.
 
 **Rule.** An identifier is unique among its siblings (ADR-0240 §4), and nothing enforces it:
 translation publishes every identifier as its author wrote it. Siblings are the children an
-agent or OS client sees: `accesskit_consumer::common_filter`'s, where an unlabelled container's
+agent sees: `accesskit_consumer::common_filter`'s without its clip rule, where an unlabelled container's
 children join its parent's. `read_wire` lists a `TreeDiagnostic::DuplicateIdentifier` for each
 clash, naming the parent and the siblings in tree order, and checks the children of every node
 it reaches, including those its budget leaves out. In debug builds, a publish that changes an

@@ -354,75 +354,62 @@ fn a_handle_from_before_a_replacement_is_not_attached() {
 }
 
 /// A scroll view's bounds are its viewport, so a row wholly outside them is
-/// off screen, as Flutter marks it `isHidden`. What an agent reads is what a
-/// screen reader can move to: the row in view, the first row past the edge
-/// (which a reader moves to in order to scroll it in), and not the rows
-/// beyond it.
+/// off screen, as Flutter marks it `isHidden`. A screen reader reaches the row
+/// in view and the first row past the edge (which it moves to in order to
+/// scroll it in), not the rows beyond it. An agent reads and finds every row
+/// the scroll view keeps, as `flutter_test`'s finders do; the row's
+/// actionability says it is not visible.
 #[test]
-fn a_reader_reaches_the_row_past_a_scroll_views_edge_and_no_further() {
-    use flui_protocol::ReadQuery;
+fn a_reader_stops_past_a_scroll_views_edge_and_an_agent_reads_every_row() {
+    use accesskit_consumer::common_filter;
+    use flui_protocol::{LocateParams, Locator, ReadQuery};
 
     let f = window();
-    let tree = f
+    let update = f
+        .owner
+        .to_accesskit_tree_update(None)
+        .expect("the tree is assembled");
+    let tree = accesskit_consumer::Tree::new(update, true);
+    let reader: Vec<String> = tree
+        .state()
+        .node_by_tree_local_id(
+            accesskit::NodeId(element(13).element.get()),
+            accesskit::TreeId::ROOT,
+        )
+        .expect("the scroll view is published")
+        .filtered_children(common_filter)
+        .filter_map(|row| row.label())
+        .collect();
+    assert_eq!(reader, ["In view", "Past the edge"]);
+
+    let agent: Vec<Option<String>> = f
         .owner
         .read_wire(
             &ReadQuery::new().with_root(element(13).element),
             placement(),
         )
-        .expect("the tree reads");
-    let rows: Vec<Option<&str>> = tree.roots[0]
+        .expect("the tree reads")
+        .roots[0]
         .children
         .iter()
-        .map(|row| row.name.as_deref())
+        .map(|row| row.name.clone())
         .collect();
-    assert_eq!(rows, [Some("In view"), Some("Past the edge")]);
-}
-
-/// An off-screen read sees every row the scroll view keeps, as a test's
-/// locators do; the default read and locate stay where a reader stops.
-#[test]
-fn an_offscreen_read_reaches_every_row_the_scroll_view_keeps() {
-    use flui_protocol::{LocateParams, Locator, ReadQuery};
-
-    let f = window();
-    let rows = |offscreen: bool| -> Vec<Option<String>> {
-        let tree = f
-            .owner
-            .read_wire(
-                &ReadQuery::new()
-                    .with_root(element(13).element)
-                    .with_offscreen(offscreen),
-                placement(),
-            )
-            .expect("the tree reads");
-        tree.roots[0]
-            .children
-            .iter()
-            .map(|row| row.name.clone())
-            .collect()
-    };
     assert_eq!(
-        rows(true),
+        agent,
         [
             Some("In view".to_owned()),
             Some("Past the edge".to_owned()),
             Some("Beyond the edge".to_owned()),
         ]
     );
-    let found = |offscreen: bool| -> usize {
-        f.owner
-            .locate_wire(
-                &LocateParams::new(Locator::named("Beyond the edge")).offscreen(offscreen),
-                placement(),
-            )
-            .expect("the tree reads")
-            .matches
-            .len()
-    };
-    assert_eq!(
-        found(false),
-        0,
-        "a reader stops at the first row past the edge"
-    );
-    assert_eq!(found(true), 1, "an off-screen locate finds every built row");
+    let found = f
+        .owner
+        .locate_wire(
+            &LocateParams::new(Locator::named("Beyond the edge")),
+            placement(),
+        )
+        .expect("the tree reads")
+        .matches;
+    assert_eq!(found.len(), 1, "an agent finds every built row");
+    assert!(!facts(&f, found[0].element, None, &[]).visible);
 }

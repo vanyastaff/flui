@@ -41,7 +41,7 @@ use std::collections::hash_map::Entry;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use accesskit::{Action, NodeId, Toggled, TreeId};
-use accesskit_consumer::{FilterResult, NodeRef, common_filter};
+use accesskit_consumer::{FilterResult, NodeRef};
 use flui_foundation::geometry::{DevicePixelRatio, Rect as LogicalRect, device_rect_covering};
 use flui_protocol::{
     ActionName, ActionRequest, Checked, ElementId, Node, ReadQuery, Rect, Role, Tree,
@@ -392,9 +392,9 @@ fn reads_selected(node: &NodeRef<'_>) -> bool {
 /// `Value` pattern on any node with a value, but calling it on one with no
 /// `SetValue` action does nothing.
 fn wire_actions(node: &NodeRef<'_>) -> Vec<ActionName> {
-    let supports = |action| node.supports_action(action, &common_filter);
+    let supports = |action| node.supports_action(action, &unclipped_filter);
     let mut actions = Vec::new();
-    if node.is_invocable(&common_filter) {
+    if node.is_invocable(&unclipped_filter) {
         actions.push(ActionName::Invoke);
     }
     if node.toggled().is_some() && !offers_selection_item(node) {
@@ -424,16 +424,15 @@ fn wire_actions(node: &NodeRef<'_>) -> Vec<ActionName> {
     actions
 }
 
-/// AccessKit's common filter, which also leaves out the owner's announcer
-/// nodes: they carry what assistive technology speaks, not an element of the
-/// interface, so an agent neither reads nor acts on them.
-///
-/// With `offscreen`, a child a clipping ancestor keeps off screen is kept as
-/// well: the whole built tree, as `flutter_test`'s finders search it.
+/// What an agent reads and acts on: AccessKit's common filter without its
+/// clipping rule, so every built node, rows a list keeps past its viewport
+/// included, as `flutter_test`'s finders search them. Whether one is shown is
+/// the actionability `visible` check. It also leaves out the owner's
+/// announcer nodes: they carry what assistive technology speaks, not an
+/// element of the interface, so an agent neither reads nor acts on them.
 #[derive(Clone, Copy)]
 struct AgentFilter {
     announcers: Option<[NodeId; 2]>,
-    offscreen: bool,
 }
 
 impl AgentFilter {
@@ -442,16 +441,6 @@ impl AgentFilter {
             announcers: owner
                 .announcer_node_ids()
                 .map(|ids| ids.map(|id| NodeId(id.as_u64()))),
-            offscreen: false,
-        }
-    }
-
-    /// As [`Self::of`], keeping what a clipping ancestor holds off screen
-    /// when `offscreen` is set.
-    fn reading(owner: &SemanticsOwner, offscreen: bool) -> Self {
-        Self {
-            offscreen,
-            ..Self::of(owner)
         }
     }
 
@@ -464,10 +453,8 @@ impl AgentFilter {
                 .is_some_and(|announcers| announcers.contains(&node.locate().0))
         {
             FilterResult::ExcludeSubtree
-        } else if self.offscreen {
-            unclipped_filter(node)
         } else {
-            common_filter(node)
+            unclipped_filter(node)
         }
     }
 }
@@ -630,7 +617,7 @@ pub(crate) fn identifier_clashes(
     let mut clashes = Vec::new();
     let mut pending = vec![state.root()];
     while let Some(node) = pending.pop() {
-        let children: Vec<NodeRef<'_>> = node.filtered_children(common_filter).collect();
+        let children: Vec<NodeRef<'_>> = node.filtered_children(unclipped_filter).collect();
         if let Some(parent) = accessibility_id(&node) {
             let siblings = children
                 .iter()
@@ -689,7 +676,7 @@ fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node
     }
     out.disabled = node.is_disabled();
     out.focused = node.is_focused() && (!node.is_root() || root_claims_focus);
-    out.focusable = node.is_focusable(&common_filter);
+    out.focusable = node.is_focusable(&unclipped_filter);
     if node.toggled().is_some() && !offers_selection_item(node) {
         out.checked = node.toggled().map(|state| match state {
             Toggled::True => Checked::True,
@@ -761,10 +748,7 @@ impl SemanticsOwner {
                 Some(id) => {
                     let node = state
                         .node_by_tree_local_id(NodeId(id.get()), TreeId::ROOT)
-                        .filter(|node| {
-                            AgentFilter::reading(self, query.offscreen).apply(node)
-                                == FilterResult::Include
-                        })
+                        .filter(|node| AgentFilter::of(self).apply(node) == FilterResult::Include)
                         .ok_or(WireReadError::NotFound { element: id })?;
                     (node, id, node.is_root())
                 }
@@ -777,7 +761,7 @@ impl SemanticsOwner {
                 truncated: false,
                 root_claims_focus,
                 diagnostics: Vec::new(),
-                filter: AgentFilter::reading(self, query.offscreen),
+                filter: AgentFilter::of(self),
             };
             if walk.remaining == 0 {
                 return Ok(Tree::new(Vec::new(), true));

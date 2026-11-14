@@ -426,16 +426,6 @@ pub struct LocateParams {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub max_matches: Option<u32>,
-    /// Also match what a clipping ancestor keeps off screen, such as a list's
-    /// rows past its viewport, which assistive technology and the default
-    /// locate leave out but for the first past each edge: the tree
-    /// `flutter_test`'s finders search. An action on such a match still
-    /// fails its `visible` check.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "crate::skip::is_default")
-    )]
-    pub offscreen: bool,
 }
 
 impl LocateParams {
@@ -445,15 +435,7 @@ impl LocateParams {
         Self {
             locator,
             max_matches: None,
-            offscreen: false,
         }
-    }
-
-    /// Also match what a clipping ancestor keeps off screen.
-    #[must_use]
-    pub fn offscreen(mut self, offscreen: bool) -> Self {
-        self.offscreen = offscreen;
-        self
     }
 }
 

@@ -40,7 +40,7 @@ use flui_protocol::{
     ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ErrorObject,
     ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams,
     Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
-    ReadParams, ReadQuery, Tree, WindowParams, outline,
+    ReadParams, Tree, WindowParams, outline,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
@@ -65,7 +65,7 @@ const ANSWER_FRAMES: u32 = 64;
 const SHOWN_LINES: usize = 15;
 
 /// How often [`Tester::try_is_visible`] locates and reads again when a frame
-/// changed what it found in between.
+/// changed the tree between the locate and a reading.
 const VISIBLE_READS: usize = 4;
 
 /// At most this many zero-length frames run work due now before a read: a
@@ -443,7 +443,7 @@ impl Tester {
         self.run_due_now();
         let call = self
             .window
-            .call::<SemanticsLocate>(LocateParams::new(locator.clone()).offscreen(true))?;
+            .call::<SemanticsLocate>(LocateParams::new(locator.clone()))?;
         Ok(self.answered(call)?.matches)
     }
 
@@ -488,32 +488,30 @@ impl Tester {
     /// barrier or a popup over it, is an action's `receives` check, not this.
     ///
     /// The locate and the reading of each match are separate reads, and a
-    /// frame due between them may rebuild or relabel what the locate found:
-    /// the answer counts only when a second locate finds the same elements,
-    /// and is taken again otherwise, a few times at most.
+    /// frame due between them may move or rebuild what the locate found: an
+    /// answer counts only when every reading was made on the tree the locate
+    /// read, and is taken again otherwise, a few times at most.
     ///
     /// # Errors
     ///
-    /// When the window cannot answer.
+    /// When the window cannot answer, and [`TestError::NotSettled`] when
+    /// frames keep changing the tree between the locate and its readings.
     pub fn try_is_visible(&mut self, locator: &Locator) -> Result<bool, TestError> {
-        let mut visible = false;
-        for _ in 0..VISIBLE_READS {
-            let found = self.try_find_all(locator)?;
-            visible = false;
-            for one in &found {
-                visible |= self.actionability(one)?.visible;
+        'read: for _ in 0..VISIBLE_READS {
+            for one in &self.try_find_all(locator)? {
+                let facts = self.actionability(one)?;
+                if facts.revision != one.revision {
+                    continue 'read;
+                }
+                if facts.visible {
+                    return Ok(true);
+                }
             }
-            let again = self.try_find_all(locator)?;
-            let same = again.len() == found.len()
-                && again
-                    .iter()
-                    .zip(&found)
-                    .all(|(again, found)| again.element == found.element);
-            if same {
-                break;
-            }
+            return Ok(false);
         }
-        Ok(visible)
+        Err(TestError::NotSettled {
+            frames: VISIBLE_READS,
+        })
     }
 
     /// Whether an element `locator` matches is visible.
@@ -572,9 +570,9 @@ impl Tester {
 
     fn try_semantics(&mut self) -> Result<Tree, TestError> {
         self.run_due_now();
-        let call = self.window.call::<SemanticsRead>(
-            ReadParams::new(self.window.id()).query(ReadQuery::new().with_offscreen(true)),
-        )?;
+        let call = self
+            .window
+            .call::<SemanticsRead>(ReadParams::new(self.window.id()))?;
         self.answered(call)
     }
 
