@@ -574,8 +574,10 @@ pub fn current_host() -> Result<CurrentHost, PlatformError> {
 }
 
 impl CurrentHost {
-    /// Starts this host on a runtime of its own ([`NativeExecutor::own`]), for a host started
-    /// without an application: tests, headless, tools.
+    /// Starts this host without an application: tests, headless, tools.
+    ///
+    /// Off the browser it runs its IO on a runtime of its own
+    /// (`NativeExecutor::own`); the browser host runs no IO and takes none.
     ///
     /// # Errors
     ///

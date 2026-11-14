@@ -71,7 +71,7 @@
 //! | rendering into a window | [`Renderer::new`] — owns one window's device, queue, and surface, and recovers from device loss |
 //! | rendering without a window (tests, screenshots, thumbnails, CI) | [`HeadlessRenderer::new`] — rasterizes a layer tree to RGBA8 bytes |
 //! | driving draw calls yourself | [`WgpuPainter`] — the per-frame painter; `examples/painting_demo` is the worked example |
-//! | writing the application frame loop | [`RasterBackend`] — the trait FLUI's own runners call, so the backend is one construction site |
+//! | presenting every window of an application | [`RasterExecutor`] over one [`GpuContext`] — each window a slot of one device (ADR-0305) |
 //!
 //! All three constructors are `async`, because wgpu's adapter and device
 //! requests are. The library does not choose a blocking strategy for you: an
@@ -217,8 +217,7 @@ pub(crate) mod dispatch;
 #[cfg(test)]
 pub(crate) mod superellipse;
 
-/// The frame-driver trait ([`RasterBackend`]) `Renderer` implements and
-/// flui-app's GPU-free test doubles stand in for.
+/// What a frame became once a backend drew it ([`PresentDisposition`]).
 pub mod raster;
 
 /// The raster executor: one mutator rendering every presentation's slot,
@@ -491,25 +490,14 @@ pub use external_texture_registry::{
     ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
     ExternalTextureEntry, ExternalTextureRegistry,
 };
-// RasterBackend: the frame-driver swap point. The trait is unconditional;
-// only the wgpu impl is feature-gated.
-#[expect(
-    deprecated,
-    reason = "ADR-0305: the old raster seam, until the web draws through `RasterExecutor`"
-)]
-pub use raster::{PrePresentHook, PresentDisposition, RasterBackend};
+pub use raster::PresentDisposition;
 // The raster executor and its commands (ADR-0305).
 pub use raster_executor::{
-    DeviceHealth, ExecutorHealth, RasterCommand, RasterExecutor, RasterSendError, RasterSender,
-    RasterVerdict, SendReceipt, SlotBackend, SlotChange, SlotConfig, SlotFailure, SlotId,
+    DeviceHealth, ExecutorHealth, RasterBackend, RasterCommand, RasterExecutor, RasterSendError,
+    RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId,
     SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface, SlotTarget, SlotVisibility,
     SurfaceHold, TurnOutcome,
 };
-// The GPU-resource freshness stamp (ADR-0045 decision 4); declared in
-// `flui-foundation` and re-exported here so `flui_engine::GpuResourceGeneration`
-// keeps resolving — the compile-fail fixture for its private field cites this
-// path, and `FrameStamp` compares this axis.
-pub use flui_foundation::GpuResourceGeneration;
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
 // The one GPU context every slot renders through (ADR-0305 §1).

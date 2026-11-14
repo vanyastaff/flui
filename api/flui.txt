@@ -2629,7 +2629,6 @@ pub const fn flui::foundation::FrameEpoch::next(self) -> Self
 #[non_exhaustive] pub struct flui::foundation::FrameStamp
 field flui::foundation::FrameStamp::address: flui::foundation::PresentationAddress // at 0
 field flui::foundation::FrameStamp::epoch: flui::foundation::FrameEpoch // at 1
-field flui::foundation::FrameStamp::gpu_resource_generation: flui::foundation::GpuResourceGeneration // at 3
 field flui::foundation::FrameStamp::surface_generation: flui::foundation::SurfaceGeneration // at 2
 impl Clone for flui::foundation::FrameStamp
 impl Copy for flui::foundation::FrameStamp
@@ -2637,7 +2636,7 @@ impl Eq for flui::foundation::FrameStamp
 impl PartialEq for flui::foundation::FrameStamp
 impl core::fmt::Debug for flui::foundation::FrameStamp
 impl core::marker::StructuralPartialEq for flui::foundation::FrameStamp
-pub fn flui::foundation::FrameStamp::new(address: flui::foundation::PresentationAddress, epoch: flui::foundation::FrameEpoch, surface_generation: flui::foundation::SurfaceGeneration, gpu_resource_generation: flui::foundation::GpuResourceGeneration) -> Self
+pub fn flui::foundation::FrameStamp::new(address: flui::foundation::PresentationAddress, epoch: flui::foundation::FrameEpoch, surface_generation: flui::foundation::SurfaceGeneration) -> Self
 pub struct flui::foundation::GenerationGate(_)
 impl Clone for flui::foundation::GenerationGate
 impl Default for flui::foundation::GenerationGate
@@ -2646,21 +2645,6 @@ pub fn flui::foundation::GenerationGate::bump(&self) -> flui::foundation::Resour
 pub fn flui::foundation::GenerationGate::current(&self) -> flui::foundation::ResourceGeneration
 pub fn flui::foundation::GenerationGate::is_current(&self, generation: flui::foundation::ResourceGeneration) -> bool
 pub fn flui::foundation::GenerationGate::new() -> Self
-pub struct flui::foundation::GpuResourceGeneration(_)
-impl Clone for flui::foundation::GpuResourceGeneration
-impl Copy for flui::foundation::GpuResourceGeneration
-impl Default for flui::foundation::GpuResourceGeneration
-impl Eq for flui::foundation::GpuResourceGeneration
-impl Ord for flui::foundation::GpuResourceGeneration
-impl PartialEq for flui::foundation::GpuResourceGeneration
-impl PartialOrd for flui::foundation::GpuResourceGeneration
-impl core::fmt::Debug for flui::foundation::GpuResourceGeneration
-impl core::fmt::Display for flui::foundation::GpuResourceGeneration
-impl core::hash::Hash for flui::foundation::GpuResourceGeneration
-impl core::marker::StructuralPartialEq for flui::foundation::GpuResourceGeneration
-pub const flui::foundation::GpuResourceGeneration::ZERO: Self = _
-pub const fn flui::foundation::GpuResourceGeneration::get(self) -> u64
-pub fn flui::foundation::GpuResourceGeneration::mint() -> Self
 #[repr(transparent)] pub struct flui::foundation::Id<T: flui::foundation::Marker>(_, _)
 impl From<flui::foundation::Id<flui::foundation::markers::Semantics>> for flui::foundation::inspect::InspectId
 impl<'de, T: flui::foundation::Marker> serde_core::de::Deserialize<'de> for flui::foundation::Id<T>
@@ -3318,7 +3302,6 @@ pub const flui::foundation::diagnostics::REDACTED_VALUE: &str = "<private>"
 pub mod flui::foundation::epoch
 reexport flui::foundation::epoch::FrameEpoch => flui::foundation::FrameEpoch
 reexport flui::foundation::epoch::GenerationGate => flui::foundation::GenerationGate
-reexport flui::foundation::epoch::GpuResourceGeneration => flui::foundation::GpuResourceGeneration
 reexport flui::foundation::epoch::ResourceGeneration => flui::foundation::ResourceGeneration
 reexport flui::foundation::epoch::SurfaceGeneration => flui::foundation::SurfaceGeneration
 pub fn flui::foundation::event_epoch() -> std::time::Instant
@@ -12783,14 +12766,15 @@ impl core::fmt::Debug for flui::platform::Opened
 impl core::marker::StructuralPartialEq for flui::platform::Opened
 pub fn flui::platform::Opened::is_empty(&self) -> bool
 pub fn flui::platform::Opened::new(urls: impl IntoIterator<Item = String>, files: impl IntoIterator<Item = flui::platform::OpenedFile>, target: flui::platform::OpenTarget, launch: flui::platform::Launch) -> Self
-#[non_exhaustive] pub struct flui::platform::OpenedFile
+#[non_exhaustive] pub struct flui::platform::OpenedFile { .. }
 field flui::platform::OpenedFile::path: std::path::PathBuf // at 0
 impl Clone for flui::platform::OpenedFile
 impl Eq for flui::platform::OpenedFile
 impl PartialEq for flui::platform::OpenedFile
 impl core::fmt::Debug for flui::platform::OpenedFile
-impl core::marker::StructuralPartialEq for flui::platform::OpenedFile
+pub fn flui::platform::OpenedFile::name(&self) -> Option<&str>
 pub fn flui::platform::OpenedFile::new(path: impl Into<std::path::PathBuf>) -> Self
+pub fn flui::platform::OpenedFile::try_from_descriptor(descriptor: std::os::fd::owned::OwnedFd, name: Option<String>) -> Result<Self>
 pub struct flui::platform::OsRelease(_)
 impl Clone for flui::platform::OsRelease
 impl Eq for flui::platform::OsRelease
@@ -34578,6 +34562,7 @@ fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_intrins
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_parent_data_dyn(&self, index: usize) -> Option<&dyn flui::rendering::ParentData>
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_parent_data_dyn_mut(&mut self, index: usize) -> Option<&mut dyn flui::rendering::ParentData>
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_parent_data_dyn_or_insert(&mut self, index: usize, _create: &dyn Fn() -> Box<dyn flui::rendering::ParentData>) -> Option<&mut dyn flui::rendering::ParentData> { .. }
+fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_size(&self, index: usize) -> Option<&flui::geometry::Size>
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::constraints(&self) -> flui::prelude::BoxConstraints
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::descendant_layout_degraded(&self) -> bool { .. }
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::layout_child(&mut self, index: usize, constraints: flui::prelude::BoxConstraints) -> flui::rendering::RenderResult<flui::geometry::Size>

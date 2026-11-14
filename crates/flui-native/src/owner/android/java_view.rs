@@ -742,7 +742,12 @@ fn jni_native<T: Default>(method: &'static str, body: impl FnOnce() -> T) -> T {
     os_entry(method, (), AfterPanic::Answer(|()| T::default()), body)
 }
 
-fn strings(env: &mut Env<'_>, array: &JObjectArray<'_>) -> jni::errors::Result<Vec<String>> {
+/// The strings of `array`, in order; a `null` array is empty and a `null`
+/// element is skipped.
+pub(crate) fn strings(
+    env: &mut Env<'_>,
+    array: &JObjectArray<'_>,
+) -> jni::errors::Result<Vec<String>> {
     if array.is_null() {
         return Ok(Vec::new());
     }

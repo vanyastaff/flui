@@ -13,8 +13,8 @@ use flui_engine::{
     },
 };
 use flui_foundation::{
-    FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
-    SurfaceGeneration, UiRuntimeId, geometry::DeviceSize,
+    FrameEpoch, FrameStamp, PresentationAddress, PresentationId, SurfaceGeneration, UiRuntimeId,
+    geometry::DeviceSize,
 };
 use flui_layer::{CanvasLayer, DamageRegion, FullReason, Layer, LayerTree, Scene, SceneSnapshot};
 use flui_platform::{ColorGamut, DisplayColor, DisplayConnection};
@@ -61,12 +61,7 @@ impl Rig {
         self.send(RasterCommand::Frame {
             slot,
             snapshot: SceneSnapshot::new(
-                FrameStamp::new(
-                    address(),
-                    frame_epoch,
-                    generation,
-                    GpuResourceGeneration::ZERO,
-                ),
+                FrameStamp::new(address(), frame_epoch, generation),
                 DamageRegion::Unchanged,
                 Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
             ),
@@ -370,7 +365,7 @@ struct ReentersOwner {
     resizes: std::rc::Rc<std::cell::RefCell<Vec<(RasterSender, SlotChange)>>>,
 }
 
-impl flui_engine::SlotBackend for ReentersOwner {
+impl flui_engine::RasterBackend for ReentersOwner {
     fn attach(
         &mut self,
         slot: SlotId,
@@ -448,6 +443,10 @@ impl flui_engine::SlotBackend for ReentersOwner {
 
     fn detach(&mut self, slot: SlotId) {
         self.inner.detach(slot);
+    }
+
+    fn kept_textures(&self, slot: SlotId) -> flui_layer::TextureUpdates {
+        self.inner.kept_textures(slot)
     }
 
     fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
@@ -529,12 +528,7 @@ fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
         RasterCommand::Frame {
             slot,
             snapshot: SceneSnapshot::new(
-                FrameStamp::new(
-                    address(),
-                    frame_epoch,
-                    generation,
-                    GpuResourceGeneration::ZERO,
-                ),
+                FrameStamp::new(address(), frame_epoch, generation),
                 DamageRegion::Unchanged,
                 Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
             ),
@@ -1257,12 +1251,7 @@ fn a_resize_answer_is_matched_to_its_send_by_generation() {
         .send(RasterCommand::Frame {
             slot,
             snapshot: SceneSnapshot::new(
-                FrameStamp::new(
-                    address(),
-                    epoch,
-                    record.required_generation,
-                    GpuResourceGeneration::ZERO,
-                ),
+                FrameStamp::new(address(), epoch, record.required_generation),
                 DamageRegion::Unchanged,
                 Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
             ),

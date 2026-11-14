@@ -18,8 +18,8 @@ use flui_engine::{
     testing::{ScriptedAnswer, ScriptedSlots, SlotCall},
 };
 use flui_foundation::{
-    FrameEpoch, FrameStamp, GpuResourceGeneration, ManualClock, MonotonicClock,
-    PresentationAddress, PresentationId, SurfaceGeneration, UiRuntimeId,
+    FrameEpoch, FrameStamp, ManualClock, MonotonicClock, PresentationAddress, PresentationId,
+    SurfaceGeneration, UiRuntimeId,
     geometry::{DeviceSize, Rect},
     memory::MemoryPressureLevel,
     panic::FirstPanic,
@@ -119,12 +119,7 @@ fn snapshot(at: Attached, epoch: u64, damage: DamageRegion, scene: Scene) -> Sce
         frame_epoch = frame_epoch.next();
     }
     SceneSnapshot::new(
-        FrameStamp::new(
-            at.address,
-            frame_epoch,
-            at.generation,
-            GpuResourceGeneration::ZERO,
-        ),
+        FrameStamp::new(at.address, frame_epoch, at.generation),
         damage,
         scene,
     )
@@ -1370,7 +1365,7 @@ impl Drop for MintsOnDrop {
 /// A backend whose attach panics with a [`MintsOnDrop`] payload.
 struct PanicsAtAttach;
 
-impl flui_engine::SlotBackend for PanicsAtAttach {
+impl flui_engine::RasterBackend for PanicsAtAttach {
     fn attach(&mut self, _: SlotId, _: SlotTarget, _: SlotConfig) -> flui_engine::EngineResult<()> {
         std::panic::panic_any(MintsOnDrop)
     }
@@ -1426,6 +1421,10 @@ impl flui_engine::SlotBackend for PanicsAtAttach {
     }
 
     fn detach(&mut self, _: SlotId) {}
+
+    fn kept_textures(&self, _: SlotId) -> flui_layer::TextureUpdates {
+        flui_layer::TextureUpdates::default()
+    }
 
     fn reclaim(&mut self, _: MemoryPressureLevel) {}
 

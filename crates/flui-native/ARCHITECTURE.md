@@ -2579,7 +2579,7 @@ whatever was built on it must be rebuilt once the browser gives one back. The lo
 cancelled with `preventDefault` — without that the browser never restores the context —
 and a browser that never restores it leaves the page without a surface, which is all the
 page can know. A lost WebGPU device is not a surface event, so it does not use this
-signal; the renderer reports it to its owner directly.
+signal; the GPU context marks it lost and wakes its owner (`GpuContext::on_device_lost`).
 
 **Alternatives considered:**
 

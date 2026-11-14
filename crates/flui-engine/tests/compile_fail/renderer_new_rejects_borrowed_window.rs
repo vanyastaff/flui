@@ -8,8 +8,8 @@
 //! `borrow_then_drop`'s body is generic over `W` with no `'static` bound, so
 //! `&window` (a reference to a function-local) can never satisfy
 //! `WindowTarget`'s `'static` requirement regardless of what a caller
-//! instantiates `W` with; the body fails to type-check on its own, the same
-//! pattern `raster_backend_requires_send.rs` uses for `RasterBackend: Send`.
+//! instantiates `W` with; the body fails to type-check on its own, without
+//! a caller.
 
 #![forbid(unsafe_code)]
 

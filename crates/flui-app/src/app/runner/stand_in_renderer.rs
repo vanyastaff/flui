@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use flui_engine::{
-    EngineError, EngineResult, FrameLatency, PresentDisposition, SlotBackend, SlotConfig, SlotId,
+    EngineError, EngineResult, FrameLatency, PresentDisposition, RasterBackend, SlotConfig, SlotId,
     SlotTarget, UnconfiguredSurface,
 };
 use flui_foundation::geometry::DeviceSize;
@@ -213,7 +213,7 @@ pub(super) struct StandInBackend {
     shared: Arc<Mutex<Shared>>,
 }
 
-impl SlotBackend for StandInBackend {
+impl RasterBackend for StandInBackend {
     fn attach(
         &mut self,
         slot: SlotId,
@@ -325,6 +325,11 @@ impl SlotBackend for StandInBackend {
             window.released = true;
             window.slot = None;
         }
+    }
+
+    fn kept_textures(&self, _slot: SlotId) -> TextureUpdates {
+        // The stand-in draws no texture.
+        TextureUpdates::default()
     }
 
     fn reclaim(&mut self, _level: MemoryPressureLevel) {}

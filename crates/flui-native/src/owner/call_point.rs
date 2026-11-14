@@ -78,6 +78,7 @@ impl<R> Called<R> {
         target_os = "windows",
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32",
         all(target_os = "linux", any(feature = "x11", feature = "wayland")),
         all(test, not(target_arch = "wasm32"))
