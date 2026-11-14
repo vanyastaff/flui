@@ -466,6 +466,8 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSCalendar",
     "NSDateFormatter",
     "NSFormatter",
+    # A universal link: a scene's web browsing activity.
+    "NSUserActivity",
 ] }
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIFont",
@@ -483,6 +485,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UISceneSession",
     "UISceneConfiguration",
     "UISceneOptions",
+    # The links and documents a scene is opened with.
+    "UIOpenURLContext",
     "UIWindowScene",
     "UIEvent",
     "UIGestureRecognizer",
