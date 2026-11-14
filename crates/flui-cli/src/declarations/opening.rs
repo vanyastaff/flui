@@ -44,6 +44,12 @@ impl UrlScheme {
                 "`{scheme}` is not a URL scheme: a letter, then letters, digits, `+`, `-` or `.`"
             ));
         }
+        if scheme.len() == 1 {
+            return Err(format!(
+                "`{scheme}` is one letter, which Windows reads as a drive (`{scheme}:\\…`) in the \
+                 arguments a link launches with: a scheme has two characters or more"
+            ));
+        }
         if RESERVED_SCHEMES.contains(&scheme.as_str()) {
             return Err(format!(
                 "`{scheme}` is not the application's own scheme; a web link is declared by its \
@@ -242,6 +248,8 @@ mod tests {
             ("https", false),
             ("HTTP", false),
             ("file", false),
+            ("x", false),
+            ("xy", true),
         ] {
             assert_eq!(UrlScheme::try_new(scheme).is_ok(), accepted, "{scheme:?}");
         }

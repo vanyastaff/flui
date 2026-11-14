@@ -108,7 +108,8 @@ proguard = "android/proguard-rules.pro"
 
 - Version 3 adds what the application opens, at the top of the table and under
   `features.<feature>`:
-  - `url-schemes`, its own URL schemes: RFC 3986 schemes, kept in lower case, with no web or
+  - `url-schemes`, its own URL schemes: RFC 3986 schemes of two characters or more (Windows reads
+    a one-letter one in a launch's arguments as a drive), kept in lower case, with no web or
     system scheme (`http`, `https`, `file`, `content`, `data`, `javascript`, `about`);
   - `associated-domains`, the web domains whose `https` links open it: host names without a
     scheme, a path or `*`, kept in lower case;

@@ -12,13 +12,13 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE,
-    REG_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW,
-    RegGetValueW, RegOpenKeyExW, RegSetValueExW,
+    HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_CREATE_KEY_DISPOSITION,
+    REG_CREATED_NEW_KEY, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_SZ, RegCloseKey,
+    RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, RegSetValueExW,
 };
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 
-use super::{Classes, Entry, Found, MARKER};
+use super::{Claim, Classes, Entry, Found, MARKER, Wrote};
 
 /// Where the user's classes are, under `HKEY_CURRENT_USER`.
 const USER_CLASSES: &str = "Software\\Classes";
@@ -142,6 +142,50 @@ fn string(key: &Key, subkey: &str, name: &str) -> std::io::Result<Option<String>
     ))
 }
 
+/// Create or open `path` under the user's hive for writing, and say whether
+/// this call created it.
+fn create(path: &str) -> std::io::Result<(Key, bool)> {
+    let path = HSTRING::from(path);
+    let mut key = HKEY::default();
+    let mut disposition = REG_CREATE_KEY_DISPOSITION::default();
+    // SAFETY: `path` is a NUL-terminated string that outlives the call, and
+    // `key` and `disposition` are stack-locals the call writes the created or
+    // opened key and whether it created it to.
+    checked(unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            &path,
+            None,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            None,
+            &raw mut key,
+            Some(&raw mut disposition),
+        )
+    })?;
+    Ok((Key(key), disposition == REG_CREATED_NEW_KEY))
+}
+
+/// Set the string value `name` (`""` for the default) of `key` to `data`.
+fn set_string(key: &Key, name: &str, data: &str) -> std::io::Result<()> {
+    let name = HSTRING::from(name);
+    let name = if name.is_empty() {
+        PCWSTR::null()
+    } else {
+        PCWSTR(name.as_ptr())
+    };
+    let data: Vec<u8> = data
+        .encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    // SAFETY: `name` is null or a NUL-terminated string that outlives the
+    // call, and `data` is the value's UTF-16 with its terminating NUL, the
+    // form `REG_SZ` holds.
+    checked(unsafe { RegSetValueExW(key.0, name, None, REG_SZ, Some(&data)) })
+}
+
 impl Classes for UserClasses {
     fn find(&self, name: &str) -> std::io::Result<Found> {
         let Some(key) = open(HKEY_CLASSES_ROOT, name, KEY_READ)? else {
@@ -156,50 +200,33 @@ impl Classes for UserClasses {
         })
     }
 
-    fn write(&mut self, name: &str, entries: &[Entry]) -> std::io::Result<()> {
-        for entry in entries {
-            let mut path = format!("{USER_CLASSES}\\{name}");
-            if !entry.subkey.is_empty() {
-                path.push('\\');
-                path.push_str(entry.subkey);
-            }
-            let path = HSTRING::from(path);
-            let mut key = HKEY::default();
-            // SAFETY: `path` is a NUL-terminated string that outlives the
-            // call, and `key` is a stack-local the call writes the created or
-            // opened key to.
-            checked(unsafe {
-                RegCreateKeyExW(
-                    HKEY_CURRENT_USER,
-                    &path,
-                    None,
-                    PCWSTR::null(),
-                    REG_OPTION_NON_VOLATILE,
-                    KEY_WRITE,
-                    None,
-                    &raw mut key,
-                    None,
-                )
-            })?;
-            let key = Key(key);
-            let value_name = HSTRING::from(entry.name);
-            let value_name = if value_name.is_empty() {
-                PCWSTR::null()
-            } else {
-                PCWSTR(value_name.as_ptr())
-            };
-            let data: Vec<u8> = entry
-                .data
-                .encode_utf16()
-                .chain([0])
-                .flat_map(u16::to_le_bytes)
-                .collect();
-            // SAFETY: `value_name` is null or a NUL-terminated string that
-            // outlives the call, and `data` is the value's UTF-16 with its
-            // terminating NUL, the form `REG_SZ` holds.
-            checked(unsafe { RegSetValueExW(key.0, value_name, None, REG_SZ, Some(&data)) })?;
+    fn write(&mut self, name: &str, entries: &[Entry], claim: Claim) -> std::io::Result<Wrote> {
+        let root = format!("{USER_CLASSES}\\{name}");
+        let (key, created) = create(&root)?;
+        if claim == Claim::New && !created {
+            // Another process made the key since it was read: it is theirs.
+            return Ok(Wrote::Taken);
         }
-        Ok(())
+        let written = entries.iter().try_for_each(|entry| {
+            if entry.subkey.is_empty() {
+                set_string(&key, entry.name, &entry.data)
+            } else {
+                let (subkey, _) = create(&format!("{root}\\{}", entry.subkey))?;
+                set_string(&subkey, entry.name, &entry.data)
+            }
+        });
+        drop(key);
+        match written {
+            Ok(()) => Ok(Wrote::Written),
+            Err(error) => {
+                // A key this write created goes with it, so no empty or
+                // unmarked key is left for the next run to refuse.
+                if created && let Err(rollback) = self.delete(name) {
+                    tracing::warn!(%rollback, key = %name, "a key left by a failed registration cannot be deleted");
+                }
+                Err(error)
+            }
+        }
     }
 
     fn delete(&mut self, name: &str) -> std::io::Result<()> {
@@ -242,7 +269,14 @@ impl Classes for UserClasses {
             }
             checked(status)?;
             let key_name = String::from_utf16_lossy(&name[..len as usize]);
-            if string(&classes, &key_name, MARKER)?.as_deref() == Some(app_id) {
+            // A key whose marker cannot be read as a string (another
+            // program's value of that name, a key it guards) is not this
+            // application's.
+            if string(&classes, &key_name, MARKER)
+                .ok()
+                .flatten()
+                .is_some_and(|marker| marker == app_id)
+            {
                 marked.push(key_name);
             }
         }

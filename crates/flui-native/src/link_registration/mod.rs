@@ -8,7 +8,11 @@
 //! [`MARKER`], and that marker is the only claim registration trusts:
 //!
 //! - a scheme no key names, in the user's classes or the machine's, is
-//!   written;
+//!   written, into a key the write itself creates: one another process
+//!   created since it was read is left to that process ([`Claim::New`]),
+//!   and one whose write fails is deleted again; the marker is the first
+//!   value written, so a rewrite that stops part way leaves a key the next
+//!   run still knows as this application's;
 //! - a key marked with this application's id is rewritten only when its
 //!   command names another executable (the application moved or was
 //!   updated in place), and left as it is otherwise;
@@ -40,10 +44,19 @@ pub(crate) const MARKER: &str = "FluiApplicationId";
 /// The key's subkey whose default value is the command that opens a link.
 const COMMAND: &str = "shell\\open\\command";
 
-/// The schemes registration never writes, whatever the application declares:
-/// a web URL is the application's by its associated domain, not by its
-/// scheme, and a file by its type.
-const RESERVED: [&str; 3] = ["http", "https", "file"];
+/// The schemes registration never writes, whatever the application declares,
+/// the ones `flui`'s manifest check refuses: a web URL is the application's
+/// by its associated domain, a file by its type, and the rest are the
+/// system's.
+const RESERVED: [&str; 7] = [
+    "http",
+    "https",
+    "file",
+    "content",
+    "data",
+    "javascript",
+    "about",
+];
 
 /// What a key of the merged classes view holds, as far as registration
 /// reads it.
@@ -62,6 +75,26 @@ pub(crate) enum Found {
     Unmarked,
 }
 
+/// Which key a write may set its values in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Claim {
+    /// Only a key the write itself creates: none had the name when it was
+    /// read, and one another process creates in between is not touched.
+    New,
+    /// The key this application marked, created again if it went.
+    Own,
+}
+
+/// What a write did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Wrote {
+    /// Every value is set.
+    Written,
+    /// Under [`Claim::New`], the key existed by the time it was created:
+    /// nothing is set.
+    Taken,
+}
+
 /// One value a key is written with: under `subkey` of the key (`""` for the
 /// key itself), the value `name` (`""` for the default value), a string.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,8 +110,12 @@ pub(crate) struct Entry {
 pub(crate) trait Classes {
     /// What the key `name` holds.
     fn find(&self, name: &str) -> std::io::Result<Found>;
-    /// Create the user's key `name` and set `entries` in it.
-    fn write(&mut self, name: &str, entries: &[Entry]) -> std::io::Result<()>;
+    /// Set `entries` in the user's key `name`, in their order. Under
+    /// [`Claim::New`] the key is created, and a key that exists by then is
+    /// left as it is ([`Wrote::Taken`]); a key the write created is deleted
+    /// again when a later value fails, so a failure never leaves an empty or
+    /// unmarked key behind.
+    fn write(&mut self, name: &str, entries: &[Entry], claim: Claim) -> std::io::Result<Wrote>;
     /// Delete the user's key `name` with everything under it; a key that is
     /// gone already is not an error.
     fn delete(&mut self, name: &str) -> std::io::Result<()>;
@@ -115,6 +152,15 @@ pub(crate) enum Refusal {
     Foreign(String),
     #[error("the key of `{scheme}` belongs to the application `{owner}` and is left as it is")]
     OtherApplication { scheme: String, owner: String },
+    #[error(
+        "`{0}` is one letter, which a launch's arguments read as a drive: its links would never \
+         open the application"
+    )]
+    OneLetter(String),
+    #[error(
+        "another process created the key of `{0}` while it was registered; it is left as it is"
+    )]
+    Taken(String),
 }
 
 /// The application registration writes for.
@@ -143,8 +189,9 @@ impl Application<'_> {
 ///
 /// [`Refusal::NotAScheme`] unless it is a letter followed by letters,
 /// digits, `+`, `-` and `.` (RFC 3986 §3.1), which also keeps a key's name
-/// from reaching another key; [`Refusal::Reserved`] for `http`, `https` and
-/// `file`.
+/// from reaching another key; [`Refusal::OneLetter`] for a scheme a drive
+/// letter would be mistaken for; [`Refusal::Reserved`] for the [`RESERVED`]
+/// schemes.
 pub(crate) fn scheme_key(scheme: &str) -> Result<String, Refusal> {
     let mut characters = scheme.chars();
     let well_formed = characters
@@ -155,6 +202,9 @@ pub(crate) fn scheme_key(scheme: &str) -> Result<String, Refusal> {
         return Err(Refusal::NotAScheme(scheme.to_owned()));
     }
     let key = scheme.to_ascii_lowercase();
+    if key.len() == 1 {
+        return Err(Refusal::OneLetter(key));
+    }
     if RESERVED.contains(&key.as_str()) {
         return Err(Refusal::Reserved(key));
     }
@@ -164,10 +214,12 @@ pub(crate) fn scheme_key(scheme: &str) -> Result<String, Refusal> {
 /// The values a scheme's key is written with.
 pub(crate) fn scheme_entries(application: &Application<'_>) -> [Entry; 5] {
     let entry = |subkey, name, data: String| Entry { subkey, name, data };
+    // The marker goes first: a write that stops part way leaves a key the
+    // next run knows as this application's and completes.
     [
+        entry("", MARKER, application.app_id.to_owned()),
         entry("", "", format!("URL:{}", application.display_name)),
         entry("", "URL Protocol", String::new()),
-        entry("", MARKER, application.app_id.to_owned()),
         entry(
             "DefaultIcon",
             "",
@@ -180,19 +232,19 @@ pub(crate) fn scheme_entries(application: &Application<'_>) -> [Entry; 5] {
 /// What registration does with a key that holds `found`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Step {
-    Write,
+    Write(Claim),
     Current,
     Refuse(Refusal),
 }
 
 fn step(scheme: &str, found: Found, application: &Application<'_>) -> Step {
     match found {
-        Found::Absent => Step::Write,
+        Found::Absent => Step::Write(Claim::New),
         Found::Marked { app_id, command } if app_id == application.app_id => {
             if command.is_some_and(|command| command == application.command()) {
                 Step::Current
             } else {
-                Step::Write
+                Step::Write(Claim::Own)
             }
         }
         Found::Marked { app_id, .. } => Step::Refuse(Refusal::OtherApplication {
@@ -238,8 +290,13 @@ pub(crate) fn register_in(
                 tracing::warn!(%refusal, "a declared URL scheme is not registered");
                 registered.refused += 1;
             }
-            Step::Write => match classes.write(&key, &scheme_entries(application)) {
-                Ok(()) => registered.written += 1,
+            Step::Write(claim) => match classes.write(&key, &scheme_entries(application), claim) {
+                Ok(Wrote::Written) => registered.written += 1,
+                Ok(Wrote::Taken) => {
+                    let refusal = Refusal::Taken(key.clone());
+                    tracing::warn!(%refusal, "a declared URL scheme is not registered");
+                    registered.refused += 1;
+                }
                 Err(error) => {
                     tracing::warn!(%error, scheme = %key, "the scheme's key cannot be written");
                     registered.refused += 1;
@@ -262,7 +319,14 @@ fn remove_undeclared(classes: &mut impl Classes, app_id: &str, declared: &[Strin
         }
     };
     let mut removed = 0;
-    for key in marked.iter().filter(|key| !declared.contains(key)) {
+    // The registry's names compare without case, as `find` does, and a key
+    // keeps the spelling it was created with.
+    let undeclared = marked.iter().filter(|key| {
+        !declared
+            .iter()
+            .any(|declared| declared.eq_ignore_ascii_case(key))
+    });
+    for key in undeclared {
         match classes.delete(key) {
             Ok(()) => removed += 1,
             Err(error) => {
@@ -357,17 +421,23 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        Application, Classes, Entry, Found, MARKER, Refusal, Registered, register_in, scheme_key,
-        unregister_in,
+        Application, Claim, Classes, Entry, Found, MARKER, Refusal, Registered, Wrote, register_in,
+        scheme_key, unregister_in,
     };
 
-    /// The user's classes and the machine's, as maps of key to values.
+    /// The user's classes and the machine's, as maps of key to values, whose
+    /// names compare without case as the registry's do.
     #[derive(Default)]
     struct Map {
         user: BTreeMap<String, Vec<Entry>>,
         machine: BTreeMap<String, Vec<Entry>>,
         refuse_writes: bool,
         refuse_delete: Option<&'static str>,
+        /// A write sets this many values and then fails.
+        stop_after: Option<usize>,
+        /// A key another process creates between a scheme's read and its
+        /// write.
+        appears: Option<(&'static str, Vec<Entry>)>,
     }
 
     impl Map {
@@ -377,11 +447,20 @@ mod tests {
                 .find(|entry| entry.subkey == subkey && entry.name == name)
                 .map(|entry| entry.data.clone())
         }
+
+        fn spelled(keys: &BTreeMap<String, Vec<Entry>>, name: &str) -> Option<String> {
+            keys.keys()
+                .find(|key| key.eq_ignore_ascii_case(name))
+                .cloned()
+        }
     }
 
     impl Classes for Map {
         fn find(&self, name: &str) -> std::io::Result<Found> {
-            let Some(entries) = self.user.get(name).or_else(|| self.machine.get(name)) else {
+            let entries = Self::spelled(&self.user, name)
+                .map(|key| &self.user[&key])
+                .or_else(|| Self::spelled(&self.machine, name).map(|key| &self.machine[&key]));
+            let Some(entries) = entries else {
                 return Ok(Found::Absent);
             };
             Ok(match Self::value(entries, "", MARKER) {
@@ -393,19 +472,40 @@ mod tests {
             })
         }
 
-        fn write(&mut self, name: &str, entries: &[Entry]) -> std::io::Result<()> {
+        fn write(&mut self, name: &str, entries: &[Entry], claim: Claim) -> std::io::Result<Wrote> {
+            if let Some((key, values)) = self.appears.take() {
+                self.user.insert(key.to_owned(), values);
+            }
             if self.refuse_writes {
                 return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
             }
-            self.user.insert(name.to_owned(), entries.to_vec());
-            Ok(())
+            let existing = Self::spelled(&self.user, name);
+            if claim == Claim::New && existing.is_some() {
+                return Ok(Wrote::Taken);
+            }
+            let key = existing.unwrap_or_else(|| name.to_owned());
+            for (set, entry) in entries.iter().enumerate() {
+                if self.stop_after == Some(set) {
+                    // The contract: a key the write created goes with it.
+                    if claim == Claim::New {
+                        self.user.remove(&key);
+                    }
+                    return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+                }
+                let values = self.user.entry(key.clone()).or_default();
+                values.retain(|value| (value.subkey, value.name) != (entry.subkey, entry.name));
+                values.push(entry.clone());
+            }
+            Ok(Wrote::Written)
         }
 
         fn delete(&mut self, name: &str) -> std::io::Result<()> {
             if self.refuse_delete == Some(name) {
                 return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
             }
-            self.user.remove(name);
+            if let Some(key) = Self::spelled(&self.user, name) {
+                self.user.remove(&key);
+            }
             Ok(())
         }
 
@@ -450,9 +550,9 @@ mod tests {
         assert_eq!(
             classes.user["notes"],
             [
+                entry("", MARKER, "com.example.notes"),
                 entry("", "", "URL:Notes"),
                 entry("", "URL Protocol", ""),
-                entry("", MARKER, "com.example.notes"),
                 entry("DefaultIcon", "", r#""C:\Apps\Notes\notes.exe",0"#),
                 entry(
                     "shell\\open\\command",
@@ -549,6 +649,8 @@ mod tests {
             ("HTTPS", Refusal::Reserved("https".to_owned())),
             ("http", Refusal::Reserved("http".to_owned())),
             ("file", Refusal::Reserved("file".to_owned())),
+            ("Data", Refusal::Reserved("data".to_owned())),
+            ("X", Refusal::OneLetter("x".to_owned())),
         ] {
             assert_eq!(scheme_key(scheme), Err(refusal), "{scheme:?}");
         }
@@ -578,6 +680,98 @@ mod tests {
                 ..Registered::default()
             }
         );
+    }
+
+    /// A write that stops part way never leaves a key a later run refuses:
+    /// a key it created goes with it and is written whole next time, and a
+    /// rewrite of this application's own key keeps the marker it starts
+    /// with, so the next run completes it.
+    #[test]
+    fn a_write_that_stops_is_completed_by_the_next_run() {
+        let mut classes = Map {
+            stop_after: Some(1),
+            ..Map::default()
+        };
+        let registered = register_in(&mut classes, &NOTES, &["notes"]);
+        assert_eq!(
+            registered,
+            Registered {
+                refused: 1,
+                ..Registered::default()
+            }
+        );
+        assert!(classes.user.is_empty(), "a created key goes with its write");
+        classes.stop_after = None;
+        let registered = register_in(&mut classes, &NOTES, &["notes"]);
+        assert_eq!(registered.written, 1);
+
+        let moved = Application {
+            executable: r"D:\Moved\notes.exe",
+            ..NOTES
+        };
+        classes.stop_after = Some(2);
+        let _ = register_in(&mut classes, &moved, &["notes"]);
+        assert!(
+            matches!(
+                classes.find("notes").expect("found"),
+                Found::Marked { ref app_id, .. } if app_id == "com.example.notes"
+            ),
+            "the stopped rewrite leaves the application's marker"
+        );
+        classes.stop_after = None;
+        let registered = register_in(&mut classes, &moved, &["notes"]);
+        assert_eq!(registered.written, 1);
+        assert_eq!(
+            classes.find("notes").expect("found"),
+            Found::Marked {
+                app_id: "com.example.notes".to_owned(),
+                command: Some(moved.command()),
+            }
+        );
+    }
+
+    /// A key another process creates between the read and the write, whether
+    /// another application's registration or anyone's, is left exactly as it
+    /// was created.
+    #[test]
+    fn a_key_created_while_registering_is_left_alone() {
+        let other = vec![
+            entry("", MARKER, "com.example.other"),
+            entry("shell\\open\\command", "", r#""C:\Other\other.exe" "%1""#),
+        ];
+        let mut classes = Map {
+            appears: Some(("notes", other.clone())),
+            ..Map::default()
+        };
+        let registered = register_in(&mut classes, &NOTES, &["notes"]);
+        assert_eq!(
+            registered,
+            Registered {
+                refused: 1,
+                ..Registered::default()
+            }
+        );
+        assert_eq!(classes.user["notes"], other);
+    }
+
+    /// The application's key keeps the spelling it was created with, and the
+    /// registry compares names without case: a key spelled `Jot` is the
+    /// declared `jot`'s, current, and not removed.
+    #[test]
+    fn a_key_is_the_schemes_whatever_its_case() {
+        let mut classes = Map::default();
+        let _ = register_in(&mut classes, &NOTES, &["jot"]);
+        let values = classes.user.remove("jot").expect("written");
+        classes.user.insert("Jot".to_owned(), values);
+        let registered = register_in(&mut classes, &NOTES, &["jot"]);
+        assert_eq!(
+            registered,
+            Registered {
+                current: 1,
+                ..Registered::default()
+            }
+        );
+        assert!(classes.user.contains_key("Jot"));
     }
 
     /// A scheme an earlier version declared and this one does not stops
