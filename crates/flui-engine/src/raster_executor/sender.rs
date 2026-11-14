@@ -133,6 +133,10 @@ pub(crate) struct Shared {
         )
     )]
     death_reported: AtomicBool,
+    /// Runs inside a lifecycle send, between its health read and its
+    /// queueing, so a test can land another thread's change in that window.
+    #[cfg(test)]
+    pub(crate) during_send: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
 const RUNNING: u8 = 0;
@@ -174,6 +178,8 @@ impl Shared {
             failure: Mutex::new(None),
             death: std::sync::OnceLock::new(),
             death_reported: AtomicBool::new(false),
+            #[cfg(test)]
+            during_send: Mutex::new(None),
         }
     }
 
@@ -344,6 +350,10 @@ impl Shared {
     /// `Full` while the queue is full, `Gone` once the executor stopped.
     pub(crate) fn send_lifecycle(&self, message: Lifecycle) -> Result<(), RasterSendError> {
         self.sending.fetch_add(1, Ordering::SeqCst);
+        #[cfg(test)]
+        if let Some(during) = &*self.during_send.lock() {
+            during();
+        }
         let sent = if self.health.load(Ordering::SeqCst) == RUNNING {
             self.lifecycle.try_send(message)
         } else {
@@ -1078,6 +1088,81 @@ mod death_log {
         assert_eq!(
             shared.take_failure(),
             Some(ExecutorFailure::Wedged { waited })
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod speculation {
+    //! The owner's speculative surface holds against the raster thread's
+    //! changes, landed inside a refused send through the send's test hook.
+
+    use std::{sync::Arc, thread, time::Duration};
+
+    use crossbeam_channel::bounded;
+    use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId, geometry::DeviceSize};
+
+    use super::{Lifecycle, RasterSender, Shared};
+    use crate::raster_executor::{
+        LIFECYCLE_CAPACITY, RasterCommand, RasterSendError, SlotConfig, SlotTarget, SurfaceEvent,
+        SurfaceHold,
+    };
+
+    /// A raster thread that drops a slot's surface while the owner's release
+    /// is being refused does not have the drop undone by the release's
+    /// withdrawal: the owner is still asked for a new surface.
+    ///
+    /// Red-check: with the record unlocked across the send, the drop lands on
+    /// the speculative `Released`, which ignores it, and the withdrawal puts
+    /// the hold back to `Held`.
+    #[test]
+    fn a_surface_drop_during_a_refused_release_still_asks_for_a_new_surface() {
+        let (queue, _drain) = bounded(LIFECYCLE_CAPACITY);
+        let shared = Arc::new(Shared::new(queue));
+        let sender = RasterSender::new(Arc::clone(&shared));
+        let slot = sender.mint_slot().expect("a slot id is left");
+        sender
+            .send(RasterCommand::Attach {
+                slot,
+                address: PresentationAddress {
+                    ui_runtime_id: UiRuntimeId::new(1),
+                    presentation_id: PresentationId::new(1),
+                },
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(8, 8),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        while shared.send_lifecycle(Lifecycle::RetryDevice).is_ok() {}
+        let inbox = sender.inbox(slot).expect("the slot is held");
+        let (landed_tx, landed) = std::sync::mpsc::channel();
+        let raster = Arc::new(parking_lot::Mutex::new(None));
+        let started = Arc::clone(&raster);
+        *shared.during_send.lock() = Some(Box::new(move || {
+            let inbox = Arc::clone(&inbox);
+            let landed_tx = landed_tx.clone();
+            *started.lock() = Some(thread::spawn(move || {
+                let mut state = inbox.lock();
+                state.surface = state.surface.on(SurfaceEvent::SurfaceDropped);
+                drop(state);
+                let _told = landed_tx.send(());
+            }));
+            // Unlocked, the drop lands here, inside the send; locked, it
+            // waits for the withdrawal.
+            let _landed = landed.recv_timeout(Duration::from_millis(200));
+        }));
+        assert!(matches!(
+            sender.send(RasterCommand::Release { slot }),
+            Err(RasterSendError::Full(_))
+        ));
+        *shared.during_send.lock() = None;
+        let thread = raster.lock().take().expect("the hook ran");
+        thread.join().expect("the drop does not panic");
+        assert_eq!(
+            sender.record(slot).map(|record| record.surface.hold),
+            Some(SurfaceHold::Wanted)
         );
     }
 }
