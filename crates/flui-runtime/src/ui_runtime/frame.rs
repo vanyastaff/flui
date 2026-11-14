@@ -343,6 +343,14 @@ impl UiRuntime {
             {
                 any_retry_needed = true;
             }
+            // The scene this segment's outcome replaces is never submitted (one sink, the last
+            // scene goes), so no verdict resets its presentation's streak: its clean segment
+            // does, as for a segment that painted nothing.
+            if matches!(last_outcome, FramePaintOutcome::Painted(_))
+                && let Some(dropped) = self.presentations.get(producer)
+            {
+                dropped.reset_frame_failure_streak();
+            }
             last_outcome = result;
             producer = presentation.id();
         }
@@ -973,6 +981,10 @@ impl UiRuntime {
         // The first panic of a layer read's reply, resumed with the rest of this tail's panics.
         let mut hover_panic = FirstPanic::new();
         use crate::sink::SubmitVerdict;
+        // A withheld scene gets no verdict to reset the streak: its clean segment does.
+        if !should_send && matches!(outcome, FramePaintOutcome::Painted(_)) {
+            producer.reset_frame_failure_streak();
+        }
         if should_send && let FramePaintOutcome::Painted(publication) = outcome {
             // What the frame commits once its verdict is known, captured before the sink sees it:
             // the layer reads parked for this scene read it now, and are answered once a verdict
@@ -1029,7 +1041,8 @@ impl UiRuntime {
                 | SubmitVerdict::Retry
                 | SubmitVerdict::SurfaceStale
                 | SubmitVerdict::DeviceLost
-                | SubmitVerdict::Failed => None,
+                | SubmitVerdict::Failed
+                | SubmitVerdict::Refused => None,
             };
             if let Some(replaces) = queued {
                 // The sink took the frame and settles it later, by its stamp: the record waits

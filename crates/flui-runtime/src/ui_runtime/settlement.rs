@@ -153,7 +153,7 @@ impl UiRuntime {
                 .borrow()
                 .iter()
                 .any(|pending| pending.tree_revision >= current);
-            if !shown_by_later {
+            if !shown_by_later && !producer.device_abandoned() {
                 tail.retry_needed = true;
                 tail.retry_needs_repaint = true;
             }
@@ -607,23 +607,28 @@ impl UiRuntime {
                         resume_unwind(payload);
                     }
                 }
-                SubmitVerdict::Failed => {
+                SubmitVerdict::Failed | SubmitVerdict::Refused => {
                     producer.record_frame_dropped();
                     // No retry fixes this frame, but its tree is still not shown and nothing else
                     // may ask for a frame: unless a pending frame painted from this tree or a
                     // later one will settle, the frame is tried again after the dropped-frame
                     // backoff (a key or button press ends the wait early), with a full repaint
-                    // since the submit consumed the paint demand. Armed before the telemetry's
-                    // subscriber can panic. A given-up device holds the frames (ADR-0267).
+                    // since the submit consumed the paint demand. The streak and the wait are armed
+                    // before the mark, whose platform wake is user code and can unwind, and before
+                    // the telemetry's subscriber. A given-up device holds the frames (ADR-0267). A
+                    // refused frame waits for its window's next change, which asks for a frame.
                     let shown_by_later = producer
                         .pending_frames
                         .borrow()
                         .iter()
                         .any(|pending| pending.tree_revision >= tree_revision);
-                    if !shown_by_later && !producer.device_abandoned() {
-                        self.mark_needs_full_repaint_for(producer);
+                    if render_verdict == SubmitVerdict::Failed
+                        && !shown_by_later
+                        && !producer.device_abandoned()
+                    {
                         producer.note_frame_failure();
                         Self::arm_failure_retry(producer);
+                        self.mark_needs_full_repaint_for(producer);
                     }
                     // A failed frame takes the inputs stamped since the frames still waiting for
                     // their settlement were cut: the earlier ones are theirs to report.

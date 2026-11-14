@@ -1165,6 +1165,33 @@ fn a_parked_withheld_settlement_leaves_the_failed_frames_retry() {
     assert_eq!(held_pointer_count(&ui_runtime), 1);
 }
 
+/// A queued frame that commits an older tree asks for the frame that shows the current one when
+/// no pending frame was painted from it, with no input held; a frame still pending from the
+/// current tree owes it instead, so that settlement asks for nothing.
+///
+/// Fails when the repaint is owed only to held input, or when a later pending frame is ignored.
+#[test]
+fn a_settlement_of_an_older_tree_asks_for_the_current_one() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let [(first, _), (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    assert_eq!(held_pointer_count(&ui_runtime), 0);
+    assert_eq!(settle(&mut ui_runtime, first), Settled::Applied);
+    assert!(
+        !ui_runtime.needs_redraw(),
+        "the pending frame painted from the current tree owes it"
+    );
+
+    // The tree moves on with no frame queued from it, and the queued frame commits the older one.
+    ui_runtime.presentations.primary().advance_tree_revision();
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert!(
+        ui_runtime.needs_redraw(),
+        "the settlement asks for the frame that shows the current tree"
+    );
+    assert_eq!(held_pointer_count(&ui_runtime), 0);
+}
+
 /// Whether the primary presentation waits out a dropped frame's backoff.
 fn failure_retry_armed(ui_runtime: &UiRuntime) -> bool {
     ui_runtime

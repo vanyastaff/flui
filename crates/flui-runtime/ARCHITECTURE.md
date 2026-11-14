@@ -1243,7 +1243,8 @@ writes, tickers and the frame's own invalidations keep their demand for the
 attempt. A text failure that waits for input arms nothing. A clean segment that paints nothing
 clears the streak and the wait; a painted one clears them once its verdict commits the current
 tree, and a frame that settles `Failed` waits out the same backoff before its tree is painted again
-(ADR-0334). `headless_frame_driver_matrix` in `flui-testing` pins the
+(ADR-0334); a frame the host answers `Refused` waits for its window's next change instead.
+`headless_frame_driver_matrix` in `flui-testing` pins the
 cadence at 60, 120 and 240 Hz, the single-failure redraw, the press bypass and a
 streak of forty.
 

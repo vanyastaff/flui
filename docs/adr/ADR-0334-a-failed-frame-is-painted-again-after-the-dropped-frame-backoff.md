@@ -11,17 +11,22 @@
 
 ## Context and problem statement
 
-`SubmitVerdict::Failed` is a frame no retry fixes: a generic render error, or a submit the raster
-side refused. ADR-0048 lets it drain telemetry and arm nothing. The frame commits nothing either,
-so the presentation stays `Uncommitted`, and pointer input that arrives is held until a commit
-(`crates/flui-runtime/src/ui_runtime/input.rs`, `should_hold_pointer`). Nothing then asks for a
-frame. An application with no animation keeps its last frame on screen, and holds every pointer
-event, until an unrelated frame happens to run. This happens inline today, and queued frames
-(ADR-0305 §4) add a second way in: a settlement that commits an older tree.
+`SubmitVerdict::Failed` is a frame no retry fixes this frame. Before this record it covered two
+kinds: a generic render error or a frame the raster side could not take, which a later attempt may
+get through; and a window the host knows cannot show a frame until it changes (a surface or size
+the device refuses, a renderer that panicked on the scene), whose next change asks for a frame.
+ADR-0048 lets `Failed` drain telemetry and arm nothing. The frame commits nothing either, so the
+presentation stays `Uncommitted`, and pointer input that arrives is held until a commit
+(`crates/flui-runtime/src/ui_runtime/input.rs`, `should_hold_pointer`). For the first kind
+nothing then asks for a frame. An application with no animation keeps its last frame on screen,
+and holds every pointer event, until an unrelated frame happens to run. This happens inline
+today, and queued frames (ADR-0305 §4) add a second way in: a settlement that commits an older
+tree.
 
-Retrying at once is no answer. A refused submit fails the same way next frame. The dropped-frame
-streak that paces retries (ADR-0267) is reset by every clean segment, and a frame that fails at
-submit had a clean segment, so its retries would run at the display rate forever.
+Retrying at once is no answer. A frame that failed may fail the same way next frame. The
+dropped-frame streak that paces retries (ADR-0267) is reset by every clean segment, and a frame
+that fails at submit had a clean segment, so its retries would run at the display rate forever.
+Retrying the second kind at all is waste: it meets the same refusal until the window changes.
 
 How does a presentation whose last frame failed get its tree on screen, without spinning?
 
@@ -30,20 +35,24 @@ How does a presentation whose last frame failed get its tree on screen, without 
 - Accepted work is delivered: input held for a commit needs a frame that commits.
 - No spin: a frame that keeps failing costs at most one attempt per backoff interval.
 - One retry pacing for every dropped frame: the backoff ADR-0267 gives a lost device.
+- No attempt the host knows is refused: a window that waits for its next change costs nothing.
 - A given-up device holds its frames (ADR-0267), whatever the verdict.
 
 ## Considered options
 
 1. Retry a failed frame after the dropped-frame backoff, with the streak kept until a frame
-   commits the current tree.
-2. Retry at once, on the next display period.
-3. Release held input when a frame fails, against the tree that was not shown.
-4. Keep ADR-0048: no retry.
+   commits the current tree, and a separate `Refused` verdict for a window that waits for its
+   next change.
+2. Option 1 without `Refused`: every failed frame, refused windows included, retries on the
+   backoff.
+3. Retry at once, on the next display period.
+4. Release held input when a frame fails, against the tree that was not shown.
+5. Keep ADR-0048: no retry.
 
 ## Decision
 
-Chosen option: 1, because it is the only option that both delivers held input and bounds the
-attempts.
+Chosen option: 1, because it is the only option that delivers held input, bounds the attempts,
+and spends none on a window the host knows is refused.
 
 - **§1.** A frame that settles `Failed` paints its presentation's tree again after the
   dropped-frame backoff (`failure_retry_delay`, doubling from one display period up to
@@ -54,21 +63,35 @@ attempts.
   wait early, as for any dropped frame.
 - **§2.** A clean segment that painted a scene does not reset the streak. The scene's verdict
   does, once the frame commits the current tree (`Presented`, `NoPresent`, `NotShown`). A clean
-  segment that painted nothing still resets it. An older queued frame's commit leaves the streak,
-  and the wait a newer failed frame armed.
+  segment that painted nothing still resets it, and so does one whose scene reaches no sink. An
+  older queued frame's commit leaves the streak, and the wait a newer failed frame armed.
 - **§3.** A settlement that commits an older tree, with no pending frame painted from the current
-  one, asks for a repaint, whether input is held or not (`owe_current_tree`).
+  one, asks for a repaint, whether input is held or not (`owe_current_tree`), unless the device
+  was given up.
+- **§4.** A host whose window cannot show a frame until the window changes answers
+  `SubmitVerdict::Refused`: the surface or the size is one the device refuses, or the renderer
+  panicked on this scene. The runtime records the dropped frame, drains its telemetry, commits
+  nothing and arms nothing; the window's next change (a size the device takes, a new surface, a
+  rebuilt device, a rebuild of the tree) asks for the frame. `flui-app`'s raster host answers it,
+  and `Failed` stays for what a later attempt may get through.
 
 ### Consequences
 
 - Good, because an application whose frame failed shows its tree within the backoff, and the input
   it held replays on that commit.
-- Good, because a sink that refuses every frame costs one attempt per second at the cap.
-- Bad, because a failure that is permanent (a detached slot) is retried once per second until the
-  presentation goes. The cost is one paint, and the frame driver's wait keeps the host asleep in
-  between.
+- Good, because a sink that fails every frame costs one attempt per second at the cap, and a
+  refused window costs none.
+- Bad, because a failure that is permanent and that the host cannot name (a detached slot) is
+  retried once per second until the presentation goes. The cost is one paint, and the frame
+  driver's wait keeps the host asleep in between.
+- Bad, because a refused window holds its pointer input until it changes, as before this record.
 - Neutral, because `consecutive_failures` in a later `FrameFailureReport` now counts failed
-  submits as well as dropped segments.
+  submits as well as dropped segments, and frames lost with their device count 1, 2, 3… instead
+  of 1 each time: their painted segments no longer reset the streak, so their wait doubles to the
+  cap as ADR-0267 §1 asks of every dropped frame.
+- Neutral, because a scene that reaches no sink (a first frame still withheld, a scene another
+  presentation's scene replaced in the same pump) resets the streak at its clean segment, as a
+  segment that painted nothing does.
 
 ### Confirmation
 
@@ -80,29 +103,51 @@ Tests in `crates/flui-runtime/src/ui_runtime/frame_commit_state_tests.rs`:
   held behind a failed frame replays on the retried frame's commit, and the older frame's
   settlement leaves the wait standing;
 - `a_parked_withheld_settlement_leaves_the_failed_frames_retry` (§2): a parked `NotShown`
-  settlement of an older frame leaves the wait standing.
+  settlement of an older frame leaves the wait standing;
+- `a_settlement_of_an_older_tree_asks_for_the_current_one` (§3): a settlement of an older tree
+  with no input held asks for a repaint, and asks for none while a frame from the current tree is
+  pending.
+
+`failed_frame::a_failed_frame_is_painted_again_after_a_backoff_that_grows` in
+`crates/flui-runtime/tests/main.rs` pins §1 and §2 through `UiRuntime::pump`: no frame is submitted
+before the deadline `next_wake` reports, each retry submits once, the waits grow, and a presented
+frame ends the wait.
+
+`crates/flui-app/tests/runner_close.rs` pins §4 through the raster host:
+`a_window_past_the_device_limit_waits_for_a_size_it_takes`,
+`a_window_over_the_rebuilt_device_limit_waits_for_a_size_it_takes` and
+`a_window_whose_new_surface_is_refused_waits_for_its_next_change` arm no wait while the window is
+refused and draw on its next change, and `a_resize_that_keeps_panicking_is_not_retried_forever`
+stops after the one retry of a panicked resize.
 
 ## Pros and cons of the options
 
-### 1. Retry after the dropped-frame backoff
+### 1. Retry after the dropped-frame backoff, refused windows wait for a change
 
 - Good, because it reuses the wait, the press bypass and the cap that a dropped segment and a lost
   device already have.
+- Good, because a window the host knows is refused spends no paint until it changes.
 - Bad, because the streak's reset moves from the segment to the verdict, which ADR-0048 set.
+- Bad, because a sink gains a verdict, and must choose between `Failed` and `Refused`.
 
-### 2. Retry at once
+### 2. Every failed frame retries on the backoff
+
+- Good, because the verdict set stays as it is.
+- Bad, because a window at a size the device refuses paints once per second until it is resized.
+
+### 3. Retry at once
 
 - Good, because it recovers a frame that failed once within one display period.
-- Bad, because a sink that refuses every frame makes the presentation render at the display rate
+- Bad, because a sink that fails every frame makes the presentation render at the display rate
   forever.
 
-### 3. Release held input on failure
+### 4. Release held input on failure
 
 - Good, because no frame is spent.
 - Bad, because the input hit-tests a tree the screen does not show, which is the mismatch the hold
   exists to prevent, and the stale frame stays on screen.
 
-### 4. Keep ADR-0048
+### 5. Keep ADR-0048
 
 - Good, because nothing changes.
 - Bad, because the application keeps its last frame and holds its input until an unrelated frame

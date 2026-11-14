@@ -32,7 +32,8 @@ use flui_layer::ScenePublication;
 ///         SubmitVerdict::Retry => true,
 ///         SubmitVerdict::SurfaceStale => true,
 ///         SubmitVerdict::DeviceLost => true,
-///         SubmitVerdict::Failed => false,
+///         SubmitVerdict::Failed => true,
+///         SubmitVerdict::Refused => false,
 ///         SubmitVerdict::Queued => false,
 ///         SubmitVerdict::QueuedReplacing(_) => false,
 ///     }
@@ -76,10 +77,18 @@ pub enum SubmitVerdict {
     /// epochs (ADR-0267).
     DeviceLost,
     /// The frame failed in a way no retry can fix this frame (a generic
-    /// render error, or a refused submit). Its tree is still not shown, so
-    /// the caller paints it again after the dropped-frame backoff (ADR-0267),
-    /// unless a frame it queued from that tree or a later one is pending.
+    /// render error, or a frame the raster side could not take). Its tree is
+    /// still not shown, so the caller paints it again after the dropped-frame
+    /// backoff (ADR-0334), unless a frame it queued from that tree or a later
+    /// one is pending.
     Failed,
+    /// The window cannot show a frame until it changes: its surface or its
+    /// size is one the device refuses, or the renderer panicked on this scene
+    /// and would panic on its retry too. Nothing is retried and nothing
+    /// commits; the window's next change (a size the device takes, a new
+    /// surface, a rebuilt device, a rebuild of the tree) asks for the next
+    /// frame (ADR-0334 §4).
+    Refused,
     /// The sink took the frame and settles it later: the raster side answers with a
     /// [`FrameSettlement`] naming the frame's address and epoch, which the host hands to
     /// `UiRuntime::settle_frame`. Until then the runtime keeps what the frame commits, captured

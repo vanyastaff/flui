@@ -318,9 +318,9 @@ pub(crate) fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_
 }
 
 /// The consecutive-failure streak counts uninterrupted failures and
-/// resets on the next cleanly completed segment — the field an
+/// resets once a frame commits the current tree (ADR-0334 §2) — the field an
 /// embedder keys escalation off.
-pub(crate) fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
+pub(crate) fn consecutive_failures_count_up_and_reset_on_a_presented_frame() {
     let ui_runtime = UiRuntime::for_test();
     ui_runtime
         .attach_root_widget(&SizedBox::new(10.0, 10.0))
@@ -349,7 +349,7 @@ pub(crate) fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
     pump(&ui_runtime, &mut backend); // fails: streak 1
     pump(&ui_runtime, &mut backend); // fails: streak 2
     probe_armed.set(false);
-    pump(&ui_runtime, &mut backend); // clean: streak resets
+    pump(&ui_runtime, &mut backend); // clean and presented: streak resets
     probe_armed.set(true);
     pump(&ui_runtime, &mut backend); // fails: streak restarts at 1
 
@@ -362,7 +362,7 @@ pub(crate) fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
     assert_eq!(
         consecutive,
         vec![1, 2, 1],
-        "two uninterrupted failures count 1,2; a clean segment resets; the next \
+        "two uninterrupted failures count 1,2; a presented frame resets; the next \
          failure restarts at 1"
     );
 }
