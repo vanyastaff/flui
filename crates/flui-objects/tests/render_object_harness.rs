@@ -6156,7 +6156,8 @@ fn harness_shimmer_mask_masks_only_mid_sweep() {
         mid.structure()
     );
     assert_eq!(mid.hit_first(20.0, 20.0), Some(mid.id("child")));
-    for rest in [masked(sweep(0.0)), masked(sweep(1.0)), masked(held(None))] {
+    for proxy in [sweep(0.0), sweep(1.0), held(None)] {
+        let rest = masked(proxy);
         assert!(
             !rest.structure().contains(&"ShaderMask"),
             "{:?}",

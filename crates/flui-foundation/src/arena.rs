@@ -108,13 +108,31 @@ pub struct FrameArena {
     /// The most bytes handed out at once since the last reset: a frame that frees its scratch
     /// in reverse order ends with the cursor back at zero, and still needed this much.
     peak: Cell<usize>,
-    /// The peak of each of the last [`RECENT_RESETS`] resets that followed some allocation.
-    recent: [usize; RECENT_RESETS],
+    /// The size class of each of the last [`RECENT_RESETS`] resets that followed some
+    /// allocation: the power of two its peak rounds up to (at least [`MIN_CHUNK`]), as an
+    /// exponent, so the window stays small inside the owner that holds the arena; zero for a slot
+    /// no reset has written yet.
+    recent: [u8; RECENT_RESETS],
     /// Where the next reset writes in `recent`.
     next_recent: usize,
     /// The size the next chunk opens at, so a frame that needed several chunks takes one the
     /// next time: a reset sets it, and never allocates.
     next_chunk: usize,
+}
+
+/// The exponent of the power of two `bytes` rounds up to, at least [`MIN_CHUNK`]'s; a size past
+/// the largest power of two is class `usize::BITS`.
+fn size_class(bytes: usize) -> u8 {
+    let class = bytes
+        .max(MIN_CHUNK)
+        .checked_next_power_of_two()
+        .map_or(usize::BITS, usize::trailing_zeros);
+    u8::try_from(class).expect("BUG: a size class is at most usize::BITS")
+}
+
+/// The bytes of size class `class`; the class past the largest power of two saturates.
+fn class_size(class: u8) -> usize {
+    1_usize.checked_shl(u32::from(class)).unwrap_or(usize::MAX)
 }
 
 impl FrameArena {
@@ -151,17 +169,14 @@ impl FrameArena {
             // frame nor releases the chunk those frames sized.
             return;
         }
-        self.recent[self.next_recent] = used;
+        self.recent[self.next_recent] = size_class(used);
         self.next_recent = (self.next_recent + 1) % RECENT_RESETS;
-        let recent_most = self.recent.iter().copied().max().unwrap_or(0);
-        let wanted = if recent_most == 0 {
-            0
-        } else {
-            recent_most
-                .checked_next_power_of_two()
-                .unwrap_or(recent_most)
-                .max(MIN_CHUNK)
-        };
+        let wanted = self
+            .recent
+            .iter()
+            .copied()
+            .max()
+            .map_or(MIN_CHUNK, class_size);
 
         let chunks = self.chunks.get_mut();
         let keep_newest = chunks.last().is_some_and(|chunk| {
@@ -580,6 +595,20 @@ mod tests {
         bytes.shrink_to_fit();
         assert_eq!(arena.cursor.get(), 10);
         assert_eq!(bytes, [7; 10]);
+    }
+
+    /// The arena lives inline in every pipeline owner, so its window of recent peaks stays a
+    /// few hundred bytes.
+    #[test]
+    fn the_arena_is_small_inline() {
+        assert!(
+            std::mem::size_of::<FrameArena>() <= 256,
+            "{} bytes",
+            std::mem::size_of::<FrameArena>()
+        );
+        assert_eq!(size_class(1), 12);
+        assert_eq!(class_size(size_class(MIN_CHUNK + 1)), 2 * MIN_CHUNK);
+        assert_eq!(class_size(size_class(usize::MAX)), usize::MAX);
     }
 
     #[test]
