@@ -340,6 +340,16 @@ fragment is dropped. The URL is then admitted by the application's `LinkDeclarat
 scheme; a UI runtime declares nothing until its runner sets them, so it opens nothing. An admitted
 URL is applied as a `Go`, so the pages it shares with the stack stay.
 
+A URL that arrives before the presentation's first frame (a cold start) finds no Router yet. The
+slot keeps its path as the initial location (`UrlOwnerSlot::open_at`; a second one replaces the
+first), and the Router that registers as the first owner takes it in `create_state` and opens on
+the stack `back_stack` derives from it instead of its own initial stack, as Flutter's
+`defaultRouteName` names the first route: the initial pages are never built. A location no route
+matches keeps the initial stack and reaches `on_unknown` after that frame, where the hook may
+navigate. The first frame that builds a tree ends the cold start: a location no Router took is
+dropped with a warning, so a Router mounted later never opens on an old link, and a URL for a tree
+with no Router is `NoUrlOwner` from then on.
+
 The sources of an intent are on the owner thread already: the URLs the platform opens reach
 `AppHandler` (ADR-0254), the development agent's window methods arrive through
 `UiCommand::Agent`. A thread that needs to navigate writes a signal (`UiCommand::SignalWrite`,
@@ -422,7 +432,11 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   `a_router_inside_a_page_does_not_own_the_url` and, through `HeadlessHost::open_url`,
   `an_opened_url_navigates_only_when_declared` (nothing declared opens nothing, an undeclared
   scheme or domain and a web URL with no host are refused, an unmatched path is `NoMatch`, a
-  declared web link opens as a `go`); `opened_urls_split_into_scheme_host_and_route_location`
+  declared web link opens as a `go`), `a_url_opened_before_the_first_frame_opens_the_router_on_it`
+  (the initial and the replaced pages never built),
+  `a_cold_url_no_route_matches_reaches_on_unknown_after_the_frame` (the hook's redirect applies)
+  and `a_cold_url_no_router_took_is_dropped_after_the_first_frame` (the warning, `NoUrlOwner`, a
+  Router mounted later opens on its own stack); `opened_urls_split_into_scheme_host_and_route_location`
   (the path without its authority, an empty path, case, escapes and the query, the length
   bound, the declarations).
 - `examples/navigation.rs` (`cargo check --example navigation --features material`): a push, a

@@ -15,7 +15,7 @@ use flui_view::navigation::{
     NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, RoutePath, UrlOwner,
 };
 use flui_view::prelude::*;
-use flui_view::{AsyncDriver, BoxedView, BuildContextExt, TaskToken};
+use flui_view::{AsyncDriver, BoxedView, BuildContextExt, FrameTiming, PostFrameHandle, TaskToken};
 
 use crate::navigator::lifecycle::{RetiredValues, Terminal};
 
@@ -342,8 +342,21 @@ impl<R: Routable> StatefulView for Router<R> {
     /// The state is born with its build phase and, when this is the
     /// presentation's outermost router, its place in the presentation's
     /// URL-owner slot.
+    ///
+    /// The router that becomes the URL owner first opens on the location of a
+    /// URL the platform opened before the first frame, if there is one: the
+    /// stack [`Routable::back_stack`] derives from it replaces the initial
+    /// one. A location no route matches keeps the initial stack and reaches
+    /// [`on_unknown`](Router::on_unknown) after the frame, where the hook may
+    /// navigate.
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
-        RouterState::new(self, ctx.build_phase(), url_slot(ctx))
+        let slot = url_slot(ctx);
+        let opened = slot.as_ref().and_then(UrlOwnerSlot::take_initial);
+        let mut state = RouterState::new(self, ctx.build_phase(), slot);
+        if let Some(path) = opened {
+            state.open_on(path, ctx.post_frame_handle());
+        }
+        state
     }
 }
 
@@ -393,6 +406,17 @@ impl<R: Routable> RouterState<R> {
     }
 }
 
+/// Tell a router's `on_unknown` hook of a cold-start location no route
+/// matched, after the frame that mounted the router.
+fn report_unknown<R: Routable>(
+    (shared, path): (Weak<RouterShared<R>>, RoutePath),
+    _timing: &FrameTiming,
+) {
+    if let Some(shared) = shared.upgrade() {
+        drop(RouterUrlOwner::unknown(&shared, path));
+    }
+}
+
 /// Persistent state for [`Router`]. Opaque: it is public only because
 /// [`StatefulView::State`] names it.
 pub struct RouterState<R: Routable> {
@@ -431,6 +455,31 @@ impl<R: Routable> Drop for RouterState<R> {
 }
 
 impl<R: Routable> RouterState<R> {
+    /// Open on `path`, the location of a URL the platform opened before the
+    /// first frame, in place of the initial stack. A location no route
+    /// matches keeps the initial stack and is reported to `on_unknown` after
+    /// the frame, where a navigation from the hook is not refused as one
+    /// from a build.
+    fn open_on(&mut self, path: RoutePath, post_frame: Option<PostFrameHandle>) {
+        match R::back_stack(&path) {
+            Ok(stack) if !stack.is_empty() => {
+                let replaced = RetiredValues(std::mem::replace(&mut self.initial, stack));
+                drop(replaced);
+            }
+            _ => {
+                let report = (Rc::downgrade(&*self.shared), path);
+                let queued =
+                    post_frame.map(|handle| handle.schedule_or_return(report, report_unknown::<R>));
+                if !matches!(queued, Some(Ok(()))) {
+                    tracing::warn!(
+                        "a URL opened before the first frame matches no route, and no frame is \
+                         left to tell `on_unknown`"
+                    );
+                }
+            }
+        }
+    }
+
     /// Seed each initial value as a page, bottom to top.
     ///
     /// Pages seeded before a failure (a route-identity refusal, a panicking
