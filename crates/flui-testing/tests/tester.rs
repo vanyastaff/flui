@@ -797,6 +797,22 @@ fn hiding_the_window_hides_the_application_and_showing_it_resumes() {
     );
 }
 
+#[test]
+fn showing_an_unfocused_window_leaves_it_unfocused() {
+    use flui_view::AppLifecycleState::Inactive;
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    t.set_window_focused(false);
+    t.set_window_visible(false);
+    t.set_window_visible(true);
+    assert_eq!(
+        opened.borrow().lifecycle.last(),
+        Some(&Inactive),
+        "the OS focus never came back"
+    );
+}
+
 /// A restart is the user quitting and opening the application again: a write
 /// the run accepted and had not yet carried out still reaches the storage.
 #[test]

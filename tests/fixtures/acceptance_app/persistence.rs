@@ -12,7 +12,7 @@ use flui::testing::MemoryStorage;
 use flui::view::persist::Document;
 use serde_json::{Value, json};
 
-use crate::app::{AcceptanceApp, Faults, Loader, NoteId, OpenedStack, Route, Saved, Session};
+use crate::app::{AcceptanceApp, Faults, FirstScreens, Loader, NoteId, Route, Saved, Session};
 use crate::testing::AppRun;
 
 /// More frames than a load over memory storage takes.
@@ -206,7 +206,7 @@ fn settings_over_editor_restores_and_backs_out_twice() {
 #[test]
 fn list_offset_and_route_are_restored_on_the_first_loaded_frame() {
     let (app, gate) = gated();
-    let opened = OpenedStack::default();
+    let opened = Rc::new(FirstScreens::default());
     let app = app.first_screens(Rc::clone(&opened));
     gate.set_open(true);
     let mut run = AppRun::start(app);

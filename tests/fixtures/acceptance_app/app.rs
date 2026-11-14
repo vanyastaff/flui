@@ -234,9 +234,6 @@ impl FirstScreens {
     }
 }
 
-/// What [`AcceptanceApp::first_screens`] records into.
-pub type OpenedStack = Rc<FirstScreens>;
-
 /// What `planter` gives for `kind`, when there is a planter.
 fn plant(planter: Option<&Planter>, kind: Kept) -> Option<Rc<dyn Any>> {
     planter.map(|planter| Rc::<dyn Any>::from(planter(kind)))
@@ -273,7 +270,7 @@ pub struct AcceptanceApp {
     first_attempt: u32,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
-    opened: Option<OpenedStack>,
+    opened: Option<Rc<FirstScreens>>,
 }
 
 impl AcceptanceApp {
@@ -332,7 +329,7 @@ impl AcceptanceApp {
 
     /// Record in `opened` the routes the first loaded frame builds screens for.
     #[must_use]
-    pub fn first_screens(mut self, opened: OpenedStack) -> Self {
+    pub fn first_screens(mut self, opened: Rc<FirstScreens>) -> Self {
         self.opened = Some(opened);
         self
     }
@@ -666,7 +663,7 @@ struct Shared {
     faults: Faults,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
-    opened: Option<OpenedStack>,
+    opened: Option<Rc<FirstScreens>>,
 }
 
 /// A presentation's close guard and a notifier told each time what it has
@@ -734,7 +731,7 @@ struct Root {
     first_attempt: u32,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
-    opened: Option<OpenedStack>,
+    opened: Option<Rc<FirstScreens>>,
 }
 
 struct RootState {
@@ -932,7 +929,7 @@ struct Loaded {
     faults: Faults,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
-    opened: Option<OpenedStack>,
+    opened: Option<Rc<FirstScreens>>,
 }
 
 struct LoadedState {
@@ -945,7 +942,7 @@ struct LoadedState {
     faults: Faults,
     planter: Option<Planter>,
     edits: Option<EditCounter>,
-    opened: Option<OpenedStack>,
+    opened: Option<Rc<FirstScreens>>,
     _kept: Option<Rc<dyn Any>>,
 }
 
@@ -1070,7 +1067,7 @@ struct ScreenState {
     /// follows the router while the page is mounted.
     place: Option<Weak<Place>>,
     /// Where this screen reports being built, and for which route.
-    first: Option<(OpenedStack, Route)>,
+    first: Option<(Rc<FirstScreens>, Route)>,
     _kept: Option<Rc<dyn Any>>,
 }
 

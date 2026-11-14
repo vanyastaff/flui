@@ -34,6 +34,10 @@ pub const HEIGHT: u32 = 720;
 const SETTLE_STEP: Duration = Duration::from_millis(50);
 const SETTLE_STEPS: usize = 8;
 
+/// How often [`AppRun::shows`] locates and reads again when a frame ran
+/// between the two.
+const READ_ATTEMPTS: usize = 4;
+
 /// One run of the application: the tester driving it and the handles its
 /// root gives the rows.
 pub struct AppRun {
@@ -281,10 +285,8 @@ impl AppRun {
     ///
     /// # Panics
     ///
-    /// On an event the window's input path does not take: a composition
-    /// whose cursor selects a range or does not fall between characters, or
-    /// the session ending while a composition is shown (the platform would
-    /// end it there; a row commits or cancels it first).
+    /// On a composition whose cursor selects a range or does not fall
+    /// between characters, which the window's input path does not take.
     pub fn ime(&mut self, event: ImeEvent) {
         match event {
             ImeEvent::Preedit { text, .. } if text.is_empty() => {
@@ -301,11 +303,10 @@ impl AppRun {
                 self.tester.compose(&text, caret);
             }
             ImeEvent::Commit(text) => self.tester.commit_composition(&text),
-            ImeEvent::Disabled => assert!(
-                self.title_composing().is_none(),
-                "the input method's session ends with no composition shown"
-            ),
-            // The session opens with the composition it brings.
+            // The framework ends the composition at the end of a session, the
+            // edit an empty composition makes (`project_ime_event`).
+            ImeEvent::Disabled => self.tester.cancel_composition(),
+            // The framework takes the start of a session as no edit.
             ImeEvent::Enabled => {}
             other => panic!("the window's input path takes no {other:?}"),
         }
@@ -406,7 +407,8 @@ impl AppRun {
         self.settle();
     }
 
-    /// The window becomes hidden (`false`) or shown again; the row settles.
+    /// The window becomes hidden (`false`) or shown again, without settling:
+    /// a row reads what the store holds before the frames run.
     pub fn set_window_visible(&mut self, visible: bool) {
         self.tester.set_window_visible(visible);
     }
@@ -511,16 +513,31 @@ impl AppRun {
     /// centre would reach it: a row the list scrolled out of its viewport, or
     /// built in its cache, lies outside the list's bounds.
     fn any(&mut self, locator: &Locator) -> bool {
-        let found: Vec<Match> = self.tester.find_all(locator);
-        if found.is_empty() {
-            return false;
+        // The locate and the read are two reads, and a frame between them may
+        // rebuild or rename what the first found: a node counts only when the
+        // read holds it with the name it was found by, and a read holding
+        // none of them is taken again.
+        for _ in 0..READ_ATTEMPTS {
+            let found: Vec<Match> = self.tester.find_all(locator);
+            if found.is_empty() {
+                return false;
+            }
+            let tree = self.tester.semantics();
+            let same = |node: &Node| {
+                found
+                    .iter()
+                    .any(|found| found.node.id == node.id && found.node.name == node.name)
+            };
+            let mut held = false;
+            walk_semantics(&tree.roots, &mut |node| held |= same(node));
+            if !held {
+                continue;
+            }
+            let mut shown = false;
+            walk_shown(&tree.roots, None, &mut |node| shown |= same(node));
+            return shown;
         }
-        let tree = self.tester.semantics();
-        let mut shown = false;
-        walk_shown(&tree.roots, None, &mut |node| {
-            shown |= found.iter().any(|found| found.node.id == node.id);
-        });
-        shown
+        panic!("the tree changed between every locate and read of {locator:?}");
     }
 
     /// The Title field's render-object field `name`.
@@ -577,29 +594,33 @@ fn bounds(node: &Node) -> Option<Bounds> {
     ))
 }
 
-/// Visit each node whose centre lies inside `clip` and inside the bounds of
-/// every node above it.
+/// Visit each node whose centre lies inside `clip`, the bounds of the nodes
+/// above it. A node without bounds, or with empty ones, narrows nothing
+/// below it: it is a wrapper, not a region on screen.
 fn walk_shown(nodes: &[Node], clip: Option<Bounds>, visit: &mut impl FnMut(&Node)) {
     for node in nodes {
-        let own = bounds(node);
-        let inside = match (own, clip) {
-            (Some((left, top, right, bottom)), Some((cl, ct, cr, cb))) => {
-                let (x, y) = ((left + right) / 2.0, (top + bottom) / 2.0);
-                (cl..=cr).contains(&x) && (ct..=cb).contains(&y)
-            }
-            (Some(_), None) => true,
-            (None, _) => false,
-        };
-        if !inside {
+        let Some(own) = bounds(node) else {
+            walk_shown(&node.children, clip, visit);
             continue;
+        };
+        let (left, top, right, bottom) = own;
+        if let Some((cl, ct, cr, cb)) = clip {
+            let (x, y) = ((left + right) / 2.0, (top + bottom) / 2.0);
+            if !((cl..=cr).contains(&x) && (ct..=cb).contains(&y)) {
+                continue;
+            }
         }
         visit(node);
-        let clip = match (own, clip) {
-            (Some((left, top, right, bottom)), Some((cl, ct, cr, cb))) => {
-                Some((left.max(cl), top.max(ct), right.min(cr), bottom.min(cb)))
-            }
-            (own, clip) => own.or(clip),
+        let narrowed = if right <= left || bottom <= top {
+            clip
+        } else {
+            Some(match clip {
+                Some((cl, ct, cr, cb)) => {
+                    (left.max(cl), top.max(ct), right.min(cr), bottom.min(cb))
+                }
+                None => own,
+            })
         };
-        walk_shown(&node.children, clip, visit);
+        walk_shown(&node.children, narrowed, visit);
     }
 }
