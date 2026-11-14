@@ -6,7 +6,7 @@
 //! presentation's `Router` (`UiRuntime::open_url`, ADR-0330 §5).
 //!
 //! The presentation is the window's own for
-//! [`OpenTarget::Window`](flui_platform::OpenTarget::Window) (an iOS scene, an
+//! [`OpenTarget::Window`] (an iOS scene, an
 //! Android activity), and for the application as a whole the one whose
 //! window was focused last, else the window opened first. URLs that arrive
 //! before their presentation exists (a link that launched the application)
