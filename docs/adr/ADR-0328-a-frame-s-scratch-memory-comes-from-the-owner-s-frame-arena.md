@@ -156,8 +156,8 @@ pure Rust performance gain and changes nothing an author writes.
 
 - `flui-foundation`'s `arena::tests`, under miri: a frame of the same shape reuses the one kept
   chunk, a frame that frees in order keeps its chunk, a reset never allocates, idle resets keep
-  the chunk busy frames need, a spike's chunk is released after the window, the last block frees, grows and shrinks in place, and zero-size and
-  over-aligned layouts are honoured.
+  the chunk busy frames need, a spike's chunk is released after the window, the last block
+  frees, grows and shrinks in place, and zero-size and over-aligned layouts are honoured.
 - A `compile_fail` doctest on `FrameArena`: a `FrameVec` alive across `reset` is error E0502.
 - `cargo xtask perf`: each moving pull request lowers `allocations` in the scenarios it touches,
   no scenario's count rises, and `idle_frame_retained_scene` stays at zero.
