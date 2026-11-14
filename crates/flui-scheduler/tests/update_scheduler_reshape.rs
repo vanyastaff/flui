@@ -196,6 +196,10 @@ fn update_scheduler_bounds_matrix() {
                 a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs as fn(),
             ),
             (
+                "a_frame_recorded_out_of_order_reaches_a_consumer_past_the_later_one",
+                a_frame_recorded_out_of_order_reaches_a_consumer_past_the_later_one as fn(),
+            ),
+            (
                 "a_late_frame_names_its_slowest_phase",
                 a_late_frame_names_its_slowest_phase as fn(),
             ),
@@ -513,5 +517,46 @@ fn a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs() {
         ids(&two),
         [late],
         "the later input waited for the later frame"
+    );
+}
+
+/// A frame recorded after a later one, because its sink settled it later, still reaches a
+/// consumer whose cursor is the later frame: the cursor follows the order of recording.
+///
+/// Fails when the cursor filters by id.
+fn a_frame_recorded_out_of_order_reaches_a_consumer_past_the_later_one() {
+    let clock = FrameClock::new();
+    let start = Instant::now();
+    let times = FrameTimes {
+        clock_timestamp: start,
+        segment_start: start,
+        segment_end: start,
+        submit_at: start,
+        phases: FramePhaseDurations::default(),
+    };
+    clock.mark_demand(DemandKind::Dirty);
+    assert!(clock.poll(start).should_run_segment());
+    let queued = clock.telemetry_cut();
+    clock.mark_demand(DemandKind::Dirty);
+    assert!(clock.poll(start).should_run_segment());
+    let failed = clock.telemetry_cut();
+
+    let later = clock.record_frame(failed, address(), times, PresentOutcome::Errored);
+    let seen = clock.frames_since(None);
+    assert_eq!(
+        seen.last().map(|frame| frame.frame_id),
+        Some(later.frame_id)
+    );
+
+    let settled = clock.record_frame(queued, address(), times, PresentOutcome::Presented);
+    assert!(
+        settled.frame_id < later.frame_id,
+        "the queued frame was produced first"
+    );
+    let next = clock.frames_since(Some(later.frame_id));
+    assert_eq!(
+        next.iter().map(|frame| frame.frame_id).collect::<Vec<_>>(),
+        [settled.frame_id],
+        "the frame recorded after the cursor is delivered"
     );
 }

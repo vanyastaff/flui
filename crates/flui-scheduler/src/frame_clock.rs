@@ -878,6 +878,7 @@ impl FrameClock {
     pub fn telemetry_cut(&self) -> FrameTelemetryCut {
         FrameTelemetryCut {
             produced: self.produced_count(),
+            first_epoch: 0,
             next_epoch: self.pending_input_epochs.borrow().cut(),
         }
     }
@@ -925,10 +926,7 @@ impl FrameClock {
         times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
-        let input_epochs = self
-            .pending_input_epochs
-            .borrow_mut()
-            .drain_before(cut.next_epoch);
+        let input_epochs = self.pending_input_epochs.borrow_mut().drain(cut);
         self.record_frame_with_epochs(cut, address, times, present_outcome, input_epochs)
     }
 
@@ -958,10 +956,7 @@ impl FrameClock {
         times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
-        let input_epochs = self
-            .pending_input_epochs
-            .borrow()
-            .peek_before(cut.next_epoch);
+        let input_epochs = self.pending_input_epochs.borrow().peek(cut);
         self.record_frame_with_epochs(cut, address, times, present_outcome, input_epochs)
     }
 
@@ -1004,9 +999,14 @@ impl FrameClock {
         snapshot
     }
 
-    /// Every retained [`FrameSnapshot`] with `frame_id` strictly greater
-    /// than `since` (or every retained snapshot, if `since` is `None`),
-    /// oldest first, as owned values. `Option<FrameId>` rather than a bare
+    /// Every retained [`FrameSnapshot`] recorded after the one `since` names
+    /// (or every retained snapshot, if `since` is `None`), in the order they
+    /// were recorded, as owned values. A frame its sink settles later is
+    /// recorded after frames submitted behind it, so the cursor follows the
+    /// order of recording, not of ids: a consumer that passes the last id it
+    /// received sees every snapshot recorded since. A cursor whose snapshot
+    /// the ring no longer holds returns every retained snapshot with a greater
+    /// id. `Option<FrameId>` rather than a bare
     /// `FrameId` sentinel: frame ids are 1-based `NonZeroU64`
     /// under the hood, so there is no
     /// representable "before the first frame" `FrameId` to pass instead.

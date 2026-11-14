@@ -780,7 +780,14 @@ impl UiRuntime {
         subscriber_panic
     }
 
+    /// Replays the pointer input `presentation` held for a commit, by the rule that held it:
+    /// only while the presentation is `Committed`. A commit that leaves it uncommitted (an older
+    /// frame settled while a later one waits, a text barrier, a segment in flight) leaves the
+    /// input held for the commit that clears it.
     pub(super) fn replay_committed_held_pointer_input(&self, presentation: &PresentationState) {
+        if presentation.frame_commit_state() != FrameCommitState::Committed {
+            return;
+        }
         let Some(mut replay) = HeldPointerReplay::begin(presentation.held_pointer_input()) else {
             return;
         };

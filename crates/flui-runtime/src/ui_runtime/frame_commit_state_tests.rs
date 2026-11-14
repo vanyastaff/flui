@@ -634,17 +634,18 @@ fn a_frame_answered_inline_without_a_commit_leaves_queued_frames_to_their_settle
     assert_uncommitted_since(&ui_runtime, queued_revision.next());
 }
 
-/// A sink that queues more frames than the settlement ring holds folds the oldest, and a
-/// subscriber that panics on that fold's trace leaves the frame to finish: the newest record is
-/// queued, the folded reads wait again, and the frame settles as rendered before the panic
-/// continues.
+/// A third frame queued while two wait supersedes the second in the raster inbox: the second's
+/// record folds, and the first, which the raster side may be rendering, keeps waiting for its
+/// settlement. A subscriber that panics on that fold's trace leaves the frame to finish: it
+/// settles as rendered before the panic continues.
 ///
-/// Fails when the fold's panic leaves the frame before its tail.
+/// Fails when the fold drops the oldest record, or when its panic leaves the frame before its
+/// tail.
 #[test]
 fn a_subscriber_that_panics_on_a_folded_frame_leaves_the_frame_finished() {
     let mut ui_runtime = mount_box();
     let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
-    let _ = queue_two_frames(&ui_runtime, &mut sink);
+    let [(first, _), _] = queue_two_frames(&ui_runtime, &mut sink);
     ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
 
     let panicked = render_under(
@@ -670,6 +671,11 @@ fn a_subscriber_that_panics_on_a_folded_frame_leaves_the_frame_finished() {
     assert!(
         !ui_runtime.needs_redraw(),
         "the frame settled as rendered before the panic continued"
+    );
+    assert_eq!(
+        settle(&mut ui_runtime, first),
+        Settled::Applied,
+        "the oldest frame, which the raster side may be rendering, keeps its record"
     );
     let newest = *sink.epochs.last().expect("three frames were queued");
     assert_eq!(
@@ -805,11 +811,22 @@ fn a_subscriber_that_panics_on_a_superseded_frame_leaves_the_settled_frame_finis
     });
     assert!(!ui_runtime.render_frame(&mut sink));
     ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    press_primary(&ui_runtime);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for a commit"
+    );
     let panicked = render_under(PanicsOnEvent { needle }, || {
         let _ = ui_runtime.render_frame(&mut sink);
     });
     assert!(panicked, "the subscriber's panic continues");
     assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        0,
+        "the held Down replays before the panic continues"
+    );
     assert!(
         ui_runtime
             .presentations
@@ -817,5 +834,100 @@ fn a_subscriber_that_panics_on_a_superseded_frame_leaves_the_settled_frame_finis
             .pending_frames
             .borrow()
             .is_empty()
+    );
+}
+
+/// Input held while a queued frame waits stays held when that frame settles but the
+/// presentation is still uncommitted for another reason (a text sizing replacement withdrew its
+/// layout): the replay follows the rule that held the input.
+///
+/// Fails when the settlement replays against a presentation that is not committed.
+#[test]
+fn a_settlement_leaves_input_held_while_the_presentation_is_not_committed() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let (_policy, writer) = flui_painting::TextSizing::captured();
+    assert!(
+        ui_runtime.install_captured_text_sizing_for(ui_runtime.presentation_id(), writer.source())
+    );
+    press_primary(&ui_runtime);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for a commit"
+    );
+
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
+    assert_ne!(primary_state(&ui_runtime), FrameCommitState::Committed);
+    assert_eq!(
+        held_pointer_count(&ui_runtime),
+        1,
+        "the Down waits for the commit the text replacement owes"
+    );
+}
+
+/// An input stamped after a queued frame was cut and before a frame that failed inline belongs
+/// to the failed frame alone: it is reported once, not again by the next frame that presents.
+///
+/// Fails when the failed frame reads its inputs without taking them.
+#[test]
+fn a_failed_frame_takes_the_inputs_stamped_since_the_queued_frame() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|call, _| {
+        if call == 0 {
+            SubmitVerdict::Queued
+        } else {
+            SubmitVerdict::Failed
+        }
+    });
+    assert!(!ui_runtime.render_frame(&mut sink));
+    let clock = ui_runtime.presentations.primary().clock();
+    let late = clock.stamp_input_epoch(clock.now());
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(!ui_runtime.render_frame(&mut sink));
+    assert_eq!(settle(&mut ui_runtime, sink.epochs[0]), Settled::Applied);
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+    assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
+
+    let frames = ui_runtime
+        .presentations
+        .primary()
+        .clock()
+        .frames_since(None);
+    let reporting = frames
+        .iter()
+        .filter(|frame| frame.input_epochs.iter().any(|epoch| epoch.id == late))
+        .map(|frame| frame.present_outcome)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reporting,
+        [flui_scheduler::PresentOutcome::Errored],
+        "the failed frame reports the input once: {frames:?}"
+    );
+}
+
+/// A sink that panics loses its frame: the frame's cleanup and the repaint it owes run
+/// contained, so a subscriber that panics on the cleanup's trace still leaves the repaint armed
+/// before the sink's panic continues.
+///
+/// Fails when the cleanup runs uncontained before the repaint.
+#[test]
+fn a_subscriber_that_panics_on_a_lost_frames_cleanup_leaves_the_repaint_armed() {
+    let ui_runtime = mount_box();
+    let mut sink =
+        ScriptedSink::new(|_, _| -> SubmitVerdict { panic!("sink — intentional panic") });
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "abandoned before it was shown",
+        },
+        || {
+            let _ = ui_runtime.render_frame(&mut sink);
+        },
+    );
+    assert!(panicked, "the sink's panic continues");
+    assert!(
+        ui_runtime.render_frame(&mut ScriptedSink::always_presents()),
+        "the lost scene is painted again"
     );
 }

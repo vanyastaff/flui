@@ -19,9 +19,12 @@ use crate::frame_failure::FrameFailureKind;
 use crate::presentation::PresentationState;
 use crate::sink::{FrameSettlement, Settled, SubmitVerdict};
 
-/// The most frames one presentation keeps pending: the deepest placement's settlement ring
-/// (ADR-0305 §5). A sink that queues one more has let a settlement go, and the oldest record is
-/// folded into the next, as a superseded frame's is.
+/// The most frames one presentation keeps pending: the deepest placement's depth (ADR-0305 §5),
+/// which the frame clock's in-flight gate holds the frames the raster side renders or answers
+/// to. A record past it is a frame the raster side superseded in its inbox: a frame sent while
+/// another waits there replaces it, and the replaced one gets no settlement of its own. That frame
+/// is always the newest record before the one being queued (the frames the executor took are
+/// older), so it is the one folded; a record the executor renders keeps waiting for its answer.
 const MAX_PENDING_FRAMES: usize = 2;
 
 /// What a frame commits once its sink's verdict is known, captured when the frame is handed to
@@ -151,9 +154,9 @@ impl UiRuntime {
     }
 
     /// The sink queued `frame`, stamped `epoch`: its record waits for the settlement that names
-    /// it. A presentation already holding [`MAX_PENDING_FRAMES`] folds its oldest record into the
-    /// next, so the reads it holds wait for a later scene. Returns the first panic of that fold,
-    /// for the caller to resume after the frame's tail.
+    /// it. A presentation already holding [`MAX_PENDING_FRAMES`] folds its newest record, the one
+    /// `frame` superseded in the raster inbox, so the reads it holds wait for a later scene.
+    /// Returns the first panic of that fold, for the caller to resume after the frame's tail.
     pub(super) fn queue_pending_frame(
         producer: &PresentationState,
         epoch: FrameEpoch,
@@ -163,7 +166,7 @@ impl UiRuntime {
         let folded = {
             let mut pending = producer.pending_frames.borrow_mut();
             let folded = (pending.len() >= MAX_PENDING_FRAMES)
-                .then(|| pending.pop_front())
+                .then(|| pending.pop_back())
                 .flatten();
             pending.push_back(frame);
             folded
@@ -174,10 +177,10 @@ impl UiRuntime {
             // The reads wait again before a subscriber hears of it, and each step runs contained.
             held.contain(|| Self::abandon_pending_frame(producer, folded));
             held.contain(|| {
-                tracing::warn!(
+                tracing::trace!(
                     target: "flui.frame",
                     epoch,
-                    "BUG: a sink queued more frames than its settlement ring holds; the oldest is folded"
+                    "a frame superseded in the raster inbox left the settlement ring; its record folds"
                 );
             });
         }
@@ -278,8 +281,8 @@ impl UiRuntime {
         });
         // Held input replays once the retry is in place, before the first panic resumes: a panic
         // that came first does not strand the input the commit released. Which settlement
-        // replays it is decided with the verdict (`owe_held_input`), by the rule the inline
-        // frame follows.
+        // replays it is decided with the verdict (`owe_held_input`), and the replay runs only
+        // while the presentation is committed, the rule that held it.
         if replay_committed_input {
             held.contain(|| self.replay_committed_held_pointer_input(producer));
         }
@@ -463,7 +466,9 @@ impl UiRuntime {
                     held.absorb(self.commit_painted_frame(producer, tree_revision, &input_regions));
                     producer.record_frame_dropped();
                     let streak = producer.record_frame_withheld();
-                    Self::owe_held_input(producer, shows_current_tree, &mut tail);
+                    // The retry below repaints the tree held input waits for; a parked frame owes
+                    // only the replay, and no repaint for the input either.
+                    tail.replay_committed_input = shows_current_tree;
                     if streak <= MAX_NOT_SHOWN_RETRIES {
                         // Armed before the trace: a subscriber's panic there keeps the retry.
                         tail.retry_needed = true;
@@ -493,7 +498,7 @@ impl UiRuntime {
                         // permanent disable: the next real event gets a full
                         // budget again.
                         producer.clear_not_shown_streak();
-                        tracing::warn!(
+                        tracing::trace!(
                             frame = frame_number,
                             streak,
                             "Frame withheld by the surface for {} consecutive attempts; \
@@ -570,20 +575,22 @@ impl UiRuntime {
                 }
                 SubmitVerdict::Failed => {
                     producer.record_frame_dropped();
-                    // A failed frame takes the inputs it was cut after only when no queued frame
-                    // still waits for its settlement: those inputs are that frame's to report, and
-                    // a failure reads them without taking them.
-                    let epochs = if producer.pending_frames.borrow().is_empty() {
-                        EpochDisposition::Drain
-                    } else {
-                        EpochDisposition::Retain
-                    };
+                    // A failed frame takes the inputs stamped since the frames still waiting for
+                    // their settlement were cut: the earlier ones are theirs to report.
+                    let mut telemetry = telemetry;
+                    telemetry.cut = producer
+                        .pending_frames
+                        .borrow()
+                        .iter()
+                        .fold(telemetry.cut, |cut, pending| {
+                            cut.after(pending.telemetry.cut)
+                        });
                     self.record_submit_telemetry(
                         telemetry,
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
-                        epochs,
+                        EpochDisposition::Drain,
                     );
                     // The sink already logged the backend-specific error at
                     // classification time; this records the transaction-
