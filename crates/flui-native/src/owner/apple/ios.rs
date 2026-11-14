@@ -467,6 +467,8 @@ pub struct IOSLoop {
     wake: RefCell<WakeDeadline>,
     /// The frames the scenes' windows' handlers produced.
     frames: FrameCount,
+    /// A re-arm after a window's run is posted and has not run yet.
+    rearm_posted: Cell<bool>,
     /// The screens, as the table made them; shared with every window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     /// Marks `displays` stale and wakes the owner on screen and scene
@@ -565,6 +567,7 @@ impl IOSLoop {
             deadline: RefCell::new(None),
             wake: RefCell::default(),
             frames: FrameCount::default(),
+            rearm_posted: Cell::new(false),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
             notices: H::notices(&app),
@@ -706,6 +709,32 @@ impl IOSLoop {
         if let Some(window) = window {
             window.request_redraw();
         }
+    }
+
+    /// Ask the handler for the next wake deadline once the native callback
+    /// that ended a window's run returns, in one main-queue task however many
+    /// runs end before it.
+    fn rearm_soon(&self) {
+        if self.rearm_posted.replace(true) {
+            return;
+        }
+        let identity = Arc::clone(&self.identity);
+        dispatch2::DispatchQueue::main().exec_async(move || {
+            os_entry(
+                "the UIKit wake deadline's re-arm",
+                (),
+                AfterPanic::Answer(|()| ()),
+                move || {
+                    FluiAppDelegate::with_platform(|platform| {
+                        if !Arc::ptr_eq(&platform.identity, &identity) {
+                            return;
+                        }
+                        platform.rearm_posted.set(false);
+                        platform.arm_deadline();
+                    });
+                },
+            );
+        });
     }
 
     fn arm_deadline(&self) {
@@ -1612,12 +1641,26 @@ impl IOSLoop {
     }
 }
 
-/// A scene's window delivered a frame, which may have unwound: the frame
-/// may have served the deadline last delivered or left a new one, and no
-/// owner turn need follow a frame, so the handler is asked for the next
-/// deadline now, as the other loops ask on every iteration.
-pub(crate) fn after_frame() {
-    FluiAppDelegate::with_platform(IOSLoop::arm_deadline);
+/// A run of a scene window's deliveries ended (a display-link frame, a touch
+/// batch, a delivery inside an owner turn), perhaps by unwinding. The run may
+/// have served the deadline last delivered or left a new one, and no owner
+/// turn need follow it, so the loop asks the handler for its next deadline
+/// once the native callback returns: one main-queue task, however many runs
+/// end before it. Runs no user code, so it may run while a panic unwinds.
+pub(crate) fn after_delivery() {
+    // Neither borrow may panic: the run may be unwinding.
+    let platform = DELEGATE_STATE
+        .try_with(|state| {
+            state
+                .try_borrow()
+                .ok()
+                .and_then(|state| state.platform.clone())
+        })
+        .ok()
+        .flatten();
+    if let Some(platform) = platform {
+        platform.rearm_soon();
+    }
 }
 
 pub(crate) fn request_close(id: WindowId) {

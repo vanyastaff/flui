@@ -400,20 +400,10 @@ define_class!(
                             link.timestamp(),
                             link.targetTimestamp(),
                         );
-                        // A frame that unwinds still counted as run: the
-                        // loop's deadline is armed again and the link
-                        // settles before its panic resumes.
-                        let mut first = flui_foundation::panic::FirstPanic::new();
-                        first.contain(|| {
-                            self.delivery()
-                                .dispatch_frame(crate::frame_request_timed(age, until_present));
-                        });
-                        crate::owner::apple::ios::after_frame();
-                        if !demand.pending() {
-                            link.setPaused(true);
-                        }
-                        first.resume();
-                    } else if !demand.pending() {
+                        self.delivery()
+                            .dispatch_frame(crate::frame_request_timed(age, until_present));
+                    }
+                    if !demand.pending() {
                         link.setPaused(true);
                     }
                 }
@@ -1163,11 +1153,14 @@ impl IOSWindow {
         handler: SceneDelivery,
     ) -> Self {
         let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
-        let delivery = Arc::new(WindowDelivery::counting_frames(
-            handler.handler,
-            crate::input::availability::ios(),
-            handler.frames,
-        ));
+        let delivery = Arc::new(
+            WindowDelivery::counting_frames(
+                handler.handler,
+                crate::input::availability::ios(),
+                handler.frames,
+            )
+            .after_each_run(crate::owner::apple::ios::after_delivery),
+        );
         // What another thread raises for the window waits for an owner turn.
         if let Some(signal) = signal.upgrade() {
             delivery.resume_through_signal(&signal);

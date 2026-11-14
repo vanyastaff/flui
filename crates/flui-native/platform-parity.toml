@@ -208,7 +208,7 @@ evidence = "Windows sees minimize and restore, a DWM cloak (another virtual desk
 id = "suspend-resume-gpu-surface-loss"
 feature = 'Suspend, resume, GPU-surface loss'
 status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "yes", android = "partial", web = "partial", headless = "yes" }
-note = "Android dispatches `onResume` and `onPause` as the execution state, apart from focus; the Web's page events ran against a fake page, not yet in Chrome."
+note = "Android dispatches `onResume` and `onPause` as the execution state, apart from focus; the Web's page events ran against a fake page, not yet in Chrome. On iOS a device rebuild and a refused surface asked for again on their pace have not run on a device."
 evidence = 'Android dispatches `onResume` and `onPause` as the execution state, apart from focus (the shade left it running, Home suspended it on the Galaxy S21 above); Web: `freeze` and `resume` set the execution state (run against a fake page), and `webglcontextlost`, `webglcontextrestored` and a lost WebGPU device rebuild the renderer at once, without a frame (compile-checked, its decisions unit-tested; not yet in Chrome)'
 
 [[group.section.row]]
