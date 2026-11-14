@@ -93,14 +93,14 @@ const _: () = assert!(size_of::<RecordedOp>() <= 120);
 - Good, because a command is 120 bytes and the op 112, with nothing boxed: the assertions hold.
 - Good, because a repaint into a warm list allocates nothing for its payloads, as it did when they
   were inline and as option 1 cannot (`recording_contract::re_recording_a_warm_list_with_payloads_allocates_nothing`).
-- Good, because the retained-scene costs fall: `list_10k_scroll_one_screen.allocated_bytes`
-  929,588 → 916,196, `full_reassemble` 363,997 → 347,141, `label_change_*` 22,064 → 21,648,
-  `caret_blink_in_10k_list` 5,860 → 5,052; the control rows' bytes fall 3 to 12 % and the tab
-  bars, the navigation bar and the cupertino tab bar take fewer allocations.
+- Good, because the retained-scene costs fall, measured over the boxless inline form: the
+  `allocated_bytes` of `list_10k_scroll_one_screen` by 1.4 %, of `full_reassemble` by 4.6 %, of
+  `label_change_*` by 1.9 % and of `caret_blink_in_10k_list` by 14 %; the control rows' bytes fall
+  3 to 12 %, and the tab bars and the navigation bar take fewer allocations.
 - Bad, because a cold list asks for one block the first time it stores a payload: a control whose
-  chunk records a shadow or a ring takes one more allocation to mount (checkbox 99 → 100, switch
-  119 → 120, elevated button 170 → 171, chip 203 → 205, filter chip 210 → 212), and the list is
-  24 bytes larger (list tile 27,996 → 28,076 bytes).
+  chunk records a shadow or a ring takes one more allocation to mount (one for the checkbox,
+  switch and elevated button rows, two for the chip and filter chip rows), and the list is 24 bytes
+  larger (80 bytes more for a list tile, 64 for an elevated button).
 - Bad, because a reader resolves an id through the command it came with: a payload is not a field
   of the op, and an op moved out of its list (`DrawOp` clone) names nothing until it is read with
   `DrawCommandBuf`.
@@ -143,7 +143,7 @@ const _: () = assert!(size_of::<RecordedOp>() <= 120);
 
 - Good, because no control row rises: the one payload a control's chunk holds needs no block.
 - Bad, because a payload slot is 200 bytes and every list pays it: `DisplayList` 336 → 520 bytes
-  and `list_10k_scroll_one_screen.allocated_bytes` 929,588 → 947,476.
+  and `list_10k_scroll_one_screen.allocated_bytes` rises by 1.9 %, against option 2's fall of 1.4 %.
 
 ### 4. Commands and payloads in one allocation
 
