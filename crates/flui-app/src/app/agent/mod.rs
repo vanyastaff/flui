@@ -172,6 +172,37 @@ pub(crate) fn install_from_launch(
     false
 }
 
+/// A build without the driver agent: a release build without the `driver`
+/// feature, which `cargo test --release` compiles.
+#[cfg(all(test, not(driver_agent)))]
+mod without_the_agent {
+    use std::cell::Cell;
+    use std::sync::Arc;
+
+    use super::{Disconnect, install_from_launch};
+
+    /// Whatever the launch says (an endpoint and a token in the environment,
+    /// an intent's extras), a build without the agent reads none of its
+    /// values and installs nothing: an Intent extra or a variable is no way
+    /// into a release build.
+    #[test]
+    fn a_build_without_the_agent_reads_no_launch_value() {
+        let read = Cell::new(0_usize);
+        let mut config = crate::AppConfig::new();
+        let installed = install_from_launch(
+            &mut config,
+            |key| {
+                read.set(read.get() + 1);
+                Some(format!("{key}"))
+            },
+            &Arc::new(Disconnect::default()),
+            false,
+        );
+        assert!(!installed, "no agent is installed");
+        assert_eq!(read.get(), 0, "no launch value is read");
+    }
+}
+
 #[cfg(all(test, driver_agent))]
 mod tests {
     use std::sync::Arc;

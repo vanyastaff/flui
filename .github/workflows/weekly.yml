@@ -19,6 +19,9 @@ name: Weekly
 #                 red canary is a dated warning to act on, never a gate.
 #                 Read it alongside This Week in Rust's "Calls for Testing"
 #                 and "Final Comment Period" sections.
+#   release-agent — the tests only a build without the driver agent has
+#                 (release, no `driver` feature): it reads no agent launch
+#                 value.
 #   cli-live-build — `flui create --local` + `flui build desktop` of the
 #                 generated project (FLUI_CLI_LIVE_BUILD=1), the only run of
 #                 the CLI test that compiles a scaffolded app end to end.
@@ -165,6 +168,26 @@ jobs:
 
       - name: cargo clippy --release (workspace, all targets)
         run: cargo clippy --workspace --all-targets --release --locked --keep-going -- -D warnings
+
+  # release-agent — the tests of a build without the driver agent, which only
+  # the release profile compiles (`cfg(driver_agent)` is a debug build or the
+  # `driver` feature): such a build reads no agent launch value, from the
+  # environment or an Android intent (activation spec R11). PR CI never
+  # compiles them.
+  release-agent:
+    name: release-profile agent tests
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: cargo test --release (flui-app, the agent's launch)
+        run: cargo test --release --locked -p flui-app --lib agent::
 
   # cli-live-build — the one flui-cli test that runs a real `cargo build`:
   # `flui create --local <checkout>` then `flui build desktop --json` on the
