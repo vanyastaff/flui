@@ -129,8 +129,10 @@ impl PipelineOwner<Semantics> {
 
     /// The body of [`Self::run_semantics`], entered with the phase set.
     fn run_semantics_in_phase(&mut self) -> crate::error::RenderResult<()> {
-        // The last pass's scratch lists are gone with its regions; this one starts empty.
+        // The last pass's scratch lists and built nodes are gone with its regions; this one
+        // starts empty.
         self.frame_arena.reset();
+        self.built_arena.reset();
         let mut callbacks = AssemblyCallbacks::default();
         // The rebuild check's own retained handlers, retired with the pass's.
         #[cfg_attr(
@@ -172,6 +174,7 @@ impl PipelineOwner<Semantics> {
                 // cannot partially commit an earlier subtree.
                 let mut regions = AssemblyRegions::reusing(
                     &self.frame_arena,
+                    &self.built_arena,
                     std::mem::take(&mut self.semantics_regions.visited),
                 );
                 if !tree_is_empty {
@@ -239,8 +242,13 @@ impl PipelineOwner<Semantics> {
                         regions.authored.clear();
                         regions.duplicate = None;
                         regions.invalid_sort_key = None;
-                        assemble_semantics_root(&self.render_tree, self.root_id, &mut regions)
-                            .map(|root| SemanticsPlan::Rebuild(root.map(Box::new)))
+                        assemble_semantics_root(&self.render_tree, self.root_id, &mut regions).map(
+                            |root| {
+                                SemanticsPlan::Rebuild(
+                                    root.map(|root| Box::new_in(root, &self.built_arena)),
+                                )
+                            },
+                        )
                     };
                     let mut planned = match planned {
                         Ok(plan) => plan,
@@ -413,8 +421,12 @@ pub(super) struct RegionIdentities {
 }
 
 struct AssemblyRegions<'f> {
-    /// Where the pass's scratch lists come from (ADR-0328).
+    /// Where the pass's scratch lists come from (ADR-0328): each is freed before the level
+    /// that listed it returns.
     arena: &'f FrameArena,
+    /// Where the child lists of the nodes the pass builds come from: they outlive the level
+    /// that built them, and in [`Self::arena`] would sit above every list freed after them.
+    built: &'f FrameArena,
     /// The render nodes this pass walked, in the table the previous pass grew:
     /// emptying it writes its control bytes, which costs less than regrowing.
     visited: FxHashSet<RenderId>,
@@ -425,12 +437,17 @@ struct AssemblyRegions<'f> {
 }
 
 impl<'f> AssemblyRegions<'f> {
-    /// Regions for a pass that takes its scratch lists from `arena` and walks into the table
-    /// of `visited`, emptied.
-    fn reusing(arena: &'f FrameArena, mut visited: FxHashSet<RenderId>) -> Self {
+    /// Regions for a pass that takes its scratch lists from `arena`, builds its nodes' child
+    /// lists in `built` and walks into the table of `visited`, emptied.
+    fn reusing(
+        arena: &'f FrameArena,
+        built: &'f FrameArena,
+        mut visited: FxHashSet<RenderId>,
+    ) -> Self {
         visited.clear();
         Self {
             arena,
+            built,
             visited,
             authored: FxHashSet::default(),
             duplicate: None,
@@ -506,8 +523,8 @@ impl RegionIdentities {
     /// When the source is exhausted the field keeps its runs without
     /// identities, so the owner publishes it without them and reports it.
     /// A field the plan rebuilt forgets the runs it no longer has.
-    fn assign_text_runs(&mut self, plan: &mut SemanticsPlan, tree: &RenderTree) {
-        let mut stack: Vec<&mut BuiltSemanticsNode> = match plan {
+    fn assign_text_runs(&mut self, plan: &mut SemanticsPlan<'_>, tree: &RenderTree) {
+        let mut stack: Vec<&mut BuiltSemanticsNode<'_>> = match plan {
             SemanticsPlan::Rebuild(root) => root.as_deref_mut().into_iter().collect(),
             SemanticsPlan::Graft(grafts) => grafts.iter_mut().map(|(_, built)| built).collect(),
         };
@@ -621,17 +638,19 @@ impl RegionIdentities {
     }
 }
 
-struct BuiltSemanticsNode {
+struct BuiltSemanticsNode<'f> {
     source: SemanticsSource,
     config: SemanticsConfiguration,
     rect: Rect<f64>,
     reveal_rect: Rect<f64>,
-    children: Vec<BuiltSemanticsNode>,
+    /// From the owner's built-node arena: the pass moves the nodes into the semantics owner and
+    /// drops the list.
+    children: FrameVec<'f, BuiltSemanticsNode<'f>>,
 }
 
-enum SemanticsPlan {
-    Rebuild(Option<Box<BuiltSemanticsNode>>),
-    Graft(Vec<(flui_foundation::SemanticsId, BuiltSemanticsNode)>),
+enum SemanticsPlan<'f> {
+    Rebuild(Option<Box<BuiltSemanticsNode<'f>, &'f FrameArena>>),
+    Graft(FrameVec<'f, (flui_foundation::SemanticsId, BuiltSemanticsNode<'f>)>),
 }
 
 /// A set an ancestor in the built tree contains, as a member below it sees it.
@@ -657,9 +676,9 @@ struct SetScope {
 /// - a member of an unknown or separately authored set must not
 ///   acquire an unrelated total through that walk ("item 12 of 5"): the totals
 ///   of the known sets above it are withheld rather than a sentinel invented.
-fn reconcile_collections(root: &mut BuiltSemanticsNode) {
+fn reconcile_collections(root: &mut BuiltSemanticsNode<'_>) {
     fn visit(
-        node: &mut BuiltSemanticsNode,
+        node: &mut BuiltSemanticsNode<'_>,
         sets: &mut Vec<SetScope>,
         tables: &mut Vec<TableShape>,
     ) {
@@ -816,7 +835,7 @@ fn declares_collection_scope(config: &SemanticsConfiguration) -> bool {
     config.size_of_set().is_some() || config.table_shape().is_some()
 }
 
-fn has_collection_metadata(root: &BuiltSemanticsNode) -> bool {
+fn has_collection_metadata(root: &BuiltSemanticsNode<'_>) -> bool {
     let mut pending = vec![root];
     while let Some(node) = pending.pop() {
         if declares_collection_scope(&node.config) {
@@ -829,8 +848,8 @@ fn has_collection_metadata(root: &BuiltSemanticsNode) -> bool {
 
 /// Release draft metadata while the validation error retains first-failure
 /// authority. Configuration callbacks are opaque ownership (ADR-0127).
-fn retire_rejected_plan(plan: SemanticsPlan) {
-    let mut nodes: Vec<BuiltSemanticsNode> = match plan {
+fn retire_rejected_plan(plan: SemanticsPlan<'_>) {
+    let mut nodes: Vec<BuiltSemanticsNode<'_>> = match plan {
         SemanticsPlan::Rebuild(root) => root.into_iter().map(|node| *node).collect(),
         SemanticsPlan::Graft(grafts) => grafts.into_iter().map(|(_, node)| node).collect(),
     };
@@ -843,16 +862,16 @@ fn retire_rejected_plan(plan: SemanticsPlan) {
     recovery.finish();
 }
 
-struct PendingSemanticsNode {
+struct PendingSemanticsNode<'f> {
     source: SemanticsSource,
     config: SemanticsConfiguration,
     rect: Rect<f64>,
     reveal_rect: Rect<f64>,
-    children: Vec<BuiltSemanticsNode>,
+    children: FrameVec<'f, BuiltSemanticsNode<'f>>,
 }
 
-impl PendingSemanticsNode {
-    fn form(self) -> BuiltSemanticsNode {
+impl<'f> PendingSemanticsNode<'f> {
+    fn form(self) -> BuiltSemanticsNode<'f> {
         BuiltSemanticsNode {
             source: self.source,
             config: self.config,
@@ -863,16 +882,16 @@ impl PendingSemanticsNode {
     }
 }
 
-enum SemanticsFragment {
-    Pending(PendingSemanticsNode),
-    Formed(BuiltSemanticsNode),
+enum SemanticsFragment<'f> {
+    Pending(PendingSemanticsNode<'f>),
+    Formed(BuiltSemanticsNode<'f>),
 }
 
 /// A subtree's contribution and its still-unconsumed sibling barrier.
 /// Transparent render wrappers forward the barrier; a formed boundary consumes
 /// descendant barriers while keeping its own directive for its parent.
 struct SemanticsFragments<'f> {
-    nodes: FrameVec<'f, SemanticsFragment>,
+    nodes: FrameVec<'f, SemanticsFragment<'f>>,
     blocks_previous_siblings: bool,
 }
 
@@ -1144,11 +1163,11 @@ enum SemanticsAssemblyError {
     PendingRoot { root: RenderId },
 }
 
-fn assemble_semantics_root(
+fn assemble_semantics_root<'f>(
     tree: &RenderTree,
     root: Option<RenderId>,
-    regions: &mut AssemblyRegions<'_>,
-) -> Result<Option<BuiltSemanticsNode>, SemanticsAssemblyError> {
+    regions: &mut AssemblyRegions<'f>,
+) -> Result<Option<BuiltSemanticsNode<'f>>, SemanticsAssemblyError> {
     let Some(root) = root else {
         return Ok(None);
     };
@@ -1173,10 +1192,10 @@ fn assemble_semantics_root(
     extract_formed_root(root, fragments.nodes).map(Some)
 }
 
-fn extract_formed_root(
+fn extract_formed_root<'f>(
     root: RenderId,
-    fragments: FrameVec<'_, SemanticsFragment>,
-) -> Result<BuiltSemanticsNode, SemanticsAssemblyError> {
+    fragments: FrameVec<'f, SemanticsFragment<'f>>,
+) -> Result<BuiltSemanticsNode<'f>, SemanticsAssemblyError> {
     if fragments.len() != 1 {
         return Err(SemanticsAssemblyError::InvalidRootFragmentCount {
             actual: fragments.len(),
@@ -1340,7 +1359,7 @@ fn build_semantics_fragments_impl<'f>(
     // Most nodes of a large subtree contribute no fragment (a decoration, a
     // layout box): the list allocates on its first fragment, not per node.
     let arena = regions.arena;
-    let mut child_fragments: FrameVec<'f, SemanticsFragment> = Vec::new_in(arena);
+    let mut child_fragments: FrameVec<'f, SemanticsFragment<'f>> = Vec::new_in(arena);
     let mut children_block_previous = append_region_fragments(
         &mut child_fragments,
         authored.before_children,
@@ -1398,14 +1417,20 @@ fn build_semantics_fragments_impl<'f>(
                 child_fragments.clear();
                 children_block_previous = true;
             }
-            if child_fragments.is_empty() {
-                // The first child that contributes hands its list over whole.
+            // Room for one fragment per child still to come, as a list sized for every child up
+            // front would have; a child with several fragments grows it by doubling.
+            let still_to_come = node.children().len() - child_slot - 1;
+            if fragments.nodes.is_empty() {
+                // A child that contributes nothing leaves the list as it is: a node whose
+                // children list nothing allocates nothing.
+            } else if child_fragments.capacity() == 0 {
+                // The first child that contributes hands its list over whole. It is the arena's
+                // last block, so it grows in place; each later child's list then sits above it,
+                // is emptied into it and freed as the last block, and the arena reuses that
+                // memory for the next child.
                 child_fragments = fragments.nodes;
+                child_fragments.reserve(still_to_come);
             } else {
-                // Room for these and one fragment per child still to come, as
-                // a list sized for every child up front would have; a child with
-                // several fragments grows it by doubling.
-                let still_to_come = node.children().len() - child_slot - 1;
                 child_fragments.reserve(fragments.nodes.len() + still_to_come);
                 child_fragments.extend(fragments.nodes);
             }
@@ -1449,6 +1474,7 @@ fn build_semantics_fragments_impl<'f>(
     let children = merge_child_fragments(
         &mut config,
         child_fragments,
+        regions.built,
         decisions.children_merge_into_ancestor,
         decisions.child_context.names_a_control,
     );
@@ -1515,8 +1541,8 @@ fn debug_assert_hosted_runs(authored_runs: Option<usize>, authored: &SemanticsRe
     clippy::too_many_arguments,
     reason = "uses the same assembly context as real child fragments"
 )]
-fn append_region_fragments(
-    fragments: &mut FrameVec<'_, SemanticsFragment>,
+fn append_region_fragments<'f>(
+    fragments: &mut FrameVec<'f, SemanticsFragment<'f>>,
     authored: Vec<flui_semantics::SemanticsRegion>,
     host: RenderId,
     placement: RegionPlacement,
@@ -1524,7 +1550,7 @@ fn append_region_fragments(
     clips: SemanticsClips,
     context: SemanticsAssemblyContext,
     blocks_user_actions: bool,
-    regions: &mut AssemblyRegions<'_>,
+    regions: &mut AssemblyRegions<'f>,
 ) -> bool {
     let mut blocks_previous = false;
     for region in authored {
@@ -1567,7 +1593,7 @@ fn append_region_fragments(
             config,
             rect: clipped.rect,
             reveal_rect,
-            children: Vec::new(),
+            children: Vec::new_in(regions.built),
         };
         fragments.push(if decisions.forms_node {
             SemanticsFragment::Formed(pending.form())
@@ -1578,16 +1604,19 @@ fn append_region_fragments(
     blocks_previous
 }
 
-fn merge_child_fragments(
+fn merge_child_fragments<'f>(
     config: &mut SemanticsConfiguration,
-    mut fragments: FrameVec<'_, SemanticsFragment>,
+    mut fragments: FrameVec<'f, SemanticsFragment<'f>>,
+    built: &'f FrameArena,
     suppress_conflicts: bool,
     names_a_control: bool,
-) -> Vec<BuiltSemanticsNode> {
+) -> FrameVec<'f, BuiltSemanticsNode<'f>> {
     // Stable sorting preserves declarative order for equal keys and unkeyed
     // siblings. Sort before folding, so merged labels follow reading order too.
     fragments.sort_by(|a, b| {
-        fn key(fragment: &SemanticsFragment) -> Option<&flui_semantics::SemanticsSortKey> {
+        fn key<'a>(
+            fragment: &'a SemanticsFragment<'_>,
+        ) -> Option<&'a flui_semantics::SemanticsSortKey> {
             match fragment {
                 SemanticsFragment::Formed(node) => node.config.sort_key(),
                 SemanticsFragment::Pending(node) => node.config.sort_key(),
@@ -1598,11 +1627,23 @@ fn merge_child_fragments(
     let conflicts = (!suppress_conflicts).then(|| {
         mark_configuration_conflicts(config, &fragments, names_a_control, fragments.allocator())
     });
-    let mut children = Vec::with_capacity(fragments.len());
+    let scratch = *fragments.allocator();
+    let total = fragments.len();
+    // Allocated on the first child that needs a list of its own: an absorbed pending node's
+    // list is taken over instead, so a chain of absorbed nodes over many descendants moves one
+    // list up the chain rather than copying it at each level.
+    let mut children: FrameVec<'f, BuiltSemanticsNode<'f>> = Vec::new_in(built);
 
-    for (index, fragment) in fragments.into_iter().enumerate() {
+    // The iterator holds the fragments' buffer, below the conflict marks: it is dropped after
+    // them, so the arena frees both in the reverse order it handed them out.
+    let mut drained = fragments.into_iter();
+    for (index, fragment) in drained.by_ref().enumerate() {
+        let rest = total - index - 1;
         match fragment {
-            SemanticsFragment::Formed(node) => children.push(node),
+            SemanticsFragment::Formed(node) => {
+                make_room(&mut children, 1 + rest);
+                children.push(node);
+            }
             // Runs are the synthetic children of the one node declaring them,
             // so a merge never drops a second text's runs for the first's:
             // that text keeps its node and its runs (ADR-0214 §2).
@@ -1613,19 +1654,44 @@ fn merge_child_fragments(
                     || (pending.config.text_content().is_some()
                         && config.text_content().is_some()) =>
             {
+                make_room(&mut children, 1 + rest);
                 children.push(pending.form());
             }
             SemanticsFragment::Pending(pending) => {
                 config.absorb(&pending.config);
-                children.extend(pending.children);
+                if children.capacity() == 0 {
+                    // Nothing is listed yet, so `children` holds no memory: take this list over
+                    // with room for the fragments still to come.
+                    children = pending.children;
+                    children.reserve_exact(rest);
+                } else {
+                    make_room(&mut children, pending.children.len() + rest);
+                    children.extend(pending.children);
+                }
             }
         }
     }
+    drop(conflicts);
+    drop(drained);
 
     if config.makes_document_selections() {
-        in_reading_order(&mut children, config.text_direction().unwrap_or_default());
+        in_reading_order(
+            &mut children,
+            config.text_direction().unwrap_or_default(),
+            scratch,
+        );
     }
     children
+}
+
+/// Makes room in `list` for `additional` more: exactly that much for its first allocation, which
+/// is sized for every fragment still to come, and by doubling after that.
+fn make_room<T>(list: &mut FrameVec<'_, T>, additional: usize) {
+    if list.capacity() == 0 {
+        list.reserve_exact(additional);
+    } else {
+        list.reserve(additional);
+    }
 }
 
 /// Keyed siblings first, by name and then order; unkeyed ones after, as
@@ -1653,20 +1719,31 @@ fn by_sort_key(
 /// ([`flui_semantics::reading_order`]), so the text a selection reports is
 /// the text the pointer selects. The children of folded-in nodes are ordered
 /// with their new siblings.
-fn in_reading_order(children: &mut Vec<BuiltSemanticsNode>, direction: TextDirection) {
+///
+/// The children stay in their own list; the reordering lists into `scratch`, freed in the
+/// reverse order it allocates.
+fn in_reading_order(
+    children: &mut FrameVec<'_, BuiltSemanticsNode<'_>>,
+    direction: TextDirection,
+    scratch: &FrameArena,
+) {
     children.sort_by(|a, b| by_sort_key(a.config.sort_key(), b.config.sort_key()));
     let keyed = children
         .iter()
         .take_while(|child| child.config.sort_key().is_some())
         .count();
-    let unkeyed = children.split_off(keyed);
-    let boxes: Vec<Rect<f64>> = unkeyed.iter().map(|child| child.reveal_rect).collect();
-    let mut slots: Vec<Option<BuiltSemanticsNode>> = unkeyed.into_iter().map(Some).collect();
-    children.extend(
-        flui_semantics::reading_order(&boxes, direction)
-            .into_iter()
-            .filter_map(|index| slots[index].take()),
-    );
+    let unkeyed = children.len() - keyed;
+    let mut boxes: FrameVec<'_, Rect<f64>> = Vec::with_capacity_in(unkeyed, scratch);
+    boxes.extend(children[keyed..].iter().map(|child| child.reveal_rect));
+    let order = flui_semantics::reading_order(&boxes, direction);
+    let mut slots: FrameVec<'_, Option<BuiltSemanticsNode<'_>>> =
+        Vec::with_capacity_in(unkeyed, scratch);
+    while children.len() > keyed {
+        slots.push(children.pop());
+    }
+    slots.reverse();
+    // Popping kept the list's capacity, so this refills it in place.
+    children.extend(order.into_iter().filter_map(|index| slots[index].take()));
 }
 
 /// What the conflict marking decided for one fragment of a parent.
@@ -1699,7 +1776,7 @@ impl FragmentPlace {
 /// A byte per fragment, from the frame arena: this runs for every node of every assembly.
 fn mark_configuration_conflicts<'f>(
     parent: &SemanticsConfiguration,
-    fragments: &[SemanticsFragment],
+    fragments: &[SemanticsFragment<'_>],
     names_a_control: bool,
     arena: &'f FrameArena,
 ) -> FrameVec<'f, FragmentPlace> {
@@ -1743,7 +1820,7 @@ fn mark_configuration_conflicts<'f>(
 
 fn rebuild_semantics_owner(
     owner: &mut SemanticsOwner,
-    root: Option<BuiltSemanticsNode>,
+    root: Option<BuiltSemanticsNode<'_>>,
     regions: &RegionIdentities,
 ) {
     owner.clear();
@@ -1757,10 +1834,10 @@ fn rebuild_semantics_owner(
 }
 
 /// Splits an assembled node into its arena representation and its children.
-fn semantics_node_parts(
-    built: BuiltSemanticsNode,
+fn semantics_node_parts<'f>(
+    built: BuiltSemanticsNode<'f>,
     regions: &RegionIdentities,
-) -> (SemanticsNode, Vec<BuiltSemanticsNode>) {
+) -> (SemanticsNode, FrameVec<'f, BuiltSemanticsNode<'f>>) {
     let mut node = match built.source {
         SemanticsSource::Render(id) => SemanticsNode::new().with_source_render_id(id),
         SemanticsSource::Region(source) => SemanticsNode::new().with_region_id(
@@ -1778,7 +1855,7 @@ fn semantics_node_parts(
 
 fn insert_built_semantics_node(
     owner: &mut SemanticsOwner,
-    built: BuiltSemanticsNode,
+    built: BuiltSemanticsNode<'_>,
     regions: &RegionIdentities,
 ) -> flui_foundation::SemanticsId {
     let (node, children) = semantics_node_parts(built, regions);
@@ -1796,14 +1873,14 @@ fn insert_built_semantics_node(
 
 /// Plans all marked subtrees without mutating the persistent arena. If any
 /// precondition fails the caller discards this plan and assembles the full tree.
-fn plan_graft_pass(
+fn plan_graft_pass<'f>(
     tree: &RenderTree,
     pipeline_root: Option<RenderId>,
     owner: &SemanticsOwner,
     marked: &[RenderId],
     placed: &[RenderId],
-    regions: &mut AssemblyRegions<'_>,
-) -> Option<Vec<(flui_foundation::SemanticsId, BuiltSemanticsNode)>> {
+    regions: &mut AssemblyRegions<'f>,
+) -> Option<FrameVec<'f, (flui_foundation::SemanticsId, BuiltSemanticsNode<'f>)>> {
     let pipeline_root = pipeline_root?;
     let marked_set: FxHashSet<RenderId> = marked.iter().copied().collect();
 
@@ -1853,10 +1930,17 @@ fn plan_graft_pass(
     // rebuild of the same tree.
     survivors.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
-    survivors
-        .into_iter()
-        .map(|(_, anchor)| plan_graft_anchor(tree, pipeline_root, owner, anchor, regions))
-        .collect()
+    let mut grafts = Vec::with_capacity_in(survivors.len(), regions.built);
+    for (_, anchor) in survivors {
+        grafts.push(plan_graft_anchor(
+            tree,
+            pipeline_root,
+            owner,
+            anchor,
+            regions,
+        )?);
+    }
+    Some(grafts)
 }
 
 /// Resolves a placement mark — a node whose subtree moved while no
@@ -2161,13 +2245,13 @@ fn assembly_inputs_into(
 /// arena in place of the anchor's previous subtree: the anchor's arena slot
 /// (and thus its parent's children list and its published identity) is
 /// preserved; everything below is replaced.
-fn plan_graft_anchor(
+fn plan_graft_anchor<'f>(
     tree: &RenderTree,
     pipeline_root: RenderId,
     owner: &SemanticsOwner,
     anchor: RenderId,
-    regions: &mut AssemblyRegions<'_>,
-) -> Option<(flui_foundation::SemanticsId, BuiltSemanticsNode)> {
+    regions: &mut AssemblyRegions<'f>,
+) -> Option<(flui_foundation::SemanticsId, BuiltSemanticsNode<'f>)> {
     let anchor_sid = owner
         .tree()
         .find_by_accessibility_id(AccessibilityNodeId::from(anchor))?;
@@ -2249,7 +2333,7 @@ fn collection_affects_graft(tree: &SemanticsTree, anchor: flui_foundation::Seman
 fn apply_graft(
     owner: &mut SemanticsOwner,
     anchor_sid: flui_foundation::SemanticsId,
-    built: BuiltSemanticsNode,
+    built: BuiltSemanticsNode<'_>,
     regions: &RegionIdentities,
 ) {
     let old_children: Vec<flui_foundation::SemanticsId> = owner
@@ -2290,7 +2374,8 @@ fn check_placement_against_rebuild(
     identities: &mut RegionIdentities,
 ) -> AssemblyCallbacks {
     let arena = FrameArena::new();
-    let mut regions = AssemblyRegions::reusing(&arena, FxHashSet::default());
+    let built_arena = FrameArena::new();
+    let mut regions = AssemblyRegions::reusing(&arena, &built_arena, FxHashSet::default());
     let announcers: Vec<accesskit::NodeId> =
         identities
             .existing_announcements()
@@ -2305,7 +2390,7 @@ fn check_placement_against_rebuild(
     let Ok(built) = assemble_semantics_root(tree, root, &mut regions) else {
         return std::mem::take(&mut regions.callbacks);
     };
-    let mut plan = SemanticsPlan::Rebuild(built.map(Box::new));
+    let mut plan = SemanticsPlan::Rebuild(built.map(|root| Box::new_in(root, &built_arena)));
     if let SemanticsPlan::Rebuild(Some(root)) = &mut plan {
         reconcile_collections(root);
     }
@@ -2385,7 +2470,7 @@ fn describe_semantics_configuration(
 }
 
 /// The configuration a fragment carries, formed or not.
-fn fragment_config(fragment: &mut SemanticsFragment) -> &mut SemanticsConfiguration {
+fn fragment_config<'a>(fragment: &'a mut SemanticsFragment<'_>) -> &'a mut SemanticsConfiguration {
     match fragment {
         SemanticsFragment::Pending(pending) => &mut pending.config,
         SemanticsFragment::Formed(formed) => &mut formed.config,
@@ -2399,9 +2484,9 @@ fn fragment_config(fragment: &mut SemanticsFragment) -> &mut SemanticsConfigurat
 /// node that declares a set of its own.
 fn item_declares_position(
     config: &SemanticsConfiguration,
-    children: &[BuiltSemanticsNode],
+    children: &[BuiltSemanticsNode<'_>],
 ) -> bool {
-    fn within(node: &BuiltSemanticsNode) -> bool {
+    fn within(node: &BuiltSemanticsNode<'_>) -> bool {
         node.config.position_in_set().is_some()
             || (node.config.size_of_set().is_none() && node.children.iter().any(within))
     }
@@ -2429,7 +2514,7 @@ fn stamp_position(host: Option<RenderId>, config: &mut SemanticsConfiguration, i
 fn offer_semantic_index_to_fragments(
     node: &RenderNode,
     host: Option<RenderId>,
-    fragments: &mut [SemanticsFragment],
+    fragments: &mut [SemanticsFragment<'_>],
 ) {
     let Some(index) = stamped_sliver_parent_data(node).and_then(|pd| pd.semantic_index) else {
         return;
@@ -2482,7 +2567,7 @@ fn apply_lazy_child_semantic_index(
     node: &RenderNode,
     host: Option<RenderId>,
     config: &mut SemanticsConfiguration,
-    children: &[BuiltSemanticsNode],
+    children: &[BuiltSemanticsNode<'_>],
 ) {
     let Some(index) = stamped_sliver_parent_data(node).and_then(|pd| pd.semantic_index) else {
         return;

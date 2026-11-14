@@ -60,8 +60,8 @@ from?
 
 ## Decision
 
-Option 1. `flui_foundation::arena` holds `FrameArena`; each `PipelineOwner` owns one, a phase
-walk lends it to its scratch collections, and the walk resets it as it begins.
+Option 1. `flui_foundation::arena` holds `FrameArena`; each `PipelineOwner` owns its arenas, a
+phase walk lends them to its scratch collections, and the walk resets them as it begins.
 
 ### §1 The arena
 
@@ -108,10 +108,26 @@ free a chunk. Miri runs the arena's unit tests (the `flui-foundation` miri scope
 
 ### §3 Who holds it and how a walk reaches it
 
-The `PipelineOwner` owns its `FrameArena` beside its other per-frame state, so two UI runtimes on
-one thread never share one (ADR-0266). A phase walk resets it as it begins (`&mut self` on the
-owner), then lends `&FrameArena` to the walk's own context; the semantics assembly carries it in
-its `AssemblyRegions`. Resetting at the start of a walk needs no frame-end hook, and a walk that
+The `PipelineOwner` owns its arenas beside its other per-frame state, so two UI runtimes on one
+thread never share one (ADR-0266). A phase walk resets them as it begins (`&mut self` on the
+owner), then lends `&FrameArena` to the walk's own context; the semantics assembly carries them in
+its `AssemblyRegions`.
+
+A walk keeps two kinds of memory apart, one arena each. Scratch (`frame_arena`) is freed before
+the level that listed it returns: a fragment list, conflict marks, a reordering. What a level
+builds for its parent (`built_arena`) outlives the level until the walk hands it on: the semantics
+nodes the pass builds and their child lists, which it moves into the semantics owner. In one arena
+a built list would sit above every scratch list freed after it, so none of those would be reused
+within the walk and the frame's peak would grow to all of them. Apart, the scratch arena reuses
+each level's memory for the next. A level takes over the first non-empty list a child returns
+and reserves room for its remaining children while it is still the last block; each later
+child's list is emptied into it and freed as the last block; and the level drops its scratch in
+the reverse order it took it. A block freed while another sits above it (a list that must grow
+past its size, the lists inside fragments a barrier discards) waits for the reset. A level that absorbs a child's node
+as its first fragment takes over that node's child list: a chain of absorbed nodes with no
+siblings hands one list up without copying it, and a level with fragments after it moves the list
+once, as it would copy it into a new one. The built arena's peak is the built tree, plus a failed graft's partial nodes when
+the pass falls back to a rebuild. Resetting at the start of a walk needs no frame-end hook, and a walk that
 unwound has dropped its collections before the next one resets. `flui-view`'s build phase gets
 an arena of its own on the `BuildOwner` under the same rules when its first site moves.
 
@@ -150,7 +166,7 @@ pure Rust performance gain and changes nothing an author writes.
 - Bad: scratch collections carry an allocator parameter inside the pipeline, which their
   signatures show, and a scratch type that holds one carries the arena's lifetime.
 - Bad: `unsafe impl Allocator` is new unsafe code in `flui-foundation`; miri covers it.
-- Neutral: memory held between frames is one chunk sized by the peaks of recent frames.
+- Neutral: memory held between frames is one chunk per arena, sized by the peaks of recent frames.
 
 ### Confirmation
 
