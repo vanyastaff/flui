@@ -714,9 +714,11 @@ tree revision it was painted from, its input regions, the layer reads parked for
 haptic cut and its segment's span. The host later hands the raster side's
 `FrameSettlement { address, epoch, verdict }` to `UiRuntime::settle_frame`, which applies that
 verdict to the record its address and epoch name, by the same code an inline verdict runs, so
-the settlement commits the frame it names and not the tree as it is by then. Records queued
-before it fold into it (the raster side superseded those frames, and their layer reads wait for a
-later scene), and a settlement no record matches is `Settled::Stale` (ADR-0305 §4). The frame's
+the settlement commits the frame it names and not the tree as it is by then. A frame the sink
+replaced in its inbox folds when the frame that replaced it is queued (`QueuedReplacing`), and
+records still queued before a settled one fold into it (the raster side settles a slot's frames
+in order); their layer reads wait for a later scene. A settlement no record matches is
+`Settled::Stale` (ADR-0305 §4). The frame's
 telemetry is recorded against the `FrameTelemetryCut` taken at submit: its own frame id and only
 the inputs stamped before it; a frame that fails inline meanwhile takes only the inputs stamped
 since (`FrameTelemetryCut::after`).
@@ -727,6 +729,7 @@ still pending. Pinned by
 `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored`,
 `a_settlement_commits_the_revision_its_frame_was_painted_from`,
 `a_later_settlement_folds_the_frames_it_superseded`,
+`a_replaced_frame_folds_by_its_stamp_and_never_the_frame_being_rendered`,
 `held_input_waits_for_the_settlement_that_commits_the_tree`,
 `held_input_behind_a_failed_frame_asks_for_the_frame_that_shows_the_tree`,
 `a_settlement_leaves_input_held_while_the_presentation_is_not_committed`,

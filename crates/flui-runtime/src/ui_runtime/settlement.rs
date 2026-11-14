@@ -191,8 +191,8 @@ impl UiRuntime {
                     target: "flui.frame",
                     epoch,
                     limit = MAX_PENDING_FRAMES,
-                    "a sink queued more frames than a presentation keeps pending without naming \
-                     the one it replaced; the newest record folds"
+                    "a presentation holds more frames pending than its sink keeps unsettled; \
+                     the newest record folds"
                 );
             });
         }
@@ -201,11 +201,11 @@ impl UiRuntime {
 
     /// Settles one frame a sink queued (ADR-0305 §4): the frame whose record `settlement`'s
     /// address and epoch name commits what it captured when it was submitted, by the same rules
-    /// an inline verdict follows. Frames of the same presentation queued before it and not
-    /// settled were superseded on the raster side, so their records fold into this one. A
-    /// settlement no pending record matches (another runtime's, an earlier life's, one already
-    /// settled, or `Queued`, which no settlement carries) is [`Settled::Stale`], traced and
-    /// ignored.
+    /// an inline verdict follows. The raster side settles a slot's frames in order, so frames of
+    /// the same presentation queued before it and still pending get no settlement of their own,
+    /// and their records fold into this one. A settlement no pending record matches (another
+    /// runtime's, an earlier life's, one already settled or folded, or a queued verdict, which
+    /// no settlement carries) is [`Settled::Stale`], traced and ignored.
     ///
     /// The host calls it on the owner thread, with no borrow of its own held: the settlement
     /// runs code the runtime does not own (layer read replies, the window's input regions, a

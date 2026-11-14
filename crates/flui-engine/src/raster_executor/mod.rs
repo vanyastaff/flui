@@ -14,8 +14,9 @@
 //! names the frame it answers, not whatever frame is current when the
 //! owner reads it. Every accepted frame settles on every exit: rendered,
 //! refused on a stale generation, not shown, failed, panicked, or still
-//! pending when the executor stops. A frame superseded in the inbox is
-//! settled by the frame that superseded it; a detached slot's pending frame
+//! pending when the executor stops. A frame superseded in the inbox never
+//! renders and gets no settlement: the send that superseded it names its
+//! stamp ([`SendReceipt::Replaced`]); a detached slot's pending frame
 //! leaves with its presentation.
 //!
 //! The executor is inline, and the owner runs its turn, or on its own raster

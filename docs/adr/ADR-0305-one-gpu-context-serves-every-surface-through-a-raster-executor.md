@@ -290,13 +290,12 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
   leaves the regions of the last presented frame in force.
 - The executor writes each settlement into the slot's record, never a queued verdict; the record
   holds every undrained settlement in a ring of the placement's depth, and the executor starts no
-  frame of a slot whose ring is full, so none is overwritten. A frame superseded in the inbox gets
-  no settlement of its own: the settlement of the frame that superseded it settles it too, and
-  the UI runtime folds its record when the sink names its stamp in `QueuedReplacing` (from the
-  sender's `SendReceipt::Replaced`), so the records a presentation keeps pending stay within the
-  placement's depth and one. Then the executor calls the host's wake, with no lock held and
-  contained (`RasterExecutor::turn`); the owner drains the record on its own thread and calls
-  `settle_frame` after its own borrows are released (ADR-0287 §1).
+  frame of a slot whose ring is full, so none is overwritten. A frame superseded in the inbox never
+  renders and gets no settlement: the UI runtime folds its record when the sink names its stamp
+  in `QueuedReplacing` (from the sender's `SendReceipt::Replaced`), so the records a presentation
+  keeps pending stay within the placement's depth and one. Then the executor calls the host's
+  wake, with no lock held and contained (`RasterExecutor::turn`); the owner drains the record on
+  its own thread and calls `settle_frame` after its own borrows are released (ADR-0287 §1).
 - A settlement whose address or epoch no pending record holds is `Stale`, traced and ignored:
   `FrameEpoch` counts within one runtime's life, and the address carries the runtime's
   generational id.

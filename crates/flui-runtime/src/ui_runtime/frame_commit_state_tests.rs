@@ -713,6 +713,39 @@ fn a_replaced_frame_folds_by_its_stamp_and_never_the_frame_being_rendered() {
     assert_eq!(primary_state(&ui_runtime), FrameCommitState::Committed);
 }
 
+/// A subscriber that panics while a replaced frame's record folds leaves the frame that replaced
+/// it queued and finished: its record waits for its settlement, the replaced one is gone, and
+/// the panic continues after the frame's tail.
+///
+/// Fails when the fold runs before the new record is pushed, or uncontained before the tail.
+#[test]
+fn a_subscriber_that_panics_on_a_replaced_frame_leaves_the_replacing_frame_queued() {
+    let mut ui_runtime = mount_box();
+    let rendering = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    let replaced = queue_one(&ui_runtime, SubmitVerdict::Queued);
+    let mut sink = ScriptedSink::new(move |_, _| SubmitVerdict::QueuedReplacing(replaced));
+    ui_runtime.mark_needs_full_repaint_for(ui_runtime.presentations.primary());
+
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "abandoned before it was shown",
+        },
+        || {
+            let _ = ui_runtime.render_frame(&mut sink);
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert!(
+        !ui_runtime.needs_redraw(),
+        "the frame was queued before the panic continued"
+    );
+    let replacing = *sink.epochs.last().expect("the frame was submitted");
+    assert_eq!(settle(&mut ui_runtime, replaced), Settled::Stale);
+    assert_eq!(settle(&mut ui_runtime, rendering), Settled::Applied);
+    assert_eq!(settle(&mut ui_runtime, replacing), Settled::Applied);
+}
+
 /// A sink that answers `Queued` past the ring's bound without naming the frame it replaced
 /// broke its contract: the newest record, the frame it most likely replaced, folds, and the
 /// oldest keeps its record. A subscriber that panics on the fold's error leaves the frame to
