@@ -391,7 +391,7 @@ travel as absolute `file:` URIs and a call's URIs are bounded as `Opened`'s are.
 first process holds a mutex and serves a named pipe, both named with the app id and the user's
 session id and granted to the first's logon SID alone (another logon of the same user, over Remote
 Desktop or a second sign-in, holds the user's SID but not that one), with a mandatory label at its
-own integrity level that refuses writes from below it, so an unelevated process of the same user
+own integrity level that refuses any access from below it, so an unelevated process of the same user
 cannot hand an elevated instance links and files; the pipe rejects remote clients, and its frame
 (the launch's links and absolute paths, its length first) is bounded and read as untrusted input.
 A later launch hands its right and its frame only to a pipe served by a process of its own user

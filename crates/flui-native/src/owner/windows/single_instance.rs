@@ -316,12 +316,14 @@ pub(crate) fn claim(
     let (mutex_name, pipe_name) = object_names(name, session);
     // This logon of the user alone, named by its logon SID: another logon
     // of the same user (Remote Desktop, a second console sign-in) holds the
-    // user's SID but not this one (`current_logon_sid` says why). No write
-    // from a process below this one's integrity level either: an unelevated
-    // process of the same logon cannot open an elevated instance's mutex or
-    // write to its pipe (`TokenIdentity` says why).
+    // user's SID but not this one (`current_logon_sid` says why). And no
+    // access at all from a process below this one's integrity level: no
+    // write, so an unelevated process of the same logon cannot hand an
+    // elevated instance a launch (`TokenIdentity` says why), and no read or
+    // wait, so it cannot hold the mutex open past the instance's end and
+    // leave later elevated launches a name with no pipe behind it.
     let logon = crate::process::current_logon_sid()?;
-    let sddl = format!("D:P(A;;GA;;;{logon})S:(ML;;NW;;;{})", me.integrity);
+    let sddl = format!("D:P(A;;GA;;;{logon})S:(ML;;NWNRNX;;;{})", me.integrity);
     let (mutex, existed) = open_mutex(&mutex_name, &sddl)?;
     if !existed {
         let host = executor.handle();
