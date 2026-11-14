@@ -18,10 +18,12 @@
 //! settled by the frame that superseded it; a detached slot's pending frame
 //! leaves with its presentation.
 //!
-//! The executor is inline: the owner runs its turn. Two locks exist, each
-//! slot's inbox's and the device's record's, held only to swap values:
-//! nothing that can run user code (a destructor, the host's wake, a `tracing`
-//! event) runs under them.
+//! The executor is inline, and the owner runs its turn, or on its own raster
+//! thread ([`RasterExecutor::spawn`]), which a doorbell every accepted send
+//! rings wakes. Its locks (each slot's inbox's, the device's record's, the
+//! thread's doorbell and failure) are held only to swap values: nothing that
+//! can run user code (a destructor, the host's wake, a `tracing` event) runs
+//! under them.
 
 mod backend;
 mod command;
@@ -30,6 +32,8 @@ mod inbox;
 mod sender;
 mod slot;
 mod surface;
+#[cfg(not(target_arch = "wasm32"))]
+mod thread;
 
 use std::{rc::Rc, sync::Arc};
 
@@ -44,8 +48,9 @@ use flui_layer::{DamageRegion, FullReason, ResyncReason, SceneSnapshot};
 
 pub use backend::RasterBackend;
 pub use command::{
-    ExecutorHealth, LIFECYCLE_CAPACITY, RasterCommand, RasterSendError, RasterVerdict, SendReceipt,
-    SlotChange, SlotConfig, SlotSettlement, SlotTarget, SlotVisibility,
+    DETACH_DEADLINE, ExecutorFailure, ExecutorHealth, LIFECYCLE_CAPACITY, RasterCommand,
+    RasterSendError, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotSettlement,
+    SlotTarget, SlotVisibility,
 };
 pub use device_health::DeviceHealth;
 pub use inbox::{SlotFailure, SlotPhase, SlotRecord};
@@ -54,10 +59,12 @@ pub(crate) use slot::SlotMint;
 pub use slot::{SlotDomain, SlotId};
 use surface::SurfaceEvent;
 pub use surface::{SlotSize, SlotSurface, SurfaceHold};
+#[cfg(not(target_arch = "wasm32"))]
+pub use thread::ExecutorHandle;
 
 use self::{
     device_health::{DeviceRebuilds, FailedRebuild},
-    inbox::{INLINE_DEPTH, InboxState, SlotInbox},
+    inbox::{InboxState, SlotInbox},
     sender::{Lifecycle, Shared},
 };
 use crate::{
@@ -146,18 +153,29 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let shared = Arc::new(Shared::new(lifecycle_tx));
         let sender = RasterSender::new(Arc::clone(&shared));
         (
-            Self {
-                backend,
-                shared,
-                lifecycle: Some(lifecycle),
-                wake: Box::new(wake),
-                read_at: std::cell::Cell::new(clock.now()),
-                clock,
-                rebuilds: DeviceRebuilds::default(),
-                slots: Vec::new(),
-            },
+            Self::assemble(backend, clock, Box::new(wake), shared, lifecycle),
             sender,
         )
+    }
+
+    /// The executor over `shared`, on the thread that will turn it.
+    fn assemble(
+        backend: B,
+        clock: Rc<dyn MonotonicClock>,
+        wake: Box<dyn Fn()>,
+        shared: Arc<Shared>,
+        lifecycle: Receiver<Lifecycle>,
+    ) -> Self {
+        Self {
+            backend,
+            shared,
+            lifecycle: Some(lifecycle),
+            wake,
+            read_at: std::cell::Cell::new(clock.now()),
+            clock,
+            rebuilds: DeviceRebuilds::default(),
+            slots: Vec::new(),
+        }
     }
 
     /// Whether the executor still takes commands.
@@ -306,7 +324,10 @@ impl<B: RasterBackend> RasterExecutor<B> {
     /// [`RasterVerdict::Failed`], those of slots whose attach was still
     /// queued included. Called by `Drop`; a second call does nothing.
     pub fn shut_down(&mut self) {
-        if self.shared.health() != ExecutorHealth::Running {
+        // The queue goes at the first stop. A raster thread's owner marks the
+        // shared state stopped before the thread drains, so the state alone
+        // does not say whether this executor drained.
+        if self.lifecycle.is_none() {
             return;
         }
         self.shared.shut_down();
@@ -717,7 +738,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let (size, generation, visibility, color, latency, frame) = {
             let mut state = slot.inbox.lock();
             // A full ring holds the next frame where it is.
-            let frame = if state.settlements.len() < INLINE_DEPTH {
+            let frame = if state.settlements.len() < slot.inbox.depth {
                 state.frame.take()
             } else {
                 None

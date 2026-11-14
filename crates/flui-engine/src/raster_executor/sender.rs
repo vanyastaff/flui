@@ -12,16 +12,18 @@ use std::{
 
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::{SurfaceGeneration, geometry::DeviceSize, memory::MemoryPressureLevel};
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use web_time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
+use super::inbox::THREADED_DEPTH;
 use super::{
     DeviceHealth, SlotId, SurfaceEvent,
     command::{
-        ExecutorHealth, RasterCommand, RasterSendError, SendReceipt, SlotChange, SlotConfig,
-        SlotSettlement, SlotTarget,
+        ExecutorFailure, ExecutorHealth, RasterCommand, RasterSendError, SendReceipt, SlotChange,
+        SlotConfig, SlotSettlement, SlotTarget,
     },
-    inbox::{SlotFailure, SlotInbox, SlotPhase, SlotRecord},
+    inbox::{INLINE_DEPTH, SlotFailure, SlotInbox, SlotPhase, SlotRecord},
     slot::SlotMint,
 };
 use crate::{
@@ -103,19 +105,53 @@ pub(crate) struct Shared {
     /// The strongest trim asked for since the last turn: 0 for none.
     trim: AtomicU8,
     device: Mutex<DeviceRecord>,
+    /// How many settlements a slot holds undrained (ADR-0305 §5).
+    depth: usize,
+    /// What wakes a raster thread: rung by every accepted send and every
+    /// drain that frees a ring's place. `None` inline, where the owner turns.
+    doorbell: Option<Doorbell>,
+    /// Why the raster thread stopped serving or a turn of it failed, until
+    /// the owner takes it.
+    failure: Mutex<Option<ExecutorFailure>>,
 }
 
 const RUNNING: u8 = 0;
 const SHUT_DOWN: u8 = 1;
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        dead_code,
+        reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+    )
+)]
+const DIED: u8 = 2;
 
 impl Shared {
+    /// The state of an inline executor, which its owner turns.
     pub(crate) fn new(lifecycle: Sender<Lifecycle>) -> Self {
+        Self::with_placement(lifecycle, INLINE_DEPTH, None)
+    }
+
+    /// The state of an executor on a raster thread, which a send wakes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn threaded(lifecycle: Sender<Lifecycle>) -> Self {
+        Self::with_placement(lifecycle, THREADED_DEPTH, Some(Doorbell::default()))
+    }
+
+    fn with_placement(
+        lifecycle: Sender<Lifecycle>,
+        depth: usize,
+        doorbell: Option<Doorbell>,
+    ) -> Self {
         Self {
             lifecycle,
             health: AtomicU8::new(RUNNING),
             sending: AtomicUsize::new(0),
             trim: AtomicU8::new(0),
             device: Mutex::new(DeviceRecord::default()),
+            depth,
+            doorbell,
+            failure: Mutex::new(None),
         }
     }
 
@@ -127,22 +163,109 @@ impl Shared {
     pub(crate) fn health(&self) -> ExecutorHealth {
         match self.health.load(Ordering::Acquire) {
             RUNNING => ExecutorHealth::Running,
-            _ => ExecutorHealth::ShutDown,
+            SHUT_DOWN => ExecutorHealth::ShutDown,
+            _ => ExecutorHealth::Died,
         }
+    }
+
+    pub(crate) fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Wake the raster thread, if there is one.
+    pub(crate) fn ring(&self) {
+        if let Some(doorbell) = &self.doorbell {
+            doorbell.ring();
+        }
+    }
+
+    /// Wait until a send rings or `timeout` passes; `None` waits for a ring.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wait_for_ring(&self, timeout: Option<std::time::Duration>) {
+        if let Some(doorbell) = &self.doorbell {
+            doorbell.wait(timeout);
+        }
+    }
+
+    /// A raster thread finished a turn: an owner waiting on a slot's record
+    /// looks again.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn note_turn(&self) {
+        if let Some(doorbell) = &self.doorbell {
+            *doorbell.turns.lock() += 1;
+            doorbell.turned.notify_all();
+        }
+    }
+
+    /// How many turns the raster thread finished.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn turns(&self) -> u64 {
+        self.doorbell
+            .as_ref()
+            .map_or(0, |doorbell| *doorbell.turns.lock())
+    }
+
+    /// Wait until a turn after the `seen`th finished, at most `timeout`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wait_for_turn(&self, seen: u64, timeout: std::time::Duration) {
+        if let Some(doorbell) = &self.doorbell {
+            let mut turns = doorbell.turns.lock();
+            if *turns == seen {
+                let _timed_out = doorbell.turned.wait_for(&mut turns, timeout);
+            }
+        }
+    }
+
+    /// Keep `failure` for the owner unless an earlier one waits there; the
+    /// later one is dropped outside the lock.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    pub(crate) fn hold_failure(&self, failure: ExecutorFailure) {
+        let refused = {
+            let mut held = self.failure.lock();
+            if held.is_some() {
+                Some(failure)
+            } else {
+                *held = Some(failure);
+                None
+            }
+        };
+        drop(refused);
+    }
+
+    pub(crate) fn take_failure(&self) -> Option<ExecutorFailure> {
+        self.failure.lock().take()
+    }
+
+    /// The raster thread is wedged past its deadline: every send answers
+    /// `Gone` from now on, whatever the thread does next (ADR-0305 §9).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn die(&self, failure: ExecutorFailure) {
+        self.health.store(DIED, Ordering::SeqCst);
+        self.hold_failure(failure);
     }
 
     /// Stop taking lifecycle commands. Returns once every send that saw the
     /// executor running has queued its message, so the queue the stop then
     /// drains holds every command a send accepted, and every later send
     /// answers `Gone` (ADR-0305 §9). A send runs no user code, so the wait
-    /// ends whatever thread the sends are on.
+    /// ends whatever thread the sends are on. An executor already marked
+    /// died stays died.
     pub(crate) fn shut_down(&self) {
         // Sequentially consistent with the send's increment and health read:
         // either the send sees the stop, or the stop sees the send.
-        self.health.store(SHUT_DOWN, Ordering::SeqCst);
+        let _was_running =
+            self.health
+                .compare_exchange(RUNNING, SHUT_DOWN, Ordering::SeqCst, Ordering::SeqCst);
         while self.sending.load(Ordering::SeqCst) != 0 {
             std::hint::spin_loop();
         }
+        self.ring();
     }
 
     /// Queue `message` while the executor runs, or hand its command back:
@@ -181,6 +304,52 @@ impl Shared {
             1 => Some(MemoryPressureLevel::Moderate),
             _ => Some(MemoryPressureLevel::Critical),
         }
+    }
+}
+
+/// A raster thread's wake: a flag a send sets and the thread clears when it
+/// wakes, so a ring between the thread's turn and its wait is not lost; and
+/// the count of its turns, which an owner waiting on a slot's record watches.
+#[derive(Default)]
+pub(crate) struct Doorbell {
+    rung: Mutex<bool>,
+    bell: Condvar,
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    turns: Mutex<u64>,
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    turned: Condvar,
+}
+
+impl Doorbell {
+    fn ring(&self) {
+        *self.rung.lock() = true;
+        self.bell.notify_one();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait(&self, timeout: Option<std::time::Duration>) {
+        let mut rung = self.rung.lock();
+        if !*rung {
+            match timeout {
+                Some(timeout) => {
+                    let _timed_out = self.bell.wait_for(&mut rung, timeout);
+                }
+                None => self.bell.wait(&mut rung),
+            }
+        }
+        *rung = false;
     }
 }
 
@@ -295,7 +464,7 @@ impl RasterSender {
         if self.shared.health() != ExecutorHealth::Running {
             return Err(RasterSendError::gone(command));
         }
-        match command {
+        let sent = match command {
             RasterCommand::Attach {
                 slot,
                 address,
@@ -315,7 +484,11 @@ impl RasterSender {
                 .shared
                 .send_lifecycle(Lifecycle::RetryDevice)
                 .map(|()| SendReceipt::Accepted),
+        };
+        if sent.is_ok() {
+            self.shared.ring();
         }
+        sent
     }
 
     /// Where the context's device stands, as the executor's last turn left
@@ -339,6 +512,14 @@ impl RasterSender {
         self.shared.device().failure.take()
     }
 
+    /// Why the raster thread stopped serving, or a turn of it failed, once:
+    /// the owner reports it as it reports a device's failure (ADR-0305 §9).
+    /// An inline executor holds none: its turn's panics resume on the owner.
+    #[must_use]
+    pub fn take_executor_failure(&self) -> Option<ExecutorFailure> {
+        self.shared.take_failure()
+    }
+
     /// The record of `slot`; `None` for an id the owner does not hold.
     #[must_use]
     pub fn record(&self, slot: SlotId) -> Option<SlotRecord> {
@@ -355,6 +536,11 @@ impl RasterSender {
         let mut state = inbox.lock();
         let drained = state.settlements.len();
         into.extend(state.settlements.drain(..));
+        drop(state);
+        if drained > 0 {
+            // A full ring held the slot's next frame: a raster thread may start it.
+            self.shared.ring();
+        }
         drained
     }
 
@@ -409,7 +595,12 @@ impl RasterSender {
             if slots.entries.len() <= index {
                 slots.entries.resize_with(index + 1, || None);
             }
-            let inbox = Arc::new(SlotInbox::new(address, generation, size));
+            let inbox = Arc::new(SlotInbox::new(
+                address,
+                generation,
+                size,
+                self.shared.depth(),
+            ));
             slots.entries[index] = Some(OwnerSlot {
                 id: slot,
                 inbox: Arc::clone(&inbox),

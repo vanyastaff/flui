@@ -355,8 +355,8 @@ pub struct SlotSettlement {
 
 /// Whether the executor still takes commands (ADR-0305 §9).
 ///
-/// An inline executor stops only by shutting down; the state of a raster
-/// thread that stops without one arrives with the threaded placement.
+/// An inline executor stops only by shutting down; a raster thread also
+/// dies, when it does not answer within [`DETACH_DEADLINE`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExecutorHealth {
@@ -366,4 +366,40 @@ pub enum ExecutorHealth {
     /// [`RasterVerdict::Failed`], and every send answers
     /// [`RasterSendError::Gone`].
     ShutDown,
+    /// Its raster thread did not answer within [`DETACH_DEADLINE`]: every
+    /// send answers [`RasterSendError::Gone`], and the owner settles every
+    /// frame still pending [`RasterVerdict::Failed`], since the thread no
+    /// longer can. Terminal for the application's rendering: the wedged
+    /// thread still holds the context (ADR-0305 §9).
+    Died,
+}
+
+/// How long an owner waits for a raster thread to answer a detach or a stop
+/// before it marks the executor [`ExecutorHealth::Died`]: above wgpu's
+/// one-second acquire timeout, so a slow acquire is not a wedge
+/// (ADR-0305 §9).
+pub const DETACH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What went wrong on a raster thread, for its owner to report as it reports
+/// a device's failure ([`RasterSender::take_executor_failure`]).
+///
+/// [`RasterSender::take_executor_failure`]: super::RasterSender::take_executor_failure
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ExecutorFailure {
+    /// The thread did not answer within the deadline: the executor died.
+    #[error("the raster thread did not answer within {waited:?}; rendering stopped")]
+    Wedged {
+        /// How long the owner waited.
+        waited: std::time::Duration,
+    },
+    /// A turn panicked outside a slot's own command (the host's wake, a trim
+    /// or a destructor). The thread contained it and kept serving; the
+    /// payload is discarded once its text is read, since it cannot be
+    /// resumed on the owner's thread.
+    #[error("a raster turn panicked: {message}")]
+    TurnPanicked {
+        /// The panic's text, or a placeholder for a payload that has none.
+        message: String,
+    },
 }

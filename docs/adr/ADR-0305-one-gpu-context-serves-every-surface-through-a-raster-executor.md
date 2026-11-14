@@ -375,6 +375,11 @@ executor runs each command under its own catch, in both placements.
   the destructor of a dropped scene. None runs under the inbox lock. A `tracing` event inside a
   command can run while that command's slot is half-updated, which is why a panic there is
   contained and costs the caches above.
+- A panic outside a slot's command (the host's wake, a trim, a destructor) is resumed on the
+  owner once the turn is committed, inline. On a raster thread it cannot be resumed on the owner's
+  thread: the thread contains it, keeps serving, discards the payload once its text is read, and
+  hands the text to the owner as `ExecutorFailure::TurnPanicked`, which the owner reports as it
+  reports a device's failure.
 
 §8. **A lost device is the context's, and the rebuild keeps the surfaces.**
 
@@ -443,7 +448,9 @@ executor and slot.
 - On a timeout the window is quarantined, not closed: the presentation leaves, its window and
   target are kept until the process exits, and the executor is marked `Died`. A raster thread
   wedged past the deadline holds the context, so every window stops drawing, not one; the
-  application learns it from `ExecutorHealth` and from each frame's `Failed` settlement.
+  application learns it from `ExecutorHealth`, from each frame's `Failed` settlement, and from
+  `ExecutorFailure::Wedged`, which the owner takes from its sender (`take_executor_failure`) and
+  reports as it reports a device's failure, with no panic on its thread.
 - `Died` is terminal for the application's rendering, as a dead runtime is under ADR-0258 §2: the
   owner does not bootstrap a second context while the wedged thread still holds the first and its
   quarantined windows, and the application decides whether to exit.
@@ -460,13 +467,22 @@ impl<B: RasterBackend> RasterExecutor<B> {
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
-    pub fn spawn(self) -> std::io::Result<ExecutorHandle>;        // threaded: a named raster thread
+    pub fn spawn(                                                 // threaded: a named raster thread
+        backend: B,
+        clock: Arc<dyn MonotonicClock + Send + Sync>,
+        wake: impl Fn() + Send + 'static,
+    ) -> std::io::Result<(ExecutorHandle, RasterSender)>;
 }
 ```
 
 - Inline, the owner holds the executor and runs its turn from `FrameSink::submit` and after each
-  lifecycle command. Threaded, `spawn` moves the executor and its context onto one raster thread,
-  and the owner holds only an `ExecutorHandle`; one raster thread serves every slot (ADR-0091 §4).
+  lifecycle command. Threaded, `spawn` moves the backend and its context onto one raster thread,
+  which builds the executor there, and the owner holds only an `ExecutorHandle`; one raster thread
+  serves every slot (ADR-0091 §4). `spawn` is a constructor, not a method of an inline executor:
+  the inline executor keeps its clock as an `Rc` and its wake as a plain closure, which stay on
+  the owner's thread, and the backend is asked `Send` alone, not `Sync`. The thread turns once per
+  ring of a doorbell, which every accepted send and every drain that frees a ring's place rings,
+  and once when a lost device's rebuild is due.
 - The target placement is ADR-0091 §5's table: threaded on Win32 and Linux; inline on macOS
   (wgpu-hal's Metal acquire messages `NSWindow` from the acquiring thread,
   `wgpu-hal/src/metal/surface.rs:354-370`) and on the web; inline on Android and iOS until a
