@@ -106,11 +106,23 @@ variant's fields.
   (`/` alone is the root) and has no empty segment, no trailing `/`, and no `?`, `#` or `%`. A
   `:name` segment fills the field `name` (`:type` fills `r#type`); every other segment is
   literal text, which `RoutePath` encodes, so a non-ASCII literal is written as itself. Every
-  parameter names a field exactly once, and every field is a parameter.
+  parameter names a field exactly once, and every field is a parameter or a query field.
+- **Query fields.** A location carries a query (`/search?q=rust&tag=a&tag=b`), as deep links
+  do and as go_router exposes in `state.uri.queryParameters`. `RoutePath` keeps its pairs in order
+  with repeats, reads `+` as a space and prints an empty value as the bare key; `query()` reads
+  them and `with_query` appends one. A field marked `#[query]` is read by its name
+  (`#[query(rename = "tag")]` names another key): `Option<T>` is `None` without the key, `Vec<T>`
+  takes every value of the key, and any other `T: Default` is its default without it; a value
+  that does not parse is `RouteParseError::Param`. `to_path` prints the query fields in
+  declaration order and leaves out `None` and an empty `Vec`. Keys no field names are ignored.
+  The query is part of the location only: `back_stack` opens the pages below without it. There
+  is no `#` fragment.
 - **Compile-time rejections.** A struct, union or generic type; a tuple variant (nesting is a
   `#[nest]` variant, below); a variant with no `#[route]`, with two, or with anything after the
-  pattern; a malformed pattern; a parameter without a field or a field without a parameter; a
-  field type that is not `FromStr + Display` (reported on the field); and two patterns of the
+  pattern; a malformed pattern; a parameter without a field, a field without a parameter that is
+  not `#[query]`, a parameter that names a `#[query]` field, a malformed `#[query]`; a
+  field type that is not `FromStr + Display` (plus `Default` for a query field that is neither
+  `Option` nor `Vec`; reported on the field); and two patterns of the
   same shape (the same length, the same literals and parameters in the same places), because
   the second could never be parsed.
 - **Specificity, not declaration order.** `from_path` tries the patterns shortest first, then
@@ -329,7 +341,10 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
 
 - §1: `derived_routable_round_trips` (`crates/flui-widgets/tests/routable_derive.rs`), a property
   test over a derived route enum with multi-parameter, string, literal-sibling and non-ASCII
-  patterns; `crates/flui-widgets/tests/routable_ui.rs` compiles the accepted shapes
+  patterns and query fields of each kind, with the query rows of
+  `route_locations_preserve_encoded_segment_identity` (`+` as a space, order and repeats, the
+  bare key, the prefixes without the query, defaults and `Param`);
+  `crates/flui-widgets/tests/routable_ui.rs` compiles the accepted shapes
   (`routable_ui/pass/`) and every rejection against its diagnostic (`routable_ui/fail/`); the
   pattern parser, specificity order and conflict detection in
   `crates/flui-macros/src/derive_routable/pattern.rs`.
@@ -432,4 +447,4 @@ registered as the presentation's `UrlOwner`, `UiRuntime::navigate`, `on_unknown`
 the platform opens routed to it (`AppHandler`, ADR-0254). Nesting (`#[nest]`), guards
 (`Router::guard(|from: Option<&R>, to: &R| -> Guard<R>)` with `Guard::{Allow, Redirect(R), Deny}`,
 synchronous, more than five redirects being `RouterError::RedirectLoop`), and web history
-(`pushState`/`popstate`, query and fragment in `RoutePath`) follow as features.
+(`pushState`/`popstate`, the fragment in `RoutePath`) follow as features.

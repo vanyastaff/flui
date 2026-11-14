@@ -1,0 +1,5 @@
+error: `#[query]` takes only `rename = "key"`
+ --> tests/routable_ui/fail/query_attr_arg.rs:7:17
+  |
+7 |         #[query(key = "q")]
+  |                 ^^^

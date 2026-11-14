@@ -17558,8 +17558,10 @@ pub fn flui::prelude::RoutePath::as_str(&self) -> &str
 pub fn flui::prelude::RoutePath::join(self, segment: impl core::fmt::Display) -> Self
 pub fn flui::prelude::RoutePath::parse(location: &str) -> Result<Self, flui::widgets::RouteParseError>
 pub fn flui::prelude::RoutePath::prefixes(&self) -> impl Iterator<Item = flui::prelude::RoutePath> + '_
+pub fn flui::prelude::RoutePath::query(&self) -> impl Iterator<Item = (alloc::borrow::Cow<'_, str>, alloc::borrow::Cow<'_, str>)> + '_
 pub fn flui::prelude::RoutePath::root() -> Self
 pub fn flui::prelude::RoutePath::segments(&self) -> impl Iterator<Item = alloc::borrow::Cow<'_, str>> + '_
+pub fn flui::prelude::RoutePath::with_query(self, key: impl core::fmt::Display, value: impl core::fmt::Display) -> Self
 pub struct flui::prelude::Router<R: flui::prelude::Routable> { .. }
 impl<R: flui::prelude::Routable> Clone for flui::prelude::Router<R>
 impl<R: flui::prelude::Routable> Drop for flui::prelude::Router<R>

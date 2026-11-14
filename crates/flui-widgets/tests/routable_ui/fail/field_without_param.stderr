@@ -1,4 +1,4 @@
-error: field `draft` is not in the pattern `/note/:id`: add a `:draft` segment
+error: field `draft` is not in the pattern `/note/:id`: add a `:draft` segment, or mark it `#[query]` to read it from the query
  --> tests/routable_ui/fail/field_without_param.rs:6:21
   |
 6 |     Note { id: u32, draft: bool },

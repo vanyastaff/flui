@@ -1,4 +1,4 @@
-error: a route pattern has no `?` query, `#` fragment or `%` escape; write the literal text, and `RoutePath` encodes it
+error: a route pattern has no `?` query, `#` fragment or `%` escape: a `#[query]` field reads the query, and literal text is written as is, since `RoutePath` encodes it
  --> tests/routable_ui/fail/pattern_query.rs:5:13
   |
 5 |     #[route("/search?q=:q")]

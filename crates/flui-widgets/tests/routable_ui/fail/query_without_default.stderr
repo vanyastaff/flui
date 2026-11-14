@@ -1,0 +1,16 @@
+error[E0277]: the trait bound `Page: std::default::Default` is not satisfied
+  --> tests/routable_ui/fail/query_without_default.rs:24:15
+   |
+24 |         page: Page,
+   |               ^^^^ the trait `std::default::Default` is not implemented for `Page`
+   |
+note: required by a bound in `flui_widgets::router::__derive::assert_query_defaulted`
+  --> src/router/__derive.rs
+   |
+   | pub fn assert_query_defaulted<T: FromStr + Display + Default>() {}
+   |                                                      ^^^^^^^ required by this bound in `assert_query_defaulted`
+help: consider annotating `Page` with `#[derive(Default)]`
+   |
+ 4 + #[derive(Default)]
+ 5 | struct Page(u32);
+   |
