@@ -261,9 +261,7 @@ pub use text_direction::TextDirection;
 pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
 // Window-runtime generation/version counters + commit-time freshness gate.
-pub use epoch::{
-    FrameEpoch, GenerationGate, GpuResourceGeneration, ResourceGeneration, SurfaceGeneration,
-};
+pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};
 // The frame-identity group bundled for the raster boundary.
 pub use frame_stamp::FrameStamp;
 pub use id::{

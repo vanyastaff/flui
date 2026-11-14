@@ -498,11 +498,6 @@ pub use raster_executor::{
     SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface, SlotTarget, SlotVisibility,
     SurfaceHold, TurnOutcome,
 };
-// The GPU-resource freshness stamp (ADR-0045 decision 4); declared in
-// `flui-foundation` and re-exported here so `flui_engine::GpuResourceGeneration`
-// keeps resolving — the compile-fail fixture for its private field cites this
-// path, and `FrameStamp` compares this axis.
-pub use flui_foundation::GpuResourceGeneration;
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
 // The one GPU context every slot renders through (ADR-0305 §1).
