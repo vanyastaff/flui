@@ -1,6 +1,6 @@
 ### Changed
 
-- `flui run --agent` in Firefox needs Firefox 140 or later, the first that reports when a navigation's document commits. An older Firefox, ESR 128 among them, is refused when the session starts, with its version and the one needed; before, it ran with a race on every reload.
+- `flui run --agent` in Firefox needs Firefox 140 or later, the first that reports when a navigation's document commits. An older Firefox, ESR 128 among them, is refused when the session starts as an unsupported target (exit 2), with its version and the one needed; before, it ran with a race on every reload.
 
 ### Fixed
 

@@ -75,7 +75,7 @@ pub(crate) enum LaunchError {
     },
     /// The browser answered, but is one the link cannot drive. Its stderr says nothing of
     /// that, so it is left out.
-    Unsupported(LinkError),
+    Unsupported(String),
     /// The browser's protocol failed.
     Link {
         error: LinkError,
@@ -87,7 +87,9 @@ impl std::fmt::Display for LaunchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let stderr = match self {
             Self::Start(error) => return write!(f, "could not start the browser: {error}"),
-            Self::Unsupported(error) => return error.fmt(f),
+            Self::Unsupported(why) => {
+                return write!(f, "the link cannot drive this browser: {why}");
+            }
             Self::Silent { why, stderr } => {
                 write!(f, "the browser opened no remote protocol: {why}")?;
                 stderr
@@ -126,7 +128,7 @@ impl LaunchError {
                 command: failure.command,
                 stderr,
             },
-            error @ LinkError::Unsupported(_) => Self::Unsupported(error),
+            LinkError::Unsupported(why) => Self::Unsupported(why),
             error => Self::Link { error, stderr },
         }
     }
