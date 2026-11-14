@@ -48,7 +48,7 @@ UI runtime owner lane    UiRuntime (!Send + !Sync)
                        input, focus, semantics, text input
                          │ owned snapshots / closed commands
                          ▼
-raster owner lane   RasterExecutor slot: surface, renderer, GPU submission,
+raster executor     RasterExecutor slot: surface, renderer, GPU submission,
                     SurfaceGeneration authority
 ```
 
@@ -56,7 +56,7 @@ raster owner lane   RasterExecutor slot: surface, renderer, GPU submission,
 |---|---|---|
 | Event-loop side: the backend's `PlatformWindow` plus `AppRuntime`'s `WindowRegistry` | platform/event-loop lane | native window lifetime, event delivery, OS callback registration, redraw requests, the native-window → presentation map |
 | `PresentationState` | stored by value in its `UiRuntime`; `!Send + !Sync` (statically asserted) | the presentation's UI root and pipeline, frame/input state, focus, gestures, mouse tracking, text-input session, semantics |
-| `RasterExecutor` slot (`flui-engine`) | raster owner lane | renderer, GPU surface, configure/present ordering, `SurfaceGeneration` |
+| `RasterExecutor` slot (`flui-engine`) | raster executor (inline on the owner thread) | renderer, GPU surface, configure/present ordering, `SurfaceGeneration` |
 
 `PresentationRuntime` survives only as the name of the contract those owners
 form. It is not a public struct, a crate, an `Arc` shared among lanes, a bundle
@@ -85,7 +85,7 @@ returns `OwnerGone`.
 Owners on different threads exchange owned `Send` data through bounded
 channels or dedicated one-shot completions — never UI closures or a generic
 "run this on the UI thread" job. `RuntimeEvent` (native/host observations → UI runtime) and
-`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shapes of that traffic; the one placement shipped is the inline executor on the owner thread, so a command and a frame go through a mutex-guarded slot inbox, not a channel to another thread. The rules:
+`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shapes of that traffic; the one placement shipped is the inline executor on the owner thread, so a `Frame` and a `Configure` go through the slot's mutex-guarded inbox, and the lifecycle commands (`Attach`, `Release`, `Restore`, `Detach`, `RetryDevice`) through one bounded channel (`LIFECYCLE_CAPACITY`) that the executor drains with `try_recv` on the owner thread; the channel is a queue the bounded-queue rule below covers. The rules:
 
 - every routable message carries, or is structurally bound to, its exact
   `PresentationAddress`;
@@ -183,7 +183,7 @@ SurfaceAttached/Suspended ──close──▶ Closing ──teardown ack──�
 | `Closing` | no new input or frames; mapping removed, callbacks cancelled, IME disabled, owner jobs cancelled, raster shutdown awaited |
 | `Closed` | terminal; capabilities fail with `OwnerGone`; the slot is recycled only with a new generation |
 
-Resume does not claim `SurfaceAttached` until the raster owner acknowledges a
+Resume does not claim `SurfaceAttached` until the executor slot acknowledges a
 valid generation.
 
 ### 10. Platform callbacks are owned and cancellable

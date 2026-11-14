@@ -322,7 +322,7 @@ shared handle is a wgpu ref-count.
 | `Renderer::painter`, `Renderer::offscreen` | `WgpuPainter`, `OffscreenRenderer` | Owned outright; the painter records content and the offscreen renderer blits retained presentation |
 | `Renderer::_single_mutator` | `PhantomData<Cell<()>>` | Makes `Renderer: !Sync` by declaration rather than by whichever field happens to be `!Sync`; pinned by `assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` |
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
-| `RasterExecutor` shared state | one `Mutex` per slot inbox (`SlotInbox`); in `Shared` (`raster_executor/sender.rs`) one `Mutex` for the device's record, the atomics `health`, `sending` and `trim`, and the bounded `crossbeam_channel` lifecycle queue | The mutexes are held only to swap values and nothing that can run user code runs under them (`raster_executor` module doc); the atomics and the queue take no lock |
+| `RasterExecutor` shared state | one `Mutex` per slot inbox (`SlotInbox`); in `Shared` (`raster_executor/sender.rs`) one `Mutex` for the device's record, the atomics `health`, `sending` and `trim`, and the bounded `crossbeam_channel` lifecycle queue | The mutexes are held only to swap values and nothing that can run user code runs under them (`raster_executor` module doc); the atomics take no lock, and the executor only `try_recv`s the queue and waits on no lock |
 
 **Unsafe.** `#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`, and one
 production exception with its own `expect`: `renderer::dxgi_frame_statistics`
@@ -834,7 +834,7 @@ the slot owing a full repaint.
 Two public types whose every reader was their own test. `GpuServices`
 (ADR-0045 decision 2) shipped only its offscreen half while the working
 windowed entry point was hidden; `RasterOptions` (decision 6) was a DTO
-the raster owner stored and never read, advertising a range the capacity-one
+the former raster owner stored and never read, advertising a range the capacity-one
 mailbox could not reach. Both ADR decisions carry an implementation-status
 paragraph; the pacing surface returns with a real consumer.
 
@@ -1068,14 +1068,17 @@ stays: with the correct previous frame outside the damage, it bounds a
 straddling shape's out-of-damage slice to one frame. The full clear and the
 partial clear paint one constant, `frame_protocol::BACKGROUND`.
 
-Only the web's `DirectSink` reaches `Renderer::render_frame`, through
-`RasterBackend::render_scene`, and it forces a full repaint first, so no producer
-applies a partial region to a `Renderer` now. Native slots draw through `SlotBackend`.
-The public `Renderer::render_scene` is the
+`Renderer::render_frame` renders the damage the tracker holds and has two
+production callers: `RasterBackend::render_scene`, reached by the web's
+`DirectSink`, which forces a full repaint first, and the public
+`Renderer::render_scene`, which renders in full; so no production caller applies
+a partial region to a `Renderer` now. Native slots draw through `SlotBackend`.
+`Renderer::render_scene` is the
 entry point for a frame no producer accounted for (direct mode, a hot-reload
 plugin's scene): it renders in full, invalidates the target and makes the
-next frame full, because the owner's differ compares against scenes it
-submitted and would otherwise scissor over pixels it never saw.
+next frame full, because the owner plans damage against the version the raster
+side acknowledged (`RasterBase`), which a scene rendered here never advances, and a
+partial frame would otherwise scissor over pixels the owner never saw.
 
 FLUI has no per-buffer damage accumulation (buffer age), so it keeps a committed
 retained image and prepares a candidate; it rounds damage outward with a 1 px anti-aliasing
@@ -1343,7 +1346,7 @@ Screenshots complement the numerical readbacks; they do not replace them.
 ### 22. The raster seam's outcome enums are closed
 
 `PresentDisposition`, `SendReceipt` and `RasterVerdict` carry no enum-level
-`#[non_exhaustive]`, for ADR-0068 §2's reason: the raster lane in `flui-app`
+`#[non_exhaustive]`, for ADR-0068 §2's reason: the raster host in `flui-app`
 turns each into a frame verdict or a stamp, and a variant added later must stop
 compiling at that match instead of falling into a default that drops owed work.
 Each carries its `#[expect(clippy::exhaustive_enums, reason = "…")]`.

@@ -51,7 +51,7 @@
   `HostNotice::MemoryPressure` the host reclaims its application receivers (`AssetRegistry` and
   others) and the raster thread's pools once, and each UI runtime its text service, before any
   subscriber hears the notice; `Critical` also evicts every pooled GPU buffer and resets the glyph
-  atlas. `RasterHandle` and `AssetRegistry` implement `ReclaimMemory`.
+  atlas. `AssetRegistry` implements `ReclaimMemory`.
 - **`flui-testing`**: `window_conformance`, the checks every window backend runs against its
   `PlatformWindow`: capabilities are honest, accepted commands converge into the state, revisions
   change only with the state, bad numbers are refused, and a closed window refuses.

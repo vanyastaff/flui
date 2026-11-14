@@ -29,7 +29,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///   web, both of which need `'static`.
 /// - `Send + Sync` — wgpu's own `WindowHandle` marker trait (the bound its
 ///   safe `SurfaceTarget` requires) demands both, and the lease is rebuilt
-///   from the raster owner thread on recovery, which must be able to hold
+///   from the thread that recovers the surface, which must be able to hold
 ///   the `Arc<dyn WindowTarget>` across an `.await` without becoming `!Send`.
 ///
 /// Blanket-implemented over every type that already satisfies the bounds —

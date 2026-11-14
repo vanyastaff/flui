@@ -198,8 +198,8 @@ pub trait RasterBackend: Send {
     /// passes [`SwapChainStatistics::None`](flui_platform::SwapChainStatistics::None)
     /// elsewhere, and reads nothing while no hook is installed.
     ///
-    /// Runs on whichever thread presents: the owner thread, for the web's
-    /// `DirectSink`.
+    /// Runs on whichever thread presents. No production path installs a hook
+    /// today: the web's `DirectSink` never calls it.
     ///
     /// Default: ignored. A backend that never presents (offscreen,
     /// scripted doubles) has nothing to notify.

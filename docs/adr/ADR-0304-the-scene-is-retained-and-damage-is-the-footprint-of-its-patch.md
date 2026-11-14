@@ -402,7 +402,7 @@ carries the lineage, so no separate lineage pair is kept.
 moves by value; what it shares with the owner is immutable, and its doc's "ownership transfer, not
 reference counting" (`scene_snapshot.rs:155-159`) now means that the snapshot is moved and its
 nodes are shared. A slot's inbox stays latest-wins; a superseded frame's damage folds into the
-survivor (`raster_executor/sender.rs`).
+survivor (`raster_executor/sender.rs`). The executor reads no `base`: the owner planned the damage against `RasterBase` before the send, so the fold unions the damage and the texture updates and keeps the survivor's other fields.
 
 The raster side holds, per presentation, the version whose image it last committed and the
 `SurfaceKey` that image is on (`RasterBase`). A publication for another key, a surface recreated at

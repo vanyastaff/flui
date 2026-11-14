@@ -268,7 +268,7 @@ it removes (ADR-0075's effects that never ran in the product) comes from two imp
 one frame, not from a missing second product. It is not the forbidden `flui-presentation` crate: it owns
 the UI runtime state rather than handles to it, it does not depend on application policy (runners,
 backends and the GPU stay in H), and it is not a fourth owner forwarding operations; the UI runtime,
-the platform backend and the raster owner remain the three owners of ADR-0037 §1.
+the platform backend and the raster executor remain the three owners of ADR-0037 §1.
 
 ### Not decided here
 

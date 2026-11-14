@@ -799,7 +799,7 @@ impl UiRuntime {
     /// (tests outside it use `render_frame_for_test`, under `testing`).
     ///
     /// The host chooses the sink it hands the pump: `flui-app` passes its
-    /// raster lane on the desktop, Android and iOS runners and a direct sink
+    /// raster host on the desktop, Android and iOS runners and a direct sink
     /// over a borrowed backend on the web runner; tests pass a scripted one.
     /// Every sink feeds the same classification arms below
     /// through [`SubmitVerdict`](crate::sink::SubmitVerdict), so the
@@ -1017,7 +1017,7 @@ impl UiRuntime {
                 // `Fifo` mode the block is a wait for the next vsync on the
                 // Vulkan/Wayland path; the native AppKit backend returns from the
                 // present in ~42 µs — ADR-0058's per-backend facts. On the inline
-                // raster lane the pump runs synchronously inside `submit`, so the
+                // executor the pump runs synchronously inside `submit`, so the
                 // call's own duration lands here either way). Sampling before the
                 // call (as an
                 // earlier version of this method did) understates every

@@ -107,7 +107,7 @@ AppRuntime — process/application host (one per process)
         ├── element tree + BuildOwner, PipelineOwner + render tree
         ├── focus tree + gesture/input state
         ├── FrameClock (vsync, refresh rate, visibility, throttling)
-        └── SceneSnapshot producer → raster owner (SurfaceGeneration authority)
+        └── SceneSnapshot producer → its `RasterExecutor` slot (SurfaceGeneration authority)
 ```
 
 Instantiation is **policy, not architecture**: desktop default is one UI runtime per window; fully
@@ -187,15 +187,15 @@ pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
 }
 ```
 
-- The raster owner solely owns the renderer (surface, device, queue).
-- It is bound to one presentation and is the `SurfaceGeneration` authority: a
+- The presentation's slot of the `RasterExecutor` (`flui-engine`) solely owns the renderer
+  (surface, device, queue).
+- A slot is bound to one presentation and is the `SurfaceGeneration` authority: a
   reconfigure/resize bumps the generation before the next frame is accepted, and a frame whose
-  generation mismatches is rejected before rendering with `SurfaceOutdated`.
-- Acks (`Presented`, `Dropped`, `SurfaceOutdated`, `DeviceLost`) carry the frame identity and
-  travel on the lossy telemetry lane; shutdown completion has its own one-shot channel.
-- Which thread the raster owner runs on is ADR-0045's decision. The protocol is exercised by a
-  threaded test harness, because under a synchronous raster owner its drop, stale-generation and
-  shutdown paths are unreachable.
+  generation mismatches is refused before rendering with the verdict `SurfaceStale`.
+- The slot answers each frame with a `RasterVerdict` (`Presented`, `NoPresent`, `NotShown`,
+  `Retry`, `SurfaceStale`, `DeviceLost`, `Failed`).
+- The executor runs inline on the owner thread (ADR-0305); no raster thread ships, and a threaded
+  placement would keep this protocol.
 
 ### 6. Identity, versioning, cancellation — freshness is per work class
 
@@ -223,9 +223,8 @@ pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
 0. `AppRuntime` detaches the UI runtime's platform callbacks — delivery stops before teardown.
 1. The UI runtime stops accepting frames; the owner inbox flips to drain-and-refuse (`OwnerGone`).
 2. Worker jobs are cancelled; in-flight results hit the refused inbox or fail freshness.
-3. The snapshot mailbox closes; the raster owner finishes or drops in-flight work and fires the
-   one-shot shutdown completion.
-4. Renderer and surface teardown happen in the raster owner before the window handle is
+3. The slot's inbox closes with `Detach`; the executor finishes or drops the in-flight work.
+4. Renderer and surface teardown happen in the slot before the window handle is
    destroyed.
 5. The UI runtime drops; surviving handles turn `OwnerGone`.
 

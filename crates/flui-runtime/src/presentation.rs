@@ -886,7 +886,7 @@ impl PresentationState {
             text_store_host,
         ));
 
-        // Frames and retirements wake the runtime so the raster lane applies them.
+        // Frames and retirements wake the runtime so the raster executor applies them.
         let textures = flui_layer::TextureRegistry::new(Arc::clone(&capabilities.wake));
         let close_guard = CloseGuardSource::new(
             &capabilities.close.vetoes,

@@ -2,7 +2,7 @@
 //! and the damage it carries (ADR-0304 §5).
 //!
 //! Compositing produces one `SceneSnapshot` per window per frame; it is the one
-//! seam a `UiRuntime` hands to a raster owner.
+//! seam a `UiRuntime` hands to a raster executor slot.
 
 use std::num::NonZeroU8;
 
@@ -355,11 +355,11 @@ impl DamageRect {
 
 /// The owned per-presentation per-frame raster package.
 ///
-/// Produced by compositing and moved **by value** into the raster mailbox:
-/// ownership transfer, not reference counting, is the seam. The raster owner
+/// Produced by compositing and moved **by value** to the raster executor:
+/// ownership transfer, not reference counting, is the seam. The executor
 /// is the sole holder once a snapshot is sent and drops it when done. The
 /// type is `Send + Sync` (plain data), pinned below; the by-value contract is
-/// enforced by the mailbox API taking ownership, not by the auto traits.
+/// enforced by the executor's send API taking ownership, not by the auto traits.
 ///
 /// # Frame identity
 ///

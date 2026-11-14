@@ -24,9 +24,6 @@
 - **`flui-layer`** (breaking): `LayerNode::with_render_id` is replaced by
   `LayerNode::with_boundary(render_id, content_token)`; `DamageRegion` gains the `Partial` and
   `Unchanged` variants, so a match on it needs arms for them or a wildcard.
-- **`flui-engine`**: `RasterOwner` applies each frame's damage to the backend (`mark_dirty` for a
-  partial region) instead of always calling `mark_full_repaint`, including for frames it rejects
-  or that a newer submit supersedes; a failed render marks the next frame full.
 - **`flui-engine`**: `Renderer::render_scene` is now the entry point for frames outside a raster
   owner (direct mode, a hot-reload plugin's scene): it always renders in full and makes the next
   frame full too. `RasterBackend::render_scene` renders the damage the owner applied.
