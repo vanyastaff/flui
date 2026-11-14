@@ -287,6 +287,10 @@ impl TextSizingCohort {
     /// released and its policies stop retaining. The allocation stays, for
     /// [`TextSizing::begin_cohort_in`] to give the next attempt.
     #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "a u64 generation advanced once per retired attempt cannot run out"
+    )]
     pub fn retire(self) -> RetiredTextSizingCohort {
         let Self { policy, attempt } = self;
         drop(policy);
