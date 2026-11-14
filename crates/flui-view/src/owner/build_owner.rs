@@ -202,7 +202,7 @@ pub(crate) struct BuildDrainResult {
 /// loop: each one unwinds `drain_build_scope`'s stack frame immediately,
 /// skipping any code placed after the loop. Without this guard, an id
 /// already marked dirty on the tree and removed from `external_inbox` (by
-/// `absorb_mid_drain_inbox`'s own `drain()`) but capped by the budget would
+/// `absorb_mid_drain_inbox`'s `take_into`) but capped by the budget would
 /// end up in none of `dirty_elements`, `dirty_reasons`, or `external_inbox`
 /// the moment a LATER build in the same drain panics — a silently lost
 /// rebuild request. A `Drop` impl runs on every exit path, unwind included,
@@ -2193,12 +2193,12 @@ impl BuildOwner {
     /// at once, and `self.external_inbox` can go and stay empty for the
     /// remainder of the drain (the common case once budget is exhausted), so
     /// later pops hit this function's early return instead of a full
-    /// lock-drain-collect cycle.
+    /// lock-and-move cycle.
     ///
     /// # Locking
     ///
-    /// The inbox lock is held only for the `drain()` that empties it into an
-    /// owned `Vec`, released before anything else runs. It is never held
+    /// The inbox lock is held only for the `take_into` that moves its requests
+    /// into the kept `landed_builds` buffer, released before anything else runs. It is never held
     /// across a build — `parking_lot::Mutex` is non-reentrant, and a build
     /// may call `schedule` synchronously. `capped_leftover` itself is a
     /// plain, unlocked map; `CappedLeftoverGuard::drop` re-locks the inbox
