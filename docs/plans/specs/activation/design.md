@@ -145,6 +145,11 @@ Fragment в `RoutePath` не входит: для ссылки он ничего
 Включается сам, когда приложение объявило `url-schemes` или `file-types`; `Application::single_instance(false)`
 отключает его, `Application::single_instance(true)` включает без объявлений.
 Имя экземпляра — `AppIdentity` (app id в обратной DNS-форме).
+Код одного экземпляра — фича `single-instance` фасада (`flui-app`, `flui-native`), по умолчанию выключена:
+без неё код шины и канала не линкуется, `Application::single_instance` нет, а `flui build` и `flui run`
+отказывают сборке Linux или Windows с объявленными `url-schemes` или `file-types`, называя схемы, типы
+и фичу; `flui doctor` показывает то же как `project.single-instance`. Шаблоны `flui create` схем не
+объявляют и фичу не включают (ADR-0088 §6).
 
 - **Windows.** Первый экземпляр создаёт именованный мьютекс `Local\flui-<app-id>-<session-id>` и сервер
   именованного канала `\\.\pipe\flui-<app-id>-<session-id>`. Второй, найдя мьютекс, вызывает

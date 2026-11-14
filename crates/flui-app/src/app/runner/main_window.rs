@@ -781,25 +781,32 @@ where
 }
 
 /// Start `host`, as one instance named `single` when it is given
-/// ([`CurrentHost::start_single`](flui_native::CurrentHost::start_single)).
-/// The Wayland and X11 hosts run their IO sources (XIM, IBus, logind, the
+/// (`CurrentHost::start_single`):
+/// `None` when another process of the application took this launch. The
+/// Wayland and X11 hosts run their IO sources (XIM, IBus, logind, the
 /// settings portal, the session bus), and the Windows host its single-instance
-/// pipe, on the application's IO runtime, so a
-/// process runs one (ADR-0327 §3); every other host, and an application that
-/// brought its own executors, starts on the host's own.
+/// pipe, on the application's IO runtime, so a process runs one (ADR-0327 §3);
+/// every other host, and an application that brought its own executors,
+/// starts on the host's own.
 fn start_host(
     host: flui_native::CurrentHost,
     single: Option<&str>,
-) -> Result<flui_native::HostStart, LaunchError> {
+) -> Result<Option<Box<dyn flui_native::Platform>>, LaunchError> {
     let executor =
         host_executor(host, single.is_some())?.unwrap_or_else(flui_native::NativeExecutor::own);
-    let started = match single {
-        Some(app_id) => host.start_single(executor, app_id),
-        None => host
-            .start_with(executor)
-            .map(flui_native::HostStart::Started),
-    };
-    started.map_err(LaunchError::from_platform)
+    #[cfg(feature = "single-instance")]
+    if let Some(app_id) = single {
+        return match host
+            .start_single(executor, app_id)
+            .map_err(LaunchError::from_platform)?
+        {
+            flui_native::HostStart::Started(platform) => Ok(Some(platform)),
+            flui_native::HostStart::Forwarded => Ok(None),
+        };
+    }
+    host.start_with(executor)
+        .map(Some)
+        .map_err(LaunchError::from_platform)
 }
 
 /// The executor `host` runs its IO on: the application's IO runtime for the
@@ -941,7 +948,7 @@ where
 {
     let started = start_or_forward(
         application,
-        || platform().map(flui_native::HostStart::Started),
+        || platform().map(Some),
         teardown_log,
         renderers,
     )?;
@@ -953,7 +960,7 @@ where
 /// launch: nothing started, and the services the start installed are down.
 fn start_or_forward<V, F>(
     mut application: DesktopRun<V, F>,
-    platform: impl FnOnce() -> Result<flui_native::HostStart, LaunchError>,
+    platform: impl FnOnce() -> Result<Option<Box<dyn flui_native::Platform>>, LaunchError>,
     teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
     renderers: RasterFactory,
 ) -> Result<Option<StartedLoop>, LaunchError>
@@ -978,11 +985,10 @@ where
     if let Some(executors) = application.config.executors.clone() {
         APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(executors));
     }
-    let platform = match platform()? {
-        flui_native::HostStart::Started(platform) => platform,
+    let Some(platform) = platform()? else {
         // The running instance took the launch; the guard takes the services
         // down as for a refused start.
-        flui_native::HostStart::Forwarded => return Ok(None),
+        return Ok(None);
     };
     startup.disarm();
     let fatal = Rc::new(RefCell::new(None));

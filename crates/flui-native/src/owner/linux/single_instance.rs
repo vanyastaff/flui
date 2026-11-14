@@ -16,12 +16,15 @@ use flui_platform::{Launch, OpenTarget, Opened};
 use crate::owner::file_uri::{PathConvention, opened_by_urls};
 
 /// The `platform_data` key of a Wayland activation token.
+#[cfg(any(feature = "single-instance", test))]
 const ACTIVATION_TOKEN: &str = "activation-token";
 /// The `platform_data` key of an X11 startup notification id.
+#[cfg(any(feature = "single-instance", test))]
 const STARTUP_ID: &str = "desktop-startup-id";
 
 /// The object path of the application `bus_name` names, as GApplication
 /// derives it: `/` and each element, `-` written `_`.
+#[cfg(any(feature = "single-instance", test))]
 pub(crate) fn object_path(bus_name: &str) -> String {
     let mut path = String::with_capacity(bus_name.len() + 1);
     for element in bus_name.split('.') {
@@ -47,6 +50,7 @@ impl Forwarded {
     /// [`Opened`] keeps one ([`flui_platform::MAX_OPENED_URL_LEN`], which the
     /// first instance applies again as it opens it), or the `file:` URI of a
     /// path as long as Linux names one (`PATH_MAX`, every byte escaped).
+    #[cfg(any(feature = "single-instance", test))]
     pub(crate) const MAX_URI_LEN: usize = {
         let file = "file://".len() + 3 * 4096;
         if file > flui_platform::MAX_OPENED_URL_LEN {
@@ -59,6 +63,7 @@ impl Forwarded {
     /// Whether the first instance takes every URI of this launch: one longer
     /// than [`Self::MAX_URI_LEN`] would be dropped there, so a launch that
     /// carries one runs as an instance of its own instead.
+    #[cfg(any(feature = "single-instance", test))]
     pub(crate) fn fits(&self) -> bool {
         self.uris.iter().all(|uri| uri.len() <= Self::MAX_URI_LEN)
     }
@@ -67,6 +72,7 @@ impl Forwarded {
     /// then its files as `file:` URIs (they are absolute already: the launch
     /// read them against this process's working directory, which the first
     /// instance does not share), with `token`.
+    #[cfg(any(feature = "single-instance", test))]
     pub(crate) fn of_launch(launch: Opened, token: Option<String>) -> Self {
         let mut uris = launch.urls;
         uris.extend(launch.files.iter().filter_map(|file| {
@@ -94,6 +100,7 @@ impl Forwarded {
 /// The token a launch was handed: the Wayland activation token
 /// (`XDG_ACTIVATION_TOKEN`), else the X11 startup notification id
 /// (`DESKTOP_STARTUP_ID`); an empty value is none.
+#[cfg(any(feature = "single-instance", test))]
 pub(crate) fn launch_token(
     activation_token: Option<std::ffi::OsString>,
     startup_id: Option<std::ffi::OsString>,
@@ -117,6 +124,7 @@ pub(crate) fn startup_time(startup_id: &str) -> Option<u32> {
 }
 
 /// The token of a call's `platform_data`, by either key GApplication sends.
+#[cfg(any(feature = "single-instance", test))]
 pub(crate) fn token_of<'a>(
     platform_data: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Option<String> {
@@ -134,6 +142,7 @@ pub(crate) fn token_of<'a>(
 /// The `platform_data` a second instance sends with `token`, under both
 /// keys, as GApplication does: the first instance reads whichever its
 /// display server takes.
+#[cfg(any(feature = "single-instance", test))]
 pub(crate) fn platform_data(token: Option<&str>) -> Vec<(&'static str, String)> {
     match token {
         Some(token) => vec![
@@ -144,10 +153,39 @@ pub(crate) fn platform_data(token: Option<&str>) -> Vec<(&'static str, String)> 
     }
 }
 
-#[cfg(any(x11_host, wayland_host))]
+#[cfg(all(any(x11_host, wayland_host), feature = "single-instance"))]
 pub(crate) use bus::{Claim, FirstInstance, claim};
+#[cfg(all(any(x11_host, wayland_host), not(feature = "single-instance")))]
+pub(crate) use off::FirstInstance;
 
-#[cfg(any(x11_host, wayland_host))]
+/// A build without the `single-instance` feature claims no name on the bus:
+/// the first instance the hosts name has no value, and they deliver nothing.
+#[cfg(all(any(x11_host, wayland_host), not(feature = "single-instance")))]
+mod off {
+    use std::sync::Arc;
+
+    use super::Forwarded;
+    use crate::owner::signal::OwnerSignal;
+    use crate::owner::single_instance::Delivery;
+
+    /// No first instance: this build has none.
+    #[derive(Debug)]
+    pub(crate) enum FirstInstance {}
+
+    impl FirstInstance {
+        /// Unreachable: no value exists.
+        pub(crate) fn attach(&self, _signal: &Arc<OwnerSignal>) {
+            match *self {}
+        }
+
+        /// Unreachable: no value exists.
+        pub(crate) fn take(&self) -> Vec<(Forwarded, Delivery)> {
+            match *self {}
+        }
+    }
+}
+
+#[cfg(all(any(x11_host, wayland_host), feature = "single-instance"))]
 mod bus {
     use std::collections::HashMap;
     use std::sync::{Arc, Weak};

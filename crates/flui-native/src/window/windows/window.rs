@@ -1632,6 +1632,7 @@ impl WindowsWindow {
     /// application handed over: a minimized window is restored first, then
     /// activated as [`WindowCommand::Activate`] activates it, with the
     /// foreground right the launch handed over.
+    #[cfg(feature = "single-instance")]
     pub(crate) fn activate_forwarded(&self) {
         // SAFETY: `IsIconic` reads the state of a handle and dereferences no
         // memory of ours.

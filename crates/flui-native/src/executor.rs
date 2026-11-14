@@ -18,7 +18,7 @@ use tokio::runtime::{Handle, Runtime};
 /// started without one, and must never claim a full-core pool.
 #[cfg_attr(
     not(any(
-        windows,
+        all(windows, feature = "single-instance"),
         all(target_os = "linux", any(feature = "wayland", feature = "x11"))
     )),
     allow(
@@ -51,7 +51,7 @@ pub struct NativeExecutor(Inner);
 #[derive(Clone)]
 #[cfg_attr(
     not(any(
-        windows,
+        all(windows, feature = "single-instance"),
         all(target_os = "linux", any(feature = "wayland", feature = "x11"))
     )),
     allow(
@@ -89,7 +89,7 @@ impl NativeExecutor {
     /// The runtime to spawn on, starting an own runtime on first use.
     #[cfg_attr(
         not(any(
-            windows,
+            all(windows, feature = "single-instance"),
             all(target_os = "linux", any(feature = "wayland", feature = "x11"))
         )),
         allow(
@@ -108,7 +108,7 @@ impl NativeExecutor {
 impl RuntimeOwner {
     #[cfg_attr(
         not(any(
-            windows,
+            all(windows, feature = "single-instance"),
             all(target_os = "linux", any(feature = "wayland", feature = "x11"))
         )),
         allow(

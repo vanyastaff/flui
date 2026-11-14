@@ -141,7 +141,7 @@ impl HostPlatform<Windows> {
 
     /// [`try_new`](Self::try_new) as the application's one instance in the
     /// session, which takes the launches later processes hand it, as
-    /// [`CurrentHost::start_single`](crate::CurrentHost::start_single)
+    /// `CurrentHost::start_single`
     /// starts it.
     pub(crate) fn try_new_with(instance: Option<FirstInstance>) -> Result<Self, PlatformError> {
         let build = WindowsBuild::read();

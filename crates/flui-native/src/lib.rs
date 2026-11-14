@@ -575,6 +575,7 @@ pub fn current_host() -> Result<CurrentHost, PlatformError> {
 
 /// What [`CurrentHost::start_single`] found: this process is the application's one instance and
 /// its host started, or another process is and took this launch.
+#[cfg(feature = "single-instance")]
 #[expect(
     clippy::exhaustive_enums,
     reason = "a launch either starts its host or hands itself to the running instance"
@@ -587,6 +588,7 @@ pub enum HostStart {
     Forwarded,
 }
 
+#[cfg(feature = "single-instance")]
 impl std::fmt::Debug for HostStart {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -647,7 +649,7 @@ impl CurrentHost {
     /// # Errors
     ///
     /// [`PlatformError::Init`] when the host fails to start, as [`start_with`](Self::start_with).
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "single-instance", not(target_arch = "wasm32")))]
     pub fn start_single(
         self,
         executor: NativeExecutor,
@@ -835,12 +837,12 @@ impl CurrentHost {
 }
 
 /// The name a Linux host's process owns on the session bus while it is its application's one
-/// instance ([`CurrentHost::start_single`]).
+/// instance (`CurrentHost::start_single`, with the `single-instance` feature).
 #[cfg(any(x11_host, wayland_host))]
 type InstanceClaim = owner::linux::single_instance::FirstInstance;
 
 /// The mutex and pipe a Windows process holds while it is its application's one instance in the
-/// session ([`CurrentHost::start_single`]).
+/// session (`CurrentHost::start_single`, with the `single-instance` feature).
 #[cfg(windows)]
 type InstanceClaim = owner::windows::single_instance::FirstInstance;
 

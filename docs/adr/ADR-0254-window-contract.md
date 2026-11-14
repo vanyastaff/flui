@@ -393,10 +393,15 @@ session id and granted to the current user's SID alone; the pipe rejects remote 
 frame (the launch's links and absolute paths, its length first) is bounded and read as untrusted
 input. A later launch hands its right and its frame only to a pipe served by a process of its own
 user. An app id outside reverse DNS, or a session that cannot keep one instance (no bus, a mutex or
-pipe it cannot open), is warned about and the process runs as an instance of its own. macOS, iOS and Android keep one instance themselves and
-each Web page is an application of its own: `start_single` starts their host as `start_with` does.
-`flui-app` asks for one instance when the application declares a URL scheme or calls
-`Application::single_instance(true)`, and `single_instance(false)` turns it off.
+pipe it cannot open), is warned about and the process runs as an instance of its own. macOS, iOS
+and Android keep one instance themselves and each Web page is an application of its own:
+`start_single` starts their host as `start_with` does. `flui-app` asks for one instance when the
+application declares a URL scheme or calls `Application::single_instance(true)`, and
+`single_instance(false)` turns it off. All of it is `flui`'s `single-instance` feature, off by
+default: without it the session-bus and pipe code is not linked and `Application::single_instance`
+is absent, so each launch is a process of its own, and `flui build` and `flui run` refuse a Linux
+or Windows build of an application that declares URL schemes or file types (`flui doctor` reports
+it as `project.single-instance`).
 
 System preferences are not a registration:
 ADR-0172's delivery stands. The notices, the session-end hold and their fan-out are ADR-0237's and

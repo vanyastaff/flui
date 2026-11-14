@@ -180,7 +180,7 @@ fn opened_reports_waiting_for_ready_are_bounded() {
     let called = run
         .delivery
         .try_opened(admitted.clone(), || {
-            answered_after.set(Some(app.opens().len()))
+            answered_after.set(Some(app.opens().len()));
         })
         .expect("room for the launch");
     assert!(matches!(called, Called::Returned(())));

@@ -65,6 +65,7 @@ pub fn current_user_sid() -> std::io::Result<String> {
 /// The system's error when the process cannot be opened for a query, or its
 /// token or user cannot be read.
 #[cfg(windows)]
+#[cfg(feature = "single-instance")]
 pub(crate) fn process_user_sid(pid: u32) -> std::io::Result<String> {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};

@@ -12,14 +12,18 @@
 //! full, when the owner's loop has ended, when the owner does not take it
 //! within the hold, or when the application cannot hold it.
 
-#[cfg(windows)]
-pub(crate) use inbox::MAX_WAITING;
 #[cfg(any(x11_host, wayland_host))]
-pub(crate) use inbox::Refused;
-#[cfg(any(x11_host, wayland_host, windows))]
-pub(crate) use inbox::{Delivery, HOLD, Inbox, OwnerWake, Posted, hand_on};
+pub(crate) use inbox::Delivery;
+#[cfg(all(windows, feature = "single-instance"))]
+pub(crate) use inbox::MAX_WAITING;
+#[cfg(any(x11_host, wayland_host, all(windows, feature = "single-instance")))]
+pub(crate) use inbox::hand_on;
+#[cfg(all(any(x11_host, wayland_host, windows), feature = "single-instance"))]
+pub(crate) use inbox::{HOLD, Inbox, OwnerWake};
+#[cfg(all(any(x11_host, wayland_host), feature = "single-instance"))]
+pub(crate) use inbox::{Posted, Refused};
 
-#[cfg(any(windows, test))]
+#[cfg(any(all(windows, feature = "single-instance"), test))]
 pub(crate) mod frame;
 
 /// The name the instance of an application of `app_id` is known by: the app
@@ -27,6 +31,7 @@ pub(crate) mod frame;
 /// letters, digits, `_` and `-`, none starting with a digit, 255 bytes at
 /// most); `None` otherwise. It is a D-Bus bus name as it is, and names the
 /// Windows mutex and pipe with no character either reserves.
+#[cfg(any(feature = "single-instance", test))]
 pub(crate) fn instance_name(app_id: &str) -> Option<&str> {
     let well_formed = app_id.len() <= 255
         && app_id.split('.').count() >= 2
@@ -40,8 +45,15 @@ pub(crate) fn instance_name(app_id: &str) -> Option<&str> {
     well_formed.then_some(app_id)
 }
 
-#[cfg(any(x11_host, wayland_host, windows))]
+#[cfg(any(x11_host, wayland_host, all(windows, feature = "single-instance")))]
 mod inbox {
+    #![cfg_attr(
+        not(feature = "single-instance"),
+        expect(
+            dead_code,
+            reason = "without one instance a Linux host only hands on what no first instance takes"
+        )
+    )]
     use std::collections::VecDeque;
     use std::future::Future as _;
     use std::pin::Pin;

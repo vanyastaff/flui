@@ -13,8 +13,7 @@ use windows::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::UpdateWindow,
     UI::WindowsAndMessaging::{
-        GW_HWNDNEXT, GetForegroundWindow, GetTopWindow, GetWindow, GetWindowPlacement,
-        IsWindowVisible, WINDOWPLACEMENT,
+        GetForegroundWindow, GetWindowPlacement, IsWindowVisible, WINDOWPLACEMENT,
     },
 };
 
@@ -252,6 +251,7 @@ impl ClassWindows for WindowSet {
         }
     }
 
+    #[cfg(feature = "single-instance")]
     fn shows_any(&self) -> bool {
         self.by_handle.borrow().values().any(|window| {
             // SAFETY: a query of a handle this set holds; a closed one answers
@@ -260,6 +260,7 @@ impl ClassWindows for WindowSet {
         })
     }
 
+    #[cfg(feature = "single-instance")]
     fn activate_forwarded(&self) {
         // Taken out of the set before it is activated: an activation runs
         // user code, which may open or close windows.
@@ -273,11 +274,15 @@ impl ClassWindows for WindowSet {
 impl WindowSet {
     /// How many top-level windows the walk down the screen's order looks at
     /// for one of the set's before it takes any shown one.
+    #[cfg(feature = "single-instance")]
     const FRONT_WALK: usize = 4096;
 
     /// The shown window of the set highest in the order of the windows on the
     /// screen (the one activated last comes to the top), else any shown one.
+    #[cfg(feature = "single-instance")]
     fn front_shown(&self) -> Option<Rc<WindowsWindow>> {
+        use windows::Win32::UI::WindowsAndMessaging::{GW_HWNDNEXT, GetTopWindow, GetWindow};
+
         let windows = self.by_handle.borrow();
         let shown = |window: &&Rc<WindowsWindow>| {
             // SAFETY: a query of a handle this set holds.

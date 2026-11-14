@@ -94,6 +94,7 @@ returned request or poll `try_result` to obtain the window result."
 //! | `material` | off | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `http` | off | the built-in `HttpCapability` provider, each host's own HTTP stack (`ureq` over rustls on Linux); off, an `HttpCapability` request is refused as not registered |
+//! | `single-instance` | off | one instance per user session on Linux and Windows (`Application::single_instance`): a later launch hands the running instance its links and files; off, each launch is a process of its own, and `flui build` and `flui run` refuse a desktop build of an application that declares URL schemes or file types |
 //! | `system` | off | `flui::services::system`: the launcher and file-dialog providers |
 //! | `devtools` | off | re-exports `flui-devtools` as `devtools`: the frame profiler, timeline and inspector counters |
 //! | `driver` | off | the driver agent in an optimized build; every debug build serves its windows to a driver launched with an endpoint (ADR-0239) |

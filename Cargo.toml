@@ -848,6 +848,15 @@ system = ["dep:flui-system"]
 # links no HTTP client or TLS stack.
 http = ["flui-app/http"]
 
+# === One instance per user session ===
+# `Application::single_instance` (ADR-0254 §4): on Linux and Windows a later
+# launch hands the running instance what it opens, and an application that
+# declares a URL scheme runs as one instance by itself. Off, the application
+# runs as many instances as it is launched and links no session-bus or pipe
+# code; `flui build` and `flui run` refuse a desktop build of a project whose
+# manifest declares URL schemes or file types without it.
+single-instance = ["flui-app/single-instance"]
+
 # === Unstable input surface ===
 # Additive. Re-exports the handle-less input capabilities
 # (`flui::platform::input_capabilities`: `InputCapabilities`, `Availability`,

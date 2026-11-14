@@ -26,7 +26,27 @@ pub(crate) mod control;
 #[cfg(test)]
 mod modal_frame_tests;
 pub(crate) mod modal_loop;
+#[cfg(feature = "single-instance")]
 pub(crate) mod single_instance;
+/// A build without the `single-instance` feature serves no pipe: the first
+/// instance the host names has no value, and its owner window gets no hook.
+#[cfg(not(feature = "single-instance"))]
+pub(crate) mod single_instance {
+    use std::sync::Arc;
+
+    use super::control::OwnerMessages;
+
+    /// No first instance: this build has none.
+    #[derive(Debug)]
+    pub(crate) enum FirstInstance {}
+
+    impl FirstInstance {
+        /// Unreachable: no value exists.
+        pub(crate) fn into_hook(self) -> Arc<dyn OwnerMessages> {
+            match self {}
+        }
+    }
+}
 #[cfg(test)]
 mod tests;
 // The quiet host the loop's tests run over, and another host's tests name.
@@ -409,6 +429,7 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
 
     /// Whether any window is shown: a launch another process forwarded asks
     /// an application that shows none to reopen.
+    #[cfg(feature = "single-instance")]
     fn shows_any(&self) -> bool;
 
     /// Bring forward the shown window highest in the order of the windows on
@@ -417,6 +438,7 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
     /// foreground. With no window shown, nothing comes forward: the window
     /// the application shows for the reopen it was asked comes forward with
     /// that right.
+    #[cfg(feature = "single-instance")]
     fn activate_forwarded(&self);
 }
 

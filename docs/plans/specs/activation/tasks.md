@@ -137,6 +137,15 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   экземпляра, получает ответ «взят» (ответ — отдельная задача, на Linux:
   `a_launch_taken_as_the_instance_ends_is_answered_as_taken`). Запуск двумя процессами на Windows —
   строка parity `single-instance-forward-arguments`.
+  Запуск отвечается «взят», только когда приложение его приняло (`AppDelivery::try_opened`, на обоих
+  хостах): `a_taken_launch_is_answered_by_its_delivery`, `opened_reports_waiting_for_ready_are_bounded`
+  (переполненная очередь отчётов возвращает запуск его процессу).
+- **Фича `single-instance`.** Выключена по умолчанию; `a_desktop_that_opens_links_needs_one_instance`
+  (Linux и Windows без фичи отказ с названием схемы, типа и фичи, с фичей и без объявлений сборка,
+  Android, macOS и wasm не затронуты), `a_desktop_run_that_opens_links_needs_one_instance` (`flui run`
+  отказывает до сборки), проверка `project.single-instance` в
+  `doctor_lists_what_a_manifest_lacks_of_what_the_application_opens`; clippy `flui-native` и
+  `flui-app` для Linux (без фичи, `wayland`, `x11`, с фичей) и `x86_64-pc-windows-msvc` с фичей и без.
 - **AC11 (ключи, Android, Apple `Info.plist`).** `what_an_application_opens_is_checked_before_a_manifest_carries_it`
   (схемы, домены, расширения, MIME, имена), `what_the_application_opens_is_joined_over_the_graph`
   (регистр, файл фичи только при включённой фиче), строки `a_malformed_declaration_is_refused_by_crate`

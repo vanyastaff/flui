@@ -458,7 +458,7 @@ impl AppDelivery {
     ///
     /// `opened` itself, when the queue is full; `admitted` has not run.
     #[cfg_attr(
-        not(any(windows, linux_host, test)),
+        not(any(all(windows, feature = "single-instance"), linux_host, test)),
         expect(
             dead_code,
             reason = "only the hosts that keep one instance answer a launch"
