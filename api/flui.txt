@@ -34525,6 +34525,7 @@ fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_intrins
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_parent_data_dyn(&self, index: usize) -> Option<&dyn flui::rendering::ParentData>
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_parent_data_dyn_mut(&mut self, index: usize) -> Option<&mut dyn flui::rendering::ParentData>
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_parent_data_dyn_or_insert(&mut self, index: usize, _create: &dyn Fn() -> Box<dyn flui::rendering::ParentData>) -> Option<&mut dyn flui::rendering::ParentData> { .. }
+fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::child_size(&self, index: usize) -> Option<&flui::geometry::Size>
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::constraints(&self) -> flui::prelude::BoxConstraints
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::descendant_layout_degraded(&self) -> bool { .. }
 fn flui_rendering::protocol::box_protocol::ErasedBoxLayoutContext::layout_child(&mut self, index: usize, constraints: flui::prelude::BoxConstraints) -> flui::rendering::RenderResult<flui::geometry::Size>
