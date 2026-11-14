@@ -61,6 +61,7 @@ impl OpenSettings {
     /// URL scheme, whose links a second launch would otherwise open in a
     /// second process. `None` without an application id in `identity`,
     /// which is warned about: the bus name and the pipe are named by it.
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
     pub(crate) fn single_instance_id(&self, identity: &flui_log::AppIdentity) -> Option<String> {
         let declared = self
             .declarations
