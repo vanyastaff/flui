@@ -286,7 +286,6 @@ struct HostSlot {
     /// dropped (a device rebuild the window's surface did not survive) is
     /// made again over it.
     surface_target: Arc<dyn SurfaceTarget>,
-    epoch: FrameEpoch,
     /// The version on screen, which a publication's damage starts from
     /// (ADR-0304 §7). Moved only by a frame the slot showed.
     base: RasterBase,
@@ -592,7 +591,6 @@ impl RasterHost {
             HostSlot {
                 slot,
                 surface_target,
-                epoch: FrameEpoch::ZERO,
                 base,
                 textures,
                 carried,
@@ -1380,7 +1378,8 @@ impl RasterHost {
             })
     }
 
-    /// Send `publication` to `address`'s slot, measured on `surface`, turn
+    /// Send `publication`, the frame `epoch` names in its UI runtime's
+    /// sequence, to `address`'s slot, measured on `surface`, turn
     /// the executor and answer what became of the frame. A panic of the
     /// frame is held for the window to report to its UI runtime after the
     /// frame ([`RasterSlot::report_frame_panic`]); the frame fails, and the
@@ -1390,6 +1389,7 @@ impl RasterHost {
         &mut self,
         address: PresentationAddress,
         surface: (u32, u32),
+        epoch: FrameEpoch,
         publication: ScenePublication,
     ) -> SubmitVerdict {
         let Some(placed) = self.placed.as_mut() else {
@@ -1416,8 +1416,6 @@ impl RasterHost {
             .slots
             .get_mut(&address)
             .expect("BUG: `configure` found the slot");
-        slot.epoch = slot.epoch.next();
-        let epoch = slot.epoch;
         let key = SurfaceKey {
             size: surface,
             generation,
@@ -1628,11 +1626,11 @@ impl FrameSink for SlotFrame {
         self.surface
     }
 
-    fn submit(&mut self, publication: ScenePublication) -> SubmitVerdict {
+    fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict {
         // A frame dispatched while the host is turning (a platform callback
         // re-entering from the GPU work) keeps its work for the next wake.
         self.host
-            .try_with(|host| host.submit(self.address, self.surface, publication))
+            .try_with(|host| host.submit(self.address, self.surface, epoch, publication))
             .unwrap_or(SubmitVerdict::Retry)
     }
 }

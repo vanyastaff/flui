@@ -1,7 +1,9 @@
 //! Test support for code that drives the raster executor without a GPU
 //! (ADR-0243: the fake sits beside its contract, [`RasterBackend`]).
 
-use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
+
+use parking_lot::Mutex;
 
 use flui_foundation::{ManualClock, geometry::DeviceSize, memory::MemoryPressureLevel};
 use flui_layer::{DamageRegion, Scene, TextureUpdates};
@@ -94,6 +96,8 @@ struct Script {
     /// retires or the slot detaches.
     kept: Vec<(SlotId, TextureId, flui_painting::paint::Image)>,
     rebuilds: VecDeque<ScriptedAnswer>,
+    reclaims: VecDeque<ScriptedAnswer>,
+    detaches: VecDeque<ScriptedAnswer>,
     /// The slots the next successful rebuild cannot present to.
     rebuild_refusals: Vec<(SlotId, EngineError)>,
     device_lost: bool,
@@ -101,22 +105,44 @@ struct Script {
     no_inline_rebuild: bool,
     /// The clock each rebuild advances, and by how much.
     rebuild_takes: Option<(ManualClock, Duration)>,
+    /// What the next render waits on before it answers.
+    render_hold: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+}
+
+/// A render a [`ScriptedSlots`] backend holds: it answers once this is
+/// released or dropped, so a raster thread stands for one that does not
+/// answer.
+#[derive(Debug)]
+pub struct RenderHold {
+    _release: std::sync::mpsc::Sender<()>,
+    started: std::sync::mpsc::Receiver<()>,
+}
+
+impl RenderHold {
+    /// Whether the held render began within `timeout`.
+    #[must_use]
+    pub fn began_within(&self, timeout: Duration) -> bool {
+        self.started.recv_timeout(timeout).is_ok()
+    }
+
+    /// Let the held render answer.
+    pub fn release(self) {}
 }
 
 /// A [`RasterBackend`] with no GPU: it logs every call and answers from a
 /// script, presenting and succeeding once the script is spent.
 ///
 /// Clones share one script, so a test keeps a clone after handing one to the
-/// executor.
+/// executor, on the owner's thread or a raster thread.
 #[derive(Clone, Default)]
 pub struct ScriptedSlots {
-    script: Rc<RefCell<Script>>,
+    script: Arc<Mutex<Script>>,
 }
 
 impl std::fmt::Debug for ScriptedSlots {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScriptedSlots")
-            .field("calls", &self.script.borrow().calls.len())
+            .field("calls", &self.script.lock().calls.len())
             .finish_non_exhaustive()
     }
 }
@@ -128,67 +154,92 @@ impl ScriptedSlots {
         Self::default()
     }
 
+    /// Hold the next render until the answer is released or dropped.
+    #[must_use = "dropping the hold releases the render at once"]
+    pub fn hold_next_render(&self) -> RenderHold {
+        let (release, held) = std::sync::mpsc::channel();
+        let (began, started) = std::sync::mpsc::channel();
+        self.script.lock().render_hold = Some((began, held));
+        RenderHold {
+            _release: release,
+            started,
+        }
+    }
+
     /// Answer the next unanswered render with `answer`.
     pub fn script_render(&self, answer: ScriptedAnswer) {
-        self.script.borrow_mut().renders.push_back(answer);
+        self.script.lock().renders.push_back(answer);
     }
 
     /// Answer the next unanswered attach with `answer`.
     pub fn script_attach(&self, answer: ScriptedAnswer) {
-        self.script.borrow_mut().attaches.push_back(answer);
+        self.script.lock().attaches.push_back(answer);
     }
 
     /// Answer the next unanswered resize with `answer`.
     pub fn script_resize(&self, answer: ScriptedAnswer) {
-        self.script.borrow_mut().resizes.push_back(answer);
+        self.script.lock().resizes.push_back(answer);
     }
 
     /// Answer the next unanswered restore with `answer`.
     pub fn script_restore(&self, answer: ScriptedAnswer) {
-        self.script.borrow_mut().restores.push_back(answer);
+        self.script.lock().restores.push_back(answer);
     }
 
     /// Answer the next unanswered `apply_textures` with `answer`.
     pub fn script_textures(&self, answer: ScriptedAnswer) {
-        self.script.borrow_mut().texture_answers.push_back(answer);
+        self.script.lock().texture_answers.push_back(answer);
     }
 
     /// The texture updates applied so far, oldest first.
     #[must_use]
     pub fn textures(&self) -> Vec<AppliedTextures> {
-        self.script.borrow().textures.clone()
+        self.script.lock().textures.clone()
     }
 
     /// Lose the device: every render fails
     /// [`EngineError::DeviceLost`] until a rebuild succeeds.
     pub fn lose_device(&self) {
-        self.script.borrow_mut().device_lost = true;
+        self.script.lock().device_lost = true;
     }
 
     /// Lose the device inside the next render, which fails
     /// [`EngineError::DeviceLost`], as wgpu's device-lost callback can fire
     /// while a frame records.
     pub fn lose_device_in_next_render(&self) {
-        self.script.borrow_mut().lose_in_next_render = true;
+        self.script.lock().lose_in_next_render = true;
     }
 
     /// Answer that no device rebuild can succeed where the executor runs, as
     /// the web's context does.
     pub fn cannot_rebuild_inline(&self) {
-        self.script.borrow_mut().no_inline_rebuild = true;
+        self.script.lock().no_inline_rebuild = true;
     }
 
     /// Undo [`cannot_rebuild_inline`](Self::cannot_rebuild_inline): device
     /// rebuilds can succeed where the executor runs again, as a driver that
     /// came back does.
     pub fn can_rebuild_inline(&self) {
-        self.script.borrow_mut().no_inline_rebuild = false;
+        self.script.lock().no_inline_rebuild = false;
     }
 
     /// Every device rebuild from now on advances `clock` by `took`, as a
     /// driver that blocks the attempt does.
     pub fn rebuilds_take(&self, clock: &ManualClock, took: Duration) {
-        self.script.borrow_mut().rebuild_takes = Some((clock.clone(), took));
+        self.script.lock().rebuild_takes = Some((clock.clone(), took));
+    }
+
+    /// Answer the next unanswered detach with `answer`: a
+    /// [`ScriptedAnswer::Panic`] panics once the slot is forgotten, any
+    /// other answer detaches.
+    pub fn script_detach(&self, answer: ScriptedAnswer) {
+        self.script.lock().detaches.push_back(answer);
+    }
+
+    /// Answer the next unanswered reclaim with `answer`: a
+    /// [`ScriptedAnswer::Panic`] panics, any other answer frees nothing.
+    pub fn script_reclaim(&self, answer: ScriptedAnswer) {
+        self.script.lock().reclaims.push_back(answer);
     }
 
     /// Answer the next unanswered device rebuild with `answer`; one the
@@ -196,29 +247,26 @@ impl ScriptedSlots {
     /// once the new device is in place, so the backend no longer reports the
     /// device lost.
     pub fn script_rebuild(&self, answer: ScriptedAnswer) {
-        self.script.borrow_mut().rebuilds.push_back(answer);
+        self.script.lock().rebuilds.push_back(answer);
     }
 
     /// The next successful rebuild answers that the new device cannot
     /// present to `slot`, for `error`.
     pub fn refuse_on_rebuild(&self, slot: SlotId, error: EngineError) {
-        self.script
-            .borrow_mut()
-            .rebuild_refusals
-            .push((slot, error));
+        self.script.lock().rebuild_refusals.push((slot, error));
     }
 
     /// Every call so far, oldest first.
     #[must_use]
     pub fn calls(&self) -> Vec<SlotCall> {
-        self.script.borrow().calls.clone()
+        self.script.lock().calls.clone()
     }
 
     /// The renders so far.
     #[must_use]
     pub fn renders(&self) -> Vec<(SlotId, DamageRegion)> {
         self.script
-            .borrow()
+            .lock()
             .calls
             .iter()
             .filter_map(|call| match *call {
@@ -229,7 +277,7 @@ impl ScriptedSlots {
     }
 
     fn answer(&self, call: SlotCall) -> Option<ScriptedAnswer> {
-        let mut script = self.script.borrow_mut();
+        let mut script = self.script.lock();
         script.calls.push(call);
         match call {
             SlotCall::Attach(..) => script.attaches.pop_front(),
@@ -237,11 +285,9 @@ impl ScriptedSlots {
             SlotCall::Textures(_) => script.texture_answers.pop_front(),
             SlotCall::Resize(..) => script.resizes.pop_front(),
             SlotCall::Restore(_) => script.restores.pop_front(),
-            SlotCall::Release(_)
-            | SlotCall::DisplayColor(..)
-            | SlotCall::Latency(..)
-            | SlotCall::Detach(_)
-            | SlotCall::Reclaim(_) => None,
+            SlotCall::Release(_) | SlotCall::DisplayColor(..) | SlotCall::Latency(..) => None,
+            SlotCall::Detach(_) => script.detaches.pop_front(),
+            SlotCall::Reclaim(_) => script.reclaims.pop_front(),
             SlotCall::RebuildDevice => script.rebuilds.pop_front(),
         }
     }
@@ -301,12 +347,12 @@ impl RasterBackend for ScriptedSlots {
             frames: updates.frames.iter().map(|(id, _)| *id).collect(),
             retired: updates.retired.clone(),
         };
-        self.script.borrow_mut().textures.push(applied);
+        self.script.lock().textures.push(applied);
         let answered = self.succeed(SlotCall::Textures(slot), "textures");
         {
             // Kept as a context keeps them, for `kept_textures`: a refused
             // update still applies its retirements and the frames that fit.
-            let mut script = self.script.borrow_mut();
+            let mut script = self.script.lock();
             script.kept.retain(|(kept_slot, id, _)| {
                 *kept_slot != slot
                     || !(updates.retired.contains(id)
@@ -329,8 +375,15 @@ impl RasterBackend for ScriptedSlots {
         _scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
+        let hold = self.script.lock().render_hold.take();
+        if let Some((began, hold)) = hold {
+            // A test that stopped watching does not hold the render up.
+            let _told = began.send(());
+            // Released or dropped: either way the render goes on.
+            let _released = hold.recv();
+        }
         {
-            let mut script = self.script.borrow_mut();
+            let mut script = self.script.lock();
             if std::mem::take(&mut script.lose_in_next_render) {
                 script.device_lost = true;
             }
@@ -353,9 +406,9 @@ impl RasterBackend for ScriptedSlots {
         _scene: &Scene,
         reset_fonts: bool,
     ) -> EngineResult<PresentDisposition> {
-        if self.script.borrow().device_lost {
+        if self.script.lock().device_lost {
             self.script
-                .borrow_mut()
+                .lock()
                 .calls
                 .push(SlotCall::Lent(slot, reset_fonts));
             return Err(EngineError::DeviceLost);
@@ -369,17 +422,20 @@ impl RasterBackend for ScriptedSlots {
     }
 
     fn detach(&mut self, slot: SlotId) {
-        let _none = self.answer(SlotCall::Detach(slot));
+        let answer = self.answer(SlotCall::Detach(slot));
         self.script
-            .borrow_mut()
+            .lock()
             .kept
             .retain(|(kept_slot, _, _)| *kept_slot != slot);
+        if let Some(ScriptedAnswer::Panic) = answer {
+            panic!("scripted detach panic");
+        }
     }
 
     fn kept_textures(&self, slot: SlotId) -> TextureUpdates {
         TextureUpdates::from_frames(
             self.script
-                .borrow()
+                .lock()
                 .kept
                 .iter()
                 .filter(|(kept_slot, _, _)| *kept_slot == slot)
@@ -389,35 +445,37 @@ impl RasterBackend for ScriptedSlots {
     }
 
     fn reclaim(&mut self, level: MemoryPressureLevel) {
-        let _none = self.answer(SlotCall::Reclaim(level));
+        if let Some(ScriptedAnswer::Panic) = self.answer(SlotCall::Reclaim(level)) {
+            panic!("scripted reclaim panic");
+        }
     }
 
     fn device_lost(&self) -> bool {
-        self.script.borrow().device_lost
+        self.script.lock().device_lost
     }
 
     fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
-        let takes = self.script.borrow().rebuild_takes.clone();
+        let takes = self.script.lock().rebuild_takes.clone();
         if let Some((clock, took)) = takes {
             clock.advance(took);
         }
         match self.answer(SlotCall::RebuildDevice) {
             None | Some(ScriptedAnswer::Answer(_)) => {
-                let mut script = self.script.borrow_mut();
+                let mut script = self.script.lock();
                 script.device_lost = false;
                 Ok(std::mem::take(&mut script.rebuild_refusals))
             }
             Some(ScriptedAnswer::Fail(error)) => Err(error),
             Some(ScriptedAnswer::Panic) => {
                 // The new device is in place when the rebuild unwinds.
-                self.script.borrow_mut().device_lost = false;
+                self.script.lock().device_lost = false;
                 panic!("scripted device rebuild panic")
             }
         }
     }
 
     fn rebuilds_inline(&self) -> bool {
-        !self.script.borrow().no_inline_rebuild
+        !self.script.lock().no_inline_rebuild
     }
 }
 

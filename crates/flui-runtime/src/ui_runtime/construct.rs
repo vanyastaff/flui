@@ -227,6 +227,7 @@ impl UiRuntime {
             clock,
             frame_time: Cell::new(None),
             last_frame_time: Cell::new(None),
+            frame_epoch: Cell::new(flui_foundation::FrameEpoch::ZERO),
             needs_redraw,
             input_taps: crate::InputTaps::new(Arc::clone(&wake)),
             decision_recorder: super::recording::DecisionRecorder::default(),

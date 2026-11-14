@@ -7,8 +7,7 @@
 //! [`ResourceGeneration`]) is a compile error, not a bug waiting to happen:
 //!
 //! - [`FrameEpoch`] — a runtime's per-frame counter. Meaningful only within
-//!   one `UiRuntime` lifetime; a worker result declares the epoch it was
-//!   computed for, and the owner drops it at commit if the epoch is stale.
+//!   one `UiRuntime` lifetime; the raster side settles a frame by it.
 //! - [`SurfaceGeneration`] — bumped every time the raster surface is
 //!   (re)configured (resize, device-lost recovery); guards frames in flight
 //!   against a surface that no longer exists.
@@ -103,18 +102,15 @@ macro_rules! epoch_counters {
 epoch_counters! {
     /// A `UiRuntime`'s monotonic per-frame counter.
     ///
-    /// Minted by the runtime's scheduler; subsumes `Scene::frame_number`
-    /// (one fact, one place — `Scene` keeps its field for now but the
-    /// UI runtime protocol threads `FrameEpoch` instead). Meaningful only
-    /// within one `UiRuntime` lifetime: recreating a UI runtime creates a new
-    /// runtime with a new `FrameEpoch` sequence starting at
-    /// [`FrameEpoch::ZERO`] again, and channel identity (not epoch
-    /// comparison) is what keeps a stale runtime's results from being
-    /// mistaken for the new one's.
-    ///
-    /// A worker job carries the `FrameEpoch` it was issued under; at commit
-    /// (Idle drain) the owner applies the result only if that epoch is still
-    /// current, otherwise it is dropped with a trace event, never a panic.
+    /// The UI runtime mints the next one for each frame any of its
+    /// presentations hands a sink, so a frame that never reaches a sink takes
+    /// none, and the raster side settles a frame by the
+    /// [`FrameStamp`](crate::FrameStamp) that pairs it with the presentation's
+    /// address (ADR-0305 §4). Meaningful only within one `UiRuntime`
+    /// lifetime: recreating a UI runtime creates a new runtime with a new
+    /// sequence starting at [`FrameEpoch::ZERO`] again, and the address's
+    /// generational runtime id (not epoch comparison) is what keeps a stale
+    /// runtime's results from being mistaken for the new one's.
     pub struct FrameEpoch;
 
     /// Generation counter bumped on every raster surface (re)configure:
