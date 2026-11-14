@@ -238,7 +238,7 @@ pub struct WindowDelivery {
     /// it opens ([`Self::counting_frames`]).
     frames_run: Arc<AtomicU64>,
     /// Called on the owner thread after each run of the FIFO, one that
-    /// unwinds included ([`Self::after_each_run`]); runs no user code.
+    /// unwinds included (`after_each_run`); runs no user code.
     after_run: Option<fn()>,
     /// The answer of the close request asked with the FIFO idle
     /// ([`Self::dispatch_close_request`]), left by its delivery.
@@ -875,7 +875,7 @@ impl std::fmt::Debug for WindowDelivery {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
-/// Calls a window's [`WindowDelivery::after_each_run`] hook when a run of
+/// Calls a window's `WindowDelivery::after_each_run` hook when a run of
 /// its FIFO ends, by return or by unwinding.
 struct AfterRun(Option<fn()>);
 
