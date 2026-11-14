@@ -18,7 +18,7 @@ use flui_app::app::{AppConfig, Application, ExitPolicy, WindowPolicy};
 use flui_app::testing::HeadlessRun;
 use flui_native::HeadlessPlatform;
 use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
-use flui_view::navigation::LinkDeclarations;
+use flui_view::navigation::OpenDeclarations;
 use flui_widgets::prelude::*;
 use flui_widgets::{Router, SizedBox};
 
@@ -34,7 +34,7 @@ enum Page {
 type Built = Rc<RefCell<Vec<(&'static str, Page)>>>;
 
 /// The application declares its own scheme.
-const DECLARES: LinkDeclarations = LinkDeclarations::new().url_schemes(&["myapp"]);
+const DECLARES: OpenDeclarations = OpenDeclarations::new().url_schemes(&["myapp"]);
 
 /// The page each window opens on when no link names another.
 const INITIAL: Page = Page::Note { id: 9 };
@@ -231,12 +231,14 @@ fn opens(application: Application, url: &str) -> bool {
 }
 
 pub(crate) fn the_entry_functions_manifest_declares_what_a_run_opens() {
-    use flui_app::app::__entry::{LinkDeclarations, declare, join, joined_len};
+    use flui_app::app::__entry::{
+        FileTypeDeclaration, OpenDeclarations, declare, join, joined_len,
+    };
 
     // What `#[flui::main]` writes at the top of the function it marks for a
-    // manifest declaring `url-schemes = ["myapp"]`, and a scheme under each
-    // of two features: this test crate is compiled with `unstable-windows`
-    // and without `driver`.
+    // manifest declaring `url-schemes = ["myapp"]`, a `file-types` entry, and
+    // a scheme under each of two features: this test crate is compiled with
+    // `unstable-windows` and without `driver`.
     const URL_SCHEME_PARTS: &[&[&str]] = &[
         &["myapp"],
         {
@@ -252,8 +254,22 @@ pub(crate) fn the_entry_functions_manifest_declares_what_a_run_opens() {
             if cfg!(feature = "driver") { PART } else { &[] }
         },
     ];
-    const URL_SCHEMES: &[&str] = &join::<{ joined_len(URL_SCHEME_PARTS) }>(URL_SCHEME_PARTS);
-    let declared = declare(LinkDeclarations::new().url_schemes(URL_SCHEMES));
+    const URL_SCHEMES: &[&str] =
+        &join::<&str, { joined_len(URL_SCHEME_PARTS) }>(URL_SCHEME_PARTS, "");
+    const NOTE: FileTypeDeclaration =
+        FileTypeDeclaration::new("note", "application/x-myapp-note", "Note");
+    const FILE_TYPE_PARTS: &[&[FileTypeDeclaration]] = &[&[NOTE]];
+    const FILE_TYPES: &[FileTypeDeclaration] =
+        &join::<FileTypeDeclaration, { joined_len(FILE_TYPE_PARTS) }>(
+            FILE_TYPE_PARTS,
+            FileTypeDeclaration::new("", "", ""),
+        );
+    assert_eq!(FILE_TYPES, [NOTE], "the file types join as the schemes do");
+    let declared = declare(
+        OpenDeclarations::new()
+            .url_schemes(URL_SCHEMES)
+            .file_types(FILE_TYPES),
+    );
     assert!(
         opens(Application::new(), "myapp:///note/3"),
         "a run the entry starts opens what its manifest declares"
@@ -266,7 +282,7 @@ pub(crate) fn the_entry_functions_manifest_declares_what_a_run_opens() {
         (cfg!(feature = "unstable-windows"), cfg!(feature = "driver")),
         "a feature's scheme counts only when the crate is compiled with the feature"
     );
-    let own = LinkDeclarations::new().url_schemes(&["other"]);
+    let own = OpenDeclarations::new().url_schemes(&["other"]);
     assert!(
         !opens(Application::new().declares(own), "myapp:///note/3"),
         "an application's own declarations replace the manifest's"

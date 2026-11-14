@@ -63,6 +63,17 @@ associations or single instance»; строка `deep-links-url-schemes-file-ass
   стека `Router` проверяется через `HeadlessHost` и headless-платформу. Запуски на устройствах
   становятся строками `platform-parity.toml`.
 
+- **R11. Адрес приходит только из объявленного.** В релизной сборке адрес активации приходит только
+  через то, что объявляет манифест (`[package.metadata.flui.declares]`): intent-фильтры, URL-схемы,
+  app links и universal links. Произвольный extra Intent адресом не становится. Ни точка входа, ни
+  отладочные значения рантайма или движка (значения запуска агента: `flui.agent.endpoint`,
+  `flui.agent.token`, `flui.agent.exit_on_disconnect`) не читаются из Intent, окружения или
+  аргументов процесса. Их читает только сборка, в которой есть агент драйвера (`cfg(driver_agent)`:
+  отладочная сборка или фича `driver`), и это видно в типе сборки. Тест показывает, что сборка без
+  агента их не читает. Так FLUI закрывает дыру, которую Flutter 3.50 закрыл для extras `route`,
+  `dart_entrypoint`, `cached_engine_id` и `--dart-flags`
+  ([breaking change](https://docs.flutter.dev/release/breaking-changes/stricter-android-entrypoint-intent-verification)).
+
 ## Вне объёма
 
 - История браузера (`pushState`/`popstate`) и fragment в `RoutePath`: это отдельная фича
@@ -73,6 +84,6 @@ associations or single instance»; строка `deep-links-url-schemes-file-ass
 
 ## Ворота закрытия
 
-Спека закрывается, когда задачи AC1–AC12 на `main`; строка `deep-links-url-schemes-file-associations`
+Спека закрывается, когда задачи AC1–AC13 на `main`; строка `deep-links-url-schemes-file-associations`
 и строка `single-instance-forward-arguments` в parity показывают построенное, где оно запускалось, а запуски,
 которые ещё нужны на устройствах, стоят в строках parity, а не в спеке.

@@ -211,5 +211,5 @@ file-types = [{ extension = "note", mime = "application/x-myapp-note", name = "N
   ADR-0307 §2. Задачи переписывают разделы: ADR-0330 §1 (query, AC1) и §5 (начальный адрес, AC3),
   ADR-0254 §4 (один экземпляр, AC10).
 - **О5.** `#[flui::main]` читает `[package.metadata.flui.declares]` при компиляции; приложение
-  без него передаёт `Application::declares(LinkDeclarations::new().url_schemes(&[…]))`, и эти
+  без него передаёт `Application::declares(OpenDeclarations::new().url_schemes(&[…]))`, и эти
   объявления заменяют манифест.

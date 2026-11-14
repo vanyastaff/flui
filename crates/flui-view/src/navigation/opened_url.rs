@@ -199,27 +199,76 @@ fn port_of(authority: &str) -> Result<Option<u16>, ()> {
     port.parse::<u16>().map(Some).map_err(|_| ())
 }
 
-/// The URLs an application declares it opens: its own schemes and the web
-/// domains it is associated with, as `[package.metadata.flui.declares]`
-/// lists them under `url-schemes` and `associated-domains` (ADR-0307).
+/// What an application declares it opens: its own URL schemes, the web
+/// domains it is associated with and the file types it opens, as
+/// `[package.metadata.flui.declares]` lists them under `url-schemes`,
+/// `associated-domains` and `file-types` (ADR-0307).
 ///
 /// The platform hands an application only the URLs it registered for, but a
 /// command line or a second instance can carry any text, so the UI runtime
-/// admits an opened URL only through this list. Empty by default: an
-/// application that declares nothing opens no URL.
+/// admits an opened URL only through this list. A host that registers the
+/// application with the system as it runs (an unpackaged Windows build)
+/// registers what it lists, and an application that declares a scheme or a
+/// file type runs as one instance. Empty by default: an application that
+/// declares nothing opens no URL.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct LinkDeclarations {
+pub struct OpenDeclarations {
     url_schemes: &'static [&'static str],
     associated_domains: &'static [&'static str],
+    file_types: &'static [FileTypeDeclaration],
 }
 
-impl LinkDeclarations {
-    /// No scheme and no domain.
+/// One file type an application opens: the `file-types` entry of
+/// `[package.metadata.flui.declares]` (ADR-0307 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileTypeDeclaration {
+    extension: &'static str,
+    mime: &'static str,
+    name: &'static str,
+}
+
+impl FileTypeDeclaration {
+    /// The type of files named `*.extension` (without its `.`, such as
+    /// `note`), whose MIME type is `mime` (`application/x-notes-note`) and
+    /// which the system names `name` (`Note`). `flui build` checks the
+    /// manifest's values before a platform carries them; a host that writes
+    /// one itself checks it again.
+    #[must_use]
+    pub const fn new(extension: &'static str, mime: &'static str, name: &'static str) -> Self {
+        Self {
+            extension,
+            mime,
+            name,
+        }
+    }
+
+    /// The extension, without its `.`.
+    #[must_use]
+    pub const fn extension(&self) -> &'static str {
+        self.extension
+    }
+
+    /// The MIME type.
+    #[must_use]
+    pub const fn mime(&self) -> &'static str {
+        self.mime
+    }
+
+    /// The name the system shows for the type.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
+impl OpenDeclarations {
+    /// No scheme, no domain and no file type.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             url_schemes: &[],
             associated_domains: &[],
+            file_types: &[],
         }
     }
 
@@ -243,6 +292,20 @@ impl LinkDeclarations {
             associated_domains,
             ..self
         }
+    }
+
+    /// The file types the application opens. An opened file reaches the
+    /// application whatever its type (`Application::on_open_files` hears
+    /// every one); these are the types the system offers to open with it.
+    #[must_use]
+    pub const fn file_types(self, file_types: &'static [FileTypeDeclaration]) -> Self {
+        Self { file_types, ..self }
+    }
+
+    /// The file types [`file_types`](Self::file_types) declared.
+    #[must_use]
+    pub const fn declared_file_types(&self) -> &'static [FileTypeDeclaration] {
+        self.file_types
     }
 
     /// The URL schemes [`url_schemes`](Self::url_schemes) declared.
@@ -308,14 +371,14 @@ pub enum OpenUrlRefused {
     #[error("the URL's path is not a route location: {0}")]
     Path(RouteParseError),
     /// The scheme is not one of the application's
-    /// [`url_schemes`](LinkDeclarations::url_schemes).
+    /// [`url_schemes`](OpenDeclarations::url_schemes).
     #[error("the application declares no URL scheme {scheme:?}")]
     UndeclaredScheme {
         /// The scheme, in lower case.
         scheme: String,
     },
     /// A web URL whose host is not one of the application's
-    /// [`associated_domains`](LinkDeclarations::associated_domains).
+    /// [`associated_domains`](OpenDeclarations::associated_domains).
     #[error("the application declares no associated domain {host:?}")]
     UndeclaredDomain {
         /// The host, in lower case, or `None` for a web URL with none.

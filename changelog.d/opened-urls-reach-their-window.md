@@ -1,6 +1,6 @@
 ### Added
 
-- `Application::declares(LinkDeclarations)` names the URL schemes and web domains an application
+- `Application::declares(OpenDeclarations)` names the URL schemes and web domains an application
   opens, and `Application::on_open_files` hears the files the operating system opens it with.
 - A URL the operating system opens the application with reaches the `Router` of its window: the
   window it was addressed to, else the one focused last, else the first. A link that launched the

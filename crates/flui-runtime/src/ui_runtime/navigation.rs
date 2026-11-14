@@ -2,7 +2,7 @@
 
 use flui_foundation::PresentationId;
 use flui_view::navigation::{
-    LinkDeclarations, NavigationIntent, NavigationRefused, OpenUrlRefused, OpenedUrl,
+    NavigationIntent, NavigationRefused, OpenDeclarations, OpenUrlRefused, OpenedUrl,
 };
 
 use super::UiRuntime;
@@ -40,7 +40,7 @@ impl UiRuntime {
     /// Open `url`, a URL the platform opened for presentation
     /// `presentation`, as Flutter's engine hands a deep link to its Router:
     /// the URL is split ([`OpenedUrl::parse`]), admitted by the application's
-    /// [`LinkDeclarations`], and its path is applied as a
+    /// [`OpenDeclarations`], and its path is applied as a
     /// [`NavigationOp::Go`](flui_view::navigation::NavigationOp::Go), so the
     /// pages it shares with the current stack stay. A URL that arrives before
     /// the presentation's first frame, when no `Router` has mounted yet,
@@ -63,7 +63,7 @@ impl UiRuntime {
             .as_ref()
             .is_some_and(|origin| origin.same_origin(&url));
         if !on_the_page {
-            self.link_declarations.get().admit(&url)?;
+            self.open_declarations.get().admit(&url)?;
         }
         let slot = self
             .presentations
@@ -78,8 +78,8 @@ impl UiRuntime {
     /// [`open_url`](Self::open_url) admits from then on. The runner sets
     /// them from the application's `[package.metadata.flui.declares]`
     /// before the platform delivers the first URL.
-    pub fn set_link_declarations(&self, declarations: LinkDeclarations) {
-        self.link_declarations.set(declarations);
+    pub fn set_open_declarations(&self, declarations: OpenDeclarations) {
+        self.open_declarations.set(declarations);
     }
 
     /// Admit, from then on, the URLs of `origin`, the page the application
