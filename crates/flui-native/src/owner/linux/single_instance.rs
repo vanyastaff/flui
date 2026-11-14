@@ -170,6 +170,8 @@ mod bus {
     use std::sync::{Arc, Weak};
     use std::time::Duration;
 
+    use futures_util::StreamExt as _;
+    use futures_util::stream::FuturesUnordered;
     use parking_lot::Mutex;
     use tokio::sync::oneshot;
     use zbus::fdo::{RequestNameFlags, RequestNameReply};
@@ -182,6 +184,11 @@ mod bus {
 
     /// The D-Bus interface a first instance serves.
     const INTERFACE: &str = "org.freedesktop.Application";
+    /// The interface every D-Bus peer answers.
+    const PEER: &str = "org.freedesktop.DBus.Peer";
+    /// The most calls read off the bus that wait to be served; the bus
+    /// connection holds a later one until there is room.
+    const MAX_READ: usize = 64;
 
     /// The most launches that wait for the owner at once; a later one is
     /// refused, and its process runs as an instance of its own.
@@ -299,20 +306,19 @@ mod bus {
                 .collect()
         }
 
-        /// Wait until the owner takes the launch [`post`](Self::post) queued,
-        /// at most the inbox's hold; past it the launch is withdrawn and
-        /// refused, so its process runs on its own and the owner never takes
-        /// it.
+        /// Wait until the owner takes the launch whose `answer`
+        /// [`post`](Self::post) returned, at most the inbox's hold; past it
+        /// the launch is withdrawn and refused, so its process runs on its
+        /// own and the owner never takes it.
         ///
         /// # Errors
         ///
-        /// `post`'s refusal, `Failed` when the owner ended before taking the
-        /// launch or held it past the hold.
+        /// `Failed` when the owner ended before taking the launch or held it
+        /// past the hold.
         pub(super) async fn answer(
             &self,
-            posted: zbus::fdo::Result<oneshot::Receiver<()>>,
+            mut answer: oneshot::Receiver<()>,
         ) -> zbus::fdo::Result<()> {
-            let mut answer = posted?;
             let ended = || {
                 zbus::fdo::Error::Failed(
                     "the running instance ended before it took the launch".to_owned(),
@@ -367,57 +373,149 @@ mod bus {
         }
     }
 
-    /// `org.freedesktop.Application` as a first instance serves it.
-    struct Application(Arc<Inbox>);
+    /// What a call to the first instance asks of it.
+    enum Asked {
+        /// Answer at once, with no value.
+        Nothing,
+        /// Answer once the owner takes the launch the call posted.
+        Launch(oneshot::Receiver<()>),
+    }
 
-    #[zbus::interface(name = "org.freedesktop.Application")]
-    impl Application {
-        /// The application was launched again with nothing to open: its
-        /// window comes forward. Answered once the owner takes the launch.
-        async fn activate(
-            &self,
-            platform_data: HashMap<String, OwnedValue>,
-        ) -> zbus::fdo::Result<()> {
-            self.0
-                .answer(self.0.post(Forwarded {
+    /// Serve `org.freedesktop.Application` at `path` from `calls` until the
+    /// task is aborted, with the first instance.
+    ///
+    /// The calls are read off the connection's stream and answered by hand,
+    /// not by the bus library's object server: one interface of three
+    /// methods does not pay for the server's introspection, properties and
+    /// dispatch in every application's binary.
+    async fn serve(
+        connection: zbus::Connection,
+        path: String,
+        inbox: Arc<Inbox>,
+        mut calls: zbus::MessageStream,
+    ) {
+        // A launch is posted as its call is read, so launches are queued in
+        // the order they came; only the wait for the owner runs alongside.
+        let mut answering = FuturesUnordered::new();
+        loop {
+            tokio::select! {
+                Some(()) = answering.next(), if !answering.is_empty() => {}
+                call = calls.next() => match call {
+                    Some(Ok(call)) => {
+                        let asked = ask(&inbox, &path, &call);
+                        answering.push(respond(
+                            connection.clone(),
+                            Arc::clone(&inbox),
+                            call,
+                            asked,
+                        ));
+                    }
+                    Some(Err(error)) => {
+                        tracing::debug!(%error, "an unreadable call to the running instance");
+                    }
+                    None => return,
+                },
+            }
+        }
+    }
+
+    /// What `call` asks: a launch is posted to `inbox` now. A call to
+    /// another object, interface or method, or with arguments of another
+    /// signature, is refused as D-Bus names the refusal.
+    fn ask(inbox: &Inbox, path: &str, call: &zbus::Message) -> zbus::fdo::Result<Asked> {
+        use zbus::fdo::Error;
+
+        let header = call.header();
+        let member = header.member().map_or("", |member| member.as_str());
+        let interface = header.interface().map(zbus::names::InterfaceName::as_str);
+        // Every object answers `Ping`, as D-Bus asks of each peer.
+        if interface == Some(PEER) && member == "Ping" {
+            return Ok(Asked::Nothing);
+        }
+        if header.path().map(zbus::ObjectPath::as_str) != Some(path) {
+            return Err(Error::UnknownObject(format!(
+                "no object at {:?}",
+                header.path()
+            )));
+        }
+        if interface.is_some_and(|interface| interface != INTERFACE) {
+            return Err(Error::UnknownInterface(format!(
+                "{interface:?} is not served here"
+            )));
+        }
+        let invalid = |error: zbus::Error| Error::InvalidArgs(error.to_string());
+        let body = call.body();
+        let forwarded = match member {
+            "Activate" => {
+                let (platform_data,) = body
+                    .deserialize::<(HashMap<String, OwnedValue>,)>()
+                    .map_err(invalid)?;
+                Forwarded {
                     uris: Vec::new(),
                     token: token(&platform_data),
-                }))
-                .await
-        }
+                }
+            }
+            "Open" => {
+                let (uris, platform_data) = body
+                    .deserialize::<(Vec<String>, HashMap<String, OwnedValue>)>()
+                    .map_err(invalid)?;
+                Forwarded {
+                    uris: uris
+                        .into_iter()
+                        .take(flui_platform::MAX_OPENED_ITEMS)
+                        .filter(|uri| uri.len() <= Forwarded::MAX_URI_LEN)
+                        .collect(),
+                    token: token(&platform_data),
+                }
+            }
+            // An action of the application's: FLUI declares none, so the
+            // call only brings its window forward.
+            "ActivateAction" => {
+                let (_action, _parameter, platform_data) = body
+                    .deserialize::<(String, Vec<OwnedValue>, HashMap<String, OwnedValue>)>()
+                    .map_err(invalid)?;
+                Forwarded {
+                    uris: Vec::new(),
+                    token: token(&platform_data),
+                }
+            }
+            _ => {
+                return Err(Error::UnknownMethod(format!(
+                    "{member:?} is not a method of {INTERFACE}"
+                )));
+            }
+        };
+        inbox.post(forwarded).map(Asked::Launch)
+    }
 
-        /// The application was launched again with `uris`. Answered once
-        /// the owner takes the launch.
-        async fn open(
-            &self,
-            uris: Vec<String>,
-            platform_data: HashMap<String, OwnedValue>,
-        ) -> zbus::fdo::Result<()> {
-            self.0
-                .answer(
-                    self.0.post(Forwarded {
-                        uris: uris
-                            .into_iter()
-                            .take(flui_platform::MAX_OPENED_ITEMS)
-                            .filter(|uri| uri.len() <= Forwarded::MAX_URI_LEN)
-                            .collect(),
-                        token: token(&platform_data),
-                    }),
-                )
-                .await
+    /// Answer `call` with what it `asked` once that is known: a launch once
+    /// the owner took it or the inbox handed it back. A call that expects no
+    /// answer gets none.
+    async fn respond(
+        connection: zbus::Connection,
+        inbox: Arc<Inbox>,
+        call: zbus::Message,
+        asked: zbus::fdo::Result<Asked>,
+    ) {
+        let answered = match asked {
+            Ok(Asked::Launch(taken)) => inbox.answer(taken).await,
+            Ok(Asked::Nothing) => Ok(()),
+            Err(refused) => Err(refused),
+        };
+        let header = call.header();
+        if header
+            .primary()
+            .flags()
+            .contains(zbus::message::Flags::NO_REPLY_EXPECTED)
+        {
+            return;
         }
-
-        /// An action of the application's: FLUI declares none, so the call
-        /// only brings its window forward.
-        async fn activate_action(
-            &self,
-            action: String,
-            parameter: Vec<OwnedValue>,
-            platform_data: HashMap<String, OwnedValue>,
-        ) -> zbus::fdo::Result<()> {
-            // The action and its parameter name nothing FLUI declares.
-            drop((action, parameter));
-            self.activate(platform_data).await
+        let sent = match answered {
+            Ok(()) => connection.reply(&header, &()).await,
+            Err(refused) => connection.reply_dbus_error(&header, refused).await,
+        };
+        if let Err(error) = sent {
+            tracing::debug!(%error, "a later launch was not answered: its caller left");
         }
     }
 
@@ -438,7 +536,9 @@ mod bus {
 
     /// The first instance: it owns the name while it lives.
     pub(crate) struct FirstInstance {
-        _connection: zbus::Connection,
+        /// The task that serves the calls, which holds the connection: the
+        /// name goes when it ends.
+        serving: tokio::task::JoinHandle<()>,
         inbox: Arc<Inbox>,
     }
 
@@ -453,14 +553,18 @@ mod bus {
         /// refused to its caller, which runs as an instance of its own, and
         /// the name goes with the connection.
         fn drop(&mut self) {
+            // First, so a subscriber that panics below cannot keep the name:
+            // a caller still waiting hears that the instance left the bus.
+            self.serving.abort();
             let left = std::mem::take(&mut *self.inbox.queue.lock());
-            if !left.is_empty() {
+            let count = left.len();
+            drop(left);
+            if count > 0 {
                 tracing::warn!(
-                    launches = left.len(),
+                    launches = count,
                     "the instance ends with forwarded launches it never took; they are refused"
                 );
             }
-            drop(left);
         }
     }
 
@@ -492,31 +596,36 @@ mod bus {
     ///
     /// # Errors
     ///
-    /// The bus error, when there is no session bus or the call fails: the
-    /// caller then starts as an instance of its own, so the launch is not
-    /// lost.
+    /// The bus error, when there is no session bus, it does not answer in
+    /// time or the call fails: the caller then starts as an instance of its
+    /// own, so the launch is not lost.
     pub(crate) fn claim(
         executor: &NativeExecutor,
         address: Option<&str>,
         bus_name: &str,
         launch: Forwarded,
     ) -> zbus::Result<Claim> {
-        let runtime = executor.handle();
-        let claimed = async {
-            tokio::time::timeout(
-                CONNECT_TIMEOUT + FORWARD_TIMEOUT,
-                claim_on(address, bus_name, launch),
-            )
-            .await
-            .map_err(|_| zbus::Error::Failure("the session bus did not answer in time".into()))?
-        };
-        // The caller may itself be inside the runtime's asynchronous context
-        // (a `#[tokio::main]` entry that lends its runtime), where
-        // `Handle::block_on` panics: the claim waits on a thread of its own.
+        let host = executor.handle();
+        // The claim waits on a thread and a runtime of its own, not on the
+        // host's: the caller may be inside the host's runtime (a
+        // `#[tokio::main]` entry that lends it), where `Handle::block_on`
+        // panics, and a current-thread runtime whose one thread is the caller
+        // runs no timer while that thread waits here. The first instance
+        // then serves on the host's runtime.
         std::thread::scope(|scope| {
             let waiting = std::thread::Builder::new()
                 .name("flui-single-instance".into())
-                .spawn_scoped(scope, || runtime.block_on(claimed))
+                .spawn_scoped(scope, || {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build()
+                        .map_err(|error| {
+                            zbus::Error::Failure(format!(
+                                "no runtime to claim the bus name on: {error}"
+                            ))
+                        })?
+                        .block_on(claim_on(&host, address, bus_name, launch))
+                })
                 .map_err(|error| {
                     zbus::Error::Failure(format!("no thread to claim the bus name on: {error}"))
                 })?;
@@ -526,34 +635,56 @@ mod bus {
         })
     }
 
+    /// The error of a bus that did not answer within its time.
+    fn late(_: tokio::time::error::Elapsed) -> zbus::Error {
+        zbus::Error::Failure("the session bus did not answer in time".into())
+    }
+
     async fn claim_on(
+        host: &tokio::runtime::Handle,
         address: Option<&str>,
         bus_name: &str,
         launch: Forwarded,
     ) -> zbus::Result<Claim> {
-        let builder = match address {
-            Some(address) => zbus::connection::Builder::address(address),
-            None => zbus::connection::Builder::session(),
-        };
-        let inbox = Arc::new(Inbox::new(HOLD, tokio::runtime::Handle::current()));
         let path = object_path(bus_name);
-        let connection = builder
-            .serve_at(path.as_str(), Application(Arc::clone(&inbox)))
-            .build()
+        let (connection, calls, reply) = tokio::time::timeout(CONNECT_TIMEOUT, async {
+            let builder = match address {
+                Some(address) => zbus::connection::Builder::address(address),
+                None => zbus::connection::Builder::session(),
+            };
+            let connection = builder.build().await?;
+            // Listening before the name is owned: a call can come the moment
+            // it is.
+            let calls = zbus::MessageStream::for_match_rule(
+                zbus::MatchRule::builder()
+                    .msg_type(zbus::message::Type::MethodCall)
+                    .build()?,
+                &connection,
+                std::num::NonZeroUsize::new(MAX_READ),
+            )
             .await?;
-        let reply = connection
-            .request_name_with_flags(bus_name, RequestNameFlags::DO_NOT_QUEUE)
-            .await;
+            let reply = connection
+                .request_name_with_flags(bus_name, RequestNameFlags::DO_NOT_QUEUE)
+                .await;
+            zbus::Result::Ok((connection, calls, reply))
+        })
+        .await
+        .map_err(late)??;
         match reply {
             Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {
-                Ok(Claim::First(FirstInstance {
-                    _connection: connection,
-                    inbox,
-                }))
+                let inbox = Arc::new(Inbox::new(HOLD, host.clone()));
+                let serving = host.spawn(serve(connection, path, Arc::clone(&inbox), calls));
+                Ok(Claim::First(FirstInstance { serving, inbox }))
             }
             Ok(RequestNameReply::Exists | RequestNameReply::InQueue)
             | Err(zbus::Error::NameTaken) => {
-                forward(&connection, bus_name, &path, launch).await?;
+                drop(calls);
+                tokio::time::timeout(
+                    FORWARD_TIMEOUT,
+                    forward(&connection, bus_name, &path, launch),
+                )
+                .await
+                .map_err(late)??;
                 Ok(Claim::Forwarded)
             }
             Err(error) => Err(error),
@@ -877,6 +1008,64 @@ mod bus_tests {
         }
     }
 
+    /// The first instance answers every call D-Bus can send it: a peer's
+    /// `Ping`, and a refusal named as D-Bus names it for a call to another
+    /// object, interface or method, or one whose arguments have another
+    /// signature, so no caller waits for an answer that never comes.
+    #[test]
+    fn calls_the_first_instance_does_not_serve_are_refused_by_name() {
+        let Some(bus) = PrivateBus::start() else {
+            eprintln!("skipped: no dbus-daemon");
+            return;
+        };
+        let executor = NativeExecutor::own();
+        let address = bus.address.as_str();
+        let Claim::First(_first) =
+            claim(&executor, Some(address), NAME, launch(&[], None)).expect("the bus answers")
+        else {
+            panic!("the first launch owns the name");
+        };
+        let path = super::object_path(NAME);
+        let answers: Vec<Result<(), String>> = executor.handle().block_on(async {
+            let caller = zbus::connection::Builder::address(address)
+                .build()
+                .await
+                .expect("a caller connects");
+            let calls: [(&str, &str, &str); 5] = [
+                (path.as_str(), "org.freedesktop.DBus.Peer", "Ping"),
+                ("/elsewhere", "org.freedesktop.Application", "Activate"),
+                (path.as_str(), "org.example.Other", "Activate"),
+                (path.as_str(), "org.freedesktop.Application", "Quit"),
+                (path.as_str(), "org.freedesktop.Application", "Open"),
+            ];
+            let mut answers = Vec::new();
+            for (object, interface, method) in calls {
+                let answer = caller
+                    .call_method(Some(NAME), object, Some(interface), method, &("one",))
+                    .await;
+                answers.push(match answer {
+                    // `Ping` takes no argument, and a peer ignores the body.
+                    Ok(_) => Ok(()),
+                    Err(zbus::Error::FDO(refused)) => {
+                        Err(zbus::DBusError::name(&*refused).as_str().to_owned())
+                    }
+                    Err(other) => Err(format!("not a refusal: {other}")),
+                });
+            }
+            answers
+        });
+        assert_eq!(
+            answers,
+            [
+                Ok(()),
+                Err("org.freedesktop.DBus.Error.UnknownObject".to_owned()),
+                Err("org.freedesktop.DBus.Error.UnknownInterface".to_owned()),
+                Err("org.freedesktop.DBus.Error.UnknownMethod".to_owned()),
+                Err("org.freedesktop.DBus.Error.InvalidArgs".to_owned()),
+            ]
+        );
+    }
+
     /// An application whose entry runs inside the runtime it lends the host
     /// (`#[tokio::main]`) claims its name from that runtime's asynchronous
     /// context, where `Handle::block_on` panics: the claim waits on a thread
@@ -900,6 +1089,39 @@ mod bus_tests {
         assert!(
             matches!(claimed, Ok(Claim::First(_))),
             "the first launch owns the name"
+        );
+    }
+
+    /// A claim made inside a current-thread runtime the application lends
+    /// the host, against a bus that takes the connection and never answers,
+    /// gives up in time, so the application starts on its own: the claim's
+    /// timer runs on a runtime of its own, while the lent runtime's one
+    /// thread waits for the claim.
+    #[test]
+    fn a_claim_on_a_silent_bus_gives_up_inside_a_current_thread_runtime() {
+        let dir = tempfile::tempdir().expect("a directory for the socket");
+        let socket = dir.path().join("bus");
+        // Connections wait in the backlog: connected, never answered.
+        let _silent = std::os::unix::net::UnixListener::bind(&socket).expect("a socket");
+        let address = format!("unix:path={}", socket.display());
+        let (answered, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime");
+            let refused = runtime.block_on(async {
+                let executor = NativeExecutor::from_tokio(tokio::runtime::Handle::current());
+                claim(&executor, Some(&address), NAME, launch(&[], None)).is_err()
+            });
+            answered
+                .send(refused)
+                .expect("the test waits for the answer");
+        });
+        assert_eq!(
+            answer.recv_timeout(Duration::from_secs(10)),
+            Ok(true),
+            "the claim gives up on a silent bus"
         );
     }
 
@@ -939,14 +1161,15 @@ mod bus_tests {
     fn a_launch_held_past_the_hold_is_handed_back_once() {
         let runtime = timers();
         let inbox = super::bus::Inbox::new(Duration::from_millis(20), runtime.handle().clone());
-        let handed_back = runtime.block_on(inbox.answer(inbox.post(launch(&["flui:a"], None))));
+        let posted = inbox.post(launch(&["flui:a"], None)).expect("room to wait");
+        let handed_back = runtime.block_on(inbox.answer(posted));
         assert!(handed_back.is_err(), "the caller hears the refusal");
         assert!(
             inbox.take().is_empty(),
             "a launch handed back is not delivered as well"
         );
 
-        let posted = inbox.post(launch(&["flui:b"], None));
+        let posted = inbox.post(launch(&["flui:b"], None)).expect("room to wait");
         assert_eq!(inbox.take().len(), 1);
         assert_eq!(runtime.block_on(inbox.answer(posted)), Ok(()));
     }

@@ -426,8 +426,7 @@ rustix = { workspace = true, optional = true, features = ["time", "fs", "pipe"] 
 # has no `cursor-shape`.
 wayland-cursor = { version = "0.31", optional = true }
 accesskit_unix = { version = "0.24", optional = true }
-# `service`: the `org.freedesktop.Application` a first instance serves.
-zbus = { workspace = true, optional = true, features = ["service"] }
+zbus = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 # `net`: the readiness of the XIM client's X connection (`AsyncFd`).
 tokio = { workspace = true, features = ["macros", "net"] }
