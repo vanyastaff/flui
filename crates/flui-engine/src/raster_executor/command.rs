@@ -366,11 +366,12 @@ pub enum ExecutorHealth {
     /// [`RasterVerdict::Failed`], and every send answers
     /// [`RasterSendError::Gone`].
     ShutDown,
-    /// Its raster thread did not answer within [`DETACH_DEADLINE`]: every
-    /// send answers [`RasterSendError::Gone`], and the owner settles every
-    /// frame still pending [`RasterVerdict::Failed`], since the thread no
-    /// longer can. Terminal for the application's rendering: the wedged
-    /// thread still holds the context (ADR-0305 §9).
+    /// Its raster thread did not answer within [`DETACH_DEADLINE`], or ended
+    /// without an executor: every send answers [`RasterSendError::Gone`], and
+    /// the owner's sender settles every frame still pending in an inbox
+    /// [`RasterVerdict::Failed`] at its next drain, since the thread no longer
+    /// can. Terminal for the application's rendering: the wedged thread still
+    /// holds the context (ADR-0305 §9).
     Died,
 }
 

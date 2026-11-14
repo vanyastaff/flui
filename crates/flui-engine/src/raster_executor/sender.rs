@@ -11,7 +11,9 @@ use std::{
 };
 
 use crossbeam_channel::{Sender, TrySendError};
-use flui_foundation::{SurfaceGeneration, geometry::DeviceSize, memory::MemoryPressureLevel};
+use flui_foundation::{
+    SurfaceGeneration, geometry::DeviceSize, memory::MemoryPressureLevel, panic::FirstPanic,
+};
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use web_time::Instant;
 
@@ -113,6 +115,15 @@ pub(crate) struct Shared {
     /// Why the raster thread stopped serving or a turn of it failed, until
     /// the owner takes it.
     failure: Mutex<Option<ExecutorFailure>>,
+    /// Why the executor died, once it did: kept for every later wait.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    death: std::sync::OnceLock<ExecutorFailure>,
 }
 
 const RUNNING: u8 = 0;
@@ -152,6 +163,7 @@ impl Shared {
             depth,
             doorbell,
             failure: Mutex::new(None),
+            death: std::sync::OnceLock::new(),
         }
     }
 
@@ -242,12 +254,21 @@ impl Shared {
         self.failure.lock().take()
     }
 
-    /// The raster thread is wedged past its deadline: every send answers
-    /// `Gone` from now on, whatever the thread does next (ADR-0305 §9).
+    /// The raster thread is wedged past its deadline, or ended without an
+    /// executor: every send answers `Gone` from now on, whatever the thread
+    /// does next (ADR-0305 §9). The first cause is kept.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn die(&self, failure: ExecutorFailure) {
         self.health.store(DIED, Ordering::SeqCst);
-        self.hold_failure(failure);
+        if self.death.set(failure.clone()).is_ok() {
+            self.hold_failure(failure);
+        }
+    }
+
+    /// Why the executor died; `None` while it has not.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn death(&self) -> Option<ExecutorFailure> {
+        self.death.get().cloned()
     }
 
     /// Stop taking lifecycle commands. Returns once every send that saw the
@@ -366,6 +387,8 @@ struct OwnerSlot {
 struct OwnerSlots {
     mint: SlotMint,
     entries: Vec<Option<OwnerSlot>>,
+    /// The frames pending when the executor died were settled.
+    settled_after_death: bool,
 }
 
 impl OwnerSlots {
@@ -530,6 +553,9 @@ impl RasterSender {
     /// Move `slot`'s undrained settlements, oldest first, into `into`, and
     /// answer how many moved.
     pub fn drain_settlements(&self, slot: SlotId, into: &mut Vec<SlotSettlement>) -> usize {
+        if self.shared.health() == ExecutorHealth::Died {
+            self.settle_after_death();
+        }
         let Some(inbox) = self.inbox(slot) else {
             return 0;
         };
@@ -549,6 +575,50 @@ impl RasterSender {
     pub fn take_failure(&self, slot: SlotId) -> Option<SlotFailure> {
         let inbox = self.inbox(slot)?;
         inbox.lock().failure.take()
+    }
+
+    /// The executor died: settle every frame still pending in an inbox
+    /// [`RasterVerdict::Failed`](super::RasterVerdict::Failed), since the
+    /// thread no longer can (ADR-0305 §9). Once; the frames are dropped with
+    /// no lock held. A slot keeps its phase: the wedged thread may still hold
+    /// its surface, so the owner keeps the window. A frame the wedged render
+    /// holds settles only if that render returns.
+    fn settle_after_death(&self) {
+        let inboxes: Vec<Arc<SlotInbox>> = {
+            let mut slots = self.slots.borrow_mut();
+            if std::mem::replace(&mut slots.settled_after_death, true) {
+                return;
+            }
+            slots
+                .entries
+                .iter()
+                .flatten()
+                .map(|owned| Arc::clone(&owned.inbox))
+                .collect()
+        };
+        let mut first = FirstPanic::new();
+        for inbox in inboxes {
+            let frame = {
+                let mut state = inbox.lock();
+                let frame = state.frame.take();
+                if let Some(frame) = frame.as_ref() {
+                    state.settle(frame, super::RasterVerdict::Failed);
+                }
+                frame
+            };
+            // A scene's destructor can be user code.
+            first.contain(move || drop(frame));
+        }
+        first.resume();
+    }
+
+    /// Whether the owner sent `slot`'s detach.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn detach_sent(&self, slot: SlotId) -> bool {
+        self.slots
+            .borrow()
+            .live(slot)
+            .is_some_and(|owned| owned.detaching)
     }
 
     fn inbox(&self, slot: SlotId) -> Option<Arc<SlotInbox>> {

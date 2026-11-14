@@ -11,9 +11,10 @@ use std::{
 };
 
 use flui_engine::{
-    DETACH_DEADLINE, ExecutorFailure, ExecutorHandle, ExecutorHealth, RasterCommand,
-    RasterExecutor, RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotConfig, SlotId,
-    SlotPhase, SlotSettlement, SlotTarget, testing::ScriptedSlots,
+    DETACH_DEADLINE, DeviceHealth, EngineError, ExecutorFailure, ExecutorHandle, ExecutorHealth,
+    RasterCommand, RasterExecutor, RasterSendError, RasterSender, RasterVerdict, SendReceipt,
+    SlotConfig, SlotId, SlotPhase, SlotSettlement, SlotTarget,
+    testing::{ScriptedAnswer, ScriptedSlots, SlotCall},
 };
 use flui_foundation::{
     FrameEpoch, FrameStamp, ManualClock, PresentationAddress, PresentationId, SurfaceGeneration,
@@ -175,37 +176,92 @@ fn a_send_wakes_the_raster_thread_and_its_frame_settles_for_the_owner() {
 }
 
 /// A slot on the raster thread holds two settlements undrained, so one frame
-/// presents while the owner builds the next (ADR-0305 §5).
+/// presents while the owner builds the next (ADR-0305 §5); a third waits for
+/// the owner's drain, which wakes the thread to render it.
 ///
 /// Red-check: at the inline depth the second frame waits for a drain that
-/// never comes.
+/// never comes; without the ring in `drain_settlements` the third frame waits
+/// for a send that never comes.
 #[test]
 fn a_raster_thread_slot_renders_two_frames_before_the_owner_drains() {
     let thread = spawn();
     let at = attach(&thread.sender);
+    let undrained = |count: usize| {
+        thread
+            .sender
+            .record(at.slot)
+            .is_some_and(|record| record.undrained == count)
+    };
     thread.sender.send(frame(at, 1)).expect("accepted");
-    eventually("rendered the first frame", || {
-        thread
-            .sender
-            .record(at.slot)
-            .is_some_and(|record| record.undrained == 1)
-    });
+    eventually("rendered the first frame", || undrained(1));
     thread.sender.send(frame(at, 2)).expect("accepted");
-    eventually("rendered the second frame undrained", || {
-        thread
-            .sender
-            .record(at.slot)
-            .is_some_and(|record| record.undrained == 2)
+    eventually("rendered the second frame undrained", || undrained(2));
+    thread.sender.send(frame(at, 3)).expect("accepted");
+    // Time for the thread to turn on the third frame's ring and hold the
+    // frame behind the full ring, so the drain's ring is the only one left.
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        thread.backend.renders().len(),
+        2,
+        "a full ring holds the frame"
+    );
+    let mut drained = Vec::new();
+    assert_eq!(thread.sender.drain_settlements(at.slot, &mut drained), 2);
+    eventually("rendered the held frame once drained", || undrained(1));
+    assert_eq!(thread.backend.renders().len(), 3);
+}
+
+/// A lost device is rebuilt when its backoff ends, with no send to wake the
+/// thread: the thread waits for the rebuild's due time, not only for a ring.
+///
+/// Red-check: with the thread waiting for a ring alone, the device stays
+/// `Rebuilding` after its first failed rebuild.
+#[test]
+fn a_raster_thread_rebuilds_a_lost_device_when_its_backoff_ends() {
+    let (wake, woken) = mpsc::channel();
+    let backend = ScriptedSlots::new();
+    let (handle, sender) = RasterExecutor::spawn(
+        backend.clone(),
+        Arc::new(flui_foundation::clock::SystemClock),
+        move || {
+            let _told = wake.send(());
+        },
+    )
+    .expect("the raster thread starts");
+    let thread = Thread {
+        handle,
+        sender,
+        backend,
+        woken,
+    };
+    let at = attach(&thread.sender);
+    thread
+        .backend
+        .script_rebuild(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    thread.backend.lose_device();
+    // One send, so the thread turns and meets the loss.
+    thread.sender.send(frame(at, 1)).expect("accepted");
+    eventually("rebuilt the device after its backoff", || {
+        thread.sender.device_health() == DeviceHealth::Healthy
+            && thread
+                .backend
+                .calls()
+                .iter()
+                .filter(|call| matches!(call, SlotCall::RebuildDevice))
+                .count()
+                == 2
     });
-    assert_eq!(thread.backend.renders().len(), 2);
 }
 
 /// A detach the thread does not answer in time marks the executor died:
-/// every send comes back, and the owner can take why, as it takes a device's
-/// failure (ADR-0305 §9).
+/// every send comes back, the frames still pending settle failed, the owner
+/// can take why, as it takes a device's failure, and dropping the handle no
+/// longer waits for the wedged thread (ADR-0305 §9).
 ///
 /// Red-check: without `ExecutorHandle::die` the executor still reads
-/// `Running` and the frame is accepted for a thread that cannot draw it.
+/// `Running`; without the owner's settlement after the death the pending
+/// frame never settles; with the handle's drop waiting again it takes
+/// another `DETACH_DEADLINE`.
 #[test]
 fn a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline() {
     let thread = spawn();
@@ -213,26 +269,46 @@ fn a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline() {
     let hold = thread.backend.hold_next_render();
     thread.sender.send(frame(at, 1)).expect("accepted");
     assert!(hold.began_within(PATIENCE), "the thread starts the render");
-    thread
-        .sender
-        .send(RasterCommand::Detach { slot: at.slot })
-        .expect("the detach is accepted");
+    // Pending behind the held render, in the slot's inbox.
+    thread.sender.send(frame(at, 2)).expect("accepted");
     let waited = Duration::from_millis(50);
     assert_eq!(
-        thread.handle.wait_detached(&thread.sender, at.slot, waited),
+        thread.handle.detach(&thread.sender, at.slot, waited),
         Err(ExecutorFailure::Wedged { waited })
     );
     assert_eq!(thread.handle.health(), ExecutorHealth::Died);
     assert_eq!(thread.sender.health(), ExecutorHealth::Died);
     assert!(matches!(
-        thread.sender.send(frame(at, 2)),
+        thread.sender.send(frame(at, 3)),
         Err(RasterSendError::Gone(_))
     ));
+    let mut settled = Vec::new();
+    thread.sender.drain_settlements(at.slot, &mut settled);
+    assert_eq!(
+        settled
+            .iter()
+            .map(|settlement| settlement.verdict)
+            .collect::<Vec<_>>(),
+        vec![RasterVerdict::Failed],
+        "the pending frame settles failed, since the thread no longer can"
+    );
     assert_eq!(
         thread.sender.take_executor_failure(),
         Some(ExecutorFailure::Wedged { waited })
     );
-    // The thread ends once its render answers: dropping the handle waits for it.
+    assert_eq!(
+        thread.handle.detach(&thread.sender, at.slot, waited),
+        Err(ExecutorFailure::Wedged { waited }),
+        "a dead executor answers why at once"
+    );
+    let Thread { handle, .. } = thread;
+    let dropped = Instant::now();
+    drop(handle);
+    assert!(
+        dropped.elapsed() < DETACH_DEADLINE / 2,
+        "a dead executor's handle does not wait for its thread again"
+    );
+    // The thread stops once its render answers.
     hold.release();
 }
 

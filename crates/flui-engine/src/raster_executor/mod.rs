@@ -153,14 +153,24 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let shared = Arc::new(Shared::new(lifecycle_tx));
         let sender = RasterSender::new(Arc::clone(&shared));
         (
-            Self::assemble(backend, clock, Box::new(wake), shared, lifecycle),
+            Self::assemble(
+                backend,
+                clock.now(),
+                clock,
+                Box::new(wake),
+                shared,
+                lifecycle,
+            ),
             sender,
         )
     }
 
-    /// The executor over `shared`, on the thread that will turn it.
+    /// The executor over `shared`, on the thread that will turn it; `read_at`
+    /// is the clock's first answer, read by the caller, so building runs no
+    /// code the executor does not own.
     fn assemble(
         backend: B,
+        read_at: web_time::Instant,
         clock: Rc<dyn MonotonicClock>,
         wake: Box<dyn Fn()>,
         shared: Arc<Shared>,
@@ -171,7 +181,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
             shared,
             lifecycle: Some(lifecycle),
             wake,
-            read_at: std::cell::Cell::new(clock.now()),
+            read_at: std::cell::Cell::new(read_at),
             clock,
             rebuilds: DeviceRebuilds::default(),
             slots: Vec::new(),
