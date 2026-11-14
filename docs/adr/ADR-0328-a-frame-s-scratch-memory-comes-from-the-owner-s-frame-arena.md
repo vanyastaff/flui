@@ -120,12 +120,13 @@ nodes the pass builds and their child lists, which it moves into the semantics o
 a built list would sit above every scratch list freed after it, so none of those would be reused
 within the walk and the frame's peak would grow to all of them. Apart, the scratch arena reuses
 each level's memory for the next. A level takes over the first non-empty list a child returns
-and sizes it for its remaining children at once, while it is still the last block; each later
+and reserves room for its remaining children while it is still the last block; each later
 child's list is emptied into it and freed as the last block; and the level drops its scratch in
 the reverse order it took it. A block freed while another sits above it (a list that must grow
-past its size, a list a barrier emptied) waits for the reset. A level that absorbs a child's node
-takes over that node's child list, so a chain of absorbed nodes does not copy its descendants at
-each level. The built arena's peak is the built tree, plus a failed graft's partial nodes when
+past its size, the lists inside fragments a barrier discards) waits for the reset. A level that absorbs a child's node
+as its first fragment takes over that node's child list: a chain of absorbed nodes with no
+siblings hands one list up without copying it, and a level with fragments after it moves the list
+once, as it would copy it into a new one. The built arena's peak is the built tree, plus a failed graft's partial nodes when
 the pass falls back to a rebuild. Resetting at the start of a walk needs no frame-end hook, and a walk that
 unwound has dropped its collections before the next one resets. `flui-view`'s build phase gets
 an arena of its own on the `BuildOwner` under the same rules when its first site moves.
