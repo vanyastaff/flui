@@ -633,3 +633,11 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - `cargo xtask fuzz` runs two targets, `image_decode` and `agent_wire` ([testing.md](testing.md#fuzzing)). The parsers inside `flui-native` (the XIM codec, clipboard text, drag offer kinds, the Windows drag crossing, Wayland configure arrays) have property tests that draw their bytes at random and no coverage-guided run: they are `pub(crate)`, and a fuzz target is an example, which sees only its crate's public API.
 - The entry closes when each has a target, reached through an item the crate's `testing` feature exports.
+
+### The AppKit pump and the Android loop keep their own due-deadline rule
+
+> **Environments:** macOS, Android · **Who it hurts:** Applications whose wake deadline repeats an instant no frame serviced (a handler that declines its frames): those loops keep waking for it · **Parity:** none (owner core)
+
+- The Win32 loop and its modal loops, the X11, Wayland and UIKit loops arm and take the application's wake deadline through `WakeDeadline::{arm, take_due}` (`crates/flui-native/src/owner/wake_deadline.rs`): an instant delivered once is armed again only after a frame ran. The AppKit pump (`owner/apple/macos/wake_pump.rs`, `TickPlan`) asks for a frame at a due instant and looks again every `FOLLOW_UP` with no frame count, and the Android loop (`owner/android/poll.rs`, `DueDeadline`, with `owner/redraw_poll.rs`) offers a past instant once but keeps polling with no timeout while it stays due and the Activity is resumed.
+- Neither host counts its frames: their windows build their `WindowDelivery` without the loop's `FrameCount`, so moving them to the rule means wiring the count through the AppKit and Android windows, which this host cannot compile, and a run on a Mac and an Android device.
+- The entry closes when both loops drive their deadline through `WakeDeadline`, `TickPlan` and `DueDeadline` are gone, and a run on each device shows a declined frame does not keep the loop awake.

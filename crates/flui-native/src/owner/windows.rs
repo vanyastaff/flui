@@ -91,7 +91,6 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::{self, AfterPanic};
 pub(crate) use crate::owner::wake_deadline::FrameCount;
-use crate::owner::wake_deadline::ModalDelivery;
 use crate::owner::wake_deadline::WakeDeadline;
 use crate::{
     error::PlatformError, host, owner::OpenWindows, owner::OwnerHooks, owner::OwnerPlatform,

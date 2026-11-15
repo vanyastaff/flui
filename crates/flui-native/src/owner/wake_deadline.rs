@@ -1,8 +1,8 @@
 //! The owner's wake deadline as a loop arms and delivers it: the instant the
 //! application's handler asks the loop to wake at
 //! (`AppHandler::wake_deadline`), and the rule that keeps a deadline no frame
-//! could service from spinning the loop. The Win32, X11, Wayland and UIKit
-//! loops wait on it.
+//! could service from spinning the loop. The Win32 loop and its modal loops,
+//! and the X11, Wayland and UIKit loops, wait on it.
 
 /// The last deadline the loop delivered. The application's handler answers
 /// with an instant only, so the same instant is either work no frame has had
@@ -11,10 +11,10 @@
 /// instant answers the same instant once per item), which must get its frame.
 /// The frame count is the delivery generation that tells them apart. A run
 /// has one handler, so the instant alone names the answer.
-pub(crate) struct DeadlineDelivery {
-    pub(crate) arm: DeadlineArm,
+struct DeadlineDelivery {
+    arm: DeadlineArm,
     /// The platform's frame count when the delivery was made.
-    pub(crate) frames: u64,
+    frames: u64,
 }
 
 impl DeadlineDelivery {
@@ -22,40 +22,8 @@ impl DeadlineDelivery {
     /// instant always, the same one whenever a frame callback ran since. An
     /// answer no frame could have serviced stays delivered, so a delivery that
     /// reaches no frame never spins the loop.
-    pub(crate) fn admits(&self, deadline: web_time::Instant, frames: u64) -> bool {
+    fn admits(&self, deadline: web_time::Instant, frames: u64) -> bool {
         self.arm.deadline != deadline || frames != self.frames
-    }
-}
-
-/// The last wake deadline a modal loop delivered, kept across its frame
-/// requests ([`ModalFrames`](super::windows::modal_loop::ModalFrames)): the
-/// main loop's rule, held apart from the main loop's own record, which is
-/// suspended under the modal loop.
-#[cfg(windows)]
-#[derive(Default)]
-pub(crate) struct ModalDelivery(std::cell::RefCell<Option<DeadlineDelivery>>);
-
-#[cfg(windows)]
-impl ModalDelivery {
-    /// Whether `deadline` is due for delivery after the last one.
-    pub(crate) fn admits(&self, deadline: web_time::Instant, frames: u64) -> bool {
-        self.0
-            .borrow()
-            .as_ref()
-            .is_none_or(|last| last.admits(deadline, frames))
-    }
-
-    /// `deadline` was delivered at the frame count `frames`.
-    pub(crate) fn record(&self, deadline: web_time::Instant, frames: u64) {
-        *self.0.borrow_mut() = Some(DeadlineDelivery {
-            arm: DeadlineArm { deadline },
-            frames,
-        });
-    }
-
-    /// No deadline is asked for: the next one is new whatever it is.
-    pub(crate) fn clear(&self) {
-        *self.0.borrow_mut() = None;
     }
 }
 
@@ -83,8 +51,8 @@ impl FrameCount {
 }
 
 /// A deadline the loop waits for.
-pub(crate) struct DeadlineArm {
-    pub(crate) deadline: web_time::Instant,
+struct DeadlineArm {
+    deadline: web_time::Instant,
 }
 
 /// The wake deadline of a loop that waits with a timeout of its own: the
