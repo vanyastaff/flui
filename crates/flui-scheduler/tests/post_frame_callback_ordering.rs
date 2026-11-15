@@ -385,6 +385,123 @@ fn incomplete_presentations_do_not_block_eligible_siblings() {
     );
 }
 
+/// A pipeline that completes a presentation's segment and then panics aborts the host frame, but
+/// the segment it completed is done: the next frame's pipeline enters the presentation's next
+/// segment, and the callbacks that waited for the completed geometry run at that frame's end.
+///
+/// Fails when the aborted frame leaves the segment completing, so the next one cannot begin.
+fn an_aborted_frame_leaves_a_completed_segment_free_to_begin_the_next() {
+    let scheduler = UpdateScheduler::new();
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
+    let presentation = owner.presentation_scope();
+    let log = Log::default();
+    presentation.enter_segment().expect("first segment");
+    let ran = log.clone();
+    presentation
+        .post_frame_handle()
+        .schedule(move |_| ran.push("completed geometry"))
+        .expect("callback for the segment");
+    let aborted = catch_unwind(AssertUnwindSafe(|| {
+        owner.drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            || {
+                presentation.complete_segment().expect("coherent geometry");
+                panic!("pipeline after its segment — intentional test panic");
+            },
+        )
+    }));
+    assert!(aborted.is_err(), "the pipeline's panic aborts the frame");
+    assert!(
+        log.get().is_empty(),
+        "the aborted frame runs no post-frame callback"
+    );
+    assert!(
+        presentation.has_completion_demand(),
+        "the completed segment's callback keeps the demand that admits the next segment"
+    );
+    assert!(
+        !scheduler.is_frame_scheduled(),
+        "the scheduler asks no frame itself; the runtime's gates admit the next segment"
+    );
+
+    let entered = owner
+        .drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            || {
+                let entered = presentation.enter_segment();
+                if entered.is_ok() {
+                    presentation.complete_segment().expect("coherent geometry");
+                }
+                entered
+            },
+        )
+        .expect("live owner frame");
+    entered.expect("the next frame enters the next segment");
+    assert_eq!(
+        log.get(),
+        ["completed geometry"],
+        "the completed segment's callback runs at the next frame's end"
+    );
+}
+
+/// A pipeline that panics inside a presentation's segment leaves that segment's callback debt
+/// suspended: the next frame resumes the segment, and its callbacks run once it completes.
+///
+/// Fails when the aborted frame leaves the segment running, so neither entering nor resuming it
+/// succeeds.
+fn an_aborted_frame_suspends_the_segment_it_left_running() {
+    let scheduler = UpdateScheduler::new();
+    let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
+    let presentation = owner.presentation_scope();
+    let log = Log::default();
+    let aborted = catch_unwind(AssertUnwindSafe(|| {
+        owner.drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            || {
+                presentation.enter_segment().expect("segment");
+                let ran = log.clone();
+                presentation
+                    .post_frame_handle()
+                    .schedule(move |_| ran.push("resumed geometry"))
+                    .expect("callback for the segment");
+                panic!("pipeline inside its segment — intentional test panic");
+            },
+        )
+    }));
+    assert!(aborted.is_err(), "the pipeline's panic aborts the frame");
+    assert!(
+        !scheduler.is_frame_scheduled(),
+        "the scheduler asks no frame itself; the runtime's gates admit the resume"
+    );
+    assert!(
+        presentation.has_completion_demand(),
+        "the suspended segment's callback keeps the demand that admits its resume"
+    );
+
+    let resumed = owner
+        .drive_frame(
+            Instant::now(),
+            far_deadline(),
+            || {},
+            || {
+                let resumed = presentation.resume_segment();
+                if resumed.is_ok() {
+                    presentation.complete_segment().expect("coherent geometry");
+                }
+                resumed
+            },
+        )
+        .expect("live owner frame");
+    resumed.expect("the next frame resumes the suspended segment");
+    assert_eq!(log.get(), ["resumed geometry"]);
+}
+
 fn cancelled_geometry_transfers_completion_debt_to_replacement() {
     let scheduler = UpdateScheduler::new();
     let owner = flui_scheduler::OwnerFrame::try_new(&scheduler).expect("owner");
@@ -1088,6 +1205,14 @@ fn post_frame_ordering_matrix() {
             (
                 "incomplete_presentations_do_not_block_eligible_siblings",
                 incomplete_presentations_do_not_block_eligible_siblings as fn(),
+            ),
+            (
+                "an_aborted_frame_suspends_the_segment_it_left_running",
+                an_aborted_frame_suspends_the_segment_it_left_running as fn(),
+            ),
+            (
+                "an_aborted_frame_leaves_a_completed_segment_free_to_begin_the_next",
+                an_aborted_frame_leaves_a_completed_segment_free_to_begin_the_next as fn(),
             ),
             (
                 "cancelled_geometry_transfers_completion_debt_to_replacement",

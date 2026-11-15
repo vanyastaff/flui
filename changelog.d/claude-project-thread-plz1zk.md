@@ -66,3 +66,8 @@
   held ([ADR-0334](/docs/adr/ADR-0334-a-failed-frame-is-painted-again-after-the-dropped-frame-backoff.md)).
   The backoff doubles while frames keep failing at submit, and a frame that commits the current
   tree resets it.
+- **`flui-scheduler`**: a host frame whose pipeline panics after a presentation completed its
+  segment, or inside it, no longer leaves that segment active. The completed segment's scope
+  returns to idle and one left running is suspended, and a scope whose callbacks still wait is
+  given completion demand, so the presentation's next segment runs them. Before, the runtime's next
+  frame panicked on the retained segment and the application stopped drawing.

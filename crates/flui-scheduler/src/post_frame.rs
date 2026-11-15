@@ -488,6 +488,34 @@ impl OwnerFrame {
         });
     }
 
+    /// Settle the segments of a frame that aborted before its post-frame dispatch. A segment the
+    /// frame completed stays completed, so its callbacks stay eligible and the presentation may
+    /// enter its next segment. A segment still running keeps its callback debt as a suspended
+    /// one, which the presentation's next segment resumes. Either way a scope whose callbacks
+    /// still wait is given completion demand, so the runtime admits that next segment through
+    /// its own gates (`has_completion_demand`): its eligibility, a hidden presentation, the
+    /// failed frame's backoff. The scheduler asks no frame itself.
+    pub(crate) fn settle_aborted_segments(&self) {
+        let queue = self.post_frame.queue.borrow();
+        self.post_frame.scopes.borrow_mut().retain(|scope| {
+            let Some(scope) = scope.upgrade() else {
+                return false;
+            };
+            let next = match scope.phase.get() {
+                SegmentPhase::Completing => SegmentPhase::Idle,
+                SegmentPhase::Running => SegmentPhase::Suspended,
+                SegmentPhase::Idle | SegmentPhase::Suspended | SegmentPhase::Servicing => {
+                    return true;
+                }
+            };
+            scope.phase.set(next);
+            if !scope.closed.get() && queue.iter().any(|entry| entry.target.belongs_to(&scope)) {
+                scope.next_demand.set(true);
+            }
+            true
+        });
+    }
+
     /// Return an uninvoked tail to the already-validated queue. Original IDs
     /// retain FIFO order ahead of newer registrations on the next drain.
     pub(crate) fn restore_post_frame_queue(&self) {
@@ -735,7 +763,11 @@ impl PresentationFrameScope {
 
     /// Reissue retained successor demand after the host clears its wake latch.
     /// The runtime calls this only for an eligible presentation; hidden or
-    /// suspended geometry retains its debt without forcing an idle busy loop.
+    /// withdrawn geometry retains its debt without forcing an idle busy loop.
+    /// A scope an aborted frame settled (its completed segment returned to idle,
+    /// or one left running suspended) with a callback still waiting has demand,
+    /// so its presentation is admitted to its next
+    /// segment once its layout is published.
     pub fn rearm_completion_demand(&self) {
         if self.has_completion_demand()
             && let Some(scheduler) = self.scheduler.upgrade()

@@ -92,6 +92,15 @@ entry returns to the queue with its original ID and cancellation record, while
 healthy siblings continue. An older completed epoch is also blocked while its
 presentation's current geometry is incomplete.
 
+A host frame that aborts skips the post-frame dispatch that returns each scope to
+idle, so the abort settles the scopes itself: a segment the pipeline completed
+stays completed and its scope idle, so its callbacks stay eligible and the
+presentation enters its next segment; a segment left running is suspended with
+its debt, which the presentation's next segment resumes. A scope whose callbacks
+still wait is given completion demand, and the scheduler asks no frame itself:
+the runtime admits that next segment through its own gates (eligibility, a hidden
+presentation, a failed frame's backoff).
+
 `PresentationScopeFactory` is the weak assembly capability. It can mint scopes
 only for the original live owner; a scoped widget handle cannot mint siblings.
 Successor registration commits completion demand before requesting a host wake,

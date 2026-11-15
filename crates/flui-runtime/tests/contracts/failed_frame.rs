@@ -157,10 +157,11 @@ fn runtime_whose_wake_panics(panics: &Arc<AtomicBool>) -> UiRuntime {
 
 /// A platform wake that panics while a failed or device-lost frame asks for its repaint leaves
 /// the frame's backoff armed: the frame waits for the deadline, neither tried at once nor
-/// forgotten.
+/// forgotten, and the retry after it presents.
 ///
-/// Fails when the repaint's wake runs before the streak and the wait are committed, or before the
-/// dropped frame's telemetry is recorded.
+/// Fails when the repaint's wake runs before the streak and the wait are committed, before the
+/// dropped frame's telemetry is recorded, or when the aborted frame leaves its presentation's
+/// completed segment unable to begin the next.
 #[test]
 fn a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff() {
     for verdict in [SubmitVerdict::Failed, SubmitVerdict::DeviceLost] {
@@ -189,6 +190,13 @@ fn a_dropped_frame_whose_wake_panics_still_waits_out_the_backoff() {
             }),
             "{verdict:?}: the dropped frame's telemetry is recorded"
         );
+        let failed_at = web_time::Instant::now();
+        wait_out_the_backoff(&mut runtime, &mut sink, failed_at);
+        assert!(
+            host_turn(&mut runtime, &mut sink),
+            "{verdict:?}: the retried frame presents after the aborted one"
+        );
+        assert_eq!(sink.submits, 2, "{verdict:?}");
     }
 }
 
