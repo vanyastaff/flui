@@ -94,6 +94,7 @@ type UnknownHook = Rc<dyn Fn(&RoutePath)>;
 ///
 /// ```toml
 /// [package.metadata.flui.declares]
+/// schema = 3
 /// url-schemes = ["myapp"]
 /// associated-domains = ["notes.example.com"]
 /// ```
