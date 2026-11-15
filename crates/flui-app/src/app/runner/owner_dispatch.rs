@@ -98,8 +98,10 @@ pub(super) enum DispatchError {
     /// nothing of the application's runs inside one, so a native callback
     /// that meets it is a defect of this crate.
     Busy,
-    /// No UI runtime is installed, or the host that held them is shut or
-    /// gone: nothing is left to deliver to.
+    /// Nothing takes this delivery: no UI runtime is installed, the host that
+    /// held them is shut or gone, or the owner refused it for a reason this
+    /// crate has no answer of its own for (a full inbox, an exhausted
+    /// preference revision, a refusal the runtime gains later).
     RuntimeUnavailable,
 }
 
@@ -646,9 +648,9 @@ pub(super) fn dispatch_platform_ui_runtime(
 ///
 /// A request the owner refused because the presentation is gone answers
 /// `Declined`: the runtime was replaced, the presentation is another one's or
-/// closing, or no runtime is left. No frame ran and none will, and a platform
-/// told otherwise would ask for the same due instant again on every turn of
-/// its loop.
+/// closing, or the owner has no runtime or no room for the request. No frame
+/// ran for it, and a platform told otherwise would ask for the same due
+/// instant again on every turn of its loop.
 ///
 /// # Panics
 ///

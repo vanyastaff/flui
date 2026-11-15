@@ -448,6 +448,11 @@ impl MainController {
             }
             contain(|| drop(pending));
         }
+        // An open that failed or was cancelled installs nothing: its routes
+        // and the storage its placement was read from go with it.
+        if let Some(opening) = self.opening.take() {
+            contain(|| drop(opening));
+        }
     }
     fn take_pending_failure(&mut self) -> Option<AppWindowError> {
         // Transfer notification ownership before native cleanup can reenter.
