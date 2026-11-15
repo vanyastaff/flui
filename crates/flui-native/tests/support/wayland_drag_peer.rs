@@ -58,6 +58,9 @@ pub(crate) struct Wanted {
     pub(crate) mime: Option<String>,
     /// The action it takes.
     pub(crate) action: DndAction,
+    /// How many times it asks for a drop's bytes on a pipe it never reads,
+    /// before the read it reports.
+    pub(crate) unread: usize,
 }
 
 /// What the peer's data source or data device heard.
@@ -154,7 +157,8 @@ struct State {
     /// The size of the buffer attached.
     drawn: Option<(i32, i32)>,
     shown: bool,
-    /// Pipes the source holds open, writing nothing.
+    /// Pipes held open and left alone: a source's it writes nothing to, a
+    /// target's it never reads.
     held: Vec<OwnedFd>,
     /// The offer of the drag over the target.
     over: Option<WlDataOffer>,
@@ -407,6 +411,11 @@ impl Dispatch<WlDataDevice, ()> for State {
                 let (Some(offer), Some(mime)) = (state.over.take(), wanted.mime.clone()) else {
                     return;
                 };
+                for _ in 0..wanted.unread {
+                    let (reader, writer) = rustix::pipe::pipe().expect("a pipe");
+                    offer.receive(mime.clone(), writer.as_fd());
+                    state.held.push(reader);
+                }
                 let (reader, writer) = rustix::pipe::pipe().expect("a pipe");
                 offer.receive(mime, writer.as_fd());
                 drop(writer);

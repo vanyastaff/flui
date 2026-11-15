@@ -246,8 +246,15 @@ impl SeatDrag {
     }
 
     /// Write the representation `mime` names into `fd`, from a thread of
-    /// its own; the provider is asked with no cell borrowed.
+    /// its own. The write takes its place among the writers before the
+    /// provider is asked or its payload made into bytes, so a `send` past
+    /// them costs the application nothing: its descriptor closes here, which
+    /// ends its reader's read. The provider is asked with no cell borrowed.
     fn serve(&self, mime: &str, fd: OwnedFd) {
+        let Some(permit) = self.shared.writers.permit() else {
+            tracing::debug!("a drag's write past {MAX_WRITERS} at once was refused");
+            return;
+        };
         let taken = self
             .shared
             .sources
@@ -286,10 +293,6 @@ impl SeatDrag {
                 return;
             }
             None => return,
-        };
-        let Some(permit) = self.shared.writers.permit() else {
-            tracing::debug!("a drag's write past {MAX_WRITERS} at once was refused");
-            return;
         };
         let spawned = std::thread::Builder::new()
             .name("flui-wayland-drag".to_owned())
