@@ -13,7 +13,8 @@
 //!   it asks that seat's offer for its text in the form
 //!   [`TextForm::preferred`] picks, under the MIME type the owner named,
 //!   and a thread of its own reads the pipe, bounded in time and size, and
-//!   answers the read's resolver.
+//!   answers the read's resolver. Reads of one offer share that read and
+//!   its answer, and no more than a few wait at once ([`reads`]).
 //! - **A write** makes a data source offering the text in every form of
 //!   [`TextForm::OFFERED`] and sets it as the selection of the last user
 //!   input's seat, under that input's serial: a compositor takes a selection
@@ -34,7 +35,7 @@
 //!   ownership. With no user input yet the text is held here only, and a
 //!   read answers it until another client's selection arrives.
 
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{BorrowedFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -42,13 +43,16 @@ use std::time::Duration;
 use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, Concealment, capability::Resolver,
 };
+use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_callback::{self, WlCallback};
+use wayland_client::protocol::wl_data_offer::WlDataOffer;
 use wayland_client::protocol::wl_data_source::{self, WlDataSource};
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use web_time::Instant;
 
+use self::reads::{Admitted, Reads};
 use super::owners::Owners;
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
@@ -58,6 +62,7 @@ use crate::transfer::linux::wayland::pipe::{self, PipeError};
 use crate::transfer::linux::wayland::{DataDevices, DeviceListener, OfferData};
 
 mod primary;
+mod reads;
 
 /// How long a read waits for the selection's owner to write its text, and a
 /// write for the reader to take it. An owner that hangs answers nothing.
@@ -105,6 +110,39 @@ struct Shared {
 struct State {
     /// The text the application owns each seat's selection with.
     owned: Owners<WlSeat, Owned>,
+    /// The reads of other clients' selections under way.
+    reads: SelectionReads,
+}
+
+/// The reads of one selection under way, each of the offer it asked.
+type SelectionReads = Reads<ObjectId, Resolver<ClipboardRead>>;
+
+/// Read `offer`'s text as `form` for `reader`. `admit` admits the read
+/// among those under way, on the owner thread: a read of the offer already
+/// under way answers this one too, and only the first of an offer starts
+/// one, which `receive` asks the offer's owner for and a thread named
+/// `thread` reads. Past the most that wait, the read is refused at once.
+fn read_offer(
+    admitted: Option<Admitted<Resolver<ClipboardRead>>>,
+    form: TextForm,
+    thread: &str,
+    receive: impl FnOnce(BorrowedFd<'_>),
+) {
+    match admitted {
+        // Off the owner thread nothing was admitted, and the reader went
+        // with the attempt; a read that joined waits on the one under way.
+        None | Some(Admitted::Joined) => {}
+        Some(Admitted::Started(end)) => reads::start(end, form, thread, receive),
+        Some(Admitted::Refused(reader)) => {
+            // A retired owner has nobody left to answer. The read is settled
+            // before the diagnostic, which runs user code.
+            let _ = reader.resolve(Err(ClipboardError::Unavailable));
+            tracing::debug!(
+                "a selection read past {} waiting was refused",
+                reads::MAX_READERS
+            );
+        }
+    }
 }
 
 impl DeviceListener for Shared {
@@ -207,7 +245,8 @@ impl WaylandClipboard for SeatClipboard {
 
     fn release(&self) {
         let held = self.shared.state.with(std::mem::take);
-        if let Some(State { owned }) = held {
+        // A read under way ends on its own thread, which holds its readers.
+        if let Some(State { owned, reads: _ }) = held {
             owned.into_items().into_iter().for_each(Owned::release);
         }
         if let Some(primary) = self.shared.primary.with(primary::Primary::take) {
@@ -261,8 +300,9 @@ enum Read {
     /// The application owns the selection and wrote this text: admitted once
     /// the state is let go of, since a refusal logs.
     Owned(Arc<str>),
-    /// The offer's owner writes the text in `form` to the pipe.
-    Pipe(OwnedFd, TextForm),
+    /// Another client owns the selection: its offer is asked for the text
+    /// in this form, under the MIME type its owner offered it under.
+    Offer(WlDataOffer, TextForm, String),
 }
 
 impl NativeClipboard for SeatClipboard {
@@ -279,46 +319,30 @@ impl NativeClipboard for SeatClipboard {
                 if let Some(owned) = state.owned.read(seat) {
                     return Read::Owned(Arc::clone(&owned.text));
                 }
-                let Some((offer, (form, mime))) = selection
+                selection
                     .as_ref()
                     .and_then(|selection| selection.offer.as_ref())
-                    .and_then(|offer| Some((offer, preferred(offer.data::<OfferData>()?)?)))
-                else {
-                    return Read::Now(Ok(None));
-                };
-                match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
-                    Ok((reader, writer)) => {
-                        // The type as the owner offered it: an owner may match
-                        // what it is asked for exactly.
-                        offer.receive(mime, writer.as_fd());
-                        // The owner holds the write end now; the loop's next
-                        // flush sends the request.
-                        drop(writer);
-                        Read::Pipe(reader, form)
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "no pipe for a clipboard read");
-                        Read::Now(Err(ClipboardError::Unavailable))
-                    }
-                }
+                    .and_then(|offer| {
+                        let (form, mime) = preferred(offer.data::<OfferData>()?)?;
+                        Some(Read::Offer(offer.clone(), form, mime))
+                    })
+                    .unwrap_or(Read::Now(Ok(None)))
             })
             .unwrap_or(Read::Now(Err(ClipboardError::Unavailable)));
         match read {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
             Read::Owned(text) => drop(answer.resolve(owned_text(&text))),
-            Read::Pipe(reader, form) => {
-                let spawned = std::thread::Builder::new()
-                    .name("flui-wayland-clipboard".to_owned())
-                    .spawn(move || {
-                        let text = read_selection(reader).and_then(|bytes| form.answer(bytes));
-                        let _ = answer.resolve(text);
-                    });
-                // The closure, and the resolver in it, is dropped: the read
-                // ends as abandoned by its provider.
-                if let Err(error) = spawned {
-                    tracing::warn!(%error, "no thread for a clipboard read");
-                }
+            Read::Offer(offer, form, mime) => {
+                let admitted = self
+                    .shared
+                    .state
+                    .with(|state| state.reads.admit(offer.id(), answer));
+                // The type as the owner offered it: an owner may match what
+                // it is asked for exactly.
+                read_offer(admitted, form, "flui-wayland-clipboard", |pipe| {
+                    offer.receive(mime, pipe);
+                });
             }
         }
     }
@@ -334,7 +358,7 @@ impl NativeClipboard for SeatClipboard {
         let text: Arc<str> = write.into_text().into();
         let last = self.shared.last_input.latest();
         let previous = self.shared.state.with(|state| {
-            let State { owned } = state;
+            let State { owned, .. } = state;
             let devices = &self.shared.devices;
             let set = |source: &WlDataSource, seat: &WlSeat, serial: u32| {
                 devices.set_selection(seat, source, serial).then_some(())

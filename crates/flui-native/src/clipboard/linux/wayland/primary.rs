@@ -24,7 +24,7 @@
 //! - **A read of the application's own selection** asks its closure at
 //!   once, again with nothing held.
 
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
@@ -62,6 +62,8 @@ pub(super) struct Primary {
     retired: Vec<SelectionText>,
     /// The `send`s recorded since the last turn.
     sends: Vec<Request>,
+    /// The reads of other clients' selections under way.
+    reads: super::SelectionReads,
 }
 
 struct PrimaryDevice {
@@ -118,7 +120,9 @@ struct Request {
 enum Read {
     Now(ClipboardRead),
     Ask(SelectionText),
-    Pipe(OwnedFd, TextForm),
+    /// Another client owns the selection: its offer is asked for the text
+    /// in this form, under the MIME type its owner offered it under.
+    Offer(ZwpPrimarySelectionOfferV1, TextForm, String),
 }
 
 impl Primary {
@@ -302,23 +306,13 @@ impl super::SeatClipboard {
                 {
                     return Read::Ask(Rc::clone(&owned.text));
                 }
-                let Some((offer, (form, mime))) = device
+                device
                     .and_then(|device| device.offers.selection())
-                    .and_then(|offer| Some((offer, super::preferred(offer.data::<OfferData>()?)?)))
-                else {
-                    return Read::Now(Ok(None));
-                };
-                match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
-                    Ok((reader, writer)) => {
-                        offer.receive(mime, writer.as_fd());
-                        drop(writer);
-                        Read::Pipe(reader, form)
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "no pipe for a primary selection read");
-                        Read::Now(Err(ClipboardError::Unavailable))
-                    }
-                }
+                    .and_then(|offer| {
+                        let (form, mime) = super::preferred(offer.data::<OfferData>()?)?;
+                        Some(Read::Offer(offer.clone(), form, mime))
+                    })
+                    .unwrap_or(Read::Now(Ok(None)))
             })
             .unwrap_or(Read::Now(Err(ClipboardError::Unavailable)));
         match read {
@@ -326,17 +320,14 @@ impl super::SeatClipboard {
             Read::Now(text) => drop(answer.resolve(text)),
             // Asked with nothing held: the closure may call back in.
             Read::Ask(text) => answer_with(text, answer),
-            Read::Pipe(reader, form) => {
-                let spawned = std::thread::Builder::new()
-                    .name("flui-wayland-primary".to_owned())
-                    .spawn(move || {
-                        let text =
-                            super::read_selection(reader).and_then(|bytes| form.answer(bytes));
-                        let _ = answer.resolve(text);
-                    });
-                if let Err(error) = spawned {
-                    tracing::warn!(%error, "no thread for a primary selection read");
-                }
+            Read::Offer(offer, form, mime) => {
+                let admitted = self
+                    .shared
+                    .primary
+                    .with(|primary| primary.reads.admit(offer.id(), answer));
+                super::read_offer(admitted, form, "flui-wayland-primary", |pipe| {
+                    offer.receive(mime, pipe);
+                });
             }
         }
     }
