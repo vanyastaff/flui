@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::build::desktop::DesktopBuilder;
-use crate::build::{
-    AppBundle, BuildArtifacts, BuildUnit, BuilderContextBuilder, BuiltPackage, Platform, Profile,
-};
+use crate::build::{BuildUnit, BuilderContextBuilder, Platform, Profile};
 
 const FIXTURE_ROOT: &str = "FLUI_DESKTOP_FIXTURE_ROOT";
 const FIXTURE_CASE: &str = "FLUI_DESKTOP_FIXTURE_CASE";
@@ -261,6 +259,8 @@ fn default_run_and_ambiguous_bins_are_distinguished() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn a_desktop_entry_registers_what_the_built_member_opens() {
+    use crate::build::{AppBundle, BuildArtifacts, BuiltPackage};
+
     let temp = tempfile::tempdir().expect("fixture");
     let root = temp.path();
     write(
