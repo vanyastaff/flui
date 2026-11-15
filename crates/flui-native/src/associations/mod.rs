@@ -83,11 +83,13 @@ const RESERVED: [&str; 7] = [
 pub(crate) enum Found {
     /// No key has the name.
     Absent,
-    /// The key carries [`MARKER`]: the application id it names, and the
-    /// command it opens a link with, if it has one.
+    /// The key carries [`MARKER`]: the application id it names, the command
+    /// it opens a link or a file with, if it has one, and the extension a
+    /// ProgID names under [`FILE_TYPE`] (`None` for a scheme's key).
     Marked {
         app_id: String,
         command: Option<String>,
+        file_type: Option<String>,
     },
     /// The key exists and carries no marker: another application's, or the
     /// system's.
@@ -340,15 +342,31 @@ fn extension_key(extension: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Step {
     Write(Claim),
+    /// The key is this application's but of the other kind (a scheme's key
+    /// where a ProgID is declared, or the reverse, or a ProgID of another
+    /// extension): it is removed, its offer withdrawn, and written anew.
+    Replace(Marked),
     Current,
     Refuse(Refusal),
 }
 
-fn step(key: &str, found: Found, application: &Application<'_>) -> Step {
+/// What registration does with the key `key` that holds `found`, for a
+/// scheme (`file_type` is `None`) or the file type of the extension
+/// `file_type`.
+fn step(key: &str, found: Found, application: &Application<'_>, file_type: Option<&str>) -> Step {
     match found {
         Found::Absent => Step::Write(Claim::New),
-        Found::Marked { app_id, command } if app_id == application.app_id => {
-            if command.is_some_and(|command| command == application.command()) {
+        Found::Marked {
+            app_id,
+            command,
+            file_type: found_type,
+        } if app_id == application.app_id => {
+            if found_type.as_deref() != file_type {
+                Step::Replace(Marked {
+                    name: key.to_owned(),
+                    file_type: found_type,
+                })
+            } else if command.is_some_and(|command| command == application.command()) {
                 Step::Current
             } else {
                 Step::Write(Claim::Own)
@@ -380,14 +398,18 @@ impl Registered {
     }
 }
 
-/// Write `entries` into the key `key` of a declared `what` (a URL scheme or
-/// a file type), unless what it holds is current or someone else's.
+/// Write `entries` into the key `key` of a declared `what` (a URL scheme, or
+/// the file type of the extension `file_type`), unless what it holds is
+/// current or someone else's. An offer withdrawn on the way, from a key of
+/// the other kind this application wrote, is counted in `withdrawn`.
 fn register_key(
     classes: &mut impl Classes,
     application: &Application<'_>,
     key: &str,
     entries: &[Entry],
     what: &str,
+    file_type: Option<&str>,
+    withdrawn: &mut usize,
 ) -> Outcome {
     let found = match classes.find(key) {
         Ok(found) => found,
@@ -396,24 +418,47 @@ fn register_key(
             return Outcome::Refused;
         }
     };
-    match step(key, found, application) {
+    match step(key, found, application, file_type) {
         Step::Current => Outcome::Current,
         Step::Refuse(refusal) => {
             tracing::warn!(%refusal, "a declared {what} is not registered");
             Outcome::Refused
         }
-        Step::Write(claim) => match classes.write(key, entries, claim) {
-            Ok(Wrote::Written) => Outcome::Written,
-            Ok(Wrote::Taken) => {
-                let refusal = Refusal::Taken(key.to_owned());
-                tracing::warn!(%refusal, "a declared {what} is not registered");
-                Outcome::Refused
+        Step::Write(claim) => write_key(classes, key, entries, claim, what),
+        Step::Replace(marked) => {
+            // Removed whole, so no value of the other kind stays behind
+            // (`URL Protocol`, `FluiFileType`, an offer), then created anew.
+            let mut replaced = Removed::default();
+            let removal = remove(classes, &marked, &mut replaced);
+            *withdrawn += replaced.withdrawn;
+            if let Err(error) = removal {
+                tracing::warn!(%error, key, "a key of the other kind cannot be replaced by a declared {what}");
+                return Outcome::Refused;
             }
-            Err(error) => {
-                tracing::warn!(%error, key, "the key of a declared {what} cannot be written");
-                Outcome::Refused
-            }
-        },
+            write_key(classes, key, entries, Claim::New, what)
+        }
+    }
+}
+
+/// Write `entries` into the key `key` of a declared `what` under `claim`.
+fn write_key(
+    classes: &mut impl Classes,
+    key: &str,
+    entries: &[Entry],
+    claim: Claim,
+    what: &str,
+) -> Outcome {
+    match classes.write(key, entries, claim) {
+        Ok(Wrote::Written) => Outcome::Written,
+        Ok(Wrote::Taken) => {
+            let refusal = Refusal::Taken(key.to_owned());
+            tracing::warn!(%refusal, "a declared {what} is not registered");
+            Outcome::Refused
+        }
+        Err(error) => {
+            tracing::warn!(%error, key, "the key of a declared {what} cannot be written");
+            Outcome::Refused
+        }
     }
 }
 
@@ -429,6 +474,8 @@ pub(crate) fn register_in(
 ) -> Registered {
     let mut registered = Registered::default();
     let mut declared = Vec::with_capacity(url_schemes.len() + file_types.len());
+    // Offers withdrawn from keys of the other kind, which the shell hears about.
+    let mut withdrawn = 0;
     for scheme in url_schemes {
         let key = match scheme_key(scheme) {
             Ok(key) => key,
@@ -444,6 +491,8 @@ pub(crate) fn register_in(
             &key,
             &scheme_entries(application),
             "URL scheme",
+            None,
+            &mut withdrawn,
         );
         registered.count(outcome);
         declared.push(key);
@@ -469,7 +518,15 @@ pub(crate) fn register_in(
             continue;
         }
         let entries = file_type_entries(application, &extension, file_type.name);
-        let outcome = register_key(classes, application, &prog_id, &entries, "file type");
+        let outcome = register_key(
+            classes,
+            application,
+            &prog_id,
+            &entries,
+            "file type",
+            Some(&extension),
+            &mut withdrawn,
+        );
         changed |= outcome == Outcome::Written;
         let outcome = match outcome {
             Outcome::Refused => Outcome::Refused,
@@ -491,7 +548,7 @@ pub(crate) fn register_in(
     }
     let removed = remove_undeclared(classes, application.app_id, &declared);
     registered.removed = removed.keys;
-    if changed || removed.file_types > 0 {
+    if changed || withdrawn > 0 || removed.withdrawn > 0 {
         classes.announce();
     }
     registered
@@ -501,7 +558,9 @@ pub(crate) fn register_in(
 #[derive(Debug, Default, Clone, Copy)]
 struct Removed {
     keys: usize,
-    file_types: usize,
+    /// The `OpenWithProgids` values withdrawn, counted as each goes: the
+    /// shell hears of a withdrawal whose key then fails to go too.
+    withdrawn: usize,
 }
 
 /// Delete `marked`: a ProgID's `OpenWithProgids` value first, so a key that
@@ -514,15 +573,12 @@ fn remove(
 ) -> std::io::Result<()> {
     // An extension the marker does not hold as written names no key this
     // application offered itself under.
-    let extension = marked.file_type.as_deref().and_then(extension);
-    if let Some(extension) = &extension {
-        classes.withdraw(&extension_key(extension), &marked.name)?;
+    if let Some(extension) = marked.file_type.as_deref().and_then(extension) {
+        classes.withdraw(&extension_key(&extension), &marked.name)?;
+        removed.withdrawn += 1;
     }
     classes.delete(&marked.name)?;
     removed.keys += 1;
-    if extension.is_some() {
-        removed.file_types += 1;
-    }
     Ok(())
 }
 
@@ -570,7 +626,7 @@ pub(crate) fn unregister_in(classes: &mut impl Classes, app_id: &str) -> std::io
             first.get_or_insert(error);
         }
     }
-    if removed.file_types > 0 {
+    if removed.withdrawn > 0 {
         classes.announce();
     }
     first.map_or(Ok(removed.keys), Err)
@@ -649,7 +705,8 @@ mod tests {
 
     use super::{
         Application, Claim, Classes, Entry, FILE_TYPE, FileType, Found, MARKER, Marked, Refusal,
-        Registered, Wrote, file_type_key, register_in, scheme_key, unregister_in,
+        Registered, Wrote, file_type_entries, file_type_key, register_in, scheme_entries,
+        scheme_key, unregister_in,
     };
 
     /// The user's classes and the machine's, as maps of key to values, whose
@@ -700,6 +757,7 @@ mod tests {
                 Some(app_id) => Found::Marked {
                     app_id,
                     command: Self::value(entries, "shell\\open\\command", ""),
+                    file_type: Self::value(entries, "", FILE_TYPE),
                 },
                 None => Found::Unmarked,
             })
@@ -881,6 +939,7 @@ mod tests {
             Found::Marked {
                 app_id: "com.example.notes".to_owned(),
                 command: Some(NOTES.command()),
+                file_type: None,
             },
             "the moved application's key names this executable"
         );
@@ -992,6 +1051,7 @@ mod tests {
             Found::Marked {
                 app_id: "com.example.notes".to_owned(),
                 command: Some(moved.command()),
+                file_type: None,
             }
         );
     }
@@ -1282,6 +1342,65 @@ mod tests {
         let registered = register_in(&mut classes, &NOTES, &[], &[NOTE]);
         assert_eq!(registered.removed, 1);
         assert_eq!(classes.offered[".jot"], Vec::<String>::new());
+
+        // The offer goes and the key stays: the shell still hears that the
+        // extension's list changed.
+        let _ = register_in(&mut classes, &NOTES, &[], &[NOTE, JOT]);
+        classes.refuse_delete = Some("com.example.notes.jot");
+        let announced = classes.announced;
+        let registered = register_in(&mut classes, &NOTES, &[], &[NOTE]);
+        assert_eq!(registered.removed, 0);
+        assert_eq!(classes.offered[".jot"], Vec::<String>::new());
+        assert_eq!(
+            classes.announced,
+            announced + 1,
+            "a withdrawal whose key stays is announced"
+        );
+    }
+
+    /// A key this application wrote for a scheme that it now declares as a
+    /// file type's ProgID, or the reverse, is replaced whole: nothing of the
+    /// other kind stays, and the shell hears of the offer that comes or goes.
+    #[test]
+    fn a_key_of_the_other_kind_is_replaced() {
+        let prog_id = "com.example.notes.note";
+        let mut classes = Map::default();
+        let _ = register_in(&mut classes, &NOTES, &[prog_id], &[]);
+        assert_eq!(classes.user[prog_id], scheme_entries(&NOTES));
+
+        let registered = register_in(&mut classes, &NOTES, &[], &[NOTE]);
+        assert_eq!(
+            registered,
+            Registered {
+                written: 1,
+                ..Registered::default()
+            },
+            "a scheme's key is no current ProgID"
+        );
+        assert_eq!(
+            classes.user[prog_id],
+            file_type_entries(&NOTES, "note", "Notes note"),
+            "no `URL Protocol` stays"
+        );
+        assert_eq!(classes.offered[".note"], [prog_id]);
+
+        let announced = classes.announced;
+        let registered = register_in(&mut classes, &NOTES, &[prog_id], &[]);
+        assert_eq!(
+            registered,
+            Registered {
+                written: 1,
+                ..Registered::default()
+            },
+            "a ProgID is no current scheme's key"
+        );
+        assert_eq!(classes.user[prog_id], scheme_entries(&NOTES));
+        assert_eq!(
+            classes.offered[".note"],
+            Vec::<String>::new(),
+            "the offer is withdrawn"
+        );
+        assert_eq!(classes.announced, announced + 1);
     }
 
     /// Unregistering withdraws the application's offers and deletes its

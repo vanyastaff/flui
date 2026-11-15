@@ -218,6 +218,7 @@ impl Classes for UserClasses {
             Some(app_id) => Found::Marked {
                 app_id,
                 command: string(&key, super::COMMAND, "")?,
+                file_type: string(&key, "", FILE_TYPE)?,
             },
             None => Found::Unmarked,
         })
