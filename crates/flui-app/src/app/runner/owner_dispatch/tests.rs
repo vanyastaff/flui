@@ -578,7 +578,7 @@ fn explicit_platform_quit_detaches_every_installed_ui_runtime() {
 }
 
 /// Installing a UI runtime resolves the loop-scoped execution services
-/// (issue #557) at the same known point as `SharedEngineServices` — and
+/// at the same known point as `SharedEngineServices` — and
 /// full loop-exit teardown shuts them down AND clears the slot, so a
 /// SECOND platform loop hosted on this same thread (an embedder running
 /// `run_app` twice in one process; a headless-restart harness) gets
@@ -857,7 +857,7 @@ fn panic_restores_dispatch_host_for_next_event() {
 }
 
 // ========================================================================
-// Issue #555 red exploits: multi-ui_runtime `AppRuntime` hosting,
+// Multi-ui_runtime `AppRuntime` hosting,
 // separate-ui_runtimes policy, exit policy, hot-restart.
 //
 // Every test below was structurally impossible to even set up before this
@@ -3340,7 +3340,7 @@ fn owner_dispatch_matrix() {
 }
 
 // ========================================================================
-// Close-request veto (issue #558)
+// Close-request veto
 // ========================================================================
 
 /// A window's metrics from a logical size and scale, as a platform reports them.

@@ -22985,6 +22985,7 @@ pub fn flui::testing::MemoryStorage::kept_aside(&self, name: &flui::platform::St
 pub fn flui::testing::MemoryStorage::live_requests(&self) -> usize
 pub fn flui::testing::MemoryStorage::new() -> Self
 pub fn flui::testing::MemoryStorage::put(&self, name: &flui::platform::StorageName, bytes: impl Into<Vec<u8>>)
+pub fn flui::testing::MemoryStorage::reads(&self) -> usize
 #[non_exhaustive] pub struct flui::testing::Node
 field flui::testing::Node::actions: Vec<flui_protocol::wire::ActionName> // at 17
 field flui::testing::Node::automation_id: Option<String> // at 6

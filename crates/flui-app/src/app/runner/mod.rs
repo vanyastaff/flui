@@ -239,7 +239,7 @@ pub fn window_handle(
 }
 
 /// Close the window at `address` programmatically, bypassing its
-/// close-request handler (issue #558).
+/// close-request handler.
 ///
 /// This is how an application finishes a close it kept open: a
 /// [`CloseRequestHandler`](crate::CloseRequestHandler) that answered
@@ -633,6 +633,7 @@ mod tests {
                     })
                     .unwrap_or(false);
                 saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);
+                flui_platform::FrameOutcome::Produced
             },
         );
 

@@ -1,5 +1,5 @@
 //! Task, worker, and service lifecycles over the unified execution services
-//! (issue #558, ADR-0049).
+//! (ADR-0049).
 //!
 //! # Lifecycle taxonomy
 //!
@@ -50,8 +50,8 @@
 //! # Not in this slice (stated, not silently assumed)
 //!
 //! - **ProcessWorker** — see the table above.
-//! - **Journaled recoverable state** — issue #558's remaining criterion,
-//!   a deliberately separate slice. The close-request veto that used to be
+//! - **Journaled recoverable state** — not built here,
+//!   deliberately separate work. The close-request veto that used to be
 //!   named here alongside it has landed in
 //!   [`close_request`](super::close_request); note that it answers a
 //!   different question from [`ServiceLifetime::KeepsAppAlive`] and is
@@ -878,7 +878,7 @@ impl<E: Send> ServicePublisher<E> {
         // Keep retired / refused payloads out of the critical section: their
         // Drop is arbitrary user code and may publish again through a cloned
         // handle. Destroying them while `events` is locked deadlocks on the
-        // non-reentrant mutex (issue #1071).
+        // non-reentrant mutex.
         let outcome = {
             let mut events = queue.events.lock();
             if queue.receiver_alive.load(Ordering::Acquire) {

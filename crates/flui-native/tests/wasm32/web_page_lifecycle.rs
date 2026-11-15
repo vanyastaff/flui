@@ -403,10 +403,31 @@ async fn web_page_events_leave_with_the_window() {
     assert!(fire_on_canvas("webglcontextlost"));
     assert_eq!(executions.lock().expect("recorded values").len(), 1);
     assert_eq!(surfaces.lock().expect("recorded values").len(), 1);
+    let target = window.surface_target();
+    assert!(
+        target.window_handle().is_ok() && target.display_handle().is_ok(),
+        "an open window's target answers both handles"
+    );
 
     window
         .admit_and_apply(flui_platform::WindowCommand::Close)
         .expect("a page retires its canvas");
+    // A retired window has no surface to make: its target refuses the display
+    // handle where it refuses the window handle.
+    assert!(
+        matches!(
+            target.window_handle(),
+            Err(raw_window_handle::HandleError::Unavailable)
+        ),
+        "a retired window's target still answers a window handle"
+    );
+    assert!(
+        matches!(
+            target.display_handle(),
+            Err(raw_window_handle::HandleError::Unavailable)
+        ),
+        "a retired window's target still answers a display handle"
+    );
     assert_eq!(
         document_listeners(),
         baseline,
