@@ -263,7 +263,7 @@ fn window_routes_contract() {
     not(target_arch = "wasm32")
 ))]
 mod runner_paths {
-    use flui_native::HeadlessHostWindow;
+    use flui_platform::PlatformWindow;
     use flui_widgets::SizedBox;
 
     use super::WindowRoutes;
@@ -279,8 +279,13 @@ mod runner_paths {
         HeadlessRun::start(Application::new(), SizedBox::shrink())
     }
 
-    fn waiting(window: &HeadlessHostWindow) -> Option<usize> {
-        WindowRoutes::of(window).inputs_waiting()
+    /// How many inputs wait for the window's input route; `None` once the
+    /// route is set and has heard them all, so input reaches the
+    /// presentation as it arrives.
+    fn waiting(window: &(impl PlatformWindow + ?Sized)) -> Option<usize> {
+        let routes = WindowRoutes::of(window);
+        let waiting = routes.held.borrow().inputs.len();
+        (waiting > 0 || !routes.input.is_set()).then_some(waiting)
     }
 
     fn the_main_window() {
@@ -302,7 +307,7 @@ mod runner_paths {
                 .expect("the open is admitted")
                 .expect("outside an owner turn the window opens at once");
         assert_eq!(
-            WindowRoutes::of(&*window).inputs_waiting(),
+            waiting(&*window),
             None,
             "a bare secondary window is installed by the call that opens it"
         );

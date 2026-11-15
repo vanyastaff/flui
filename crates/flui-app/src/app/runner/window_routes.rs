@@ -418,14 +418,6 @@ impl WindowRoutes {
             _held: self.held.borrow_mut(),
         }
     }
-
-    /// How many inputs wait for the input route; `None` once the route is
-    /// set and has heard them all, so input reaches the presentation as it
-    /// arrives.
-    pub(crate) fn inputs_waiting(&self) -> Option<usize> {
-        let waiting = self.held.borrow().inputs.len();
-        (waiting > 0 || !self.input.is_set()).then_some(waiting)
-    }
 }
 
 /// Opening a window with fresh routes, adopted, as the runner opens its
