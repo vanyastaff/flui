@@ -4,11 +4,11 @@
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
     AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, CapabilitiesOwner,
-    CapabilityAbsence, ControlsOffset, InvalidControlsOffset, KeyboardInset, SizeConstraints,
-    SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
-    WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFrame,
-    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOptions, WindowRevision,
-    WindowRevisionExhausted, WindowState,
+    CapabilityAbsence, ControlsOffset, InvalidControlsOffset, InvalidGeometry, KeyboardInset,
+    SizeConstraints, SystemControls, Unsupported, UnsupportedReason, WindowAppearance,
+    WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
+    WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOptions,
+    WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -19,12 +19,17 @@ fn constraints(min: Option<Size<f64>>, max: Option<Size<f64>>) -> WindowCommand 
     WindowCommand::SetConstraints(SizeConstraints::try_new(min, max).expect("finite limits"))
 }
 
-fn invalid(command: &WindowCommand) {
+/// `command` is refused before any OS call, and the refusal names the numbers.
+fn invalid(command: &WindowCommand, refused: InvalidGeometry) {
     assert_eq!(
         command.validate(),
-        Err(AdmissionError::InvalidGeometry),
+        Err(AdmissionError::InvalidGeometry(refused)),
         "{command:?} must be refused before any OS call"
     );
+}
+
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(size(width, height)).expect("an extent")
 }
 
 fn valid(command: &WindowCommand) {
@@ -46,28 +51,53 @@ fn a_window_opens_with_balanced_input_unless_it_asks_for_low_latency() {
 }
 
 fn position_must_be_finite() {
-    invalid(&WindowCommand::SetPosition(Point::new(f64::NAN, 0.0)));
-    invalid(&WindowCommand::SetPosition(Point::new(0.0, f64::INFINITY)));
-    invalid(&WindowCommand::SetPosition(Point::new(
-        f64::NEG_INFINITY,
-        1.0,
-    )));
+    for (x, y) in [
+        (f64::NAN, 0.0),
+        (0.0, f64::INFINITY),
+        (f64::NEG_INFINITY, 1.0),
+    ] {
+        invalid(
+            &WindowCommand::SetPosition(Point::new(x, y)),
+            InvalidGeometry::Position { x, y },
+        );
+    }
     valid(&WindowCommand::SetPosition(Point::new(-1920.0, -40.0)));
 }
 
 fn size_must_be_finite_and_positive() {
-    invalid(&WindowCommand::SetSize(size(0.0, 100.0)));
-    invalid(&WindowCommand::SetSize(size(100.0, -1.0)));
-    invalid(&WindowCommand::SetSize(size(f64::NAN, 100.0)));
-    invalid(&WindowCommand::SetSize(size(100.0, f64::INFINITY)));
+    invalid(
+        &WindowCommand::SetSize(size(0.0, 100.0)),
+        InvalidGeometry::Empty {
+            width: 0.0,
+            height: 100.0,
+        },
+    );
+    for (width, height) in [(100.0, -1.0), (f64::NAN, 100.0), (100.0, f64::INFINITY)] {
+        invalid(
+            &WindowCommand::SetSize(size(width, height)),
+            InvalidGeometry::Extent { width, height },
+        );
+    }
     valid(&WindowCommand::SetSize(size(1.0, 1.0)));
 }
 
 /// A limit with no area is refused at admission; one that is no extent at all
 /// cannot be put in a command.
 fn constraints_with_a_bad_bound_are_refused() {
-    invalid(&constraints(Some(size(0.0, 10.0)), None));
-    invalid(&constraints(None, Some(size(10.0, 0.0))));
+    invalid(
+        &constraints(Some(size(0.0, 10.0)), None),
+        InvalidGeometry::Empty {
+            width: 0.0,
+            height: 10.0,
+        },
+    );
+    invalid(
+        &constraints(None, Some(size(10.0, 0.0))),
+        InvalidGeometry::Empty {
+            width: 10.0,
+            height: 0.0,
+        },
+    );
     for bad in [
         size(10.0, f64::NAN),
         size(-5.0, 10.0),
@@ -85,14 +115,13 @@ fn constraints_with_a_bad_bound_are_refused() {
 }
 
 fn minimum_above_maximum_in_either_dimension_is_refused() {
-    invalid(&constraints(
-        Some(size(200.0, 50.0)),
-        Some(size(100.0, 100.0)),
-    ));
-    invalid(&constraints(
-        Some(size(50.0, 200.0)),
-        Some(size(100.0, 100.0)),
-    ));
+    for min in [extent(200.0, 50.0), extent(50.0, 200.0)] {
+        let max = extent(100.0, 100.0);
+        invalid(
+            &WindowCommand::SetConstraints(SizeConstraints::new(Some(min), Some(max))),
+            InvalidGeometry::Limits { min, max },
+        );
+    }
     valid(&constraints(
         Some(size(100.0, 100.0)),
         Some(size(100.0, 100.0)),
@@ -101,6 +130,48 @@ fn minimum_above_maximum_in_either_dimension_is_refused() {
         Some(size(50.0, 50.0)),
         Some(size(100.0, 100.0)),
     ));
+}
+
+/// An opening asks for its size and limits as the commands do, and is refused
+/// for the same numbers with the same error: nothing a command could not ask
+/// for reaches a host at open.
+fn an_opening_is_refused_for_what_a_command_is_refused_for() {
+    let limits = [
+        (Some(extent(800.0, 600.0)), Some(extent(400.0, 300.0))),
+        (Some(extent(800.0, 600.0)), Some(extent(900.0, 300.0))),
+        (Some(WindowExtent::ZERO), None),
+        (None, Some(extent(0.0, 300.0))),
+        (Some(extent(400.0, 300.0)), Some(extent(800.0, 600.0))),
+        (None, None),
+    ];
+    for (min, max) in limits {
+        let options = WindowOptions::default().min_size(min).max_size(max);
+        let command = WindowCommand::SetConstraints(SizeConstraints::new(min, max));
+        assert_eq!(
+            options
+                .constraints()
+                .map_err(AdmissionError::InvalidGeometry),
+            command.validate().map(|()| SizeConstraints::new(min, max)),
+            "{min:?} {max:?}"
+        );
+    }
+    for asked in [
+        size(0.0, 600.0),
+        size(f64::NAN, 600.0),
+        size(800.0, -1.0),
+        size(800.0, 600.0),
+    ] {
+        let options = WindowOptions::default().size(asked);
+        assert_eq!(
+            options
+                .content_extent()
+                .map_err(AdmissionError::InvalidGeometry),
+            WindowCommand::SetSize(asked)
+                .validate()
+                .map(|()| extent(asked.width, asked.height)),
+            "{asked:?}"
+        );
+    }
 }
 
 fn open_or_absent_constraints_are_valid() {
@@ -384,7 +455,10 @@ fn admit_checks_numbers_before_capabilities() {
     let bad = WindowCommand::SetSize(size(-1.0, 10.0));
     assert_eq!(
         admits(&bad, &WindowCapabilities::NONE),
-        Err(AdmissionError::InvalidGeometry)
+        Err(AdmissionError::InvalidGeometry(InvalidGeometry::Extent {
+            width: -1.0,
+            height: 10.0
+        }))
     );
 }
 
@@ -746,6 +820,10 @@ fn window_command_validate() {
             (
                 "minimum_above_maximum_in_either_dimension_is_refused",
                 minimum_above_maximum_in_either_dimension_is_refused,
+            ),
+            (
+                "an_opening_is_refused_for_what_a_command_is_refused_for",
+                an_opening_is_refused_for_what_a_command_is_refused_for,
             ),
             (
                 "open_or_absent_constraints_are_valid",

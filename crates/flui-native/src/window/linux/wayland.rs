@@ -1316,7 +1316,7 @@ mod toplevel {
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
     use crate::window::state::{
-        ReportedFacts, WindowStateCell, not_carried_out, system_frame_or_none,
+        ReportedFacts, SampledGeometry, WindowStateCell, not_carried_out, system_frame_or_none,
     };
 
     /// What the compositor said of one window since the owner last looked,
@@ -1656,8 +1656,9 @@ mod toplevel {
             (output, scale)
         }
 
-        /// The snapshot these facts make; none for a size that is no extent.
-        fn state(&self) -> Result<WindowState, flui_platform::InvalidGeometry> {
+        /// The read these facts make; a size that is no extent costs it its
+        /// geometry and nothing else.
+        fn state(&self) -> crate::window::state::Sample {
             let applied = self.applied;
             let entered = first_live(&applied.told.outputs, |output| self.live.contains(output));
             let (output, scale) = self.output_and_scale();
@@ -1670,53 +1671,59 @@ mod toplevel {
                 .own_frame(decoration, states)
                 .map_or(0.0, |frame| frame.header());
             let outer = Size::new(content.width, content.height + header);
-            let state = WindowState::new(
-                WindowGeometry::try_new(None, outer)?,
-                flui_platform::WindowExtent::try_new(content)?,
-            )
-            .with_mode(states.mode())
-                // A toplevel has no hidden state of its own: it is shown
-                // until it closes.
-                .with_visible(!self.closed)
-                .with_focused(states.activated)
-                .with_title(Some(applied.title.clone()))
-                .with_constraints(applied.constraints)
-                .with_resizable(applied.resizable)
-                .with_frame(applied.reported_frame(decoration))
-                .with_display(output.map(|output| output.display));
-            Ok(ReportedFacts {
-                metrics: WindowMetrics::from_logical(content, scale).ok(),
-                appearance: self.portal.appearance(),
-                insets: flui_platform::WindowInsets::ZERO,
-                execution: WindowExecutionState::Running,
-                // What the compositor says it draws: a surface it maps (a
-                // configured window with a frame) enters an output, and one
-                // it does not draw (covered, on a hidden workspace, its
-                // outputs off, minimized) is suspended. A configured window
-                // the compositor has not shown yet enters no output until it
-                // draws its first frame, so it is not occluded: it would
-                // otherwise never be given that frame.
-                occluded: Sight {
-                    configured: applied.configured,
-                    shown: self.shown,
-                    on_output: entered.is_some(),
-                    suspended: states.suspended,
-                }
-                .occluded(),
-                hovered: self.hovered,
-                active: states.activated,
-                capabilities: presented::reported(
-                    capabilities(
-                        applied.told.wm,
-                        decoration.absence(),
-                        decoration.app_title_bar_absence(),
-                        states,
-                        self.activation,
+            let geometry = WindowGeometry::try_new(None, outer).and_then(|outer| {
+                Ok(SampledGeometry {
+                    outer,
+                    content: flui_platform::WindowExtent::try_new(content)?,
+                    normal: None,
+                })
+            });
+            crate::window::state::Sample::read(geometry, |state| {
+                let state = state
+                    .with_mode(states.mode())
+                    // A toplevel has no hidden state of its own: it is shown
+                    // until it closes.
+                    .with_visible(!self.closed)
+                    .with_focused(states.activated)
+                    .with_title(Some(applied.title.clone()))
+                    .with_constraints(applied.constraints)
+                    .with_resizable(applied.resizable)
+                    .with_frame(applied.reported_frame(decoration))
+                    .with_display(output.map(|output| output.display));
+                ReportedFacts {
+                    metrics: WindowMetrics::from_logical(content, scale).ok(),
+                    appearance: self.portal.appearance(),
+                    insets: flui_platform::WindowInsets::ZERO,
+                    execution: WindowExecutionState::Running,
+                    // What the compositor says it draws: a surface it maps (a
+                    // configured window with a frame) enters an output, and one
+                    // it does not draw (covered, on a hidden workspace, its
+                    // outputs off, minimized) is suspended. A configured window
+                    // the compositor has not shown yet enters no output until it
+                    // draws its first frame, so it is not occluded: it would
+                    // otherwise never be given that frame.
+                    occluded: Sight {
+                        configured: applied.configured,
+                        shown: self.shown,
+                        on_output: entered.is_some(),
+                        suspended: states.suspended,
+                    }
+                    .occluded(),
+                    hovered: self.hovered,
+                    active: states.activated,
+                    capabilities: presented::reported(
+                        capabilities(
+                            applied.told.wm,
+                            decoration.absence(),
+                            decoration.app_title_bar_absence(),
+                            states,
+                            self.activation,
+                        ),
+                        self.reports_presentation,
                     ),
-                    self.reports_presentation,
-                ),
-            }
-            .onto(state))
+                }
+                .onto(state)
+            })
         }
     }
 
@@ -1729,6 +1736,9 @@ mod toplevel {
             options: &WindowOptions,
             handler: Rc<dyn WindowHandler>,
         ) -> Result<Rc<Self>, OpenWindowError> {
+            // Refused before an id is taken, for what a command is refused for.
+            let content = options.content_extent()?;
+            let constraints = options.constraints()?;
             let WindowSeed {
                 id,
                 protocol,
@@ -1799,8 +1809,7 @@ mod toplevel {
                 .as_ref()
                 .map(|exporter| exporter.export_toplevel(&surface, &queue, Arc::clone(&record)));
             toplevel.set_title(options.title.clone());
-            let constraints = options.constraints();
-            let size = clamp(options.size, constraints);
+            let size = clamp(content.get(), constraints);
             match options.mode {
                 WindowMode::Maximized => toplevel.set_maximized(),
                 WindowMode::Fullscreen => toplevel.set_fullscreen(None),
@@ -1866,10 +1875,11 @@ mod toplevel {
                     InputCapabilities::UNAVAILABLE,
                     frames,
                 )),
-                // Until the first configure, below: the size asked for, or
-                // none where that is no extent.
+                // Until the first configure, below: the size asked for, held
+                // to the limits asked for.
                 state: Arc::new(WindowStateCell::new({
-                    let asked = flui_platform::WindowExtent::try_new(size).unwrap_or_default();
+                    let asked = flui_platform::WindowExtent::try_new(size)
+                        .expect("BUG: a checked size held to checked limits is an extent");
                     WindowState::new(WindowGeometry::unplaced(asked), asked)
                 })),
                 record,
@@ -1930,7 +1940,7 @@ mod toplevel {
             window.carry_out_protocol();
             // The window's first snapshot holds the first configure; the
             // handler hears nothing before its capability snapshot.
-            let _ = window.state.state_with(|| window.sample());
+            let _ = window.state.refresh(&window.delivery, || window.sample());
             notices.mark_stale_on_wake(&window.state);
             window
                 .delivery
@@ -1953,7 +1963,7 @@ mod toplevel {
         }
 
         /// The window's state as the compositor and the owner describe it now.
-        fn sample(&self) -> Result<WindowState, flui_platform::InvalidGeometry> {
+        fn sample(&self) -> crate::window::state::Sample {
             let applied = self.applied.borrow();
             Sample {
                 applied: &applied,
@@ -2136,16 +2146,13 @@ mod toplevel {
         /// Read the window again for its state publisher, announcing
         /// nothing: `WindowDelivery::dispatch_state_changed` does.
         fn read_state(&self) -> Publication {
-            self.state.invalidate();
-            self.state.state_with(|| self.sample()).outcome()
+            self.state.refresh(&self.delivery, || self.sample())
         }
 
         /// The compositor reported a change: read the window again and tell
         /// its handler when the snapshot changed.
         fn refresh_state(&self) {
-            if self.read_state() == Publication::Changed {
-                self.delivery.dispatch_state_changed();
-            }
+            self.state.publish_report(&self.delivery, || self.sample());
         }
 
         /// Carry out what the compositor told the window since the last
@@ -2658,11 +2665,7 @@ mod toplevel {
         /// A revision this read publishes is announced at the owner's turn,
         /// never from the read.
         fn state(&self) -> WindowState {
-            let published = self.state.state_with(|| self.sample());
-            if published.changed {
-                self.delivery.state_changed_after_read();
-            }
-            published.state
+            self.state.read(&self.delivery, || self.sample())
         }
 
         fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {

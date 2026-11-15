@@ -102,7 +102,9 @@ use crate::{
     owner::OpenWindowError,
     owner::slot::{OwnerCell, OwnerWeak},
     owner::window_delivery::{Retirement, WindowDelivery},
-    window::state::{ReportedFacts, WindowStateCell, mode_of, reported_frame},
+    window::state::{
+        ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
+    },
 };
 use flui_platform::{
     CursorError, DisplayId, PlatformWindow, RedrawRequester, SurfaceTarget, WindowHandler,
@@ -425,6 +427,8 @@ impl MacOSWindow {
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
     ) -> Result<Rc<Self>, OpenWindowError> {
+        let content = options.content_extent()?;
+        let constraints = options.constraints()?;
         // A window's owner lane is the AppKit main queue — the one lane all
         // other process AppKit traffic already serializes on (see
         // `owner::apple::macos::owner_lane`) — which runs on the main thread
@@ -520,7 +524,7 @@ impl MacOSWindow {
 
             // The limits are on the content size, like `options.size`, and the
             // same pair is read back into the state.
-            let (min, max) = content_limits_of_constraints(options.constraints());
+            let (min, max) = content_limits_of_constraints(constraints);
             let _: () = msg_send![ns_window, setContentMinSize: NSSize::new(min.width, min.height)];
             let _: () = msg_send![ns_window, setContentMaxSize: NSSize::new(max.width, max.height)];
 
@@ -667,14 +671,11 @@ impl MacOSWindow {
                 redraw: OnceCell::new(),
                 displays: OnceLock::new(),
                 snapshot: Arc::new(WindowStateCell::new(
-                    WindowState::new(
-                        WindowGeometry::unplaced(options.content_extent()),
-                        options.content_extent(),
-                    )
-                    .with_title(Some(options.title.clone()))
-                    .with_constraints(options.constraints())
-                    .with_resizable(options.resizable)
-                    .with_frame(options.frame),
+                    WindowState::new(WindowGeometry::unplaced(content), content)
+                        .with_title(Some(options.title.clone()))
+                        .with_constraints(constraints)
+                        .with_resizable(options.resizable)
+                        .with_frame(options.frame),
                 )),
             });
 
@@ -1738,31 +1739,26 @@ impl MacOSWindow {
     /// invalidated it. A revision the read publishes is announced at the
     /// owner's turn, never from the read.
     fn current_state(&self) -> WindowState {
-        let published = self.snapshot.state_with(|| self.sample_state());
-        if published.changed {
-            self.delivery.state_changed_after_read();
-        }
-        published.state
+        self.snapshot.read(&self.delivery, || self.sample_state())
     }
 
     /// AppKit reported a change, or a command was just carried out: read the
     /// window again, and raise `WindowHandler::state_changed` when that
     /// produced a new revision.
     fn publish_state(&self) {
-        if self.read_state() == crate::owner::window_delivery::Publication::Changed {
-            self.delivery.dispatch_state_changed();
-        }
+        self.snapshot
+            .publish_report(&self.delivery, || self.sample_state());
     }
 
     /// Read the window again for its state publisher, announcing nothing.
     fn read_state(&self) -> crate::owner::window_delivery::Publication {
-        self.snapshot.invalidate();
-        self.snapshot.state_with(|| self.sample_state()).outcome()
+        self.snapshot
+            .refresh(&self.delivery, || self.sample_state())
     }
 
-    /// The window as AppKit reports it now; no sample for rectangles that
-    /// describe no window.
-    fn sample_state(&self) -> Result<WindowState, flui_platform::InvalidGeometry> {
+    /// The window as AppKit reports it now; rectangles that describe no
+    /// window cost the sample its geometry and nothing else.
+    fn sample_state(&self) -> Sample {
         let (display, normal, scale, occlusion_visible, heading, asked_frame) = {
             let state = self.state.lock();
             (
@@ -1804,62 +1800,70 @@ impl MacOSWindow {
             let position = primary_screen_height().and_then(|height| {
                 top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
             });
-            let state = WindowState::new(
-                WindowGeometry::try_new(position, Size::new(frame.size.width, frame.size.height))?,
-                flui_platform::WindowExtent::try_new(Size::new(
-                    content.size.width,
-                    content.size.height,
-                ))?,
-            )
-            .with_mode(mode)
-            .with_normal_geometry(if mode == WindowMode::Normal {
-                None
-            } else {
-                normal
+            let geometry =
+                WindowGeometry::try_new(position, Size::new(frame.size.width, frame.size.height))
+                    .and_then(|outer| {
+                        Ok(SampledGeometry {
+                            outer,
+                            content: flui_platform::WindowExtent::try_new(Size::new(
+                                content.size.width,
+                                content.size.height,
+                            ))?,
+                            normal: if mode == WindowMode::Normal {
+                                None
+                            } else {
+                                normal
+                            },
+                        })
+                    });
+            // The window's appearance, not NSApp's: a window may override it.
+            let appearance = content_view::effective_appearance(
+                (&*self.ns_window)
+                    .downcast_ref::<objc2_app_kit::NSWindow>()
+                    .expect("BUG: MacOSWindow wraps an NSWindow"),
+            );
+            let capabilities = capabilities_of(
+                flags,
+                heading,
+                appkit_window_capabilities(self.owner_is_main, self.presentation),
+            );
+            Sample::read(geometry, |state| {
+                let state = state
+                    .with_mode(mode)
+                    .with_visible(flags.is_shown())
+                    .with_focused(focused)
+                    .with_title(Some(title))
+                    .with_resizable(flags.resizable)
+                    .with_frame(reported_frame(
+                        mask.contains(NSWindowStyleMask::Titled),
+                        asked_frame,
+                    ))
+                    .with_constraints(constraints_of_content_limits(
+                        Size::new(min.width, min.height),
+                        Size::new(max.width, max.height),
+                    ))
+                    .with_display(display);
+                ReportedFacts {
+                    metrics: flui_foundation::geometry::WindowMetrics::from_logical(
+                        Size::new(content.size.width, content.size.height),
+                        scale,
+                    )
+                    .ok(),
+                    appearance,
+                    // A desktop window has no safe area and AppKit never
+                    // suspends one.
+                    insets: flui_platform::WindowInsets::ZERO,
+                    execution: flui_platform::WindowExecutionState::Running,
+                    // Covered or on another space.
+                    occluded: !occlusion_visible,
+                    hovered,
+                    // The key window is the one this host reports active;
+                    // the main window has no report of its own here.
+                    active: focused,
+                    capabilities,
+                }
+                .onto(state)
             })
-            .with_visible(flags.is_shown())
-            .with_focused(focused)
-            .with_title(Some(title))
-            .with_resizable(flags.resizable)
-            .with_frame(reported_frame(
-                mask.contains(NSWindowStyleMask::Titled),
-                asked_frame,
-            ))
-            .with_constraints(constraints_of_content_limits(
-                Size::new(min.width, min.height),
-                Size::new(max.width, max.height),
-            ))
-            .with_display(display);
-            Ok(ReportedFacts {
-                metrics: flui_foundation::geometry::WindowMetrics::from_logical(
-                    Size::new(content.size.width, content.size.height),
-                    scale,
-                )
-                .ok(),
-                // The window's appearance, not NSApp's: a window may
-                // override it.
-                appearance: content_view::effective_appearance(
-                    (&*self.ns_window)
-                        .downcast_ref::<objc2_app_kit::NSWindow>()
-                        .expect("BUG: MacOSWindow wraps an NSWindow"),
-                ),
-                // A desktop window has no safe area and AppKit never
-                // suspends one.
-                insets: flui_platform::WindowInsets::ZERO,
-                execution: flui_platform::WindowExecutionState::Running,
-                // Covered or on another space.
-                occluded: !occlusion_visible,
-                hovered,
-                // The key window is the one this host reports active;
-                // the main window has no report of its own here.
-                active: focused,
-                capabilities: capabilities_of(
-                    flags,
-                    heading,
-                    appkit_window_capabilities(self.owner_is_main, self.presentation),
-                ),
-            }
-            .onto(state))
         }
     }
 

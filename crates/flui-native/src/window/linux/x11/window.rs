@@ -108,7 +108,9 @@ use crate::owner::wake_deadline::FrameCount;
 use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
 use crate::window::plan::{FrameInset, OpenPlan, PlacementDisplay};
-use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, not_carried_out};
+use crate::window::state::{
+    ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, not_carried_out,
+};
 
 /// `_NET_WM_STATE` and `WM_STATE` are read this far, in 4-byte units.
 const PROPERTY_READ_LENGTH: u32 = 64;
@@ -440,20 +442,14 @@ impl X11Window {
     /// Read the window again for its state publisher, announcing nothing:
     /// `WindowDelivery::dispatch_state_changed` calls `state_changed`.
     fn read_state(&self) -> Publication {
-        self.cell.invalidate();
-        self.cell.state_with(|| self.sample()).outcome()
+        self.cell.refresh(&self.delivery, || self.sample())
     }
 
     /// The window may differ from its last snapshot: read it again, raise
     /// `state_changed` for a new revision, tell the bridge of a change of
     /// focus, and ask for a frame when the content changed size.
     fn refresh_state(&self) {
-        self.cell.invalidate();
-        let published = self.cell.state_with(|| self.sample());
-        if published.changed {
-            self.delivery.dispatch_state_changed();
-        }
-        let state = published.state;
+        let state = self.cell.publish_report(&self.delivery, || self.sample());
         let (focus_changed, resized) = {
             let mut record = self.record.borrow_mut();
             let focus_changed =
@@ -476,9 +472,10 @@ impl X11Window {
         }
     }
 
-    /// The window as the server and the window manager hold it now; no sample
-    /// for a rectangle that describes no window.
-    fn sample(&self) -> Result<WindowState, flui_platform::InvalidGeometry> {
+    /// The window as the server and the window manager hold it now; a
+    /// rectangle that describes no window costs the sample its geometry and
+    /// nothing else.
+    fn sample(&self) -> Sample {
         let read = self.read_server();
         let support = self.support();
         let capabilities = capabilities(support);
@@ -491,7 +488,7 @@ impl X11Window {
             state.visible = false;
             state.focused = false;
             state.active = false;
-            return Ok(state);
+            return Sample::from(state);
         };
         let outer = outer_bounds(read.origin, read.content, read.frame);
         let display = snapshot
@@ -512,18 +509,24 @@ impl X11Window {
         // Mapped under an unmapped ancestor (a window manager's frame on
         // another workspace) or fully covered.
         let occluded = read.map_state == MapState::UNVIEWABLE || record.obscured;
-        let geometry = logical_geometry(outer, scale)?;
-        let content_size = flui_platform::WindowExtent::try_new(Size::new(
-            f64::from(read.content.width) / scale,
-            f64::from(read.content.height) / scale,
-        ))?;
-        let normal_geometry = match mode {
-            WindowMode::Normal => {
-                record.normal_geometry = Some(geometry);
-                None
-            }
-            _ => record.normal_geometry,
-        };
+        let geometry = logical_geometry(outer, scale).and_then(|geometry| {
+            let content = flui_platform::WindowExtent::try_new(Size::new(
+                f64::from(read.content.width) / scale,
+                f64::from(read.content.height) / scale,
+            ))?;
+            let normal = match mode {
+                WindowMode::Normal => {
+                    record.normal_geometry = Some(geometry);
+                    None
+                }
+                _ => record.normal_geometry,
+            };
+            Ok(SampledGeometry {
+                outer: geometry,
+                content,
+                normal,
+            })
+        });
         if mode == WindowMode::Normal
             && record.frame.has_system_title_bar()
             && let Some(windows) = self.windows.upgrade()
@@ -531,31 +534,32 @@ impl X11Window {
             windows.frame_inset.record(read.frame.added());
         }
         let metrics = WindowMetrics::try_new(read.content, scale).ok();
-        let state = WindowState::new(geometry, content_size)
-            .with_mode(mode)
-            .with_normal_geometry(normal_geometry)
-            .with_visible(visible)
-            .with_focused(read.focused)
-            .with_title(Some(record.title.clone()))
-            .with_constraints(record.constraints)
-            .with_resizable(record.resizable)
-            .with_frame(record.frame)
-            .with_display(display.map(|display| display.id));
-        Ok(ReportedFacts {
-            metrics,
-            appearance: self.appearance(),
-            insets: flui_platform::WindowInsets::ZERO,
-            execution: flui_platform::WindowExecutionState::Running,
-            occluded,
-            hovered: self.delivery.hovered(),
-            active: if support.managed {
-                read.active
-            } else {
-                read.focused
-            },
-            capabilities,
-        }
-        .onto(state))
+        Sample::read(geometry, |state| {
+            let state = state
+                .with_mode(mode)
+                .with_visible(visible)
+                .with_focused(read.focused)
+                .with_title(Some(record.title.clone()))
+                .with_constraints(record.constraints)
+                .with_resizable(record.resizable)
+                .with_frame(record.frame)
+                .with_display(display.map(|display| display.id));
+            ReportedFacts {
+                metrics,
+                appearance: self.appearance(),
+                insets: flui_platform::WindowInsets::ZERO,
+                execution: flui_platform::WindowExecutionState::Running,
+                occluded,
+                hovered: self.delivery.hovered(),
+                active: if support.managed {
+                    read.active
+                } else {
+                    read.focused
+                },
+                capabilities,
+            }
+            .onto(state)
+        })
     }
 
     /// Ask the server for what the snapshot reads, every request first, then
@@ -1523,11 +1527,7 @@ impl PlatformWindow for X11Window {
     /// A revision this read publishes is announced at the owner's turn, never
     /// from the read.
     fn state(&self) -> WindowState {
-        let published = self.cell.state_with(|| self.sample());
-        if published.changed {
-            self.delivery.state_changed_after_read();
-        }
-        published.state
+        self.cell.read(&self.delivery, || self.sample())
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
@@ -1844,6 +1844,9 @@ impl X11Windows {
                     .into(),
             });
         }
+        // Refused before an id is taken, for what a command is refused for.
+        options.content_extent()?;
+        let constraints = options.constraints()?;
         let id = self.mint_id()?;
         let support = self.support.get();
         // A title bar of the application's opens with the window manager's frame
@@ -1945,7 +1948,7 @@ impl X11Windows {
             input_scale: WindowScale::new(scale),
             record: RefCell::new(Record {
                 title: options.title.clone(),
-                constraints: options.constraints(),
+                constraints,
                 resizable: options.resizable,
                 // No title bar of the application's here yet: one asked for
                 // opens with the system's frame.

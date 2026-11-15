@@ -156,7 +156,12 @@ fn commands_reach_the_control_checked_and_in_order() {
     handle.set_frame(frame).expect("accepted");
     assert_eq!(
         handle.set_size(Size::new(0.0, 10.0)),
-        Err(SubmitError::Admission(AdmissionError::InvalidGeometry)),
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry(
+            flui_platform::InvalidGeometry::Empty {
+                width: 0.0,
+                height: 10.0
+            }
+        ))),
         "a size that describes no window is refused before the control"
     );
     handle.hide().expect("accepted");

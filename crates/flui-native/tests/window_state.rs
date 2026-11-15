@@ -323,13 +323,102 @@ fn invalid_geometry_is_refused_before_the_host() {
             Some(Size::new(100.0, 100.0)),
         )),
     ] {
+        let refused = command
+            .validate()
+            .expect_err("numbers that describe no window");
         assert_eq!(
             window.admit_and_apply(command.clone()),
-            Err(CommandRefusal::Admission(AdmissionError::InvalidGeometry)),
+            Err(CommandRefusal::Admission(refused)),
+            "{command:?}"
+        );
+        assert!(
+            matches!(refused, AdmissionError::InvalidGeometry(_)),
             "{command:?}"
         );
     }
     assert_eq!(window.state(), before);
+}
+
+/// A report whose geometry describes no window costs the window its geometry
+/// and nothing else: a focus change and a close the window system reports
+/// while it stands are published, and the close's `state_changed` reaches the
+/// handler before `closed`.
+fn a_bad_report_keeps_the_geometry_and_publishes_the_rest() {
+    use flui_testing::window_handler::HandlerCall;
+
+    let platform = HeadlessPlatform::new();
+    let opened = open(&platform);
+    let host = mock(&opened.window);
+    let before = opened.window.state();
+    host.simulate_resize(f64::NAN, 100.0);
+    host.simulate_focus(!before.focused);
+    let focused = opened.window.state();
+    assert_eq!(focused.focused, !before.focused, "the focus is published");
+    assert_eq!(
+        focused.content_size, before.content_size,
+        "the geometry stands"
+    );
+    assert_eq!(focused.outer, before.outer);
+    let calls = opened.handler.calls().len();
+    host.simulate_close();
+    let closed = opened.window.state();
+    assert!(!closed.visible, "the close is published");
+    assert_eq!(
+        closed.execution,
+        flui_platform::WindowExecutionState::Detached
+    );
+    let after: Vec<HandlerCall> = opened.handler.calls().split_off(calls);
+    let changed = after
+        .iter()
+        .position(|call| *call == HandlerCall::StateChanged);
+    let ended = after.iter().position(|call| *call == HandlerCall::Closed);
+    assert!(
+        matches!((changed, ended), (Some(changed), Some(ended)) if changed < ended),
+        "the close's state change, then closed: {after:?}"
+    );
+}
+
+/// An opening asks for its size and limits as the commands do: options a
+/// command would be refused for open no window, with the same error.
+fn options_that_describe_no_window_open_none() {
+    use flui_platform::{InvalidGeometry, WindowExtent};
+
+    let platform = HeadlessPlatform::new();
+    let extent =
+        |width, height| WindowExtent::try_new(Size::new(width, height)).expect("an extent");
+    let rows = [
+        (
+            WindowOptions::default()
+                .min_size(Some(extent(800.0, 600.0)))
+                .max_size(Some(extent(400.0, 300.0))),
+            InvalidGeometry::Limits {
+                min: extent(800.0, 600.0),
+                max: extent(400.0, 300.0),
+            },
+        ),
+        (
+            WindowOptions::default().min_size(Some(WindowExtent::ZERO)),
+            InvalidGeometry::Empty {
+                width: 0.0,
+                height: 0.0,
+            },
+        ),
+        (
+            WindowOptions::default().size(Size::new(f64::NAN, 600.0)),
+            InvalidGeometry::Extent {
+                width: f64::NAN,
+                height: 600.0,
+            },
+        ),
+    ];
+    for (options, refused) in rows {
+        let opened = Opened::on(&platform, options);
+        assert!(
+            matches!(opened, Err(flui_native::OpenWindowError::InvalidGeometry(error)) if error == refused),
+            "{refused}: {:?}",
+            opened.err()
+        );
+    }
 }
 
 fn a_closed_window_refuses_commands() {
@@ -689,6 +778,14 @@ fn window_state_contract() {
             (
                 "invalid_geometry_is_refused_before_the_host",
                 invalid_geometry_is_refused_before_the_host as fn(),
+            ),
+            (
+                "options_that_describe_no_window_open_none",
+                options_that_describe_no_window_open_none as fn(),
+            ),
+            (
+                "a_bad_report_keeps_the_geometry_and_publishes_the_rest",
+                a_bad_report_keeps_the_geometry_and_publishes_the_rest as fn(),
             ),
             (
                 "a_closed_window_refuses_commands",

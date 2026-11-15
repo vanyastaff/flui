@@ -2,7 +2,7 @@
 //! a window's geometry builds no value, so it cannot be published.
 
 use flui_foundation::geometry::{Point, Size};
-use flui_platform::{InvalidGeometry, SizeConstraints, WindowExtent, WindowGeometry, WindowState};
+use flui_platform::{InvalidGeometry, SizeConstraints, WindowExtent, WindowGeometry};
 
 /// Sides no window has: what a size divided by a zero scale, a compositor's
 /// NaN or an inverted rectangle reads as.
@@ -61,8 +61,7 @@ fn a_rectangle_is_a_finite_position_and_an_extent() {
             "{bad}"
         );
     }
-    let moved = WindowGeometry::EMPTY
-        .sized(WindowExtent::try_new(size).expect("an extent"))
+    let moved = WindowGeometry::unplaced(WindowExtent::try_new(size).expect("an extent"))
         .at(Some(Point::new(4.0, 2.0)))
         .expect("a finite position");
     assert_eq!(
@@ -89,26 +88,25 @@ fn limits_are_extents() {
     }
 }
 
-/// What a NaN in a snapshot used to cost: a sample that never equals the
-/// published snapshot publishes a revision on every read. Every number a
-/// snapshot holds now equals itself, so a snapshot is its own successor.
-fn a_snapshot_is_equal_to_itself() {
-    let state = WindowState::new(
-        WindowGeometry::try_new(Some(Point::new(10.0, 20.0)), Size::new(816.0, 639.0))
-            .expect("a rectangle"),
-        WindowExtent::try_new(Size::new(800.0, 600.0)).expect("an extent"),
-    )
-    .with_normal_geometry(Some(WindowGeometry::EMPTY))
-    .with_constraints(
-        SizeConstraints::try_new(
-            Some(Size::new(1.0, 1.0)),
-            Some(Size::new(f64::MAX, f64::MAX)),
-        )
-        .expect("finite limits"),
-    );
-    let published = state.successor(state.clone()).expect("an equal sample");
-    assert_eq!(published.revision, state.revision);
-    assert_eq!(published, state);
+/// The refusal of a report equals itself, a NaN in it included, so a host,
+/// a test or a diagnostic that compares two refusals of the same report sees
+/// one; refusals of different numbers differ.
+fn a_refusal_equals_itself() {
+    let refusals = [
+        WindowExtent::try_new(Size::new(f64::NAN, 600.0)).expect_err("a NaN side"),
+        WindowGeometry::try_new(Some(Point::new(0.0, f64::NAN)), Size::new(1.0, 1.0))
+            .expect_err("a NaN coordinate"),
+        WindowExtent::try_new(Size::new(-1.0, 600.0)).expect_err("a negative side"),
+    ];
+    for (index, refusal) in refusals.iter().enumerate() {
+        for (other_index, other) in refusals.iter().enumerate() {
+            assert_eq!(
+                refusal == other,
+                index == other_index,
+                "{refusal} / {other}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -125,10 +123,7 @@ fn window_geometry() {
                 a_rectangle_is_a_finite_position_and_an_extent,
             ),
             ("limits_are_extents", limits_are_extents),
-            (
-                "a_snapshot_is_equal_to_itself",
-                a_snapshot_is_equal_to_itself,
-            ),
+            ("a_refusal_equals_itself", a_refusal_equals_itself),
         ],
     );
 }

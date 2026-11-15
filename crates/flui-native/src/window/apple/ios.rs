@@ -70,7 +70,7 @@ use crate::text::TextInput;
 use crate::window::capabilities::{pointer_absence, scene_capabilities};
 use crate::window::installation::{PendingWindowInstallation, WindowInstallation};
 use crate::window::keyboard;
-use crate::window::state::{ReportedFacts, WindowStateCell};
+use crate::window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCell};
 use crate::{BootstrapError, PlatformError, PlatformProxy};
 use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_platform::{
@@ -1425,56 +1425,63 @@ impl IOSWindow {
     }
 
     /// The scene's size, visibility, focus, metrics and lifecycle, read again.
-    /// A closed scene is hidden, unfocused and detached. No sample for a view
-    /// whose bounds are no extent.
-    fn sample_state(&self) -> Result<WindowState, flui_platform::InvalidGeometry> {
+    /// A closed scene is hidden, unfocused and detached. A view whose bounds
+    /// are no extent costs the sample its geometry and nothing else.
+    fn sample_state(&self) -> Sample {
         let metrics = *self.metrics.lock();
         let closed = self.closed.load(Ordering::SeqCst);
         let (focused, foreground) = {
             let lifecycle = self.lifecycle.lock();
             (lifecycle.focused && !closed, lifecycle.visible)
         };
-        let extent = flui_platform::WindowExtent::try_new(metrics.size)?;
-        let state = WindowState::new(WindowGeometry::unplaced(extent), extent)
-            // A scene cannot hide its window; in the background the system
-            // keeps it from the screen, which is its occlusion.
-            .with_visible(!closed)
-            .with_focused(focused)
-            .with_resizable(false)
-            .with_frame(flui_platform::WindowFrame::None)
-            .with_display(self.screen.lock().id);
-        Ok(ReportedFacts {
-            metrics: flui_foundation::geometry::WindowMetrics::from_logical(
-                metrics.size,
-                metrics.scale,
-            )
-            .ok(),
-            appearance: if self.dark.load(Ordering::Relaxed) {
-                WindowAppearance::Dark
-            } else {
-                WindowAppearance::Light
-            },
-            insets: flui_platform::WindowInsets::ZERO
-                .try_with_safe_area(metrics.safe_area)
-                .unwrap_or_else(|error| {
-                    tracing::warn!(%error, "UIKit reported a safe area FLUI cannot publish; none is");
-                    flui_platform::WindowInsets::ZERO
-                })
-                .with_keyboard(metrics.keyboard),
-            execution: self.execution_now(),
-            occluded: !foreground,
-            hovered: self.delivery.hovered(),
-            // A scene has no activation apart from its focus.
-            active: focused,
-            capabilities: scene_capabilities(),
-        }
-        .onto(state))
+        let geometry =
+            flui_platform::WindowExtent::try_new(metrics.size).map(|extent| SampledGeometry {
+                outer: WindowGeometry::unplaced(extent),
+                content: extent,
+                normal: None,
+            });
+        Sample::read(geometry, |state| {
+            let state = state
+                // A scene cannot hide its window; in the background the system
+                // keeps it from the screen, which is its occlusion.
+                .with_visible(!closed)
+                .with_focused(focused)
+                .with_resizable(false)
+                .with_frame(flui_platform::WindowFrame::None)
+                .with_display(self.screen.lock().id);
+            ReportedFacts {
+                metrics: flui_foundation::geometry::WindowMetrics::from_logical(
+                    metrics.size,
+                    metrics.scale,
+                )
+                .ok(),
+                appearance: if self.dark.load(Ordering::Relaxed) {
+                    WindowAppearance::Dark
+                } else {
+                    WindowAppearance::Light
+                },
+                insets: flui_platform::WindowInsets::ZERO
+                    .try_with_safe_area(metrics.safe_area)
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(%error, "UIKit reported a safe area FLUI cannot publish; none is");
+                        flui_platform::WindowInsets::ZERO
+                    })
+                    .with_keyboard(metrics.keyboard),
+                execution: self.execution_now(),
+                occluded: !foreground,
+                hovered: self.delivery.hovered(),
+                // A scene has no activation apart from its focus.
+                active: focused,
+                capabilities: scene_capabilities(),
+            }
+            .onto(state)
+        })
     }
 
     /// Read the scene again for its state publisher, announcing nothing.
     fn read_state(&self) -> crate::owner::window_delivery::Publication {
-        self.snapshot.invalidate();
-        self.snapshot.state_with(|| self.sample_state()).outcome()
+        self.snapshot
+            .refresh(&self.delivery, || self.sample_state())
     }
 
     fn detach_native(&self, marker: MainThreadMarker) {
@@ -1875,15 +1882,11 @@ impl PlatformWindow for IOSWindow {
     /// commands, so a scene's window honours none and observes nothing.
     ///
     /// A revision this read publishes is announced at the owner's turn, never
-    /// from the read: the window's next delivery (the display link's frame)
-    /// carries it first.
+    /// from the read: the delivery asks the loop for a turn through the owner
+    /// signal it resumes through.
     fn state(&self) -> WindowState {
         self.snapshot.invalidate();
-        let published = self.snapshot.state_with(|| self.sample_state());
-        if published.changed {
-            self.delivery.state_changed_after_read();
-        }
-        published.state
+        self.snapshot.read(&self.delivery, || self.sample_state())
     }
 }
 

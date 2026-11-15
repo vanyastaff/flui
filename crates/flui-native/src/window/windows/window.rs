@@ -426,26 +426,23 @@ impl WindowsWindow {
                 focused: false,
             }));
 
-            let constraints = options.constraints();
+            let constraints = options.constraints()?;
             let capabilities = windows.capabilities();
-            let snapshot = Arc::new(WindowStateCell::new(crate::window::state::opening_state(
-                sample_state(
-                    hwnd,
-                    &state,
-                    OwnerTracking {
-                        mode: NativeMode::Normal,
-                        restore_style: 0,
-                        constraints,
-                        display: displays.display_of_window(hwnd),
-                        appearance,
-                        active: false,
-                        hovered: false,
-                        occluded: false,
-                        capabilities,
-                        frame: options.frame,
-                    },
-                ),
-                capabilities,
+            let snapshot = Arc::new(WindowStateCell::open(sample_state(
+                hwnd,
+                &state,
+                OwnerTracking {
+                    mode: NativeMode::Normal,
+                    restore_style: 0,
+                    constraints,
+                    display: displays.display_of_window(hwnd),
+                    appearance,
+                    active: false,
+                    hovered: false,
+                    occluded: false,
+                    capabilities,
+                    frame: options.frame,
+                },
             )));
 
             // A wake marks the published state stale, so the first read after

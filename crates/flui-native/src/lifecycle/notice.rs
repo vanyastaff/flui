@@ -152,7 +152,7 @@ mod tests {
             .expect("an empty sample publishes");
         let read = || WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO);
         let window = Arc::new(WindowStateCell::new(read()));
-        let _ = window.state_with(|| Ok(read()));
+        let _ = window.state_with(|| crate::window::state::Sample::from(read()));
         assert!(
             !displays.is_stale() && !window.is_stale(),
             "fresh to begin with"

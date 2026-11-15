@@ -17,11 +17,11 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
-    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, InvalidGeometry,
-    PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints,
-    SurfaceChange, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
-    WindowCommand, WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowIdMint,
-    WindowMaterial, WindowMode, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
+    PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange, Unsupported,
+    UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand, WindowFrame,
+    WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowMaterial, WindowMode,
+    WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -36,7 +36,7 @@ use crate::owner::headless::{HeadlessLoop, HeadlessState, TrackedWindows, consul
 use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::platform::HostPlatform;
 use crate::text::WindowTextInput;
-use crate::window::state::{ReportedFacts, WindowStateCell};
+use crate::window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCell};
 
 /// What the headless host imposes on its windows.
 ///
@@ -175,6 +175,9 @@ impl TrackedWindows for HeadlessWindows {
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
+        // Refused before an id is taken, for what a command is refused for.
+        let content = options.content_extent()?;
+        let constraints = options.constraints()?;
         let display = state.window_display();
         let window_id = HEADLESS_WINDOW_IDS.lock().next()?;
         let (capabilities, limits) = {
@@ -198,6 +201,8 @@ impl TrackedWindows for HeadlessWindows {
                 display_bounds: display.and_then(|id| state.display_bounds(id)),
                 capabilities,
                 limits,
+                content,
+                constraints,
             },
             WindowDelivery::new(handler, input),
         );
@@ -589,6 +594,10 @@ struct HeadlessWindowSetup {
     display_bounds: Option<Bounds<f64>>,
     capabilities: WindowCapabilities,
     limits: HeadlessWindowPolicy,
+    /// The content size the options ask for, checked.
+    content: flui_platform::WindowExtent,
+    /// The limits the options ask for, checked.
+    constraints: SizeConstraints,
 }
 
 /// The mutable state of a [`HeadlessHostWindow`].
@@ -721,17 +730,12 @@ impl HeadlessHostWindowState {
 /// mode without `observes_minimized`, and no frame while fullscreen. A
 /// closed window is detached; a size or scale that is not a drawable area
 /// reports no metrics. The hover is what the last hover report said. A
-/// snapshot the window system reported is read as it was reported.
-///
-/// # Errors
-/// [`InvalidGeometry`] when the model's rectangle or size describes no
-/// window, as a window system's report can.
-fn sample_window_state(
-    model: &HeadlessHostWindowState,
-    hovered: bool,
-) -> Result<WindowState, InvalidGeometry> {
+/// snapshot the window system reported is read as it was reported. A
+/// rectangle or size of the model that describes no window, as a window
+/// system's report can, costs the sample its geometry and nothing else.
+fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample {
     if let Some(reported) = &model.reported {
-        return Ok(reported.clone());
+        return Sample::from(reported.clone());
     }
     let capabilities = &model.capabilities;
     let observed = |bounds: ModelBounds| {
@@ -753,58 +757,52 @@ fn sample_window_state(
     } else {
         model.execution
     };
-    let outer = observed(model.geometry())?;
-    let state = WindowState::new(outer, outer.extent())
-        .with_mode(mode)
-        .with_normal_geometry(model.normal_geometry.map(observed).transpose()?)
-        .with_visible(model.visible && !model.closed)
-        .with_focused(model.focused)
-        .with_title(Some(model.title.clone()))
-        .with_constraints(model.constraints)
-        .with_resizable(model.resizable)
-        .with_frame(if model.mode == WindowMode::Fullscreen {
-            WindowFrame::None
-        } else {
-            model.frame
+    let geometry = observed(model.geometry()).and_then(|outer| {
+        Ok(SampledGeometry {
+            outer,
+            content: outer.extent(),
+            normal: model.normal_geometry.map(observed).transpose()?,
         })
-        .with_display(model.display);
-    // This host has no activation apart from focus.
-    Ok(ReportedFacts {
-        metrics: flui_foundation::geometry::WindowMetrics::from_logical(
-            model.size,
-            model.scale_factor,
-        )
-        .ok(),
-        appearance: model.appearance,
-        insets: model.insets,
-        execution,
-        occluded: model.occluded,
-        hovered,
-        active: model.focused,
-        capabilities: *capabilities,
-    }
-    .onto(state))
+    });
+    Sample::read(geometry, |state| {
+        let state = state
+            .with_mode(mode)
+            .with_visible(model.visible && !model.closed)
+            .with_focused(model.focused)
+            .with_title(Some(model.title.clone()))
+            .with_constraints(model.constraints)
+            .with_resizable(model.resizable)
+            .with_frame(if model.mode == WindowMode::Fullscreen {
+                WindowFrame::None
+            } else {
+                model.frame
+            })
+            .with_display(model.display);
+        // This host has no activation apart from focus.
+        ReportedFacts {
+            metrics: flui_foundation::geometry::WindowMetrics::from_logical(
+                model.size,
+                model.scale_factor,
+            )
+            .ok(),
+            appearance: model.appearance,
+            insets: model.insets,
+            execution,
+            occluded: model.occluded,
+            hovered,
+            active: model.focused,
+            capabilities: *capabilities,
+        }
+        .onto(state)
+    })
 }
 
-/// Read what `model` says now into the snapshot, announcing nothing: what the
-/// host does when its window system reported a change.
-fn read_window_state(
-    cell: &WindowStateCell,
-    model: &RefCell<HeadlessHostWindowState>,
-    delivery: &WindowDelivery,
-) -> crate::window::state::Published {
-    cell.invalidate();
-    read_stale_window_state(cell, model, delivery)
-}
-
-/// The published snapshot, read from `model` again only when something
-/// invalidated the cell since (a system wake); announcing nothing.
-fn read_stale_window_state(
-    cell: &WindowStateCell,
-    model: &RefCell<HeadlessHostWindowState>,
-    delivery: &WindowDelivery,
-) -> crate::window::state::Published {
-    cell.state_with(|| sample_window_state(&model.borrow(), delivery.hovered()))
+/// The sample `model` gives now, for the window's state cell.
+fn sample_of<'a>(
+    model: &'a RefCell<HeadlessHostWindowState>,
+    delivery: &'a WindowDelivery,
+) -> impl FnOnce() -> Sample + 'a {
+    move || sample_window_state(&model.borrow(), delivery.hovered())
 }
 
 /// What a window's state publisher reads: the model standing in for the OS,
@@ -820,7 +818,8 @@ impl SnapshotSource {
         self.delivery
             .upgrade()
             .map_or(Publication::Unchanged, |delivery| {
-                read_window_state(&self.cell, &self.model, &delivery).outcome()
+                self.cell
+                    .refresh(&delivery, sample_of(&self.model, &delivery))
             })
     }
 }
@@ -841,6 +840,8 @@ impl HeadlessHostWindow {
             display_bounds,
             capabilities,
             limits,
+            content,
+            constraints,
         } = host;
         let mut model = HeadlessHostWindowState {
             frame_rate_hints: Vec::new(),
@@ -850,10 +851,10 @@ impl HeadlessHostWindow {
                 .position
                 .filter(|_| capabilities.places_at_open.is_available())
                 .unwrap_or_default(),
-            size: options.size,
+            size: content.get(),
             mode: WindowMode::Normal,
             normal_geometry: None,
-            constraints: options.constraints(),
+            constraints,
             resizable: options.resizable,
             frame: options.frame.at_open(&capabilities),
             scale_factor: 1.0,
@@ -881,10 +882,8 @@ impl HeadlessHostWindow {
         {
             model.normal_geometry = Some(normal.into());
         }
-        let initial =
-            crate::window::state::opening_state(sample_window_state(&model, false), capabilities);
+        let window_state = Arc::new(WindowStateCell::open(sample_window_state(&model, false)));
         let state = Rc::new(RefCell::new(model));
-        let window_state = Arc::new(WindowStateCell::new(initial));
         let delivery = Arc::new(delivery);
         let source = Rc::new(SnapshotSource {
             cell: Arc::clone(&window_state),
@@ -932,10 +931,10 @@ impl HeadlessHostWindow {
     /// place ([`Self::simulate_state`]); a read never does.
     fn publish_state(&self) {
         self.state.borrow_mut().reported = None;
-        let published = read_window_state(&self.source.cell, &self.source.model, &self.delivery);
-        if published.changed {
-            self.delivery.dispatch_state_changed();
-        }
+        self.source.cell.publish_report(
+            &self.delivery,
+            sample_of(&self.source.model, &self.delivery),
+        );
     }
 
     /// The whole close teardown, in the order both production backends run it:
@@ -1075,11 +1074,10 @@ impl HeadlessHostWindow {
     /// window's own model, which publishes what the model says again.
     pub fn simulate_state(&self, state: WindowState) -> WindowState {
         self.state.borrow_mut().reported = Some(state);
-        let published = read_window_state(&self.source.cell, &self.source.model, &self.delivery);
-        if published.changed {
-            self.delivery.dispatch_state_changed();
-        }
-        published.state
+        self.source.cell.publish_report(
+            &self.delivery,
+            sample_of(&self.source.model, &self.delivery),
+        )
     }
 
     /// Simulate a resize for testing. Fires the handler's `state_changed` when the
@@ -1280,12 +1278,10 @@ impl PlatformWindow for HeadlessHostWindow {
     /// something invalidated the snapshot (a system wake). A revision such a
     /// read publishes is announced at the owner's turn, not from here.
     fn state(&self) -> WindowState {
-        let published =
-            read_stale_window_state(&self.source.cell, &self.source.model, &self.delivery);
-        if published.changed {
-            self.delivery.state_changed_after_read();
-        }
-        published.state
+        self.source.cell.read(
+            &self.delivery,
+            sample_of(&self.source.model, &self.delivery),
+        )
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {

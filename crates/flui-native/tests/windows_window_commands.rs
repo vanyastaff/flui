@@ -496,8 +496,12 @@ fn the_limits_hold_against_resizing() {
     let window = open(
         &platform,
         hidden()
-            .min_size(Some(Size::new(400.0, 300.0)))
-            .max_size(Some(Size::new(800.0, 600.0))),
+            .min_size(Some(
+                flui_platform::WindowExtent::try_new(Size::new(400.0, 300.0)).expect("a limit"),
+            ))
+            .max_size(Some(
+                flui_platform::WindowExtent::try_new(Size::new(800.0, 600.0)).expect("a limit"),
+            )),
     );
     apply(&window, WindowCommand::SetSize(Size::new(100.0, 100.0)));
     assert!(
@@ -680,7 +684,12 @@ fn a_maximum_caps_maximizing() {
 
 fn fullscreen_ignores_the_limits() {
     let platform = platform();
-    let window = open(&platform, options().max_size(Some(Size::new(500.0, 400.0))));
+    let window = open(
+        &platform,
+        options().max_size(Some(
+            flui_platform::WindowExtent::try_new(Size::new(500.0, 400.0)).expect("a limit"),
+        )),
+    );
     apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
     assert!(covers_its_monitor(&window));
 }
@@ -780,9 +789,9 @@ fn a_window_without_a_sizing_border_holds_its_limits() {
     let platform = platform();
     let window = open(
         &platform,
-        hidden()
-            .frame(WindowFrame::None)
-            .max_size(Some(Size::new(500.0, 400.0))),
+        hidden().frame(WindowFrame::None).max_size(Some(
+            flui_platform::WindowExtent::try_new(Size::new(500.0, 400.0)).expect("a limit"),
+        )),
     );
     apply(&window, WindowCommand::SetSize(Size::new(900.0, 700.0)));
     let content = window.state().content_size.get();

@@ -21,8 +21,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    InvalidGeometry, SizeConstraints, WindowAppearance, WindowExtent, WindowGeometry, WindowId,
-    WindowMode, WindowState,
+    SizeConstraints, WindowAppearance, WindowExtent, WindowGeometry, WindowId, WindowMode,
 };
 use parking_lot::Mutex;
 use windows::Win32::{
@@ -67,7 +66,9 @@ use crate::owner::windows::{
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::window::config::WindowConfiguration;
-use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, reported_frame};
+use crate::window::state::{
+    ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
+};
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`.
@@ -352,45 +353,33 @@ impl WindowContext {
     /// invalidated it. A revision the read publishes is announced in a turn
     /// of the window's own message queue, never from the read.
     pub(crate) fn window_state(&self, hwnd: HWND) -> flui_platform::WindowState {
-        let published = self.read_stale_window_state(hwnd);
-        if published.changed {
-            self.delivery.state_changed_after_read();
-        }
-        published.state
-    }
-
-    /// The published snapshot, read from the OS again only when something
-    /// invalidated it; announcing nothing.
-    fn read_stale_window_state(&self, hwnd: HWND) -> crate::window::state::Published {
-        let unchanged = || crate::window::state::Published {
-            state: self.snapshot.published(),
-            changed: false,
-        };
         // While a change takes several steps the window is half-way between two
         // states; a read from inside a callback it raises sees the last whole one.
         if self.publish_hold.get() > 0 {
-            return unchanged();
+            return self.snapshot.published();
         }
         let Some(record) = self.window_state.upgrade() else {
-            return unchanged();
+            return self.snapshot.published();
         };
-        self.snapshot
-            .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)))
+        self.snapshot.read(&self.delivery, || {
+            sample_state(hwnd, &record, self.tracking(hwnd))
+        })
     }
 
     /// Read the window again for its state publisher, announcing nothing; a
     /// a change of several steps is announced once, when it ends.
     pub(crate) fn read_window_state(&self, hwnd: HWND) -> Publication {
-        self.snapshot.invalidate();
         if self.publish_hold.get() > 0 {
+            self.snapshot.invalidate();
             return Publication::Held;
         }
         let Some(record) = self.window_state.upgrade() else {
+            self.snapshot.invalidate();
             return Publication::Unchanged;
         };
-        self.snapshot
-            .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)))
-            .outcome()
+        self.snapshot.refresh(&self.delivery, || {
+            sample_state(hwnd, &record, self.tracking(hwnd))
+        })
     }
 
     /// Whether the application draws the window's title bar: the frame asked
@@ -419,12 +408,18 @@ impl WindowContext {
     /// out: read the window again, and raise `WindowHandler::state_changed`
     /// when that produced a new revision.
     pub(crate) fn publish_window_state(&self, hwnd: HWND) {
-        self.snapshot.invalidate();
         // A change that takes several steps publishes once, when it is done:
         // a subscriber never sees the window half-changed.
-        if self.publish_hold.get() == 0 && self.read_stale_window_state(hwnd).changed {
-            self.delivery.dispatch_state_changed();
-        }
+        let record = (self.publish_hold.get() == 0)
+            .then(|| self.window_state.upgrade())
+            .flatten();
+        let Some(record) = record else {
+            self.snapshot.invalidate();
+            return;
+        };
+        self.snapshot.publish_report(&self.delivery, || {
+            sample_state(hwnd, &record, self.tracking(hwnd))
+        });
     }
 
     /// Hold back publishing until the returned guard drops; the caller then
@@ -1548,14 +1543,13 @@ fn window_text(hwnd: HWND) -> Option<String> {
 /// Win32 reports a minimized window at a parking position, so there the
 /// outer rectangle is the last known size with no position.
 ///
-/// # Errors
-/// [`InvalidGeometry`] when the rectangles over the window's scale describe
-/// no window.
+/// Rectangles that, over the window's scale, describe no window cost the
+/// sample its geometry and nothing else.
 pub(crate) fn sample_state(
     hwnd: HWND,
     record: &Mutex<WindowRecord>,
     tracking: OwnerTracking,
-) -> Result<WindowState, InvalidGeometry> {
+) -> Sample {
     let OwnerTracking {
         mode,
         restore_style,
@@ -1603,21 +1597,6 @@ pub(crate) fn sample_state(
     } else {
         cached
     };
-    let content = WindowExtent::try_new(if mode.is_minimized() { cached } else { content })?;
-    let outer = if have_window && !mode.is_minimized() {
-        WindowGeometry::try_new(
-            Some(Point::new(
-                f64::from(window.left) / scale,
-                f64::from(window.top) / scale,
-            )),
-            Size::new(
-                f64::from(window.right - window.left) / scale,
-                f64::from(window.bottom - window.top) / scale,
-            ),
-        )?
-    } else {
-        WindowGeometry::unplaced(content)
-    };
     // The rectangle the window returns to: Win32's own for a maximized or
     // minimized window (`rcNormalPosition`), and for a fullscreen one the
     // rectangle it was given on entering, taken from the same source.
@@ -1629,54 +1608,77 @@ pub(crate) fn sample_state(
         NativeMode::Maximized | NativeMode::Minimized { .. } => restore_rectangle(hwnd),
         NativeMode::Normal => None,
     };
-    let normal = restore
-        .map(|bounds| {
+    let geometry = (|| {
+        let content = WindowExtent::try_new(if mode.is_minimized() { cached } else { content })?;
+        let outer = if have_window && !mode.is_minimized() {
             WindowGeometry::try_new(
                 Some(Point::new(
-                    f64::from(bounds.origin.x) / scale,
-                    f64::from(bounds.origin.y) / scale,
+                    f64::from(window.left) / scale,
+                    f64::from(window.top) / scale,
                 )),
                 Size::new(
-                    f64::from(bounds.size.width) / scale,
-                    f64::from(bounds.size.height) / scale,
+                    f64::from(window.right - window.left) / scale,
+                    f64::from(window.bottom - window.top) / scale,
                 ),
-            )
-        })
-        .transpose()?;
-    let state = WindowState::new(outer, content)
-        .with_mode(mode_of(mode.flags()))
-        .with_normal_geometry(normal)
-        .with_visible(visible)
-        .with_focused(focused)
-        .with_title(window_text(hwnd))
-        .with_constraints(constraints)
-        .with_resizable(style & WS_THICKFRAME.0 != 0)
-        .with_frame(reported_frame(style & WS_CAPTION.0 == WS_CAPTION.0, frame))
-        .with_display(display);
-    Ok(ReportedFacts {
-        // The client area in device pixels at the window's scale; a minimized
-        // window's empty client area is not drawable and keeps the last.
-        metrics: have_client
-            .then(|| {
-                flui_foundation::geometry::WindowMetrics::try_new(
-                    Size::new(client.right - client.left, client.bottom - client.top),
-                    scale,
+            )?
+        } else {
+            WindowGeometry::unplaced(content)
+        };
+        let normal = restore
+            .map(|bounds| {
+                WindowGeometry::try_new(
+                    Some(Point::new(
+                        f64::from(bounds.origin.x) / scale,
+                        f64::from(bounds.origin.y) / scale,
+                    )),
+                    Size::new(
+                        f64::from(bounds.size.width) / scale,
+                        f64::from(bounds.size.height) / scale,
+                    ),
                 )
-                .ok()
             })
-            .flatten(),
-        appearance,
-        // A desktop window has no safe area, and Win32 never suspends one.
-        insets: flui_platform::WindowInsets::ZERO,
-        execution: flui_platform::WindowExecutionState::Running,
-        // Win32 tells of a cloak and a locked session; a window covered by
-        // others it does not report.
-        occluded,
-        hovered,
-        active,
-        capabilities,
-    }
-    .onto(state))
+            .transpose()?;
+        Ok(SampledGeometry {
+            outer,
+            content,
+            normal,
+        })
+    })();
+    Sample::read(geometry, |state| {
+        let state = state
+            .with_mode(mode_of(mode.flags()))
+            .with_visible(visible)
+            .with_focused(focused)
+            .with_title(window_text(hwnd))
+            .with_constraints(constraints)
+            .with_resizable(style & WS_THICKFRAME.0 != 0)
+            .with_frame(reported_frame(style & WS_CAPTION.0 == WS_CAPTION.0, frame))
+            .with_display(display);
+        ReportedFacts {
+            // The client area in device pixels at the window's scale; a minimized
+            // window's empty client area is not drawable and keeps the last.
+            metrics: have_client
+                .then(|| {
+                    flui_foundation::geometry::WindowMetrics::try_new(
+                        Size::new(client.right - client.left, client.bottom - client.top),
+                        scale,
+                    )
+                    .ok()
+                })
+                .flatten(),
+            appearance,
+            // A desktop window has no safe area, and Win32 never suspends one.
+            insets: flui_platform::WindowInsets::ZERO,
+            execution: flui_platform::WindowExecutionState::Running,
+            // Win32 tells of a cloak and a locked session; a window covered by
+            // others it does not report.
+            occluded,
+            hovered,
+            active,
+            capabilities,
+        }
+        .onto(state)
+    })
 }
 
 impl WindowsWindow {

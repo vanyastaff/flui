@@ -13,7 +13,10 @@
 use flui_foundation::geometry::{Point, Size};
 
 /// Why numbers describe no window.
-#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+///
+/// Two errors are equal when they carry the same numbers bit for bit, so an
+/// error read from a NaN equals itself.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
 #[non_exhaustive]
 pub enum InvalidGeometry {
     /// A coordinate of the position is NaN or infinite.
@@ -32,7 +35,66 @@ pub enum InvalidGeometry {
         /// The reported height.
         height: f64,
     },
+    /// A size asked of a window, or a limit on it, encloses no area: a side
+    /// is zero. A window system may report a zero extent (a window not
+    /// mapped yet), but a window is never asked to take one.
+    #[error("window size {width}x{height} encloses no area")]
+    Empty {
+        /// The asked width.
+        width: f64,
+        /// The asked height.
+        height: f64,
+    },
+    /// The minimum size exceeds the maximum in a dimension.
+    #[error(
+        "the minimum size {}x{} exceeds the maximum {}x{}",
+        min.width(),
+        min.height(),
+        max.width(),
+        max.height()
+    )]
+    Limits {
+        /// The asked minimum.
+        min: WindowExtent,
+        /// The asked maximum.
+        max: WindowExtent,
+    },
 }
+
+impl PartialEq for InvalidGeometry {
+    fn eq(&self, other: &Self) -> bool {
+        let same = |a: f64, b: f64| a.to_bits() == b.to_bits();
+        match (*self, *other) {
+            (Self::Position { x, y }, Self::Position { x: x2, y: y2 }) => {
+                same(x, x2) && same(y, y2)
+            }
+            (
+                Self::Extent { width, height },
+                Self::Extent {
+                    width: width2,
+                    height: height2,
+                },
+            )
+            | (
+                Self::Empty { width, height },
+                Self::Empty {
+                    width: width2,
+                    height: height2,
+                },
+            ) => same(width, width2) && same(height, height2),
+            (
+                Self::Limits { min, max },
+                Self::Limits {
+                    min: min2,
+                    max: max2,
+                },
+            ) => min == min2 && max == max2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for InvalidGeometry {}
 
 /// The extent of a window, of its content or of a limit on it, in logical
 /// pixels: each side is finite and not negative.
@@ -74,6 +136,22 @@ impl WindowExtent {
         }
     }
 
+    /// This extent, when it encloses an area: what a size asked of a window,
+    /// or a limit on it, must be.
+    ///
+    /// # Errors
+    /// [`InvalidGeometry::Empty`] when a side is zero.
+    pub(crate) fn area(self) -> Result<Self, InvalidGeometry> {
+        if self.0.width > 0.0 && self.0.height > 0.0 {
+            Ok(self)
+        } else {
+            Err(InvalidGeometry::Empty {
+                width: self.0.width,
+                height: self.0.height,
+            })
+        }
+    }
+
     /// The extent as a size.
     #[must_use]
     pub const fn get(self) -> Size<f64> {
@@ -92,6 +170,9 @@ impl WindowExtent {
         self.0.height
     }
 }
+
+// Each side is finite, never NaN, so equality is total.
+impl Eq for WindowExtent {}
 
 impl Default for WindowExtent {
     fn default() -> Self {
@@ -136,6 +217,9 @@ pub struct WindowGeometry {
     extent: WindowExtent,
 }
 
+// The position and the extent are finite, never NaN, so equality is total.
+impl Eq for WindowGeometry {}
+
 impl WindowGeometry {
     /// No position and no extent: what a window holds before its window
     /// system has reported a rectangle.
@@ -175,15 +259,6 @@ impl WindowGeometry {
             position,
             extent: self.extent,
         })
-    }
-
-    /// This rectangle with `extent`, where it is.
-    #[must_use]
-    pub const fn sized(self, extent: WindowExtent) -> Self {
-        Self {
-            position: self.position,
-            extent,
-        }
     }
 
     /// The top-left corner in global screen coordinates; `None` where the OS

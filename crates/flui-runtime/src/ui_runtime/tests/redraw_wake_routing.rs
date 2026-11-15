@@ -250,7 +250,10 @@ pub(crate) fn a_secondary_presentation_is_laid_out_at_its_own_size() {
         crate::testing::TestWindow::new()
             .focused(false)
             .with_scale_factor(2.0)
-            .with_sizes(Size::new(600, 400), Size::new(300.0, 200.0)),
+            .with_sizes(
+                Size::new(600, 400),
+                flui_platform::WindowExtent::try_new(Size::new(300.0, 200.0)).expect("an extent"),
+            ),
     );
     // A presentation holds its window weakly; the host keeps it alive.
     let assembled = ui_runtime.assemble_presentation(Rc::clone(&window));

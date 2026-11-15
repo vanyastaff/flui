@@ -129,6 +129,27 @@ impl SizeConstraints {
             max: max.map(WindowExtent::try_new).transpose()?,
         })
     }
+
+    /// These limits, when a window may be asked to hold them: each encloses
+    /// an area and the minimum does not exceed the maximum. The one check a
+    /// command ([`WindowCommand::validate`]) and an opening
+    /// ([`WindowOptions::constraints`](crate::WindowOptions::constraints))
+    /// both make.
+    ///
+    /// # Errors
+    /// [`InvalidGeometry::Empty`] for a limit with a zero side,
+    /// [`InvalidGeometry::Limits`] when the minimum exceeds the maximum in
+    /// either dimension.
+    pub(crate) fn asked(self) -> Result<Self, InvalidGeometry> {
+        let min = self.min.map(WindowExtent::area).transpose()?;
+        let max = self.max.map(WindowExtent::area).transpose()?;
+        if let (Some(min), Some(max)) = (min, max)
+            && (min.width() > max.width() || min.height() > max.height())
+        {
+            return Err(InvalidGeometry::Limits { min, max });
+        }
+        Ok(self)
+    }
 }
 
 /// What the operating system reports about one window, at one revision.
@@ -461,27 +482,22 @@ impl WindowCommand {
     /// Refuse a command whose numbers cannot describe a window, before any
     /// operating system call.
     ///
+    /// The command's numbers are read through the same types a snapshot
+    /// holds ([`WindowGeometry`], [`WindowExtent`], [`SizeConstraints`]), so
+    /// a command is refused for exactly the numbers no window has, and the
+    /// refusal carries them.
+    ///
     /// # Errors
     /// [`AdmissionError::InvalidGeometry`] for a position or size that is
-    /// not finite, a size or a limit that is not positive, or constraints
+    /// not finite, a size or a limit that encloses no area, or constraints
     /// whose minimum exceeds their maximum in either dimension.
     pub fn validate(&self) -> Result<(), AdmissionError> {
-        let valid = match self {
-            Self::SetPosition(at) => at.x.is_finite() && at.y.is_finite(),
-            Self::SetSize(size) => positive_size(*size),
-            Self::SetConstraints(constraints) => {
-                // Finite and not negative by its type; a command's limit is
-                // also an area.
-                let positive = |limit: WindowExtent| limit.width() > 0.0 && limit.height() > 0.0;
-                constraints.min.is_none_or(positive)
-                    && constraints.max.is_none_or(positive)
-                    && match (constraints.min, constraints.max) {
-                        (Some(min), Some(max)) => {
-                            min.width() <= max.width() && min.height() <= max.height()
-                        }
-                        _ => true,
-                    }
-            }
+        match self {
+            Self::SetPosition(at) => WindowGeometry::EMPTY.at(Some(*at)).map(drop),
+            Self::SetSize(size) => WindowExtent::try_new(*size)
+                .and_then(WindowExtent::area)
+                .map(drop),
+            Self::SetConstraints(constraints) => constraints.asked().map(drop),
             Self::SetTitle(_)
             | Self::SetResizable(_)
             | Self::SetFrame(_)
@@ -490,13 +506,9 @@ impl WindowCommand {
             | Self::Hide
             | Self::Activate
             | Self::Close
-            | Self::SetMaterial(_) => true,
-        };
-        if valid {
-            Ok(())
-        } else {
-            Err(AdmissionError::InvalidGeometry)
+            | Self::SetMaterial(_) => Ok(()),
         }
+        .map_err(AdmissionError::InvalidGeometry)
     }
 
     /// Admit this command to a window with these capabilities: its numbers
@@ -554,10 +566,6 @@ impl WindowCommand {
             outcome => Ok(outcome?),
         }
     }
-}
-
-fn positive_size(size: Size<f64>) -> bool {
-    size.width.is_finite() && size.height.is_finite() && size.width > 0.0 && size.height > 0.0
 }
 
 /// A [`WindowCommand`] that [`WindowCommand::admit`] checked: its numbers
@@ -621,11 +629,9 @@ pub enum AdmissionError {
     /// [`Absent`](WindowCapability::Absent).
     #[error("the window does not take this command: {0}")]
     Unsupported(#[from] Unsupported),
-    /// The command's numbers cannot describe a window.
-    #[error(
-        "the command's geometry is not finite and positive, or its minimum exceeds its maximum"
-    )]
-    InvalidGeometry,
+    /// The command's numbers cannot describe a window; the error names them.
+    #[error("the command's geometry describes no window: {0}")]
+    InvalidGeometry(InvalidGeometry),
 }
 
 impl AdmissionError {
@@ -634,7 +640,7 @@ impl AdmissionError {
     pub const fn unsupported(&self) -> Option<Unsupported> {
         match self {
             Self::Unsupported(unsupported) => Some(*unsupported),
-            Self::InvalidGeometry => None,
+            Self::InvalidGeometry(_) => None,
         }
     }
 }

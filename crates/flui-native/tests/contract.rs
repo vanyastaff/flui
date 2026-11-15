@@ -65,7 +65,9 @@ fn test_window_lifecycle_contract() {
         .visible(false)
         .resizable(true)
         .frame(WindowFrame::System)
-        .min_size(Some(Size::new(320.0, 240.0)))
+        .min_size(Some(
+            flui_platform::WindowExtent::try_new(Size::new(320.0, 240.0)).expect("a limit"),
+        ))
         .max_size(None);
 
     match platform.open_window(

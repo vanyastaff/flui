@@ -81,7 +81,7 @@ use crate::text_store_host::RecordingTextStoreHost;
 /// IME enable and cursor-area call.
 pub struct HeadlessWindow {
     id: WindowId,
-    size: Size<f64>,
+    size: flui_platform::WindowExtent,
     scale_factor: Mutex<f64>,
     cursor: Mutex<CursorIcon>,
     text_input: Option<Arc<RecordingTextInput>>,
@@ -220,7 +220,11 @@ impl HeadlessWindow {
             id: WindowIdMint::new()
                 .next()
                 .expect("BUG: a fresh mint issues its first id"),
-            size: Size::new(f64::from(width), f64::from(height)),
+            size: flui_platform::WindowExtent::try_new(Size::new(
+                f64::from(width),
+                f64::from(height),
+            ))
+            .expect("BUG: a side in whole pixels is finite and not negative"),
             scale_factor: Mutex::new(1.0),
             cursor: Mutex::new(CursorIcon::Default),
             text_input: None,
@@ -359,8 +363,8 @@ impl HeadlessWindow {
                       i32::MAX"
         )]
         Size::new(
-            (self.size.width * scale).round() as i32,
-            (self.size.height * scale).round() as i32,
+            (self.size.width() * scale).round() as i32,
+            (self.size.height() * scale).round() as i32,
         )
     }
 }
@@ -430,9 +434,7 @@ impl PlatformWindow for HeadlessWindow {
     /// shown: there is no window
     /// manager to raise it, and it honours no other command.
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.size;
-        // A size that is no extent reports none, as it reports no metrics.
-        let extent = flui_platform::WindowExtent::try_new(size).unwrap_or_default();
+        let extent = self.size;
         let mut state = flui_platform::WindowState::new(
             flui_platform::WindowGeometry::unplaced(extent),
             extent,
@@ -441,8 +443,11 @@ impl PlatformWindow for HeadlessWindow {
         .with_display(*self.display.lock())
         .with_insets(*self.insets.lock())
         .with_metrics(
-            flui_foundation::geometry::WindowMetrics::from_logical(size, *self.scale_factor.lock())
-                .ok(),
+            flui_foundation::geometry::WindowMetrics::from_logical(
+                extent.get(),
+                *self.scale_factor.lock(),
+            )
+            .ok(),
         );
         state = state.with_capabilities(self.capabilities());
         let chrome = self.chrome.lock();
@@ -957,7 +962,7 @@ impl HeadlessHost {
             clippy::cast_sign_loss,
             reason = "the window size came from u32 pixel counts"
         )]
-        let surface = (window.size.width as u32, window.size.height as u32);
+        let surface = (window.size.width() as u32, window.size.height() as u32);
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let gesture_preset = window.gesture_preset.clone();
         let platform = window.platform;
@@ -1136,8 +1141,8 @@ impl HeadlessHost {
     {
         self.ui_runtime.attach_root_widget_with_size(
             &flui_widgets::app_root(view.clone()),
-            self.window.size.width,
-            self.window.size.height,
+            self.window.size.width(),
+            self.window.size.height(),
         )
     }
 
@@ -1671,8 +1676,8 @@ impl HeadlessHost {
         self.ui_runtime.attach_root_widget_with_size_to(
             window.0,
             &flui_widgets::app_root(view.clone()),
-            size.width,
-            size.height,
+            size.width(),
+            size.height(),
         )
     }
 
@@ -1761,7 +1766,7 @@ impl HeadlessHost {
         let size = self.window_of(window).size;
         // A scale that makes no metrics is refused, as the runner refuses it.
         let Ok(metrics) =
-            flui_foundation::geometry::WindowMetrics::from_logical(size, scale_factor)
+            flui_foundation::geometry::WindowMetrics::from_logical(size.get(), scale_factor)
         else {
             return;
         };

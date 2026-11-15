@@ -96,10 +96,10 @@ pub struct AppConfig {
     pub size: Size,
 
     /// Minimum window size.
-    pub min_size: Option<Size>,
+    pub min_size: Option<flui_platform::WindowExtent>,
 
     /// Maximum window size.
-    pub max_size: Option<Size>,
+    pub max_size: Option<flui_platform::WindowExtent>,
 
     /// Initial outer position in global logical pixels; `None` lets the system
     /// place the window. A platform that cannot place a window ignores it.
@@ -464,14 +464,14 @@ impl AppConfig {
     /// Set the minimum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn min_size(mut self, width: u32, height: u32) -> Self {
-        self.min_size = Some(Size::new(width as f64, height as f64));
+        self.min_size = Some(window_extent(width, height));
         self
     }
 
     /// Set the maximum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn max_size(mut self, width: u32, height: u32) -> Self {
-        self.max_size = Some(Size::new(width as f64, height as f64));
+        self.max_size = Some(window_extent(width, height));
         self
     }
 
@@ -750,6 +750,12 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             .input_latency(config.input_latency)
             .os_options(os_options_for(config))
     }
+}
+
+/// A size in whole logical pixels as a window extent.
+fn window_extent(width: u32, height: u32) -> flui_platform::WindowExtent {
+    flui_platform::WindowExtent::try_new(Size::new(f64::from(width), f64::from(height)))
+        .expect("BUG: a side in whole pixels is finite and not negative")
 }
 
 /// The application's per-system window options, with the Android window's

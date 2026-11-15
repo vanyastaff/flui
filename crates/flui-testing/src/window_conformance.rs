@@ -26,9 +26,10 @@
 //!   [`InvalidGeometry`](AdmissionError::InvalidGeometry), so no window sees it.
 //! - **Nor does a bad report reach the snapshot.** A report whose numbers
 //!   describe no window (a size that is not finite, a scale of zero)
-//!   publishes nothing, and reading the window again keeps its revision
-//!   (ADR-0254 §1). A fixture with no way to make its window system report
-//!   one ([`WindowFixture::report_no_window`]) skips it.
+//!   publishes nothing of its geometry, and reading the window again keeps
+//!   its revision; the window's other facts are still published while it
+//!   stands (ADR-0254 §1). A fixture with no way to make its window system
+//!   report one ([`WindowFixture::report_no_window`]) skips it.
 //! - **Verbs answer to their capability.** The frame-rate hint and the input
 //!   regions, which a window takes outside the command queue because they are
 //!   sent every frame, answer `Unsupported` exactly when their capability is
@@ -450,7 +451,7 @@ fn bad_numbers_are_refused(fixture: &mut dyn WindowFixture) -> Result<(), String
         // Before the capabilities: no window, whatever it honours, is handed
         // numbers that describe none.
         match command.clone().admit(&window.state().capabilities) {
-            Err(AdmissionError::InvalidGeometry) => {}
+            Err(AdmissionError::InvalidGeometry(_)) => {}
             other => broken.push(format!("{command:?} was admitted as {other:?}")),
         }
     }
@@ -462,7 +463,9 @@ fn bad_numbers_are_refused(fixture: &mut dyn WindowFixture) -> Result<(), String
 /// zero) is no state change. The snapshot stays the one published, at its
 /// revision, however often it is read: a snapshot that held such a number
 /// would differ from itself and publish a revision with every read. The
-/// window then follows its window system again: the next size it takes is
+/// report costs the window its geometry and nothing else: a title it takes
+/// while the report stands is published. The window then follows its window
+/// system again: the next size it takes is
 /// published.
 fn a_report_that_describes_no_window_publishes_nothing(
     fixture: &mut dyn WindowFixture,
@@ -486,6 +489,23 @@ fn a_report_that_describes_no_window_publishes_nothing(
             "reading again moved the revision from {:?} to {:?}",
             after.revision, again.revision
         ));
+    }
+    // The bad report costs the window its geometry and nothing else: a fact
+    // the window takes while its window system still reports it is
+    // published.
+    let title = "a title the report does not hide";
+    if window
+        .admit_and_apply(WindowCommand::SetTitle(title.to_owned()))
+        .is_ok()
+    {
+        fixture.settle();
+        let titled = window.state();
+        if titled.title.as_deref() != Some(title) {
+            broken.push(format!(
+                "with the report standing, the title it took was not published: {:?}",
+                titled.title
+            ));
+        }
     }
     let size = Size::new(600.0, 400.0);
     if window.admit_and_apply(WindowCommand::SetSize(size)).is_ok() {

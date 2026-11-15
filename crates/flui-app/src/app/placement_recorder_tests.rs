@@ -149,11 +149,41 @@ fn restore_fits_the_outer_size_and_hands_a_maximized_window_its_normal_bounds() 
     // 1920 outer, so 1904 of content.
     assert_eq!(options.size, Size::new(1904.0, 600.0));
     assert_eq!(options.mode, WindowMode::Maximized);
+    let normal = options
+        .normal_geometry
+        .expect("a maximized window gets bounds to return to");
     assert_eq!(
-        options.normal_geometry,
-        WindowGeometry::try_new(options.position, Size::new(1920.0, 639.0)).ok(),
+        (normal.position(), normal.size()),
+        (options.position, Size::new(1920.0, 639.0)),
         "the window returns to its outer bounds"
     );
+    assert!(options.position.is_some(), "the bounds are placed");
+}
+
+/// A frame measured as no extent gives no bounds to return to: the window
+/// keeps the ones its configuration gave, rather than losing them.
+fn restore_keeps_the_configured_normal_bounds_for_a_frame_that_is_no_extent() {
+    let configured = WindowGeometry::try_new(Some(Point::new(40.0, 30.0)), Size::new(640.0, 480.0))
+        .expect("a rectangle");
+    let mut options = WindowOptions::default().normal_geometry(Some(configured));
+    let placement = WindowPlacement::new(
+        Some("key-main".into()),
+        Some(Point::new(100.0, 80.0)),
+        Size::new(800.0, 600.0),
+        WindowMode::Maximized,
+        1.0,
+    );
+    restore_into(
+        &mut options,
+        &placement,
+        &displays(),
+        &WindowCapabilities::ALL,
+        // A frame measured negative: the placement fits without it, and the
+        // outer bounds it would give are no rectangle.
+        |_| Size::new(-5000.0, 39.0),
+    );
+    assert_eq!(options.mode, WindowMode::Maximized);
+    assert_eq!(options.normal_geometry, Some(configured));
 }
 
 fn restore_asks_the_platform_for_what_it_can_place() {
@@ -519,6 +549,10 @@ fn placement_recorder() {
                 "restore_fits_the_outer_size_and_hands_a_maximized_window_its_normal_bounds",
                 restore_fits_the_outer_size_and_hands_a_maximized_window_its_normal_bounds
                     as fn(),
+            ),
+            (
+                "restore_keeps_the_configured_normal_bounds_for_a_frame_that_is_no_extent",
+                restore_keeps_the_configured_normal_bounds_for_a_frame_that_is_no_extent as fn(),
             ),
             (
                 "restore_fits_the_frame_the_window_opens_with",

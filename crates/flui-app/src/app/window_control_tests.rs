@@ -136,11 +136,21 @@ fn a_refused_command_is_never_queued() {
     let rig_all = rig(&all, 3);
     assert_eq!(
         rig_all.handle.set_size(Size::new(f64::NAN, 10.0)),
-        Err(SubmitError::Admission(AdmissionError::InvalidGeometry))
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry(
+            flui_platform::InvalidGeometry::Extent {
+                width: f64::NAN,
+                height: 10.0
+            }
+        )))
     );
     assert_eq!(
         rig_all.handle.set_position(Point::new(f64::INFINITY, 0.0)),
-        Err(SubmitError::Admission(AdmissionError::InvalidGeometry))
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry(
+            flui_platform::InvalidGeometry::Position {
+                x: f64::INFINITY,
+                y: 0.0
+            }
+        )))
     );
     assert_eq!(
         rig_none.wakes.get() + rig_all.wakes.get(),

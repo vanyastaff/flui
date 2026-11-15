@@ -130,6 +130,10 @@ enum Delivery {
     /// one of its handler's methods), so every delivery queued ahead of it,
     /// the close's `closed` included, reaches the handler first.
     Clear(Option<RetirementNotice>),
+    /// What the window's state cell has to say, said in the window's turn
+    /// ([`WindowDelivery::diagnose`]); said also after `closed`, as it is no
+    /// obligation of the handler.
+    Diagnostic(crate::window::state::StateDiagnostic),
 }
 
 /// Run by a queued clear once the handler is let go (Win32 orders its
@@ -583,6 +587,18 @@ impl WindowDelivery {
         let _asked = self.ask_for_owner_turn();
     }
 
+    /// Say what the window's state cell has to say, in the window's turn and
+    /// never here: whoever reads the window may hold borrows a `tracing`
+    /// subscriber takes again. It waits in the FIFO as an announcement after
+    /// a read does ([`Self::state_changed_after_read`]).
+    pub(crate) fn diagnose(&self, diagnostic: crate::window::state::StateDiagnostic) {
+        self.dispatch
+            .lock()
+            .pending
+            .push_back(Delivery::Diagnostic(diagnostic));
+        let _asked = self.ask_for_owner_turn();
+    }
+
     /// Ask for the owner turns that deliver what other threads raise; `wake`
     /// runs [`Self::deliver_queued`] on the owner thread.
     pub(crate) fn resume_through(&self, wake: WindowWake) {
@@ -662,6 +678,10 @@ impl WindowDelivery {
             }
             return None;
         }
+        if let Delivery::Diagnostic(diagnostic) = delivery {
+            contain_owner_callback(|| diagnostic.emit());
+            return None;
+        }
         if self.closed.load(Ordering::SeqCst) {
             // `closed` is the last obligation.
             return None;
@@ -739,7 +759,9 @@ impl WindowDelivery {
                 handler.surface_changed(change);
             })
             .or_resume(()),
-            Delivery::Clear(_) => unreachable!("BUG: a clear was delivered above"),
+            Delivery::Clear(_) | Delivery::Diagnostic(_) => {
+                unreachable!("BUG: a clear or a diagnostic was delivered above")
+            }
         }
         None
     }

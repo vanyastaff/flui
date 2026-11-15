@@ -12,7 +12,7 @@ use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{IdExhausted, IdMint};
 
 use crate::os_options::OsWindowOptions;
-use crate::{Unsupported, WindowFrame, WindowGeometry, WindowMode};
+use crate::{Unsupported, WindowExtent, WindowFrame, WindowGeometry, WindowMode};
 
 // ==================== Creation ====================
 
@@ -108,10 +108,12 @@ pub struct WindowOptions {
     /// opens with [`WindowFrame::System`]. Hosts without a system frame, such as
     /// mobile and web, retain their native frame policy.
     pub frame: WindowFrame,
-    /// Minimum window size
-    pub min_size: Option<Size<f64>>,
-    /// Maximum window size
-    pub max_size: Option<Size<f64>>,
+    /// The smallest content size, if limited. A limit that encloses no area,
+    /// or a minimum above [`max_size`](Self::max_size), refuses the open
+    /// ([`constraints`](Self::constraints)).
+    pub min_size: Option<WindowExtent>,
+    /// The largest content size, if limited.
+    pub max_size: Option<WindowExtent>,
     /// The display `position` and `normal_geometry` are measured on; `None`
     /// measures them in global logical pixels. A display that no longer exists
     /// is treated as `None`.
@@ -181,14 +183,14 @@ impl WindowOptions {
 
     /// Set the minimum content size.
     #[must_use]
-    pub const fn min_size(mut self, min_size: Option<Size<f64>>) -> Self {
+    pub const fn min_size(mut self, min_size: Option<WindowExtent>) -> Self {
         self.min_size = min_size;
         self
     }
 
     /// Set the maximum content size.
     #[must_use]
-    pub const fn max_size(mut self, max_size: Option<Size<f64>>) -> Self {
+    pub const fn max_size(mut self, max_size: Option<WindowExtent>) -> Self {
         self.max_size = max_size;
         self
     }
@@ -196,33 +198,33 @@ impl WindowOptions {
     /// The content-size limits these options ask for, as a window holds
     /// them: [`min_size`](Self::min_size) and [`max_size`](Self::max_size).
     ///
-    /// The options are a request, so a limit that is no extent (a side NaN,
-    /// infinite or negative) is not a limit the window is given: it opens
-    /// without that limit, with a warning. Every host reads the limits
-    /// through here, so they all decide it alike.
-    #[must_use]
-    pub fn constraints(&self) -> crate::SizeConstraints {
-        let limit = |asked: Option<Size<f64>>, which: &str| {
-            asked.and_then(|size| {
-                crate::WindowExtent::try_new(size)
-                    .inspect_err(|refused| {
-                        tracing::warn!(%refused, "a window opens without the {which} size it was asked for");
-                    })
-                    .ok()
-            })
-        };
-        crate::SizeConstraints::new(
-            limit(self.min_size, "minimum"),
-            limit(self.max_size, "maximum"),
-        )
+    /// Every host opens a window through here and refuses the open for the
+    /// limits a [`WindowCommand::SetConstraints`](crate::WindowCommand::SetConstraints)
+    /// is refused for, with the same error.
+    ///
+    /// # Errors
+    /// [`InvalidGeometry::Empty`](crate::InvalidGeometry::Empty) for a limit
+    /// with a zero side, [`InvalidGeometry::Limits`](crate::InvalidGeometry::Limits)
+    /// for a minimum above the maximum.
+    pub fn constraints(&self) -> Result<crate::SizeConstraints, crate::InvalidGeometry> {
+        crate::SizeConstraints::new(self.min_size, self.max_size).asked()
     }
 
     /// The content extent these options ask for ([`size`](Self::size)), as a
     /// window's first snapshot holds it before the window system has
-    /// reported one: no extent for a size that is not one.
-    #[must_use]
-    pub fn content_extent(&self) -> crate::WindowExtent {
-        crate::WindowExtent::try_new(self.size).unwrap_or_default()
+    /// reported one.
+    ///
+    /// Every host opens a window through here and refuses the open for the
+    /// size a [`WindowCommand::SetSize`](crate::WindowCommand::SetSize) is
+    /// refused for, with the same error.
+    ///
+    /// # Errors
+    /// [`InvalidGeometry::Extent`](crate::InvalidGeometry::Extent) for a side
+    /// that is NaN, infinite or negative,
+    /// [`InvalidGeometry::Empty`](crate::InvalidGeometry::Empty) for a zero
+    /// side.
+    pub fn content_extent(&self) -> Result<crate::WindowExtent, crate::InvalidGeometry> {
+        crate::WindowExtent::try_new(self.size).and_then(crate::WindowExtent::area)
     }
 
     /// Set the display the position is measured on.
