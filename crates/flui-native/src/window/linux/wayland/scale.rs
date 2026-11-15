@@ -13,7 +13,7 @@
 //! past [`BufferScale::MAX`] gets into: the window's content and the
 //! frame it draws itself are drawn at that one and the viewport
 //! stretches them. A configure of any `int` asks for a content of any size,
-//! and the renderer configures no surface past [`MAX_CONTENT_EXTENT`]
+//! and the renderer configures no surface past [`MAX_SURFACE_EXTENT`]
 //! device pixels on a side: so the scale is lowered further until the
 //! content fits ([`BufferScale::fitted`]), and the window still draws, at
 //! fewer pixels the viewport stretches. A window's metrics are
@@ -56,14 +56,14 @@ impl BufferScale {
     }
 
     /// This scale, lowered where `content` logical pixels drawn at it would
-    /// pass [`MAX_CONTENT_EXTENT`] device pixels on a side, so they fit;
+    /// pass [`MAX_SURFACE_EXTENT`] device pixels on a side, so they fit;
     /// this scale where the content is no size.
     pub(crate) fn fitted(self, content: Size<f64>) -> Self {
         let longest = content.width.max(content.height);
         if !(longest.is_finite() && longest > 0.0) {
             return self;
         }
-        let fits = f64::from(MAX_CONTENT_EXTENT) / longest;
+        let fits = f64::from(MAX_SURFACE_EXTENT) / longest;
         if self.get() <= fits {
             return self;
         }
@@ -71,15 +71,10 @@ impl BufferScale {
     }
 }
 
-/// The widest or tallest a window's content is drawn, in device pixels:
-/// the largest surface a renderer draws ([`MAX_SURFACE_EXTENT`]), signed
-/// as window metrics count device pixels.
-pub(crate) const MAX_CONTENT_EXTENT: i32 = MAX_SURFACE_EXTENT.cast_signed();
-
 /// The metrics of a window whose content is `content` logical pixels
 /// drawn at `scale`, which [`buffer_scale`] fitted to it. `None` where it
 /// has no drawable area: an extent that is no size, or one past
-/// [`MAX_CONTENT_EXTENT`] in device pixels, which a window with no
+/// [`MAX_SURFACE_EXTENT`] in device pixels, which a window with no
 /// viewport cannot draw at a scale below one; nothing is published and
 /// nothing drawn until a configure gives a size a surface can have. A side
 /// that the scale would round below one device pixel (a window far longer
@@ -97,8 +92,8 @@ pub(crate) fn metrics(content: Size<f64>, scale: BufferScale) -> Option<WindowMe
     let content = Size::new(side(content.width), side(content.height));
     let metrics = WindowMetrics::from_logical(content, scale.get()).ok()?;
     let physical = metrics.physical();
-    (physical.width <= MAX_CONTENT_EXTENT && physical.height <= MAX_CONTENT_EXTENT)
-        .then_some(metrics)
+    let fits = |side: i32| u32::try_from(side).is_ok_and(|side| side <= MAX_SURFACE_EXTENT);
+    (fits(physical.width) && fits(physical.height)).then_some(metrics)
 }
 
 /// What the compositor said of the scale a surface is drawn at.
@@ -259,7 +254,8 @@ mod tests {
                 )
             })
         };
-        let extent = f64::from(MAX_CONTENT_EXTENT);
+        let extent = f64::from(MAX_SURFACE_EXTENT);
+        let max = MAX_SURFACE_EXTENT.cast_signed();
         for (case, viewported, numerator, content, expected) in [
             (
                 "a scale in the hundreds",
@@ -287,21 +283,21 @@ mod tests {
                 true,
                 960,
                 (extent / BufferScale::MAX, 300.0),
-                Some((MAX_CONTENT_EXTENT, 2_400, BufferScale::MAX)),
+                Some((max, 2_400, BufferScale::MAX)),
             ),
             (
                 "a configure past the largest surface at the largest scale",
                 true,
                 960,
                 (4_096.0, 1_024.0),
-                Some((MAX_CONTENT_EXTENT, 4_096, 4.0)),
+                Some((max, 4_096, 4.0)),
             ),
             (
                 "a configure past the largest surface at one",
                 true,
                 120,
                 (32_768.0, 100.0),
-                Some((MAX_CONTENT_EXTENT, 50, 0.5)),
+                Some((max, 50, 0.5)),
             ),
             (
                 "a configure past the largest surface with no viewport",
@@ -315,18 +311,14 @@ mod tests {
                 true,
                 960,
                 (f64::from(i32::MAX), f64::from(i32::MAX)),
-                Some((
-                    MAX_CONTENT_EXTENT,
-                    MAX_CONTENT_EXTENT,
-                    extent / f64::from(i32::MAX),
-                )),
+                Some((max, max, extent / f64::from(i32::MAX))),
             ),
             (
                 "a sliver far longer than the cap's ratio",
                 true,
                 120,
                 (1e6, 1.0),
-                Some((MAX_CONTENT_EXTENT, 1, extent / 1e6)),
+                Some((max, 1, extent / 1e6)),
             ),
             ("a size that is none", true, 120, (0.0, 300.0), None),
             (

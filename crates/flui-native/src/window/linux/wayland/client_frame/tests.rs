@@ -497,13 +497,13 @@ fn a_hostile_scale_draws_no_gibibyte() {
         Pixels::try_new(side, side).is_none(),
         "each side is within the largest extent, the area is not"
     );
-    assert!(Pixels::try_new(MAX_EXTENT, 297).is_none());
+    assert!(Pixels::try_new(MAX_SURFACE_EXTENT, 297).is_none());
     // The widest bar at the largest scale is the most a frame draws.
     assert_eq!(
         f64::from(MAX_PIXELS),
-        f64::from(MAX_EXTENT) * HEADER * BufferScale::MAX
+        f64::from(MAX_SURFACE_EXTENT) * HEADER * BufferScale::MAX
     );
-    let widest = Pixels::try_new(MAX_EXTENT, 296).expect("within the area");
+    let widest = Pixels::try_new(MAX_SURFACE_EXTENT, 296).expect("within the area");
     assert_eq!(widest.data.len(), 4 * 16_384 * 296);
 }
 
@@ -519,7 +519,7 @@ fn a_window_that_publishes_metrics_draws_its_whole_frame() {
     use crate::window::linux::wayland::scale::metrics;
 
     let largest = BufferScale::try_new(BufferScale::MAX).expect("a scale");
-    let cap = f64::from(MAX_EXTENT);
+    let cap = f64::from(MAX_SURFACE_EXTENT);
     for (width, height) in [
         (cap / BufferScale::MAX, 300.0),
         (3_000.0, 300.0),
@@ -716,7 +716,7 @@ fn a_frame_past_the_largest_extent_is_drawn_at_it() {
         ..floating()
     };
     let bar = paint_header(&wide, BufferScale::ONE, plain).expect("drawn");
-    assert_eq!((bar.width, bar.height), (MAX_EXTENT, 37));
+    assert_eq!((bar.width, bar.height), (MAX_SURFACE_EXTENT, 37));
     let fullscreen = framed(ToplevelStates {
         fullscreen: true,
         ..ToplevelStates::default()
@@ -729,7 +729,7 @@ fn a_frame_past_the_largest_extent_is_drawn_at_it() {
     let margin = paint_margin(3, 2).expect("drawn");
     assert!(margin.data.iter().all(|byte| *byte == 0));
     assert!(paint_margin(0, 2).is_none());
-    assert!(paint_margin(MAX_EXTENT + 1, 2).is_none());
+    assert!(paint_margin(MAX_SURFACE_EXTENT + 1, 2).is_none());
 }
 
 /// The title is shaped over the font collection and rasterized: it has

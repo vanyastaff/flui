@@ -51,6 +51,7 @@ use std::time::Instant;
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{DevicePixelRatio, Size};
+use flui_platform::MAX_SURFACE_EXTENT;
 use flui_platform::input_regions::ResizeEdge;
 
 use super::configure::{TiledEdges, ToplevelStates, WmCapabilities};
@@ -78,14 +79,8 @@ const RADIUS: f64 = 8.0;
 /// The longest a second press on the title bar may follow the first and
 /// still count as a double press, in milliseconds: GTK's default.
 pub(crate) const DOUBLE_CLICK: u32 = 400;
-/// The widest or tallest a frame surface is drawn, in device pixels: the
-/// largest surface a renderer draws ([`MAX_SURFACE_EXTENT`](flui_platform::MAX_SURFACE_EXTENT)), so every window
-/// that publishes metrics has its title bar. Past it a compositor's
-/// configure asks for more memory than any screen shows, and the frame is
-/// not drawn.
-pub(crate) const MAX_EXTENT: u32 = flui_platform::MAX_SURFACE_EXTENT;
 /// The most device pixels a frame surface is drawn with: a title bar
-/// [`MAX_EXTENT`] wide and [`HEADER`] tall at [`BufferScale::MAX`]. The two
+/// [`MAX_SURFACE_EXTENT`] wide and [`HEADER`] tall at [`BufferScale::MAX`]. The two
 /// sides' caps alone leave room for a square of a gibibyte, which a narrow
 /// window at a scale in the hundreds would be.
 #[expect(
@@ -93,7 +88,7 @@ pub(crate) const MAX_EXTENT: u32 = flui_platform::MAX_SURFACE_EXTENT;
     clippy::cast_sign_loss,
     reason = "the header's height at the largest scale is a whole number of pixels"
 )]
-pub(crate) const MAX_PIXELS: u32 = MAX_EXTENT * (HEADER * BufferScale::MAX) as u32;
+pub(crate) const MAX_PIXELS: u32 = MAX_SURFACE_EXTENT * (HEADER * BufferScale::MAX) as u32;
 /// The buffers a frame surface keeps: the one the compositor shows, the one
 /// its next commit carries, and one to draw into meanwhile. A compositor
 /// that releases none has the oldest destroyed for the next.
@@ -1144,10 +1139,10 @@ pub(crate) struct Pixels {
 
 impl Pixels {
     /// A transparent image of `width` by `height` device pixels; `None` for
-    /// an empty one, one with a side past [`MAX_EXTENT`], or one of more
+    /// an empty one, one with a side past [`MAX_SURFACE_EXTENT`], or one of more
     /// than [`MAX_PIXELS`].
     pub(crate) fn try_new(width: u32, height: u32) -> Option<Self> {
-        if width == 0 || height == 0 || width > MAX_EXTENT || height > MAX_EXTENT {
+        if width == 0 || height == 0 || width > MAX_SURFACE_EXTENT || height > MAX_SURFACE_EXTENT {
             return None;
         }
         if u64::from(width) * u64::from(height) > u64::from(MAX_PIXELS) {
@@ -1247,17 +1242,17 @@ impl Pixels {
 }
 
 /// A device coordinate as a pixel index: negative and non-finite values are
-/// zero, and the largest is [`MAX_EXTENT`].
+/// zero, and the largest is [`MAX_SURFACE_EXTENT`].
 fn channel_index(value: f64) -> u32 {
     if !value.is_finite() || value <= 0.0 {
         return 0;
     }
-    let value = value.min(f64::from(MAX_EXTENT));
-    // Clamped to 0..=MAX_EXTENT and whole: the cast is exact.
+    let value = value.min(f64::from(MAX_SURFACE_EXTENT));
+    // Clamped to 0..=MAX_SURFACE_EXTENT and whole: the cast is exact.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "clamped to 0..=MAX_EXTENT and whole above"
+        reason = "clamped to 0..=MAX_SURFACE_EXTENT and whole above"
     )]
     let value = value as u32;
     value
@@ -1464,7 +1459,7 @@ fn square(centre: (f64, f64), half: f64) -> Vec<((f64, f64), (f64, f64))> {
 /// The size of the image a margin at `rect` is drawn with. With a viewport
 /// it is one transparent pixel the viewport stretches over the margin. With
 /// none the buffer is the surface's size at scale one, held within
-/// [`MAX_EXTENT`]: a margin along a side of a content at the largest extent
+/// [`MAX_SURFACE_EXTENT`]: a margin along a side of a content at the largest extent
 /// reaches past it by the other margins, and is drawn that much shorter
 /// rather than not at all. `None` for a margin that is no size.
 pub(crate) fn margin_size(rect: Rect, viewported: bool) -> Option<(u32, u32)> {
@@ -1492,7 +1487,7 @@ pub(crate) mod title {
     use flui_painting::typography::{FontWeight, TextAlign, TextDirection, TextStyle};
     use flui_painting::{GlyphContent, GlyphRasterizer};
 
-    use super::{BufferScale, MAX_EXTENT, TITLE_SIZE, TitleMask, device_extent};
+    use super::{BufferScale, MAX_SURFACE_EXTENT, TITLE_SIZE, TitleMask, device_extent};
 
     /// What a title is shaped and rasterized with, kept between titles.
     pub(crate) struct TitleText {
@@ -1600,7 +1595,7 @@ pub(crate) mod title {
                             };
                             #[expect(
                                 clippy::cast_sign_loss,
-                                reason = "x and y are checked within 0..MAX_EXTENT above"
+                                reason = "x and y are checked within 0..MAX_SURFACE_EXTENT above"
                             )]
                             let at = (y as u64) * u64::from(width) + (x as u64);
                             if let Some(cell) =
@@ -1612,7 +1607,7 @@ pub(crate) mod title {
                     }
                 }
             }
-            debug_assert!(width <= MAX_EXTENT && height <= MAX_EXTENT);
+            debug_assert!(width <= MAX_SURFACE_EXTENT && height <= MAX_SURFACE_EXTENT);
             Some(TitleMask {
                 width,
                 height,
@@ -2130,7 +2125,7 @@ pub(crate) mod surfaces {
         }
 
         /// Draw piece `index` as `shown` and commit it; `None` where it
-        /// could not be drawn (no size, past the largest extent or area, no
+        /// could not be drawn (no size, past the largest area, no
         /// shared memory).
         fn draw(&mut self, index: usize, shown: &Shown) -> Option<()> {
             let rect = shown.rect;

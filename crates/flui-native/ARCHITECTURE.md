@@ -1287,7 +1287,7 @@ trait depends on `flui-platform` instead.
   binds (each on its own, and a seat that goes is followed no more), and
   keeps one action asked for, which a later press replaces. It draws each of
   its five pieces at most once a turn, at the window's `BufferScale`, none
-  wider or taller than `client_frame::MAX_EXTENT`, which is
+  wider or taller than
   `MAX_SURFACE_EXTENT`, so every window that publishes metrics has its frame
   (`a_window_that_publishes_metrics_draws_its_whole_frame`), and none of more
   than `MAX_PIXELS`, into at most `MAX_BUFFERS`
