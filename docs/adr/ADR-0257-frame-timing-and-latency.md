@@ -148,6 +148,9 @@ it where it plans the frame, and the recording carries it with the frame that de
    interval, a variable rate, is none). It is a report, never a prediction; a time the platform
    names in advance stays `target_present`. A report no later than one already carried is dropped,
    and one still ahead of the request's delivery waits, so a window's reports never run backwards.
+   A report stamped more than a second ahead of the event clock's reading when it arrives is no
+   report (a prediction, or a stamp left on another clock) and is dropped where every host's
+   reports pass, so one wrong stamp never holds back the reports after it.
    `HostInput::Frame` carries it, and so does a recording.
 2. **Whether a window reports is a capability,** `WindowCapabilities::reports_presentation`, with
    its reason kept beside it (`presentation_feedback() -> Result<Availability, Unsupported>`): no
@@ -159,13 +162,18 @@ it where it plans the frame, and the recording carries it with the frame that de
    speaks itself (`wp_presentation`) needs nothing from the presenter.
 4. **§3 is amended:** a frame whose request names no `target_present` bounds its idle work by the
    next refresh on the grid the presentation's newest report starts, while that report is at most
-   eight refreshes old; otherwise the host's deadline applies, as before. A live report trails the
+   eight refreshes old; otherwise the host's deadline applies, as before. The refresh is the first
+   one after the host's own reading when the frame starts, and after the report: the frame's
+   vsync is earlier than both, and a refresh that has passed bounds nothing. A live report trails the
    frame that reads it by the frames in flight (three to four refreshes, measured on Windows), so
    eight is still a display presenting this window; an older one belongs to a window that was idle,
    and the display may have changed its rate since. The frame tick stays the vsync instant
    (decision 2).
 
 Confirmation: `a_presentation_report_bounds_the_idle_work_of_a_later_frame` (flui-runtime, the
-bound and the stale report), `a_presentation_and_the_input_before_it_are_on_one_timeline`
+bound and the stale report), `the_idle_work_of_a_frame_reached_late_ends_at_a_refresh_still_ahead`
+(the next refresh is one after the frame's start, never the report itself),
+`a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it` (flui-native, the report
+dropped), `a_presentation_and_the_input_before_it_are_on_one_timeline`
 (flui-testing), the conformance row `presentation_is_reported_exactly_when_claimed`, run on Win32
 with DXGI statistics and on Weston with `wp_presentation`.

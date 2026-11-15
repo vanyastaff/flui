@@ -14,8 +14,9 @@ fn clock() -> (FrameClock, web_time::Instant) {
     (FrameClock::with_source(ClockSource::Manual(manual)), start)
 }
 
-/// The next refresh after a reading lies on the report's grid, strictly after the reading; a
-/// report still ahead of the reading is itself the next.
+/// The next refresh after a reading lies on the report's grid, strictly after the reading and
+/// after the report: a report is of a frame already shown, so one that lies after the reading
+/// names a refresh that has passed, and the next is the refresh after it.
 fn the_next_refresh_lies_on_the_grid_the_report_starts() {
     let (clock, start) = clock();
     let shown = start + Duration::from_millis(100);
@@ -31,11 +32,13 @@ fn the_next_refresh_lies_on_the_grid_the_report_starts() {
         "a reading on a refresh names the one after it"
     );
     assert_eq!(clock.next_presentation_after(shown), Some(shown + ms(10)));
-    assert_eq!(
-        clock.next_presentation_after(start),
-        Some(shown),
-        "the report lies after the reading"
-    );
+    for reading in [start, shown.checked_sub(ms(1)).expect("after the start")] {
+        assert_eq!(
+            clock.next_presentation_after(reading),
+            Some(shown + ms(10)),
+            "the report lies after the reading: its refresh has passed"
+        );
+    }
 }
 
 /// Without a report, without an interval in it, or more than eight refreshes after it, no
