@@ -12,9 +12,13 @@
 //! is as many pixels. So a scale is a [`BufferScale`], which no scale
 //! past [`BufferScale::MAX`] gets into: the window's content and the
 //! frame it draws itself are drawn at that one and the viewport
-//! stretches them. And a window's metrics are [`metrics`]'s, which
-//! publishes none for a content past [`MAX_CONTENT_EXTENT`] device
-//! pixels, the size a configure of any `int` can ask for.
+//! stretches them. A configure of any `int` asks for a content of any size,
+//! and the renderer configures no surface past [`MAX_CONTENT_EXTENT`]
+//! device pixels on a side: so the scale is lowered further until the
+//! content fits ([`BufferScale::fitted`]), and the window still draws, at
+//! fewer pixels the viewport stretches. A window's metrics are
+//! [`metrics`]'s, which publishes none it cannot draw: a content past the
+//! extent with no viewport to stretch it, or one that is no size.
 
 #![forbid(unsafe_code)]
 
@@ -44,18 +48,37 @@ impl BufferScale {
     pub(crate) const fn get(self) -> f64 {
         self.0.get()
     }
+
+    /// This scale, lowered where `content` logical pixels drawn at it would
+    /// pass [`MAX_CONTENT_EXTENT`] device pixels on a side, so they fit;
+    /// this scale where the content is no size.
+    pub(crate) fn fitted(self, content: Size<f64>) -> Self {
+        let longest = content.width.max(content.height);
+        if !(longest.is_finite() && longest > 0.0) {
+            return self;
+        }
+        let fits = f64::from(MAX_CONTENT_EXTENT) / longest;
+        if self.get() <= fits {
+            return self;
+        }
+        DevicePixelRatio::try_new(fits).map_or(self, Self)
+    }
 }
 
 /// The widest or tallest a window's content is drawn, in device pixels:
-/// the largest `max_texture_dimension_2d` a `wgpu` adapter reports, so
-/// the largest surface any renderer makes.
-pub(crate) const MAX_CONTENT_EXTENT: i32 = 32_768;
+/// the largest surface the renderer configures. `flui-engine` asks its
+/// device for textures no larger (`renderer.rs`, `required_limits`) and
+/// refuses a surface past it (`WindowSlot::resize`); this crate may not
+/// name the engine, so the number is stated here as well (`docs/gaps.md`,
+/// "Native Linux host").
+pub(crate) const MAX_CONTENT_EXTENT: i32 = 16_384;
 
 /// The metrics of a window whose content is `content` logical pixels
-/// drawn at `scale`. `None` where it has no drawable area: an extent
-/// that is no size, or one past [`MAX_CONTENT_EXTENT`] in device pixels,
-/// for which nothing is published and nothing drawn until a configure
-/// gives a size a surface can have.
+/// drawn at `scale`, which [`buffer_scale`] fitted to it. `None` where it
+/// has no drawable area: an extent that is no size, or one past
+/// [`MAX_CONTENT_EXTENT`] in device pixels, which a window with no
+/// viewport cannot draw at a scale below one; nothing is published and
+/// nothing drawn until a configure gives a size a surface can have.
 pub(crate) fn metrics(content: Size<f64>, scale: BufferScale) -> Option<WindowMetrics> {
     let metrics = WindowMetrics::from_logical(content, scale.get()).ok()?;
     let physical = metrics.physical();
@@ -80,8 +103,9 @@ fn over_120(numerator: u32) -> Option<f64> {
     (numerator > 0).then(|| f64::from(numerator) / 120.0)
 }
 
-/// The scale the window's buffer is drawn at.
-pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold) -> BufferScale {
+/// The scale the buffer of a window whose content is `content` logical
+/// pixels is drawn at: the compositor's, fitted to the largest surface.
+pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, content: Size<f64>) -> BufferScale {
     if !viewported {
         return BufferScale::ONE;
     }
@@ -91,6 +115,7 @@ pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold) -> BufferScale {
         .or(told.output)
         .and_then(BufferScale::try_new)
         .unwrap_or(BufferScale::ONE)
+        .fitted(content)
 }
 
 #[cfg(test)]
@@ -179,62 +204,120 @@ mod tests {
                 1.0,
             ),
         ] {
-            assert_eq!(buffer_scale(viewported, told).get(), expected, "{case}");
+            assert_eq!(
+                buffer_scale(viewported, told, Size::new(400.0, 300.0)).get(),
+                expected,
+                "{case}"
+            );
         }
     }
 
-    /// A window publishes what a surface can be, whatever the compositor
-    /// says. Told a scale in the hundreds, a 400 by 300 window is drawn
-    /// at the largest scale, not 176 800 pixels across; given a size
-    /// past any surface it publishes no metrics, and no product of a
-    /// size and a scale overflows or is published non-finite.
+    /// A window publishes what the renderer can draw, whatever the
+    /// compositor says. Told a scale in the hundreds, a 400 by 300 window is
+    /// drawn at the largest scale, not 176 800 pixels across. A configure
+    /// whose content at the compositor's scale would pass the largest
+    /// surface is drawn at the scale that fits it, so the window still
+    /// draws and publishes metrics the renderer accepts. With no viewport
+    /// to stretch it, a content past the largest surface publishes none, and
+    /// no product of a size and a scale overflows or is published
+    /// non-finite.
     #[test]
     fn a_window_publishes_what_a_surface_can_be() {
-        let hostile = buffer_scale(
-            true,
-            ScaleTold {
-                fractional: Some(442 * 120),
-                preferred: None,
-                output: None,
-            },
-        );
-        let published =
-            metrics(Size::new(400.0, 300.0), hostile).expect("drawn at the largest scale");
-        assert_eq!(
-            (published.physical(), published.scale().get()),
-            (Size::new(3_200, 2_400), BufferScale::MAX)
-        );
-
-        let widest = f64::from(MAX_CONTENT_EXTENT) / BufferScale::MAX;
-        for (case, (width, height), scale, expected) in [
-            ("a window at one", (400.0, 300.0), 1.0, Some((400, 300))),
-            ("a fractional scale", (400.0, 300.0), 1.5, Some((600, 450))),
+        let fractional = |numerator| ScaleTold {
+            fractional: Some(numerator),
+            preferred: None,
+            output: None,
+        };
+        let published = |viewported, numerator, (width, height): (f64, f64)| {
+            let content = Size::new(width, height);
+            metrics(
+                content,
+                buffer_scale(viewported, fractional(numerator), content),
+            )
+            .map(|metrics| {
+                (
+                    metrics.physical().width,
+                    metrics.physical().height,
+                    metrics.scale().get(),
+                )
+            })
+        };
+        let extent = f64::from(MAX_CONTENT_EXTENT);
+        for (case, viewported, numerator, content, expected) in [
             (
-                "the widest content",
-                (widest, 300.0),
-                BufferScale::MAX,
-                Some((MAX_CONTENT_EXTENT, 2_400)),
+                "a scale in the hundreds",
+                true,
+                442 * 120,
+                (400.0, 300.0),
+                Some((3_200, 2_400, BufferScale::MAX)),
             ),
             (
-                "a pixel past the widest",
-                (widest + 1.0, 300.0),
-                BufferScale::MAX,
+                "a window at one",
+                true,
+                120,
+                (400.0, 300.0),
+                Some((400, 300, 1.0)),
+            ),
+            (
+                "a fractional scale",
+                true,
+                180,
+                (400.0, 300.0),
+                Some((600, 450, 1.5)),
+            ),
+            (
+                "the widest content at the largest scale",
+                true,
+                960,
+                (extent / BufferScale::MAX, 300.0),
+                Some((MAX_CONTENT_EXTENT, 2_400, BufferScale::MAX)),
+            ),
+            (
+                "a configure past the largest surface at the largest scale",
+                true,
+                960,
+                (4_096.0, 1_024.0),
+                Some((MAX_CONTENT_EXTENT, 4_096, 4.0)),
+            ),
+            (
+                "a configure past the largest surface at one",
+                true,
+                120,
+                (32_768.0, 100.0),
+                Some((MAX_CONTENT_EXTENT, 50, 0.5)),
+            ),
+            (
+                "a configure past the largest surface with no viewport",
+                false,
+                120,
+                (extent + 1.0, 300.0),
                 None,
             ),
-            ("a configure of two thousand million", (2e9, 2e9), 1.0, None),
             (
                 "the largest configure at the largest scale",
+                true,
+                960,
                 (f64::from(i32::MAX), f64::from(i32::MAX)),
-                BufferScale::MAX,
+                Some((
+                    MAX_CONTENT_EXTENT,
+                    MAX_CONTENT_EXTENT,
+                    extent / f64::from(i32::MAX),
+                )),
+            ),
+            ("a size that is none", true, 120, (0.0, 300.0), None),
+            (
+                "a size that is not finite",
+                true,
+                120,
+                (f64::NAN, 300.0),
                 None,
             ),
-            ("a size that is none", (0.0, 300.0), 1.0, None),
-            ("a size that is not finite", (f64::NAN, 300.0), 1.0, None),
         ] {
-            let scale = BufferScale::try_new(scale).expect("a scale");
-            let physical = metrics(Size::new(width, height), scale)
-                .map(|metrics| (metrics.physical().width, metrics.physical().height));
-            assert_eq!(physical, expected, "{case}");
+            assert_eq!(
+                published(viewported, numerator, content),
+                expected,
+                "{case}"
+            );
         }
     }
 }

@@ -1221,8 +1221,11 @@ trait depends on `flui-platform` instead.
   type. A Wayland window's scale is a `BufferScale`
   (`window::linux::wayland::scale`): whatever fractional, preferred or output
   scale the compositor names, the window's content and its own frame are
-  drawn at no more than `BufferScale::MAX`, and a window publishes no metrics
-  past `MAX_CONTENT_EXTENT` device pixels whatever size a configure gives
+  drawn at no more than `BufferScale::MAX`, lowered further where a
+  configure's size at that scale would pass `MAX_CONTENT_EXTENT` device
+  pixels, the largest surface the engine configures, so the window still
+  draws at a size the renderer accepts; only a window with no viewport, at
+  scale one, publishes no metrics past it
   (`a_window_publishes_what_a_surface_can_be`). A window's own frame follows
   the pointers of at most `user_input::MAX_SEATS` seats, the seats the input
   binds (each on its own, and a seat that goes is followed no more), and

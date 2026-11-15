@@ -1519,6 +1519,7 @@ mod toplevel {
                     preferred: applied.told.preferred_scale,
                     output: output.map(|output| output.scale),
                 },
+                applied.sizing.content(),
             );
             (output, scale)
         }
