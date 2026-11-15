@@ -13,11 +13,11 @@
 - **`flui-app`**: `native::with_window(address, f)` runs `f` on the host window the presentation
   at `address` is drawn in, on the thread that runs the application; `None` elsewhere, for an
   address nothing is presented at and once the presentation is gone.
-- **`flui-platform`**: `WindowOptions::os_options` (`with_os_options`), an
+- **`flui-platform`**: `WindowOptions::os_options`, an
   `os_options::OsWindowOptions` with one optional value per operating system:
   `windows: Option<Win32WindowOptions>` (`corner_preference: WindowsCornerPreference`,
   `theme: WindowsTheme`). Only that system's host reads its value. `AppConfig` carries it as
-  `os_options` (`AppConfig::with_os_options`).
+  `os_options` (`AppConfig::os_options`).
 - **`flui-native`**: Liquid Glass returns: `AppKitWindow::set_backdrop(MacOSBackdrop::Glass(..))`
   puts an `NSGlassEffectView` (macOS 26, found by name at run time) with its style, tint and
   corner radius behind FLUI's view; `MacOSBackdrop::Material(..)` puts an `NSVisualEffectView`
@@ -33,9 +33,8 @@
 - **`flui-native`**: every `Win32Window` command and query returns `Result<_, Win32WindowError>`:
   `Unsupported` (`NoWindow` for a closed window, `NotYetOnThisHost` for a contract value newer
   than the host), `Refused` (the system refused, with its `HRESULT`; a corner preference on
-  Windows 10), `Unrecognized` (a value the system reported that has no FLUI value),
-  `NotOpaque` (a title bar colour with alpha). None reaches a handle the window no longer owns.
-  `is_dark_mode` is `dark_mode`.
+  Windows 10), `Unrecognized` (a value the system reported that has no FLUI value). None
+  reaches a handle the window no longer owns. `is_dark_mode` is `dark_mode`.
 - **`flui-native`**: `WindowsBackdrop` is `#[non_exhaustive]` and gains `Auto`; `Tabbed`, the
   same material as `MicaAlt`, is gone, with `to_dwm_value` and `requires_windows_11`.
 - **`flui-native`**: a Win32 window opens with the corners and title-bar theme of its

@@ -9559,7 +9559,6 @@ fn flui::native::HostWindow::text_store_host(&self, owner: flui_native::host_win
 pub struct flui::native::NativeWindow { .. }
 impl Clone for flui::native::NativeWindow
 impl core::fmt::Debug for flui::native::NativeWindow
-pub fn flui::native::NativeWindow::new(window: &alloc::rcs::rc::Rc<dyn flui::native::HostWindow>) -> Self
 pub fn flui::native::NativeWindow::with<R>(&self, f: impl FnOnce(&dyn flui::native::HostWindow) -> R) -> Option<R>
 pub enum flui::native::NativeWindowCapability
 impl core::fmt::Debug for flui::native::NativeWindowCapability

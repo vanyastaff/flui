@@ -5799,15 +5799,15 @@ graph LR
   `set_title_bar_color` берёт `Option<Color>` и отказывает непрозрачному цвету (`NotOpaque`:
   у заголовка нет альфы). Окно достижимо из виджета: `flui::native::NativeWindowCapability`
   (берётся в `create_state`, хэндл `NativeWindow`, поиск окна по `WindowId` среди представленных;
-  тест приложения подставляет своё окно через `Application::capability` и `NativeWindow::new`);
+  тест приложения на headless-платформе видит отсутствие: `win32()` и `appkit()` отвечают `None`, подставки нет);
   пример `examples/native_window.rs` на Windows и macOS. `TabJoinError` отвечает закрытому окну
   `Unsupported` с `NoWindow`, как остальные команды; правило материала AppKit «вне главной
   дорожки» снято вместе с параметром `owner_is_main` у `appkit_window_capabilities`.
   Тесты, в скобках результат без исправления: `each_presentations_native_window_reaches_its_own_window`
   (поиск без сравнения id: хэндл второго окна достаёт первое); `native_window` в `tests/main.rs`
-  (`a_widget_acquires_its_window_in_create_state`: без провайдера — `NotRegistered`;
-  `a_test_stands_in_with_a_window_of_its_own`); `a_caption_colour_is_its_colorref` (цвет с альфой
-  принят); `a_handle_the_window_no_longer_owns_answers_closed`; `a_win32_title_bar_takes_its_colour`
+  (`a_widget_acquires_its_window_in_create_state`: без провайдера — `NotRegistered`); `a_caption_colour_is_its_colorref`
+  (цвет с альфой 0.5 принят; альфа 0.9995 отказана при `is_opaque`);
+  `a_handle_the_window_no_longer_owns_answers_closed`; `a_win32_title_bar_takes_its_colour`
   и закрытое окно в `a_win32_view_refuses_a_closed_window`; на macOS
   `appkit_window_commands_do_what_they_say_or_answer_closed`,
   `a_window_alpha_is_a_number_from_zero_to_one`, `each_level_is_one_appkit_value_read_both_ways`,

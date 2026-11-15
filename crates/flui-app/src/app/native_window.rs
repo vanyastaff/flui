@@ -2,7 +2,8 @@
 //! widget its window as the core host hands it out, so it reaches the
 //! window's per-system view (`win32()`, `appkit()`).
 
-use std::rc::{Rc, Weak};
+use std::marker::PhantomData;
+use std::rc::Rc;
 
 use flui_native::HostWindow;
 use flui_platform::capability::{Capability, ProviderContext};
@@ -14,9 +15,10 @@ use flui_platform::{Unsupported, UnsupportedReason, WindowId};
 ///
 /// Acquire it in `create_state` and keep the handle in the state; a command
 /// run through it is the application's, from a callback or a lifecycle hook,
-/// never from `build`. An application's test stands in for the built-in
-/// provider with `Application::capability` and a handle on a window of its
-/// own ([`NativeWindow::new`]).
+/// never from `build`. There is no stand-in for it: the views it lends exist
+/// only on their operating system, and an application's test on the headless
+/// platform meets the absence an application meets wherever no extension
+/// applies (the window's `win32()` and `appkit()` answer `None`).
 #[derive(Debug)]
 #[expect(
     clippy::exhaustive_enums,
@@ -29,51 +31,26 @@ impl Capability for NativeWindowCapability {
     const NAME: &'static str = "native-window";
 }
 
-/// A widget's handle on the window it is presented in.
+/// A widget's handle on the window it is presented in, by the window's id.
 ///
 /// Owner-thread (`!Send`), cheap to clone, and weak: it does not keep the
 /// window alive. [`with`](Self::with) runs a closure on the window, which
 /// narrows it to its system's view.
 #[derive(Debug, Clone)]
 pub struct NativeWindow {
-    window: Target,
-}
-
-/// The window a [`NativeWindow`] reaches.
-#[derive(Debug, Clone)]
-enum Target {
-    /// The window of this id while a presentation of the running
-    /// application is drawn in it: the built-in provider's.
-    Presented(WindowId),
-    /// A window the handle was given, while something else keeps it: a
-    /// stand-in provider's.
-    Given(Weak<dyn HostWindow>),
+    window: WindowId,
+    owner_thread: PhantomData<Rc<()>>,
 }
 
 impl NativeWindow {
-    /// A handle on `window`, which it reaches while something else keeps it
-    /// alive: what a provider that stands in for the built-in one hands out
-    /// (`Application::capability`), in an application's test with a window
-    /// of a host it opened.
-    #[must_use]
-    pub fn new(window: &Rc<dyn HostWindow>) -> Self {
-        Self {
-            window: Target::Given(Rc::downgrade(window)),
-        }
-    }
-
     /// Run `f` on the window, as its host hands it out, and return what `f`
     /// returns.
     ///
     /// `f` runs on the calling thread, outside every borrow of the runtime,
     /// so it may open or close windows. `None`, and `f` does not run, once
-    /// the window has closed or no presentation is drawn in it any more; for
-    /// a handle made by [`new`](Self::new), once nothing keeps the window.
+    /// the window has closed or no presentation is drawn in it any more.
     pub fn with<R>(&self, f: impl FnOnce(&dyn HostWindow) -> R) -> Option<R> {
-        let window = match &self.window {
-            Target::Presented(id) => crate::app::runner::native_window_by_id(*id)?,
-            Target::Given(window) => window.upgrade()?,
-        };
+        let window = crate::app::runner::native_window_by_id(self.window)?;
         Some(f(window.as_ref()))
     }
 }
@@ -90,6 +67,7 @@ pub(crate) fn provide(ctx: &ProviderContext<'_>) -> Result<NativeWindow, Unsuppo
             UnsupportedReason::NoWindow,
         ))?;
     Ok(NativeWindow {
-        window: Target::Presented(window.id()),
+        window: window.id(),
+        owner_thread: PhantomData,
     })
 }

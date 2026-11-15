@@ -2,9 +2,9 @@
 //! (ADR-0254 §8): it acquires `NativeWindowCapability` in `create_state`, and
 //! the handle runs a closure on the window as the core host hands it out. On
 //! the headless platform that window has no operating system's view, the
-//! typed absence a widget meets wherever no extension applies. An
-//! application's test stands in for the built-in provider with a window of
-//! its own.
+//! typed absence a widget meets wherever no extension applies, and the one
+//! an application's test meets: an operating system's window extension has
+//! no stand-in.
 
 use std::cell::OnceCell;
 use std::rc::Rc;
@@ -89,28 +89,5 @@ pub(crate) fn a_widget_acquires_its_window_in_create_state() {
         "the headless window is reached, and has no operating system's view"
     );
     drop(run);
-}
-
-/// An application's test stands in for the built-in provider: the override
-/// hands out a handle on a window the test opened, and the widget's handle
-/// reaches that window and no other.
-pub(crate) fn a_test_stands_in_with_a_window_of_its_own() {
-    let window: Rc<dyn HostWindow> = flui_native::headless_platform()
-        .open_window(
-            flui_platform::WindowOptions::default().visible(false),
-            flui_testing::window_handler::RecordingWindowHandler::new(),
-        )
-        .expect("a headless window opens");
-    let stand_in = Rc::clone(&window);
-    let application = Application::new().capability::<NativeWindowCapability>(
-        move |_: &flui_platform::capability::ProviderContext<'_>| Ok(NativeWindow::new(&stand_in)),
-    );
-    let (run, handle) = acquired_by(application);
-    let handle = handle.expect("the override hands out its handle");
-    assert_eq!(
-        handle.with(|reached| std::ptr::addr_eq(std::ptr::from_ref(reached), Rc::as_ptr(&window))),
-        Some(true),
-        "the stand-in's window"
-    );
-    drop(run);
+    assert_eq!(handle.with(|_| ()), None, "the run is over");
 }

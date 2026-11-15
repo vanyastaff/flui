@@ -590,16 +590,17 @@ fn owns_its_handle(checked: Result<bool, UserDataRefusal>) -> Result<(), Win32Wi
 /// in: `color`'s red, green and blue, or the system's colour for `None`.
 ///
 /// # Errors
-/// [`Win32WindowError::NotOpaque`] for a colour that is not opaque: a
-/// `COLORREF` has no alpha.
+/// [`Win32WindowError::NotOpaque`] for a colour whose alpha does not round to
+/// 255 in eight bits: a `COLORREF` has no alpha, so the conversion would lose
+/// it. An alpha that rounds to 255 (a blend ending at 0.9995) loses nothing.
 fn caption_color(color: Option<Color>) -> Result<u32, Win32WindowError> {
     let Some(color) = color else {
         return Ok(DWMWA_COLOR_DEFAULT);
     };
-    if !color.is_opaque() {
+    let [red, green, blue, alpha] = color.to_rgba8();
+    if alpha != u8::MAX {
         return Err(Win32WindowError::NotOpaque);
     }
-    let [red, green, blue, _opaque] = color.to_rgba8();
     Ok((u32::from(blue) << 16) | (u32::from(green) << 8) | u32::from(red))
 }
 
@@ -775,11 +776,16 @@ mod tests {
     };
 
     /// An opaque caption colour is the `COLORREF` of its red, green and blue;
-    /// one with alpha is refused, since a `COLORREF` has none; `None` is the
-    /// system's colour.
+    /// one whose alpha the eight bits would lose is refused, since a
+    /// `COLORREF` has none, and one whose alpha rounds to 255 (0.9995, a blend
+    /// that ends a hair short of 1) is taken; `None` is the system's colour.
     #[test]
     fn a_caption_colour_is_its_colorref() {
+        let teal = |alpha: f32| Some(Color::from_rgba_f32_array([0.0, 0.5, 0.5, alpha]));
         for (color, colorref) in [
+            (teal(1.0), Ok(0x0080_8000)),
+            (teal(0.9995), Ok(0x0080_8000)),
+            (teal(0.5), Err(Win32WindowError::NotOpaque)),
             (Some(Color::rgb(0x12, 0x34, 0x56)), Ok(0x0056_3412)),
             (Some(Color::rgb(0xFF, 0, 0)), Ok(0x0000_00FF)),
             (

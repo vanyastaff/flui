@@ -4,9 +4,10 @@
   `flui::native::NativeWindowCapability` with `ctx.capability::<NativeWindowCapability>()` in
   `create_state` and runs a closure on the window with `NativeWindow::with`, which answers `None`
   once the window has closed. The primary window is reachable from a widget; `with_window` stays
-  for code that holds a presentation's address. An application's test stands in for it with
-  `Application::capability` and `NativeWindow::absent()`. `examples/native_window.rs` uses it on
-  Windows and macOS (`cargo run --example native_window --features native`).
+  for code that holds a presentation's address. An application's test on the headless platform
+  meets the absence a widget meets wherever no extension applies: `win32()` and `appkit()` answer
+  `None` there. `examples/native_window.rs` uses it on Windows
+  and macOS (`cargo run --example native_window --features native`).
 
 ### Changed
 
@@ -25,8 +26,8 @@
   behavior `WindowMode::Fullscreen` needs. Its bit constants, which named the wrong AppKit flags,
   `from_bits` and `bits` are gone.
 - **`flui-native`**: `Win32Window::set_title_bar_color` takes an `Option<Color>` instead of an
-  `(u8, u8, u8)` tuple, and refuses a colour that is not opaque with `Win32WindowError::NotOpaque`:
-  the desktop window manager draws a title bar without alpha.
+  `(u8, u8, u8)` tuple, and refuses a colour whose alpha does not round to 255 in eight bits with
+  the new `Win32WindowError::NotOpaque`: the desktop window manager draws a title bar without alpha.
 
 ### Removed
 
