@@ -85,9 +85,12 @@ dependency that carries the application's name is not mistaken for it
 (`a_dependency_may_share_the_applications_name`). The listing is read with its depths: each line
 resolves among the dependencies of the crate it is listed under, by name and version, and where
 that crate depends on two packages of one name and version, by the source the package's id names
-(a git reference encoded as cargo prints it, a sparse index with its `sparse+`). A registry cargo
-lists by its configured name stands for any registry's crate there, which only the parent tells
-apart. A line that names no package, or a listing that leaves out the compiled package, fails the
+(a git reference encoded as cargo prints it, a sparse index with its `sparse+`). The depth cargo
+prints ends at a `|` the format starts with, since a package name may start with a digit. A
+registry cargo lists by its configured name is read back to its index as cargo reads it
+(`CARGO_REGISTRIES_<NAME>_INDEX`, then the nearest `.cargo/config` or `.cargo/config.toml` up to
+`$CARGO_HOME`'s); a name none of those configures stands for any registry's crate there
+(`registries_are_read_from_the_nearest_configuration`). A line that names no package, or a listing that leaves out the compiled package, fails the
 build instead of producing a smaller manifest (`a_listing_reads_back_as_each_crates_features`,
 `a_fork_on_an_encoded_branch_keeps_its_features`).
 

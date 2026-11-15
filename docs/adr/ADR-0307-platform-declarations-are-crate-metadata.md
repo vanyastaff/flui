@@ -156,7 +156,8 @@ its build a dependency, even where one depends on it. `cargo metadata --filter-p
 gives each crate's table and the edges between the crates. A crate is one package id throughout:
 cargo is asked for the package the build compiles by its id, and each line of the listing is
 matched among the dependencies of the crate it is listed under, by the source its package id
-names where that crate depends on two packages of one name and version. The CLI takes every
+names where that crate depends on two packages of one name and version (a registry the listing
+names by its configured name is read back to its index from cargo's configuration). The CLI takes every
 linked crate's table, plus the parts of the features the build enables for it.
 
 What the artifact does not link contributes nothing: a dependency only another target links, a
