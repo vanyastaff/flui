@@ -91,9 +91,9 @@ pub(crate) mod configure {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::Size;
-    use flui_platform::{
-        CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCapability, WindowMode,
-    };
+    use flui_platform::{CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCapability};
+
+    use crate::window::state::ModeFlags;
 
     /// `xdg_toplevel.state` values.
     const MAXIMIZED: u32 = 1;
@@ -200,15 +200,14 @@ pub(crate) mod configure {
             self.tiled.any() && !self.maximized && !self.fullscreen
         }
 
-        /// The window's mode. A Wayland client never hears that its window
-        /// was minimized, so the mode is never `Minimized`.
-        pub(crate) const fn mode(self) -> WindowMode {
-            if self.fullscreen {
-                WindowMode::Fullscreen
-            } else if self.maximized {
-                WindowMode::Maximized
-            } else {
-                WindowMode::Normal
+        /// The facts the window's mode is decided from
+        /// ([`mode_of`](crate::window::state::mode_of)). A Wayland client
+        /// never hears that its window was minimized, so it never says so.
+        pub(crate) const fn mode_flags(self) -> ModeFlags {
+            ModeFlags {
+                minimized: false,
+                fullscreen: self.fullscreen,
+                maximized: self.maximized,
             }
         }
     }
@@ -467,9 +466,10 @@ pub(crate) mod configure {
 
     #[cfg(test)]
     mod tests {
-        use flui_platform::{WindowCommand, WindowFrame};
+        use flui_platform::{WindowCommand, WindowFrame, WindowMode};
 
         use super::*;
+        use crate::window::state::mode_of;
 
         /// Limits with these bounds.
         fn bounded(min: Option<Size<f64>>, max: Option<Size<f64>>) -> SizeConstraints {
@@ -491,12 +491,12 @@ pub(crate) mod configure {
             let states = ToplevelStates::decode(&array(&[ACTIVATED, MAXIMIZED, 77]));
             assert!(states.activated && states.maximized);
             assert!(!states.fullscreen && !states.tiled.any() && !states.suspended);
-            assert_eq!(states.mode(), WindowMode::Maximized);
+            assert_eq!(mode_of(states.mode_flags()), WindowMode::Maximized);
             let both = ToplevelStates::decode(&array(&[MAXIMIZED, FULLSCREEN]));
-            assert_eq!(both.mode(), WindowMode::Fullscreen);
+            assert_eq!(mode_of(both.mode_flags()), WindowMode::Fullscreen);
             let tiled = ToplevelStates::decode(&array(&[TILED_BOTTOM, SUSPENDED]));
             assert!(tiled.tiled.any() && tiled.suspended && tiled.sized_by_compositor());
-            assert_eq!(tiled.mode(), WindowMode::Normal);
+            assert_eq!(mode_of(tiled.mode_flags()), WindowMode::Normal);
             // Each edge is its own: the frame leaves the tiled ones alone.
             let edges = ToplevelStates::decode(&array(&[TILED_LEFT, TILED_RIGHT, TILED_TOP]));
             assert_eq!(
@@ -1582,7 +1582,7 @@ mod toplevel {
             });
             crate::window::state::Sample::read(geometry, |state| {
                 let state = state
-                    .with_mode(states.mode())
+                    .with_mode(crate::window::state::mode_of(states.mode_flags()))
                     // A toplevel has no hidden state of its own: it is shown
                     // until it closes.
                     .with_visible(!self.closed)

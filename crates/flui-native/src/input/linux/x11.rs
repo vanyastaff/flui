@@ -53,7 +53,8 @@ pub mod decode {
     use flui_platform::input_capabilities::PointerKindSet;
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
-        PenTool, PointerButton, PointerEvent, PointerKind, PointerMove, ScrollPrecision, ScrollUnit,
+        PenTool, PointerButton, PointerEvent, PointerKind, PointerMove, ScrollDelta,
+        ScrollPrecision, ScrollUnit,
     };
 
     use crate::input::assembly::{
@@ -1228,11 +1229,7 @@ pub mod decode {
             precision: ScrollPrecision,
             out: &mut Vec<PlatformInput>,
         ) {
-            let Ok(delta) = wheel_step(
-                ScrollUnit::Detents,
-                WheelAmount::offset(x),
-                WheelAmount::offset(y),
-            ) else {
+            let Some(delta) = detent_step((x, y)) else {
                 return;
             };
             let Some(time) = self.contacts.stamp(event.time.reading_time()) else {
@@ -1266,9 +1263,21 @@ pub mod decode {
         (span > 0.0).then(|| ((value - axis.min) / span * 180.0 - 90.0).clamp(-90.0, 90.0))
     }
 
+    /// The step a scroll of `(x, y)` detents makes, whether from a legacy
+    /// wheel button or the scroll valuators: X11's detents grow the scroll
+    /// offset as FLUI's delta does. `None` for an amount that is not finite.
+    pub(crate) fn detent_step((x, y): (f64, f64)) -> Option<ScrollDelta> {
+        wheel_step(
+            ScrollUnit::Detents,
+            WheelAmount::offset(x),
+            WheelAmount::offset(y),
+        )
+        .ok()
+    }
+
     /// A scroll valuator's `change` in detents of `increment`; `None` for
     /// one that is not finite or an increment that is zero.
-    fn scroll_detents(change: f64, increment: f64) -> Option<f64> {
+    pub(crate) fn scroll_detents(change: f64, increment: f64) -> Option<f64> {
         let detents = change / increment;
         (increment != 0.0 && detents.is_finite()).then_some(detents)
     }

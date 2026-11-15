@@ -288,9 +288,10 @@ pub(crate) fn held_to(
 
 /// What a window system says of a window, as the three facts its mode is
 /// decided from. Each platform reads them from its own report (AppKit's style
-/// mask and flags, the X11 window manager's
-/// properties, the Win32 window's tracked mode) and [`mode_of`] decides.
-#[cfg(any(windows, target_os = "macos", x11_host, test))]
+/// mask and flags, the X11 window manager's properties, the Wayland
+/// toplevel's configured states, the Win32 window's tracked mode) and
+/// [`mode_of`] decides.
+#[cfg(any(windows, target_os = "macos", x11_host, wayland_host, test))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ModeFlags {
     /// The window is minimized: iconic, in the Dock or on the taskbar.
@@ -304,7 +305,7 @@ pub(crate) struct ModeFlags {
 /// The mode of a window with these flags. A minimized window is hidden
 /// whatever else is set; a fullscreen one often keeps its maximized flag, so
 /// fullscreen comes before maximized.
-#[cfg(any(windows, target_os = "macos", x11_host, test))]
+#[cfg(any(windows, target_os = "macos", x11_host, wayland_host, test))]
 pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
     use flui_platform::WindowMode;
     if flags.minimized {
@@ -1075,8 +1076,9 @@ mod tests {
 /// own report is held to: a row's facts, put as that system reports them and
 /// read back by the system's own reading, decide the row's mode. AppKit reads
 /// a full-screen window as full screen whatever else it says (it does not
-/// miniaturize one), so the rows where a minimized window also says full
-/// screen name its mode apart.
+/// miniaturize one), and a Wayland compositor never tells its client that a
+/// window was minimized, so the rows where a minimized window also says
+/// something else name those systems' modes apart.
 #[cfg(test)]
 mod mapping {
     use flui_foundation::geometry::{Bounds, Point, Size};
@@ -1084,6 +1086,7 @@ mod mapping {
 
     use super::{ModeFlags, mode_of};
     use crate::window::apple::geometry::mode::WindowFlags;
+    use crate::window::linux::wayland::configure::ToplevelStates;
     use crate::window::linux::x11::mode::{NetWmState, WmState, mode_flags};
     use crate::window::windows::mode::NativeMode;
 
@@ -1094,13 +1097,16 @@ mod mapping {
         mode: WindowMode,
         /// The mode AppKit reads from the same flags.
         appkit: WindowMode,
+        /// The mode a Wayland client reads from the states its compositor
+        /// configures for the same window.
+        wayland: WindowMode,
     }
 
     const fn row(
         case: &'static str,
         (minimized, fullscreen, maximized): (bool, bool, bool),
         mode: WindowMode,
-        appkit: WindowMode,
+        [appkit, wayland]: [WindowMode; 2],
     ) -> Row {
         Row {
             case,
@@ -1111,34 +1117,72 @@ mod mapping {
             },
             mode,
             appkit,
+            wayland,
         }
     }
 
     const ROWS: [Row; 8] = [
-        row("nothing set", (false, false, false), Normal, Normal),
-        row("maximized", (false, false, true), Maximized, Maximized),
-        row("fullscreen", (false, true, false), Fullscreen, Fullscreen),
-        row("minimized", (true, false, false), Minimized, Minimized),
+        row(
+            "nothing set",
+            (false, false, false),
+            Normal,
+            [Normal, Normal],
+        ),
+        row(
+            "maximized",
+            (false, false, true),
+            Maximized,
+            [Maximized, Maximized],
+        ),
+        row(
+            "fullscreen",
+            (false, true, false),
+            Fullscreen,
+            [Fullscreen, Fullscreen],
+        ),
+        row(
+            "minimized",
+            (true, false, false),
+            Minimized,
+            [Minimized, Normal],
+        ),
         row(
             "fullscreen that kept its maximized flag",
             (false, true, true),
             Fullscreen,
-            Fullscreen,
+            [Fullscreen, Fullscreen],
         ),
         row(
             "minimized from fullscreen",
             (true, true, false),
             Minimized,
-            Fullscreen,
+            [Fullscreen, Fullscreen],
         ),
         row(
             "minimized from maximized",
             (true, false, true),
             Minimized,
-            Minimized,
+            [Minimized, Maximized],
         ),
-        row("all three", (true, true, true), Minimized, Fullscreen),
+        row(
+            "all three",
+            (true, true, true),
+            Minimized,
+            [Fullscreen, Fullscreen],
+        ),
     ];
+
+    /// The states a Wayland compositor configures for such a window: the
+    /// maximized and fullscreen states as they stand, and nothing of its
+    /// being minimized, which xdg-shell has no state for.
+    fn wayland(said: ModeFlags) -> ModeFlags {
+        ToplevelStates {
+            maximized: said.maximized,
+            fullscreen: said.fullscreen,
+            ..ToplevelStates::default()
+        }
+        .mode_flags()
+    }
 
     /// The properties an X11 window manager keeps for such a window:
     /// `WM_STATE` iconic and `_NET_WM_STATE_HIDDEN` for a minimized one, the
@@ -1204,6 +1248,7 @@ mod mapping {
             said,
             mode,
             appkit: appkit_mode,
+            wayland: wayland_mode,
         } in ROWS
         {
             let modes = [
@@ -1211,6 +1256,7 @@ mod mapping {
                 ("X11", mode_of(x11(said)), mode),
                 ("Win32", mode_of(win32(said)), mode),
                 ("AppKit", mode_of(appkit(said)), appkit_mode),
+                ("Wayland", mode_of(wayland(said)), wayland_mode),
             ];
             for (system, decided, expected) in modes {
                 assert_eq!(decided, expected, "{system}: {case}");

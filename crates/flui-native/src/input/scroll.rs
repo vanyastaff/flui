@@ -3,14 +3,17 @@
 //!
 //! FLUI's delta grows the consumer's scroll offset: positive scrolls down and
 //! right. A platform reports its amounts in its own unit, which it picks
-//! (Win32's detents, the DOM's `deltaMode`, Android's axis factors, AppKit's
-//! precise deltas), and in its own
-//! direction ([`WheelDirection`]); [`wheel_step`] turns each axis to FLUI's
-//! direction and refuses an amount that is not finite. What a refused step
-//! becomes is the backend's: AppKit delivers a zero step in the
-//! event's unit, the Web and Android drop the event.
+//! (Win32's and Wayland's 120ths of a detent, [`DetentSteps`]; X11's
+//! valuator increments and wheel buttons; the DOM's `deltaMode`; Android's
+//! axis factors; AppKit's precise deltas), and in its own direction
+//! ([`WheelDirection`]); [`wheel_step`] turns each axis to FLUI's direction
+//! and refuses an amount that is not finite. What a refused step becomes is
+//! the backend's: AppKit and Wayland deliver a zero step in the event's unit,
+//! the Web, Android and X11 drop the event.
 
 use flui_platform::pointer::{InputValueError, ScrollDelta, ScrollUnit};
+
+use crate::input::assembly::WHEEL_DETENT;
 
 /// Which way a platform's wheel amount points on one axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +65,23 @@ impl WheelAmount {
     }
 }
 
+/// A wheel distance counted in [`WHEEL_DETENT`] steps to a detent, as Win32's
+/// wheel messages and Wayland's `value120` count it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DetentSteps(pub(crate) i32);
+
+impl DetentSteps {
+    /// The distance in detents, a fraction of one for a finer device.
+    pub(crate) fn detents(self) -> f64 {
+        f64::from(self.0) / f64::from(WHEEL_DETENT)
+    }
+
+    /// Whether the distance is a whole number of detents.
+    pub(crate) fn is_whole(self) -> bool {
+        self.0 % i32::from(WHEEL_DETENT) == 0
+    }
+}
+
 /// The step a wheel event makes: `x` and `y` in `unit`, each turned to FLUI's
 /// direction.
 ///
@@ -89,6 +109,8 @@ mod mapping {
     use crate::input::assembly::{
         ContactRegistry, NativeClock, WHEEL_DETENT, WheelAxis, WheelReading,
     };
+    use crate::input::linux::wayland::wire as wayland;
+    use crate::input::linux::x11::decode as x11;
 
     /// One turn: how far it scrolls in FLUI's direction (positive scrolls down
     /// and right), and the step every backend makes of it.
@@ -183,6 +205,30 @@ mod mapping {
         crate::input::apple::wheel::step(false, moving_the_content(x), moving_the_content(y)).0
     }
 
+    /// The change of an X11 scroll valuator for the turn, read in detents of
+    /// the valuator's increment; an axis that changed not at all reports no
+    /// change, which the host skips.
+    fn x11((x, y): (f64, f64)) -> Option<ScrollDelta> {
+        /// A valuator increment that is not one, so the turn is divided.
+        const INCREMENT: f64 = 15.0;
+        let detents = |amount: f64| {
+            let change = amount * INCREMENT;
+            if change == 0.0 {
+                Some(0.0)
+            } else {
+                x11::scroll_detents(change, INCREMENT)
+            }
+        };
+        x11::detent_step((detents(x)?, detents(y)?))
+    }
+
+    /// A Wayland wheel frame's `value120` for the turn: 120 to a notch,
+    /// pointing FLUI's way.
+    fn wayland((x, y): (f64, f64)) -> ScrollDelta {
+        let steps = |amount: f64| (amount * f64::from(WHEEL_DETENT)) as i32;
+        wayland::value120_step([steps(x), steps(y)]).0
+    }
+
     /// Every backend whose wheel step runs on this host takes each turn alike.
     #[test]
     fn every_backend_steps_a_turn_alike() {
@@ -197,6 +243,8 @@ mod mapping {
                 ("DOM", dom(amounts)),
                 ("Android", android(amounts)),
                 ("AppKit", Some(appkit(amounts))),
+                ("X11", x11(amounts)),
+                ("Wayland", Some(wayland(amounts))),
             ];
             for (backend, delta) in steps {
                 let Some(delta) = delta else {
@@ -213,13 +261,15 @@ mod mapping {
         }
     }
 
-    /// An amount that is not finite is refused: the Web and Android drop the
-    /// event, AppKit delivers a zero step in the event's unit.
+    /// An amount that is not finite is refused: the Web, Android and X11 drop
+    /// the event, AppKit delivers a zero step in the event's unit. Wayland's
+    /// `value120` is a whole number and cannot be anything but finite.
     #[test]
     fn a_turn_that_is_not_finite_steps_nothing() {
         for amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert_eq!(dom((amount, 0.0)), None, "DOM: {amount}");
             assert_eq!(android((0.0, amount)), None, "Android: {amount}");
+            assert_eq!(x11((0.0, amount)), None, "X11: {amount}");
             let zero = appkit((amount, 0.0));
             assert_eq!((zero.x(), zero.y()), (0.0, 0.0), "AppKit: {amount}");
         }
