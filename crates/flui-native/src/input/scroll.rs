@@ -3,7 +3,7 @@
 //!
 //! FLUI's delta grows the consumer's scroll offset: positive scrolls down and
 //! right. A platform reports its amounts in its own unit, which it picks
-//! (Win32's and Wayland's 120ths of a detent, [`DetentSteps`]; X11's
+//! (Win32's and Wayland's steps of 1/120 detent, [`DetentSteps`]; X11's
 //! valuator increments and wheel buttons; the DOM's `deltaMode`; Android's
 //! axis factors; AppKit's precise deltas), and in its own direction
 //! ([`WheelDirection`]); [`wheel_step`] turns each axis to FLUI's direction
