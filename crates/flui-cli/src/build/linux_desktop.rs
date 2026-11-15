@@ -146,6 +146,8 @@ fn exec_argument(argument: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{exec_argument, stage, string_value};
     use crate::build::platform::AppBundle;
     use crate::declarations::Declarations;
@@ -166,20 +168,16 @@ mod tests {
         let output = tempfile::tempdir().expect("a temporary directory");
         let written =
             stage(output.path(), &bundle, "notes", &declarations).expect("the files are written");
-        let relative: Vec<String> = written
+        // Compared as paths, so the host's separator does not matter.
+        let relative: Vec<&Path> = written
             .iter()
-            .map(|path| {
-                path.strip_prefix(output.path())
-                    .expect("under the output")
-                    .to_string_lossy()
-                    .into_owned()
-            })
+            .map(|path| path.strip_prefix(output.path()).expect("under the output"))
             .collect();
         assert_eq!(
             relative,
             [
-                "share/applications/com.example.notes.desktop",
-                "share/mime/packages/com.example.notes.xml",
+                Path::new("share/applications/com.example.notes.desktop"),
+                Path::new("share/mime/packages/com.example.notes.xml"),
             ]
         );
         assert_eq!(

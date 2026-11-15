@@ -187,26 +187,31 @@ mod tests {
         lib_name: "notes",
     };
 
-    /// The declarations of FLUI's own workspace, built for Android with the
-    /// features an application gets by default.
-    fn framework_declarations() -> Declarations {
+    /// The declarations of the `flui` facade built for Android, as an
+    /// application that turns on `features` of it links it.
+    fn framework_declarations(features: &[&str]) -> Declarations {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        Declarations::collect(&workspace, &["aarch64-linux-android"])
-            .expect("the workspace's declarations")
+        let features: Vec<String> = features.iter().map(|&feature| feature.to_owned()).collect();
+        Declarations::collect_with_features(&workspace, &["aarch64-linux-android"], &features)
+            .expect("the facade's declarations")
     }
 
     /// The manifest declares each permission the framework's Android host
     /// needs, because the crate that needs it declares it: `flui-native`'s
-    /// haptic patterns the vibrator, `flui-app`'s `http` feature (on by
-    /// default) the network for `HttpURLConnection`. The label and library
+    /// haptic patterns the vibrator, and `flui-app`'s `http` feature the
+    /// network for `HttpURLConnection`, only while the application turns the
+    /// facade's `http` on. `flui-app`'s own tests turn it on as a
+    /// dev-dependency, which no application links. The label and library
     /// are escaped into the base. The APK carries the dex `flui-native`
     /// declares, the checked-in one, and a minified release keeps its classes.
     #[test]
     fn the_manifest_declares_what_the_linked_crates_need() {
-        let declarations = framework_declarations();
+        const INTERNET: &str =
+            "    <uses-permission android:name=\"android.permission.INTERNET\" />\n";
+        let declarations = framework_declarations(&["http"]);
         let manifest = render(&FACTS, &declarations);
         for line in [
-            "    <uses-permission android:name=\"android.permission.INTERNET\" />\n",
+            INTERNET,
             "    <uses-permission android:name=\"android.permission.VIBRATE\" />\n",
             "android:label=\"R&amp;D &lt;Notes&gt;\"",
             "android:value=\"notes\"",
@@ -216,6 +221,12 @@ mod tests {
         assert!(
             !manifest.contains("{{"),
             "every placeholder filled:\n{manifest}"
+        );
+        let offline = render(&FACTS, &framework_declarations(&[]));
+        assert_eq!(
+            offline,
+            manifest.replace(INTERNET, ""),
+            "without `http` the manifest lacks the network permission and nothing else"
         );
         let without = render(&FACTS, &Declarations::default());
         assert!(!without.contains("<uses-permission"), "{without}");
@@ -323,11 +334,12 @@ mod tests {
         assert_eq!(plain.matches("<intent-filter").count(), 1, "{plain}");
     }
 
-    /// The manifest a FLUI application on Android gets, whole: a change to
-    /// the base or to what the framework's crates declare shows up here.
+    /// The manifest a FLUI application that turns on `http` gets on
+    /// Android, whole: a change to the base or to what the framework's
+    /// crates declare shows up here.
     #[test]
     fn the_generated_manifest_matches_its_golden() {
-        insta::assert_snapshot!(render(&FACTS, &framework_declarations()));
+        insta::assert_snapshot!(render(&FACTS, &framework_declarations(&["http"])));
     }
 
     /// The base names `FluiActivity` and the APK's code (ADR-0255 decision

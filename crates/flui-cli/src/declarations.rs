@@ -1030,9 +1030,13 @@ mod tests {
     }
 
     /// A crate's own declarations reach the application through any depth
-    /// of dependency; a feature's part counts only when the graph enables the
+    /// of dependency; a feature's part counts only when the build enables the
     /// feature; a dependency only another target links contributes nothing;
-    /// each permission lists every crate that asks for it.
+    /// each permission lists every crate that asks for it. What the artifact
+    /// does not link declares nothing: a dev-dependency and the feature it
+    /// turns on, a build script's dependency, a procedural macro and the
+    /// feature its own copy of a crate turns on. An example links its
+    /// package's dev-dependencies, so for its build they count.
     #[test]
     fn declarations_are_joined_over_the_graph_the_target_links() {
         let project = fixture(&[
@@ -1043,8 +1047,42 @@ mod tests {
                     "[workspace]\n[dependencies]\nmiddle = { path = \"../middle\" }\n\
                      http_lib = { path = \"../http_lib\", features = [\"http\"] }\n\
                      quiet = { path = \"../quiet\" }\n\
+                     macros = { path = \"../macros\" }\n\
                      [target.'cfg(target_os = \"linux\")'.dependencies]\n\
-                     linux_only = { path = \"../linux_only\" }\n",
+                     linux_only = { path = \"../linux_only\" }\n\
+                     [dev-dependencies]\n\
+                     http_lib = { path = \"../http_lib\", features = [\"camera\"] }\n\
+                     checker = { path = \"../checker\" }\n\
+                     [build-dependencies]\nscripted = { path = \"../scripted\" }\n",
+                ),
+            ),
+            (
+                "macros",
+                &manifest(
+                    "macros",
+                    "[lib]\nproc-macro = true\n[dependencies]\n\
+                     http_lib = { path = \"../http_lib\", features = [\"location\"] }\n\
+                     [package.metadata.flui.declares]\nschema = 1\n\
+                     [package.metadata.flui.declares.android]\n\
+                     permissions = [\"android.permission.BLUETOOTH\"]\n",
+                ),
+            ),
+            (
+                "checker",
+                &manifest(
+                    "checker",
+                    "[package.metadata.flui.declares]\nschema = 1\n\
+                     [package.metadata.flui.declares.android]\n\
+                     permissions = [\"android.permission.READ_CALENDAR\"]\n",
+                ),
+            ),
+            (
+                "scripted",
+                &manifest(
+                    "scripted",
+                    "[package.metadata.flui.declares]\nschema = 1\n\
+                     [package.metadata.flui.declares.android]\n\
+                     permissions = [\"android.permission.RECORD_AUDIO\"]\n",
                 ),
             ),
             (
@@ -1067,10 +1105,12 @@ mod tests {
                 "http_lib",
                 &manifest(
                     "http_lib",
-                    "[features]\nhttp = []\ncamera = []\n\
+                    "[features]\nhttp = []\ncamera = []\nlocation = []\n\
                      [package.metadata.flui.declares]\nschema = 1\n\
                      [package.metadata.flui.declares.android]\n\
                      permissions = [\"android.permission.VIBRATE\"]\n\
+                     [package.metadata.flui.declares.features.location.android]\n\
+                     permissions = [\"android.permission.ACCESS_FINE_LOCATION\"]\n\
                      [package.metadata.flui.declares.features.http.android]\n\
                      permissions = [\"android.permission.INTERNET\"]\n\
                      [[package.metadata.flui.declares.features.http.apple.privacy.accessed-apis]]\n\
@@ -1108,6 +1148,34 @@ mod tests {
                     vec!["http_lib".to_owned(), "leaf".to_owned()]
                 ),
             ]
+        );
+        let example = Member {
+            name: "app",
+            dev: true,
+        };
+        let example = Declarations::collect_package(&app, &["aarch64-linux-android"], example)
+            .expect("declarations");
+        assert_eq!(
+            permissions(&example),
+            [
+                (
+                    "android.permission.CAMERA".to_owned(),
+                    vec!["http_lib".to_owned()]
+                ),
+                (
+                    "android.permission.INTERNET".to_owned(),
+                    vec!["http_lib".to_owned()]
+                ),
+                (
+                    "android.permission.READ_CALENDAR".to_owned(),
+                    vec!["checker".to_owned()]
+                ),
+                (
+                    "android.permission.VIBRATE".to_owned(),
+                    vec!["http_lib".to_owned(), "leaf".to_owned()]
+                ),
+            ],
+            "an example links its package's dev-dependencies"
         );
         let ios = collect(&app, "aarch64-apple-ios").expect("declarations");
         assert_eq!(
@@ -1470,8 +1538,9 @@ mod tests {
     /// crate nothing in the build links: `#[flui::main]` carries its lists
     /// into the run, which opens only those. A dependency that declares a
     /// scheme, even under a feature the build leaves off, is refused by name;
-    /// an application another crate reaches only as a dev-dependency is still
-    /// the application.
+    /// an application a test crate of its workspace reaches only as a
+    /// dev-dependency is still the application, and the build of that test
+    /// crate alone, which does not link it, opens none of its links.
     #[test]
     fn only_the_application_declares_the_links_it_opens() {
         let dependency = fixture(&[
@@ -1505,7 +1574,7 @@ mod tests {
                 "checks",
                 &manifest(
                     "checks",
-                    "[workspace]\n[dev-dependencies]\napp = { path = \"../app\" }\n",
+                    "[dev-dependencies]\napp = { path = \"../app\" }\n",
                 ),
             ),
             (
@@ -1516,14 +1585,26 @@ mod tests {
                 ),
             ),
         ]);
-        let declarations = collect(&tested.path().join("checks"), "aarch64-linux-android")
-            .expect("an application a test crate depends on declares its links");
-        assert_eq!(
-            declarations
+        std::fs::write(
+            tested.path().join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\nmembers = [\"app\", \"checks\"]\n",
+        )
+        .expect("the workspace manifest");
+        let schemes = |dir: &Path| -> Vec<String> {
+            collect(dir, "aarch64-linux-android")
+                .expect("declarations")
                 .url_schemes()
                 .map(|(scheme, _)| scheme.to_string())
-                .collect::<Vec<String>>(),
-            ["notes"]
+                .collect()
+        };
+        assert_eq!(
+            schemes(tested.path()),
+            ["notes"],
+            "an application a test crate depends on declares its links"
+        );
+        assert!(
+            schemes(&tested.path().join("checks")).is_empty(),
+            "a dev-dependency is not linked, so its links are not the build's"
         );
     }
 

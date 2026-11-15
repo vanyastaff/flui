@@ -937,13 +937,14 @@ mod tests {
             })
             .collect()
     }
-    /// What FLUI's own workspace declares for a device build: `flui-native`
-    /// reads `systemUptime` for UIKit event times (`35F9.1`), and it and
-    /// `flui-assets` read file timestamps in the app's container (`C617.1`).
+    /// What the crates a device build of the `flui` facade links declare:
+    /// `flui-native` reads `systemUptime` for UIKit event times (`35F9.1`),
+    /// and it and `flui-assets` read file timestamps in the app's container
+    /// (`C617.1`).
     fn framework_declarations() -> Declarations {
         let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         Declarations::collect(&workspace, &["aarch64-apple-ios"])
-            .expect("the workspace's declarations")
+            .expect("the facade's declarations")
     }
     fn privacy_manifest_declares_what_flui_calls() {
         let manifest = privacy_manifest(None, &framework_declarations()).expect("manifest");
