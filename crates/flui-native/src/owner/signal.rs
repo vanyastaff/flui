@@ -14,6 +14,7 @@
 /// requested from another thread), through [`OwnerSignal::window_wake`].
 pub(crate) type WindowWake = Arc<dyn Fn() + Send + Sync>;
 
+use super::call_point::{Called, HandlerSlot, call, retire};
 use super::panic_boundary::contain_owner_callback;
 use super::slot::OwnerSlot;
 use crate::{
@@ -45,21 +46,29 @@ impl OwnerTurnSlot {
     /// Drops the registered callback, if any, on the calling (owner) thread.
     pub(crate) fn clear(&self) {
         let callback = self.0.borrow_mut().take();
-        contain_owner_callback(|| drop(callback));
+        retire(callback);
     }
 
-    /// Installs `callback`, returning the one it replaces.
+    /// Whether a callback waits here for the next turn.
+    fn is_registered(&self) -> bool {
+        self.0.borrow().is_some()
+    }
+}
+
+/// The owner-turn callback's slot, reached through the call point like every
+/// other handler: a turn calls it with no borrow held, and a callback
+/// registered while it ran replaces it.
+impl HandlerSlot for OwnerTurnSlot {
+    type Handler = Callback;
+
     fn replace(&self, callback: Callback) -> Option<Callback> {
         self.0.borrow_mut().replace(callback)
     }
 
-    /// Leases the callback out for one turn.
     fn take(&self) -> Option<Callback> {
         self.0.borrow_mut().take()
     }
 
-    /// Returns a leased callback unless a replacement was registered while
-    /// it was out; hands it back when it was superseded.
     fn restore(&self, callback: Callback) -> Option<Callback> {
         let mut slot = self.0.borrow_mut();
         if slot.is_none() {
@@ -546,7 +555,7 @@ impl OwnerTurn<'_> {
     pub(crate) fn drive_in(mut self, slot: &OwnerTurnSlot) -> bool {
         self.driven = true;
         let signal = self.signal;
-        let mut callback = {
+        {
             let mut state = signal.state.lock();
             if state.active {
                 return false;
@@ -574,29 +583,52 @@ impl OwnerTurn<'_> {
             }
             // With no callback registered the wake stays owed: registering
             // one schedules the turn that runs it.
-            let Some(callback) = slot.take() else {
+            if !slot.is_registered() {
                 return false;
-            };
+            }
             state.pending = false;
             state.active = true;
-            Some(callback)
-        };
-        contain_owner_callback(|| {
-            if let Some(callback) = callback.as_mut() {
-                callback();
-            }
-        });
-        {
-            let state = signal.state.lock();
-            if state.accepting {
-                callback = callback.and_then(|callback| slot.restore(callback));
-            }
         }
-        // Nested native loops during Drop must observe active and leave pending work alone.
-        contain_owner_callback(|| drop(callback));
+        // The call point drops a callback the turn displaced, or one the
+        // closed signal no longer takes back, before `active` clears: nested
+        // native loops during its `Drop` observe the turn and leave pending
+        // work alone. The callback is the runtime's own owner work; its panic
+        // is contained and logged here.
+        if let Called::Panicked(failure) = call(&LeasedTurn { signal, slot }, |callback| callback())
+        {
+            failure.contain("the owner-turn callback");
+        }
         signal.state.lock().active = false;
         signal.rearm();
         false
+    }
+}
+
+/// The turn slot as one turn of a signal leases it: the callback goes back
+/// only while the signal still accepts work, so one that ran as the loop
+/// closed is dropped, on the owner thread.
+struct LeasedTurn<'a> {
+    signal: &'a OwnerSignal,
+    slot: &'a OwnerTurnSlot,
+}
+
+impl HandlerSlot for LeasedTurn<'_> {
+    type Handler = Callback;
+
+    fn take(&self) -> Option<Callback> {
+        self.slot.take()
+    }
+
+    fn restore(&self, callback: Callback) -> Option<Callback> {
+        if self.signal.state.lock().accepting {
+            self.slot.restore(callback)
+        } else {
+            Some(callback)
+        }
+    }
+
+    fn replace(&self, callback: Callback) -> Option<Callback> {
+        self.slot.replace(callback)
     }
 }
 
@@ -652,3 +684,6 @@ impl super::ProxyTransport for SignalTransport {
         self.owner
     }
 }
+
+#[cfg(test)]
+mod tests;

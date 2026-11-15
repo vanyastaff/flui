@@ -650,6 +650,7 @@ mod event_loop {
     use std::time::Duration;
 
     use cursor_icon::CursorIcon;
+    use flui_foundation::panic::FirstPanic;
     use flui_platform::data_transfer::DragTransport;
     use flui_platform::drag::PlatformDragSource;
     use flui_platform::{
@@ -2405,17 +2406,22 @@ mod event_loop {
             // The input the seats reported reaches the windows before they
             // settle, so a frame they deliver follows the input it shows.
             // Neither holds a lock of the loop: a handler may open, close or
-            // quit.
-            self.input.deliver();
+            // quit. What the dispatch recorded is off the queue and nothing
+            // else would deliver it, so a handler's panic in one step leaves
+            // the steps after it delivered, and the first is raised after the
+            // last, as the X11 loop does with its turn's events.
+            let mut failure = FirstPanic::new();
+            failure.contain(|| self.input.deliver());
             // The application's selection is asked for its text here, at the
             // turn, not inside the dispatch that recorded the request.
-            self.clipboard.deliver();
+            failure.contain(|| self.clipboard.deliver());
             // The drags the devices recorded reach their windows, and each
             // drag's source is answered, with no lock of the loop held.
-            self.drag.deliver();
+            failure.contain(|| self.drag.deliver());
             for window in self.windows.values() {
-                window.settle();
+                failure.contain(|| window.settle());
             }
+            failure.resume();
             let turn = self.signal.begin_turn();
             self.deliver_host_notices();
             if turn.drive_in(&self.turn) || self.exit_due() {
@@ -2509,7 +2515,7 @@ mod event_loop {
             if !(emptied || reevaluate) || !self.windows.is_empty() {
                 return false;
             }
-            self.app.exit_policy().or_resume(true)
+            self.app.exit_policy().ends_loop(true)
         }
 
         /// Block until the compositor sends something, another producer
@@ -2710,6 +2716,11 @@ mod event_loop {
     }
 
     impl host::Services for WaylandLoop {
+        /// Only a page has an origin.
+        fn page_origin(&self) -> Option<String> {
+            None
+        }
+
         fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
             host::environment_launch_value(key)
         }

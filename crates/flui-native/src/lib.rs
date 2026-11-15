@@ -308,8 +308,8 @@ pub use window::headless::{
 pub use owner::apple::ios::{IOSSceneAttachmentId, IOSSceneSessionId};
 #[cfg(target_os = "ios")]
 pub use window::apple::ios::IOSSceneEvent;
-// The frame request a host stamps on the event clock (`owner/handlers.rs`).
-pub use owner::handlers::{frame_request_aged, frame_request_now, frame_request_timed};
+// The frame request a host stamps on the event clock (`owner/frame_timing.rs`).
+pub use owner::frame_timing::{frame_request_aged, frame_request_now, frame_request_timed};
 // Re-export task types
 pub use task::{Task, TaskLabel};
 // The core host's own traits; the contract's names are imported from
@@ -343,7 +343,8 @@ pub use owner::{
 ///
 /// 1. **Runtime Environment Check** (executed first):
 ///    - Checks `FLUI_HEADLESS` environment variable
-///    - If set (any value), returns `HeadlessPlatform` immediately
+///    - If set to anything but empty or `0`, returns `HeadlessPlatform`
+///      immediately; `0` and empty leave the choice to the target
 ///    - Bypasses all compile-time OS detection
 ///    - Used for CI/testing without GPU or display server
 ///
@@ -363,8 +364,8 @@ pub use owner::{
 ///
 /// # Environment Variables
 ///
-/// - **FLUI_HEADLESS=1**: Forces headless mode for CI/testing (overrides OS
-///   detection)
+/// - **FLUI_HEADLESS=1** (anything but empty or `0`): Forces headless mode for CI/testing
+///   (overrides OS detection); `0` or empty leaves the choice to the target
 ///
 /// # Platform Selection
 ///
@@ -452,36 +453,19 @@ pub enum CurrentHost {
     #[cfg(windows)]
     Windows,
     /// The native AppKit host.
-    #[cfg(all(target_os = "macos", not(windows)))]
+    #[cfg(target_os = "macos")]
     MacOs,
     /// The native Wayland host.
-    #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+    #[cfg(target_os = "linux")]
     Wayland,
     /// The native X11 host.
-    #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+    #[cfg(target_os = "linux")]
     X11,
     /// The native UIKit host.
-    #[cfg(all(
-        target_os = "ios",
-        not(any(
-            windows,
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "android"
-        ))
-    ))]
+    #[cfg(target_os = "ios")]
     Ios,
     /// The page host.
-    #[cfg(all(
-        target_arch = "wasm32",
-        not(any(
-            windows,
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "android",
-            target_os = "ios"
-        ))
-    ))]
+    #[cfg(target_arch = "wasm32")]
     Web,
 }
 
@@ -495,7 +479,7 @@ pub enum CurrentHost {
 /// Linux session with no display server or none whose host is built, Android (whose host
 /// `android_platform` starts from `android_main`), or an unsupported target.
 pub fn current_host() -> Result<CurrentHost, PlatformError> {
-    if std::env::var("FLUI_HEADLESS").is_ok() {
+    if headless_requested(std::env::var_os("FLUI_HEADLESS").as_deref()) {
         tracing::info!("FLUI_HEADLESS detected, using headless platform");
         return Ok(CurrentHost::Headless);
     }
@@ -505,12 +489,12 @@ pub fn current_host() -> Result<CurrentHost, PlatformError> {
         Ok(CurrentHost::Windows)
     }
 
-    #[cfg(all(target_os = "macos", not(windows)))]
+    #[cfg(target_os = "macos")]
     {
         Ok(CurrentHost::MacOs)
     }
 
-    #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+    #[cfg(target_os = "linux")]
     {
         let built = LinuxHosts {
             wayland: cfg!(feature = "wayland"),
@@ -523,10 +507,7 @@ pub fn current_host() -> Result<CurrentHost, PlatformError> {
         }
     }
 
-    #[cfg(all(
-        target_os = "android",
-        not(any(windows, target_os = "macos", target_os = "linux"))
-    ))]
+    #[cfg(target_os = "android")]
     {
         // The Android host needs the Activity, which the system hands only to
         // `android_main`: `android_platform(app)` starts it.
@@ -537,29 +518,12 @@ pub fn current_host() -> Result<CurrentHost, PlatformError> {
         })
     }
 
-    #[cfg(all(
-        target_os = "ios",
-        not(any(
-            windows,
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "android"
-        ))
-    ))]
+    #[cfg(target_os = "ios")]
     {
         Ok(CurrentHost::Ios)
     }
 
-    #[cfg(all(
-        target_arch = "wasm32",
-        not(any(
-            windows,
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "android",
-            target_os = "ios"
-        ))
-    ))]
+    #[cfg(target_arch = "wasm32")]
     {
         Ok(CurrentHost::Web)
     }
@@ -578,6 +542,12 @@ pub fn current_host() -> Result<CurrentHost, PlatformError> {
                 .to_string(),
         })
     }
+}
+
+/// Whether `FLUI_HEADLESS`, read as `value`, selects the headless host: set to anything but
+/// empty or `0`, as a boolean environment switch reads (`FLUI_HEADLESS=0` turns it off).
+fn headless_requested(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| !value.is_empty() && value != "0")
 }
 
 /// What [`CurrentHost::start_single`] found: this process is the application's one instance and
@@ -767,9 +737,9 @@ impl CurrentHost {
             Self::Headless => Ok(Box::new(HeadlessPlatform::new())),
             #[cfg(windows)]
             Self::Windows => Ok(Box::new(WindowsPlatform::try_new_with(instance)?)),
-            #[cfg(all(target_os = "macos", not(windows)))]
+            #[cfg(target_os = "macos")]
             Self::MacOs => Ok(Box::new(MacOSPlatform::try_new()?)),
-            #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+            #[cfg(target_os = "linux")]
             Self::Wayland | Self::X11 => {
                 let platform = if self == Self::Wayland {
                     start_wayland(executor, instance)
@@ -779,26 +749,9 @@ impl CurrentHost {
                 tracing::info!(host = platform.name(), "the session's native host started");
                 Ok(platform)
             }
-            #[cfg(all(
-                target_os = "ios",
-                not(any(
-                    windows,
-                    target_os = "macos",
-                    target_os = "linux",
-                    target_os = "android"
-                ))
-            ))]
+            #[cfg(target_os = "ios")]
             Self::Ios => Ok(Box::new(IOSPlatform::try_new()?)),
-            #[cfg(all(
-                target_arch = "wasm32",
-                not(any(
-                    windows,
-                    target_os = "macos",
-                    target_os = "linux",
-                    target_os = "android",
-                    target_os = "ios"
-                ))
-            ))]
+            #[cfg(target_arch = "wasm32")]
             Self::Web => Ok(Box::new(WebPlatform::try_new()?)),
         }
     }
@@ -812,32 +765,15 @@ impl CurrentHost {
             Self::Headless => Backend::Headless,
             #[cfg(windows)]
             Self::Windows => Backend::Win32,
-            #[cfg(all(target_os = "macos", not(windows)))]
+            #[cfg(target_os = "macos")]
             Self::MacOs => Backend::AppKit,
-            #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+            #[cfg(target_os = "linux")]
             Self::Wayland => Backend::Wayland,
-            #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+            #[cfg(target_os = "linux")]
             Self::X11 => Backend::X11,
-            #[cfg(all(
-                target_os = "ios",
-                not(any(
-                    windows,
-                    target_os = "macos",
-                    target_os = "linux",
-                    target_os = "android"
-                ))
-            ))]
+            #[cfg(target_os = "ios")]
             Self::Ios => Backend::UiKit,
-            #[cfg(all(
-                target_arch = "wasm32",
-                not(any(
-                    windows,
-                    target_os = "macos",
-                    target_os = "linux",
-                    target_os = "android",
-                    target_os = "ios"
-                ))
-            ))]
+            #[cfg(target_arch = "wasm32")]
             Self::Web => Backend::Web,
         }
     }
@@ -858,7 +794,7 @@ type InstanceClaim = owner::windows::single_instance::FirstInstance;
 type InstanceClaim = std::convert::Infallible;
 
 /// The native Wayland host, as [`current_platform`] starts it.
-#[cfg(all(target_os = "linux", feature = "wayland"))]
+#[cfg(wayland_host)]
 fn start_wayland(
     executor: NativeExecutor,
     instance: Option<InstanceClaim>,
@@ -867,7 +803,7 @@ fn start_wayland(
 }
 
 /// A build without the Wayland host never chooses it.
-#[cfg(all(target_os = "linux", not(feature = "wayland")))]
+#[cfg(all(target_os = "linux", not(wayland_host)))]
 fn start_wayland(
     _executor: NativeExecutor,
     _instance: Option<InstanceClaim>,
@@ -887,7 +823,7 @@ fn start_x11(
 }
 
 /// A build without the X11 host never chooses it.
-#[cfg(all(target_os = "linux", not(feature = "x11")))]
+#[cfg(all(target_os = "linux", not(x11_host)))]
 fn start_x11(
     _executor: NativeExecutor,
     _instance: Option<InstanceClaim>,

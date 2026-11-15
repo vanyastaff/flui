@@ -31,7 +31,6 @@ use crate::{
     owner::apple::terminate_gate::DEFERRAL_LIMIT,
     owner::apple::terminate_gate::TerminateGate,
     owner::apple::terminate_gate::Termination,
-    owner::call_point::Called,
     owner::panic_boundary::{AfterPanic, ContainedIvars, contain_os_entry, os_entry},
     owner::signal::OwnerTurnSlot,
 };
@@ -440,16 +439,9 @@ impl LoopControl {
             return;
         }
         // The handler may open a window, request another turn, or quit: it is
-        // asked outside every lock. A run with no handler allows the exit.
-        let allowed = match self.app.exit_policy() {
-            Called::Vacant => true,
-            Called::Returned(allow) => allow,
-            Called::Panicked(failure) => {
-                failure.contain("the application's exit policy");
-                self.quit();
-                return;
-            }
-        };
+        // asked outside every lock. A run with no handler, or one whose
+        // handler panicked (contained by the delivery), allows the exit.
+        let allowed = self.app.exit_policy().ends_loop(true);
         if allowed && self.state.lock().phase == Phase::Running && self.windows.is_empty() {
             self.quit();
         }

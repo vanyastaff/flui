@@ -49,7 +49,6 @@ use windows::Win32::{
 #[cfg(windows)]
 use crate::input::assembly::ContactRegistry;
 #[cfg(windows)]
-use crate::owner::call_point::{Field, call};
 #[cfg(windows)]
 use crate::owner::windows::control::OwnerPreferences;
 #[cfg(windows)]
@@ -91,9 +90,7 @@ impl crate::host::Input<WindowsLoop> for WindowsLoop {
     }
 
     fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut()>) {
-        owner.register_handler("on_keyboard_layout_change", callback, |hooks| {
-            &mut hooks.keyboard_layout_changed
-        });
+        owner.register_layout_callback("on_keyboard_layout_change", callback);
     }
 }
 
@@ -246,14 +243,13 @@ impl InputWindow {
         self.registry.borrow_mut().set_click_settings(settings);
     }
 
-    /// Dispatch a keyboard-layout change to the platform-level hook, through
-    /// the call point: no borrow of the hooks is held while it runs.
+    /// Dispatch a keyboard-layout change to the registered callback, through
+    /// the call point: no borrow of the hooks is held while it runs. Its
+    /// panic resumes into the window procedure, which ends the process: an
+    /// unwind cannot leave it (ADR-0258 §4).
     fn dispatch_keyboard_layout_change(&self) {
-        call(
-            &Field::new(&*self.app_hooks, |hooks| &mut hooks.keyboard_layout_changed),
-            |handler| handler(),
-        )
-        .or_resume(());
+        let slot = Rc::clone(&self.app_hooks.borrow().keyboard_layout_changed);
+        slot.changed().or_resume(());
     }
 }
 

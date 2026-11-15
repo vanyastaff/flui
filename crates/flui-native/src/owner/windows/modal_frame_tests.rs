@@ -3,7 +3,7 @@
 
 use super::modal_loop::ModalFrames;
 use super::*;
-use crate::owner::handlers::OpenWindows;
+use crate::owner::OpenWindows;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Windows that count the frames a delivered deadline asks of them.

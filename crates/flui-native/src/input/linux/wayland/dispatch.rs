@@ -23,6 +23,7 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use cursor_icon::CursorIcon;
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::sequence::IdMint;
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::keyboard::{KeyEvent, KeyState};
@@ -79,6 +80,7 @@ use crate::input::assembly::{NativeClock, NativeDevice, NativeSurface};
 use crate::input::availability::{self, WaylandInputGlobals};
 use crate::input::event_timestamp_ns;
 use crate::input::linux::xkb::{EVDEV_OFFSET, Keyboard, KeymapSource, keymap_length};
+use crate::owner::layout_callback::LayoutCallback;
 #[cfg(any(test, feature = "testing"))]
 use crate::owner::linux::wayland::ShownCursor;
 use crate::owner::linux::wayland::user_input::{MAX_SEATS, UserInput};
@@ -313,7 +315,8 @@ struct Shared {
     objects: OwnerCell<Objects>,
     windows: OwnerCell<Vec<Attached>>,
     delivering: OwnerCell<Option<Delivering>>,
-    layout_callbacks: OwnerCell<Vec<Box<dyn FnMut()>>>,
+    /// The application's keyboard layout callback.
+    layout_callback: OwnerCell<Rc<LayoutCallback>>,
     /// The device labels minted.
     labels: OwnerCell<IdMint<NonZeroU64>>,
     /// The seat keys minted.
@@ -548,7 +551,7 @@ impl SeatInput {
             objects: OwnerCell::new(),
             windows: OwnerCell::new(),
             delivering: OwnerCell::new(),
-            layout_callbacks: OwnerCell::new(),
+            layout_callback: OwnerCell::new(),
             labels: OwnerCell::new(),
             seat_keys: OwnerCell::new(),
             themes: OwnerCell::new(),
@@ -636,8 +639,9 @@ impl SeatInput {
             .unwrap_or_default()
     }
 
-    /// Hand `inputs` to their windows, with no cell borrowed.
-    fn hand_out(&self, inputs: Vec<(Target, PlatformInput)>) {
+    /// Hand `inputs` to their windows, with no cell borrowed, each delivery
+    /// in `failure`, the turn's.
+    fn hand_out(&self, inputs: Vec<(Target, PlatformInput)>, failure: &mut FirstPanic) {
         for (target, input) in inputs {
             let deliveries: Vec<Arc<WindowDelivery>> = self
                 .shared
@@ -667,17 +671,17 @@ impl SeatInput {
                 _ => None,
             };
             for delivery in deliveries {
-                delivery.dispatch_input(input.clone());
+                failure.contain(|| delivery.dispatch_input(input.clone()));
                 if let Some(hovered) = hover {
-                    delivery.report_hover(hovered);
+                    failure.contain(|| delivery.report_hover(hovered));
                 }
             }
         }
     }
 
     /// Give every window the capabilities the devices present and the
-    /// globals bound make now, when they changed.
-    fn refresh_capabilities(&self) {
+    /// globals bound make now, when they changed, each in `failure`.
+    fn refresh_capabilities(&self, failure: &mut FirstPanic) {
         let globals = self.shared.globals();
         let changed = self
             .shared
@@ -697,7 +701,7 @@ impl SeatInput {
         };
         let deliveries = self.deliveries();
         for delivery in deliveries {
-            delivery.set_input_capabilities(capabilities);
+            failure.contain(|| delivery.set_input_capabilities(capabilities));
         }
     }
 
@@ -733,8 +737,8 @@ impl SeatInput {
             .unwrap_or_default()
     }
 
-    /// Tell the layout callbacks, outside every cell, when the layout
-    /// changed.
+    /// Tell the application's layout callback, outside every cell, when the
+    /// layout changed. Its panic unwinds into the turn.
     fn report_layout(&self) {
         let changed = self
             .shared
@@ -748,19 +752,9 @@ impl SeatInput {
         if !changed {
             return;
         }
-        let mut callbacks = self
-            .shared
-            .layout_callbacks
-            .with(std::mem::take)
-            .unwrap_or_default();
-        for callback in &mut callbacks {
-            contain_owner_callback(&mut *callback);
+        if let Some(callback) = self.shared.layout_callback.with(|held| Rc::clone(held)) {
+            callback.changed().or_resume(());
         }
-        // A callback registered while these ran is kept after them.
-        self.shared.layout_callbacks.with(|held| {
-            callbacks.append(held);
-            *held = callbacks;
-        });
     }
 }
 
@@ -1140,7 +1134,13 @@ impl WaylandInput for SeatInput {
             .with(|objects| objects.cursor_source = Some(globals));
     }
 
+    /// Deliver what the turn recorded. The wires are off the queue and
+    /// nothing else would hear them: whatever one of them runs (a window's
+    /// handler, a field's store, the layout callback) and however it fails,
+    /// the ones after it are delivered, each window hears its share, and the
+    /// first failure is raised again after the last.
     fn deliver(&self) {
+        let mut failure = FirstPanic::new();
         // A handler that opens a window dispatches the queue meanwhile, which
         // records more: it is delivered in this turn too.
         loop {
@@ -1150,19 +1150,18 @@ impl WaylandInput for SeatInput {
             }
             for wire in wires {
                 if let Wire::Text(text) = wire {
-                    // A field's store is application code: a panic there
-                    // costs that one event, never the rest of the batch.
-                    contain_owner_callback(|| self.texts.deliver(text));
+                    failure.contain(|| self.texts.deliver(text));
                     continue;
                 }
                 let inputs = self.assemble(wire);
-                self.refresh_capabilities();
-                self.hand_out(inputs);
+                self.refresh_capabilities(&mut failure);
+                self.hand_out(inputs, &mut failure);
             }
         }
         let repeated = self.repeat_due();
-        self.hand_out(repeated);
-        self.report_layout();
+        self.hand_out(repeated, &mut failure);
+        failure.contain(|| self.report_layout());
+        failure.resume();
     }
 
     fn next_due(&self) -> Option<Instant> {
@@ -1300,11 +1299,10 @@ impl WaylandInput for SeatInput {
     }
 
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
-        let held = self
-            .shared
-            .layout_callbacks
-            .with(|callbacks| callbacks.push(callback));
-        if held.is_none() {
+        if let Some(slot) = self.shared.layout_callback.with(|held| Rc::clone(held)) {
+            slot.register(callback);
+        } else {
+            drop(callback);
             tracing::warn!(
                 "a keyboard layout callback is registered on the Wayland owner thread only"
             );
@@ -1321,13 +1319,10 @@ impl WaylandInput for SeatInput {
     fn release(&self) {
         self.texts.release();
         let windows = self.shared.windows.with(std::mem::take).unwrap_or_default();
-        let callbacks = self
-            .shared
-            .layout_callbacks
-            .with(std::mem::take)
-            .unwrap_or_default();
         contain_owner_callback(|| drop(windows));
-        contain_owner_callback(|| drop(callbacks));
+        if let Some(callback) = self.shared.layout_callback.with(|held| Rc::clone(held)) {
+            callback.release();
+        }
     }
 
     #[cfg(any(test, feature = "testing"))]

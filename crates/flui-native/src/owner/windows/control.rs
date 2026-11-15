@@ -22,7 +22,6 @@ use crate::{
     owner::ProxyTransport,
     owner::WindowOpen,
     owner::app_delivery::AppDelivery,
-    owner::call_point::Called,
     owner::hwnd_affinity::UserDataRefusal,
     owner::hwnd_affinity::UserDataVerdict,
     owner::hwnd_affinity::classify_user_data_access,
@@ -731,8 +730,8 @@ fn quit_owner_loop(signal: &OwnerSignal, turn: &OwnerTurnSlot) {
 ///
 /// The handler is asked through the call point with no `RefCell` borrow held,
 /// because it re-enters the embedder, which may open a window or quit. A
-/// window opened while it ran vetoes the exit regardless of its answer, and
-/// so does a handler that panics.
+/// window opened while it ran vetoes the exit regardless of its answer; a
+/// handler that panics leaves the exit to the host (`AppDelivery::exit_policy`).
 fn exit_policy_allows_exit(
     signal: &OwnerSignal,
     app: &AppDelivery,
@@ -742,14 +741,10 @@ fn exit_policy_allows_exit(
     if !signal.accepting() || !no_windows() {
         return false;
     }
-    // The handler is embedder code running inside this window procedure,
-    // where an unwind cannot cross the FFI boundary. A panic is contained and
-    // counts as a veto.
-    let allowed = match app.exit_policy() {
-        Called::Vacant => true,
-        called => called.or_contain(false, "the application's exit policy"),
-    };
-    allowed && signal.accepting() && no_windows()
+    // A handler with no policy, or one that panicked (contained by the
+    // delivery), leaves the exit to the host: a desktop loop ends with its
+    // last window.
+    app.exit_policy().ends_loop(true) && signal.accepting() && no_windows()
 }
 
 // SAFETY: Win32 invokes this exact signature for the dedicated registered class.

@@ -27,8 +27,8 @@ use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
 use crate::{
     error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
-    owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow, owner::ProxyTransport,
-    owner::WindowOpen, owner::handlers::OpenWindows, owner::window_delivery::WindowDelivery,
+    owner::OpenWindows, owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow,
+    owner::ProxyTransport, owner::WindowOpen, owner::window_delivery::WindowDelivery,
     platform::AppHandler, platform::Platform,
 };
 use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowOptions};
@@ -230,7 +230,7 @@ pub(crate) struct HeadlessState {
     /// binds.
     pub(crate) app: Arc<AppDelivery>,
     /// Called when a test changes the keyboard layout.
-    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut()>>,
+    pub(crate) layout_callback: std::rc::Rc<crate::owner::layout_callback::LayoutCallback>,
     pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     is_running: bool,
     /// The windows the platform tracks: the window feature's.
@@ -357,7 +357,7 @@ impl HeadlessLoop {
             owner_turn: std::rc::Weak::new(),
             notices: H::notices(&app),
             app,
-            keyboard_layout_changed: None,
+            layout_callback: std::rc::Rc::default(),
             clipboard: Arc::new(MemoryClipboard::new()),
             is_running: false,
             windows,
@@ -459,7 +459,7 @@ pub(crate) fn consult_exit_policy(state: &std::cell::RefCell<HeadlessState>) -> 
     // after its run never quits on its own, the opposite of the desktop
     // hosts, whose loop ends with its last window when nothing says
     // otherwise.
-    let allowed = app.exit_policy().or_resume(false);
+    let allowed = app.exit_policy().ends_loop(false);
     if !allowed || !state.borrow_mut().windows.is_empty() {
         return false;
     }
@@ -615,6 +615,11 @@ impl host::Loop for HeadlessLoop {
 }
 
 impl host::Services for HeadlessLoop {
+    /// Only a page has an origin.
+    fn page_origin(&self) -> Option<String> {
+        None
+    }
+
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
     }
@@ -853,8 +858,7 @@ impl HeadlessExitReevaluation {
     /// That argument rests on one thing: `windows` being non-empty means a
     /// window is genuinely open. A deferred close — parked, so the window is
     /// still tracked but no longer open — would break it, and then this must
-    /// become check-then-consume. Issue #937 owns that, and this note is here
-    /// so the reasoning is not re-derived as a defect in the meantime.
+    /// become check-then-consume.
     pub fn drive(&self) -> bool {
         let Some(platform_state) = self.state.upgrade() else {
             return false;

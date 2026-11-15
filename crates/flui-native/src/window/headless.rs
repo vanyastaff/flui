@@ -30,7 +30,7 @@ use crate::host_window::HostWindow;
 use crate::input::regions::ProjectedInputRegions;
 use crate::owner::OpenWindowError;
 
-use crate::owner::handlers::OpenWindows;
+use crate::owner::OpenWindows;
 use crate::owner::headless::TextStoreHostFactory;
 use crate::owner::headless::{HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy};
 use crate::owner::window_delivery::{Publication, WindowDelivery};

@@ -126,8 +126,21 @@ pub enum ExitAnswer {
     KeepRunning,
     /// The application has no policy of its own: the host decides as it does
     /// before `ready` and after the loop ended. The Win32, AppKit, X11 and Wayland
-    /// hosts end the loop; the headless host keeps it running.
+    /// hosts end the loop; the headless host keeps it running. A handler that
+    /// panics is answered for this way too, on every host.
     HostDecides,
+}
+
+impl ExitAnswer {
+    /// Whether the loop ends on this answer, for a host whose own default is
+    /// `host_ends`.
+    pub(crate) fn ends_loop(self, host_ends: bool) -> bool {
+        match self {
+            Self::End => true,
+            Self::KeepRunning => false,
+            Self::HostDecides => host_ends,
+        }
+    }
 }
 
 mod sealed {
@@ -312,9 +325,7 @@ pub trait Platform: sealed::Sealed + 'static {
     /// The host's primary selection, owner-local, where the platform has one
     /// (X11 and Wayland); `None` elsewhere. The application's primary
     /// selection provider builds its handles over it (ADR-0152).
-    fn primary_selection(&self) -> Option<std::rc::Rc<dyn crate::NativePrimarySelection>> {
-        None
-    }
+    fn primary_selection(&self) -> Option<std::rc::Rc<dyn crate::NativePrimarySelection>>;
 
     /// The drag-and-drop transport (ADR-0312 §4). Contract: returns clones
     /// of ONE transport per platform instance — the transport owns
@@ -327,7 +338,7 @@ pub trait Platform: sealed::Sealed + 'static {
     /// honest — not fake success).
     fn data_transfer(&self) -> Arc<dyn DragTransport>;
 
-    // ==================== App Activation (US3) ====================
+    // ==================== App Activation ====================
 
     /// Activate the application (bring to front).
     ///
@@ -343,7 +354,7 @@ pub trait Platform: sealed::Sealed + 'static {
     /// no way to.
     fn activate(&self, ignoring_other_apps: bool);
 
-    // ==================== File Operations (US3) ====================
+    // ==================== File Operations ====================
 
     /// Open a URL with the system's default handler
     fn open_url(&self, url: &str);
@@ -376,7 +387,7 @@ pub trait Platform: sealed::Sealed + 'static {
         suggested_name: Option<&str>,
     ) -> Task<Result<Option<PathBuf>, PlatformError>>;
 
-    // ==================== Keyboard (US3) ====================
+    // ==================== Keyboard ====================
 
     /// Get the current keyboard layout identifier
     ///
@@ -385,7 +396,10 @@ pub trait Platform: sealed::Sealed + 'static {
 
     /// Register a callback for keyboard layout changes
     ///
-    /// A host that does not read the layout never calls it.
+    /// A registration replaces the callback before it, which is dropped then,
+    /// on every host. A host that does not read the layout never calls it.
+    /// The callback is called with no lock of the platform held; its panic is
+    /// the failure of the turn that heard the change, as a window handler's is.
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>);
 
     /// Tell the platform the application is done holding a session end it
@@ -456,9 +470,7 @@ pub trait Platform: sealed::Sealed + 'static {
     /// The origin of the page the application runs in (`location.origin`:
     /// scheme, host and port) on the web, whose own address is how a page
     /// is opened; `None` on every other platform.
-    fn page_origin(&self) -> Option<String> {
-        None
-    }
+    fn page_origin(&self) -> Option<String>;
 
     /// Where the application `app` keeps its data on this platform, or `None`
     /// when it has nowhere to keep it.

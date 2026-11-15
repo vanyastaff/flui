@@ -29,7 +29,7 @@ use super::window::{WindowsWindow, window_capabilities};
 use crate::host::WindowPositions;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::owner::handlers::OpenWindows;
+use crate::owner::OpenWindows;
 use crate::owner::windows::{ClassWindows, WindowsLoop};
 use crate::version::gate::Since;
 use crate::version::gate::windows::WindowsBuild;

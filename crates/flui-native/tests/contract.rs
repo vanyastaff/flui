@@ -434,8 +434,8 @@ mod native_windows {
             window_opened_by_the_exit_policy_keeps_the_loop,
         ),
         (
-            "panicking_exit_policy_vetoes_and_is_asked_again",
-            panicking_exit_policy_vetoes_and_is_asked_again,
+            "panicking_exit_policy_leaves_the_exit_to_the_host",
+            panicking_exit_policy_leaves_the_exit_to_the_host,
         ),
         (
             "press_captures_the_mouse_until_the_last_release",
@@ -5632,56 +5632,26 @@ mod native_windows {
         );
     }
 
-    fn panicking_exit_policy_vetoes_and_is_asked_again() {
+    /// An exit policy that panics inside the owner procedure leaves the exit
+    /// to the host: the panic is contained, and the loop ends with its last
+    /// window as a desktop loop does, instead of waiting with no window left.
+    fn panicking_exit_policy_leaves_the_exit_to_the_host() {
         let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let calls = Arc::new(AtomicUsize::new(0));
-        let releaser = Arc::new(Mutex::new(None));
         run_loop(platform, {
             let calls = Arc::clone(&calls);
-            let releaser = Arc::clone(&releaser);
             move |log, owner| {
-                let shared = owner.proxy();
-                log.answer_exit_with({
-                    let calls = Arc::clone(&calls);
-                    move || {
-                        // The first answer is a panic inside the owner
-                        // procedure; the second allows exit.
-                        assert!(
-                            calls.fetch_add(1, Ordering::SeqCst) > 0,
-                            "first exit-policy answer panics"
-                        );
-                        true
-                    }
+                log.answer_exit_with(move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    panic!("the exit-policy answer panics");
                 });
                 post_close(&open_owned(&owner));
-                let worker = std::thread::spawn(move || {
-                    let start = Instant::now();
-                    while calls.load(Ordering::SeqCst) == 0 {
-                        assert!(
-                            start.elapsed() < Duration::from_secs(10),
-                            "hook never consulted"
-                        );
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    std::thread::sleep(Duration::from_millis(200));
-                    shared
-                        .request_exit_policy_reevaluation()
-                        .expect("the owner takes the request");
-                });
-                *releaser.lock().expect("releaser") = Some(worker);
             }
         });
-        releaser
-            .lock()
-            .expect("releaser")
-            .take()
-            .expect("worker spawned")
-            .join()
-            .expect("worker");
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            2,
-            "a panicking hook must veto without aborting and stay installed"
+            1,
+            "the loop ended once, on the host's default"
         );
     }
 

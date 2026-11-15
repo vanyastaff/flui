@@ -99,6 +99,71 @@ fn the_exit_policy_is_asked_when_the_last_window_closes() {
     );
 }
 
+/// An exit policy that panics leaves the decision to the host, as
+/// `ExitAnswer::HostDecides` does: the panic is contained, the headless
+/// platform keeps running (its own default), and the next ask is answered.
+fn a_panicking_exit_policy_leaves_the_decision_to_the_host() {
+    let log = AppLog::new();
+    let first = Cell::new(true);
+    log.answer_exit_with(move || {
+        assert!(!first.replace(false), "the first exit-policy answer panics");
+        true
+    });
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &log);
+    let close = || {
+        owner
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+            .expect("a window")
+            .try_ready()
+            .expect("at once")
+            .close_now();
+    };
+    let closed = catch_unwind(AssertUnwindSafe(close));
+    assert!(closed.is_ok(), "the exit policy's panic left the platform");
+    assert_eq!(log.calls(), [AppCall::Ready, AppCall::ExitPolicy]);
+    close();
+    assert_eq!(
+        log.calls(),
+        [
+            AppCall::Ready,
+            AppCall::ExitPolicy,
+            AppCall::ExitPolicy,
+            AppCall::Quit
+        ]
+    );
+}
+
+/// A session end's answer survives a report raised while it answered whose
+/// handler panics: the session is still held as the handler said.
+fn a_session_end_answer_survives_a_panicking_report_after_it() {
+    let platform = HeadlessPlatform::new();
+    let events = platform.host_events();
+    let log = AppLog::new();
+    log.answer_session_end(SessionEndAnswer::Block);
+    let inside = events.clone();
+    log.react(move |call, _| match call {
+        AppCall::SessionEnd(_) => inside.notice(SystemNotice::Sleep),
+        AppCall::Notice(SystemNotice::Sleep) => panic!("the report after the answer"),
+        _ => {}
+    });
+    let _owner = run_keeping_owner(Box::new(platform), &log);
+    let answer = catch_unwind(AssertUnwindSafe(|| {
+        events.session_end(SessionEndPhase::Query)
+    }));
+    assert!(
+        matches!(answer, Ok(SessionEndAnswer::Block)),
+        "the handler's answer was lost to the report's panic"
+    );
+    assert_eq!(
+        log.calls(),
+        [
+            AppCall::Ready,
+            AppCall::SessionEnd(SessionEndPhase::Query),
+            AppCall::Notice(SystemNotice::Sleep),
+        ]
+    );
+}
+
 /// What the platform reports before `run` binds the handler, and while its
 /// bootstrap runs, waits and is heard after `ready`, once, in order.
 fn a_report_before_the_handler_is_heard_after_ready() {
@@ -213,6 +278,14 @@ fn app_handler_obligation_table() {
             (
                 "the exit policy is asked when the last window closes",
                 the_exit_policy_is_asked_when_the_last_window_closes,
+            ),
+            (
+                "a panicking exit policy leaves the decision to the host",
+                a_panicking_exit_policy_leaves_the_decision_to_the_host,
+            ),
+            (
+                "a session end answer survives a panicking report after it",
+                a_session_end_answer_survives_a_panicking_report_after_it,
             ),
             (
                 "a report before the handler is heard after ready",

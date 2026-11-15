@@ -679,6 +679,39 @@ fn headless_a_run_inside_a_handler_binds_its_own() {
     });
 }
 
+/// A second keyboard layout callback replaces the first, which never hears
+/// a change again; a callback that panics is the turn's failure, raised to
+/// the caller after the platform let go of it, and stays registered.
+fn headless_a_layout_callback_registered_twice_is_replaced() {
+    within(
+        "headless keyboard layout callback, registered twice",
+        || {
+            let headless = HeadlessPlatform::new();
+            let devices = headless.input_devices();
+            let platform: Rc<dyn Platform> = Rc::new(headless);
+            let first = Rc::new(Cell::new(0_u32));
+            let second = Rc::new(Cell::new(0_u32));
+            let heard = Rc::clone(&first);
+            platform.on_keyboard_layout_change(Box::new(move || heard.set(heard.get() + 1)));
+            assert!(devices.set_keyboard_layout("de-DE"));
+            let heard = Rc::clone(&second);
+            platform.on_keyboard_layout_change(Box::new(move || {
+                heard.set(heard.get() + 1);
+                assert!(heard.get() != 1, "the layout callback");
+            }));
+            let failed = catch_unwind(AssertUnwindSafe(|| devices.set_keyboard_layout("fr-FR")));
+            assert!(failed.is_err(), "the callback's panic was not raised");
+            assert_eq!(platform.keyboard_layout(), "fr-FR");
+            assert!(devices.set_keyboard_layout("en-US"));
+            assert_eq!(
+                (first.get(), second.get()),
+                (1, 2),
+                "the replaced callback heard a change, or the panicking one was dropped"
+            );
+        },
+    );
+}
+
 fn headless_replaced_keyboard_layout_callback_reaches_the_platform() {
     within("headless keyboard layout callback", || {
         let platform: Rc<dyn Platform> = Rc::new(HeadlessPlatform::new());
@@ -719,6 +752,10 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
                 "a replaced keyboard layout callback reaches the platform",
                 headless_replaced_keyboard_layout_callback_reaches_the_platform,
             ),
+            (
+                "a layout callback registered twice is replaced",
+                headless_a_layout_callback_registered_twice_is_replaced,
+            ),
         ],
     );
 }
@@ -732,7 +769,6 @@ mod win32 {
         reason = "pumps the owner thread's own Win32 message queue"
     )]
 
-    use std::cell::Cell;
     use std::rc::Rc;
     use std::time::{Duration, Instant};
 
@@ -917,10 +953,11 @@ mod win32 {
         });
     }
 
-    /// An exit policy that asks to be asked again and then panics inside the
-    /// window procedure: the panic is contained as a veto, the loop carries
-    /// on, the handler decides the next request, and hears the quit once.
-    fn failing_exit_policy_keeps_the_loop() {
+    /// An exit policy that panics inside the window procedure, with a
+    /// reevaluation it asked for still queued: the panic is contained, the
+    /// exit is the host's (the loop ends, as with no window left), `run`
+    /// returns, and the handler hears the quit once.
+    fn failing_exit_policy_leaves_the_exit_to_the_host() {
         within("Win32 failing exit policy", || {
             let platform = WindowsPlatform::try_new().expect("native Windows platform");
             let log = AppLog::new();
@@ -928,21 +965,16 @@ mod win32 {
                 owner.request_exit_policy_reevaluation();
                 Ok(())
             });
-            let first = Cell::new(true);
             log.react(move |call, owner| {
-                if call != AppCall::ExitPolicy {
-                    return;
-                }
-                if first.replace(false) {
+                if call == AppCall::ExitPolicy {
                     owner.request_exit_policy_reevaluation();
                     panic!("first failure");
                 }
-                owner.proxy().request_quit().expect("the loop takes a quit");
             });
             Box::new(platform)
                 .run(Rc::clone(&log) as Rc<dyn AppHandler>)
-                .expect("the loop carries on past the contained panic");
-            assert_eq!(log.count(AppCall::ExitPolicy), 2, "asked again");
+                .expect("the loop ends past the contained panic");
+            assert_eq!(log.count(AppCall::ExitPolicy), 1, "decided once");
             assert_eq!(log.count(AppCall::Quit), 1, "the quit, once");
         });
     }
@@ -995,8 +1027,8 @@ mod win32 {
                     replaced_keyboard_layout_callback,
                 ),
                 (
-                    "a failing exit policy keeps the loop",
-                    failing_exit_policy_keeps_the_loop,
+                    "a failing exit policy leaves the exit to the host",
+                    failing_exit_policy_leaves_the_exit_to_the_host,
                 ),
                 (
                     "a handler dropped at teardown is contained",

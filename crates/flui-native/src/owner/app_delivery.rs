@@ -122,8 +122,12 @@ struct State {
     /// Accepted, in order, and not yet heard.
     pending: VecDeque<Report>,
     /// A method runs on the owner thread (`ready`, or a report being
-    /// delivered): a report accepted now waits behind it.
+    /// delivered), or the run bound its handler and has yet to call `ready`:
+    /// a report accepted now waits behind it.
     delivering: bool,
+    /// The run bound its handler and has yet to call `ready`: `delivering`
+    /// holds the reports for it, and a release does not wait for it.
+    awaiting_ready: bool,
     /// The quit was accepted: a later one is the same quit.
     quit_accepted: bool,
     /// The loop ended while a delivery ran: the handler is released once the
@@ -226,8 +230,8 @@ impl AppDelivery {
 
     /// Bind the run's `handler` on the calling thread, which becomes the one
     /// it is called on, over the run's `platform` and owner `hooks`. Reports
-    /// accepted before stay queued for it; they are delivered once
-    /// [`Self::ready`] returns.
+    /// accepted before, and from here until [`Self::ready`] is called, stay
+    /// queued for it; they are delivered once `ready` returns.
     pub(crate) fn bind(
         &self,
         handler: Rc<dyn AppHandler>,
@@ -245,9 +249,14 @@ impl AppDelivery {
         if refused.is_some() {
             tracing::error!("the application handler could not be kept: owner slots are exhausted");
         }
-        let previous = self.state.lock().binding.replace(Binding {
-            owned: Arc::new(slot),
-        });
+        let previous = {
+            let mut state = self.state.lock();
+            state.delivering = true;
+            state.awaiting_ready = true;
+            state.binding.replace(Binding {
+                owned: Arc::new(slot),
+            })
+        };
         retire(previous);
         retire(refused);
     }
@@ -262,9 +271,13 @@ impl AppDelivery {
     pub(crate) fn release(&self) {
         let (binding, unheard) = {
             let mut state = self.state.lock();
-            if state.delivering && state.on_owner() {
+            if state.delivering && !state.awaiting_ready && state.on_owner() {
                 state.release_after_delivery = true;
                 return;
+            }
+            // A run that ends before it calls `ready` holds no delivery.
+            if std::mem::take(&mut state.awaiting_ready) {
+                state.delivering = false;
             }
             (state.binding.take(), std::mem::take(&mut state.pending))
         };
@@ -275,10 +288,9 @@ impl AppDelivery {
             );
         }
         if let Some(binding) = binding {
-            // The handler leaves its slot here: while an unwind is under way
-            // `retire` keeps it for good rather than leave it in the owner
-            // thread's table, which would drop it, and its captures, when the
-            // thread exits.
+            // The handler leaves its slot here and is dropped contained, never
+            // left in the owner thread's table, which would drop it, and its
+            // captures, when the thread exits.
             retire(binding.owned.take());
             drop(binding);
         }
@@ -295,6 +307,7 @@ impl AppDelivery {
         let launch = {
             let mut state = self.state.lock();
             state.delivering = true;
+            state.awaiting_ready = false;
             take_launch(&mut state.pending)
         };
         // `ready` may take what launched the application
@@ -361,15 +374,23 @@ impl AppDelivery {
         self.question(|handler, owner| handler.session_end(owner, phase))
     }
 
-    /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]);
-    /// vacant with no handler to ask, and when the handler leaves the decision
-    /// to the host.
-    pub(crate) fn exit_policy(&self) -> Called<bool> {
+    /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]).
+    ///
+    /// [`ExitAnswer::HostDecides`] with no handler to ask, and when the
+    /// handler panics: the panic is contained and logged here, on every host,
+    /// and the host decides as it does for a handler that leaves the decision
+    /// to it ([`ExitAnswer::ends_loop`]). A panic reaching the platform is a
+    /// defect of the framework's own handler (ADR-0258 §4), and the question
+    /// is asked where no window is left, so neither a veto (a loop that may
+    /// wait for nothing) nor an unwind out of the loop is the answer.
+    pub(crate) fn exit_policy(&self) -> ExitAnswer {
         match self.question(<dyn AppHandler>::exit_policy) {
-            Called::Returned(ExitAnswer::End) => Called::Returned(true),
-            Called::Returned(ExitAnswer::KeepRunning) => Called::Returned(false),
-            Called::Returned(ExitAnswer::HostDecides) | Called::Vacant => Called::Vacant,
-            Called::Panicked(failure) => Called::Panicked(failure),
+            Called::Returned(answer) => answer,
+            Called::Vacant => ExitAnswer::HostDecides,
+            Called::Panicked(failure) => {
+                failure.contain("the application's exit policy");
+                ExitAnswer::HostDecides
+            }
         }
     }
 
@@ -590,9 +611,11 @@ impl AppDelivery {
 
     /// Ask the handler with `body` at once. A report raised while it answers
     /// waits for the answer, as one raised inside any method does, and is
-    /// delivered right after it. When the answer came but a report delivered
-    /// after it panicked, that panic is the question's failure: the host
-    /// falls back as it does for a handler that panicked.
+    /// delivered right after it. The answer is the question's outcome: a
+    /// report delivered after it that panics is an operation of its own, its
+    /// panic contained and logged, and the answer still returned (a session
+    /// end the handler blocked stays blocked). Only when no answer came does
+    /// the report's panic come back.
     fn question<R>(&self, body: impl FnOnce(&dyn AppHandler, &OwnerPlatform) -> R) -> Called<R> {
         let begun = {
             let mut state = self.state.lock();
@@ -611,11 +634,11 @@ impl AppDelivery {
         let answer = self.ask(body);
         walk.disarm();
         match (answer, self.drain()) {
-            (Called::Panicked(first), Called::Panicked(later)) => {
+            (answer @ (Called::Returned(_) | Called::Panicked(_)), Called::Panicked(later)) => {
                 later.contain("the application handler");
-                Called::Panicked(first)
+                answer
             }
-            (_, Called::Panicked(failure)) => Called::Panicked(failure),
+            (Called::Vacant, Called::Panicked(failure)) => Called::Panicked(failure),
             (answer, _) => answer,
         }
     }

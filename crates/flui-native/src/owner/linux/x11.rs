@@ -101,8 +101,8 @@ use x11rb::xcb_ffi::XCBConnection;
 use crate::error::PlatformError;
 use crate::executor::NativeExecutor;
 use crate::host;
+use crate::owner::OpenWindows;
 use crate::owner::app_delivery::AppDelivery;
-use crate::owner::handlers::OpenWindows;
 use crate::owner::linux::single_instance::FirstInstance;
 use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
@@ -932,7 +932,7 @@ impl X11Loop {
     /// Ask the application whether the loop may end now that no window is
     /// open; with no policy of its own, the loop ends, as a desktop loop does.
     fn exit_allowed(&self) -> bool {
-        self.app.exit_policy().or_resume(true)
+        self.app.exit_policy().ends_loop(true)
     }
 
     /// The colour scheme the portal reported, to each window.
@@ -1583,6 +1583,11 @@ fn no_file_prompt() -> PlatformError {
 }
 
 impl host::Services for X11Loop {
+    /// Only a page has an origin.
+    fn page_origin(&self) -> Option<String> {
+        None
+    }
+
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
     }
