@@ -5458,6 +5458,29 @@ graph LR
   проходят под Xvfb: 152 из 152; trybuild — как выше); Wayland под headless Weston — 95 из 95.
   Не запускалось: macOS, iOS, Android и wasm32 (правки `window/apple/*`, `window/android.rs`,
   `window/web.rs` сделаны без сборки; их проверяет `cross-typecheck` и `wasm-check` CI).
+  **Раунд правок проверки** (две стандартные проверки, три треда Codex, проверка спеки).
+  Плохая геометрия выборки стоит ей только геометрии: хост отдаёт ячейке `Sample` (факты и
+  `Result` геометрии), ячейка хранит опубликованную геометрию и метрики и публикует остальное
+  (фокус, видимость, режим, закрытие); все восемь хостов читают через `read`, `refresh` и
+  `publish_report` ячейки. Диагностика ячейки и сбой поста хода окна произносятся в ходе
+  владельца, не внутри чтения; web-окно просит ход через сигнал владельца; голый
+  `HeadlessPlatform` без петли и состояние-зависимые причины отсутствия записаны в `docs/gaps.md`.
+  `WindowOptions::min_size`/`max_size` — `WindowExtent`, и каждый хост отказывает открытию с
+  размером или пределами, которые отказала бы команда (`OpenWindowError::InvalidGeometry`);
+  `AdmissionError::InvalidGeometry` несёт числа. Удалены `WindowGeometry::sized`,
+  `WindowCapability::availability` и `absence` (без продакшен-вызовов). Android отказывает
+  `set_input_regions` после выхода в отставку; Win32 сообщает серию DPI 0 один раз. ADR-0254
+  переписан как текущее правило (решения 1, 2, 4, 6) без дописанных поправок. Тесты, падающие
+  при откате: `a_refused_geometry_keeps_the_published_one_and_publishes_the_other_facts`,
+  `a_bad_report_keeps_the_geometry_and_publishes_the_rest`, строка conformance
+  `a_report_that_describes_no_window_publishes_nothing` на headless,
+  `options_that_describe_no_window_open_none`,
+  `an_opening_is_refused_for_what_a_command_is_refused_for`,
+  `restore_keeps_the_configured_normal_bounds_for_a_frame_that_is_no_extent`,
+  `a_run_of_zero_dpi_messages_is_reported_once`, `a_refusal_equals_itself`. Проверки: Windows —
+  clippy workspace `--all-targets -D warnings`, nextest шести крейтов 1262 из 1264 (две известные
+  ошибки базы), `xtask checks`; WSL — clippy `-p flui-native -p flui-testing`, lib-тесты
+  `window::` 115 из 115. Не собиралось: macOS, iOS, Android, wasm32.
 - [ ] **LY108** — ветка `app/handler-answers`, PR #2641. Открытая часть: размещение окна мимо
   `StorageCapability` приложения
   ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); как хост
