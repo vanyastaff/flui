@@ -4871,6 +4871,37 @@ graph LR
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
   публичный путь keyboard layout.
+- [x] **LY111** — #2640, ветка `cli/declarations-linked-only`, от `main` @ `3f4aea639`.
+  Находка 1 подтверждена прогоном: `cargo metadata` объединяет фичи по dev-зависимостям,
+  build-скриптам и копиям процедурных макросов, а `Declarations::collect` брал весь граф, поэтому
+  фасад без `http` получал `INTERNET` (`flui-app` включает `http` для собственных тестов).
+  Сделано: `declarations/linked.rs` (`LinkedCrates`) читает крейты и фичи сборки из
+  `cargo tree --target <triple> -e normal,no-proc-macro` (для примера ещё и `dev`), от
+  `cargo metadata --filter-platform` остаются таблицы и рёбра; сбор без названного пакета читает
+  то, что cargo собирает по умолчанию в каталоге проекта, а не весь workspace (`Scope`,
+  `collect_run` и отдельная поправка `links_one_instance` удалены). Этим путём идут все читатели:
+  манифест Android, `Info.plist` и privacy manifest iOS (упаковщик читает пакет, который собрал;
+  `BuildArtifacts` называет его типом `BuiltPackage` вместо JSON), бандл macOS, desktop entry
+  Linux, проверка одного экземпляра, `flui doctor`, `flui add`. У Windows писателя манифеста в
+  CLI нет: незапакованный запуск регистрирует то, что `#[flui::main]` прочитал под `cfg!`.
+  Тесты: `declarations_are_joined_over_the_graph_the_target_links` (dev-зависимость и её фича,
+  зависимость build-скрипта, процедурный макрос и фича его копии, сборка примера),
+  `the_manifest_declares_what_the_linked_crates_need` (`INTERNET` только с `http` фасада),
+  `only_the_application_declares_the_links_it_opens`,
+  `add_links_a_capability_and_shows_its_registration`,
+  `a_listing_reads_back_as_each_crates_features`. С откатом (те же тесты на `main` @
+  `3f4aea639`) первые четыре падают: семь разрешений вместо двух, `INTERNET` в манифесте без
+  `http`, схема dev-зависимости в сборке тестового крейта, `FOREGROUND_SERVICE` в выводе
+  `flui add`. Находка 2: R5.12 и строка LY56 переписаны под ADR-0307; остаток ADR-0154 §7
+  (таблица приложения, entitlements и MSIX, провайдер с ответом `NotDeclared`) записан в
+  `docs/gaps.md`; ADR-0307 §3 и Confirmation описывают нынешний сбор. Проверки на Windows:
+  nextest `-p flui-cli` — 139 из 143; `agent::browser` (три теста) падает и на неизменённой базе
+  («named pipes do not support I/O timeouts»), `generated_hot_reload_project_compiles` не уложился
+  в 20 минут при занятом пуле; clippy `-p flui-cli --all-targets -D warnings`; `xtask checks`.
+  Не запускалось: сборки Android, iOS и macOS (нет SDK, устройства и Mac; `stage_macos_app` на
+  этом хосте не компилируется), Linux и wasm32 остаются на CI. Не тронуто и передано
+  координатору: D18 в `design.md` и строка «Sandbox and entitlement manifests» в
+  `platform-parity.toml` всё ещё описывают прежний охват.
 
 ## Отступление от порядка, решённое владельцем
 
