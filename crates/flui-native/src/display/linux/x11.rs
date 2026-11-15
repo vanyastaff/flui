@@ -1,6 +1,5 @@
 //! The X11 adapter: a connection of its own that selects RandR's change events
-//! on the root window and reads the whole RandR state again whenever one
-//! arrives.
+//! on the root window and reads again what an event says may have changed.
 //!
 //! RandR 1.5 is required: its monitors are the displays. The adapter reads the
 //! state (monitors, the outputs and CRTCs behind them, the modes, the
@@ -8,6 +7,15 @@
 //! [`RandrState`] and leaves everything else to that model. A change is a
 //! different state, so the several events one reconfiguration sends (screen,
 //! CRTC and output notifications) collapse into one report.
+//!
+//! The server is a peer, so what a read costs does not grow with what it
+//! lists: the monitors and the outputs asked about are capped
+//! (`x11_model::MAX_MONITORS`, `MAX_OUTPUTS`), of the modes only those a CRTC
+//! runs are kept, and each property is read to a fixed length. A RandR event
+//! reads the whole state; a change of the resources reads the scale alone, and
+//! a change of the desktop or of the work area the work area alone
+//! ([`Stale`]). A step hears at most [`MAX_STEP_EVENTS`] events before it
+//! reads.
 
 use std::os::fd::{AsFd, BorrowedFd};
 
@@ -22,11 +30,14 @@ use x11rb::rust_connection::RustConnection;
 use super::session::{DisplayError, Session, Step, wait_readable};
 use super::view::OutputView;
 use super::x11_model::{
-    RandrCrtc, RandrMode, RandrMonitor, RandrOutput, RandrState, current_work_area,
-    xft_scale_factor,
+    RandrCrtc, RandrMode, RandrMonitor, RandrOutput, RandrState, bounded_monitors,
+    current_work_area, modes_run, outputs_to_read, xft_scale_factor,
 };
 
 const PROTOCOL: &str = "X11";
+/// The events one step hears before it reads what they said changed: a
+/// server that sends without end is still read.
+const MAX_STEP_EVENTS: usize = 256;
 /// `RESOURCE_MANAGER` is read this far (in 4-byte units): 256 KiB.
 const RESOURCES_LENGTH: u32 = 1 << 16;
 /// An output's EDID is read this far (in 4-byte units): the 128-byte base block.
@@ -133,20 +144,77 @@ impl X11Session {
         })
     }
 
-    /// Whether `event` can change what the displays are.
-    fn concerns_displays(&self, event: &Event) -> bool {
+    /// What of the displays `event` says may have changed.
+    fn stale_after(&self, event: &Event) -> Stale {
         match event {
-            Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => true,
-            Event::PropertyNotify(property) => {
-                property.window == self.root
-                    && [
-                        xproto::Atom::from(AtomEnum::RESOURCE_MANAGER),
-                        self.atoms.work_area,
-                        self.atoms.current_desktop,
-                    ]
+            Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => Stale::OUTPUTS,
+            Event::PropertyNotify(property) if property.window == self.root => {
+                if property.atom == xproto::Atom::from(AtomEnum::RESOURCE_MANAGER) {
+                    Stale::SCALE
+                } else if [self.atoms.work_area, self.atoms.current_desktop]
                     .contains(&property.atom)
+                {
+                    Stale::WORK_AREA
+                } else {
+                    Stale::default()
+                }
             }
-            _ => false,
+            _ => Stale::default(),
+        }
+    }
+
+    /// The state with what `stale` names read again; `None` when the read met
+    /// a configuration in flux. Only a change of the outputs reads the RandR
+    /// state: the scale and the work area are a property each.
+    fn read_again(&self, stale: Stale) -> Result<Option<RandrState>, DisplayError> {
+        if stale.outputs {
+            return read_state(&self.connection, self.root, &self.atoms);
+        }
+        let mut state = self.state.clone();
+        if stale.scale {
+            state.scale_factor = resource_scale(&self.connection, self.root);
+        }
+        if stale.work_area {
+            state.work_area = work_area(&self.connection, self.root, &self.atoms);
+        }
+        Ok(Some(state))
+    }
+}
+
+/// What of the displays the events of a step said may have changed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Stale {
+    /// The monitors, outputs, CRTCs or modes: the whole state is read.
+    outputs: bool,
+    /// The `Xft.dpi` resource.
+    scale: bool,
+    /// The work area, or the desktop whose work area it is.
+    work_area: bool,
+}
+
+impl Stale {
+    const OUTPUTS: Self = Self {
+        outputs: true,
+        scale: false,
+        work_area: false,
+    };
+    const SCALE: Self = Self {
+        outputs: false,
+        scale: true,
+        work_area: false,
+    };
+    const WORK_AREA: Self = Self {
+        outputs: false,
+        scale: false,
+        work_area: true,
+    };
+
+    /// Both are stale.
+    fn and(self, other: Self) -> Self {
+        Self {
+            outputs: self.outputs || other.outputs,
+            scale: self.scale || other.scale,
+            work_area: self.work_area || other.work_area,
         }
     }
 }
@@ -159,13 +227,17 @@ impl Session for X11Session {
     fn step(&mut self, stop: BorrowedFd<'_>) -> Result<Step, DisplayError> {
         // Events already read from the socket come first: the wait below only
         // sees data the connection has not read yet.
-        let mut concerned = false;
-        while let Some(event) = self.connection.poll_for_event().map_err(error)? {
-            concerned |= self.concerns_displays(&event);
+        let mut stale = Stale::default();
+        let mut heard = 0;
+        while heard < MAX_STEP_EVENTS
+            && let Some(event) = self.connection.poll_for_event().map_err(error)?
+        {
+            heard += 1;
+            stale = stale.and(self.stale_after(&event));
         }
-        if concerned {
+        if stale != Stale::default() {
             // The old state stays when the read met a configuration in flux.
-            if let Some(state) = read_state(&self.connection, self.root, &self.atoms)? {
+            if let Some(state) = self.read_again(stale)? {
                 // A monitor with no output (made by `xrandr --setmonitor`)
                 // changes the state without changing a display, and wakes
                 // nobody.
@@ -221,65 +293,59 @@ fn read_state(
         return Ok(None);
     };
 
-    let mut monitors = Vec::with_capacity(listed.monitors.len());
+    // Each list is read as far as its cap: a monitor is named, and an output
+    // asked about, only if the state keeps it.
+    let monitors = bounded_monitors(listed.monitors.iter().map(|monitor| RandrMonitor {
+        name: atom_name(connection, monitor.name),
+        is_primary: monitor.primary,
+        bounds: Bounds::new(
+            Point::new(i32::from(monitor.x), i32::from(monitor.y)),
+            Size::new(i32::from(monitor.width), i32::from(monitor.height)),
+        ),
+        outputs: monitor.outputs.clone(),
+    }));
     let mut outputs: Vec<RandrOutput> = Vec::new();
     let mut crtcs: Vec<RandrCrtc> = Vec::new();
-    for monitor in &listed.monitors {
-        for &output in &monitor.outputs {
-            if outputs.iter().any(|known| known.id == output) {
-                continue;
-            }
+    for output in outputs_to_read(&monitors) {
+        let Some(info) = settle(
+            randr::get_output_info(connection, output, resources.config_timestamp)
+                .map_err(error)?
+                .reply(),
+        )?
+        else {
+            return Ok(None);
+        };
+        let crtc = if info.status == randr::SetConfig::SUCCESS {
+            info.crtc
+        } else {
+            0
+        };
+        outputs.push(RandrOutput {
+            id: output,
+            crtc,
+            name: String::from_utf8_lossy(&info.name).into_owned(),
+            edid: output_edid(connection, output, atoms.edid),
+        });
+        if crtc != 0 && !crtcs.iter().any(|known| known.id == crtc) {
             let Some(info) = settle(
-                randr::get_output_info(connection, output, resources.config_timestamp)
+                randr::get_crtc_info(connection, crtc, resources.config_timestamp)
                     .map_err(error)?
                     .reply(),
             )?
             else {
                 return Ok(None);
             };
-            let crtc = if info.status == randr::SetConfig::SUCCESS {
-                info.crtc
+            let mode = if info.status == randr::SetConfig::SUCCESS {
+                info.mode
             } else {
                 0
             };
-            outputs.push(RandrOutput {
-                id: output,
-                crtc,
-                name: String::from_utf8_lossy(&info.name).into_owned(),
-                edid: output_edid(connection, output, atoms.edid),
-            });
-            if crtc != 0 && !crtcs.iter().any(|known| known.id == crtc) {
-                let Some(info) = settle(
-                    randr::get_crtc_info(connection, crtc, resources.config_timestamp)
-                        .map_err(error)?
-                        .reply(),
-                )?
-                else {
-                    return Ok(None);
-                };
-                let mode = if info.status == randr::SetConfig::SUCCESS {
-                    info.mode
-                } else {
-                    0
-                };
-                crtcs.push(RandrCrtc { id: crtc, mode });
-            }
+            crtcs.push(RandrCrtc { id: crtc, mode });
         }
-        monitors.push(RandrMonitor {
-            name: atom_name(connection, monitor.name),
-            is_primary: monitor.primary,
-            bounds: Bounds::new(
-                Point::new(i32::from(monitor.x), i32::from(monitor.y)),
-                Size::new(i32::from(monitor.width), i32::from(monitor.height)),
-            ),
-            outputs: monitor.outputs.clone(),
-        });
     }
 
-    let modes = resources
-        .modes
-        .iter()
-        .map(|mode| {
+    let modes = modes_run(
+        resources.modes.iter().map(|mode| {
             let flags = u32::from(mode.mode_flags);
             RandrMode {
                 id: mode.id,
@@ -289,8 +355,9 @@ fn read_state(
                 interlace: flags & u32::from(randr::ModeFlag::INTERLACE) != 0,
                 double_scan: flags & u32::from(randr::ModeFlag::DOUBLE_SCAN) != 0,
             }
-        })
-        .collect();
+        }),
+        &crtcs,
+    );
 
     Ok(Some(RandrState {
         monitors,

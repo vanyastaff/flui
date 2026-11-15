@@ -120,6 +120,62 @@ fn a_randr_reconfiguration_on_a_real_server_is_published() {
     let stop = Arc::new(eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK).expect("fd"));
     watchdog(&stop, Duration::from_secs(20));
 
+    // A change of the desktop reads the work area again and nothing else: the
+    // outputs did not change, and reading them is a request for each. (Part
+    // of this test for the same reason as the wake below.)
+    let mut probes = 0;
+    // The requests the session made so far, these probes aside: each request
+    // of a connection takes the next sequence number.
+    let mut requests_made = |session: &X11Session| {
+        let cookie = xproto::get_input_focus(&session.connection).expect("request");
+        let sequence = cookie.sequence_number();
+        cookie.reply().expect("the server answers");
+        probes += 1;
+        sequence - probes
+    };
+    let desktop = xproto::intern_atom(&control, false, b"_NET_CURRENT_DESKTOP")
+        .expect("request")
+        .reply()
+        .expect("the atom")
+        .atom;
+    let before_change = requests_made(&session);
+    xproto::change_property(
+        &control,
+        xproto::PropMode::REPLACE,
+        root,
+        desktop,
+        AtomEnum::CARDINAL,
+        32,
+        1,
+        &1_u32.to_ne_bytes(),
+    )
+    .expect("request")
+    .check()
+    .expect("the server sets the property");
+    // A step that finds no event yet waits for one and reads nothing.
+    let read = loop {
+        match session
+            .step(stop.as_fd())
+            .expect("the session keeps running")
+        {
+            Step::Stopped => panic!("the desktop's change was never read"),
+            Step::Changed => panic!("a desktop with no work area changes no display"),
+            Step::Idle => {}
+        }
+        let read = requests_made(&session) - before_change;
+        if read > 0 {
+            break read;
+        }
+    };
+    xproto::delete_property(&control, root, desktop)
+        .expect("request")
+        .check()
+        .expect("the server deletes the property");
+    assert!(
+        read <= 2,
+        "a change of the desktop made {read} requests: the work area is two properties"
+    );
+
     // Turning the screen off removes the display.
     configure(0, info.x, info.y, &[]);
     until_changed(&mut session, &stop);

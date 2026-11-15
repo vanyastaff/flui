@@ -70,6 +70,66 @@ pub(crate) struct RandrMonitor {
     pub outputs: Vec<u32>,
 }
 
+/// The monitors the adapter reads. A desk has a few screens and a video wall
+/// a few dozen (the Wayland host binds as many outputs); a server that lists
+/// monitors without end is read this far, and the monitors past it are no
+/// displays.
+pub(crate) const MAX_MONITORS: usize = 64;
+
+/// The outputs the adapter asks the server about, each two or three round
+/// trips (its information, its EDID, its CRTC), and the outputs kept of one
+/// monitor. A monitor is one output and a tiled panel a few; a monitor whose
+/// output is past this is listed with no refresh rate and no lasting key.
+pub(crate) const MAX_OUTPUTS: usize = 64;
+
+/// The monitors a state keeps of `listed`: the first [`MAX_MONITORS`], each
+/// with its first [`MAX_OUTPUTS`] outputs. `listed` is read only that far, so
+/// what making a monitor costs (its name is a round trip) is bounded too.
+pub(crate) fn bounded_monitors(
+    listed: impl IntoIterator<Item = RandrMonitor>,
+) -> Vec<RandrMonitor> {
+    listed
+        .into_iter()
+        .take(MAX_MONITORS)
+        .map(|mut monitor| {
+            monitor.outputs.truncate(MAX_OUTPUTS);
+            monitor
+        })
+        .collect()
+}
+
+/// The outputs behind `monitors` the adapter asks the server about: each
+/// once, in the order the monitors list them, [`MAX_OUTPUTS`] at most.
+pub(crate) fn outputs_to_read(monitors: &[RandrMonitor]) -> Vec<u32> {
+    let mut outputs: Vec<u32> = Vec::new();
+    for output in monitors.iter().flat_map(|monitor| &monitor.outputs) {
+        if outputs.len() == MAX_OUTPUTS {
+            break;
+        }
+        if !outputs.contains(output) {
+            outputs.push(*output);
+        }
+    }
+    outputs
+}
+
+/// The modes of `listed` a CRTC of `crtcs` runs, the only ones a refresh rate
+/// is read from: what a state keeps of the server's mode list is bounded by
+/// its CRTCs, however long the list is.
+pub(crate) fn modes_run(
+    listed: impl IntoIterator<Item = RandrMode>,
+    crtcs: &[RandrCrtc],
+) -> Vec<RandrMode> {
+    let mut modes: Vec<RandrMode> = Vec::new();
+    for mode in listed {
+        let run = crtcs.iter().any(|crtc| crtc.mode == mode.id);
+        if run && !modes.iter().any(|kept| kept.id == mode.id) {
+            modes.push(mode);
+        }
+    }
+    modes
+}
+
 /// The server's RandR state at one moment.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct RandrState {
@@ -575,6 +635,52 @@ mod tests {
         assert_eq!(randr.views()[0].usable_bounds, randr.views()[0].bounds);
     }
 
+    /// A server that lists monitors, outputs and modes without end is read as
+    /// far as the caps: the first monitors, each output once up to the cap,
+    /// and of the modes only those a CRTC runs.
+    fn a_list_without_end_is_read_as_far_as_its_cap() {
+        let listed = (0..10_000_u32).map(|number| {
+            // Each monitor lists a hundred outputs of its own.
+            let outputs: Vec<u32> = (number * 100..number * 100 + 100).collect();
+            monitor("wall", &outputs, 0)
+        });
+        let monitors = bounded_monitors(listed);
+        assert_eq!(monitors.len(), MAX_MONITORS);
+        assert!(
+            monitors
+                .iter()
+                .all(|monitor| monitor.outputs.len() == MAX_OUTPUTS),
+            "each monitor keeps its first outputs"
+        );
+        let outputs = outputs_to_read(&monitors);
+        assert_eq!(
+            outputs,
+            (0..u32::try_from(MAX_OUTPUTS).expect("the cap fits")).collect::<Vec<_>>(),
+            "each output once, in order, up to the cap"
+        );
+        // A screen's monitors and outputs are read whole.
+        let desk = bounded_monitors([monitor("DP-1", &[1], 0), monitor("Tiled", &[2, 3, 1], 1920)]);
+        assert_eq!(outputs_to_read(&desk), [1, 2, 3]);
+
+        let crtcs = [
+            RandrCrtc { id: 101, mode: 7 },
+            RandrCrtc { id: 102, mode: 7 },
+            RandrCrtc { id: 103, mode: 0 },
+            RandrCrtc {
+                id: 104,
+                mode: 9_999,
+            },
+        ];
+        let listed = (1..10_000)
+            .chain([7])
+            .map(|id| mode(id, 148_500_000, 2200, 1125));
+        let kept: Vec<u32> = modes_run(listed, &crtcs)
+            .iter()
+            .map(|mode| mode.id)
+            .collect();
+        assert_eq!(kept, [7, 9_999], "the modes a CRTC runs, each once");
+    }
+
     fn xft_dpi_parsing() {
         assert_eq!(xft_scale_factor("Xft.dpi: 96"), Some(1.0));
         assert_eq!(xft_scale_factor("Xft.dpi: 192\n"), Some(2.0));
@@ -624,6 +730,10 @@ mod tests {
                 (
                     "scale_and_work_area_come_from_the_server",
                     scale_and_work_area_come_from_the_server,
+                ),
+                (
+                    "a_list_without_end_is_read_as_far_as_its_cap",
+                    a_list_without_end_is_read_as_far_as_its_cap,
                 ),
                 ("xft_dpi_parsing", xft_dpi_parsing),
             ],
