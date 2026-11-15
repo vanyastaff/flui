@@ -94,6 +94,14 @@ pub(super) enum DispatchError {
     /// accepted. Later work must not jump the deferred close at a bounded
     /// batch boundary.
     PresentationClosing,
+    /// A pure publication holds the owner's registry. Nothing native and
+    /// nothing of the application's runs inside one, so a native callback
+    /// that meets it is a defect of this crate.
+    Busy,
+    /// Nothing takes this delivery: no UI runtime is installed, the host that
+    /// held them is shut or gone, or the owner refused it for a reason this
+    /// crate has no answer of its own for (a full inbox, an exhausted
+    /// preference revision, a refusal the runtime gains later).
     RuntimeUnavailable,
 }
 
@@ -104,10 +112,10 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
             OwnerError::UnknownRuntime => Self::StaleRuntime,
             OwnerError::UnknownPresentation => Self::StalePresentation,
             OwnerError::PresentationClosing => Self::PresentationClosing,
+            OwnerError::Busy => Self::Busy,
             OwnerError::PreferenceRevisionExhausted
             | OwnerError::OwnerGone
             | OwnerError::Closed
-            | OwnerError::Busy
             | OwnerError::InboxFull
             | _ => Self::RuntimeUnavailable,
         }
@@ -624,6 +632,62 @@ pub(super) fn dispatch_platform_ui_runtime(
     event: RuntimeTask,
 ) -> Result<(), DispatchError> {
     dispatch_owner_turn(OwnerTurn::Presentation(dispatcher, event))
+}
+
+/// Deliver a window's frame request to the presentation `binding` was
+/// installed for, and answer the platform with what became of it
+/// (ADR-0254 §4): the answer every frame route gives.
+///
+/// A frame the owner accepted answers `Produced`, whether it ran in this call
+/// or joined the turn that is running: that turn runs it, and the platform
+/// has no later moment to count it, so a `Declined` here would leave work the
+/// frame put back at the same instant unasked for. A frame that joined a turn
+/// whose host shuts, or whose runtime retires, before the turn reaches it was
+/// counted and never runs: the platform asks once more, and that request is
+/// refused.
+///
+/// A request the owner refused because the presentation is gone answers
+/// `Declined`: the runtime was replaced, the presentation is another one's or
+/// closing, or the owner has no runtime or no room for the request. No frame
+/// ran for it, and a platform told otherwise would ask for the same due
+/// instant again on every turn of its loop.
+///
+/// # Panics
+///
+/// Off the owner thread, or while a pure publication holds the owner's
+/// registry. A window calls its handler on the thread that opened it, and
+/// nothing native runs inside a pure publication, so either is a defect of
+/// this crate; the window contains the panic and answers `Failed`.
+pub(super) fn dispatch_platform_frame(
+    dispatcher: PresentationDispatcher,
+    binding: super::frame_driver::FrameBinding,
+    request: flui_platform::FrameRequest,
+) -> flui_platform::FrameOutcome {
+    use flui_runtime::owner::Delivery;
+
+    let turn = OwnerTurn::Presentation(dispatcher, RuntimeTask::Frame(binding, request));
+    match dispatch_owner_turn_delivery(turn) {
+        Ok(Delivery::Driven | Delivery::Queued) => flui_platform::FrameOutcome::Produced,
+        Err(
+            gone @ (DispatchError::StaleRuntime
+            | DispatchError::StalePresentation
+            | DispatchError::PresentationClosing
+            | DispatchError::RuntimeUnavailable),
+        ) => {
+            tracing::trace!(
+                ?dispatcher,
+                ?gone,
+                "a frame request found its presentation gone"
+            );
+            flui_platform::FrameOutcome::Declined
+        }
+        Err(DispatchError::WrongThread) => {
+            panic!("BUG: a window asked for a frame off the thread that opened it")
+        }
+        Err(DispatchError::Busy) => {
+            panic!("BUG: a window asked for a frame inside a pure publication of its owner")
+        }
+    }
 }
 
 /// Apply the commands application code queued for its windows, when this is the
@@ -1265,7 +1329,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     });
     log(TeardownStep::Flush);
 
-    // Service-lifecycle shutdown (issue #558) BEFORE the pools close: the
+    // Service-lifecycle shutdown BEFORE the pools close: the
     // registry cancels every application service cooperatively and joins
     // each against one shared deadline — the flush window in which a
     // service persists its final state. Ordering is load-bearing: the
@@ -1298,7 +1362,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     });
     log(TeardownStep::Services);
 
-    // Execution-services shutdown (issue #557): the whole loop is exiting,
+    // Execution-services shutdown: the whole loop is exiting,
     // so stop background admission, cancel outstanding work, join running
     // work until the exit deadline's end, and CLEAR the slot — a
     // second platform loop hosted on this same thread later (an embedder

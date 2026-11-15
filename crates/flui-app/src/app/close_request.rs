@@ -1,5 +1,5 @@
 //! Per-window close-request veto — the application's answer to "may this
-//! window close?" (issue #558's cancel-or-defer criterion).
+//! window close?".
 //!
 //! # The seam this fills
 //!
@@ -53,9 +53,9 @@
 //! [`request_presentation_close`](crate::request_presentation_close) closes
 //! the window once the work is done.
 //!
-//! Issue #558's own `deadline -> flush -> termination` leg is a different
+//! The `deadline -> flush -> termination` leg is a different
 //! question — how long teardown may take *after* a close is agreed — and
-//! belongs with the journaled-state slice, not here.
+//! belongs with journaled state, not here.
 //!
 //! # Not in this slice (stated, not silently assumed)
 //!
@@ -129,7 +129,7 @@ impl CloseRequest {
 /// The application's answer to a [`CloseRequest`].
 ///
 /// `#[non_exhaustive]`: a future variant carrying a runtime-bounded flush
-/// window (issue #558's `deadline -> flush -> termination` leg) would be an
+/// window (the `deadline -> flush -> termination` leg) would be an
 /// additive change here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -137,7 +137,7 @@ pub enum CloseResponse {
     /// Let the window close now. The close proceeds exactly as it would
     /// with no handler registered at all.
     Close,
-    /// Keep the window open. Issue #558 calls this outcome *Cancel*; the
+    /// Keep the window open. The
     /// name here says what happens rather than what was refused.
     ///
     /// The close is recorded on the presentation's close guard as a
@@ -280,7 +280,7 @@ struct PresentationCloseEntry {
     /// Weak on purpose: this router is loop-scoped and outlives any single
     /// window. A strong reference would pin a closed window's native
     /// resources — and, through the callbacks it owns, its GPU surface —
-    /// alive past the teardown ordering issue #713's Wayland crash
+    /// alive past the teardown ordering a Wayland crash at quit
     /// established.
     window: std::rc::Weak<dyn PlatformWindow>,
     handler: Option<CloseRequestHandler>,

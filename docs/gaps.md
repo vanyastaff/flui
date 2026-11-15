@@ -577,6 +577,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `flui-view`, `flui-painting` and `flui-engine` hash ids and fingerprints with `rustc_hash` and hold that with `#![warn(clippy::disallowed_types)]` at their roots (`clippy.toml`, `disallowed-types`). Every other crate still builds std `HashMap`/`HashSet` with a random SipHash seed, which costs time on every lookup and gives a run-to-run iteration order: `rg -w 'HashMap|HashSet' crates packages --type rust` lists them, `flui-native`, `flui-widgets` and `flui-interaction` the most.
 - A crate leaves this entry when it opts into the lint at its root; a table whose keys come from outside the process keeps SipHash under `#[expect(clippy::disallowed_types, reason = "…")]`. The entry closes when the workspace default in `Cargo.toml` turns from `allow` to the lint's own level and the root attributes go.
 
+### Window placement bypasses an application's storage provider
+
+> **Environments:** desktop · **Who it hurts:** Applications that replace `StorageCapability` (an encrypted store, say) and ask a window to remember its placement · **Parity:** none (capability seam)
+
+- A window that remembers its placement (`AppConfig::restore_placement`) reads and writes it through the host's built-in store (`runtime_storage()` in `crates/flui-app/src/app/runner/placement.rs`). An application that overrides `StorageCapability` with `Application::capability` still gets its window placement read from and written to the plain host store under the run's data directory, and one with an override and no data directory gets no placement at all.
+- The read precedes the first window, and a provider is resolved through a `ProviderContext` (an owner poster, completions, runtime locals) that only a UI runtime has. [ADR-0152](adr/ADR-0152-capability-seam-revised.md) §2 has providers live per UI runtime and handles acquired in lifecycle hooks; it does not cover the host acquiring a capability for itself.
+- The check is an application run with a storage override and `restore_placement`, whose override sees the placement's read and write while the host store sees neither.
+
 ### Widget states still fill their handles in `init_state`
 
 > **Environments:** all · **Who it hurts:** Contributors copying a catalog widget's state · **Parity:** none (API shape)

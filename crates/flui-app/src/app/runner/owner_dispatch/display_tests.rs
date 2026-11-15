@@ -143,6 +143,7 @@ fn install_window(
         move |_| {
             assert!(!failing.load(Ordering::SeqCst), "injected frame failure");
             counter.fetch_add(1, Ordering::SeqCst);
+            flui_platform::FrameOutcome::Produced
         },
     );
     let runtime = build_ui_runtime(Rc::clone(&window), 1.0).expect("runtime");
@@ -277,6 +278,7 @@ fn snapshot_is_committed_before_observers_run() {
                 APP_RUNTIME.with(|slot| slot.borrow().installed_host.displays().snapshot());
             log.lock()
                 .push(accepted.map(|snapshot| snapshot.revision().get()));
+            flui_platform::FrameOutcome::Produced
         },
     );
     let before = Rig::accepted().expect("seed").revision().get();
@@ -349,6 +351,7 @@ fn foreign_thread_invalidation_wakes_the_owner() {
     crate::app::runner::window_routes::WindowRoutes::of(&win.native).route_frame_requested(
         move |_| {
             log.lock().push(std::thread::current().id());
+            flui_platform::FrameOutcome::Produced
         },
     );
 
