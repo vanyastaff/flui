@@ -4900,7 +4900,7 @@ graph LR
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
   публичный путь keyboard layout.
-- [x] **LY109** — ветка `platform/presentation-colour-boundary` (PR_NUMBER). Семь находок проверки
+- [x] **LY109** — ветка `platform/presentation-colour-boundary` (#2644). Семь находок проверки
   готовых задач; шесть исправлены, одна (п. 7) проверена и оказалась покрытой.
   (1) Отчёт о показе кадра со штампом далеко в будущем (насыщенный rebase, произвольный
   `tv_sec_hi` Wayland, `presentedTime` Metal) вытеснял все следующие отчёты окна:
@@ -4951,10 +4951,10 @@ graph LR
   Проверки на Windows: clippy `--affected=origin/main --all-targets -D warnings` (все зависящие
   пакеты) — чисто; `xtask checks`, `panic-boundary --self-test` — зелёные; doctests
   `flui-platform` — 67; nextest `-p flui-platform -p flui-native -p flui-engine -p flui-scheduler
-  -p flui-runtime -p xtask -p flui-app -p flui-testing` — 1435 из 1441. Из шести упавших два
-  относились к этому PR и исправлены: `parity_document_matches_its_source` (правка внесена в
-  `platform-parity.toml`, документ перегенерирован) и `native_window_commands` (допуск штампа
-  кадра под загруженной машиной; отдельно проходит). Четыре не относятся:
+  -p flui-runtime -p xtask -p flui-app -p flui-testing` — 1435 из 1441. Из шести упавших один
+  относился к этому PR и исправлен: `parity_document_matches_its_source` (правка внесена в
+  `platform-parity.toml`, документ перегенерирован). `native_window_commands` вышел за секундный
+  допуск штампа кадра при 32 занятых слотах сборки и отдельно проходит. Четыре не относятся:
   `an_intent_opens_its_link_or_documents` (POSIX-путь из file-URL на Windows),
   `the_driver_agent_contains_every_failure` (падает и на базе, см. LY55) и два trybuild-набора
   (`flui-platform::compile_fail`, `flui-native::compiler_guards`): у 1.100.0 здесь нет `rust-src`,
