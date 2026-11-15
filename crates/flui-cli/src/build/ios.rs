@@ -88,13 +88,13 @@ impl IosBuilder {
             Ok(BuildArtifacts {
                 rust_libs: Vec::new(),
                 executable: outputs.pop(),
-                metadata: selected.metadata(),
+                package: Some(selected.built_package()),
             })
         } else {
             Ok(BuildArtifacts {
                 rust_libs: outputs,
                 executable: None,
-                metadata: selected.metadata(),
+                package: Some(selected.built_package()),
             })
         }
     }

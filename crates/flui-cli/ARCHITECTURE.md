@@ -51,16 +51,71 @@ it is the package of the app's own Java or Kotlin code.
 
 A crate states what it needs from the application's manifests in
 `[package.metadata.flui.declares]` (ADR-0307): a `schema` version, then per-platform keys, and
-under `features.<feature>` what a feature adds while it is enabled. `declarations.rs` reads every
-package of the graph `cargo metadata --filter-platform` resolves for each target built, with the
-features that graph enables, and joins them. The table is strict: an unknown key, a schema newer
-than the CLI reads, a feature the crate lacks or a malformed value fails the build naming the crate
-(`a_malformed_declaration_is_refused_by_crate`). The CLI holds nobody's needs as literals:
-`flui-native` declares `VIBRATE` for its haptic patterns, `flui-app`'s `http` feature declares
-`INTERNET` for `HttpURLConnection` (`declarations_are_joined_over_the_graph_the_target_links`,
-`the_manifest_declares_what_the_linked_crates_need`).
+under `features.<feature>` what a feature adds while it is enabled. `declarations.rs` joins the
+tables of the crates the built artifact links, each with the features the build enables for it.
 
-Android's `AndroidManifest.xml` is generated whole on every build (ADR-0255 decision 6) at
+Invariant: a manifest declares nothing for code the artifact does not link. `cargo metadata`
+resolves one graph for everything a workspace can build, so its features count what a
+dev-dependency, a build script's dependency or a procedural macro's own copy of a crate turns on.
+Every collection therefore takes the crates and their features from `declarations/linked.rs`,
+which reads `cargo tree` over normal edges without procedural macros for the target, and takes
+only the tables and the edges from `cargo metadata --filter-platform`
+(`declarations_are_joined_over_the_graph_the_target_links`).
+
+One entry, `Declarations::collect(Build, targets)`, serves the Android, iOS, macOS and Linux
+writers, the one-instance check and `flui doctor`. A `Build` is a directory, a `Selection` and
+the features the build turns on. The selection is what the build compiles: a named member, an
+example of one (which links its package's dev-dependencies), or cargo's default for the
+directory, which is the package there and at a workspace's root its default member, whether the
+root is virtual or a package itself (`the_default_selection_is_what_cargo_builds_there`). A build compiles one
+application: the default selection at a root with several default members fails naming them,
+because one application's manifests do not join another's declarations, and the package built
+stays the application when a crate of its build depends on it
+(`only_the_application_declares_the_links_it_opens`). A packager reads the member its build
+compiled (`BuildArtifacts::package`), not the member's siblings
+(`a_desktop_entry_registers_what_the_built_member_opens`,
+`an_ios_bundle_reads_the_declarations_of_the_built_member`). Android builds `cargo ndk build
+--lib` in the project's directory without naming a package, so it reads the default selection.
+`flui run` selects the binary plain `cargo run` would run, as `flui build` selects a desktop
+binary (a root package's default members; among several default members, the one `default-run`
+when exactly one names one: `a_run_without_a_package_selects_the_binary_cargo_runs`), and names
+it to every cargo command of the run, so the check reads the build that runs: plain `cargo run`
+among several default members would turn on the features every member asks of a shared
+dependency. The features the run builds with come from one function that gives both the cargo
+commands and the check (`a_desktop_run_checks_what_it_builds`).
+
+A crate is its `PackageId` from end to end. Cargo is asked for the compiled package by id, so a
+dependency that carries the application's name is not mistaken for it
+(`a_dependency_may_share_the_applications_name`). The listing is read with its depths: each line
+resolves among the dependencies of the crate it is listed under, by name and version, and where
+that crate depends on two packages of one name and version, by the source the package's id names
+(a git reference encoded as cargo prints it, a sparse index with its `sparse+`). The depth cargo
+prints ends at a `|` the format starts with, since a package name may start with a digit. A
+registry cargo lists by its configured name is read back to its index as cargo reads it
+(`CARGO_REGISTRIES_<NAME>_INDEX`, then the nearest cargo configuration file, the one without the
+extension beside a `.cargo/config.toml` when both are there, up to the one in `$CARGO_HOME`, a
+relative `CARGO_HOME` read against the directory cargo runs in); a name none of those configures stands for any registry's crate there
+(`registries_are_read_from_the_nearest_configuration`). A line that names no package, or a listing that leaves out the compiled package, fails the
+build instead of producing a smaller manifest (`a_listing_reads_back_as_each_crates_features`,
+`a_fork_on_an_encoded_branch_keeps_its_features`).
+
+`flui add` prints what the added crate declares for each platform whose manifests the build
+writes, from that platform's build on any host: the Android permissions of the Android build (a
+feature only it turns on included) and the Apple accessed APIs of the iOS build, never what a
+feature only another platform's build or the application's tests turn on. It finds the crate by
+the application's dependency edge, or the facade's, under the key the application names it by,
+in each target's own graph, so a crate linked at one version for Android and another for iOS is
+read at each (`add_links_a_capability_and_shows_its_registration`,
+`add_reads_each_platforms_version_of_the_crate`).
+
+The table is strict: an unknown key, a schema newer than the CLI reads, a feature the crate lacks
+or a malformed value fails the build naming the crate
+(`a_malformed_declaration_is_refused_by_crate`). The CLI holds nobody's needs as literals:
+`flui-native` declares `VIBRATE` for its haptic patterns, and `flui-app`'s `http` feature declares
+`INTERNET` for `HttpURLConnection`, which an application gets only with the facade's `http` on
+(`the_manifest_declares_what_the_linked_crates_need`).
+
+Android's `AndroidManifest.xml` is generated whole on every build (ADR-0307 §4) at
 `<project>/platforms/android/app/src/main/AndroidManifest.xml`, where both packagers read it: FLUI's base
 (`templates/android/AndroidManifest.xml`), the joined permissions, the label from `flui.toml` and
 the application's `cdylib`. It is written only when it changed. A file there without the

@@ -224,15 +224,18 @@ fn main() {
     assert!(!output.status.success(), "fixture compilation must refuse");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("selected fixture Cargo args:"), "{stderr}");
-    let cargo_selector = if selector == "--example" {
-        "--example"
+    // A package is named to cargo by its id (`…#<name>@<version>`), which a
+    // dependency of the same name cannot make ambiguous.
+    let reached = if selector == "--example" {
+        stderr.contains(&format!("\"--example\", \"{selected}\""))
     } else {
-        "--package"
+        stderr
+            .split("\"--package\", \"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .is_some_and(|spec| spec.ends_with(&format!("#{selected}@0.1.0")))
     };
-    assert!(
-        stderr.contains(&format!("\"{cargo_selector}\", \"{selected}\"")),
-        "{stderr}"
-    );
+    assert!(reached, "{stderr}");
 }
 
 fn web_example_selector_reaches_the_requested_example() {

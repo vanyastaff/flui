@@ -181,8 +181,21 @@ pub(crate) struct BuildArtifacts {
     /// Desktop builds and executable iOS examples produce an executable. Other mobile/web builds produce
     /// libraries consumed by a platform bundle step and leave this `None`.
     pub(crate) executable: Option<PathBuf>,
-    /// Platform-specific metadata (JSON)
-    pub(crate) metadata: serde_json::Value,
+    /// The workspace member the build compiled, when it selected one;
+    /// `None` for a build of what cargo builds by default at the project.
+    pub(crate) package: Option<BuiltPackage>,
+}
+
+/// The workspace member a build compiled one target of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BuiltPackage {
+    /// The member's package name.
+    pub(crate) name: String,
+    /// The member's version, as its manifest states it.
+    pub(crate) version: String,
+    /// Whether the target built links the member's dev-dependencies as
+    /// well, as an example does and a binary does not.
+    pub(crate) links_dev_dependencies: bool,
 }
 
 /// Delivered file or bundle directory after a platform-specific build.

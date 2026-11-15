@@ -1,7 +1,7 @@
 //! Native library delivery without a consumer Xcode project.
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::{BuildArtifacts, BuilderContext, FinalArtifacts, Platform};
-use crate::declarations::Declarations;
+use crate::declarations::{Build, Declarations, Selection};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
@@ -471,17 +471,14 @@ pub(crate) async fn package_application(
     let mut bundle = if let Some(bundle) = &ctx.bundle {
         bundle.clone()
     } else {
-        let name = artifacts.metadata["package_name"].as_str().ok_or_else(|| {
+        let package = artifacts.package.as_ref().ok_or_else(|| {
             invalid("application bundle metadata or Cargo package metadata is required")
         })?;
         let mut bundle = crate::build::AppBundle::new(
-            name,
-            crate::app_id::AppId::unconfigured(name).apple_bundle_id(),
+            &package.name,
+            crate::app_id::AppId::unconfigured(&package.name).apple_bundle_id(),
         );
-        bundle.version = artifacts.metadata["package_version"]
-            .as_str()
-            .ok_or_else(|| invalid("Cargo package version is required"))?
-            .into();
+        bundle.version.clone_from(&package.version);
         bundle
     };
     let version = cargo_metadata::semver::Version::parse(&bundle.version)
@@ -507,6 +504,7 @@ pub(crate) async fn package_application(
         .join("ios")
         .join(PRIVACY_MANIFEST);
     let app_dir = ctx.workspace_root.clone();
+    let built = artifacts.package.clone();
     let cancel = Arc::new(AtomicU8::new(RUNNING));
     let _guard = CancelOnDrop(Arc::clone(&cancel));
     tokio::task::spawn_blocking(move || {
@@ -516,7 +514,12 @@ pub(crate) async fn package_application(
             "x86_64-apple-ios" => ("x86_64", "IOSSIMULATOR"),
             _ => return Err(invalid(format!("unsupported application target {triple}"))),
         };
-        let declarations = Declarations::collect(&app_dir, &[triple.as_str()])?;
+        // What the bundle's manifests state, from the crates the executable
+        // links: those of the member the build compiled.
+        let declarations = Declarations::collect(
+            Build::at(&app_dir).selecting(Selection::of_built(built.as_ref())),
+            &[triple.as_str()],
+        )?;
         let filename = format!("{}.app", bundle.name);
         let destination = output.join(&filename);
         no_symlink_destination(&destination)?;
@@ -936,13 +939,14 @@ mod tests {
             })
             .collect()
     }
-    /// What FLUI's own workspace declares for a device build: `flui-native`
-    /// reads `systemUptime` for UIKit event times (`35F9.1`), and it and
-    /// `flui-assets` read file timestamps in the app's container (`C617.1`).
+    /// What the crates a device build of the `flui` facade links declare:
+    /// `flui-native` reads `systemUptime` for UIKit event times (`35F9.1`),
+    /// and it and `flui-assets` read file timestamps in the app's container
+    /// (`C617.1`).
     fn framework_declarations() -> Declarations {
         let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        Declarations::collect(&workspace, &["aarch64-apple-ios"])
-            .expect("the workspace's declarations")
+        Declarations::collect(Build::at(&workspace), &["aarch64-apple-ios"])
+            .expect("the facade's declarations")
     }
     fn privacy_manifest_declares_what_flui_calls() {
         let manifest = privacy_manifest(None, &framework_declarations()).expect("manifest");

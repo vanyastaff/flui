@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::platform::BuildUnit;
+use crate::build::platform::{BuildUnit, BuiltPackage};
 
 pub(crate) struct CargoTarget {
     package: PackageId,
@@ -22,19 +22,25 @@ pub(crate) struct CargoTarget {
 impl CargoTarget {
     /// The workspace member the build compiles, and whether its target
     /// links the member's dev-dependencies (an example's does).
-    pub(crate) fn member(&self) -> crate::declarations::Member<'_> {
-        crate::declarations::Member {
-            name: &self.package_name,
-            dev: self.kind == TargetKind::Example,
+    pub(crate) fn built_package(&self) -> BuiltPackage {
+        BuiltPackage {
+            name: self.package_name.clone(),
+            version: self.version.clone(),
+            links_dev_dependencies: self.kind == TargetKind::Example,
         }
     }
-    pub(crate) fn metadata(&self) -> serde_json::Value {
-        serde_json::json!({"package_name": self.package_name, "package_version": self.version})
+    /// The package id of the workspace member the build compiles.
+    pub(crate) fn package_id(&self) -> &PackageId {
+        &self.package
     }
+
+    /// The arguments that select this target in a `cargo` command. The
+    /// package is named by its id, which a dependency that shares its name
+    /// cannot make ambiguous ("multiple packages match").
     pub(crate) fn cargo_args(&self) -> Vec<String> {
         let mut args = vec![
             "--package".into(),
-            self.package_name.clone(),
+            self.package.repr.clone(),
             if self.crate_type == CrateType::StaticLib {
                 "--lib"
             } else if self.kind == TargetKind::Example {
@@ -199,27 +205,51 @@ async fn select_target_for(
                 metadata.workspace_members.contains(&package.id) && package.name.as_str() == name
             })
             .collect(),
+        // What cargo builds without `--package`: at the workspace's root,
+        // virtual or a package itself, its default members (the root
+        // package alone unless `default-members` names others); in a
+        // member, that member.
         _ => {
-            if let Some(package) = metadata.packages.iter().find(|package| {
+            let at_root = metadata
+                .workspace_root
+                .join("Cargo.toml")
+                .as_std_path()
+                .canonicalize()
+                .is_ok_and(|root| root == manifest);
+            match metadata.packages.iter().find(|package| {
                 package
                     .manifest_path
                     .as_std_path()
                     .canonicalize()
                     .is_ok_and(|path| path == manifest)
             }) {
-                vec![package]
-            } else {
-                metadata
+                Some(package) if !at_root || !metadata.workspace_default_members.is_available() => {
+                    vec![package]
+                }
+                _ => metadata
                     .packages
                     .iter()
                     .filter(|package| metadata.workspace_default_members.contains(&package.id))
-                    .collect()
+                    .collect(),
             }
         }
     };
     if packages.is_empty() {
         return Err(invalid(format!("no package matches {unit:?}")));
     }
+    // `cargo run` without `--bin`: when exactly one selected package names a
+    // `default-run`, the binaries of that name; otherwise every binary of
+    // every selected package, each `default-run` ignored (cargo
+    // `src/bin/cargo/commands/run.rs`, `CompileFilter::single_bin`).
+    let default_run = match packages
+        .iter()
+        .filter_map(|package| package.default_run.as_deref())
+        .collect::<Vec<&str>>()
+        .as_slice()
+    {
+        [name] => Some((*name).to_owned()),
+        _ => None,
+    };
     let mut candidates = Vec::new();
     for package in packages {
         let kind = if staticlib {
@@ -244,10 +274,7 @@ async fn select_target_for(
                 staticlib
                     || match unit {
                         BuildUnit::Example(name) => target.name == *name,
-                        _ => package
-                            .default_run
-                            .as_ref()
-                            .is_none_or(|name| target.name == *name),
+                        _ => default_run.as_ref().is_none_or(|name| target.name == *name),
                     }
             })
             .collect();
@@ -425,4 +452,145 @@ async fn finish_child(child: &mut Child, target: &CargoTarget) -> BuildResult<Pa
         stop_child(child).await?;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::select_target;
+    use crate::build::platform::BuildUnit;
+
+    /// Write `files`, each `(path, contents)`, under `root`.
+    fn write(root: &Path, files: &[(&str, &str)]) {
+        for (path, contents) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent directory"))
+                .expect("the directories");
+            std::fs::write(path, contents).expect("a fixture file");
+        }
+    }
+
+    /// The binary selected without `--package` or `--bin` at `dir`, as
+    /// `<package>::<bin>`, or the refusal.
+    fn selected(dir: &Path) -> Result<String, String> {
+        select(dir)
+            .map(|target| format!("{}::{}", target.package_name, target.name))
+            .map_err(|error| error.to_string())
+    }
+
+    fn select(dir: &Path) -> crate::build::error::BuildResult<super::CargoTarget> {
+        tokio::runtime::Runtime::new()
+            .expect("a runtime")
+            .block_on(select_target(dir, &BuildUnit::DefaultBinary))
+    }
+
+    /// The arguments that select a member name it so that a dependency of
+    /// the same name does not make cargo's `--package` ambiguous.
+    #[test]
+    fn a_member_is_named_apart_from_a_dependency_of_its_name() {
+        let fixture = tempfile::tempdir().expect("a temporary directory");
+        let package = |version: &str, rest: &str| {
+            format!(
+                "[package]\nname = \"app\"\nversion = \"{version}\"\nedition = \"2024\"\n{rest}"
+            )
+        };
+        write(
+            fixture.path(),
+            &[
+                (
+                    "ws/Cargo.toml",
+                    &package(
+                        "0.1.0",
+                        "[workspace]\n[dependencies]\nold = { package = \"app\", path = \"../old\" }\n",
+                    ),
+                ),
+                ("ws/src/main.rs", "fn main() {}\n"),
+                ("old/Cargo.toml", &package("0.2.0", "")),
+                ("old/src/lib.rs", ""),
+            ],
+        );
+        let ws = fixture.path().join("ws");
+        let args = select(&ws).expect("the member's binary").cargo_args();
+        let [flag, spec, ..] = args.as_slice() else {
+            panic!("--package and its value: {args:?}");
+        };
+        assert_eq!(flag, "--package");
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let output = std::process::Command::new(cargo)
+            .current_dir(&ws)
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["tree", "--depth", "0", "--package", spec])
+            .output()
+            .expect("cargo tree");
+        assert!(
+            output.status.success(),
+            "`--package {spec}` names one package: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The binary `cargo run` runs without `--package` or `--bin`: at a
+    /// workspace root that is a package itself, of its default members, not
+    /// of the root package; among several default members, the one
+    /// `default-run` names when one of them names one, though another member
+    /// has a binary of its own; with no `default-run`, one binary or a
+    /// refusal naming them.
+    #[test]
+    fn a_run_without_a_package_selects_the_binary_cargo_runs() {
+        let fixture = tempfile::tempdir().expect("a temporary directory");
+        let package = |name: &str, rest: &str| {
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{rest}")
+        };
+        let root = fixture.path().join("root");
+        write(
+            &root,
+            &[
+                (
+                    "Cargo.toml",
+                    &package(
+                        "shell",
+                        "[workspace]\nmembers = [\"app\"]\ndefault-members = [\"app\"]\n",
+                    ),
+                ),
+                ("src/main.rs", "fn main() {}\n"),
+                ("app/Cargo.toml", &package("app", "")),
+                ("app/src/main.rs", "fn main() {}\n"),
+            ],
+        );
+        assert_eq!(
+            selected(&root),
+            Ok("app::app".to_owned()),
+            "a root package's default member"
+        );
+
+        let members = fixture.path().join("members");
+        write(
+            &members,
+            &[
+                (
+                    "Cargo.toml",
+                    "[workspace]\nresolver = \"3\"\nmembers = [\"a\", \"c\"]\n",
+                ),
+                ("a/Cargo.toml", &package("a", "default-run = \"a\"\n")),
+                ("a/src/main.rs", "fn main() {}\n"),
+                ("a/src/bin/a2.rs", "fn main() {}\n"),
+                ("c/Cargo.toml", &package("c", "")),
+                ("c/src/main.rs", "fn main() {}\n"),
+            ],
+        );
+        assert_eq!(
+            selected(&members),
+            Ok("a::a".to_owned()),
+            "the one `default-run` among the default members"
+        );
+        write(&members, &[("a/Cargo.toml", &package("a", ""))]);
+        let refused = selected(&members);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|error| error.contains("expected one executable")),
+            "{refused:?}"
+        );
+    }
 }
