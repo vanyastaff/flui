@@ -6,9 +6,11 @@ use super::image::Image;
 /// The largest image a decode produces, in RGBA8 bytes: 256 MiB (a 64 MP
 /// image), and 128 MiB (32 MP) on Android, iOS and the web.
 ///
-/// Checked against the header's dimensions before any pixel is decoded, and
-/// given to the decoder as its allocation limit, so an image that compresses
-/// small but decodes huge is refused instead of allocating. The limit bounds
+/// Checked against the header's dimensions before any pixel is decoded, both
+/// at the image's own depth (the decoder's buffer: eight bytes a pixel for a
+/// 16-bit RGBA PNG) and as the RGBA8 copy, and given to the decoder as its
+/// allocation limit, so an image that compresses small but decodes huge is
+/// refused instead of allocating. The limit bounds
 /// each block a decode asks for, not their sum: a decode near the limit holds
 /// several at once (a decoder's working planes, its buffer, the RGBA8 copy).
 #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
@@ -16,9 +18,11 @@ pub const MAX_DECODED_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
 /// The largest image a decode produces, in RGBA8 bytes: 256 MiB (a 64 MP
 /// image), and 128 MiB (32 MP) on Android, iOS and the web.
 ///
-/// Checked against the header's dimensions before any pixel is decoded, and
-/// given to the decoder as its allocation limit, so an image that compresses
-/// small but decodes huge is refused instead of allocating. The limit bounds
+/// Checked against the header's dimensions before any pixel is decoded, both
+/// at the image's own depth (the decoder's buffer: eight bytes a pixel for a
+/// 16-bit RGBA PNG) and as the RGBA8 copy, and given to the decoder as its
+/// allocation limit, so an image that compresses small but decodes huge is
+/// refused instead of allocating. The limit bounds
 /// each block a decode asks for, not their sum: a decode near the limit holds
 /// several at once (a decoder's working planes, its buffer, the RGBA8 copy).
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
@@ -34,9 +38,10 @@ pub enum ImageDecodeError {
         "the decoded image would take {requested} bytes, larger than the {limit} a decode takes"
     )]
     TooLarge {
-        /// The RGBA8 bytes the header's dimensions ask for, saturated at
-        /// `u64::MAX`; `u64::MAX` too when the decoder refused an allocation
-        /// past the limit before the dimensions were read.
+        /// The bytes the header's dimensions ask for, in the larger of the
+        /// decoder's buffer at the image's own depth and the RGBA8 copy,
+        /// saturated at `u64::MAX`; `u64::MAX` too when the decoder refused an
+        /// allocation past the limit before the dimensions were read.
         requested: u64,
         /// [`MAX_DECODED_IMAGE_BYTES`].
         limit: u64,
@@ -56,7 +61,8 @@ impl Image {
     /// # Errors
     ///
     /// [`ImageDecodeError::TooLarge`] when the header's dimensions ask for more
-    /// than [`MAX_DECODED_IMAGE_BYTES`], before any pixel is decoded;
+    /// than [`MAX_DECODED_IMAGE_BYTES`] at the image's own depth or as RGBA8,
+    /// before any pixel is decoded;
     /// [`ImageDecodeError::Malformed`] for bytes that are not such an image.
     pub fn decode(bytes: &[u8]) -> Result<Self, ImageDecodeError> {
         use image::ImageDecoder as _;
@@ -78,10 +84,15 @@ impl Image {
         let decoder = reader.into_decoder().map_err(malformed)?;
         let (width, height) = decoder.dimensions();
         // `u32::MAX² × 4` does not fit in a u64: it saturates.
-        let requested = u64::from(width)
+        let rgba8 = u64::from(width)
             .checked_mul(u64::from(height))
             .and_then(|pixels| pixels.checked_mul(4))
             .unwrap_or(u64::MAX);
+        // `from_decoder` first allocates one block of `total_bytes` (saturated
+        // at `u64::MAX` by the decoder) for the pixels at their own depth,
+        // which the decoder's allocation limit does not count: a 16-bit RGBA
+        // PNG takes twice its RGBA8 copy there.
+        let requested = rgba8.max(decoder.total_bytes());
         if requested > limit {
             return Err(ImageDecodeError::TooLarge { requested, limit });
         }
