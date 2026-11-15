@@ -276,7 +276,10 @@ impl OwnerPlatform {
     /// The title bar and border a decorated window adds to its content size on a
     /// display of scale `scale_factor`. See [`Platform::window_frame_inset`].
     #[must_use]
-    pub fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+    pub fn window_frame_inset(
+        &self,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    ) -> flui_foundation::geometry::Size<f64> {
         self.platform.window_frame_inset(scale_factor)
     }
 

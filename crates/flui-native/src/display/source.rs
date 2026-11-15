@@ -519,8 +519,8 @@ mod mapping {
             color: Err(flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE),
         };
         display
-            .info(id)
-            .expect("BUG: the sample has a size and a density")
+            .info(id, flui_foundation::geometry::DevicePixelRatio::ONE)
+            .expect("BUG: the sample has a size")
             .refresh_period
     }
 

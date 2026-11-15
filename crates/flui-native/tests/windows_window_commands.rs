@@ -1233,10 +1233,13 @@ fn geometry_win32_cannot_hold_is_refused() {
     assert_eq!(after.outer, before.outer);
 }
 
-/// A size past the largest surface a renderer draws is given that surface, by
-/// the rule every host clamps a window extent with, where Win32 alone would
-/// take a window no renderer can draw.
-fn a_size_past_the_largest_surface_is_clamped_to_it() {
+/// A size past the largest surface a renderer draws is admitted and applied,
+/// where it used to be refused as past Win32's range: the window takes a size no
+/// larger than the largest surface. The clamp itself is proven by the pure
+/// conversion's table and the headless host's snapshot
+/// (`a_size_past_the_largest_surface_is_held_at_it`); Win32 holds a window
+/// within its own track size as well, so this run cannot tell the two apart.
+fn a_size_past_the_largest_surface_is_admitted() {
     let platform = platform();
     let window = open(&platform, options());
     for (command, wide) in [
@@ -2210,8 +2213,8 @@ fn native_window_commands() {
             geometry_win32_cannot_hold_is_refused,
         ),
         (
-            "a_size_past_the_largest_surface_is_clamped_to_it",
-            a_size_past_the_largest_surface_is_clamped_to_it,
+            "a_size_past_the_largest_surface_is_admitted",
+            a_size_past_the_largest_surface_is_admitted,
         ),
         (
             "the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through",

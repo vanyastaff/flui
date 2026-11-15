@@ -50,7 +50,7 @@ use objc2_ui_kit::{
 };
 use parking_lot::Mutex;
 
-use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{DisplayInfo, DisplayKey, DisplaySnapshot, FrameRateHint};
 
 use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
@@ -60,6 +60,7 @@ use super::link_rate::{
     frame_rate_preference,
 };
 use super::screen::{IosPotentialHeadroom, SameObject, ScreenLedger, change_screen, screen_color};
+use crate::display::scale::ScaleStreak;
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::apple::ios::{NativeOwner, ScreenIdentity, ScreenNumber};
@@ -93,6 +94,9 @@ pub struct IosDisplays {
     link_periods: Mutex<ScreenPeriods<WindowId>>,
     /// The cadence each window's display link shows, as it measures it.
     cadences: Mutex<Vec<(WindowId, LinkPeriod)>>,
+    /// Whether the last screen scale read was refused, so a run of refusals
+    /// is reported once.
+    scale_streak: Mutex<ScaleStreak>,
 }
 
 impl std::fmt::Debug for IosDisplays {
@@ -111,6 +115,7 @@ impl IosDisplays {
             screens: NativeOwner::new(std::cell::RefCell::new(ScreenLedger::new()), marker),
             link_periods: Mutex::new(ScreenPeriods::new()),
             cadences: Mutex::new(Vec::new()),
+            scale_streak: Mutex::new(ScaleStreak::default()),
         }
     }
 
@@ -121,6 +126,7 @@ impl IosDisplays {
         let mut displays = Vec::with_capacity(live.len());
         let mut live_numbers = Vec::with_capacity(live.len());
         let mut ledger = self.screens.get(marker).borrow_mut();
+        let mut refusals = Vec::new();
         // The first listed screen is the device's own display.
         for (index, screen) in live.iter().enumerate() {
             let Some(number) = ledger.number_of(screen) else {
@@ -130,9 +136,13 @@ impl IosDisplays {
             let Some(id) = self.source.mint(&DisplayKey::IosScreen(number)) else {
                 continue;
             };
-            // A scale that is none, which no screen reports, reads as one.
-            let ratio =
-                DevicePixelRatio::try_new(screen.nativeScale()).unwrap_or(DevicePixelRatio::ONE);
+            // The screen's scale by the hosts' one rule; a refusal is
+            // reported once the ledger is let go.
+            let (ratio, refused) = self
+                .scale_streak
+                .lock()
+                .read(screen.nativeScale(), "UIScreen nativeScale");
+            refusals.extend(refused);
             let scale = ratio.get();
             let bounds = device_bounds_from_points(screen.bounds(), scale);
             let name = if index == 0 {
@@ -157,6 +167,9 @@ impl IosDisplays {
         }
         ledger.release_unlisted(&live);
         drop(ledger);
+        for refused in refusals {
+            refused.report();
+        }
         self.link_periods.lock().retain_screens(&live_numbers);
         displays
     }

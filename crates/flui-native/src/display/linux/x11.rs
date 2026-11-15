@@ -449,7 +449,13 @@ fn resource_scale(connection: &RustConnection, root: xproto::Window) -> Option<D
     .ok()?
     .reply()
     .ok()?;
-    xft_scale_factor(&String::from_utf8_lossy(&reply.value))
+    let reported = xft_scale_factor(&String::from_utf8_lossy(&reply.value))?;
+    // The number set, by the hosts' one rule; nothing is borrowed here.
+    let (ratio, refused) = crate::display::scale::read_scale(reported, "Xft.dpi");
+    if let Some(refused) = refused {
+        refused.report();
+    }
+    Some(ratio)
 }
 
 /// The work area of the current desktop, if the window manager sets one.

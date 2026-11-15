@@ -257,6 +257,37 @@ fn the_host_clamp_is_visible_in_the_snapshot() {
     );
 }
 
+/// A size past the largest surface a renderer draws is held at it, at the
+/// window's scale, as every native host clamps a window extent; one under it
+/// is taken as asked.
+fn a_size_past_the_largest_surface_is_held_at_it() {
+    let platform = HeadlessPlatform::new();
+    let window = open(&platform);
+    let largest = f64::from(flui_platform::MAX_SURFACE_EXTENT);
+    // (scale, asked width, published width)
+    for (scale, asked, published) in [
+        (1.0, largest - 1.0, largest - 1.0),
+        (1.0, largest, largest),
+        (1.0, largest + 1.0, largest),
+        (1.0, 1.0e10, largest),
+        (2.0, largest, largest / 2.0),
+    ] {
+        mock(&window).simulate_scale_factor_change(scale);
+        let (_, after) = applied(&window, WindowCommand::SetSize(Size::new(asked, 100.0)));
+        assert_eq!(
+            after.content_size,
+            Size::new(published, 100.0),
+            "{asked} at scale {scale}"
+        );
+        let physical = after.metrics.expect("a drawable window").physical();
+        assert!(
+            u32::try_from(physical.width)
+                .is_ok_and(|width| width <= flui_platform::MAX_SURFACE_EXTENT),
+            "{asked} at scale {scale}: {physical:?}"
+        );
+    }
+}
+
 fn a_refused_maximize_is_accepted_and_changes_nothing() {
     let platform = HeadlessPlatform::new()
         .with_window_policy(HeadlessWindowPolicy::default().refusing_maximize());
@@ -725,13 +756,14 @@ fn window_facts_arrive_only_in_the_snapshot() {
             failures.push(format!("{name}: the same report published again"));
         }
     }
-    // Nothing drawable: a zero size and a scale that is not finite.
-    let heard = listen(&window);
-    let drawn = window.state();
+    // A scale that is not finite is read by the hosts' one rule, as the base
+    // ratio: the window keeps a scale and still draws.
     mock.simulate_scale_factor_change(f64::NAN);
-    if window.state().metrics != drawn.metrics || !heard.lock().expect("log").is_empty() {
-        failures.push("a NaN scale reached the snapshot".to_owned());
+    if window.state().metrics.map(|metrics| metrics.scale().get()) != Some(1.0) {
+        failures.push("a NaN scale was not read as the base ratio".to_owned());
     }
+    // Nothing drawable: a zero size.
+    let heard = listen(&window);
     mock.simulate_scale_factor_change(2.0);
     heard.lock().expect("log").clear();
     let before_empty = window.state();
@@ -775,6 +807,10 @@ fn window_state_contract() {
             (
                 "the_host_clamp_is_visible_in_the_snapshot",
                 the_host_clamp_is_visible_in_the_snapshot as fn(),
+            ),
+            (
+                "a_size_past_the_largest_surface_is_held_at_it",
+                a_size_past_the_largest_surface_is_held_at_it as fn(),
             ),
             (
                 "a_refused_maximize_is_accepted_and_changes_nothing",

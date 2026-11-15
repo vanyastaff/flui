@@ -237,7 +237,11 @@ pub trait Window<O> {
     fn capabilities(owner: &O, shared: &Self::Shared) -> WindowCapabilities;
 
     /// [`Platform::window_frame_inset`].
-    fn frame_inset(owner: &O, shared: &Self::Shared, scale_factor: f64) -> Size<f64>;
+    fn frame_inset(
+        owner: &O,
+        shared: &Self::Shared,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64>;
 
     /// [`Platform::display_connection`].
     fn display_connection(
@@ -532,7 +536,7 @@ impl<O> Window<O> for Absent<position::Window> {
         WindowCapabilities::NONE
     }
 
-    fn frame_inset(_: &O, (): &(), _: f64) -> Size<f64> {
+    fn frame_inset(_: &O, (): &(), _: flui_foundation::geometry::DevicePixelRatio) -> Size<f64> {
         Size::new(0.0, 0.0)
     }
 

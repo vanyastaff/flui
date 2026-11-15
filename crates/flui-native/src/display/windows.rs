@@ -469,7 +469,7 @@ pub(crate) mod source {
 
     use std::num::NonZeroIsize;
 
-    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
+    use flui_foundation::geometry::{Bounds, Point, Size};
     use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot};
     use parking_lot::Mutex;
     use windows::Win32::{
@@ -508,6 +508,7 @@ pub(crate) mod source {
         DXGI_HDR10, DXGI_SRGB, DXGI_WIDE_SDR, OutputColor, OutputColorSpace, QdcVirtualModeAware,
         SampledMonitor, display_color, display_period, resolve_display,
     };
+    use crate::display::scale::ScaleStreak;
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
@@ -522,6 +523,9 @@ pub(crate) mod source {
         /// The handle-to-key pairs of the last sample, which resolve a window's
         /// nearest monitor.
         monitors: Mutex<Vec<SampledMonitor>>,
+        /// Whether the last monitor DPI read was refused, so a run of refusals
+        /// is reported once.
+        scale_streak: Mutex<ScaleStreak>,
         #[cfg(test)]
         samples: std::sync::atomic::AtomicUsize,
     }
@@ -596,6 +600,7 @@ pub(crate) mod source {
                 source: DisplaySource::new(),
                 build: WindowsBuild::read(),
                 monitors: Mutex::new(Vec::new()),
+                scale_streak: Mutex::new(ScaleStreak::default()),
                 #[cfg(test)]
                 samples: std::sync::atomic::AtomicUsize::new(0),
             }
@@ -633,14 +638,19 @@ pub(crate) mod source {
                 let Some(id) = self.source.mint(&key) else {
                     continue;
                 };
-                let mut display = DisplayInfo::new(
-                    id,
-                    monitor.device_name.clone(),
-                    monitor.bounds,
-                    monitor.scale_factor,
-                )
-                .with_usable_bounds(monitor.usable_bounds)
-                .with_primary(monitor.is_primary);
+                // The monitor's DPI over the base DPI, by the hosts' one rule;
+                // the streak's lock is let go before a refusal is reported.
+                let (ratio, refused) = self
+                    .scale_streak
+                    .lock()
+                    .read(f64::from(monitor.dpi) / 96.0, "Win32 monitor DPI");
+                if let Some(refused) = refused {
+                    refused.report();
+                }
+                let mut display =
+                    DisplayInfo::new(id, monitor.device_name.clone(), monitor.bounds, ratio)
+                        .with_usable_bounds(monitor.usable_bounds)
+                        .with_primary(monitor.is_primary);
                 // The monitor's interface path names this monitor on this machine
                 // across restarts, so a window remembered on it finds it again.
                 if let Some(interface) = monitor_interface_path(&monitor.device_name) {
@@ -928,7 +938,8 @@ pub(crate) mod source {
         device_name: String,
         bounds: Bounds<i32>,
         usable_bounds: Bounds<i32>,
-        scale_factor: DevicePixelRatio,
+        /// The effective DPI `GetDpiForMonitor` reports.
+        dpi: u32,
         is_primary: bool,
     }
 
@@ -965,10 +976,7 @@ pub(crate) mod source {
                         origin: Point::new(rc_work.left, rc_work.top),
                         size: Size::new(rc_work.right - rc_work.left, rc_work.bottom - rc_work.top),
                     },
-                    // A DPI of zero, which no monitor has, reads as the
-                    // base DPI, as the window limits read it.
-                    scale_factor: DevicePixelRatio::try_new(f64::from(dpi_x) / 96.0)
-                        .unwrap_or(DevicePixelRatio::ONE),
+                    dpi: dpi_x,
                     // MONITORINFOF_PRIMARY = 1
                     is_primary: (monitor_info.monitorInfo.dwFlags & 1) != 0,
                 })

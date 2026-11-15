@@ -1149,7 +1149,7 @@ mod toplevel {
     use std::sync::{Arc, Weak};
 
     use cursor_icon::CursorIcon;
-    use flui_foundation::geometry::Size;
+    use flui_foundation::geometry::{DevicePixelRatio, Size};
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::{
         AdmittedCommand, ApplyError, CloseDecision, CursorError, PlatformTextInput, PlatformWindow,
@@ -1432,7 +1432,12 @@ mod toplevel {
         /// The frame the window draws itself with `states` and its content
         /// now; `None` where it draws none. Around a title bar of the
         /// application's it is the margins alone.
-        fn own_frame(&self, decoration: Decoration, states: ToplevelStates) -> Option<Frame> {
+        fn own_frame(
+            &self,
+            decoration: Decoration,
+            states: ToplevelStates,
+            viewported: bool,
+        ) -> Option<Frame> {
             let app_margins = decoration.app_margins(self.app_title_bar.is_some());
             (app_margins || decoration.drawn() == Drawn::Client).then_some(Frame {
                 content: self.sizing.content(),
@@ -1440,6 +1445,7 @@ mod toplevel {
                 resizable: self.resizable,
                 offers: Offers::from(self.told.wm),
                 title_bar: !app_margins,
+                viewported,
             })
         }
 
@@ -1570,7 +1576,7 @@ mod toplevel {
             // The outer size is the window's geometry: the content, and the
             // title bar of a frame it draws itself.
             let header = applied
-                .own_frame(decoration, states)
+                .own_frame(decoration, states, self.viewported)
                 .map_or(0.0, |frame| frame.header());
             let outer = Size::new(content.width, content.height + header);
             let geometry = WindowGeometry::try_new(None, outer).and_then(|outer| {
@@ -1754,6 +1760,7 @@ mod toplevel {
                             fullscreen: options.mode == WindowMode::Fullscreen,
                             ..ToplevelStates::default()
                         },
+                        protocol.viewporter.is_some(),
                     )
                     .map_or(0.0, |frame| frame.header()),
                 ..applied
@@ -1931,7 +1938,11 @@ mod toplevel {
             }
             let (frame, scale, title, resizable) = {
                 let applied = self.applied.borrow();
-                let frame = applied.own_frame(self.decoration(&applied), applied.sizing.states());
+                let frame = applied.own_frame(
+                    self.decoration(&applied),
+                    applied.sizing.states(),
+                    self.viewported,
+                );
                 (
                     frame,
                     self.buffer_scale(&applied),
@@ -2091,7 +2102,7 @@ mod toplevel {
                     // The configure sizes the window geometry: a title bar
                     // the window draws itself comes off the content's height.
                     let (width, height) = applied
-                        .own_frame(decoration, configure.states)
+                        .own_frame(decoration, configure.states, self.viewported)
                         .map_or((configure.width, configure.height), |frame| {
                             frame.content_of(configure.width, configure.height)
                         });
@@ -2710,11 +2721,10 @@ mod toplevel {
             if self.closed.get() {
                 return Err(Unsupported::new(UnsupportedReason::NoWindow));
             }
-            let scale = self
-                .state
-                .published()
-                .metrics
-                .map_or(1.0, |metrics| metrics.scale().get());
+            let scale = self.state.published().metrics.map_or(
+                DevicePixelRatio::ONE,
+                flui_foundation::geometry::WindowMetrics::scale,
+            );
             self.frame_record.set_regions(regions, scale);
             Ok(())
         }
@@ -2939,7 +2949,11 @@ mod toplevel {
         /// where it offers none, a window draws its own title bar above its
         /// content. Where it offers frames, its answer comes with the
         /// window, so the inset is the frame it is asked for: none.
-        fn frame_inset(owner: &WaylandLoop, _: &WaylandWindows, _: f64) -> Size<f64> {
+        fn frame_inset(
+            owner: &WaylandLoop,
+            _: &WaylandWindows,
+            _: flui_foundation::geometry::DevicePixelRatio,
+        ) -> Size<f64> {
             if !owner.offers_decorations() && owner.offers_frame_surfaces() {
                 Size::new(0.0, client_frame::HEADER)
             } else {

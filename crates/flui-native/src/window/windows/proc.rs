@@ -19,7 +19,7 @@
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
     SizeConstraints, WindowAppearance, WindowExtent, WindowGeometry, WindowId, WindowMode,
 };
@@ -238,6 +238,9 @@ pub(crate) struct WindowContext {
     /// The inner-size limits the app set, in logical pixels; `WM_GETMINMAXINFO`
     /// turns them into outer limits at the window's current DPI.
     pub constraints: std::cell::Cell<flui_platform::SizeConstraints>,
+    /// Whether the last DPI the limits were read at was refused, so a run of
+    /// refusals is reported once.
+    pub scale_streak: std::cell::Cell<crate::display::scale::ScaleStreak>,
     /// Whether the app wants the window resizable. A window without a frame
     /// cannot be, but gets the frame back with this still set.
     pub resizable: std::cell::Cell<bool>,
@@ -1459,7 +1462,7 @@ pub(crate) struct WindowRecord {
     pub(crate) bounds: Bounds<f64>,
 
     /// Current scale factor (DPI / 96)
-    pub(crate) scale_factor: f64,
+    pub(crate) scale_factor: DevicePixelRatio,
 
     /// Is window visible?
     pub(crate) visible: bool,
@@ -1568,7 +1571,7 @@ pub(crate) fn sample_state(
     let (scale, visible, focused, cached) = {
         let record = record.lock();
         (
-            record.scale_factor,
+            record.scale_factor.get(),
             record.visible,
             record.focused,
             record.bounds.size,
@@ -1961,7 +1964,8 @@ impl WindowContext {
         // The scale and the rectangle change together: a subscriber sees the
         // window once, at its new size.
         let hold = self.hold_publishing();
-        self.update_window_state(|state| state.scale_factor = new_scale);
+        let ratio = self.scale.ratio();
+        self.update_window_state(|state| state.scale_factor = ratio);
         self.apply_dpi_rectangle(hwnd, suggested, new_scale / old_scale);
         // The state callback the rectangle's `WM_SIZE` ran may have closed the
         // window: its resize and frame are then not for whatever window has
@@ -2476,12 +2480,21 @@ impl WindowContext {
         let (frame_width, frame_height) =
             super::set::outer_size(style, ex_style, dpi, (0, 0), self.draws_app_title_bar())
                 .unwrap_or((0, 0));
-        Some(track_limits(
+        // A DPI of zero, which Windows reports for a handle it cannot
+        // measure, reads as the base DPI by the hosts' one rule.
+        let mut streak = self.scale_streak.get();
+        let (ratio, refused) = streak.read(f64::from(dpi) / 96.0, "Win32 window DPI");
+        self.scale_streak.set(streak);
+        let limits = track_limits(
             constraints.min.map(WindowExtent::get),
             constraints.max.map(WindowExtent::get),
-            dpi,
+            ratio,
             PixelSize::new(frame_width, frame_height),
-        ))
+        );
+        if let Some(refused) = refused {
+            refused.report();
+        }
+        Some(limits)
     }
 
     /// Fill in `WM_GETMINMAXINFO` with the app's size limits at the window's

@@ -768,11 +768,6 @@ pub(crate) mod placement {
     use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{DisplayInfo, DisplaySnapshot, InvalidGeometry, WindowGeometry};
 
-    /// Whether `scale` is a scale: finite and positive.
-    pub(crate) fn is_scale(scale: f64) -> bool {
-        scale.is_finite() && scale > 0.0
-    }
-
     /// `pixels`, already rounded, as the whole number it is, when it is one
     /// between `min` and `max`.
     fn whole(pixels: f64, min: i32, max: i32) -> Option<i32> {
@@ -789,20 +784,16 @@ pub(crate) mod placement {
 
     /// A logical length at `scale` as a window extent in device pixels, by
     /// the hosts' one rule ([`state::device_extent`](crate::window::state::device_extent)),
-    /// whose largest extent fits X11's 16 bits. `None` for a length or scale
-    /// that is not finite and positive.
-    pub(crate) fn device_extent(logical: f64, scale: f64) -> Option<u16> {
-        let ratio = DevicePixelRatio::try_new(scale)?;
-        u16::try_from(crate::window::state::device_extent(logical, ratio)?).ok()
+    /// whose largest extent fits X11's 16 bits. `None` for a length that is
+    /// not finite and positive.
+    pub(crate) fn device_extent(logical: f64, scale: DevicePixelRatio) -> Option<u16> {
+        u16::try_from(crate::window::state::device_extent(logical, scale)?).ok()
     }
 
     /// A logical coordinate at `scale` as an X11 coordinate in device pixels,
     /// rounded. `None` when it is not finite or does not fit 16 bits.
-    pub(crate) fn device_coordinate(logical: f64, scale: f64) -> Option<i16> {
-        if !is_scale(scale) {
-            return None;
-        }
-        let pixels = (logical * scale).round();
+    pub(crate) fn device_coordinate(logical: f64, scale: DevicePixelRatio) -> Option<i16> {
+        let pixels = scale.to_device(logical).round();
         i16::try_from(whole(pixels, i32::from(i16::MIN), i32::from(i16::MAX))?).ok()
     }
 
@@ -867,32 +858,32 @@ pub(crate) mod placement {
     }
 
     /// `bounds`, in device pixels, at `scale` as the logical geometry the
-    /// window state publishes; a scale that is not one is taken as 1.
+    /// window state publishes.
     ///
     /// # Errors
     /// [`InvalidGeometry`] when the rectangle over the scale describes no
     /// window.
     pub(crate) fn logical_geometry(
         bounds: Bounds<i32>,
-        scale: f64,
+        scale: DevicePixelRatio,
     ) -> Result<WindowGeometry, InvalidGeometry> {
-        let scale = if is_scale(scale) { scale } else { 1.0 };
+        let logical = |device: i32| scale.to_logical(f64::from(device));
         WindowGeometry::try_new(
             Some(Point::new(
-                f64::from(bounds.origin.x) / scale,
-                f64::from(bounds.origin.y) / scale,
+                logical(bounds.origin.x),
+                logical(bounds.origin.y),
             )),
-            Size::new(
-                f64::from(bounds.size.width) / scale,
-                f64::from(bounds.size.height) / scale,
-            ),
+            Size::new(logical(bounds.size.width), logical(bounds.size.height)),
         )
     }
 
     /// The scale a window on `display` has: the display's, else `last`, the
     /// window's last one.
-    pub(crate) fn window_scale(display: Option<&DisplayInfo>, last: f64) -> f64 {
-        display.map_or(last, |display| display.scale_factor.get())
+    pub(crate) fn window_scale(
+        display: Option<&DisplayInfo>,
+        last: DevicePixelRatio,
+    ) -> DevicePixelRatio {
+        display.map_or(last, |display| display.scale_factor)
     }
 
     /// The area two rectangles share, in square device pixels.
@@ -929,6 +920,10 @@ pub(crate) mod placement {
 
         use super::*;
 
+        fn ratio(scale: f64) -> DevicePixelRatio {
+            DevicePixelRatio::try_new(scale).expect("a positive ratio")
+        }
+
         #[test]
         fn logical_numbers_become_x11_numbers_only_when_they_fit() {
             let max = u16::try_from(flui_platform::MAX_SURFACE_EXTENT)
@@ -951,13 +946,15 @@ pub(crate) mod placement {
                 ("the first coordinate", -32_768.0, 1.0, None, Some(-32_768)),
                 ("not a number", f64::NAN, 1.0, None, None),
                 ("infinite", f64::INFINITY, 1.0, None, None),
-                ("a zero scale", 10.0, 0.0, None, None),
-                ("a scale that is not one", 10.0, f64::NAN, None, None),
             ];
             for (case, logical, scale, extent, coordinate) in table {
-                assert_eq!(device_extent(logical, scale), extent, "{case}: extent");
                 assert_eq!(
-                    device_coordinate(logical, scale),
+                    device_extent(logical, ratio(scale)),
+                    extent,
+                    "{case}: extent"
+                );
+                assert_eq!(
+                    device_coordinate(logical, ratio(scale)),
                     coordinate,
                     "{case}: coordinate"
                 );
@@ -985,13 +982,11 @@ pub(crate) mod placement {
             assert_eq!(outer.origin.x, i32::MIN);
             assert_eq!(outer.size.width, i32::MAX);
             assert_eq!(
-                logical_geometry(Bounds::new(Point::new(98, 50), Size::new(646, 514)), 2.0),
+                logical_geometry(
+                    Bounds::new(Point::new(98, 50), Size::new(646, 514)),
+                    ratio(2.0)
+                ),
                 WindowGeometry::try_new(Some(Point::new(49.0, 25.0)), Size::new(323.0, 257.0))
-            );
-            assert_eq!(
-                logical_geometry(Bounds::new(Point::new(4, 2), Size::new(8, 6)), f64::NAN),
-                WindowGeometry::try_new(Some(Point::new(4.0, 2.0)), Size::new(8.0, 6.0)),
-                "a scale that is not one is 1"
             );
         }
 
@@ -1016,7 +1011,11 @@ pub(crate) mod placement {
             ];
             for (case, scale, last, expected) in table {
                 let display = scale.map(at);
-                assert_eq!(window_scale(display.as_ref(), last), expected, "{case}");
+                assert_eq!(
+                    window_scale(display.as_ref(), ratio(last)),
+                    ratio(expected),
+                    "{case}"
+                );
             }
         }
 
@@ -1067,10 +1066,10 @@ pub(crate) mod hints {
 
     #![forbid(unsafe_code)]
 
-    use flui_foundation::geometry::Size;
+    use flui_foundation::geometry::{DevicePixelRatio, Size};
     use flui_platform::{SizeConstraints, WindowExtent};
 
-    use super::placement::device_extent;
+    use crate::window::state::device_extent_rounded;
 
     /// The content sizes a window is held between, in device pixels.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1085,7 +1084,7 @@ pub(crate) mod hints {
         constraints: SizeConstraints,
         resizable: bool,
         content: Size<i32>,
-        scale: f64,
+        scale: DevicePixelRatio,
     ) -> SizeLimits {
         if !resizable {
             let held = Some((content.width, content.height));
@@ -1094,15 +1093,18 @@ pub(crate) mod hints {
                 max: held,
             };
         }
-        let device = |size: WindowExtent| {
+        // The hosts' one extent rule, rounded as a limit rounds: a minimum up
+        // and a maximum down, so the content never ends outside the limits.
+        let device = |size: WindowExtent, round: fn(f64) -> f64| {
+            let side = |logical: f64| device_extent_rounded(logical, scale, round);
             Some((
-                i32::from(device_extent(size.width(), scale)?),
-                i32::from(device_extent(size.height(), scale)?),
+                side(size.width())?.cast_signed(),
+                side(size.height())?.cast_signed(),
             ))
         };
         SizeLimits {
-            min: constraints.min.and_then(device),
-            max: constraints.max.and_then(device),
+            min: constraints.min.and_then(|min| device(min, f64::ceil)),
+            max: constraints.max.and_then(|max| device(max, f64::floor)),
         }
     }
 
@@ -1166,6 +1168,20 @@ pub(crate) mod hints {
                     },
                 ),
                 (
+                    "a fractional scale rounds a minimum up and a maximum down",
+                    SizeConstraints::try_new(
+                        Some(Size::new(100.3, 100.3)),
+                        Some(Size::new(500.3, 500.3)),
+                    )
+                    .expect("finite limits"),
+                    true,
+                    1.5,
+                    SizeLimits {
+                        min: Some((151, 151)),
+                        max: Some((750, 750)),
+                    },
+                ),
+                (
                     "a limit past the extent is held at it",
                     SizeConstraints::try_new(None, Some(Size::new(1.0e9, 10.0)))
                         .expect("finite limits"),
@@ -1179,7 +1195,12 @@ pub(crate) mod hints {
             ];
             for (case, constraints, resizable, scale, expected) in table {
                 assert_eq!(
-                    size_limits(constraints, resizable, content, scale),
+                    size_limits(
+                        constraints,
+                        resizable,
+                        content,
+                        DevicePixelRatio::try_new(scale).expect("a positive ratio")
+                    ),
                     expected,
                     "{case}"
                 );

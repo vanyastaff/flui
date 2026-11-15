@@ -42,13 +42,13 @@ use objc2_foundation::{
     NSString,
 };
 
-use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
 #[cfg(not(target_arch = "aarch64"))]
 use super::screen::MacosPotentialHeadroom;
 use super::screen::device_bounds_of_screen;
 use super::screen::{macos_display_key, macos_display_persistent_key, screen_color};
+use crate::display::scale::ScaleStreak;
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::apple::macos::bounds_of;
@@ -138,6 +138,9 @@ impl crate::owner::notices::StaleOnWake for MacosDisplays {
 pub struct MacosDisplays {
     source: DisplaySource,
     version: MacOSVersion,
+    /// Whether the last screen scale read was refused, so a run of refusals
+    /// is reported once.
+    scale_streak: parking_lot::Mutex<ScaleStreak>,
 }
 
 impl std::fmt::Debug for MacosDisplays {
@@ -151,6 +154,7 @@ impl MacosDisplays {
         Self {
             source: DisplaySource::new(),
             version: MacOSVersion::read(),
+            scale_streak: parking_lot::Mutex::new(ScaleStreak::default()),
         }
     }
 
@@ -168,9 +172,15 @@ impl MacosDisplays {
             let Some(id) = display_key_of(&screen).and_then(|key| self.source.mint(&key)) else {
                 continue;
             };
-            // A scale that is none, which no screen reports, reads as one.
-            let ratio = DevicePixelRatio::try_new(screen.backingScaleFactor())
-                .unwrap_or(DevicePixelRatio::ONE);
+            // The screen's scale by the hosts' one rule; a refusal is
+            // reported with nothing borrowed.
+            let (ratio, refused) = self
+                .scale_streak
+                .lock()
+                .read(screen.backingScaleFactor(), "NSScreen backingScaleFactor");
+            if let Some(refused) = refused {
+                refused.report();
+            }
             let scale = ratio.get();
             // NSScreen frames are in points with a bottom-left origin on the
             // primary screen; the snapshot carries device pixels of this

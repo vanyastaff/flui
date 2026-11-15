@@ -419,7 +419,10 @@ pub trait Platform: sealed::Sealed + 'static {
     /// (headless, mobile, web). Win32 answers zero, an under-estimate, since it
     /// does not measure the frame before a window exists; X11 answers the
     /// frame it has measured so far and AppKit the one its window style gives.
-    fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64>;
+    fn window_frame_inset(
+        &self,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    ) -> flui_foundation::geometry::Size<f64>;
 
     /// The host's connection to its window system, for the life of the host
     /// (ADR-0305 §2): what the application's one GPU instance is made on, so
@@ -714,7 +717,10 @@ impl<H: Host> Platform for HostPlatform<H> {
         H::Window::capabilities(&self.owner, &self.window_shared)
     }
 
-    fn window_frame_inset(&self, scale_factor: f64) -> Size<f64> {
+    fn window_frame_inset(
+        &self,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64> {
         H::Window::frame_inset(&self.owner, &self.window_shared, scale_factor)
     }
 

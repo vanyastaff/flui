@@ -68,9 +68,14 @@ impl WheelAmount {
 /// A wheel distance counted in [`WHEEL_DETENT`] steps to a detent, as Win32's
 /// wheel messages and Wayland's `value120` count it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DetentSteps(pub(crate) i32);
+pub(crate) struct DetentSteps(i32);
 
 impl DetentSteps {
+    /// A distance of `steps`, [`WHEEL_DETENT`] of them to a detent.
+    pub(crate) const fn new(steps: i32) -> Self {
+        Self(steps)
+    }
+
     /// The distance in detents, a fraction of one for a finer device.
     pub(crate) fn detents(self) -> f64 {
         f64::from(self.0) / f64::from(WHEEL_DETENT)
@@ -205,21 +210,19 @@ mod mapping {
         crate::input::apple::wheel::step(false, moving_the_content(x), moving_the_content(y)).0
     }
 
-    /// The change of an X11 scroll valuator for the turn, read in detents of
-    /// the valuator's increment; an axis that changed not at all reports no
-    /// change, which the host skips.
+    /// The moves of an X11 device's two scroll valuators for the turn, read
+    /// by the host's own valuator path, then stepped; `None` where the host
+    /// steps nothing.
     fn x11((x, y): (f64, f64)) -> Option<ScrollDelta> {
         /// A valuator increment that is not one, so the turn is divided.
         const INCREMENT: f64 = 15.0;
-        let detents = |amount: f64| {
-            let change = amount * INCREMENT;
-            if change == 0.0 {
-                Some(0.0)
-            } else {
-                x11::scroll_detents(change, INCREMENT)
-            }
+        let valuator = |horizontal: bool, amount: f64| x11::ValuatorMove {
+            horizontal,
+            change: amount * INCREMENT,
+            increment: INCREMENT,
         };
-        x11::detent_step((detents(x)?, detents(y)?))
+        let detents = x11::valuator_detents([valuator(true, x), valuator(false, y)])?;
+        x11::detent_step(detents)
     }
 
     /// A Wayland wheel frame's `value120` for the turn: 120 to a notch,

@@ -458,7 +458,9 @@ fn view_of(
         name: label_of(state),
         bounds,
         usable_bounds: bounds,
-        scale_factor: DevicePixelRatio::try_new(scale_factor)?,
+        // Both sides are positive whole numbers, so their quotient is a ratio.
+        scale_factor: DevicePixelRatio::try_new(scale_factor)
+            .expect("BUG: a positive size over a positive size is a finite positive ratio"),
         // `wl_output.mode`'s `refresh` is millihertz in an `i32`; zero or
         // less means the compositor does not know.
         refresh_period: RefreshPeriod::from_millihertz(i64::from(mode.refresh_millihertz)).ok(),

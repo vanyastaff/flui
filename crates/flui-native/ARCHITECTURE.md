@@ -609,7 +609,16 @@ trait depends on `flui-platform` instead.
   X11 `NotYetOnThisHost`, a compositor without `wp_color_management_v1` or a
   device below the API that reports it `NotOnThisDevice`, the browser's
   headroom `NotOnThisPlatform`. The Wayland model numbers each image
-  description it asks for and takes over only the newest one's `done`.
+  description it asks for and takes over only the newest one's `done`. A
+  scale an operating system reports, of a display or of a window (a DPI over
+  the base DPI, a backing or content scale, a density, a pixel ratio,
+  `Xft.dpi`), becomes a `DevicePixelRatio` once, where it enters, by the one
+  rule `display::scale::ScaleStreak::read`: a finite positive ratio is taken,
+  anything else reads as the base ratio, so the display or window still exists
+  with a scale, and the first refusal of a run is handed back to be reported
+  with nothing borrowed (`a_reported_scale_is_taken_or_read_as_the_base_ratio_once_reported`).
+  Win32's `WM_DPICHANGED` of zero DPI is not a reading but a message naming
+  none: the window keeps the DPI it has (`WindowScale::rescale`).
   `display::source::mapping` reads one table of cadences through the
   Android sample, the Windows rule, the Wayland and RandR models, the
   display link and the estimator; the macOS source hands CoreGraphics' rate
@@ -1069,8 +1078,12 @@ trait depends on `flui-platform` instead.
   `a_command_admitted_before_a_revision_is_superseded` holds a host to it
   where its fixture can revise capabilities. A command no host arm carries
   out answers `ApplyError::Platform` (`window::state::not_carried_out`), and
-  Win32 numbers beyond its device range are `PlatformFailure::OutOfRange`:
-  admission held them finite and positive, the range is the window system's.
+  a Win32 position beyond its device range is `PlatformFailure::OutOfRange`:
+  admission held it finite, the range is the window system's. A size past the
+  largest surface is not refused: the Win32, X11 and headless hosts clamp it by
+  the one extent rule (`window::state::device_extent`), as ADR-0254 lets a command
+  "take effect or be clamped, as the next snapshot shows" (AppKit does not yet,
+  `docs/gaps.md`).
   Showing, activating and closing are commands like the others
   (`Show`, `Activate`, `Close`); there is no method twin. The snapshot
   describes what the OS reported, not what a command asked for, and holds

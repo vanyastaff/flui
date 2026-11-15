@@ -18,7 +18,8 @@ use crate::input::primary_mouse_info;
 use crate::input::scroll::{DetentSteps, WheelAmount, wheel_step};
 use flui_platform::PlatformInput;
 
-/// The distance of one wheel detent (Win32's `WHEEL_DELTA`).
+/// The steps to one wheel detent: a wheel distance is counted in 1/120 of a
+/// detent by Win32 (`WHEEL_DELTA`) and by Wayland (`value120`) alike.
 pub const WHEEL_DETENT: i16 = 120;
 
 /// Which wheel turned.
@@ -69,7 +70,7 @@ impl ContactRegistry {
         let position = PointerPosition::try_new(Point::new(x / scale, y / scale)).ok()?;
         // Win32 signs the vertical wheel turned away from the user, toward
         // earlier content, and the horizontal one tilted right.
-        let steps = DetentSteps(i32::from(reading.distance));
+        let steps = DetentSteps::new(i32::from(reading.distance));
         let detents = steps.detents();
         let (x, y) = match reading.axis {
             WheelAxis::Vertical => (0.0, detents),

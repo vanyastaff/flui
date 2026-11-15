@@ -18,6 +18,7 @@ fn framed(states: ToplevelStates) -> Frame {
         resizable: true,
         offers: EVERYTHING,
         title_bar: true,
+        viewported: true,
     }
 }
 
@@ -713,10 +714,37 @@ fn a_frame_past_the_largest_extent_is_drawn_at_it() {
     let plain = PLAIN;
     let wide = Frame {
         content: Size::new(1e7, 300.0),
+        viewported: false,
         ..floating()
     };
     let bar = paint_header(&wide, BufferScale::ONE, plain).expect("drawn");
     assert_eq!((bar.width, bar.height), (MAX_SURFACE_EXTENT, 37));
+    // With no viewport to stretch the bar, its buttons are laid out within
+    // what is drawn, and a press is routed to the one drawn there.
+    let drawn = f64::from(MAX_SURFACE_EXTENT);
+    assert_eq!(wide.drawn_width(), drawn);
+    for button in wide.buttons() {
+        let area = wide.button_rect(button).expect("a shown button");
+        assert!(area.x + area.width <= drawn, "{button:?} at {area:?}");
+        let (x, y) = (area.x + area.width / 2.0, area.y + area.height / 2.0);
+        assert_eq!(
+            wide.part_at(Piece::Header, x, y),
+            Some(Part::Button(button))
+        );
+        assert_eq!(
+            wide.part_at(Piece::Header, x - drawn + 1e7, y),
+            Some(Part::Caption),
+            "{button:?}: nothing is drawn where the content would end"
+        );
+    }
+    assert!(wide.title_room() <= drawn);
+    // A viewport stretches the bar, so its controls end with the content.
+    let stretched = Frame {
+        viewported: true,
+        ..wide
+    };
+    let close = stretched.button_rect(Button::Close).expect("close");
+    assert_eq!(close.x + close.width + BUTTON_GAP, 1e7);
     let fullscreen = framed(ToplevelStates {
         fullscreen: true,
         ..ToplevelStates::default()
@@ -782,7 +810,7 @@ fn a_press_on_the_applications_bar_is_the_windows() {
         ..floating()
     };
     let mut chrome = ContentChrome {
-        scale: 1.0,
+        scale: DevicePixelRatio::ONE,
         ..ContentChrome::default()
     };
     let _changed = chrome.projected.update(
@@ -790,7 +818,7 @@ fn a_press_on_the_applications_bar_is_the_windows() {
             InputRegionKind::WindowMove,
             flui_foundation::geometry::Rect::from_ltrb(0.0, 0.0, 400.0, 32.0),
         )],
-        1.0,
+        DevicePixelRatio::ONE,
         None,
     );
     let at = Instant::now();

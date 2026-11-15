@@ -273,17 +273,17 @@ fn mode_refresh_period(mode: &RandrMode) -> Option<RefreshPeriod> {
     let millihertz = i64::try_from(mode_refresh_millihertz(mode)?).ok()?;
     RefreshPeriod::from_millihertz(millihertz).ok()
 }
-
 /// `Xft.dpi / 96` from the text of the root window's `RESOURCE_MANAGER`
-/// property, or `None` when it sets no usable dpi.
-pub(crate) fn xft_scale_factor(resources: &str) -> Option<DevicePixelRatio> {
+/// property, as the number it reports; `None` when it sets no number. Whether
+/// the number is a scale is the hosts' one rule's (`display::scale`).
+pub(crate) fn xft_scale_factor(resources: &str) -> Option<f64> {
     let dpi: f64 = resources
         .lines()
         .find_map(|line| line.trim().strip_prefix("Xft.dpi:"))?
         .trim()
         .parse()
         .ok()?;
-    DevicePixelRatio::try_new(dpi / 96.0)
+    Some(dpi / 96.0)
 }
 
 /// The work area of the desktop `current` out of `_NET_WORKAREA`, a flat list
@@ -612,7 +612,8 @@ mod tests {
     fn scale_and_work_area_come_from_the_server() {
         let mut randr = state(vec![monitor("DP-1", &[1], 0)]);
         assert_eq!(randr.views()[0].scale_factor, DevicePixelRatio::ONE);
-        randr.scale_factor = xft_scale_factor("*.background: white\nXft.dpi:\t144\n");
+        randr.scale_factor = xft_scale_factor("*.background: white\nXft.dpi:\t144\n")
+            .and_then(DevicePixelRatio::try_new);
         randr.work_area = current_work_area(&[0, 28, 1920, 1052, 0, 0, 1920, 1080], Some(0));
         let view = &randr.views()[0];
         assert_eq!(view.scale_factor.get(), 1.5);
@@ -682,30 +683,13 @@ mod tests {
     }
 
     fn xft_dpi_parsing() {
-        assert_eq!(
-            xft_scale_factor("Xft.dpi: 96").map(DevicePixelRatio::get),
-            Some(1.0)
-        );
-        assert_eq!(
-            xft_scale_factor("Xft.dpi: 192\n").map(DevicePixelRatio::get),
-            Some(2.0)
-        );
-        assert_eq!(
-            xft_scale_factor("Xft.dpi: 0").map(DevicePixelRatio::get),
-            None
-        );
-        assert_eq!(
-            xft_scale_factor("Xft.dpi: lots").map(DevicePixelRatio::get),
-            None
-        );
-        assert_eq!(
-            xft_scale_factor("Xft.antialias: 1").map(DevicePixelRatio::get),
-            None
-        );
-        assert_eq!(
-            xft_scale_factor("Xft.dpi: -96").map(DevicePixelRatio::get),
-            None
-        );
+        assert_eq!(xft_scale_factor("Xft.dpi: 96"), Some(1.0));
+        assert_eq!(xft_scale_factor("Xft.dpi: 192\n"), Some(2.0));
+        // A number that is no scale is the hosts' one rule's to refuse.
+        assert_eq!(xft_scale_factor("Xft.dpi: 0"), Some(0.0));
+        assert_eq!(xft_scale_factor("Xft.dpi: -96"), Some(-1.0));
+        assert_eq!(xft_scale_factor("Xft.dpi: lots"), None);
+        assert_eq!(xft_scale_factor("Xft.antialias: 1"), None);
     }
 
     #[test]

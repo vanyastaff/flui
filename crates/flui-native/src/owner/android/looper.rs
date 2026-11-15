@@ -179,7 +179,7 @@ pub(crate) trait ActivityWindow: crate::host_window::HostWindow + Send + Sync {
 
     /// The ratio of device to logical pixels the window's display has, read
     /// now: the input translation and the Java view take it.
-    fn scale(&self) -> f64;
+    fn scale(&self) -> flui_foundation::geometry::DevicePixelRatio;
 
     /// Reads the input capabilities again (the Java view became ready).
     fn refresh_capabilities(&self);
@@ -562,7 +562,7 @@ impl AndroidLoop {
                             if explored {
                                 return InputStatus::Handled;
                             }
-                            let events = self.input.motion(&self.app, motion, scale_factor);
+                            let events = self.input.motion(&self.app, motion, scale_factor.get());
                             let mut any_handled = false;
                             self.offer_handwriting(window.as_ref(), &events);
                             for platform_input in events {

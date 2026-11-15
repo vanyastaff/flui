@@ -323,20 +323,33 @@ pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
 /// every host hands a window extent to its window system or draws a surface
 /// of the window: snapped to the device grid, at least one pixel, and at most
 /// [`MAX_SURFACE_EXTENT`](flui_platform::MAX_SURFACE_EXTENT), past which the
-/// side is clamped, since no renderer draws a larger surface. `None` for a
+/// side is clamped, since no host gives a window a larger surface. `None` for a
 /// side that is not finite or not positive.
 #[cfg(any(windows, x11_host, wayland_host, test))]
 pub(crate) fn device_extent(
     logical: f64,
     ratio: flui_foundation::geometry::DevicePixelRatio,
 ) -> Option<u32> {
+    device_extent_rounded(logical, ratio, flui_foundation::geometry::snap)
+}
+
+/// [`device_extent`] with the device pixels rounded by `round` instead of
+/// snapped: a size limit rounds its minimum up and its maximum down, so the
+/// content never ends outside the logical limit. The range is the same: at
+/// least one pixel, clamped at the largest surface, `None` for a side that is
+/// not finite or not positive.
+#[cfg(any(windows, x11_host, wayland_host, test))]
+pub(crate) fn device_extent_rounded(
+    logical: f64,
+    ratio: flui_foundation::geometry::DevicePixelRatio,
+    round: fn(f64) -> f64,
+) -> Option<u32> {
     use flui_platform::MAX_SURFACE_EXTENT;
     if !(logical.is_finite() && logical > 0.0) {
         return None;
     }
     // A product past `f64::MAX` is infinite, which the clamp also bounds.
-    let pixels = flui_foundation::geometry::snap(ratio.to_device(logical))
-        .clamp(1.0, f64::from(MAX_SURFACE_EXTENT));
+    let pixels = round(ratio.to_device(logical)).clamp(1.0, f64::from(MAX_SURFACE_EXTENT));
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -1310,6 +1323,18 @@ mod extent {
             ("at a fractional scale", 401.0, 1.5, Some(602)),
             ("a half pixel rounds up", 0.5, 5.0, Some(3)),
             ("a sliver is one pixel", 0.01, 1.0, Some(1)),
+            (
+                "just under the largest surface",
+                max - 1.0,
+                1.0,
+                Some(MAX_SURFACE_EXTENT - 1),
+            ),
+            (
+                "one past the largest surface",
+                max + 1.0,
+                1.0,
+                Some(MAX_SURFACE_EXTENT),
+            ),
             (
                 "the largest surface",
                 max / 2.0,

@@ -227,15 +227,14 @@ impl FrameInset {
 
     /// The frame in logical pixels on a display of `scale_factor`; zero before
     /// any was measured.
-    pub(crate) fn logical(&self, scale_factor: f64) -> Size<f64> {
+    pub(crate) fn logical(&self, scale_factor: DevicePixelRatio) -> Size<f64> {
         let measured = *self.measured.lock();
-        match measured {
-            Some(frame) if scale_factor.is_finite() && scale_factor > 0.0 => Size::new(
-                f64::from(frame.width) / scale_factor,
-                f64::from(frame.height) / scale_factor,
-            ),
-            _ => Size::new(0.0, 0.0),
-        }
+        measured.map_or(Size::new(0.0, 0.0), |frame| {
+            Size::new(
+                scale_factor.to_logical(f64::from(frame.width)),
+                scale_factor.to_logical(f64::from(frame.height)),
+            )
+        })
     }
 }
 
@@ -664,7 +663,7 @@ mod tests {
     fn frame_inset_is_recorded_from_a_framed_window_on_screen() {
         let inset = FrameInset::default();
         assert_eq!(
-            inset.logical(1.0),
+            inset.logical(DevicePixelRatio::ONE),
             Size::new(0.0, 0.0),
             "nothing recorded yet"
         );
@@ -679,25 +678,19 @@ mod tests {
         }
 
         inset.record(Size::new(20, 60));
-        assert_eq!(inset.logical(1.0), Size::new(20.0, 60.0));
+        assert_eq!(inset.logical(DevicePixelRatio::ONE), Size::new(20.0, 60.0));
         assert!(inset.is_known());
         assert_eq!(
-            inset.logical(2.0),
+            inset.logical(ratio(2.0)),
             Size::new(10.0, 30.0),
             "device pixels over scale"
         );
-        assert_eq!(
-            inset.logical(0.0),
-            Size::new(0.0, 0.0),
-            "a scale that divides by zero"
-        );
-        assert_eq!(inset.logical(f64::NAN), Size::new(0.0, 0.0));
 
         // A frame of one dimension only (a bar and no borders) is a frame, and a
         // later report replaces an earlier one.
         inset.record(Size::new(0, 30));
-        assert_eq!(inset.logical(1.0), Size::new(0.0, 30.0));
+        assert_eq!(inset.logical(DevicePixelRatio::ONE), Size::new(0.0, 30.0));
         inset.record(Size::new(8, 38));
-        assert_eq!(inset.logical(1.0), Size::new(8.0, 38.0));
+        assert_eq!(inset.logical(DevicePixelRatio::ONE), Size::new(8.0, 38.0));
     }
 }

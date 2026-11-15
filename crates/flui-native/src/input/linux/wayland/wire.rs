@@ -1371,7 +1371,7 @@ fn step(unit: ScrollUnit, values: [f64; 2]) -> ScrollDelta {
 /// The step of a wheel frame's `value120` (horizontal, vertical): detents,
 /// precise when they are not whole.
 pub(crate) fn value120_step(value120: [i32; 2]) -> (ScrollDelta, ScrollPrecision) {
-    let steps = value120.map(DetentSteps);
+    let steps = value120.map(DetentSteps::new);
     let precision = if steps.iter().all(|steps| steps.is_whole()) {
         ScrollPrecision::Notched
     } else {

@@ -1234,6 +1234,7 @@ pub(crate) mod source {
     use super::color_query::display_color;
     use super::refresh_estimate::RefreshEstimator;
     use super::screen_identity::RetainedScreens;
+    use crate::display::scale::{RefusedScale, ScaleStreak};
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
 
@@ -1263,16 +1264,37 @@ pub(crate) mod source {
         /// first seen, taken as the display's own scale with the page at 100%.
         /// `None` until the first sample and after the screen changed.
         screen_ratio: Option<f64>,
+        /// Whether the last pixel ratio read was refused, so a run of
+        /// refusals is reported once.
+        scale_streak: ScaleStreak,
+        /// The refusals of the last sample, reported once the state is let go.
+        refused: Vec<RefusedScale>,
+    }
+
+    impl State {
+        /// The ratio `reported` gives by the hosts' one rule; a refusal that
+        /// starts a streak waits in `refused` to be reported.
+        fn read_scale(&mut self, reported: f64, what: &'static str) -> DevicePixelRatio {
+            let (ratio, refused) = self.scale_streak.read(reported, what);
+            self.refused.extend(refused);
+            ratio
+        }
     }
 
     impl crate::owner::web::HostDisplays for WebDisplays {
         /// The cached snapshot, sampled from the browser when an event invalidated
         /// it.
         fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-            self.source.snapshot_with(|| {
+            let snapshot = self.source.snapshot_with(|| {
                 let mut state = self.state.lock();
                 self.sample(&mut state)
-            })
+            });
+            // Reported with the state let go: a subscriber is user code.
+            let refused = std::mem::take(&mut self.state.lock().refused);
+            for refused in refused {
+                refused.report();
+            }
+            snapshot
         }
 
         /// The id is a product of sampling: it follows the cached snapshot.
@@ -1327,6 +1349,8 @@ pub(crate) mod source {
                     details: None,
                     screens: RetainedScreens::new(),
                     screen_ratio: None,
+                    scale_streak: ScaleStreak::default(),
+                    refused: Vec::new(),
                 }),
             })
         }
@@ -1422,8 +1446,7 @@ pub(crate) mod source {
             let screen = window.screen().map_err(|_| PlatformError::Displays {
                 message: "the window has no screen".into(),
             })?;
-            let scale_factor = DevicePixelRatio::try_new(window.device_pixel_ratio())
-                .unwrap_or(DevicePixelRatio::ONE);
+            let scale_factor = state.read_scale(window.device_pixel_ratio(), "devicePixelRatio");
             let device_scale = *state.screen_ratio.get_or_insert(scale_factor.get());
             let bounds = Bounds::new(
                 Point::new(0, 0),
@@ -1487,21 +1510,32 @@ pub(crate) mod source {
                         .find(|(screen, _)| is_primary(screen))
                         .map(|(_, id)| *id)
                 });
-            let window_scale = DevicePixelRatio::try_new(window.device_pixel_ratio());
+            let window_scale = state.read_scale(window.device_pixel_ratio(), "devicePixelRatio");
             let displays = listed
                 .iter()
                 .map(|(screen, id)| {
+                    // A screen that reports no ratio of its own is at the base
+                    // ratio; one that reports a number reads it by the hosts'
+                    // one rule.
+                    let own_ratio = get(screen, "devicePixelRatio")
+                        .and_then(|ratio| ratio.as_f64())
+                        .map_or(DevicePixelRatio::ONE, |ratio| {
+                            state.read_scale(ratio, "ScreenDetailed devicePixelRatio")
+                        });
                     if Some(*id) == current {
                         // The screen the window is on reports the window's own pixel
                         // ratio, which includes page zoom, so the scale behaves the
                         // same with and without screen access. Its estimate belongs
                         // to it alone.
-                        with_period(screen_info(screen, *id, window_scale), period)
-                            .with_color(self.page_color(window))
+                        with_period(
+                            screen_info(screen, *id, own_ratio, Some(window_scale)),
+                            period,
+                        )
+                        .with_color(self.page_color(window))
                     } else {
                         // A page's media queries describe the screen it is on;
                         // the browser says nothing of the others' colour.
-                        screen_info(screen, *id, None)
+                        screen_info(screen, *id, own_ratio, None)
                             .with_color(Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM))
                     }
                 })
@@ -1526,11 +1560,9 @@ pub(crate) mod source {
     fn screen_info(
         screen: &JsValue,
         id: DisplayId,
+        own_ratio: DevicePixelRatio,
         scale_override: Option<DevicePixelRatio>,
     ) -> DisplayInfo {
-        let own_ratio = get_number(screen, "devicePixelRatio")
-            .and_then(DevicePixelRatio::try_new)
-            .unwrap_or(DevicePixelRatio::ONE);
         let scale_factor = scale_override.unwrap_or(own_ratio);
         let number = |name: &str, fallback: f64| get_number(screen, name).unwrap_or(fallback);
         let device = |css: f64| device_pixels(css, own_ratio.get());

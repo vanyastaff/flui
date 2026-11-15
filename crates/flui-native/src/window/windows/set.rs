@@ -382,7 +382,11 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         windows.capabilities()
     }
 
-    fn frame_inset(_: &WindowsLoop, _: &WindowSet, _: f64) -> Size<f64> {
+    fn frame_inset(
+        _: &WindowsLoop,
+        _: &WindowSet,
+        _: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64> {
         // The frame is not measured before a window exists, so the host
         // reports the contract's default: no inset.
         Size::new(0.0, 0.0)

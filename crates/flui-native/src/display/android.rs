@@ -24,6 +24,7 @@ pub(crate) mod sample {
         Headroom, RefreshPeriod,
     };
 
+    use crate::display::scale::{RefusedScale, ScaleStreak};
     use crate::owner::android::ndk::{NdkFn, SetFrameRate, SymbolSource};
     use crate::version::gate::Gate;
     use crate::version::gate::android::AndroidApi;
@@ -110,26 +111,30 @@ pub(crate) mod sample {
         /// `Display.DEFAULT_DISPLAY`, the built-in screen.
         pub(crate) const DEFAULT_DISPLAY_ID: i32 = 0;
 
-        /// The snapshot entry for this display under `id`; `None` for a display
-        /// that reports no size or density, which nothing could be laid out on.
-        pub(crate) fn info(&self, id: DisplayId) -> Option<DisplayInfo> {
+        /// The display's scale, read by the hosts' one rule from Android's
+        /// density (`densityDpi / 160`): a density that is none reads as the
+        /// base ratio, with the refusal to report when it starts a streak.
+        pub(crate) fn scale(
+            &self,
+            streak: &mut ScaleStreak,
+        ) -> (DevicePixelRatio, Option<RefusedScale>) {
+            streak.read(f64::from(self.density_dpi) / 160.0, "Android densityDpi")
+        }
+
+        /// The snapshot entry for this display under `id` at `scale`; `None`
+        /// for a display that reports no size, which nothing could be laid out
+        /// on.
+        pub(crate) fn info(&self, id: DisplayId, scale: DevicePixelRatio) -> Option<DisplayInfo> {
             if self.width <= 0 || self.height <= 0 {
                 return None;
             }
             let bounds = Bounds::new(Point::new(0, 0), Size::new(self.width, self.height));
-            let scale = scale_factor(self.density_dpi)?;
             let mut info = DisplayInfo::new(id, &self.name, bounds, scale)
                 .with_primary(self.display_id == Self::DEFAULT_DISPLAY_ID)
                 .with_color(display_color(self.color));
             info.refresh_period = RefreshPeriod::from_hz(f64::from(self.refresh_hz)).ok();
             Some(info)
         }
-    }
-
-    /// Device pixels per logical pixel: Android's density is `densityDpi / 160`;
-    /// `None` for a density that is none.
-    fn scale_factor(density_dpi: i32) -> Option<DevicePixelRatio> {
-        DevicePixelRatio::try_new(f64::from(density_dpi) / 160.0)
     }
 
     /// The highest rate among `rates` that describes a cadence.
@@ -233,7 +238,7 @@ pub(crate) mod sample {
 
         use super::*;
 
-        fn a_display_without_size_or_density_is_not_described() {
+        fn a_display_without_size_is_not_described() {
             let registry = DisplayRegistry::new();
             let id = registry.mint(&DisplayKey::AndroidId(0)).expect("id");
             let healthy = RawDisplay {
@@ -246,7 +251,9 @@ pub(crate) mod sample {
                 max_refresh_hz: Some(120.0),
                 color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             };
-            let info = healthy.info(id).expect("a healthy display");
+            let (scale, refused) = healthy.scale(&mut ScaleStreak::default());
+            assert!(refused.is_none());
+            let info = healthy.info(id, scale).expect("a healthy display");
             assert_eq!(
                 info.scale_factor.get(),
                 2.625,
@@ -267,19 +274,28 @@ pub(crate) mod sample {
                     height: -1,
                     ..healthy.clone()
                 },
-                RawDisplay {
-                    density_dpi: 0,
-                    ..healthy.clone()
-                },
             ] {
-                assert_eq!(broken.info(id), None, "{broken:?}");
+                assert_eq!(broken.info(id, DevicePixelRatio::ONE), None, "{broken:?}");
             }
             let external = RawDisplay {
                 display_id: 2,
                 refresh_hz: 0.0,
                 ..healthy
             };
-            let info = external.info(id).expect("an external display");
+            let info = external
+                .info(id, DevicePixelRatio::ONE)
+                .expect("an external display");
+            // A density that is none reads as the base ratio, and the display
+            // is still described.
+            let unscaled = RawDisplay {
+                density_dpi: 0,
+                ..external
+            };
+            let mut streak = ScaleStreak::default();
+            let (scale, refused) = unscaled.scale(&mut streak);
+            assert_eq!(scale, DevicePixelRatio::ONE);
+            assert!(refused.is_some(), "the first refusal is reported");
+            assert!(unscaled.info(id, scale).is_some());
             assert!(!info.is_primary);
             assert_eq!(info.refresh_period, None, "an unknown rate stays unknown");
         }
@@ -307,7 +323,9 @@ pub(crate) mod sample {
                 max_refresh_hz: Some(60.0),
                 color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             };
-            let info = failed.info(id).expect("the display is still listed");
+            let info = failed
+                .info(id, DevicePixelRatio::ONE)
+                .expect("the display is still listed");
             assert_eq!(info.bounds.size, Size::new(1920, 1080));
             assert_eq!(info.color, Err(CapabilityAbsence::NOT_ON_THIS_DEVICE));
             let reported = RawDisplay {
@@ -315,7 +333,9 @@ pub(crate) mod sample {
                 ..failed
             };
             assert_eq!(
-                reported.info(id).map(|info| info.color),
+                reported
+                    .info(id, DevicePixelRatio::ONE)
+                    .map(|info| info.color),
                 Some(Ok(DisplayColor::Standard(ColorGamut::DisplayP3)))
             );
         }
@@ -415,8 +435,8 @@ pub(crate) mod sample {
                 "android_display_table",
                 &[
                     (
-                        "a_display_without_size_or_density_is_not_described",
-                        a_display_without_size_or_density_is_not_described as fn(),
+                        "a_display_without_size_is_not_described",
+                        a_display_without_size_is_not_described as fn(),
                     ),
                     (
                         "highest_rate_ignores_values_that_are_not_rates",
@@ -497,6 +517,7 @@ pub(crate) mod source {
         ColorReport, DisplayColorReport, FrameRateRequests, HighestHdrSdrRatio, RawDisplay,
         max_refresh_hz, requested_frame_rate,
     };
+    use crate::display::scale::ScaleStreak;
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
     use crate::owner::android::ndk::{AChoreographer, RefreshRateWatch, SymbolSource};
@@ -617,6 +638,9 @@ pub(crate) mod source {
         /// `WindowManager.isCrossWindowBlurEnabled` at the last sample; false
         /// below API 31 and before the first sample.
         cross_window_blur: AtomicBool,
+        /// Whether the last density read was refused, so a run of refusals is
+        /// reported once.
+        scale_streak: Mutex<ScaleStreak>,
     }
 
     impl std::fmt::Debug for AndroidDisplays {
@@ -644,6 +668,7 @@ pub(crate) mod source {
                 activity: Mutex::new(None),
                 max_rate_changed: AtomicBool::new(false),
                 cross_window_blur: AtomicBool::new(false),
+                scale_streak: Mutex::new(ScaleStreak::default()),
             }
         }
     }
@@ -660,6 +685,7 @@ pub(crate) mod source {
         fn snapshot(&self, app: &AndroidApp) -> Result<DisplaySnapshot, PlatformError> {
             let before = self.source.published().revision();
             let mut missing_activity = None;
+            let mut refusals = Vec::new();
             let snapshot = self.source.snapshot_with(|| {
                 let sample = sample(app, self.api).map_err(|error| PlatformError::Displays {
                     message: error.to_string(),
@@ -670,7 +696,11 @@ pub(crate) mod source {
                     let Some(id) = self.source.mint(&DisplayKey::AndroidId(raw.display_id)) else {
                         continue;
                     };
-                    let Some(info) = raw.info(id) else {
+                    // The streak's lock is let go before the next line; the
+                    // refusal is reported once the sample is done.
+                    let (scale, refused) = raw.scale(&mut self.scale_streak.lock());
+                    refusals.extend(refused);
+                    let Some(info) = raw.info(id, scale) else {
                         continue;
                     };
                     if raw.display_id == sample.activity_display_id {
@@ -694,6 +724,9 @@ pub(crate) mod source {
                 }
                 Ok(infos)
             })?;
+            for refused in refusals {
+                refused.report();
+            }
             if let Some(display_id) = missing_activity {
                 // The Activity is on a display this sample does not list: ask for
                 // one more sample per snapshot revision, not one per owner wake.

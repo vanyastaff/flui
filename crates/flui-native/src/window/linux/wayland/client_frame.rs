@@ -283,6 +283,11 @@ pub(crate) struct Frame {
     /// draws one of its own (`WindowFrame::AppTitleBar`), which keeps the
     /// margins alone.
     pub(crate) title_bar: bool,
+    /// Whether a viewport stretches the frame's surfaces: where none does,
+    /// a surface is drawn at scale one and no wider than
+    /// [`MAX_SURFACE_EXTENT`], so the title bar's controls are laid out
+    /// within that.
+    pub(crate) viewported: bool,
 }
 
 impl Frame {
@@ -392,7 +397,7 @@ impl Frame {
     pub(crate) fn button_rect(&self, button: Button) -> Option<Rect> {
         let index = self.buttons().position(|shown| shown == button)?;
         let steps = f64::from(u32::try_from(index).ok()?);
-        let x = self.content.width - (BUTTON_GAP + BUTTON) * (steps + 1.0);
+        let x = self.drawn_width() - (BUTTON_GAP + BUTTON) * (steps + 1.0);
         Some(Rect {
             x,
             y: (HEADER - BUTTON) / 2.0,
@@ -410,7 +415,20 @@ impl Frame {
 
     /// The widest the title is drawn, in logical pixels.
     pub(crate) fn title_room(&self) -> f64 {
-        (self.content.width - 2.0 * self.buttons_extent()).max(0.0)
+        (self.drawn_width() - 2.0 * self.buttons_extent()).max(0.0)
+    }
+
+    /// How much of the title bar's width is drawn, in logical pixels: all
+    /// of it where a viewport stretches it (its scale is fitted so that it
+    /// fits the largest surface), else, at scale one, no more than the
+    /// largest surface. The buttons and the title are laid out within it,
+    /// so a press is never routed to a control that is not drawn.
+    pub(crate) fn drawn_width(&self) -> f64 {
+        if self.viewported {
+            self.content.width
+        } else {
+            self.content.width.min(f64::from(MAX_SURFACE_EXTENT))
+        }
     }
 
     /// What lies at (`x`, `y`) on `piece`, in that piece's own logical
@@ -625,7 +643,7 @@ pub(crate) struct ContentChrome {
     pub(crate) projected: ProjectedInputRegions,
     /// The scale the regions were projected at, which a press is measured
     /// at too.
-    pub(crate) scale: f64,
+    pub(crate) scale: DevicePixelRatio,
 }
 
 /// One seat's pointer on the window's own surface, where the application
@@ -650,9 +668,9 @@ impl PointerOnContent {
         if self.held != Some(BTN_LEFT) {
             return None;
         }
-        let point = device_point(x * chrome.scale, y * chrome.scale)?;
+        let point = device_point(chrome.scale.to_device(x), chrome.scale.to_device(y))?;
         self.presses
-            .moved(point, chrome.scale)
+            .moved(point, chrome.scale.get())
             .then_some(Action::Move)
     }
 
@@ -689,7 +707,7 @@ impl PointerOnContent {
         let Some((x, y)) = self.at else {
             return ContentAnswer::App;
         };
-        let Some(point) = device_point(x * chrome.scale, y * chrome.scale) else {
+        let Some(point) = device_point(chrome.scale.to_device(x), chrome.scale.to_device(y)) else {
             return ContentAnswer::App;
         };
         let answer = self.presses.press(
@@ -698,7 +716,7 @@ impl PointerOnContent {
             button,
             None,
             at,
-            chrome.scale,
+            chrome.scale.get(),
         );
         let action = match answer {
             ChromePress::App => return ContentAnswer::App,
@@ -1643,6 +1661,7 @@ pub(crate) mod surfaces {
     use std::time::Instant;
 
     use cursor_icon::CursorIcon;
+    use flui_foundation::geometry::DevicePixelRatio;
     use flui_painting::text_layout::FontCollection;
     use flui_platform::input_regions::InputRegion;
     use wayland_client::protocol::wl_buffer::{self, WlBuffer};
@@ -1746,14 +1765,12 @@ pub(crate) mod surfaces {
         /// (window-logical) at `scale`, which its presses are answered from.
         /// Projected with nothing locked: a dropped region is reported
         /// through `tracing`, whose subscriber is the application's code.
-        pub(crate) fn set_regions(&self, regions: &[InputRegion], scale: f64) {
+        pub(crate) fn set_regions(&self, regions: &[InputRegion], scale: DevicePixelRatio) {
             let mut projected = std::mem::take(&mut self.0.borrow_mut().chrome.projected);
             let _changed = projected.update(regions, scale, None);
             let mut pointing = self.0.borrow_mut();
             pointing.chrome.projected = projected;
-            if scale.is_finite() && scale > 0.0 {
-                pointing.chrome.scale = scale;
-            }
+            pointing.chrome.scale = scale;
         }
 
         /// The action the pointer asked for since the last look.

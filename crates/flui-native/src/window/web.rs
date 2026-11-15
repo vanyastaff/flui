@@ -1269,7 +1269,11 @@ impl host::Window<WebLoop> for WebWindow {
         window_capabilities()
     }
 
-    fn frame_inset(_: &WebLoop, _: &WindowPositions<CanvasRef>, _: f64) -> Size<f64> {
+    fn frame_inset(
+        _: &WebLoop,
+        _: &WindowPositions<CanvasRef>,
+        _: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64> {
         // A canvas has no title bar or borders: its outer size is its content size.
         Size::new(0.0, 0.0)
     }

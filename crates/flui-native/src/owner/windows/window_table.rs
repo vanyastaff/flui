@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
+use flui_foundation::geometry::DevicePixelRatio;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI;
 
@@ -147,7 +148,13 @@ impl WindowScale {
 
     /// Its scale: its DPI over the 96 of 100%.
     pub(crate) fn scale(&self) -> f64 {
-        super::dpi_scale(self.dpi())
+        self.ratio().get()
+    }
+
+    /// Its scale as a device pixel ratio: a DPI is never zero, so it is one.
+    pub(crate) fn ratio(&self) -> DevicePixelRatio {
+        DevicePixelRatio::try_new(super::dpi_scale(self.dpi()))
+            .expect("BUG: a nonzero DPI over 96 is a finite positive ratio")
     }
 
     /// The window is now at `dpi`; answers the scale it was at. A DPI of zero

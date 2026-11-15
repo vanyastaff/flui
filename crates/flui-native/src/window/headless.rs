@@ -364,7 +364,11 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
         windows.tracked.borrow_mut().capabilities
     }
 
-    fn frame_inset(_: &HeadlessLoop, _: &HeadlessWindows, _: f64) -> Size<f64> {
+    fn frame_inset(
+        _: &HeadlessLoop,
+        _: &HeadlessWindows,
+        _: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64> {
         // A headless window draws no frame.
         Size::new(0.0, 0.0)
     }
@@ -613,7 +617,10 @@ struct HeadlessHostWindowState {
     constraints: SizeConstraints,
     resizable: bool,
     frame: WindowFrame,
-    scale_factor: f64,
+    scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    /// Whether the last simulated scale was refused, so a run of refusals
+    /// is reported once.
+    scale_streak: crate::display::scale::ScaleStreak,
     focused: bool,
     visible: bool,
     occluded: bool,
@@ -662,8 +669,16 @@ impl HeadlessHostWindowState {
     /// `size` as the host ends up with it: raised to the window's minimum,
     /// lowered to its maximum and to the largest window the host allows.
     fn clamp_size(&self, size: Size<f64>, limits: &HeadlessWindowPolicy) -> Size<f64> {
+        // The simulated window system draws no surface past the largest one a
+        // renderer draws, as every native host clamps a window extent
+        // (`window::state::device_extent`); its sizes are logical, so only
+        // the clamp applies, not the device grid.
+        let largest = self
+            .scale_factor
+            .to_logical(f64::from(flui_platform::MAX_SURFACE_EXTENT));
+        let held = crate::window::state::held_to(size, self.constraints);
         Self::clamp_to_host(
-            crate::window::state::held_to(size, self.constraints),
+            Size::new(held.width.min(largest), held.height.min(largest)),
             limits,
         )
     }
@@ -778,7 +793,7 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample
         ReportedFacts {
             metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                 model.size,
-                model.scale_factor,
+                model.scale_factor.get(),
             )
             .ok(),
             appearance: model.appearance,
@@ -852,7 +867,8 @@ impl HeadlessHostWindow {
             constraints: opening.constraints,
             resizable: options.resizable,
             frame: options.frame.at_open(&capabilities),
-            scale_factor: 1.0,
+            scale_factor: flui_foundation::geometry::DevicePixelRatio::ONE,
+            scale_streak: crate::display::scale::ScaleStreak::default(),
             focused: true,
             execution: flui_platform::WindowExecutionState::Running,
             insets: flui_platform::WindowInsets::ZERO,
@@ -1033,7 +1049,7 @@ impl HeadlessHostWindow {
             material: state.materials.last().copied().unwrap_or_default(),
             metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                 state.size,
-                state.scale_factor,
+                state.scale_factor.get(),
             )
             .ok(),
             focused: state.focused,
@@ -1097,8 +1113,19 @@ impl HeadlessHostWindow {
 
     /// Simulate a monitor DPI change for testing: the scale factor moves with
     /// no logical size change, and the snapshot's metrics carry the new scale.
+    /// The number is read as an operating system's is, by the hosts' one rule:
+    /// one that is not a finite positive ratio reads as the base ratio and is
+    /// reported once per run of them.
     pub fn simulate_scale_factor_change(&self, scale_factor: f64) {
-        self.state.borrow_mut().scale_factor = scale_factor;
+        let refused = {
+            let mut state = self.state.borrow_mut();
+            let (ratio, refused) = state.scale_streak.read(scale_factor, "simulated scale");
+            state.scale_factor = ratio;
+            refused
+        };
+        if let Some(refused) = refused {
+            refused.report();
+        }
         self.publish_state();
     }
 
