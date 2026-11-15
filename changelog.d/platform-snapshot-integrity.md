@@ -31,8 +31,9 @@
   was ignored with a warning (a minimum above the maximum reached the window system). Every host
   refuses, before it takes an id, the numbers the command setting them would refuse (a size or
   position that is not finite, a size or limit that encloses no area, a minimum above the
-  maximum) with `OpenWindowError::InvalidOption`, whose message names the option and its numbers;
-  an application whose `AppConfig` asks for them does not start (`LaunchError::InitialWindow`).
+  maximum) with `OpenWindowError::InvalidOption`, whose message names the option and its numbers.
+  An application whose `AppConfig` asks for them does not start, on any platform: `run` answers
+  the new `LaunchError::InvalidWindowOption` before any runner starts.
   `WindowOptions::min_size` and `max_size` are `Option<WindowExtent>`, and so are `AppConfig`'s;
   `WindowOptions::constraints` and `content_extent` are replaced by `WindowOptions::geometry`.
 - `flui-platform`: `AdmissionError::InvalidGeometry` carries the `InvalidGeometry` that refused

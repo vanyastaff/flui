@@ -490,15 +490,17 @@ pub(crate) struct OpenSpot {
     pub(crate) normal: Option<(i32, i32, i32, i32)>,
 }
 
-/// Turn the options of an opening window into physical pixels.
+/// Turn the checked numbers of an opening window (`opening`, from
+/// `WindowOptions::geometry`) and its `options` into physical pixels.
 ///
-/// `options.size` is the content size, so `outer_of` (the window frame at a
-/// DPI) turns it into the outer size. `options.position` and
+/// `opening.content` is the content size, so `outer_of` (the window frame at a
+/// DPI) turns it into the outer size. `opening.position` and
 /// `options.normal_geometry` are relative to the origin of `target`'s usable
 /// area in that display's logical pixels and convert through that display's own
 /// scale; with no `target` they are global logical pixels at `system_scale`.
 pub(crate) fn open_spot(
     options: &WindowOptions,
+    opening: &flui_platform::OpeningGeometry,
     target: Option<&flui_platform::DisplayInfo>,
     system_scale: f64,
     outer_of: impl Fn(u32, (i32, i32)) -> (i32, i32),
@@ -509,8 +511,8 @@ pub(crate) fn open_spot(
         .unwrap_or(system_scale);
     let dpi = ((scale * f64::from(USER_DEFAULT_SCREEN_DPI)).round() as u32).max(1);
     let content = (
-        logical_to_device(options.size.width, scale),
-        logical_to_device(options.size.height, scale),
+        logical_to_device(opening.content.width(), scale),
+        logical_to_device(opening.content.height(), scale),
     );
     let outer = outer_of(dpi, content);
     let anchor = target.map_or((0, 0), |display| {
@@ -525,7 +527,7 @@ pub(crate) fn open_spot(
             anchor.1.saturating_add(logical_to_device(at.y, scale)),
         )
     };
-    let origin = options.position.map(place);
+    let origin = opening.position.map(place);
     let normal = options.normal_geometry.and_then(|geometry| {
         let (left, top) = geometry.position().map(place).or(origin)?;
         Some((
@@ -631,7 +633,13 @@ mod open_tests {
 
     fn the_size_is_the_content_and_the_frame_is_added() {
         let options = WindowOptions::default().size(Size::new(800.0, 600.0));
-        let spot = open_spot(&options, None, 1.0, with_frame);
+        let spot = open_spot(
+            &options,
+            &options.geometry().expect("valid options"),
+            None,
+            1.0,
+            with_frame,
+        );
         assert_eq!(spot.outer, (816, 639));
         assert_eq!(spot.origin, None);
     }
@@ -643,7 +651,13 @@ mod open_tests {
         let options = WindowOptions::default()
             .size(Size::new(800.0, 600.0))
             .position(Some(Point::new(100.0, 50.0)));
-        let spot = open_spot(&options, Some(&target), 1.0, with_frame);
+        let spot = open_spot(
+            &options,
+            &options.geometry().expect("valid options"),
+            Some(&target),
+            1.0,
+            with_frame,
+        );
         assert_eq!(spot.scale, 2.0);
         assert_eq!(spot.outer, (1600 + 16, 1200 + 39));
         assert_eq!(spot.origin, Some((1920 + 200, 100)));
@@ -651,7 +665,13 @@ mod open_tests {
 
     fn without_a_display_the_position_is_global_at_the_system_scale() {
         let options = WindowOptions::default().position(Some(Point::new(100.0, 50.0)));
-        let spot = open_spot(&options, None, 1.5, with_frame);
+        let spot = open_spot(
+            &options,
+            &options.geometry().expect("valid options"),
+            None,
+            1.5,
+            with_frame,
+        );
         assert_eq!(spot.origin, Some((150, 75)));
     }
 
@@ -663,7 +683,13 @@ mod open_tests {
                 Some(Point::new(100.0, 80.0)),
                 Size::new(700.0, 500.0),
             )));
-        let spot = open_spot(&options, Some(&target), 1.0, with_frame);
+        let spot = open_spot(
+            &options,
+            &options.geometry().expect("valid options"),
+            Some(&target),
+            1.0,
+            with_frame,
+        );
         assert_eq!(spot.normal, Some((100, 80, 800, 580)));
     }
 
@@ -671,11 +697,27 @@ mod open_tests {
         let options = WindowOptions::default()
             .position(Some(Point::new(30.0, 40.0)))
             .normal_geometry(Some(geometry(None, Size::new(300.0, 200.0))));
-        let spot = open_spot(&options, None, 1.0, with_frame);
+        let spot = open_spot(
+            &options,
+            &options.geometry().expect("valid options"),
+            None,
+            1.0,
+            with_frame,
+        );
         assert_eq!(spot.normal, Some((30, 40, 330, 240)));
         let unplaced =
             WindowOptions::default().normal_geometry(Some(geometry(None, Size::new(300.0, 200.0))));
-        assert_eq!(open_spot(&unplaced, None, 1.0, with_frame).normal, None);
+        assert_eq!(
+            open_spot(
+                &unplaced,
+                &unplaced.geometry().expect("valid options"),
+                None,
+                1.0,
+                with_frame
+            )
+            .normal,
+            None
+        );
     }
 
     fn an_opening_rectangle_at_the_edge_of_the_range_saturates() {
@@ -685,7 +727,13 @@ mod open_tests {
                 Some(Point::new(3.0e9, 3.0e9)),
                 Size::new(700.0, 500.0),
             )));
-        let spot = open_spot(&options, None, 1.0, with_frame);
+        let spot = open_spot(
+            &options,
+            &options.geometry().expect("valid options"),
+            None,
+            1.0,
+            with_frame,
+        );
         assert_eq!(
             spot.normal,
             Some((i32::MAX, i32::MAX, i32::MAX, i32::MAX)),

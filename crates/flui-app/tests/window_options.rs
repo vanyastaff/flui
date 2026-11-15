@@ -1,26 +1,22 @@
 //! An application whose window options ask for numbers a window command
-//! would be refused for does not start: its main window is refused with the
-//! error that names the option and its numbers, on the headless platform as
-//! on every host.
+//! would be refused for does not start: the one check every platform's start
+//! makes before any runner refuses it with the error that names the option
+//! and its numbers, and nothing starts (no window opens).
 
-use flui_app::app::{AppConfig, AppWindowError, Application, LaunchError};
+use flui_app::app::{AppConfig, Application, LaunchError};
 use flui_app::testing::HeadlessRun;
-use flui_native::OpenWindowError;
 use flui_platform::{InvalidGeometry, WindowExtent, WindowOption};
 use flui_widgets::SizedBox;
 
 /// What starting an application with `config` fails with: the option the
-/// main window's open refused, and why.
+/// start refused, and why.
 fn refused_start(config: AppConfig) -> (WindowOption, InvalidGeometry, String) {
     let run = HeadlessRun::start(Application::new().config(config), SizedBox::new(10.0, 10.0));
+    assert!(run.open_windows().is_empty(), "no window opened");
     let error = run.join().expect_err("the application does not start");
     let message = error.to_string();
-    let LaunchError::InitialWindow(AppWindowError::Native { source }) = error else {
-        panic!("the main window's open is refused: {message}");
-    };
-    let Some(OpenWindowError::InvalidOption(refused)) = source.downcast_ref::<OpenWindowError>()
-    else {
-        panic!("refused for its options: {message}");
+    let LaunchError::InvalidWindowOption(refused) = error else {
+        panic!("the start is refused for its window options: {message}");
     };
     (refused.option, refused.refused, message)
 }
@@ -57,7 +53,7 @@ pub(crate) fn a_minimum_above_the_maximum_refuses_the_start() {
         }
     );
     assert!(
-        message.contains("`min_size and max_size`"),
+        message.contains("options `min_size` and `max_size` describe"),
         "the error names the options: {message}"
     );
 }

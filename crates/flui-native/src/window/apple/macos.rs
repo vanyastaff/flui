@@ -324,16 +324,30 @@ impl MacOSWindow {
     /// # Errors
     /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
     /// NSWindow.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the window's identity, its checked options and the owner's shares, handed over once"
+    )]
     pub(crate) fn try_new(
         mtm: MainThreadMarker,
         id: WindowId,
         options: WindowOptions,
+        opening: flui_platform::OpeningGeometry,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
     ) -> Result<Rc<Self>, OpenWindowError> {
-        Self::new_inner(mtm, id, options, handler, windows_map, windows, view_hooks)
+        Self::new_inner(
+            mtm,
+            id,
+            options,
+            opening,
+            handler,
+            windows_map,
+            windows,
+            view_hooks,
+        )
     }
 
     /// Hand this window the platform's display registry, and read which display
@@ -422,6 +436,7 @@ impl MacOSWindow {
         _main: MainThreadMarker,
         id: WindowId,
         mut options: WindowOptions,
+        opening: flui_platform::OpeningGeometry,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
@@ -431,7 +446,7 @@ impl MacOSWindow {
             content,
             constraints,
             ..
-        } = options.geometry()?;
+        } = opening;
         // A window's owner lane is the AppKit main queue — the one lane all
         // other process AppKit traffic already serializes on (see
         // `owner::apple::macos::owner_lane`) — which runs on the main thread
@@ -451,7 +466,7 @@ impl MacOSWindow {
             // Convert logical size to NSRect
             let frame = NSRect::new(
                 NSPoint::new(0.0, 0.0),
-                NSSize::new(options.size.width, options.size.height),
+                NSSize::new(content.width(), content.height()),
             );
 
             // Build window style mask
@@ -736,8 +751,8 @@ impl MacOSWindow {
             tracing::info!(
                 "Created NSWindow {:p} with size {}x{} (scale: {})",
                 ns_window,
-                options.size.width,
-                options.size.height,
+                content.width(),
+                content.height(),
                 scale
             );
 
@@ -1223,6 +1238,10 @@ impl host::Window<MacOSLoop> for MacOSWindow {
                 rejected: Some(Box::new(options)),
             });
         }
+        // Refused before an id is taken, for what a command is refused for,
+        // and checked as the application wrote it, before the position is
+        // made global.
+        let opening = options.geometry()?;
         measure_placement_globally(owner.displays.as_ref(), &mut options);
         // The loop still crosses threads until its owner-local step (ADR-0327 §5), so
         // only asking AppKit proves this is the main thread the window's
@@ -1233,8 +1252,6 @@ impl host::Window<MacOSLoop> for MacOSWindow {
                 message: "a macOS window opens on the main thread only".to_owned(),
             });
         };
-        // Refused before an id is taken, for what a command is refused for.
-        options.geometry()?;
         let Some(id) = windows.ids.with(|ids| ids.next()) else {
             return Err(OpenWindowError::Backend {
                 message: "a macOS window opens on the main thread that built its platform"
@@ -1245,6 +1262,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             main,
             id?,
             options,
+            opening,
             handler,
             Arc::clone(&owner.windows),
             windows,

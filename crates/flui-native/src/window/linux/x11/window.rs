@@ -2100,7 +2100,8 @@ impl X11Windows {
             });
         }
         // Refused before an id is taken, for what a command is refused for.
-        let constraints = options.geometry()?.constraints;
+        let opening = options.geometry()?;
+        let constraints = opening.constraints;
         let id = self.mint_id()?;
         let support = self.support();
         // A title bar of the application's opens with the window manager's frame
@@ -2113,6 +2114,7 @@ impl X11Windows {
         let placement = PlacementDisplay::choose(snapshot.as_ref(), options.display);
         let plan = OpenPlan::new(
             &options,
+            &opening,
             &window_capabilities,
             placement,
             self.frame_inset.logical(placement.scale_factor),
@@ -2167,7 +2169,7 @@ impl X11Windows {
         // Until the first read of the server: what was asked for, or an empty
         // window where that describes none.
         let initial = WindowState::new(
-            WindowGeometry::try_new(options.position, plan.content_size)
+            WindowGeometry::try_new(opening.position, plan.content_size)
                 .unwrap_or(WindowGeometry::EMPTY),
             flui_platform::WindowExtent::try_new(plan.content_size).unwrap_or_default(),
         )

@@ -176,11 +176,7 @@ impl TrackedWindows for HeadlessWindows {
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         // Refused before an id is taken, for what a command is refused for.
-        let flui_platform::OpeningGeometry {
-            content,
-            constraints,
-            ..
-        } = options.geometry()?;
+        let opening = options.geometry()?;
         let display = state.window_display();
         let window_id = HEADLESS_WINDOW_IDS.lock().next()?;
         let (capabilities, limits) = {
@@ -204,8 +200,7 @@ impl TrackedWindows for HeadlessWindows {
                 display_bounds: display.and_then(|id| state.display_bounds(id)),
                 capabilities,
                 limits,
-                content,
-                constraints,
+                opening,
             },
             WindowDelivery::new(handler, input),
         );
@@ -597,10 +592,8 @@ struct HeadlessWindowSetup {
     display_bounds: Option<Bounds<f64>>,
     capabilities: WindowCapabilities,
     limits: HeadlessWindowPolicy,
-    /// The content size the options ask for, checked.
-    content: flui_platform::WindowExtent,
-    /// The limits the options ask for, checked.
-    constraints: SizeConstraints,
+    /// The size, limits and position the options ask for, checked.
+    opening: flui_platform::OpeningGeometry,
 }
 
 /// The mutable state of a [`HeadlessHostWindow`].
@@ -843,21 +836,20 @@ impl HeadlessHostWindow {
             display_bounds,
             capabilities,
             limits,
-            content,
-            constraints,
+            opening,
         } = host;
         let mut model = HeadlessHostWindowState {
             frame_rate_hints: Vec::new(),
             materials: Vec::new(),
             title: options.title.clone(),
-            position: options
+            position: opening
                 .position
                 .filter(|_| capabilities.places_at_open.is_available())
                 .unwrap_or_default(),
-            size: content.get(),
+            size: opening.content.get(),
             mode: WindowMode::Normal,
             normal_geometry: None,
-            constraints,
+            constraints: opening.constraints,
             resizable: options.resizable,
             frame: options.frame.at_open(&capabilities),
             scale_factor: 1.0,
@@ -874,7 +866,7 @@ impl HeadlessHostWindow {
             capabilities,
             reported: None,
         };
-        model.size = model.clamp_size(options.size, &limits);
+        model.size = model.clamp_size(opening.content.get(), &limits);
         if capabilities.permits(&WindowCommand::SetMode(options.mode)) {
             model.enter_mode(options.mode, &limits, display_bounds);
         }

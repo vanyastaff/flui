@@ -344,7 +344,7 @@ impl std::fmt::Display for WindowOption {
             Self::Size => "size",
             Self::MinSize => "min_size",
             Self::MaxSize => "max_size",
-            Self::Limits => "min_size and max_size",
+            Self::Limits => "min_size, max_size",
             Self::Position => "position",
         })
     }
@@ -367,8 +367,7 @@ impl std::fmt::Display for WindowOption {
 /// );
 /// # Ok::<(), flui_platform::InvalidGeometry>(())
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("the window option `{option}` describes no window: {refused}")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct InvalidWindowOption {
     /// The option refused.
@@ -376,6 +375,27 @@ pub struct InvalidWindowOption {
     /// Its numbers, as the command would have refused them.
     pub refused: crate::InvalidGeometry,
 }
+
+impl std::fmt::Display for InvalidWindowOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let refused = self.refused;
+        match self.option {
+            WindowOption::Limits => write!(
+                f,
+                "the window options `min_size` and `max_size` describe no window: {refused}"
+            ),
+            option @ (WindowOption::Size
+            | WindowOption::MinSize
+            | WindowOption::MaxSize
+            | WindowOption::Position) => write!(
+                f,
+                "the window option `{option}` describes no window: {refused}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InvalidWindowOption {}
 
 // ==================== Identity and mode ====================
 

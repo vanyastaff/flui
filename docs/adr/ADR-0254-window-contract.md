@@ -269,7 +269,10 @@ Admission is a type:
   checks: a `WindowOptions` size, limit or position that the command setting it would refuse
   refuses the open, before the host takes an id for the window, with
   `OpenWindowError::InvalidOption`, whose `InvalidWindowOption` names the option and carries the
-  command's `InvalidGeometry` (`WindowOptions::geometry`). The token carries the capabilities
+  command's `InvalidGeometry` (`WindowOptions::geometry`). An application's configured window
+  options are checked once more, the same way, before any runner starts: on every platform the
+  start is refused with `LaunchError::InvalidWindowOption`, which names the option, whether or not
+  its host sizes the window from them. The token carries the capabilities
   revision it was admitted against: the revision of the capabilities in the snapshot, which moves
   when what the window honours changes and not with every state change.
 - `PlatformWindow::apply(AdmittedCommand) -> Result<(), ApplyError>`. A host can no longer

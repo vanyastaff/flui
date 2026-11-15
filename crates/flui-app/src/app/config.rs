@@ -455,9 +455,10 @@ impl AppConfig {
 
     /// Set the initial window size: the content area, in logical pixels, which
     /// is what the window reports as its content size once it is open. A side
-    /// of zero is no size a window can be asked for: the main window's open
-    /// is refused with `OpenWindowError::InvalidOption` naming `size`, and
-    /// the application does not start (`LaunchError::InitialWindow`).
+    /// of zero is no size a window can be asked for: the application does not
+    /// start, on any platform, and `run` answers
+    /// [`LaunchError::InvalidWindowOption`](crate::app::LaunchError::InvalidWindowOption)
+    /// naming `size`.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.size = Size::new(width as f64, height as f64);
@@ -466,9 +467,9 @@ impl AppConfig {
 
     /// Set the minimum window size. A side of zero, or a minimum above the
     /// [maximum](Self::max_size) in either dimension, is a limit no window can
-    /// be asked for: the main window's open is refused with
-    /// `OpenWindowError::InvalidOption` naming the limit and its numbers, and
-    /// the application does not start (`LaunchError::InitialWindow`).
+    /// be asked for: the application does not start, on any platform, and
+    /// `run` answers [`LaunchError::InvalidWindowOption`](crate::app::LaunchError::InvalidWindowOption)
+    /// naming the limit and its numbers.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn min_size(mut self, width: u32, height: u32) -> Self {
         self.min_size = Some(window_extent(width, height));
@@ -490,9 +491,10 @@ impl AppConfig {
     /// ([`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)):
     /// a backend that does not report it (the Wayland host, where the
     /// compositor places windows) leaves the place to the system. A coordinate
-    /// that is NaN or infinite is no place: the main window's open is refused
-    /// with `OpenWindowError::InvalidOption` naming `position`, and the
-    /// application does not start.
+    /// that is NaN or infinite is no place: the application does not start,
+    /// on any platform, and `run` answers
+    /// [`LaunchError::InvalidWindowOption`](crate::app::LaunchError::InvalidWindowOption)
+    /// naming `position`.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn position(mut self, at: Point<f64>) -> Self {
         self.position = Some(at);

@@ -205,6 +205,9 @@ impl WindowsWindow {
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
         drag: Arc<dyn crate::owner::windows::HostDrag>,
     ) -> Result<Rc<Self>, OpenWindowError> {
+        // The numbers the window is built from: the open checked them before
+        // the id was taken, so this answers the same.
+        let opening = options.geometry()?;
         let crate::owner::windows::control::OwnerShares {
             app_hooks,
             frames,
@@ -221,11 +224,12 @@ impl WindowsWindow {
         // whose ownership has not yet transferred to a context and wrapper.
         let (identity, created) = crate::owner::windows::WindowIdentity::admit(
             crate::owner::windows::WindowIdentity::source(),
-            || Self::create_native(&options, displays.as_ref()),
+            || Self::create_native(&options, &opening, displays.as_ref()),
         );
         let (hwnd, requested, scale_factor, normal) = created?;
         Self::install_native(
             options,
+            opening,
             handler,
             windows,
             app_hooks,
@@ -252,6 +256,7 @@ impl WindowsWindow {
     /// fullscreen, the rectangle it returns to (screen coordinates).
     fn create_native(
         options: &WindowOptions,
+        opening: &flui_platform::OpeningGeometry,
         displays: &dyn crate::owner::windows::HostDisplays,
     ) -> Result<(HWND, Size<i32>, f64, Option<RECT>), OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
@@ -287,7 +292,7 @@ impl WindowsWindow {
             let target = options
                 .display
                 .and_then(|id| snapshot.as_ref().and_then(|snapshot| snapshot.get(id)));
-            let spot = open_spot(options, target, system_scale, |dpi, content| {
+            let spot = open_spot(options, opening, target, system_scale, |dpi, content| {
                 outer_size(
                     style.0,
                     ex_style.0,
@@ -340,6 +345,7 @@ impl WindowsWindow {
     )]
     fn install_native(
         options: WindowOptions,
+        opening: flui_platform::OpeningGeometry,
         handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
         app_hooks: Rc<RefCell<AppHooks>>,
@@ -426,7 +432,7 @@ impl WindowsWindow {
                 focused: false,
             }));
 
-            let constraints = options.geometry()?.constraints;
+            let constraints = opening.constraints;
             let capabilities = windows.capabilities();
             let snapshot = Arc::new(WindowStateCell::open(sample_state(
                 hwnd,
