@@ -365,6 +365,8 @@ impl Dispatch<WlRegistry, ()> for State {
         queue: &QueueHandle<Self>,
     ) {
         match event {
+            // A global of version zero is none a client binds.
+            wl_registry::Event::Global { version: 0, .. } => {}
             wl_registry::Event::Global {
                 name,
                 interface,

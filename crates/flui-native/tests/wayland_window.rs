@@ -1229,6 +1229,10 @@ mod optional {
 
         impl ForeignClient {
             /// Connect to the compositor `WAYLAND_DISPLAY` names.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a test's second client reads the whole registry of the compositor under test"
+            )]
             pub(super) fn connect() -> Self {
                 let connection = Connection::connect_to_env().expect("the compositor answers");
                 let (globals, queue) =

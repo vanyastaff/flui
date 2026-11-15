@@ -1535,10 +1535,6 @@ mod event_loop {
                     *slot = Some(bound);
                 }
             }
-            // A global of version zero is none a client binds.
-            if version == 0 {
-                return;
-            }
             let global = |newest: u32| (name, version, newest);
             if interface == WlCompositor::interface().name {
                 first(
@@ -1671,6 +1667,10 @@ mod event_loop {
             queue: &QueueHandle<Self>,
         ) {
             match event {
+                // A global of version zero is none a client binds: the loop,
+                // its outputs and every feature it offers globals to bind
+                // from version one.
+                wl_registry::Event::Global { version: 0, .. } => {}
                 wl_registry::Event::Global {
                     name,
                     interface,
