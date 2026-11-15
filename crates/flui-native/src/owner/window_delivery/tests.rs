@@ -493,6 +493,37 @@ fn a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn() {
     );
 }
 
+/// An input the owner raises is answered with the handler's answer to that
+/// input. One that another thread queued first is delivered ahead of it by
+/// the same drain, and its answer is not the owner's caller's.
+fn an_input_is_answered_with_its_own_result() {
+    let (delivery, handler) = window();
+    delivery.deliver_capability_snapshot();
+    let taken = DispatchEventResult::resolved(false, true);
+    let passed = DispatchEventResult::resolved(true, false);
+    handler.react_to_input(move |event| match event {
+        PlatformInput::Keyboard(_) => taken,
+        _ => passed,
+    });
+    // No owner turn is asked for: the owner's next delivery drains it.
+    let raised = Arc::clone(&delivery);
+    std::thread::spawn(move || {
+        let _ = raised.dispatch_input(ime());
+    })
+    .join()
+    .expect("the raising thread");
+    assert_eq!(
+        delivery.dispatch_input(key()),
+        taken,
+        "the key's caller heard the answer to the input queued ahead of it"
+    );
+    assert_eq!(
+        handler.calls(),
+        [snapshot(), input(), HandlerCall::Input(key())],
+        "both were delivered, in order"
+    );
+}
+
 /// The hook a loop asks for after each run of a window's FIFO is called once
 /// per run, after an input and after a frame, and after a frame that unwinds:
 /// the UIKit loop asks for its wake deadline there, and a run it misses
@@ -531,6 +562,10 @@ fn window_handler_obligation_table() {
         (
             "a delivery raised off the owner thread waits for an owner turn",
             a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn,
+        ),
+        (
+            "an input is answered with its own result",
+            an_input_is_answered_with_its_own_result,
         ),
         (
             "a failed frame counts and does not unwind",
