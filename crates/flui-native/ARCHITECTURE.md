@@ -145,8 +145,12 @@ trait depends on `flui-platform` instead.
   `flui_app::native::with_window` reaches the window a presentation is drawn
   in. A view's method does what it says or reports that it cannot. A
   `Win32Window` command or query first checks that its window still owns the
-  handle and that the call is on the window's owner thread
-  (`Unsupported` with `NoWindow`, `NotOnTheOwnerThread`), and a refusal of the
+  handle (`Unsupported` with `NoWindow`); the view borrows a window that is
+  neither `Send` nor `Sync`, so it is on the owner thread by its type, and a
+  handle another thread answers for is a recycled one, refused as closed. A
+  view has no command that overlaps the contract: what `WindowCommand` does
+  (the frame, the maximize box, the mode, the material) is a command, not a
+  method of the view, which would leave the snapshot behind. A refusal of the
   desktop window manager is `Refused` with its `HRESULT`; each attribute is a
   constant that pairs its ordinal with its value's type, and each mapping is
   one table read both ways. The contract's material

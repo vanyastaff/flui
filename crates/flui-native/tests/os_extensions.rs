@@ -51,6 +51,11 @@ mod cases {
             "a_win32_view_refuses_a_closed_window",
             a_win32_view_refuses_a_closed_window,
         ),
+        #[cfg(target_os = "windows")]
+        (
+            "a_win32_title_bar_takes_its_colour",
+            a_win32_title_bar_takes_its_colour,
+        ),
         #[cfg(target_os = "macos")]
         (
             "the_macos_extension_has_no_view_of_another_hosts_window",
@@ -171,6 +176,39 @@ mod cases {
             closed
         );
         assert_eq!(win32.dpi().map(drop), closed);
+        assert_eq!(
+            win32.set_title_bar_color(Some(flui_painting::styling::Color::rgb(0x20, 0x40, 0x60))),
+            closed
+        );
+    }
+
+    /// The title bar takes a colour and gives the system's back for `None`
+    /// on a live window; Windows 10 has no caption colour, and refuses. The
+    /// desktop window manager does not read the caption colour back
+    /// (`E_INVALIDARG`), so the `COLORREF` each colour becomes is checked
+    /// beside the conversion, in `a_caption_colour_is_its_colorref`.
+    #[cfg(target_os = "windows")]
+    fn a_win32_title_bar_takes_its_colour() {
+        use flui_native::os::windows::{Win32WindowError, WindowsWindowExt};
+        use flui_painting::styling::Color;
+
+        let platform: Box<dyn Platform> =
+            Box::new(flui_native::WindowsPlatform::try_new().expect("the Win32 platform"));
+        let window = platform
+            .open_window(
+                hidden(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
+            .expect("a Win32 window opens");
+        let win32 = window.win32().expect("a Win32 window has its view");
+        match win32.set_title_bar_color(Some(Color::rgb(0x12, 0x80, 0x90))) {
+            Ok(()) => assert_eq!(win32.set_title_bar_color(None), Ok(())),
+            Err(Win32WindowError::Refused { .. }) => {
+                eprintln!("skipped: this build of Windows has no caption colour");
+            }
+            Err(other) => panic!("a live window's caption colour: {other}"),
+        }
+        window.close_now();
     }
 
     #[cfg(target_os = "macos")]

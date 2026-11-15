@@ -17,25 +17,19 @@
 
 use std::marker::PhantomData;
 
-use flui_foundation::geometry::Point;
+use flui_painting::styling::Color;
 use flui_platform::os_options::{Win32WindowOptions, WindowsCornerPreference, WindowsTheme};
 use flui_platform::{Brightness, Unsupported, UnsupportedReason, WindowAppearance, WindowMaterial};
-use windows::Win32::Foundation::{FALSE, HWND, TRUE};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{
-    DWM_BB_ENABLE, DWM_BLURBEHIND, DWM_SYSTEMBACKDROP_TYPE, DWM_WINDOW_CORNER_PREFERENCE,
-    DWMSBT_AUTO, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW,
-    DWMWA_CAPTION_COLOR, DWMWA_COLOR_DEFAULT, DWMWA_SYSTEMBACKDROP_TYPE,
-    DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT,
-    DWMWCP_DONOTROUND, DWMWCP_ROUND, DWMWCP_ROUNDSMALL, DWMWINDOWATTRIBUTE,
-    DwmEnableBlurBehindWindow, DwmGetWindowAttribute, DwmSetWindowAttribute,
+    DWM_SYSTEMBACKDROP_TYPE, DWM_WINDOW_CORNER_PREFERENCE, DWMSBT_AUTO, DWMSBT_MAINWINDOW,
+    DWMSBT_NONE, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW, DWMWA_CAPTION_COLOR,
+    DWMWA_COLOR_DEFAULT, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_DONOTROUND, DWMWCP_ROUND,
+    DWMWCP_ROUNDSMALL, DWMWINDOWATTRIBUTE, DwmGetWindowAttribute, DwmSetWindowAttribute,
 };
-use windows::Win32::Graphics::Gdi::HRGN;
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_STYLE, GetWindowLongPtrW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WS_MAXIMIZEBOX,
-};
 use windows::core::w;
 
 use super::WindowsWindow;
@@ -88,14 +82,15 @@ impl WindowsWindowExt for dyn HostWindow + '_ {
 }
 
 /// What a Win32 window offers beyond the window contract: the desktop window
-/// manager's backdrop, corners, title bar and theme, Snap Layouts, and the
-/// window's DPI. [`WindowsWindowExt::win32`] gives one only for a Win32
-/// window, so none of these can meet another host's window.
+/// manager's backdrop, corners, title bar colour and theme, and the window's
+/// DPI. [`WindowsWindowExt::win32`] gives one only for a Win32 window, so
+/// none of these can meet another host's window.
 ///
 /// A Win32 window's attributes are changed and read on its owner thread, the
-/// thread that created it; every command and query does what it says or
-/// answers why not ([`Win32WindowError`]), and none reaches a handle the
-/// window no longer owns.
+/// thread that created it and the only one that holds the window, so its
+/// view too; every command and query does what it says or answers why not
+/// ([`Win32WindowError`]), and none reaches a handle the window no longer
+/// owns.
 #[derive(Debug, Clone, Copy)]
 pub struct Win32Window<'a>(&'a WindowsWindow);
 
@@ -108,10 +103,6 @@ pub enum Win32WindowError {
     /// newer than this host ([`UnsupportedReason::NotYetOnThisHost`]).
     #[error(transparent)]
     Unsupported(#[from] Unsupported),
-    /// The call came from another thread than the window's owner thread, the
-    /// one that created it.
-    #[error("the call is not on the window's owner thread")]
-    NotOnTheOwnerThread,
     /// The system refused the request: this Windows build does not know it
     /// (the corners need Windows 11 build 22000, a system backdrop build
     /// 22621), or it refused the value.
@@ -418,18 +409,23 @@ pub(super) fn apply_chrome(
 // ============================================================================
 
 impl Win32Window<'_> {
-    /// The window's handle, while this view's window owns it and the call is
-    /// on its owner thread.
+    /// The window's handle, while this view's window owns it.
+    ///
+    /// The view is on the window's owner thread: it borrows a window that is
+    /// neither `Send` nor `Sync`. A handle another thread answers for is one
+    /// the system gave a window of that thread after this one closed, so it
+    /// is refused as closed, like a handle that names no window or another
+    /// class's.
     fn live(self) -> Result<HWND, Win32WindowError> {
         let window = self.0;
         match super::proc::with_window_context_checked(window.hwnd(), "Win32Window", |context| {
             context.identity == window.identity
         }) {
             Ok(true) => Ok(window.hwnd()),
-            Err(UserDataRefusal::ForeignThread) => Err(Win32WindowError::NotOnTheOwnerThread),
             Ok(false)
             | Err(
                 UserDataRefusal::WindowGone
+                | UserDataRefusal::ForeignThread
                 | UserDataRefusal::ForeignClass
                 | UserDataRefusal::EmptySlot,
             ) => Err(Win32WindowError::CLOSED),
@@ -440,8 +436,8 @@ impl Win32Window<'_> {
     /// the contract's `WindowCommand::SetMaterial`.
     ///
     /// # Errors
-    /// [`Win32WindowError`]: the window is closed, the call is off its owner
-    /// thread, the build predates the system backdrop (Windows 11 build
+    /// [`Win32WindowError`]: the window is closed, the build predates the
+    /// system backdrop (Windows 11 build
     /// 22621: `Unsupported` with `NotOnThisDevice`), or the system refused.
     pub fn set_backdrop(self, backdrop: WindowsBackdrop) -> Result<(), Win32WindowError> {
         let hwnd = self.live()?;
@@ -467,55 +463,11 @@ impl Win32Window<'_> {
         })
     }
 
-    /// Show or hide the layouts Windows 11 offers over the maximize button
-    /// (Snap Layouts), which it shows for a window with one.
-    ///
-    /// # Errors
-    /// [`Win32WindowError`]: the window is closed, the call is off its owner
-    /// thread, or the system refused to redraw the frame.
-    pub fn set_snap_layouts(self, enabled: bool) -> Result<(), Win32WindowError> {
-        let hwnd = self.live()?;
-        // SAFETY: plain style reads and writes on the live handle `live`
-        // checked, on its owner thread; `SetWindowPos` with no geometry
-        // flags only redraws the frame for the new style.
-        unsafe {
-            let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-            let style = if enabled {
-                style | WS_MAXIMIZEBOX.0
-            } else {
-                style & !WS_MAXIMIZEBOX.0
-            };
-            SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
-            SetWindowPos(
-                hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            )
-        }
-        .map_err(|error| refused("SetWindowPos", &error))
-    }
-
-    /// Whether Windows 11 offers Snap Layouts over the window's maximize
-    /// button.
-    ///
-    /// # Errors
-    /// The window is closed, or the call is off its owner thread.
-    pub fn snap_layouts(self) -> Result<bool, Win32WindowError> {
-        let hwnd = self.live()?;
-        // SAFETY: a plain style read on the live handle `live` checked.
-        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
-        Ok(style & WS_MAXIMIZEBOX.0 != 0)
-    }
-
     /// Set how the desktop window manager rounds the window's corners.
     ///
     /// # Errors
-    /// [`Win32WindowError`]: the window is closed, the call is off its owner
-    /// thread, or the system refused (Windows 10 has no rounded corners).
+    /// [`Win32WindowError`]: the window is closed, or the system refused
+    /// (Windows 10 has no rounded corners).
     pub fn set_corner_preference(
         self,
         preference: WindowsCornerPreference,
@@ -535,31 +487,12 @@ impl Win32Window<'_> {
         })
     }
 
-    /// Blur what is behind the window's transparent areas, or stop.
-    ///
-    /// # Errors
-    /// [`Win32WindowError`]: the window is closed, the call is off its owner
-    /// thread, or the system refused.
-    pub fn set_blur_behind(self, enabled: bool) -> Result<(), Win32WindowError> {
-        let hwnd = self.live()?;
-        let blur = DWM_BLURBEHIND {
-            dwFlags: DWM_BB_ENABLE,
-            fEnable: if enabled { TRUE } else { FALSE },
-            hRgnBlur: HRGN::default(),
-            fTransitionOnMaximized: FALSE,
-        };
-        // SAFETY: the call reads the stack-local, fully initialized `blur`
-        // through the typed pointer for its duration.
-        unsafe { DwmEnableBlurBehindWindow(hwnd, &raw const blur) }
-            .map_err(|error| refused("DwmEnableBlurBehindWindow", &error))
-    }
-
     /// Draw the title bar and borders dark or light, whatever the user's app
     /// theme does later.
     ///
     /// # Errors
-    /// [`Win32WindowError`]: the window is closed, the call is off its owner
-    /// thread, or the system refused (before Windows 10 20H1).
+    /// [`Win32WindowError`]: the window is closed, or the system refused
+    /// (before Windows 10 20H1).
     pub fn set_dark_mode(self, dark: bool) -> Result<(), Win32WindowError> {
         let hwnd = self.live()?;
         set(hwnd, DARK_MODE, i32::from(dark))?;
@@ -607,24 +540,22 @@ impl Win32Window<'_> {
         })
     }
 
-    /// Set the title bar's colour, or `None` for the system's (Windows 11).
+    /// Draw the title bar in `color`, or in the system's colour for `None`
+    /// (Windows 11). The desktop window manager draws a title bar opaque: the
+    /// colour's alpha is not drawn.
     ///
     /// # Errors
-    /// [`Win32WindowError`]: the window is closed, the call is off its owner
-    /// thread, or the system refused (Windows 10 has no caption colour).
-    pub fn set_title_bar_color(self, color: Option<(u8, u8, u8)>) -> Result<(), Win32WindowError> {
+    /// [`Win32WindowError`]: the window is closed, or the system refused
+    /// (Windows 10 has no caption colour).
+    pub fn set_title_bar_color(self, color: Option<Color>) -> Result<(), Win32WindowError> {
         let hwnd = self.live()?;
-        // A `COLORREF` is 0x00BBGGRR.
-        let value = color.map_or(DWMWA_COLOR_DEFAULT, |(red, green, blue)| {
-            (u32::from(blue) << 16) | (u32::from(green) << 8) | u32::from(red)
-        });
-        set(hwnd, CAPTION_COLOR, value)
+        set(hwnd, CAPTION_COLOR, caption_color(color))
     }
 
     /// The window's DPI.
     ///
     /// # Errors
-    /// The window is closed, or the call is off its owner thread.
+    /// The window is closed.
     pub fn dpi(self) -> Result<u32, Win32WindowError> {
         let hwnd = self.live()?;
         // SAFETY: takes the live handle by value; `0` means it names no
@@ -634,23 +565,15 @@ impl Win32Window<'_> {
             dpi => Ok(dpi),
         }
     }
+}
 
-    /// A point in device pixels, in logical pixels.
-    #[must_use]
-    pub fn convert_point_from_device(self, point: Point<i32>) -> Point<f64> {
-        let scale = self.0.scale_factor();
-        Point::new(f64::from(point.x) / scale, f64::from(point.y) / scale)
-    }
-
-    /// A point in logical pixels, in device pixels.
-    #[must_use]
-    pub fn convert_point_to_device(self, point: Point<f64>) -> Point<i32> {
-        let scale = self.0.scale_factor();
-        Point::new(
-            (point.x * scale).round() as i32,
-            (point.y * scale).round() as i32,
-        )
-    }
+/// The `COLORREF` (0x00BBGGRR) the desktop window manager draws a caption
+/// in: `color`'s red, green and blue, or the system's colour for `None`.
+fn caption_color(color: Option<Color>) -> u32 {
+    color.map_or(DWMWA_COLOR_DEFAULT, |color| {
+        let [red, green, blue, _alpha] = color.to_rgba8();
+        (u32::from(blue) << 16) | (u32::from(green) << 8) | u32::from(red)
+    })
 }
 
 #[cfg(test)]
@@ -810,7 +733,24 @@ mod material_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{BACKDROPS, CORNERS, from_system, to_system};
+    use flui_painting::styling::Color;
+    use windows::Win32::Graphics::Dwm::DWMWA_COLOR_DEFAULT;
+
+    use super::{BACKDROPS, CORNERS, caption_color, from_system, to_system};
+
+    /// A caption colour is the `COLORREF` of its red, green and blue, without
+    /// its alpha; `None` is the system's colour.
+    #[test]
+    fn a_caption_colour_is_its_colorref() {
+        for (color, colorref) in [
+            (Some(Color::rgb(0x12, 0x34, 0x56)), 0x0056_3412),
+            (Some(Color::rgba(0x12, 0x34, 0x56, 0x80)), 0x0056_3412),
+            (Some(Color::rgb(0xFF, 0, 0)), 0x0000_00FF),
+            (None, DWMWA_COLOR_DEFAULT),
+        ] {
+            assert_eq!(caption_color(color), colorref, "{color:?}");
+        }
+    }
 
     /// Each table maps every FLUI value to a distinct system value and back.
     #[test]
