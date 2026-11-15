@@ -2,9 +2,7 @@
 //! backoff, which grows while the frames keep failing; one answered `Refused`
 //! waits for its window's next change (ADR-0334).
 
-use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -226,58 +224,4 @@ fn a_refused_frame_waits_for_its_windows_next_change() {
         "the window's next change presents"
     );
     assert_eq!(sink.submits, 2);
-}
-
-/// A presentation waiting out a failed frame's backoff keeps the completion demand of a callback
-/// it accepted without asking for frames: a pump during the wait asks for no other one, and the
-/// retry after the wait runs the callback.
-///
-/// Fails when the commit anchor re-arms the completion demand of a presentation whose retry is
-/// not due, so each pump of the wait wakes the host for a frame that admits nothing.
-#[test]
-fn completion_demand_waits_out_the_failed_frames_backoff() {
-    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = Arc::clone(&wakes);
-    let mut runtime = crate::owner_publication::runtime_with_wake(Arc::new(move || {
-        counted.fetch_add(1, Ordering::SeqCst);
-    }));
-    runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("refused"), 400.0, 400.0)
-        .expect("mount text");
-    // Four failed frames grow the wait to eight display periods, so the pumps below run inside
-    // it on a slow host too.
-    let mut sink = Failing::new(SubmitVerdict::Failed, 4);
-    let mut failed_at = web_time::Instant::now();
-    assert!(!host_turn(&mut runtime, &mut sink), "the first frame fails");
-    for _ in 0..3 {
-        wait_out_the_backoff(&mut runtime, &mut sink, failed_at);
-        failed_at = web_time::Instant::now();
-        assert!(
-            !host_turn(&mut runtime, &mut sink),
-            "the retried frame fails again"
-        );
-    }
-    let ran = Rc::new(Cell::new(false));
-    let observed = Rc::clone(&ran);
-    runtime
-        .widgets()
-        .with_build_owner(|owner| owner.post_frame_handle().cloned())
-        .expect("the presentation installs its post-frame handle")
-        .schedule(move |_| observed.set(true))
-        .expect("a live presentation takes the callback");
-    assert!(!host_turn(&mut runtime, &mut sink));
-    let settled = wakes.load(Ordering::SeqCst);
-    assert!(!host_turn(&mut runtime, &mut sink));
-    assert_eq!(
-        wakes.load(Ordering::SeqCst),
-        settled,
-        "a pump during the wait asks for no frame on the waiting presentation's behalf"
-    );
-    assert!(
-        !ran.get(),
-        "the callback waits for the presentation's next segment"
-    );
-    wait_out_the_backoff(&mut runtime, &mut sink, failed_at);
-    assert!(host_turn(&mut runtime, &mut sink), "the retry presents");
-    assert!(ran.get(), "the retried frame runs the callback");
 }

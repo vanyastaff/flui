@@ -1401,15 +1401,8 @@ impl PresentationState {
             && self.pipeline.try_with_layout(|_| ()).is_some()
     }
 
-    /// Ask for the frame this presentation's completion demand is owed, unless the presentation
-    /// is waiting out a dropped frame's backoff: its demand then waits for the attempt the
-    /// retry makes, and a frame asked now would admit nothing.
     pub(crate) fn rearm_completion(&self) {
-        let waiting = self
-            .failure_retry_at()
-            .is_some_and(|at| self.clock.now() < at);
-        if !waiting
-            && self.has_eligible_completion()
+        if self.has_eligible_completion()
             && let Some(scope) = &self.completion_scope
         {
             scope.rearm_completion_demand();

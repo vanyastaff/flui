@@ -449,6 +449,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - The native owners arm a timer on the deadline `AppHandler::wake_deadline` reports (`UiRuntime::next_wake`, `crates/flui-native/src/owner/wake_deadline.rs`); the web owner (`crates/flui-native/src/owner/web.rs`) asks for none, and its animation-frame loop stops when no frame is asked for.
 - So a page whose frame failed waits out the dropped-frame backoff (ADR-0334 §1) until input or another frame wakes it, and the post-frame callbacks and held input of its presentation wait with it.
+- Only the commit anchor's re-arm of completion demand (`PresentationState::rearm_completion`) keeps a page with a post-frame callback waiting going: it asks for a frame at every owner turn of the backoff, each refused by the backoff gate, so every host spins through the wait instead of sleeping until it. Gating that re-arm on the backoff needs the web wake first, or the page would stall until input.
 - The check is a browser run in which a sink answers `Failed` once and the page presents its tree within the backoff with no input.
 
 ### Images decode on the UI thread without background lanes
