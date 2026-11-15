@@ -76,6 +76,8 @@ struct RecordingSource {
     concluded: Mutex<Vec<DataTransferId>>,
     /// Concluding a drop panics, as a failing backend would.
     fail_conclude: std::sync::atomic::AtomicBool,
+    /// The next drop feedback panics after it is recorded, as a failing backend would.
+    fail_feedback: std::sync::atomic::AtomicBool,
     requests: Mutex<Vec<(DataTransferId, RepresentationIndex, TransferCompleter)>>,
 }
 
@@ -93,6 +95,12 @@ impl DragTransport for RecordingSource {
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
         self.feedback.lock().push((id, feedback));
+        assert!(
+            !self
+                .fail_feedback
+                .swap(false, std::sync::atomic::Ordering::SeqCst),
+            "feedback failure"
+        );
     }
 
     fn conclude_drop(&self, id: DataTransferId) {
@@ -526,7 +534,7 @@ impl Fixture {
                 .ok()
                 .map(|()| result.path().to_vec())
         };
-        while self.owner.has_held(presentation) {
+        for _ in 0..self.owner.held_count(presentation) {
             self.owner.release_next_held(presentation, &mut hit);
         }
     }
@@ -1789,7 +1797,7 @@ fn a_held_hover_spring_loads_only_once_released() {
         f.owner.tick(time_at(500));
         assert_eq!(count(&f.log, "W:spring"), 0, "{:?}", logged(&f.log));
         f.release(f.presentation);
-        assert!(!f.owner.has_held(f.presentation));
+        assert_eq!(f.owner.held_count(f.presentation), 0);
         f.owner.tick(time_at(600));
         f.owner.tick(time_at(1000));
         assert_eq!(
@@ -1926,6 +1934,48 @@ fn a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop() {
         );
         f.owner.tick(time_at(300));
         assert_eq!(count(&f.log, "B:left"), 1);
+    });
+}
+
+/// Two drags whose receiver a build unmounts, and telling the OS about the first fails: the
+/// second's answer is still withdrawn, and the failure propagates after it.
+fn a_withdrawal_that_fails_still_withdraws_the_other_answers() {
+    in_lane(|f| {
+        let gone = f.unregistered("G", Some(COPY), None);
+        let ticket = f.register(&gone, 0.0, 100.0);
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let offer = f.text_offer();
+            ids.push(offer.id());
+            f.deliver(
+                f.presentation,
+                DragDropEvent::Entered {
+                    offer,
+                    allowed: COPY,
+                    position: Some(Point::new(5.0, 5.0)),
+                },
+            );
+        }
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        f.source
+            .fail_feedback
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let failure = catch_unwind(AssertUnwindSafe(|| f.owner.withdraw_unregistered_answers()))
+            .expect_err("telling the OS fails");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("feedback failure")
+        );
+        let feedback = f.source.feedback.lock();
+        for id in ids {
+            assert_eq!(
+                feedback.iter().rev().find(|(answered, _)| *answered == id),
+                Some(&(id, DropFeedback { accept: None })),
+                "every drag's answer is withdrawn"
+            );
+        }
     });
 }
 
@@ -3020,6 +3070,10 @@ fn drag_sessions() {
             (
                 "a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop",
                 a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop,
+            ),
+            (
+                "a_withdrawal_that_fails_still_withdraws_the_other_answers",
+                a_withdrawal_that_fails_still_withdraws_the_other_answers,
             ),
             (
                 "a_replaced_registration_is_a_new_receiver",

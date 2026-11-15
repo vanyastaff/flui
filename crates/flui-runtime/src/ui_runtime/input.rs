@@ -772,7 +772,7 @@ impl UiRuntime {
         if presentation.frame_commit_state() != FrameCommitState::Committed {
             return;
         }
-        if !self.drag.has_held(presentation.id()) {
+        if self.drag.held_count(presentation.id()) == 0 {
             return;
         }
         let clock = presentation.clock();
@@ -790,8 +790,9 @@ impl UiRuntime {
         presentation: &PresentationState,
         failures: &mut FirstPanic,
     ) {
-        // Each step takes its hover's position before a receiver runs, so this ends.
-        while self.drag.has_held(presentation.id()) {
+        // One step per hover held now: each takes its position before a receiver runs, and a
+        // step that fails before taking one cannot repeat forever.
+        for _ in 0..self.drag.held_count(presentation.id()) {
             let mut hit_panic = FirstPanic::new();
             let mut released = FirstPanic::new();
             released.contain(|| {

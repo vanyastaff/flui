@@ -188,12 +188,12 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
     not held, because the OS has acted on them: the backend resolved the drop from the cached
     answer, so while the window does not show its tree the drop lands at once, with no hit test
     at its position, on the receiver that accepted the last delivered move, the one whose answer
-    the OS took, at the point of that move. After each frame's build, a failed one included, the
-    runtime withdraws the answer of a receiver the build unmounted
-    (`DragOwner::withdraw_unregistered_answers`), so the OS refuses a drop rather than report an
-    action no receiver takes. A committed window's drop first runs its last hover at the drop's
-    position, as delivered drops always have; a receiver change under a resting pointer that no
-    hover saw is an open gap
+    the OS took, at the point of that move. After each frame's build, whether the frame ends or
+    unwinds, the runtime withdraws the answer of a receiver the build unmounted
+    (`DragOwner::withdraw_unregistered_answers`), one drag at a time so a failing one keeps the
+    others, and the OS refuses a drop rather than report an action no receiver takes. A committed
+    window's drop first runs its last hover at the drop's position, as delivered drops always
+    have; a receiver change under a resting pointer that no hover saw is an open gap
     ([gaps](../gaps.md#an-os-drop-on-a-committed-window-can-land-on-a-receiver-the-os-did-not-ask)).
 
 ## Consequences and verification
@@ -239,7 +239,8 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   `a_build_that_unmounts_the_accepting_receiver_withdraws_its_answer_from_the_os` pin item 16;
   in the `drag_sessions` table `a_held_hover_spring_loads_only_once_released` pins the paused
   hover, and the last case of `a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop` the
-  owner's withdrawal of an unmounted receiver's answer.
+  owner's withdrawal of an unmounted receiver's answer, and
+  `a_withdrawal_that_fails_still_withdraws_the_other_answers` that withdrawal when the OS fails.
   Linux CI runs these headless.
 - The OLE loop's deferred start, reentrancy and second-window repaint rows, and
   `a_window_finds_the_window_of_this_process_under_a_point` (the Win32 `window_at` on two real

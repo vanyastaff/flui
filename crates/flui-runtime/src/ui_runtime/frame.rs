@@ -40,7 +40,12 @@ impl UiRuntime {
     #[must_use]
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<flui_layer::Scene> {
         match self
-            .enter(|ui_runtime| ui_runtime.draw_frame_entered(constraints))
+            .enter(|ui_runtime| {
+                let drawn = ui_runtime.draw_frame_entered(constraints);
+                // As `render_frame` does after the build (ADR-0211 §16).
+                ui_runtime.drag.withdraw_unregistered_answers();
+                drawn
+            })
             .1
         {
             // (the third tuple element, `any_retry_needed`, is a retry-arming
@@ -958,9 +963,9 @@ impl UiRuntime {
         let mut drawing = FirstPanic::new();
         let drawn = drawing.contain(|| self.draw_frame_entered(constraints));
         // A receiver this build unmounted no longer answers for the drag it accepted: the OS is
-        // told before it can resolve a drop from that answer, after a build that failed as well
-        // (ADR-0211 §16).
-        self.drag.withdraw_unregistered_answers();
+        // told before it can resolve a drop from that answer, after a frame that unwound as well,
+        // and the frame's failure stays the first (ADR-0211 §16).
+        drawing.contain(|| self.drag.withdraw_unregistered_answers());
         if let Some(payload) = drawing.into_payload() {
             resume_unwind(payload);
         }

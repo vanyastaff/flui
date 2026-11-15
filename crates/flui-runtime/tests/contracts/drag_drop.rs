@@ -139,8 +139,9 @@ impl RenderView for ReceiverAnchor {
         ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        // As `DropTarget` does: an unmounted receiver no longer resolves. A closing presentation
-        // has withdrawn its targets already, so its error is not this test's concern.
+        // As `DropTarget` does: an unmounted receiver no longer resolves. At the runtime's
+        // teardown the lane owner is gone already and answers `OwnerGone`, which is not this
+        // test's concern.
         if let Some(target) = render_object.metadata_as::<LocalPayloadTarget>().copied() {
             let _already_withdrawn = ctx.unregister_local_payload(target);
         }

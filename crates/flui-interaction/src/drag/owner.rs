@@ -493,7 +493,7 @@ impl DragOwner {
                 .invoke(|| parts.with_view(&self.source, |view| tracker.tick(view, now)))
                 .unwrap_or_default();
             if ticked.accepting_gone {
-                self.accepting_gone(hovered);
+                failure.invoke(|| self.accepting_gone(hovered));
             }
             // Content scrolled under a pointer that rests: find what is under
             // it now, as a move there would.
@@ -718,7 +718,7 @@ impl DragOwner {
     /// the drag, before it can resolve a drop from that answer, and the drop gets no recipient
     /// (ADR-0211 §16). The receivers that went leave at the next [`tick`](Self::tick), or, for a
     /// hover [`hold`](Self::hold) keeps, when it is released or dropped. The runtime calls this
-    /// after each frame's build, a failed one included. Runs no receiver.
+    /// after each frame's build, whether the frame ends or unwinds. Runs no receiver.
     pub fn withdraw_unregistered_answers(&self) {
         let gone: Vec<(PresentationId, DataTransferId)> = {
             let state = self.shared.borrow();
@@ -731,25 +731,34 @@ impl DragOwner {
                 .map(|incoming| (incoming.presentation, incoming.offer.id()))
                 .collect()
         };
+        // Each withdrawal reaches the OS through the platform: one that fails keeps the others,
+        // whose acceptances are already forgotten, and the first failure propagates after them.
+        let mut failure = ClosePanic::new();
         for (presentation, id) in gone {
-            self.accepting_gone(Hovered::Offer(presentation, id));
+            failure.invoke(|| self.accepting_gone(Hovered::Offer(presentation, id)));
         }
+        failure.finish();
     }
 
-    /// Whether [`hold`](Self::hold) kept a hover position for `presentation` that
+    /// How many hovers [`hold`](Self::hold) kept positions for in `presentation` that
     /// [`release_next_held`](Self::release_next_held) has not delivered yet.
     #[must_use]
-    pub fn has_held(&self, presentation: PresentationId) -> bool {
-        self.shared.borrow().incoming.iter().any(|incoming| {
-            incoming.presentation == presentation && incoming.held_position.is_some()
-        })
+    pub fn held_count(&self, presentation: PresentationId) -> usize {
+        self.shared
+            .borrow()
+            .incoming
+            .iter()
+            .filter(|incoming| {
+                incoming.presentation == presentation && incoming.held_position.is_some()
+            })
+            .count()
     }
 
     /// Deliver the first hover [`hold`](Self::hold) kept for `presentation`, in the order the
     /// hovers entered, now that its window shows the tree `hit` reads: the hover moves to its
     /// last position. Does nothing when none is held. The held position is taken before any
-    /// receiver runs, so a caller that repeats this while [`has_held`](Self::has_held) is true
-    /// ends, and can keep each hover's failures in the order they happened.
+    /// receiver runs, so a caller that calls this once per hover [`held_count`](Self::held_count)
+    /// counts delivers each, and keeps each hover's failures in the order they happened.
     pub fn release_next_held(
         &self,
         presentation: PresentationId,
