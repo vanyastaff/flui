@@ -47,7 +47,7 @@ mod opened;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-mod placement;
+pub(in crate::app) mod placement;
 mod window_install;
 pub(in crate::app) mod window_routes;
 

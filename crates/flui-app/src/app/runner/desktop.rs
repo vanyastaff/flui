@@ -58,9 +58,10 @@ pub(super) struct OpeningWindow {
 }
 
 impl OpeningWindow {
-    /// What the window `config` describes carries: fresh routes, and its
-    /// remembered placement, read from storage here, before the window
-    /// opens, so its first reveal is already in place.
+    /// What the window `config` describes carries: fresh routes, and the
+    /// read of its remembered placement, started here, before the window
+    /// opens, so its first reveal can already be in place. The caller opens
+    /// the window once [`recall_settled`](Self::recall_settled) says so.
     pub(super) fn new(config: &AppConfig) -> Self {
         Self {
             routes: WindowRoutes::new(),
@@ -68,9 +69,26 @@ impl OpeningWindow {
         }
     }
 
+    /// Whether the window may open now: it remembers no placement, or the
+    /// read of it answered or reached its bound
+    /// ([`RECALL_BOUND`](crate::app::placement_recorder::RECALL_BOUND)).
+    pub(super) fn recall_settled(&mut self) -> bool {
+        self.remembered
+            .as_mut()
+            .is_none_or(RememberedPlacement::poll)
+    }
+
+    /// When the window stops waiting for its placement read; `None` when it
+    /// does not wait.
+    pub(super) fn recall_deadline(&self) -> Option<std::time::Instant> {
+        self.remembered
+            .as_ref()
+            .and_then(RememberedPlacement::deadline)
+    }
+
     /// Open the window on `owner`: [`From<&AppConfig>`]'s options, where the
-    /// window was last time when it remembers a placement, with the reveal
-    /// deferred to the first presented frame.
+    /// window was last time when it remembers a placement and the read found
+    /// one in time, with the reveal deferred to the first presented frame.
     ///
     /// The deferral is a promise to call
     /// `PlatformWindow::reveal_after_first_frame`, and

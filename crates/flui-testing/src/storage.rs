@@ -87,6 +87,9 @@ struct State {
     write_holds: usize,
     commit_holds: usize,
     copy_holds: usize,
+    read_holds: usize,
+    /// Reads asked for while a [`ReadHold`] is alive, waiting to answer.
+    held_reads: Vec<Waker>,
     /// Copies asked for while a [`CopyHold`] is alive, waiting to run.
     held_copies: Vec<Waker>,
     /// Errors the next publishes fail with, in order.
@@ -360,6 +363,40 @@ impl MemoryStorage {
         }
     }
 
+    /// Answer no read while the returned hold is alive: a read asked meanwhile
+    /// answers, from what is stored then, once the last hold drops, as a slow
+    /// disk or a remote store would.
+    ///
+    /// ```
+    /// use std::future::Future;
+    /// use std::pin::pin;
+    /// use std::task::{Context, Poll, Waker};
+    ///
+    /// use flui_platform::{Storage, StorageName};
+    /// use flui_testing::storage::MemoryStorage;
+    ///
+    /// const NOTES: StorageName = StorageName::from_static("notes");
+    /// let storage = MemoryStorage::new();
+    /// let mut ctx = Context::from_waker(Waker::noop());
+    ///
+    /// let held = storage.hold_reads();
+    /// let mut read = pin!(storage.read(&NOTES, 64));
+    /// assert!(read.as_mut().poll(&mut ctx).is_pending());
+    /// storage.put(&NOTES, "late");
+    /// drop(held);
+    /// let Poll::Ready(Ok(stored)) = read.as_mut().poll(&mut ctx) else {
+    ///     panic!("the read answers once the hold is gone");
+    /// };
+    /// assert_eq!(stored.bytes.as_deref(), Some(&b"late"[..]));
+    /// ```
+    #[must_use = "reads are held only while the hold is alive"]
+    pub fn hold_reads(&self) -> ReadHold {
+        self.state.lock().read_holds += 1;
+        ReadHold {
+            state: Arc::clone(&self.state),
+        }
+    }
+
     /// The copies [`copy_aside`](Storage::copy_aside) kept of `name`, oldest
     /// first: the copy named `<name>.corrupt-<n>` is at index `n - 1`.
     #[must_use]
@@ -399,24 +436,16 @@ impl Storage for MemoryStorage {
         let mut state = self.state.lock();
         state.live += 1;
         state.reads += 1;
-        let answer = match (&state.fail_reads, state.values.get(name)) {
-            (Some(error), _) => Err(error.clone()),
-            (None, None) => Ok(Stored {
-                bytes: None,
-                version: StoredVersion::ABSENT,
-            }),
-            (None, Some(bytes)) => {
-                let len = u64::try_from(bytes.len()).expect("BUG: a byte length fits in u64");
-                if len > limit {
-                    Err(StorageError::TooLarge { len, limit })
-                } else {
-                    Ok(Stored {
-                        bytes: Some(bytes.clone()),
-                        version: StoredVersion::of_bytes(bytes),
-                    })
-                }
-            }
-        };
+        if state.read_holds > 0 {
+            drop(state);
+            return Box::pin(HeldRead {
+                state: Arc::clone(&self.state),
+                name: *name,
+                limit,
+                answered: false,
+            });
+        }
+        let answer = state.read_answer(name, limit);
         drop(state);
         Box::pin(Answered {
             state: Arc::clone(&self.state),
@@ -606,6 +635,28 @@ impl Drop for WriteRequest {
 }
 
 impl State {
+    /// What a read of `name` refusing more than `limit` bytes answers now.
+    fn read_answer(&self, name: &StorageName, limit: u64) -> Result<Stored, StorageError> {
+        match (&self.fail_reads, self.values.get(name)) {
+            (Some(error), _) => Err(error.clone()),
+            (None, None) => Ok(Stored {
+                bytes: None,
+                version: StoredVersion::ABSENT,
+            }),
+            (None, Some(bytes)) => {
+                let len = u64::try_from(bytes.len()).expect("BUG: a byte length fits in u64");
+                if len > limit {
+                    Err(StorageError::TooLarge { len, limit })
+                } else {
+                    Ok(Stored {
+                        bytes: Some(bytes.clone()),
+                        version: StoredVersion::of_bytes(bytes),
+                    })
+                }
+            }
+        }
+    }
+
     /// Keep a copy of `name`'s stored bytes, or fail as configured.
     fn copy_aside(&mut self, name: &StorageName) -> Result<CopiedAside, StorageError> {
         if let Some(error) = &self.fail_copies {
@@ -659,6 +710,70 @@ impl Future for CopyRequest {
 impl Drop for CopyRequest {
     fn drop(&mut self) {
         self.state.lock().live -= 1;
+    }
+}
+
+/// A read asked while a [`ReadHold`] was alive: answered from the values
+/// stored when it is first polled with no hold alive.
+struct HeldRead {
+    state: Arc<Mutex<State>>,
+    name: StorageName,
+    limit: u64,
+    answered: bool,
+}
+
+impl Future for HeldRead {
+    type Output = Result<Stored, StorageError>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.answered {
+            return Poll::Pending;
+        }
+        // A waker's clone and drop run its owner's code: neither runs under
+        // the storage's lock.
+        let waker = ctx.waker().clone();
+        let mut state = self.state.lock();
+        if state.read_holds > 0 {
+            state.held_reads.push(waker);
+            return Poll::Pending;
+        }
+        let answer = state.read_answer(&self.name, self.limit);
+        drop(state);
+        drop(waker);
+        self.answered = true;
+        Poll::Ready(answer)
+    }
+}
+
+impl Drop for HeldRead {
+    fn drop(&mut self) {
+        self.state.lock().live -= 1;
+    }
+}
+
+/// While alive, [`MemoryStorage`] answers no read; see
+/// [`MemoryStorage::hold_reads`].
+pub struct ReadHold {
+    state: Arc<Mutex<State>>,
+}
+
+impl fmt::Debug for ReadHold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadHold").finish_non_exhaustive()
+    }
+}
+
+impl Drop for ReadHold {
+    fn drop(&mut self) {
+        let mut state = self.state.lock();
+        state.read_holds -= 1;
+        let wakers = if state.read_holds == 0 {
+            std::mem::take(&mut state.held_reads)
+        } else {
+            Vec::new()
+        };
+        drop(state);
+        wake_all(wakers);
     }
 }
 

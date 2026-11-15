@@ -4,18 +4,22 @@
 
 use std::rc::Rc;
 use std::sync::Arc;
+use std::task::{Context, Waker};
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{AppTitleBar, WindowFrame, WindowOptions};
 use flui_platform::{
-    DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, StorageError, StorageName,
-    WindowCapabilities, WindowGeometry, WindowMode, WindowPlacement, WindowState,
+    DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, Storage, StorageError,
+    StorageFuture, StorageName, Stored, WindowCapabilities, WindowGeometry, WindowMode,
+    WindowPlacement, WindowState,
 };
 use flui_testing::storage::MemoryStorage;
+use flui_view::persist::StorageHandle;
 
 use super::{
-    FLUSH_BUDGET, PlacementRecorder, WRITE_INTERVAL, earliest_due, recall, restore_into, settle,
+    Baseline, FlushState, PlacementRecall, PlacementRecorder, RECALL_BOUND, Recalled,
+    WRITE_INTERVAL, earliest_due, restore_into, settle,
 };
 
 const NAME: StorageName = StorageName::machine_local("window-main");
@@ -55,7 +59,7 @@ impl Fixture {
     fn new() -> Self {
         let storage = MemoryStorage::new();
         let recorder =
-            PlacementRecorder::new(Arc::new(storage.clone()), NAME, None, Arc::new(|| {}));
+            PlacementRecorder::new(handle(&storage), NAME, Baseline::Nothing, Arc::new(|| {}));
         Self {
             storage,
             recorder,
@@ -83,10 +87,50 @@ impl Fixture {
 
 const NO_FRAME: Size<f64> = Size::new(0.0, 0.0);
 
-fn recall_reads_what_an_earlier_run_stored() {
-    let storage = MemoryStorage::new();
-    assert_eq!(recall(&storage, &NAME), None, "a first run has nothing");
+/// How long the settling tests wait for storage at most.
+const BUDGET: Duration = Duration::from_secs(4);
 
+fn handle(storage: &MemoryStorage) -> StorageHandle {
+    StorageHandle::new(Arc::new(storage.clone()))
+}
+
+fn start_recall(storage: &MemoryStorage, now: Instant) -> PlacementRecall {
+    PlacementRecall::start(&handle(storage), NAME, now, Waker::noop().clone())
+}
+
+/// A store whose `read` panics, as an application's override may.
+struct PanickingReads;
+
+impl Storage for PanickingReads {
+    fn read(&self, _name: &StorageName, _limit: u64) -> StorageFuture<Stored> {
+        panic!("the application's store fails to read");
+    }
+
+    fn publish(
+        &self,
+        _name: &StorageName,
+        _bytes: Vec<u8>,
+        _mode: flui_platform::WriteMode,
+    ) -> StorageFuture<flui_platform::StoredVersion> {
+        panic!("the application's store fails to write");
+    }
+
+    fn copy_aside(&self, _name: &StorageName) -> StorageFuture<flui_platform::CopiedAside> {
+        Box::pin(std::future::ready(Err(StorageError::NotFound)))
+    }
+}
+
+/// A recall case: its name, what storage holds, what a read fails with, and
+/// what the recall settles as.
+type RecallCase<'a> = (
+    &'static str,
+    Option<&'a [u8]>,
+    Option<StorageError>,
+    Recalled,
+);
+
+fn a_recall_reads_what_storage_answers_and_checks_it() {
+    let now = Instant::now();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
         Some(Point::new(40.0, 30.0)),
@@ -94,17 +138,187 @@ fn recall_reads_what_an_earlier_run_stored() {
         WindowMode::Maximized,
         1.0,
     );
-    storage.put(&NAME, placement.to_bytes());
-    assert_eq!(recall(&storage, &NAME), Some(placement));
+    let stored_bytes = placement.to_bytes();
+    let too_large = vec![b'x'; 5000];
+    let cases: [RecallCase<'_>; 6] = [
+        ("a first run has nothing", None, None, Recalled::Absent),
+        (
+            "an earlier run's placement",
+            Some(&stored_bytes),
+            None,
+            Recalled::Placement(placement),
+        ),
+        (
+            "another version of the format",
+            Some(b"flui-window-placement/9\nnot ours\n"),
+            None,
+            Recalled::Unreadable,
+        ),
+        (
+            "a value cut short",
+            Some(b"flui-window-pla"),
+            None,
+            Recalled::Unreadable,
+        ),
+        (
+            "a value past the read limit",
+            Some(&too_large),
+            None,
+            Recalled::Unreadable,
+        ),
+        (
+            "a refused read",
+            None,
+            Some(StorageError::Busy),
+            Recalled::Refused(StorageError::Busy),
+        ),
+    ];
+    for (case, stored, refusal, expected) in cases {
+        let storage = MemoryStorage::new();
+        if let Some(bytes) = stored {
+            storage.put(&NAME, bytes.to_vec());
+        }
+        storage.fail_reads(refusal);
+        let recall = start_recall(&storage, now);
+        assert_eq!(recall.outcome(), Some(&expected), "{case}");
+        assert_eq!(
+            recall.deadline(),
+            None,
+            "{case}: a store that answers at once"
+        );
+    }
+}
 
-    storage.put(&NAME, b"flui-window-placement/9\nnot ours\n".to_vec());
-    assert_eq!(recall(&storage, &NAME), None, "another version is ignored");
-    storage.put(&NAME, b"flui-window-pla".to_vec());
-    assert_eq!(
-        recall(&storage, &NAME),
+fn a_recall_waits_until_its_bound_and_then_never_takes_the_answer() {
+    let storage = MemoryStorage::new();
+    let placement = WindowPlacement::new(
         None,
-        "a cut-short value is ignored"
+        Some(Point::new(40.0, 30.0)),
+        Size::new(800.0, 600.0),
+        WindowMode::Normal,
+        1.0,
     );
+    storage.put(&NAME, placement.to_bytes());
+    let held = storage.hold_reads();
+    let now = Instant::now();
+    let mut recall = start_recall(&storage, now);
+    assert_eq!(recall.deadline(), Some(now + RECALL_BOUND));
+    assert_eq!(
+        recall.poll(now + RECALL_BOUND.saturating_sub(Duration::from_millis(1))),
+        None,
+        "the window waits inside the bound"
+    );
+    assert_eq!(recall.poll(now + RECALL_BOUND), Some(&Recalled::TimedOut));
+    assert_eq!(
+        storage.live_requests(),
+        0,
+        "the read is dropped at the bound"
+    );
+
+    drop(held);
+    assert_eq!(
+        recall.poll(now + RECALL_BOUND * 2),
+        Some(&Recalled::TimedOut),
+        "an answer after the bound has nothing left to arrive at"
+    );
+}
+
+fn a_recall_answered_inside_its_bound_settles_with_the_answer() {
+    let storage = MemoryStorage::new();
+    let held = storage.hold_reads();
+    let now = Instant::now();
+    let mut recall = start_recall(&storage, now);
+    assert_eq!(recall.poll(now), None);
+    drop(held);
+    assert_eq!(
+        recall.poll(now + Duration::from_millis(10)),
+        Some(&Recalled::Absent)
+    );
+}
+
+fn a_storage_that_panics_costs_the_window_its_placement_only() {
+    let storage = StorageHandle::new(Arc::new(PanickingReads));
+    let recall = PlacementRecall::start(&storage, NAME, Instant::now(), Waker::noop().clone());
+    assert_eq!(recall.outcome(), Some(&Recalled::Panicked));
+
+    let recorder = PlacementRecorder::new(storage, NAME, Baseline::Nothing, Arc::new(|| {}));
+    let now = Instant::now();
+    recorder.observe(&at(10.0, 10.0), &displays(), now);
+    assert_eq!(
+        recorder.poll_flush(&mut Context::from_waker(Waker::noop()), now),
+        FlushState::Refused,
+        "a write that panics is a refused one"
+    );
+}
+
+fn a_window_that_could_not_read_its_placement_overwrites_it_only_when_it_moves() {
+    let storage = MemoryStorage::new();
+    storage.put(&NAME, b"what an earlier run kept".to_vec());
+    let recorder = PlacementRecorder::new(
+        handle(&storage),
+        NAME,
+        Recalled::TimedOut.baseline(),
+        Arc::new(|| {}),
+    );
+    let now = Instant::now();
+    recorder.observe(&at(10.0, 10.0), &displays(), now);
+    assert_eq!(
+        storage.contents(&NAME).as_deref(),
+        Some(&b"what an earlier run kept"[..]),
+        "the default it opened at does not replace what storage may hold"
+    );
+    recorder.observe(&at(300.0, 200.0), &displays(), now);
+    assert!(
+        storage
+            .contents(&NAME)
+            .is_some_and(|bytes| WindowPlacement::from_bytes(&bytes).is_ok()),
+        "a move the user makes is written"
+    );
+}
+
+fn the_end_of_the_loop_reports_a_placement_storage_did_not_take() {
+    let fixture = Fixture::new();
+    let barrier = fixture.storage.hold_commits();
+    fixture.observe(&at(100.0, 80.0), Duration::ZERO);
+    let now = fixture.after(Duration::from_millis(1));
+    let lost = settle(&[Rc::new(fixture.recorder)], now, Duration::ZERO);
+    drop(barrier);
+    assert_eq!(lost, [NAME]);
+}
+
+fn a_closed_window_finishes_its_last_write_at_owner_turns() {
+    let fixture = Fixture::new();
+    let barrier = fixture.storage.hold_commits();
+    fixture.observe(&at(100.0, 80.0), Duration::ZERO);
+    let now = fixture.after(Duration::from_millis(5));
+    fixture.recorder.begin_flush(now);
+    assert_eq!(fixture.recorder.continue_flush(now), FlushState::Waiting);
+    barrier.commit();
+    assert_eq!(fixture.recorder.continue_flush(now), FlushState::Stored);
+}
+
+fn a_display_change_alone_measures_the_window_again() {
+    let fixture = Fixture::new();
+    fixture.observe(&at(100.0, 80.0), Duration::ZERO);
+    // The taskbar moved to the left: the usable area starts 60 pixels in.
+    let registry = DisplayRegistry::new();
+    let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
+    let moved = DisplaySnapshot::empty()
+        .successor(vec![
+            DisplayInfo::new(
+                id,
+                "main",
+                Bounds::new(Point::new(60, 0), Size::new(1860, 1080)),
+                1.0,
+            )
+            .with_primary(true)
+            .with_persistent_key("key-main"),
+        ])
+        .expect("revision");
+    fixture
+        .recorder
+        .redisplay(&moved, fixture.after(WRITE_INTERVAL));
+    assert_eq!(fixture.stored_offset(), Some(Point::new(40.0, 80.0)));
 }
 
 fn restore_opens_the_window_where_it_was_and_back_onto_a_display() {
@@ -323,9 +537,9 @@ fn a_write_in_flight_waits_for_storage_to_wake_the_owner() {
     let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = Arc::clone(&wakes);
     let recorder = PlacementRecorder::new(
-        Arc::new(storage.clone()),
+        handle(&storage),
         NAME,
-        None,
+        Baseline::Nothing,
         Arc::new(move || {
             counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }),
@@ -393,9 +607,9 @@ fn a_placement_already_stored_is_not_written_again() {
     // A sentinel in place of the stored placement: any write replaces it.
     storage.put(&NAME, b"sentinel".to_vec());
     let recorder = PlacementRecorder::new(
-        Arc::new(storage.clone()),
+        handle(&storage),
         NAME,
-        Some(&placement),
+        Baseline::Holds(placement.to_bytes()),
         Arc::new(|| {}),
     );
     let now = Instant::now();
@@ -450,7 +664,7 @@ fn closing_writes_the_held_placement_without_waiting_for_the_interval() {
 
     let storage = fixture.storage.clone();
     let now = fixture.after(Duration::from_millis(20));
-    settle(&[Rc::new(fixture.recorder)], now, FLUSH_BUDGET);
+    settle(&[Rc::new(fixture.recorder)], now, BUDGET);
     let stored = WindowPlacement::from_bytes(&storage.contents(&NAME).expect("stored"))
         .expect("a placement");
     assert_eq!(stored.offset, Some(Point::new(250.0, 90.0)));
@@ -470,7 +684,7 @@ fn a_flush_keeps_going_until_storage_holds_the_newest_placement() {
 
     let storage = fixture.storage.clone();
     let now = fixture.after(Duration::from_millis(20));
-    settle(&[Rc::new(fixture.recorder)], now, FLUSH_BUDGET);
+    settle(&[Rc::new(fixture.recorder)], now, BUDGET);
 
     let stored = WindowPlacement::from_bytes(&storage.contents(&NAME).expect("stored"))
         .expect("a placement");
@@ -493,9 +707,9 @@ fn several_windows_share_one_budget_when_the_session_ends() {
         .iter()
         .map(|name| {
             Rc::new(PlacementRecorder::new(
-                Arc::new(storage.clone()),
+                handle(&storage),
                 *name,
-                None,
+                Baseline::Nothing,
                 Arc::new(|| {}),
             ))
         })
@@ -521,15 +735,15 @@ fn several_windows_share_one_budget_when_the_session_ends() {
 fn the_earliest_due_of_several_recorders_is_what_the_owner_wakes_for() {
     let storage = MemoryStorage::new();
     let first = Rc::new(PlacementRecorder::new(
-        Arc::new(storage.clone()),
+        handle(&storage),
         NAME,
-        None,
+        Baseline::Nothing,
         Arc::new(|| {}),
     ));
     let second = Rc::new(PlacementRecorder::new(
-        Arc::new(storage),
+        handle(&storage),
         StorageName::machine_local("window-two"),
-        None,
+        Baseline::Nothing,
         Arc::new(|| {}),
     ));
     let now = Instant::now();
@@ -550,8 +764,37 @@ fn placement_recorder() {
         "placement_recorder",
         &[
             (
-                "recall_reads_what_an_earlier_run_stored",
-                recall_reads_what_an_earlier_run_stored as fn(),
+                "a_recall_reads_what_storage_answers_and_checks_it",
+                a_recall_reads_what_storage_answers_and_checks_it as fn(),
+            ),
+            (
+                "a_recall_waits_until_its_bound_and_then_never_takes_the_answer",
+                a_recall_waits_until_its_bound_and_then_never_takes_the_answer as fn(),
+            ),
+            (
+                "a_recall_answered_inside_its_bound_settles_with_the_answer",
+                a_recall_answered_inside_its_bound_settles_with_the_answer as fn(),
+            ),
+            (
+                "a_storage_that_panics_costs_the_window_its_placement_only",
+                a_storage_that_panics_costs_the_window_its_placement_only as fn(),
+            ),
+            (
+                "a_window_that_could_not_read_its_placement_overwrites_it_only_when_it_moves",
+                a_window_that_could_not_read_its_placement_overwrites_it_only_when_it_moves
+                    as fn(),
+            ),
+            (
+                "the_end_of_the_loop_reports_a_placement_storage_did_not_take",
+                the_end_of_the_loop_reports_a_placement_storage_did_not_take as fn(),
+            ),
+            (
+                "a_closed_window_finishes_its_last_write_at_owner_turns",
+                a_closed_window_finishes_its_last_write_at_owner_turns as fn(),
+            ),
+            (
+                "a_display_change_alone_measures_the_window_again",
+                a_display_change_alone_measures_the_window_again as fn(),
             ),
             (
                 "restore_opens_the_window_where_it_was_and_back_onto_a_display",

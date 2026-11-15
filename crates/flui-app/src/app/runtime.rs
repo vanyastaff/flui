@@ -514,17 +514,15 @@ pub(crate) struct AppRuntime {
     /// What this host gives back on a memory-pressure notice: one receiver every
     /// UI runtime it builds shares (`runner::host::build_ui_runtime`).
     pub(super) host_memory: Arc<super::host_memory::HostMemory>,
-    /// The windows that remember their placement, keyed by presentation, so a
-    /// window closing or the session ending can write the final one.
+    /// The run's window placements: where the host acquires the storage they
+    /// are kept in, the windows that remember one and the writes still out
+    /// (`runner::placement`).
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    pub(super) placement_recorders: Vec<(
-        flui_foundation::PresentationAddress,
-        Rc<super::placement_recorder::PlacementRecorder>,
-    )>,
+    pub(super) placement: super::runner::placement::PlacementHost,
     /// The handler each window this runner opened was opened with, by window
     /// (`runner::window_routes`).
     window_routes: super::runner::window_routes::RouteBook,
@@ -632,7 +630,7 @@ impl AppRuntime {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            placement_recorders: Vec::new(),
+            placement: super::runner::placement::PlacementHost::default(),
             window_routes: super::runner::window_routes::RouteBook::default(),
         }
     }
@@ -1085,20 +1083,24 @@ impl AppRuntime {
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let frame = None;
         // A window placement held back by the write throttle is written when
-        // its interval is over. Frame-independent like text sizing: a
+        // its interval is over, and a window waiting for its placement read
+        // opens at the read's bound. Frame-independent like text sizing: a
         // minimized window has frames disabled, and the write must not wait
-        // for it to come back (`after_turn` ticks the recorders).
+        // for it to come back (`after_turn` ticks the placements).
         #[cfg(all(
             not(target_os = "android"),
             not(target_os = "ios"),
             not(target_arch = "wasm32")
         ))]
-        let placement = super::placement_recorder::earliest_due(
-            std::time::Instant::now(),
-            self.placement_recorders
-                .iter()
-                .map(|(_, recorder)| recorder),
-        );
+        let placement = [
+            self.placement.next_due(),
+            self.main_controller
+                .as_ref()
+                .and_then(super::runner::main_window::MainController::recall_deadline),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let placement = None;
         // The raster work a window's own frame serves (its owed surface, the
@@ -1454,12 +1456,6 @@ impl AppRuntime {
         self.flush_host
             .as_ref()
             .map(flui_view::__runtime::FlushHost::registry)
-    }
-
-    /// The host's byte storage, if the run configured one.
-    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-    pub(super) fn host_storage(&self) -> Option<Arc<dyn flui_platform::Storage>> {
-        self.host_storage.storage()
     }
 
     /// The providers the next UI runtime this host builds acquires platform

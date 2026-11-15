@@ -48,14 +48,6 @@ pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
     APP_RUNTIME.with(|slot| slot.borrow().font_collection())
 }
 
-/// The host's byte storage, resolved once from the run's configuration when
-/// the host started (`AppRuntime::install_host_storage`). Same borrow rule
-/// as [`runtime_wake_callback`].
-#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform::Storage>> {
-    APP_RUNTIME.with(|slot| slot.borrow().host_storage())
-}
-
 /// Stash the host executors `config` injects, before anything resolves the
 /// loop's execution services (the host storage does, on install).
 #[cfg(any(target_os = "android", target_arch = "wasm32"))]
@@ -247,6 +239,12 @@ pub(super) fn refresh_displays_with(
     if !current {
         return Ok(());
     }
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    let accepted = observation.is_ok();
     let failure = match observation {
         Ok(snapshot) => {
             host.displays().accept(snapshot);
@@ -260,6 +258,16 @@ pub(super) fn refresh_displays_with(
             .then_some(error),
     };
     deliver_displays(&host);
+    // A window's placement is kept relative to its display's usable area,
+    // which a new snapshot may have moved under a window that did not move.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    if accepted {
+        super::placement::displays_changed();
+    }
     failure.map_or(Ok(()), |error| Err(HostServicesError::Displays(error)))
 }
 

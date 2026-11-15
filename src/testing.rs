@@ -18,7 +18,7 @@
 //! ```
 
 pub use flui_testing::find;
-pub use flui_testing::storage::{CommitBarrier, CopyHold, MemoryStorage, WriteHold};
+pub use flui_testing::storage::{CommitBarrier, CopyHold, MemoryStorage, ReadHold, WriteHold};
 pub use flui_testing::{DropLedger, DropSentinel};
 pub use flui_testing::{
     Expectation, InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalPoint,
