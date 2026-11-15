@@ -389,11 +389,29 @@ pub(crate) mod support {
         pub moveresize: u32,
     }
 
-    /// What the window manager supports, as the root window says.
+    /// Which window manager runs on the screen.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) enum WindowManager {
+        /// None runs: none owns the screen's `WM_S<n>` selection or answers
+        /// `_NET_SUPPORTING_WM_CHECK`, or the one that did is gone.
+        #[default]
+        Absent,
+        /// One owns the screen's `WM_S<n>` selection (ICCCM §2.8) and answers
+        /// no `_NET_SUPPORTING_WM_CHECK`: it keeps `WM_STATE` on the windows
+        /// it manages and iconifies them (ICCCM §4.1.3.1, §4.1.4), and nothing
+        /// of EWMH is known of it.
+        Icccm,
+        /// One answers `_NET_SUPPORTING_WM_CHECK` (EWMH): what it lists in
+        /// `_NET_SUPPORTED`, its `_NET_ACTIVE_WINDOW` and the frames it
+        /// writes in `_NET_FRAME_EXTENTS` stand too.
+        Extended,
+    }
+
+    /// What the window manager supports, as the root window and the screen's
+    /// selection say.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub(crate) struct WindowManagerSupport {
-        /// A window manager runs: it answers `_NET_SUPPORTING_WM_CHECK`.
-        pub managed: bool,
+        pub manager: WindowManager,
         /// It maximizes a window on both axes.
         pub maximizes: bool,
         /// It puts a window in fullscreen.
@@ -404,17 +422,51 @@ pub(crate) mod support {
     }
 
     impl WindowManagerSupport {
-        /// The support of a window manager that runs or not (`managed`) and
-        /// lists `supported` in `_NET_SUPPORTED`; a list without a window
-        /// manager to stand behind it (one left by a window manager that quit)
-        /// says nothing.
-        pub(crate) fn read(managed: bool, supported: &[u32], atoms: &SupportAtoms) -> Self {
-            let lists = |atom: u32| managed && supported.contains(&atom);
+        /// The support of `manager`, which lists `supported` in
+        /// `_NET_SUPPORTED`. A list says something only of a window manager
+        /// that answers `_NET_SUPPORTING_WM_CHECK`: one left by a window
+        /// manager that quit, or written where none answers, says nothing.
+        pub(crate) fn read(
+            manager: WindowManager,
+            supported: &[u32],
+            atoms: &SupportAtoms,
+        ) -> Self {
+            let lists = |atom: u32| manager == WindowManager::Extended && supported.contains(&atom);
             Self {
-                managed,
+                manager,
                 maximizes: lists(atoms.maximized_horz) && lists(atoms.maximized_vert),
                 fullscreen: lists(atoms.fullscreen),
                 moves_and_resizes: lists(atoms.moveresize),
+            }
+        }
+
+        /// A window manager runs, of either kind.
+        pub(crate) fn managed(self) -> bool {
+            self.manager != WindowManager::Absent
+        }
+
+        /// The window manager speaks EWMH: it is asked for the focus with
+        /// `_NET_ACTIVE_WINDOW`, says which window is active there, and
+        /// answers `_NET_REQUEST_FRAME_EXTENTS`. The host's window alone asks.
+        #[cfg(x11_host)]
+        pub(crate) fn extended(self) -> bool {
+            self.manager == WindowManager::Extended
+        }
+
+        /// What the properties a window manager keeps on a window say
+        /// (`written`: its mode in `WM_STATE` and `_NET_WM_STATE`, its frame
+        /// in `_NET_FRAME_EXTENTS`), which stands only while a window manager
+        /// runs. One that was killed or crashed leaves them on the windows it
+        /// managed, and the server maps those again as its connection closes,
+        /// so without a window manager they are a dead one's and say nothing:
+        /// the window is in normal mode and has no frame. A window manager
+        /// that answers no `_NET_SUPPORTING_WM_CHECK` still runs: what it
+        /// wrote stands.
+        pub(crate) fn kept<T: Default>(self, written: T) -> T {
+            if self.managed() {
+                written
+            } else {
+                T::default()
             }
         }
     }
@@ -443,7 +495,7 @@ pub(crate) mod support {
         if !support.moves_and_resizes {
             capabilities = capabilities.without_app_title_bar(device);
         }
-        if !support.managed {
+        if !support.managed() {
             capabilities =
                 capabilities.unavailable(&WindowCommand::SetMode(WindowMode::Minimized), device);
             capabilities.observes_minimized = Availability::Unavailable;
@@ -480,50 +532,63 @@ pub(crate) mod support {
         #[test]
         fn what_the_window_manager_supports_is_what_a_window_honours() {
             use Availability::{Native, Unavailable};
+            use WindowManager::{Absent, Extended, Icccm};
 
-            // (case, managed, `_NET_SUPPORTED`, [minimizes, maximizes,
-            //  enters fullscreen, observes minimized])
-            let table: &[(&str, bool, &[u32], [Availability; 4])] = &[
+            // (case, the window manager, `_NET_SUPPORTED`, [minimizes,
+            //  maximizes, enters fullscreen, observes minimized])
+            let table: &[(&str, WindowManager, &[u32], [Availability; 4])] = &[
                 (
                     "no window manager",
-                    false,
+                    Absent,
                     &[],
                     [Unavailable, Unavailable, Unavailable, Unavailable],
                 ),
                 (
                     "a list left by a window manager that quit",
-                    false,
+                    Absent,
                     &[302, 303, 304],
                     [Unavailable, Unavailable, Unavailable, Unavailable],
                 ),
                 (
+                    "an ICCCM window manager, which iconifies",
+                    Icccm,
+                    &[],
+                    [Native, Unavailable, Unavailable, Native],
+                ),
+                (
+                    "a list where no window manager answers the check",
+                    Icccm,
+                    &[302, 303, 304, 305],
+                    [Native, Unavailable, Unavailable, Native],
+                ),
+                (
                     "a window manager that lists nothing",
-                    true,
+                    Extended,
                     &[],
                     [Native, Unavailable, Unavailable, Native],
                 ),
                 (
                     "maximized on one axis only",
-                    true,
+                    Extended,
                     &[302],
                     [Native, Unavailable, Unavailable, Native],
                 ),
                 (
                     "both axes",
-                    true,
+                    Extended,
                     &[303, 302],
                     [Native, Native, Unavailable, Native],
                 ),
                 (
                     "everything",
-                    true,
+                    Extended,
                     &[302, 303, 304, 305, 999],
                     [Native, Native, Native, Native],
                 ),
             ];
-            for (case, managed, supported, [minimizes, maximizes, fullscreen, observes]) in table {
+            for (case, manager, supported, [minimizes, maximizes, fullscreen, observes]) in table {
                 let honoured =
-                    capabilities(WindowManagerSupport::read(*managed, supported, &ATOMS));
+                    capabilities(WindowManagerSupport::read(*manager, supported, &ATOMS));
                 assert_eq!(honoured.minimizes, *minimizes, "{case}: minimizes");
                 assert_eq!(honoured.maximizes, *maximizes, "{case}: maximizes");
                 assert_eq!(
@@ -549,12 +614,55 @@ pub(crate) mod support {
                 }
                 assert_eq!(honoured.frame_rate_hint, Unavailable, "{case}");
                 assert_eq!(honoured.material, Unavailable, "{case}");
-                let moves = *managed && supported.contains(&ATOMS.moveresize);
+                let moves = *manager == Extended && supported.contains(&ATOMS.moveresize);
                 assert_eq!(
                     honoured.app_title_bar,
                     if moves { Native } else { Unavailable },
                     "{case}: a title bar of the application's"
                 );
+            }
+        }
+
+        /// The mode a window manager wrote on a window is the window's while
+        /// that window manager runs, whether or not it speaks EWMH: an
+        /// iconic, fullscreen window whose window manager was killed is a
+        /// mapped window in normal mode.
+        #[test]
+        fn what_a_window_manager_wrote_stands_while_it_runs() {
+            use crate::window::linux::x11::mode::{NetWmState, WmState, mode_flags};
+            use crate::window::state::mode_of;
+
+            let written = || {
+                mode_flags(
+                    Some(WmState::Iconic),
+                    NetWmState {
+                        hidden: true,
+                        fullscreen: true,
+                        ..NetWmState::default()
+                    },
+                )
+            };
+            // (case, the window manager, mode)
+            let table = [
+                (
+                    "its window manager runs",
+                    WindowManager::Extended,
+                    WindowMode::Minimized,
+                ),
+                (
+                    "its window manager runs and answers no check",
+                    WindowManager::Icccm,
+                    WindowMode::Minimized,
+                ),
+                (
+                    "its window manager is gone",
+                    WindowManager::Absent,
+                    WindowMode::Normal,
+                ),
+            ];
+            for (case, manager, mode) in table {
+                let support = WindowManagerSupport::read(manager, &[304], &ATOMS);
+                assert_eq!(mode_of(support.kept(written())), mode, "{case}");
             }
         }
 

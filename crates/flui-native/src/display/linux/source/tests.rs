@@ -331,6 +331,53 @@ fn a_window_on_an_output_the_snapshot_lacks_asks_for_one_fresh_sample() {
     );
 }
 
+/// A session that never waits: each step comes back at once, as a step that
+/// read a stream as far as its cap does, until a deadline far past the time a
+/// stop may take.
+struct Flood {
+    until: Instant,
+}
+
+impl Session for Flood {
+    fn views(&self) -> Vec<OutputView> {
+        vec![view(1)]
+    }
+
+    fn step(&mut self, _: BorrowedFd<'_>) -> Result<Step, DisplayError> {
+        if Instant::now() >= self.until {
+            return Ok(Step::Stopped);
+        }
+        std::thread::yield_now();
+        Ok(Step::Idle)
+    }
+}
+
+/// A peer that sends without end never holds the display thread: steps
+/// that come back without waiting on the stop still end at the stop, which
+/// the thread looks at between them.
+fn a_session_that_never_waits_still_stops() {
+    let flood = Duration::from_secs(10);
+    let signal = OwnerSignal::new(Arc::new(|| Ok(())));
+    signal.start().expect("the owner signal starts");
+    let displays = LinuxDisplays::new();
+    let watcher = displays
+        .watch_session(
+            Protocol::X11,
+            &signal,
+            Box::new(Flood {
+                until: Instant::now() + flood,
+            }),
+        )
+        .expect("the session starts");
+    let asked = Instant::now();
+    drop(watcher);
+    let took = asked.elapsed();
+    assert!(
+        took < flood / 2,
+        "the stop waited {took:?} for a flood that runs {flood:?}"
+    );
+}
+
 fn a_watcher_whose_thread_has_ended_reports_it_finished() {
     let rig = rig(vec![view(1)]);
     let watcher = rig.watcher.as_ref().expect("a watcher");
@@ -377,6 +424,10 @@ fn display_thread_contract() {
             (
                 "a_watcher_whose_thread_has_ended_reports_it_finished",
                 a_watcher_whose_thread_has_ended_reports_it_finished,
+            ),
+            (
+                "a_session_that_never_waits_still_stops",
+                a_session_that_never_waits_still_stops,
             ),
             (
                 "a_window_on_an_output_the_snapshot_lacks_asks_for_one_fresh_sample",

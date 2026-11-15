@@ -120,6 +120,129 @@ fn a_randr_reconfiguration_on_a_real_server_is_published() {
     let stop = Arc::new(eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK).expect("fd"));
     watchdog(&stop, Duration::from_secs(20));
 
+    // A change of the desktop reads the work area again and nothing else: the
+    // outputs did not change, and reading them is a request for each. (Part
+    // of this test for the same reason as the wake below.)
+    let mut probes = 0;
+    // The requests the session made so far, these probes aside: each request
+    // of a connection takes the next sequence number.
+    let mut requests_made = |session: &X11Session| {
+        let cookie = xproto::get_input_focus(&session.connection).expect("request");
+        let sequence = cookie.sequence_number();
+        cookie.reply().expect("the server answers");
+        probes += 1;
+        sequence - probes
+    };
+    let desktop = xproto::intern_atom(&control, false, b"_NET_CURRENT_DESKTOP")
+        .expect("request")
+        .reply()
+        .expect("the atom")
+        .atom;
+    let before_change = requests_made(&session);
+    xproto::change_property(
+        &control,
+        xproto::PropMode::REPLACE,
+        root,
+        desktop,
+        AtomEnum::CARDINAL,
+        32,
+        1,
+        &1_u32.to_ne_bytes(),
+    )
+    .expect("request")
+    .check()
+    .expect("the server sets the property");
+    // A step that finds no event yet waits for one and reads nothing.
+    let read = loop {
+        match session
+            .step(stop.as_fd())
+            .expect("the session keeps running")
+        {
+            Step::Stopped => panic!("the desktop's change was never read"),
+            Step::Changed => panic!("a desktop with no work area changes no display"),
+            Step::Idle => {}
+        }
+        let read = requests_made(&session) - before_change;
+        if read > 0 {
+            break read;
+        }
+    };
+    xproto::delete_property(&control, root, desktop)
+        .expect("request")
+        .check()
+        .expect("the server deletes the property");
+    assert!(
+        read <= 2,
+        "a change of the desktop made {read} requests: the work area is two properties"
+    );
+    // The deletion is one more change of the desktop. It is read here: heard
+    // with the events below, it would have their work area read at once.
+    let before_deletion = requests_made(&session);
+    while requests_made(&session) == before_deletion {
+        let step = session.step(stop.as_fd());
+        assert!(
+            !matches!(step.expect("the session keeps running"), Step::Stopped),
+            "the desktop's deletion was never read"
+        );
+    }
+
+    // A step stops hearing at its cap. With more events than that already
+    // read off the socket, none of the first ones about the displays, the
+    // step comes back for the rest: the socket is quiet, so a step that
+    // waited on it would sleep on the work area's change behind them.
+    let atom = |name: &[u8]| {
+        xproto::intern_atom(&control, false, name)
+            .expect("request")
+            .reply()
+            .expect("the atom")
+            .atom
+    };
+    let set = |property: xproto::Atom, values: &[u32]| {
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect();
+        xproto::change_property(
+            &control,
+            xproto::PropMode::REPLACE,
+            root,
+            property,
+            AtomEnum::CARDINAL,
+            32,
+            u32::try_from(values.len()).expect("a few values"),
+            &bytes,
+        )
+        .expect("request");
+    };
+    // Two round trips: the server has sent the session every event before
+    // the session steps.
+    let sent = || {
+        for _ in 0..2 {
+            xproto::get_input_focus(&control)
+                .expect("request")
+                .reply()
+                .expect("the server answers");
+        }
+    };
+    let (unrelated, work_area) = (atom(b"FLUI_TEST_UNRELATED"), atom(b"_NET_WORKAREA"));
+    for value in 0..u32::try_from(2 * MAX_STEP_EVENTS).expect("the cap fits") {
+        set(unrelated, &[value]);
+    }
+    set(work_area, &[0, 0, 100, 100]);
+    sent();
+    until_changed(&mut session, &stop);
+    assert_eq!(
+        session.views()[0].usable_bounds.size,
+        Size::new(100, 100),
+        "the work area behind the unrelated events was read"
+    );
+    for property in [unrelated, work_area] {
+        xproto::delete_property(&control, root, property).expect("request");
+    }
+    sent();
+    until_changed(&mut session, &stop);
+    assert_eq!(session.views(), before, "the work area is gone again");
+
     // Turning the screen off removes the display.
     configure(0, info.x, info.y, &[]);
     until_changed(&mut session, &stop);

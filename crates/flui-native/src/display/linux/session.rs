@@ -8,7 +8,7 @@
 use std::io;
 use std::os::fd::BorrowedFd;
 
-use rustix::event::{PollFd, PollFlags, poll};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 
 use super::protocol::{Environment, Protocol};
@@ -138,4 +138,17 @@ pub(super) fn wait_readable(
         connection: ready(&fds[0]),
         stop: ready(&fds[1]),
     })
+}
+
+/// Whether `stop` is readable now, looked at without waiting: what the
+/// thread checks between two steps, since a step may return without waiting
+/// on it (a stream read as far as a cap, events queued meanwhile).
+pub(super) fn stop_requested(stop: BorrowedFd<'_>) -> bool {
+    let mut fds = [PollFd::new(&stop, PollFlags::IN)];
+    let now = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // An interrupted look is a stop not seen yet: the next step waits on it.
+    matches!(poll(&mut fds, Some(&now)), Ok(ready) if ready > 0)
 }
