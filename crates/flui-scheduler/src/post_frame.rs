@@ -492,9 +492,9 @@ impl OwnerFrame {
     /// frame completed stays completed, so its callbacks stay eligible and the presentation may
     /// enter its next segment. A segment still running keeps its callback debt as a suspended
     /// one, which the presentation's next segment resumes. Either way a scope whose callbacks
-    /// still wait gets its completion demand back, which entering the segment consumed, so the
-    /// runtime admits that next segment through its own gates (`has_completion_demand`). No
-    /// frame is asked here: re-driving the frame at once would re-drive its failure.
+    /// still wait is given completion demand, so the runtime admits that next segment through
+    /// its own gates (`has_completion_demand`): its eligibility, a hidden presentation, the
+    /// failed frame's backoff. The scheduler asks no frame itself.
     pub(crate) fn settle_aborted_segments(&self) {
         let queue = self.post_frame.queue.borrow();
         self.post_frame.scopes.borrow_mut().retain(|scope| {
@@ -763,7 +763,9 @@ impl PresentationFrameScope {
 
     /// Reissue retained successor demand after the host clears its wake latch.
     /// The runtime calls this only for an eligible presentation; hidden or
-    /// suspended geometry retains its debt without forcing an idle busy loop.
+    /// withdrawn geometry retains its debt without forcing an idle busy loop.
+    /// A segment an aborted frame suspended has published geometry and its
+    /// demand, so its presentation is admitted to resume it.
     pub fn rearm_completion_demand(&self) {
         if self.has_completion_demand()
             && let Some(scheduler) = self.scheduler.upgrade()
