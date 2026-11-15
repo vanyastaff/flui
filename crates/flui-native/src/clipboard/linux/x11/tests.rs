@@ -996,14 +996,14 @@ fn an_answer_that_is_not_the_form_asked_for_is_passed_over() {
             "a list of atoms",
             &[
                 (UTF8, Words("ATOM", WORDS)),
-                (LATIN1, Bytes(LATIN1, b"caf\xe9")),
+                (LATIN1, Bytes(LATIN1, b"\xe9t\xe9")),
             ],
-            Some("caf\u{e9}"),
+            Some("\u{e9}t\u{e9}"),
         ),
         (
             "bytes typed as another form",
             &[
-                (UTF8, Bytes(LATIN1, b"caf\xe9")),
+                (UTF8, Bytes(LATIN1, b"\xe9t\xe9")),
                 (PLAIN, Bytes(PLAIN, b"plain")),
             ],
             Some("plain"),
