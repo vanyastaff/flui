@@ -1125,12 +1125,15 @@ impl X11Drag {
                 .is_some_and(|over| over.target & !mask == requestor & !mask)
     }
 
-    /// Whether `window` is another client's: one of this connection's own,
-    /// a fetch window of the transfer's target, hears its own events
-    /// already, and its event mask is the transfer's to keep.
-    fn foreign(&self, window: xproto::Window) -> bool {
-        let setup = self.connection.xcb().setup();
-        window & !setup.resource_id_mask != setup.resource_id_base
+    /// Whether `window` is another client's, whose events the session may
+    /// select and stop hearing. One of this connection's own, a fetch window
+    /// of the transfer's target, hears its own events already, and its event
+    /// mask is the transfer's to keep. The root is not the session's either:
+    /// a requestor is any id its client names, and the root's mask is the
+    /// windows', which hear its property changes with it
+    /// (`X11Connection::made`).
+    pub(super) fn foreign(&self, window: xproto::Window) -> bool {
+        window != self.connection.root() && !self.connection.made(window)
     }
 
     /// The most bytes one property of an answer holds: below the server's

@@ -176,6 +176,20 @@ impl X11Connection {
     pub(crate) fn root(&self) -> xproto::Window {
         self.screen().root
     }
+
+    /// Whether this connection made the resource `id` names: the server
+    /// gives each client a range of ids, and every window, pixmap and cursor
+    /// the client makes is numbered in it.
+    ///
+    /// The events a client selects on a window are one mask per client, and
+    /// selecting replaces it. So the platform's features select events only
+    /// on a window that is another client's and not the root: a window this
+    /// connection made hears what its own feature selected, and the root
+    /// hears what the windows selected (`X11Windows::new`).
+    pub(crate) fn made(&self, id: u32) -> bool {
+        let setup = self.xcb.setup();
+        id & !setup.resource_id_mask == setup.resource_id_base
+    }
 }
 
 /// What wakes the loop from any thread: an eventfd the loop waits on beside
@@ -871,32 +885,46 @@ impl X11Loop {
     fn dispatch_events(&self, turns: &mut Turns) -> Result<(), PlatformError> {
         // A session started since the last turn took its window's press:
         // the input ends it before the events after it, the session's now.
+        // The drag handed the windows over, so each hears it though a
+        // handler of another panicked.
+        let mut failure = FirstPanic::new();
         for window in self.drag.pointers_taken() {
-            self.input.pointer_taken(window);
+            failure.contain(|| self.input.pointer_taken(window));
         }
+        // Nothing is off the connection yet: a failure goes on from here.
+        failure.resume();
         let events = turn_events(self.connection.xcb(), &mut turns.queued).map_err(|error| {
             PlatformError::EventLoop {
                 message: format!("the X server connection failed: {error}"),
             }
         })?;
+        self.hear_all(events);
+        Ok(())
+    }
+
+    /// Hand `events`, a turn's, to the features and the windows. They are
+    /// off the connection, and nothing else would hear them: whatever one of
+    /// them runs (a handler, a listener, a `tracing` subscriber) and however
+    /// it fails, the events after it are heard, and the first failure goes
+    /// on after the last.
+    fn hear_all(&self, events: Vec<Event>) {
         let mut failure = FirstPanic::new();
         for TurnEvent { passed, event } in fold_motions(events) {
-            if let Event::Error(error) = &event {
-                // A request on a window the server no longer has (a property
-                // read racing a close): the request's own reply says so too.
-                tracing::debug!(?error, "the X server refused a request");
-                continue;
-            }
             failure.contain(|| self.hear(&event, &passed));
         }
         // What the events marked and left to be read once.
         failure.contain(|| self.input.settle());
         failure.resume();
-        Ok(())
     }
 
     /// Hand one event to the features that hear it, in their order.
     fn hear(&self, event: &Event, passed: &[Event]) {
+        if let Event::Error(error) = event {
+            // A request on a window the server no longer has (a property
+            // read racing a close): the request's own reply says so too.
+            tracing::debug!(?error, "the X server refused a request");
+            return;
+        }
         // A drag message, or the answer to a fetch, is the drag's alone;
         // the drag contains what a window's handler raises as it hears it.
         if self.drag.event(event) {
@@ -1438,6 +1466,151 @@ mod tests {
         BeforeWait, MAX_TURN_EVENTS, WaitSource, before_wait, fold_motions, turn_events, wait_for,
     };
 
+    /// A window of `platform` and its X id. Hidden: the server is other
+    /// cases' too, and a window mapped on it would lie under their pointer.
+    fn hidden_window(
+        platform: &crate::X11Platform,
+    ) -> (std::rc::Rc<dyn crate::host_window::HostWindow>, u32) {
+        use flui_platform::WindowOptions;
+        use flui_testing::window_handler::RecordingWindowHandler;
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+        use crate::platform::Platform as _;
+
+        let window = platform
+            .open_window(
+                WindowOptions::default().visible(false),
+                RecordingWindowHandler::new(),
+            )
+            .expect("an X11 window opens");
+        let target = window.surface_target();
+        let handle = target.window_handle().expect("an open window has a handle");
+        let RawWindowHandle::Xcb(handle) = handle.as_raw() else {
+            panic!("an X11 window hands out an XCB handle");
+        };
+        (window, handle.window.get())
+    }
+
+    /// The server configured `window`: an event that may change its snapshot.
+    fn configured(window: u32) -> Event {
+        use x11rb::protocol::xproto::ConfigureNotifyEvent;
+
+        Event::ConfigureNotify(ConfigureNotifyEvent {
+            event: window,
+            window,
+            ..ConfigureNotifyEvent::default()
+        })
+    }
+
+    /// Whatever an event of a turn runs, and however it fails, the events
+    /// after it are heard and the failure goes on after the last: they are
+    /// off the connection, and nothing else would hear them. Here the server
+    /// refused a request, the loop reports it, and the `tracing` subscriber
+    /// (the application's code) panics; the configure behind it still marks
+    /// its window. On the X server `DISPLAY` names; passes as untested where
+    /// none answers.
+    #[test]
+    fn a_failure_while_an_event_is_heard_leaves_the_rest_of_the_turn_heard() {
+        use flui_foundation::panic::{FirstPanic, payload_text};
+        use x11rb::protocol::ErrorKind;
+        use x11rb::protocol::xproto::ConnectionExt as _;
+        use x11rb::x11_utils::X11Error;
+
+        /// A subscriber that fails at every diagnostic.
+        struct FailsAtADiagnostic;
+
+        impl tracing::Subscriber for FailsAtADiagnostic {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {
+                panic!("the subscriber failed");
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let Ok(platform) = crate::X11Platform::try_new() else {
+            eprintln!("no X server answers: nothing to run");
+            return;
+        };
+        let owner = platform.owner();
+        let xcb = owner.connection.xcb();
+        let (_window, xid) = hidden_window(&platform);
+        let sequence = || {
+            let cookie = xcb.get_input_focus().expect("request");
+            let sequence = cookie.sequence_number();
+            cookie.reply().expect("the server answers");
+            sequence
+        };
+        // What the window opened with is read.
+        owner.windows.read_stale();
+
+        let refused = Event::Error(X11Error {
+            error_kind: ErrorKind::Window,
+            error_code: 3,
+            sequence: 1,
+            bad_value: 0,
+            minor_opcode: 0,
+            major_opcode: 20,
+            extension_name: None,
+            request_name: None,
+        });
+        let mut failure = FirstPanic::new();
+        tracing::subscriber::with_default(FailsAtADiagnostic, || {
+            failure.contain(|| owner.hear_all(vec![refused, configured(xid)]));
+        });
+        assert_eq!(
+            failure.held().and_then(payload_text),
+            Some("the subscriber failed"),
+            "the failure goes on after the turn's events"
+        );
+        let before = sequence();
+        owner.windows.read_stale();
+        assert!(
+            sequence() - before > 1,
+            "the configure behind the failure marked its window, which reads itself"
+        );
+    }
+
+    /// A flood is served turn after turn with no sleep between: a turn that
+    /// stopped at its cap left events the connection has already read, where
+    /// `poll` cannot see them, and the step before the wait takes one of
+    /// them instead of sleeping.
+    #[test]
+    fn a_flood_is_served_turn_after_turn_with_no_sleep_between() {
+        let sent = u32::try_from(3 * MAX_TURN_EVENTS + 10).expect("the flood fits");
+        let source = Wire::default();
+        // Everything is read already: the socket is quiet.
+        source.queued.borrow_mut().extend(0..sent);
+        let mut found = None;
+        let mut served = Vec::new();
+        let mut turns = 0;
+        loop {
+            let Ok(events) = turn_events(&source, &mut found);
+            assert!(events.len() <= MAX_TURN_EVENTS, "{}", events.len());
+            served.extend(events);
+            turns += 1;
+            let Ok(next) = before_wait(&source, || false);
+            match next {
+                BeforeWait::Event(event) => found = Some(event),
+                BeforeWait::Frame => unreachable!("no window waits for a frame"),
+                BeforeWait::Sleep => break,
+            }
+        }
+        assert_eq!(
+            served,
+            (0..sent).collect::<Vec<_>>(),
+            "every event, in order"
+        );
+        assert_eq!(turns, 4, "the loop slept only once nothing was left");
+    }
+
     /// An event that may change a window's snapshot makes no request: the
     /// window asks the server for its state once, after the turn's events,
     /// however many of them named it, and a change of what the window
@@ -1447,15 +1620,10 @@ mod tests {
     /// where none answers.
     #[test]
     fn a_burst_of_state_events_reads_each_window_once() {
-        use flui_platform::WindowOptions;
-        use flui_testing::window_handler::RecordingWindowHandler;
-        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
         use x11rb::protocol::xinput::{self, ConnectionExt as _, DeviceType, EnterEvent};
         use x11rb::protocol::xproto::{
-            self, ConfigureNotifyEvent, ConnectionExt as _, FocusInEvent, PropertyNotifyEvent,
+            self, ConnectionExt as _, FocusInEvent, PropertyNotifyEvent,
         };
-
-        use crate::platform::Platform as _;
 
         let Ok(platform) = crate::X11Platform::try_new() else {
             eprintln!("no X server answers: nothing to run");
@@ -1464,24 +1632,8 @@ mod tests {
         let owner = platform.owner();
         let xcb = owner.connection.xcb();
         let root = owner.connection.root();
-        // Hidden: the server is other cases' too, and a window mapped on it
-        // would lie under their pointer.
-        let open = || {
-            let window = platform
-                .open_window(
-                    WindowOptions::default().visible(false),
-                    RecordingWindowHandler::new(),
-                )
-                .expect("an X11 window opens");
-            let target = window.surface_target();
-            let handle = target.window_handle().expect("an open window has a handle");
-            let RawWindowHandle::Xcb(handle) = handle.as_raw() else {
-                panic!("an X11 window hands out an XCB handle");
-            };
-            (window, handle.window.get())
-        };
-        let (_first_window, first) = open();
-        let (_second_window, second) = open();
+        let (_first_window, first) = hidden_window(&platform);
+        let (_second_window, second) = hidden_window(&platform);
         let atom = |name: &[u8]| {
             xcb.intern_atom(false, name)
                 .expect("request")
@@ -1497,13 +1649,6 @@ mod tests {
                 window,
                 atom,
                 ..PropertyNotifyEvent::default()
-            })
-        };
-        let configured = |window: xproto::Window| {
-            Event::ConfigureNotify(ConfigureNotifyEvent {
-                event: window,
-                window,
-                ..ConfigureNotifyEvent::default()
             })
         };
         let focused = |window: xproto::Window| {
