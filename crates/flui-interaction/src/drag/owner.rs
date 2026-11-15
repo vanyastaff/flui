@@ -492,8 +492,11 @@ impl DragOwner {
             let ticked = failure
                 .invoke(|| parts.with_view(&self.source, |view| tracker.tick(view, now)))
                 .unwrap_or_default();
-            if ticked.accepting_gone {
-                failure.invoke(|| self.accepting_gone(hovered));
+            // Owed whether or not a receiver failed in the tick, and kept until it is passed on.
+            if tracker.owes_withdrawal()
+                && failure.invoke(|| self.accepting_gone(hovered)).is_some()
+            {
+                tracker.withdrawal_passed_on();
             }
             // Content scrolled under a pointer that rests: find what is under
             // it now, as a move there would.
@@ -720,12 +723,16 @@ impl DragOwner {
     /// hover [`hold`](Self::hold) keeps, when it is released or dropped. The runtime calls this
     /// after each frame's build, whether the frame ends or unwinds. Runs no receiver.
     pub fn withdraw_unregistered_answers(&self) {
-        let gone: Vec<(PresentationId, DataTransferId, DropTracker)> = {
+        let owed: Vec<(PresentationId, DataTransferId, DropTracker)> = {
             let state = self.shared.borrow();
             state
                 .incoming
                 .iter()
-                .filter(|incoming| !incoming.dropped && incoming.tracker.accepts_unregistered())
+                .filter(|incoming| !incoming.dropped)
+                .filter(|incoming| {
+                    incoming.tracker.forget_unregistered_acceptance();
+                    incoming.tracker.owes_withdrawal()
+                })
                 .map(|incoming| {
                     (
                         incoming.presentation,
@@ -736,15 +743,15 @@ impl DragOwner {
                 .collect()
         };
         // Each withdrawal reaches the OS through the platform. One that fails keeps the others,
-        // and keeps its own acceptance, so the next build or tick withdraws it again; the first
-        // failure propagates after them.
+        // and stays owed, so the next build or tick tells the OS again; the first failure
+        // propagates after them.
         let mut failure = flui_foundation::panic::FirstPanic::new();
-        for (presentation, id, tracker) in gone {
+        for (presentation, id, tracker) in owed {
             if failure
                 .contain(|| self.accepting_gone(Hovered::Offer(presentation, id)))
                 .is_some()
             {
-                tracker.forget_unregistered_acceptance();
+                tracker.withdrawal_passed_on();
             }
         }
         failure.resume();

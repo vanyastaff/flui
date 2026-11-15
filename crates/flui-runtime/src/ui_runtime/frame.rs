@@ -1227,8 +1227,11 @@ impl UiRuntime {
         if replay_committed_input {
             hover_panic.contain(|| self.replay_committed_held_input(producer));
         }
-        if let Some(payload) = hover_panic.into_payload() {
-            resume_unwind(payload);
+        if hover_panic.is_held() {
+            // A failure telling the OS about a drag came before these.
+            withdrawal.absorb(hover_panic);
+            withdrawal.resume();
+            unreachable!("BUG: a held panic resumes");
         }
 
         // Animation continuation wake — deliberately placed AFTER

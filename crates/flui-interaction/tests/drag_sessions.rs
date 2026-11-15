@@ -1995,6 +1995,52 @@ fn a_withdrawal_that_fails_still_withdraws_the_other_answers() {
     });
 }
 
+/// A receiver goes away without a build, and telling the OS at the tick fails: the next tick
+/// tells it again, once.
+fn a_withdrawal_that_fails_in_a_tick_is_told_again() {
+    in_lane(|f| {
+        let gone = f.unregistered("T", Some(COPY), None);
+        let ticket = f.register(&gone, 0.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        let withdrawals = || {
+            f.source
+                .feedback
+                .lock()
+                .iter()
+                .filter(|(answered, feedback)| *answered == id && feedback.accept.is_none())
+                .count()
+        };
+        f.source
+            .fail_feedback
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let failure = catch_unwind(AssertUnwindSafe(|| f.owner.tick(time_at(10))))
+            .expect_err("telling the OS fails");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("feedback failure")
+        );
+        assert_eq!(count(&f.log, "T:left"), 1, "{:?}", logged(&f.log));
+        assert_eq!(withdrawals(), 1);
+        f.owner.tick(time_at(20));
+        assert_eq!(withdrawals(), 2, "the failed withdrawal is told again");
+        f.owner.tick(time_at(30));
+        f.owner.withdraw_unregistered_answers();
+        assert_eq!(withdrawals(), 2, "and only once it was heard");
+    });
+}
+
 fn a_replaced_registration_is_a_new_receiver() {
     in_lane(|f| {
         let first = f.unregistered("R1", Some(COPY), None);
@@ -3090,6 +3136,10 @@ fn drag_sessions() {
             (
                 "a_withdrawal_that_fails_still_withdraws_the_other_answers",
                 a_withdrawal_that_fails_still_withdraws_the_other_answers,
+            ),
+            (
+                "a_withdrawal_that_fails_in_a_tick_is_told_again",
+                a_withdrawal_that_fails_in_a_tick_is_told_again,
             ),
             (
                 "a_replaced_registration_is_a_new_receiver",

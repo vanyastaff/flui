@@ -45,6 +45,10 @@ struct TrackerState {
     /// Bumped by every move, so an autoscroll pass a move reentered keeps the
     /// frames that move asked for.
     moves: u64,
+    /// The receiver that accepted the last move went away and the owner has not yet told the OS
+    /// (or the in-window session) that nothing accepts. Kept until the owner has, so a failure
+    /// telling it is retried, whatever else clears the acceptance.
+    owes_withdrawal: bool,
     ended: bool,
 }
 
@@ -105,9 +109,6 @@ pub(crate) enum Dropped {
 /// What a tick changed that the drag's owner must pass on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Ticked {
-    /// The receiver that accepted the last move went away: nothing accepts
-    /// until the next move.
-    pub(crate) accepting_gone: bool,
     /// A receiver scrolled its content under the drag: what is under the
     /// pointer may have changed though the pointer did not move.
     pub(crate) scrolled: bool,
@@ -281,6 +282,8 @@ impl DropTracker {
                 return None;
             }
             state.accepting = accepted;
+            // This move's answer is the one the owner passes on now.
+            state.owes_withdrawal = false;
         }
         failure.finish();
         action
@@ -334,45 +337,51 @@ impl DropTracker {
     /// runs once per hover, and one autoscroll frame runs.
     pub(crate) fn tick(&self, view: &DragView<'_>, now: EventTime) -> Ticked {
         let mut failure = ClosePanic::new();
-        let accepting_gone = self.leave_unregistered(view, &mut failure);
+        self.leave_unregistered(view, &mut failure);
         self.spring_load(view, now, &mut failure);
         let scrolled = self.autoscroll_frame(view, now, &mut failure);
         failure.finish();
-        Ticked {
-            accepting_gone,
-            scrolled,
-        }
+        Ticked { scrolled }
     }
 
-    /// Whether the receiver that accepted the last move is no longer held by its ticket. No
-    /// drop goes to it either way; the caller withdraws its answer from the OS, then
-    /// [`forget_unregistered_acceptance`](Self::forget_unregistered_acceptance).
-    pub(crate) fn accepts_unregistered(&self) -> bool {
-        let state = self.0.borrow();
-        !state.ended
-            && state.accepting.as_ref().is_some_and(|accepting| {
-                !state.entered.iter().any(|entered| {
-                    entered.is(accepting.key, &accepting.receiver) && entered.is_registered()
-                })
-            })
-    }
-
-    /// Forget the receiver that accepted the last move once its ticket no longer holds it and the
-    /// OS has heard that nothing accepts. No receiver runs: the ones that went leave at the next
-    /// [`tick`](Self::tick).
+    /// Forget the receiver that accepted the last move once its ticket no longer holds it, so no
+    /// drop goes to it, and owe its withdrawal (`owes_withdrawal`). No receiver runs: the ones
+    /// that went leave at the next [`tick`](Self::tick).
     pub(crate) fn forget_unregistered_acceptance(&self) {
-        if self.accepts_unregistered() {
-            self.0.borrow_mut().accepting = None;
+        let mut state = self.0.borrow_mut();
+        if state.ended {
+            return;
+        }
+        let gone = state.accepting.as_ref().is_some_and(|accepting| {
+            !state.entered.iter().any(|entered| {
+                entered.is(accepting.key, &accepting.receiver) && entered.is_registered()
+            })
+        });
+        if gone {
+            state.accepting = None;
+            state.owes_withdrawal = true;
         }
     }
 
-    /// Leave every entered receiver whose ticket no longer holds it; whether
-    /// the one that accepted the last move was among them.
-    fn leave_unregistered(&self, view: &DragView<'_>, failure: &mut ClosePanic) -> bool {
-        let (gone, lost) = {
+    /// Whether the receiver that accepted the last move went away and the owner has not yet
+    /// passed that on ([`withdrawal_passed_on`](Self::withdrawal_passed_on)).
+    pub(crate) fn owes_withdrawal(&self) -> bool {
+        let state = self.0.borrow();
+        !state.ended && state.owes_withdrawal
+    }
+
+    /// The owner told the OS, or the in-window session, that nothing accepts.
+    pub(crate) fn withdrawal_passed_on(&self) {
+        self.0.borrow_mut().owes_withdrawal = false;
+    }
+
+    /// Leave every entered receiver whose ticket no longer holds it; when the one that accepted the
+    /// last move was among them, its withdrawal is owed.
+    fn leave_unregistered(&self, view: &DragView<'_>, failure: &mut ClosePanic) {
+        let gone = {
             let mut state = self.0.borrow_mut();
             if state.ended {
-                return false;
+                return;
             }
             let (kept, gone): (Vec<Entered>, Vec<Entered>) = std::mem::take(&mut state.entered)
                 .into_iter()
@@ -384,15 +393,15 @@ impl DropTracker {
             });
             if lost {
                 state.accepting = None;
+                state.owes_withdrawal = true;
             }
-            (gone, lost)
+            gone
         };
         for entered in gone {
             if entered.announced && !self.is_ended() {
                 failure.invoke(|| entered.receiver.drag_left(view));
             }
         }
-        lost
     }
 
     fn spring_load(&self, view: &DragView<'_>, now: EventTime, failure: &mut ClosePanic) {
