@@ -169,6 +169,7 @@ impl SeatDrag {
             action: TransferActions::empty(),
             grab: (grab.seat.clone(), grab.serial),
         };
+        self.shared.last_input.watch(grab.seat.clone(), grab.serial);
         self.shared
             .sources
             .with(|sources| sources.session = Some(session));
@@ -186,13 +187,14 @@ impl SeatDrag {
             self.source_wire(&source, wire);
         }
         // A release reached the window under the grab the session started
-        // under: the compositor took no drag from it, and says nothing.
+        // under, so the compositor took no drag from it, or the grab's seat
+        // went: the compositor says nothing of a drag in either case.
         let ignored = self
             .shared
             .sources
             .with(|sources| {
                 let (seat, serial) = &sources.session.as_ref()?.grab;
-                Some(self.shared.last_input.released_grab(seat, *serial))
+                Some(self.shared.last_input.watched_ended(seat, *serial))
             })
             .flatten()
             .unwrap_or(false);

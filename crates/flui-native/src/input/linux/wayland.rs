@@ -53,13 +53,6 @@
 //!   cursor moved by the update's translation. Swipes and holds are the
 //!   compositor's.
 
-/// The seats the input binds, and so the most pointers a window's own frame
-/// follows. A seat is a user at the machine, and a compositor with more than
-/// a few is unheard of; a compositor announcing seats without end is not
-/// bound past this.
-#[cfg(any(wayland_host, test))]
-pub(crate) const MAX_SEATS: usize = 16;
-
 pub mod wire;
 
 pub mod repeat {

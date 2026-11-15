@@ -21,7 +21,8 @@
 
 #![forbid(unsafe_code)]
 
-use crate::owner::linux::wayland::activation::{ActivationToken, UserInput};
+use crate::owner::linux::wayland::activation::ActivationToken;
+use crate::owner::linux::wayland::user_input::UserInput;
 
 /// A request on a token object, after `get_activation_token` made it.
 #[derive(Debug, Clone, PartialEq, Eq)]

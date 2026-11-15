@@ -55,9 +55,9 @@ use flui_platform::input_regions::ResizeEdge;
 
 use super::configure::{TiledEdges, ToplevelStates, WmCapabilities};
 use super::scale::BufferScale;
-use crate::input::linux::wayland::MAX_SEATS;
 use crate::input::regions::ProjectedInputRegions;
 use crate::input::regions::presses::{ChromePress, ChromePresses, PressButton, device_point};
+use crate::owner::linux::wayland::user_input::MAX_SEATS;
 
 /// The title bar's height, in logical pixels.
 pub(crate) const HEADER: f64 = 37.0;
@@ -501,6 +501,16 @@ pub(crate) enum Action {
     Maximize,
     /// Take it out of maximized.
     Restore,
+}
+
+impl Action {
+    /// Whether the window carries it out under the seat and serial of the
+    /// press that asked: a move, a resize and the window menu are requests
+    /// under a pointer grab, which a seat that went no longer holds; the
+    /// others are the window's own and name no seat.
+    pub(crate) const fn names_seat(self) -> bool {
+        matches!(self, Self::Move | Self::Resize(_) | Self::Menu { .. })
+    }
 }
 
 /// The pointer over a frame: the part it is over, the button held, and
@@ -1839,12 +1849,13 @@ pub(crate) mod surfaces {
         fn seat_gone(&self, seat: &WlSeat) {
             let mut pointing = self.0.borrow_mut();
             pointing.pointers.forget(seat);
-            // What its press asked for names a seat the compositor no longer
-            // knows.
+            // A move, resize or menu its press asked for names a seat the
+            // compositor no longer knows; a close, minimize or maximize
+            // names none and is still carried out.
             if pointing
                 .asked
                 .as_ref()
-                .is_some_and(|asked| asked.seat == *seat)
+                .is_some_and(|asked| asked.seat == *seat && asked.action.names_seat())
             {
                 pointing.asked = None;
             }
@@ -2251,6 +2262,47 @@ pub(crate) mod surfaces {
             _: &QueueHandle<Self>,
         ) {
             // A pool has no events.
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A seat that goes takes along the move, resize or menu its press
+        /// asked for, which name its grab, and leaves a close, minimize or
+        /// maximize, which name no seat: a release on Close read with the
+        /// seat's removal still closes the window.
+        #[test]
+        fn a_seat_that_goes_leaves_the_actions_that_name_no_seat() {
+            let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
+            let Ok(connection) = Connection::from_socket(ours) else {
+                eprintln!("no libwayland-client to load; the case was not run");
+                return;
+            };
+            let seat = WlSeat::inert(connection.backend().downgrade());
+            for (action, kept) in [
+                (Action::Close, true),
+                (Action::Minimize, true),
+                (Action::Maximize, true),
+                (Action::Restore, true),
+                (Action::Move, false),
+                (Action::Resize(super::super::Edge::Bottom), false),
+                (Action::Menu { x: 4, y: 5 }, false),
+            ] {
+                let record = FrameRecord::default();
+                record.0.borrow_mut().asked = Some(Asked {
+                    action,
+                    seat: seat.clone(),
+                    serial: 7,
+                });
+                FramePointer::seat_gone(&record, &seat);
+                assert_eq!(
+                    record.take_asked().map(|asked| asked.action),
+                    kept.then_some(action),
+                    "{action:?}"
+                );
+            }
         }
     }
 }

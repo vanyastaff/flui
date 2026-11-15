@@ -15,6 +15,7 @@
 //! the objects' user data hold it weakly, so a proxy outliving the input
 //! records nothing.
 
+use std::num::NonZeroU64;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::FileExt;
 use std::rc::Rc;
@@ -22,6 +23,7 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use cursor_icon::CursorIcon;
+use flui_foundation::sequence::IdMint;
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::keyboard::{KeyEvent, KeyState};
 use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
@@ -67,19 +69,19 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::{
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_v2::{self, ZwpTabletV2};
 use web_time::Instant;
 
+use super::cursor;
 use super::keyboards::Keyboards;
 use super::wire::{
     Axis, AxisSource, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatKey, SeatWire,
     ToolWire, TouchWire, WireTime,
 };
-use super::{MAX_SEATS, cursor};
 use crate::input::assembly::{NativeClock, NativeDevice, NativeSurface};
 use crate::input::availability::{self, WaylandInputGlobals};
 use crate::input::event_timestamp_ns;
 use crate::input::linux::xkb::{EVDEV_OFFSET, Keyboard, KeymapSource, keymap_length};
 #[cfg(any(test, feature = "testing"))]
 use crate::owner::linux::wayland::ShownCursor;
-use crate::owner::linux::wayland::activation::UserInput;
+use crate::owner::linux::wayland::user_input::{MAX_SEATS, UserInput};
 use crate::owner::linux::wayland::{
     CursorGlobals, FramePointer, LastInput, SeatText, SeatWindow, TextRecorder, TextWire,
     WaylandInput, WaylandState,
@@ -312,10 +314,10 @@ struct Shared {
     windows: OwnerCell<Vec<Attached>>,
     delivering: OwnerCell<Option<Delivering>>,
     layout_callbacks: OwnerCell<Vec<Box<dyn FnMut()>>>,
-    /// The last device label minted.
-    labels: OwnerCell<u64>,
-    /// The last seat key minted.
-    seat_keys: OwnerCell<u64>,
+    /// The device labels minted.
+    labels: OwnerCell<IdMint<NonZeroU64>>,
+    /// The seat keys minted.
+    seat_keys: OwnerCell<IdMint<NonZeroU64>>,
     /// The cursor theme loaded at each buffer scale a cursor was drawn at.
     themes: OwnerCell<Vec<(i32, CursorTheme)>>,
     /// The cursor last shown, for a test.
@@ -508,15 +510,12 @@ impl TextRecorder for Shared {
     }
 }
 
-/// The label after the last one minted in `last`: labels start at one and
-/// are minted by the dispatch, on the owner thread. Zero anywhere else,
-/// where no object is made to carry one.
-fn next_label(last: &OwnerCell<u64>) -> u64 {
-    last.with(|last| {
-        *last = last.saturating_add(1);
-        *last
-    })
-    .unwrap_or(0)
+/// The next label `mint` issues: labels start at one and are minted by the
+/// dispatch, on the owner thread. Zero anywhere else, where no object is
+/// made to carry one, and once every label was issued.
+fn next_label(mint: &OwnerCell<IdMint<NonZeroU64>>) -> u64 {
+    mint.with(|mint| mint.next().map_or(0, NonZeroU64::get))
+        .unwrap_or(0)
 }
 
 /// The surface key of window `id`.

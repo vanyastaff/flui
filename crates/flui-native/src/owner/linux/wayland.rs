@@ -52,15 +52,18 @@ pub(crate) use event_loop::{
     WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
-pub(crate) mod activation {
-    //! What the loop and its windows say of an activation (`xdg-activation`):
-    //! the user input a token names, the token itself, and the token a
-    //! launcher handed the process; and what the seats' input keeps of the
-    //! inputs a token or a drag names ([`Inputs`]).
+pub(crate) mod user_input {
+    //! What the seats' input keeps of the user inputs a later request names
+    //! ([`Inputs`]): the last one, which an activation token names, and each
+    //! seat's pointer grab, which a drag starts under.
 
     #![forbid(unsafe_code)]
 
-    use std::ffi::OsString;
+    /// The seats the input binds, and so the most pointers a window's own
+    /// frame follows. A seat is a user at the machine, and a compositor with
+    /// more than a few is unheard of; a compositor announcing seats without
+    /// end is not bound past this.
+    pub(crate) const MAX_SEATS: usize = 16;
 
     /// A user input as an activation token names it: the seat it came from,
     /// the serial the compositor gave its event (a key, a button, a touch,
@@ -79,17 +82,27 @@ pub(crate) mod activation {
     /// last one, which an activation token names, and the press that began
     /// each seat's pointer grab while a button is held, which a drag starts
     /// under. A seat has one grab at most, and a seat that goes leaves
-    /// nothing here, so what is kept is bounded by the seats bound.
+    /// nothing here but the end of a watched grab, so what is kept is
+    /// bounded by the seats bound.
     #[derive(Debug)]
     pub(crate) struct Inputs<Seat, Surface> {
         last: Option<UserInput<Seat, Surface>>,
         /// Each seat's grab: the press that began it and how many buttons
         /// hold it now.
         grabs: Vec<(UserInput<Seat, Surface>, u32)>,
-        /// The grab whose last button went up last, by its seat and the
-        /// serial of its press: a drag started under it never began, since
-        /// a drag takes the pointer from its surface before any release.
-        released: Option<(Seat, u32)>,
+        /// The grab a drag session started under, and whether it ended in a
+        /// way no drag under it survives. See [`Self::watch`].
+        watched: Option<Watched<Seat>>,
+    }
+
+    /// The grab a drag session started under, by its seat and the serial of
+    /// its press.
+    #[derive(Debug)]
+    struct Watched<Seat> {
+        seat: Seat,
+        serial: u32,
+        /// Its last button went up over its surface, or its seat went.
+        ended: bool,
     }
 
     impl<Seat, Surface> Default for Inputs<Seat, Surface> {
@@ -97,7 +110,7 @@ pub(crate) mod activation {
             Self {
                 last: None,
                 grabs: Vec::new(),
-                released: None,
+                watched: None,
             }
         }
     }
@@ -134,22 +147,41 @@ pub(crate) mod activation {
                 if grab.seat == *seat {
                     *held = held.saturating_sub(1);
                     if *held == 0 {
-                        ended = Some((grab.seat.clone(), grab.serial));
+                        ended = Some(grab.serial);
                     }
                 }
                 *held > 0
             });
-            if ended.is_some() {
-                self.released = ended;
+            if let (Some(serial), Some(watched)) = (ended, self.watched.as_mut())
+                && watched.seat == *seat
+                && watched.serial == serial
+            {
+                // A drag takes the pointer from its surface before any
+                // release: one that reached the surface means none began.
+                watched.ended = true;
             }
         }
 
-        /// Whether the grab `seat`'s press `serial` began ended with a
-        /// release that reached its surface.
-        pub(crate) fn released_grab(&self, seat: &Seat, serial: u32) -> bool {
-            self.released
-                .as_ref()
-                .is_some_and(|(held, at)| held == seat && *at == serial)
+        /// Watch the grab `seat`'s press `serial` began, which a drag
+        /// session starts under, in place of any grab watched before: from
+        /// here [`Self::watched_ended`] says whether it ended in a way no
+        /// drag under it survives.
+        pub(crate) fn watch(&mut self, seat: Seat, serial: u32) {
+            self.watched = Some(Watched {
+                seat,
+                serial,
+                ended: false,
+            });
+        }
+
+        /// Whether the grab `seat`'s press `serial` began is the one watched
+        /// and ended since it was: its last button went up over its surface,
+        /// so the compositor took no drag from it, or its seat went, taking
+        /// any drag under it along.
+        pub(crate) fn watched_ended(&self, seat: &Seat, serial: u32) -> bool {
+            self.watched.as_ref().is_some_and(|watched| {
+                watched.ended && watched.seat == *seat && watched.serial == serial
+            })
         }
 
         /// `seat`'s pointer left its surface, or went, which ends any grab
@@ -158,16 +190,19 @@ pub(crate) mod activation {
             self.grabs.retain(|(grab, _)| grab.seat != *seat);
         }
 
-        /// `seat` went: its grab ends, and neither the last input nor the
-        /// grab last released names it, so no token and no drag is asked
-        /// for under a seat the compositor no longer knows.
+        /// `seat` went: its grab ends, the last input no longer names it, so
+        /// no token is asked for under a seat the compositor no longer
+        /// knows, and a watched grab of its own has ended, whether its
+        /// button was still held or already released.
         pub(crate) fn seat_gone(&mut self, seat: &Seat) {
             self.left(seat);
             if self.last.as_ref().is_some_and(|last| last.seat == *seat) {
                 self.last = None;
             }
-            if self.released.as_ref().is_some_and(|(held, _)| held == seat) {
-                self.released = None;
+            if let Some(watched) = self.watched.as_mut()
+                && watched.seat == *seat
+            {
+                watched.ended = true;
             }
         }
 
@@ -180,6 +215,121 @@ pub(crate) mod activation {
                 .map(|(grab, _)| grab)
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn input(seat: u32, serial: u32, surface: u32) -> UserInput<u32, u32> {
+            UserInput {
+                seat,
+                serial,
+                surface,
+            }
+        }
+
+        /// A seat's grab begins with its first button and ends with its
+        /// last, or as its pointer leaves; the watched grab a release ended
+        /// is one a drag started under it never began.
+        #[test]
+        fn a_grab_lasts_while_a_button_is_held() {
+            let mut inputs = Inputs::default();
+            inputs.pressed(input(1, 10, 7));
+            inputs.pressed(input(1, 11, 7));
+            assert_eq!(
+                inputs.grab_on(&7),
+                Some(&input(1, 10, 7)),
+                "the first press"
+            );
+            inputs.watch(1, 10);
+            inputs.released(&1);
+            assert_eq!(inputs.grab_on(&7), Some(&input(1, 10, 7)), "one still held");
+            assert!(!inputs.watched_ended(&1, 10));
+            inputs.released(&1);
+            assert_eq!(inputs.grab_on(&7), None);
+            assert!(inputs.watched_ended(&1, 10), "ended by a release");
+            assert!(!inputs.watched_ended(&1, 11), "the grab of 10 is watched");
+
+            inputs.pressed(input(2, 20, 8));
+            inputs.watch(2, 20);
+            assert!(!inputs.watched_ended(&1, 10), "watched in its place");
+            inputs.left(&2);
+            assert_eq!(inputs.grab_on(&8), None, "the pointer left");
+            assert!(!inputs.watched_ended(&2, 20), "no release reached it");
+        }
+
+        /// A seat removed with a button held leaves no grab and is not the
+        /// last input: a compositor adding and removing seats without end
+        /// grows nothing, and no token asked after names a seat that is
+        /// gone.
+        #[test]
+        fn a_seat_that_goes_leaves_no_input_behind() {
+            let mut inputs = Inputs::default();
+            inputs.pressed(input(1, 5, 3));
+            inputs.record(input(1, 5, 3));
+            for seat in 2..10_002 {
+                inputs.record(input(seat, seat, 7));
+                inputs.pressed(input(seat, seat, 7));
+                inputs.seat_gone(&seat);
+                assert_eq!(inputs.grab_on(&7), None, "seat {seat} is gone");
+                assert_eq!(inputs.latest(), None, "seat {seat} is gone");
+            }
+            assert_eq!(inputs.grabs.len(), 1, "the seat still here keeps its grab");
+            assert_eq!(inputs.grab_on(&3), Some(&input(1, 5, 3)));
+            inputs.record(input(1, 6, 3));
+            inputs.seat_gone(&1);
+            assert_eq!(inputs.latest(), None);
+        }
+
+        /// A drag session's grab ends when its seat goes, in either order
+        /// one read may carry: the release, then the seat's removal; or the
+        /// removal with the button still held. A compositor that ignored
+        /// the drag says nothing of it either way, and the session ends on
+        /// what is recorded here. Another seat's going ends nothing.
+        #[test]
+        fn a_watched_grab_ends_when_its_seat_goes() {
+            let mut released_then_gone = Inputs::default();
+            released_then_gone.pressed(input(1, 5, 3));
+            released_then_gone.watch(1, 5);
+            released_then_gone.released(&1);
+            released_then_gone.seat_gone(&1);
+            assert!(
+                released_then_gone.watched_ended(&1, 5),
+                "released, then the seat went"
+            );
+
+            let mut gone_held = Inputs::default();
+            gone_held.pressed(input(1, 5, 3));
+            gone_held.pressed(input(2, 9, 4));
+            gone_held.watch(1, 5);
+            gone_held.seat_gone(&2);
+            assert!(!gone_held.watched_ended(&1, 5), "another seat went");
+            gone_held.seat_gone(&1);
+            assert!(gone_held.watched_ended(&1, 5), "gone with its button held");
+
+            let mut gone_after_leave = Inputs::default();
+            gone_after_leave.pressed(input(1, 5, 3));
+            gone_after_leave.watch(1, 5);
+            gone_after_leave.left(&1);
+            assert!(!gone_after_leave.watched_ended(&1, 5), "the drag began");
+            gone_after_leave.seat_gone(&1);
+            assert!(
+                gone_after_leave.watched_ended(&1, 5),
+                "the seat went with the drag under way"
+            );
+        }
+    }
+}
+
+pub(crate) mod activation {
+    //! What the loop and its windows say of an activation (`xdg-activation`):
+    //! the token a request is answered with, and the token a launcher
+    //! handed the process. The user input a token names is
+    //! [`UserInput`](super::user_input::UserInput).
+
+    #![forbid(unsafe_code)]
+
+    use std::ffi::OsString;
 
     /// An activation token: what the compositor answered a token request
     /// with, or what a launcher handed the process. Opaque; only the
@@ -234,70 +384,6 @@ pub(crate) mod activation {
                 "handed",
                 "the compositor gets back what it sent"
             );
-        }
-
-        fn input(seat: u32, serial: u32, surface: u32) -> UserInput<u32, u32> {
-            UserInput {
-                seat,
-                serial,
-                surface,
-            }
-        }
-
-        /// A seat's grab begins with its first button and ends with its
-        /// last, or as its pointer leaves; the grab a release ended is the
-        /// one a drag started under it never began.
-        #[test]
-        fn a_grab_lasts_while_a_button_is_held() {
-            let mut inputs = Inputs::default();
-            inputs.pressed(input(1, 10, 7));
-            inputs.pressed(input(1, 11, 7));
-            assert_eq!(
-                inputs.grab_on(&7),
-                Some(&input(1, 10, 7)),
-                "the first press"
-            );
-            inputs.released(&1);
-            assert_eq!(inputs.grab_on(&7), Some(&input(1, 10, 7)), "one still held");
-            assert!(!inputs.released_grab(&1, 10));
-            inputs.released(&1);
-            assert_eq!(inputs.grab_on(&7), None);
-            assert!(inputs.released_grab(&1, 10), "ended by a release");
-
-            inputs.pressed(input(2, 20, 8));
-            inputs.left(&2);
-            assert_eq!(inputs.grab_on(&8), None, "the pointer left");
-            assert!(!inputs.released_grab(&2, 20), "no release reached it");
-        }
-
-        /// A seat removed with a button held leaves no grab, and is neither
-        /// the last input nor the grab last released: a compositor adding
-        /// and removing seats without end grows nothing, and nothing asked
-        /// after names a seat that is gone.
-        #[test]
-        fn a_seat_that_goes_leaves_no_input_behind() {
-            let mut inputs = Inputs::default();
-            inputs.pressed(input(1, 5, 3));
-            inputs.record(input(1, 5, 3));
-            for seat in 2..10_002 {
-                inputs.record(input(seat, seat, 7));
-                inputs.pressed(input(seat, seat, 7));
-                inputs.seat_gone(&seat);
-                assert_eq!(inputs.grab_on(&7), None, "seat {seat} is gone");
-                assert_eq!(inputs.latest(), None, "seat {seat} is gone");
-            }
-            assert_eq!(inputs.grabs.len(), 1, "the seat still here keeps its grab");
-            assert_eq!(inputs.grab_on(&3), Some(&input(1, 5, 3)));
-
-            inputs.released(&1);
-            assert!(inputs.released_grab(&1, 5));
-            inputs.record(input(1, 6, 3));
-            inputs.seat_gone(&1);
-            assert!(
-                !inputs.released_grab(&1, 5),
-                "its released grab is forgotten"
-            );
-            assert_eq!(inputs.latest(), None);
         }
     }
 }
@@ -552,9 +638,8 @@ mod event_loop {
     use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
     use web_time::Instant;
 
-    use super::activation::{
-        ActivationToken, Inputs, LAUNCH_TOKEN_VARIABLE, UserInput, launch_token,
-    };
+    use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, launch_token};
+    use super::user_input::{Inputs, UserInput};
     use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, poll_timeout};
     use crate::error::PlatformError;
     use crate::executor::NativeExecutor;
@@ -1137,11 +1222,18 @@ mod event_loop {
             self.0.with(|inputs| inputs.released(seat));
         }
 
-        /// Whether the grab `seat`'s press `serial` began ended with a
-        /// release that reached its surface; `false` off the owner thread.
-        pub(crate) fn released_grab(&self, seat: &WlSeat, serial: u32) -> bool {
+        /// Watch the grab `seat`'s press `serial` began, which a drag
+        /// session starts under. See [`Inputs::watch`].
+        pub(crate) fn watch(&self, seat: WlSeat, serial: u32) {
+            self.0.with(|inputs| inputs.watch(seat, serial));
+        }
+
+        /// Whether the watched grab of `seat`'s press `serial` ended: its
+        /// last button went up over its surface, or its seat went; `false`
+        /// off the owner thread.
+        pub(crate) fn watched_ended(&self, seat: &WlSeat, serial: u32) -> bool {
             self.0
-                .with(|inputs| inputs.released_grab(seat, serial))
+                .with(|inputs| inputs.watched_ended(seat, serial))
                 .unwrap_or(false)
         }
 
@@ -2770,8 +2862,8 @@ mod event_loop {
         }
 
         /// A grab is the first press a seat's pointer holds, kept until its
-        /// last button goes up or the pointer leaves its surface, and only a
-        /// release names the grab it ended.
+        /// last button goes up or the pointer leaves its surface; a watched
+        /// grab ends with a release over its surface, not with a leave.
         #[test]
         fn a_grab_is_the_first_press_held_until_its_last_release() {
             let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
@@ -2793,21 +2885,25 @@ mod event_loop {
             grabs.pressed(press(3));
             grabs.pressed(press(4));
             assert_eq!(serial(&grabs), Some(3), "the grab's first press");
+            grabs.watch(seat.clone(), 3);
             grabs.released(&seat);
             assert_eq!(serial(&grabs), Some(3), "a button still holds it");
             grabs.released(&seat);
             assert_eq!(serial(&grabs), None, "the last release ends it");
             assert!(
-                grabs.released_grab(&seat, 3),
+                grabs.watched_ended(&seat, 3),
                 "a release ended the grab of 3"
             );
             grabs.pressed(press(9));
+            grabs.watch(seat.clone(), 9);
             grabs.left(&seat);
             assert_eq!(serial(&grabs), None, "a leave ends it");
             assert!(
-                !grabs.released_grab(&seat, 9),
+                !grabs.watched_ended(&seat, 9),
                 "no release reached the surface the grab of 9 left"
             );
+            grabs.seat_gone(&seat);
+            assert!(grabs.watched_ended(&seat, 9), "its seat went");
         }
     }
 }
