@@ -5794,15 +5794,21 @@ graph LR
   (откат — нажатие хода теряется, тест ждёт его до срока). (2) Паника `exit_policy` терминальна
   (ADR-0258 §2) и решается в `AppDelivery::exit_policy` на всех хостах: исполняется ответ хоста
   по умолчанию (`ExitAnswer::ends_loop`), паника паркуется как первый отказ прогона и
-  поднимается из `run` после конца цикла (Win32, X11, Wayland, AppKit) или в вызвавший код
+  поднимается из `run` после конца цикла впереди любой более поздней паники (цикл идёт под
+  `FirstPanic`, `resume_after_run`; Win32, X11, Wayland, AppKit) или в вызвавший код
   (headless), политика больше не спрашивается. Тесты: `a_panicking_exit_policy_is_terminal`
   (`app_delivery_contracts`), `a_panicking_exit_policy_is_terminal_after_the_hosts_answer`
   (headless), Win32 `panicking_exit_policy_ends_the_loop_and_resumes_after_it` и
-  `failing_exit_policy_leaves_the_exit_to_the_host` заменили тесты вето. (3) `question` хранит
-  ответ, когда падает отчёт после него, а панику отчёта паркует так же:
+  `failing_exit_policy_leaves_the_exit_to_the_host` заменили тесты вето;
+  `a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one` на headless, X11 и Wayland (откат
+  порядка — выходит «a later handler»). Wayland теперь, как X11 и Win32, не кончает цикл, если
+  политика открыла окно. (3) `question` хранит
+  ответ, а паника отчёта после него идёт путём того же отчёта, доставленного отдельно (`Asked`:
+  ОС-вызов логирует и сохраняет ответ, Rust-кадр получает панику), ничего не паркуется:
   `a_question_keeps_its_answer_when_a_report_after_it_panics`,
-  `a_session_end_answer_survives_a_panicking_report_after_it` (без исправления — паника вместо
-  `Block`). (4) Частично: правило срока одно только на Windows. Модальный цикл Win32 берёт срок
+  `a_report_after_the_wake_deadline_is_no_terminal_failure`,
+  `a_panicking_report_after_a_session_end_answer_is_no_terminal_failure` (с паркованием паника
+  отчёта выходила только при выходе приложения). (4) Частично: правило срока одно только на Windows. Модальный цикл Win32 берёт срок
   через `WakeDeadline`, `ModalDelivery` удалён;
   `a_due_deadline_gets_one_modal_frame_per_generation` проверяет темп таймера (без исправления
   ожидание 1 мс вместо `MODAL_FRAME_PACE_MS`). Насос AppKit и цикл Android не переведены: их окна не

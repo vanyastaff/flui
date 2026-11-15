@@ -861,9 +861,11 @@ trait depends on `flui-platform` instead.
   from another thread); the quit is heard once per run. A question (session
   end, exit policy, wake deadline) is asked at once, re-entrantly if need be,
   and a report it raises is delivered right after its answer; the answer is
-  the question's outcome, which the host carries out (a blocked session end
-  stays blocked), and a report after it that panics is parked as the run's
-  terminal failure, never discarded. With no handler bound the host answers
+  kept beside the panic of a report delivered after it (`Asked`), and that
+  panic takes the path the same report's takes delivered alone, whether or
+  not an answer came: an OS caller keeps the answer and logs the panic (a
+  blocked session end stays blocked), a caller with a Rust frame gets the
+  panic, and nothing is parked. With no handler bound the host answers
   it itself (proceed, its own exit default, no deadline), and so it does for
   an exit the handler leaves to it (`ExitAnswer::HostDecides`): the desktop
   hosts end the loop, the headless platform keeps running. An exit policy
@@ -872,13 +874,17 @@ trait depends on `flui-platform` instead.
   the teardown can proceed, the panic is parked as the run's first failure,
   and the policy is not asked again, so one that panics on every call neither
   spins nor floods. Each loop only carries it out: the Win32, X11, Wayland
-  and AppKit loops resume it out of `run` once the quit is delivered and the
-  handler released (`AppDelivery::take_terminal`), where a Rust frame waits
+  and AppKit loops run their loop under a `FirstPanic` and resume it out of
+  `run` once the quit is delivered and the handler released, ahead of any
+  panic the loop raised after it (`AppDelivery::resume_after_run`), where a
+  Rust frame waits
   even though the question was asked inside a window procedure; the headless
   platform resumes it into the call that asked (a window's close, the
   reevaluation's `drive`) or into its quit; a loop that never returns to a
-  Rust frame (UIKit, the web page, the Android Activity) logs it as its
-  delivery goes. A panicking method is contained, the tail behind
+  Rust frame (UIKit, the web page, the Android Activity) never asks the exit
+  policy, so nothing parks there (ADR-0258 §3: iOS logs what reaches
+  `applicationWillTerminate:`, which `Asked::or_contain` does at once). A
+  panicking method is contained, the tail behind
   it still delivered, the first panic returned. The loop releases the handler
   when its run ends; a release made while a delivery runs (the web page and the
   Android Activity end from inside a method) waits for that delivery, so the

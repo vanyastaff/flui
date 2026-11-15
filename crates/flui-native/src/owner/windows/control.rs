@@ -744,7 +744,14 @@ fn exit_policy_allows_exit(
     // A handler with no policy, or one that panicked (contained by the
     // delivery), leaves the exit to the host: a desktop loop ends with its
     // last window.
-    app.exit_policy().ends_loop(true) && signal.accepting() && no_windows()
+    app.exit_policy()
+        .or_contain(
+            crate::platform::ExitAnswer::HostDecides,
+            "the application's exit policy",
+        )
+        .ends_loop(true)
+        && signal.accepting()
+        && no_windows()
 }
 
 // SAFETY: Win32 invokes this exact signature for the dedicated registered class.

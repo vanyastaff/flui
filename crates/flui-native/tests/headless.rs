@@ -21,6 +21,14 @@ use flui_testing::window_commands::AdmitAndApply as _;
 /// headless host); any other value, `false` and `no` included, selects the
 /// headless host.
 fn flui_headless_env_var_selects_the_headless_platform() {
+    // SAFETY: no other thread reads the environment concurrently — supplied
+    // by nextest's process-per-test isolation (see the file header).
+    unsafe { std::env::remove_var("FLUI_HEADLESS") };
+    let unset = current_host();
+    assert!(
+        !matches!(unset, Ok(CurrentHost::Headless)),
+        "FLUI_HEADLESS unset chose {unset:?}"
+    );
     for (value, headless) in [
         ("1", true),
         ("yes", true),

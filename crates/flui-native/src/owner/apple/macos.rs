@@ -378,12 +378,14 @@ impl host::Loop for MacOSLoop {
         // The sources start listening once the application has bootstrapped;
         // a notice that arrived earlier waited for it.
         let notice_watch = self.notice_sources.listen();
-        ownership.run();
+        // AppKit returns through Rust cleanup: the exit policy's parked panic,
+        // the run's first failure, comes out of `run` ahead of any later one
+        // (`AppDelivery::resume_after_run`).
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        failure.contain(|| ownership.run());
         drop(notice_watch);
         drop(ownership);
-        // AppKit returned through Rust cleanup: a terminal failure the run
-        // parked (an exit policy that panicked) resumes here, out of `run`.
-        self.app_delivery.resume_terminal();
+        self.app_delivery.resume_after_run(failure);
 
         Ok(())
     }

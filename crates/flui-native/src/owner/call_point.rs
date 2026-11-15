@@ -109,6 +109,12 @@ impl Failure {
             .expect("BUG: a failure holds its payload until consumed")
     }
 
+    /// The payload, for a caller that folds it into a `FirstPanic` behind or
+    /// ahead of other failures.
+    pub(crate) fn into_payload(mut self) -> Box<dyn Any + Send> {
+        self.take()
+    }
+
     /// Resume the handler's unwind with its own payload.
     pub(crate) fn resume(mut self) -> ! {
         resume_unwind(self.take())

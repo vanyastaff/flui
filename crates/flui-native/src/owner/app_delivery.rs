@@ -35,6 +35,7 @@ use std::collections::VecDeque;
 use std::rc::{Rc, Weak as RcWeak};
 use std::sync::Arc;
 
+use flui_foundation::panic::FirstPanic;
 use flui_platform::{Launch, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
 use parking_lot::Mutex;
 
@@ -50,6 +51,60 @@ use crate::platform::{AppHandler, ExitAnswer, Platform};
 /// (a second instance forwarding in a loop, a flood of links before `ready`)
 /// can hold in the queue, and a later one is dropped with a warning.
 const MAX_PENDING_OPENED: usize = 16;
+
+/// How a question ended: the handler's answer, and the panic of a report
+/// delivered right after the answer.
+///
+/// The answer is kept; the report's panic is not the question's and takes
+/// the path a report's panic takes when it is delivered alone: resumed where
+/// a Rust frame waits ([`Self::or_resume`]), contained and logged where the
+/// operating system called ([`Self::or_contain`]).
+#[must_use = "a report's panic after the answer is a failure: resume or contain it"]
+pub(crate) struct Asked<R> {
+    answer: Called<R>,
+    after: Option<Failure>,
+}
+
+impl<R> Asked<R> {
+    /// An answer no handler gave and no report followed.
+    fn answered(answer: R) -> Self {
+        Self {
+            answer: Called::Returned(answer),
+            after: None,
+        }
+    }
+
+    /// What the handler answered, or `vacant` when none ran. A panic, the
+    /// question's own or else a report's after it, resumes here, as a
+    /// report's does for a caller with a Rust frame to unwind into.
+    pub(crate) fn or_resume(self, vacant: R) -> R {
+        let Self { answer, after } = self;
+        if let Some(after) = after {
+            after.resume();
+        }
+        answer.or_resume(vacant)
+    }
+
+    /// What the handler answered, or `fallback` when none ran or it
+    /// panicked, for a caller with no frame to unwind into (an OS callback):
+    /// the question's panic and a report's after the answer are logged under
+    /// `handler` and their payloads discarded, and the answer stands.
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        target_arch = "wasm32",
+        all(test, not(target_arch = "wasm32"))
+    ))]
+    pub(crate) fn or_contain(self, fallback: R, handler: &'static str) -> R {
+        let Self { answer, after } = self;
+        if let Some(after) = after {
+            after.contain(handler);
+        }
+        answer.or_contain(fallback, handler)
+    }
+}
 
 /// What follows an accepted report.
 enum Next {
@@ -160,20 +215,20 @@ pub(crate) struct AppDelivery {
     /// Asks the owner for a turn that delivers what another thread reported
     /// ([`Self::resume_through`]).
     owner_turn: Mutex<Option<WindowWake>>,
-    /// The run's terminal failure (ADR-0258 §2): a panic of the exit policy,
-    /// or of a report delivered right after a question's answer, parked so
-    /// the host can carry out the answer first. The loop resumes it once its
-    /// run ended ([`Self::take_terminal`]); a later one is contained.
+    /// The run's terminal failure (ADR-0258 §2): the exit policy's panic,
+    /// parked so the host can carry out its default answer first. The loop
+    /// resumes it once its run ended ([`Self::resume_after_run`]); a later
+    /// one is contained.
     terminal: Mutex<Option<Failure>>,
     /// The native capture this delivery reports to, in builds that have one.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     journal: crate::journal::capture::Journal,
 }
 
-/// A loop whose run cannot return to a Rust frame (UIKit never returns from
-/// `UIApplicationMain`; the web page and the Android Activity end inside a
-/// callback) never resumes a terminal failure: it is logged here, as
-/// ADR-0258 §3 has iOS log it, never dropped unseen.
+/// Only the hosts whose run returns to a Rust frame ask the exit policy, so
+/// only they park: UIKit, the web page and the Android Activity never ask it,
+/// and a question's panic there takes its own path at once (`Asked`).
+/// A run abandoned before its end (a bootstrap that failed) logs it here.
 impl Drop for AppDelivery {
     fn drop(&mut self) {
         if let Some(failure) = self.terminal.get_mut().take() {
@@ -389,7 +444,7 @@ impl AppDelivery {
 
     /// Ask the handler about a phase of the session ending
     /// ([`AppHandler::session_end`]); vacant with no handler to ask.
-    pub(crate) fn session_end(&self, phase: SessionEndPhase) -> Called<SessionEndAnswer> {
+    pub(crate) fn session_end(&self, phase: SessionEndPhase) -> Asked<SessionEndAnswer> {
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         self.journal
             .record(crate::journal::capture::Captured::SessionEnd(phase));
@@ -398,43 +453,53 @@ impl AppDelivery {
 
     /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]).
     ///
+    /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]).
+    ///
     /// [`ExitAnswer::HostDecides`] with no handler to ask, and when the
     /// handler panics. The question is asked as the loop may be ending, so
-    /// its panic is terminal (ADR-0258 §2), decided here for every host: the
-    /// host's default answer ([`ExitAnswer::ends_loop`]) lets the teardown
-    /// proceed, the panic is parked as the run's first failure, which the
-    /// loop resumes once its run ended ([`Self::take_terminal`]), and the
-    /// policy is not asked again, so one that panics on every call neither
-    /// spins nor floods.
-    pub(crate) fn exit_policy(&self) -> ExitAnswer {
+    /// the policy's own panic is the one terminal failure a question has
+    /// (ADR-0258 §2), decided here for every host: the host's default answer
+    /// ([`ExitAnswer::ends_loop`]) lets the teardown proceed, the panic is
+    /// parked as the run's first failure, which the loop resumes once its run
+    /// ended ([`Self::resume_after_run`]), and the policy is not asked again,
+    /// so one that panics on every call neither spins nor floods. Only the
+    /// hosts whose run returns to a Rust frame ask it (Win32, AppKit, X11,
+    /// Wayland, headless). A report delivered after the answer that panics
+    /// takes a report's own path ([`Asked`]).
+    pub(crate) fn exit_policy(&self) -> Asked<ExitAnswer> {
         if self.state.lock().policy_failed {
-            return ExitAnswer::HostDecides;
+            return Asked::answered(ExitAnswer::HostDecides);
         }
-        match self.question(<dyn AppHandler>::exit_policy) {
-            Called::Returned(answer) => answer,
-            Called::Vacant => ExitAnswer::HostDecides,
+        let Asked { answer, after } = self.question(<dyn AppHandler>::exit_policy);
+        let answer = match answer {
             Called::Panicked(failure) => {
                 self.state.lock().policy_failed = true;
                 self.park(failure);
-                ExitAnswer::HostDecides
+                Called::Returned(ExitAnswer::HostDecides)
             }
+            answer => answer,
+        };
+        Asked { answer, after }
+    }
+
+    /// End a run whose loop ran under `failure`: the exit policy's parked
+    /// panic is the run's first failure and comes out ahead of any panic the
+    /// loop or its teardown raised later (ADR-0258 §2: the first payload is
+    /// kept); with neither, nothing happens.
+    pub(crate) fn resume_after_run(&self, failure: FirstPanic) {
+        let mut ordered = FirstPanic::new();
+        let parked = self.terminal.lock().take();
+        if let Some(first) = parked {
+            ordered.record(first.into_payload());
         }
+        ordered.absorb(failure);
+        ordered.resume();
     }
 
-    /// The run's terminal failure, parked by [`Self::exit_policy`] or by a
-    /// report that panicked after a question's answer: the loop resumes it
-    /// once its run ended and the platform let go of its state, where a Rust
-    /// frame waits for the run (ADR-0258 §3).
-    #[must_use = "a parked failure is the run's first: resume it"]
-    pub(crate) fn take_terminal(&self) -> Option<Failure> {
-        self.terminal.lock().take()
-    }
-
-    /// Resume the run's terminal failure, if one is parked.
+    /// Resume the exit policy's parked panic, if there is one: for the
+    /// headless platform, whose caller is the run's Rust frame.
     pub(crate) fn resume_terminal(&self) {
-        if let Some(failure) = self.take_terminal() {
-            failure.resume();
-        }
+        self.resume_after_run(FirstPanic::new());
     }
 
     /// Park `failure` as the run's terminal failure; a later one is
@@ -467,7 +532,7 @@ impl AppDelivery {
         )),
         expect(dead_code, reason = "the web and headless hosts have no idle wait")
     )]
-    pub(crate) fn wake_deadline(&self) -> Called<Option<web_time::Instant>> {
+    pub(crate) fn wake_deadline(&self) -> Asked<Option<web_time::Instant>> {
         self.question(<dyn AppHandler>::wake_deadline)
     }
 
@@ -671,13 +736,12 @@ impl AppDelivery {
 
     /// Ask the handler with `body` at once. A report raised while it answers
     /// waits for the answer, as one raised inside any method does, and is
-    /// delivered right after it. The answer is the question's outcome, and the
-    /// host carries it out (a session end the handler blocked stays blocked):
-    /// a report delivered after it that panics is parked as the run's
-    /// terminal failure ([`Self::take_terminal`]), never discarded. When the
-    /// question itself panicked, that panic is the outcome and the report's is
-    /// contained; when no answer came, the report's panic comes back.
-    fn question<R>(&self, body: impl FnOnce(&dyn AppHandler, &OwnerPlatform) -> R) -> Called<R> {
+    /// delivered right after it. The answer is kept beside the panic of a
+    /// report delivered after it, which takes the path that report's panic
+    /// takes when it is delivered alone ([`Asked`]): the same whether or not
+    /// the question had an answer. When the question itself panicked, that
+    /// panic is the outcome and the report's is contained, the first kept.
+    fn question<R>(&self, body: impl FnOnce(&dyn AppHandler, &OwnerPlatform) -> R) -> Asked<R> {
         let begun = {
             let mut state = self.state.lock();
             let begun = state.on_owner() && !state.delivering;
@@ -689,22 +753,30 @@ impl AppDelivery {
         if !begun {
             // Off the owner, or nested in a method that delivers what this
             // one raises after it.
-            return self.ask(body);
+            return Asked {
+                answer: self.ask(body),
+                after: None,
+            };
         }
         let walk = Walk(self);
         let answer = self.ask(body);
         walk.disarm();
         match (answer, self.drain()) {
-            (answer @ Called::Returned(_), Called::Panicked(later)) => {
-                self.park(later);
-                answer
-            }
             (answer @ Called::Panicked(_), Called::Panicked(later)) => {
                 later.contain("the application handler");
-                answer
+                Asked {
+                    answer,
+                    after: None,
+                }
             }
-            (Called::Vacant, Called::Panicked(failure)) => Called::Panicked(failure),
-            (answer, _) => answer,
+            (answer, Called::Panicked(later)) => Asked {
+                answer,
+                after: Some(later),
+            },
+            (answer, _) => Asked {
+                answer,
+                after: None,
+            },
         }
     }
 

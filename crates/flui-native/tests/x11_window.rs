@@ -101,6 +101,10 @@ mod cases {
             a_wake_deadline_no_frame_serviced_is_delivered_once,
         ),
         (
+            "a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one",
+            a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one,
+        ),
+        (
             "a_surface_targets_display_equals_the_platforms_connection",
             a_surface_targets_display_equals_the_platforms_connection,
         ),
@@ -1325,6 +1329,50 @@ mod cases {
             .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
             .count();
         assert_eq!(frames, 1, "the deadline asked for one frame");
+    }
+
+    /// An exit policy that opens a window and then panics is the run's first
+    /// failure: the loop goes on for the window, a later handler (the wake
+    /// deadline) panics and leaves the loop, and the policy's panic is the
+    /// one that comes out of `run`.
+    fn a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one() {
+        let platform = Box::new(X11Platform::try_new().expect("the X11 platform"));
+        let log = AppLog::new();
+        let kept = Rc::new(std::cell::RefCell::new(None));
+        let failed = Rc::new(std::cell::Cell::new(false));
+        log.bootstrap(|owner| {
+            quit_after(owner.proxy(), Duration::from_secs(10));
+            owner.request_exit_policy_reevaluation();
+            Ok(())
+        });
+        log.react({
+            let kept = Rc::clone(&kept);
+            let failed = Rc::clone(&failed);
+            move |call, owner| match call {
+                AppCall::ExitPolicy => {
+                    let window = owner
+                        .open_window(
+                            WindowOptions::default().visible(false),
+                            RecordingWindowHandler::new(),
+                        )
+                        .expect("a window")
+                        .try_ready()
+                        .expect("at once");
+                    *kept.borrow_mut() = Some(window);
+                    failed.set(true);
+                    panic!("the exit policy");
+                }
+                AppCall::WakeDeadline if failed.get() => panic!("a later handler"),
+                _ => {}
+            }
+        });
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            platform.run(Rc::clone(&log) as Rc<dyn AppHandler>)
+        }));
+        drop(kept.borrow_mut().take());
+        let payload = ran.expect_err("the run returned");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"the exit policy"));
+        assert_eq!(log.count(AppCall::ExitPolicy), 1);
     }
 
     /// A host started on a runtime its creator lends runs its IO there (ADR-0327 §3): the

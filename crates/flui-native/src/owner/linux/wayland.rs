@@ -702,7 +702,7 @@ mod event_loop {
     use crate::owner::watch::Watch;
     use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
-    use crate::platform::{AppHandler, Platform};
+    use crate::platform::{AppHandler, ExitAnswer, Platform};
     use crate::transfer::linux::wayland::DataDevices;
 
     /// The newest `wl_compositor` the loop understands: version 6 gives a
@@ -2516,7 +2516,14 @@ mod event_loop {
             if !(emptied || reevaluate) || !self.windows.is_empty() {
                 return false;
             }
-            self.app.exit_policy().ends_loop(true)
+            self.app
+                .exit_policy()
+                .or_resume(ExitAnswer::HostDecides)
+                .ends_loop(true)
+                // Asked with no lock held, the policy may have opened a
+                // window: one opened meanwhile keeps the loop, as on X11 and
+                // Win32.
+                && self.windows.is_empty()
         }
 
         /// Block until the compositor sends something, another producer
@@ -2624,7 +2631,7 @@ mod event_loop {
         /// End the run: the sources stop, every window still open lets go of
         /// its handler and surface, and the application hears the quit, once,
         /// before its handler is released.
-        fn finish(&self) {
+        fn finish(&self, mut failure: FirstPanic) {
             self.stop_sources();
             for window in self.windows.values() {
                 window.release();
@@ -2635,17 +2642,12 @@ mod event_loop {
             self.devices.release();
             let quit = self.app.quit_requested();
             self.app.release();
-            // A terminal failure the run parked (an exit policy that
-            // panicked) is the first: it resumes here, the quit's contained.
-            match self.app.take_terminal() {
-                Some(first) => {
-                    if let Called::Panicked(later) = quit {
-                        later.contain("the application's quit");
-                    }
-                    first.resume();
-                }
-                None => quit.or_resume(()),
+            // The exit policy's parked panic is the run's first failure: it
+            // comes out ahead of the loop's (`failure`) and the quit's.
+            if let Called::Panicked(quit) = quit {
+                failure.record(quit.into_payload());
             }
+            self.app.resume_after_run(failure);
         }
     }
 
@@ -2692,25 +2694,29 @@ mod event_loop {
             self.app.resume_through_signal(&self.signal);
             let mut guard = RunGuard(Some(&self));
             self.start_sources();
-            let outcome = self
-                .app
-                .ready(OwnerPlatform::new(platform, Rc::clone(&hooks)))
-                .map_err(PlatformError::bootstrap)
-                .and_then(|()| {
-                    self.signal
-                        .start()
-                        .map_err(|error| PlatformError::EventLoop {
-                            message: error.to_string(),
-                        })?;
-                    self.start_host_notices();
-                    while !self.turn(None)? {}
-                    Ok(())
-                });
+            // A turn's panic leaves the loop here and the run still ends in
+            // order; the exit policy's parked panic comes out ahead of it.
+            let mut failure = FirstPanic::new();
+            let outcome = failure.contain(|| {
+                self.app
+                    .ready(OwnerPlatform::new(platform, Rc::clone(&hooks)))
+                    .map_err(PlatformError::bootstrap)
+                    .and_then(|()| {
+                        self.signal
+                            .start()
+                            .map_err(|error| PlatformError::EventLoop {
+                                message: error.to_string(),
+                            })?;
+                        self.start_host_notices();
+                        while !self.turn(None)? {}
+                        Ok(())
+                    })
+            });
             guard.0 = None;
-            self.finish();
-            drop(hooks);
             tracing::info!("the Wayland loop ended");
-            outcome
+            self.finish(failure);
+            drop(hooks);
+            outcome.expect("BUG: a loop that raised no panic returned its outcome")
         }
 
         fn quit(&self) {

@@ -561,6 +561,56 @@ fn a_due_deadline_no_frame_serves_leaves_the_loop_idle() {
     );
 }
 
+/// An exit policy that opens a window and then panics is the run's first
+/// failure: the loop goes on for the window, a later handler (the wake
+/// deadline) panics and leaves the loop, and the policy's panic is the one
+/// that comes out of `run`.
+#[test]
+fn a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one() {
+    let Some(platform) = platform("a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one")
+    else {
+        return;
+    };
+    let log = app::AppLog::new();
+    let failed = Rc::new(Cell::new(false));
+    log.bootstrap(|owner| {
+        owner.request_exit_policy_reevaluation();
+        let proxy = owner.proxy();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(10));
+            let _ = proxy.request_quit();
+        });
+        Ok(())
+    });
+    log.react({
+        let failed = Rc::clone(&failed);
+        move |call, owner| match call {
+            AppCall::ExitPolicy => {
+                let window = owner
+                    .open_window(
+                        WindowOptions::default().title("kept by the policy"),
+                        RecordingWindowHandler::new() as _,
+                    )
+                    .expect("a window opens")
+                    .try_ready()
+                    .expect("at once");
+                // The loop holds the window until it closes.
+                drop(window);
+                failed.set(true);
+                panic!("the exit policy");
+            }
+            AppCall::WakeDeadline if failed.get() => panic!("a later handler"),
+            _ => {}
+        }
+    });
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Box::new(platform).run(Rc::clone(&log) as _)
+    }));
+    let payload = ran.expect_err("the run returned");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"the exit policy"));
+    assert_eq!(log.count(AppCall::ExitPolicy), 1);
+}
+
 /// A frame that serves one obligation and leaves the next due at the same
 /// instant earns that one its own frame: the instant is armed again once a
 /// frame ran, so three obligations due at one instant get three frames.

@@ -441,7 +441,14 @@ impl LoopControl {
         // The handler may open a window, request another turn, or quit: it is
         // asked outside every lock. A run with no handler, or one whose
         // handler panicked (contained by the delivery), allows the exit.
-        let allowed = self.app.exit_policy().ends_loop(true);
+        let allowed = self
+            .app
+            .exit_policy()
+            .or_contain(
+                crate::platform::ExitAnswer::HostDecides,
+                "the application's exit policy",
+            )
+            .ends_loop(true);
         if allowed && self.state.lock().phase == Phase::Running && self.windows.is_empty() {
             self.quit();
         }

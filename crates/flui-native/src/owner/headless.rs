@@ -25,7 +25,7 @@ use crate::host::{self, Host};
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::call_point::Called;
 use crate::owner::slot::OwnerSlot;
-use crate::platform::HostPlatform;
+use crate::platform::{ExitAnswer, HostPlatform};
 use crate::{
     error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
     owner::OpenWindows, owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow,
@@ -437,17 +437,13 @@ fn finish_quit(state: &std::cell::RefCell<HeadlessState>) {
         turn.clear();
     }
     // A terminal failure the run parked (an exit policy that panicked) is
-    // the first: it resumes here, after the quit was delivered.
-    let quit = app.quit_requested();
-    match app.take_terminal() {
-        Some(first) => {
-            if let Called::Panicked(later) = quit {
-                later.contain("the application's quit");
-            }
-            first.resume();
-        }
-        None => quit.or_resume(()),
+    // the first: it resumes here, after the quit was delivered, ahead of the
+    // quit's own panic.
+    let mut failure = flui_foundation::panic::FirstPanic::new();
+    if let Called::Panicked(quit) = app.quit_requested() {
+        failure.record(quit.into_payload());
     }
+    app.resume_after_run(failure);
 }
 
 /// Ask the application's handler whether the platform may quit now that no
@@ -471,7 +467,10 @@ pub(crate) fn consult_exit_policy(state: &std::cell::RefCell<HeadlessState>) -> 
     // after its run never quits on its own, the opposite of the desktop
     // hosts, whose loop ends with its last window when nothing says
     // otherwise.
-    let allowed = app.exit_policy().ends_loop(false);
+    let allowed = app
+        .exit_policy()
+        .or_resume(ExitAnswer::HostDecides)
+        .ends_loop(false);
     if !allowed || !state.borrow_mut().windows.is_empty() {
         // The answer is carried out (the platform keeps running); a policy
         // that panicked resumes into the caller now, the headless run's

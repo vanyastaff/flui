@@ -113,7 +113,7 @@ use crate::owner::wake_deadline::WakeDeadline;
 use crate::owner::watch::Watch;
 use crate::owner::window_delivery::WindowDelivery;
 use crate::owner::{DirectOwnerHooks, OwnerHooks, OwnerPlatform};
-use crate::platform::{AppHandler, PathPromptOptions, Platform};
+use crate::platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform};
 use crate::task::Task;
 
 /// The connection to the X server the platform reads events from and its
@@ -932,7 +932,10 @@ impl X11Loop {
     /// Ask the application whether the loop may end now that no window is
     /// open; with no policy of its own, the loop ends, as a desktop loop does.
     fn exit_allowed(&self) -> bool {
-        self.app.exit_policy().ends_loop(true)
+        self.app
+            .exit_policy()
+            .or_resume(ExitAnswer::HostDecides)
+            .ends_loop(true)
     }
 
     /// The colour scheme the portal reported, to each window.
@@ -1505,12 +1508,14 @@ impl host::Loop for X11Loop {
             &self.background_executor,
             &self.signal,
         ));
-        let result = self.run_loop(guard.host_notices.as_deref());
+        // A turn's panic leaves the loop here, and the teardown runs; then
+        // the exit policy's parked panic, the run's first failure, comes out
+        // ahead of it (`AppDelivery::resume_after_run`).
+        let mut failure = FirstPanic::new();
+        let result = failure.contain(|| self.run_loop(guard.host_notices.as_deref()));
         drop(guard);
-        // The quit is delivered and the handler released; a terminal failure
-        // the run parked (an exit policy that panicked) resumes here.
-        self.app.resume_terminal();
-        result
+        self.app.resume_after_run(failure);
+        result.expect("BUG: a loop that raised no panic returned its result")
     }
 
     fn quit(&self) {

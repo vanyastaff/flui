@@ -1362,13 +1362,15 @@ impl host::Loop for WindowsLoop {
             .map_err(|error| PlatformError::EventLoop {
                 message: error.to_string(),
             })?;
-        let ran = self.run_message_loop();
-        // The quit is delivered and the handler released; a terminal failure
-        // the run parked (an exit policy that panicked inside the window
-        // procedure, where no unwind may go) resumes here, out of `run`.
+        // A panic of the loop (a wake deadline's) leaves it here, and the
+        // teardown runs; then the exit policy's parked panic, asked inside the
+        // window procedure where no unwind may go, comes out of `run` ahead of
+        // it as the run's first failure (`AppDelivery::resume_after_run`).
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        let ran = failure.contain(|| self.run_message_loop());
         drop(guard);
-        self.app.resume_terminal();
-        ran
+        self.app.resume_after_run(failure);
+        ran.expect("BUG: a loop that raised no panic returned its result")
     }
 
     fn quit(&self) {
