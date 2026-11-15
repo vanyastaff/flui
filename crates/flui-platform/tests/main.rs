@@ -34,6 +34,9 @@ mod preferences;
 #[path = "window_command_validate.rs"]
 mod window_command_validate;
 
+#[path = "window_geometry.rs"]
+mod window_geometry;
+
 #[path = "unsupported.rs"]
 mod unsupported;
 

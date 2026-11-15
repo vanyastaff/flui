@@ -159,7 +159,19 @@ its anchor: update the links and the `GapId` slug in the same pull request.
   - UIKit: not run, type-checked only, queued in [#1840](https://github.com/vanyastaff/flui/issues/1840).
   - Web: not run; the browser suite has no fixture that reads the canvas back apart from the window.
   - Android: not run; the conformance needs a device fixture.
-- **Android cannot close its window:** `WindowCommand::Close` is `Unavailable` there (one native window, which the application does not finish), so a programmatic close answers `CloseRequestError::Refused`.
+- **A capability absent in one state reads as absent for good.** `CapabilityAbsence` names three
+  reasons, none of them "not in this state" ([ADR-0254](adr/ADR-0254-window-contract.md) §6
+  admits no reason worth trying again). AppKit reports a fixed-size window's `maximizes`, and a
+  full-screen window's `hides` and `sets_frame`, as `NotOnThisPlatform`, and the capability comes
+  back when the window's flags change; the X11 and Wayland hosts do the same for what the window
+  manager or the compositor stops offering. A caller that reads the reason is told the platform
+  never has it, where the window would take the command after a resize flag or a mode change.
+- **A bare headless platform delivers a read's announcement with its next delivery.** A revision
+  a read publishes, and the state cell's diagnostics, wait in the window's FIFO for an owner
+  turn, which every host asks its loop for. A `HeadlessPlatform` driven without its owner loop
+  (`OwnerPlatform`) has no loop to ask: what waits is delivered ahead of the window's next
+  delivery, and never when none comes.
+- **Android cannot close its window:** `WindowCommand::Close`'s capability is `Absent` there (one native window, which the application does not finish), so a programmatic close answers `CloseRequestError::Refused`.
 - **No close request on the Web and Android:** neither host ever asks a window handler's `close_requested` (a page's unload and an Activity's finish are not requests the application can refuse), so an application's close veto never runs there.
 
 ### No custom title bar, popups or owned windows

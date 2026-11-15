@@ -34,7 +34,7 @@ pub struct TestWindow {
     id: WindowId,
     scale_factor: f64,
     physical_size: Size<i32>,
-    logical_size: Size<f64>,
+    logical_size: flui_platform::WindowExtent,
     focused: bool,
     visible: bool,
     /// Incremented by every [`PlatformWindow::request_redraw`]; hand the
@@ -90,7 +90,7 @@ impl TestWindow {
                 .expect("BUG: a fresh mint issues its first id"),
             scale_factor: 1.0,
             physical_size: Size::default(),
-            logical_size: Size::default(),
+            logical_size: flui_platform::WindowExtent::ZERO,
             focused: false,
             visible: true,
             redraw_calls: Arc::new(AtomicU32::new(0)),
@@ -119,7 +119,7 @@ impl TestWindow {
     /// Report these physical and logical sizes in the snapshot: the metrics'
     /// drawable area and the content size.
     #[must_use]
-    pub fn with_sizes(mut self, physical: Size<i32>, logical: Size<f64>) -> Self {
+    pub fn with_sizes(mut self, physical: Size<i32>, logical: flui_platform::WindowExtent) -> Self {
         self.physical_size = physical;
         self.logical_size = logical;
         self
@@ -246,8 +246,8 @@ impl PlatformWindow for TestWindow {
     /// What the builder set, honouring no command; a size or scale that is
     /// not a drawable area reports no metrics.
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size;
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
+        let extent = self.logical_size;
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::unplaced(extent), extent)
             .with_visible(self.visible)
             .with_focused(self.focused)
             .with_metrics(

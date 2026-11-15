@@ -9,9 +9,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::geometry::WindowMetrics;
 use flui_platform::{
-    WindowAppearance, WindowCapabilities, WindowExecutionState, WindowInsets, WindowState,
+    InvalidGeometry, WindowAppearance, WindowCapabilities, WindowExecutionState, WindowExtent,
+    WindowGeometry, WindowInsets, WindowMode, WindowState,
 };
 use parking_lot::Mutex;
+
+use crate::owner::window_delivery::{Publication, WindowDelivery};
 
 /// The facts a window reports beyond its geometry, mode and flags, as each
 /// host reads them its own way, put onto a sample in one place
@@ -56,8 +59,175 @@ impl ReportedFacts {
     }
 }
 
+/// The rectangles one read of a window found: what a snapshot's geometry is
+/// built from, each valid by its type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SampledGeometry {
+    /// The outer rectangle, frame included.
+    pub(crate) outer: WindowGeometry,
+    /// The content area's extent.
+    pub(crate) content: WindowExtent,
+    /// The rectangle the window returns to from a mode other than normal.
+    pub(crate) normal: Option<WindowGeometry>,
+}
+
+impl SampledGeometry {
+    /// No rectangle: what a window holds before a read describes one.
+    const EMPTY: Self = Self {
+        outer: WindowGeometry::EMPTY,
+        content: WindowExtent::ZERO,
+        normal: None,
+    };
+
+    /// A snapshot with this geometry and every other fact at its default.
+    fn state(self) -> WindowState {
+        WindowState::new(self.outer, self.content).with_normal_geometry(self.normal)
+    }
+}
+
+/// One read of a window: every fact the host read, and whether the
+/// rectangles it read describe a window.
+///
+/// A host builds it with [`Self::read`], handing the geometry it read as a
+/// `Result` and the other facts apart from it, so a geometry the window
+/// system reported as numbers no window has (a size over a scale of zero, a
+/// NaN) costs the sample its geometry and nothing else: the cell keeps the
+/// published geometry and publishes the focus, visibility, mode, occlusion,
+/// execution state and every other fact the read found
+/// ([`WindowStateCell`]).
+#[derive(Debug)]
+pub(crate) struct Sample {
+    /// The facts read, on the geometry read or, when that was refused, on
+    /// no geometry, which the cell replaces with the published one.
+    state: WindowState,
+    /// Why the geometry read describes no window.
+    refused: Option<InvalidGeometry>,
+    /// What the host found while reading that its window should say, said by
+    /// the window's delivery in its turn, never from inside the read.
+    note: Option<Note>,
+}
+
+impl Sample {
+    /// The facts `facts` puts onto the snapshot `geometry` describes; when
+    /// `geometry` was refused, onto no geometry, and the sample carries the
+    /// refusal.
+    pub(crate) fn read(
+        geometry: Result<SampledGeometry, InvalidGeometry>,
+        facts: impl FnOnce(WindowState) -> WindowState,
+    ) -> Self {
+        match geometry {
+            Ok(geometry) => Self {
+                state: facts(geometry.state()),
+                refused: None,
+                note: None,
+            },
+            Err(refused) => Self {
+                state: facts(SampledGeometry::EMPTY.state()),
+                refused: Some(refused),
+                note: None,
+            },
+        }
+    }
+
+    /// This read, with `note` for its window to say in the window's turn: a
+    /// fact the host could not publish, which a `tracing` event inside the
+    /// read would report under the reader's borrows. The host says it once
+    /// per run of such reads, as the cell says a refused geometry.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn noting(mut self, note: impl FnOnce() + Send + 'static) -> Self {
+        self.note = Some(Note(Box::new(note)));
+        self
+    }
+}
+
+/// What a read found for its window to say (`Sample::noting`).
+pub(crate) struct Note(Box<dyn FnOnce() + Send>);
+
+impl std::fmt::Debug for Note {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Note")
+    }
+}
+
+impl From<WindowState> for Sample {
+    /// A read whose every fact is `state`'s, its geometry included.
+    fn from(state: WindowState) -> Self {
+        Self {
+            state,
+            refused: None,
+            note: None,
+        }
+    }
+}
+
+/// `sample`, a read whose geometry was refused, on the geometry `published`
+/// holds, or on no geometry for a window's first read (`None`). The one rule
+/// for a refused geometry, at a window's opening and after it:
+///
+/// - the outer rectangle and the content extent are the published ones;
+/// - the drawable metrics go with them: the sample carries none, so the
+///   published ones stand (`WindowState::successor` keeps them for none) and a
+///   first snapshot has none, never a drawable area on an empty window;
+/// - `normal_geometry` is what the contract says it is, the rectangle a
+///   window in another mode than normal returns to, whatever mode the read
+///   reports: none for a normal window; the published outer rectangle for a
+///   window that left the normal mode since, since that is where it was in
+///   it (none when that rectangle encloses no area: a window whose first
+///   read was refused has nowhere known to return to); the published one
+///   for a window that was already away from it.
+fn on_published_geometry(mut sample: WindowState, published: Option<&WindowState>) -> WindowState {
+    sample.metrics = None;
+    let Some(published) = published else {
+        sample.outer = WindowGeometry::EMPTY;
+        sample.content_size = WindowExtent::ZERO;
+        sample.normal_geometry = None;
+        return sample;
+    };
+    sample.outer = published.outer;
+    sample.content_size = published.content_size;
+    sample.normal_geometry = match (published.mode, sample.mode) {
+        (_, WindowMode::Normal) => None,
+        // A window whose published rectangle encloses no area (its first read
+        // was refused too) has nowhere known to return to.
+        (WindowMode::Normal, _) => {
+            let size = published.outer.size();
+            (size.width > 0.0 && size.height > 0.0).then_some(published.outer)
+        }
+        _ => published.normal_geometry,
+    };
+    sample
+}
+
+/// What the cell has to say about its window, said by the window's delivery
+/// in its own turn ([`WindowDelivery::diagnose`]), never from inside a read:
+/// a `tracing` subscriber is code the reader does not own, and a reader may
+/// hold borrows it takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StateDiagnostic {
+    /// A read's geometry describes no window; the published geometry stands
+    /// until a read describes one. Said once per run of such reads.
+    Refused(InvalidGeometry),
+    /// The revision space is used up: the window publishes nothing again.
+    Frozen(flui_platform::WindowRevisionExhausted),
+}
+
+impl StateDiagnostic {
+    /// Say it.
+    pub(crate) fn emit(self) {
+        match self {
+            Self::Refused(refused) => tracing::warn!(
+                %refused,
+                "a window system's report describes no window; its published geometry stands"
+            ),
+            Self::Frozen(error) => {
+                tracing::warn!(%error, "a window stops publishing state changes");
+            }
+        }
+    }
+}
+
 /// The answer to a command a host has no way to carry out. `admit` refuses it
-/// first, through a capability the host names `Unavailable`, so a window
+/// first, through a capability the host names absent, so a window
 /// reaches this only for a command the contract gained before the host learnt
 /// it: the window system cannot do it, and the caller hears so.
 #[cfg(any(windows, target_os = "macos", target_arch = "wasm32", linux_host))]
@@ -106,12 +276,12 @@ pub(crate) fn held_to(
 ) -> flui_foundation::geometry::Size<f64> {
     let mut size = size;
     if let Some(min) = constraints.min {
-        size.width = size.width.max(min.width);
-        size.height = size.height.max(min.height);
+        size.width = size.width.max(min.width());
+        size.height = size.height.max(min.height());
     }
     if let Some(max) = constraints.max {
-        size.width = size.width.min(max.width);
-        size.height = size.height.min(max.height);
+        size.width = size.width.min(max.width());
+        size.height = size.height.min(max.height());
     }
     size
 }
@@ -161,11 +331,11 @@ pub(crate) struct Published {
 
 impl Published {
     /// What a state publisher answers for this read.
-    pub(crate) const fn outcome(&self) -> crate::owner::window_delivery::Publication {
+    pub(crate) const fn outcome(&self) -> Publication {
         if self.changed {
-            crate::owner::window_delivery::Publication::Changed
+            Publication::Changed
         } else {
-            crate::owner::window_delivery::Publication::Unchanged
+            Publication::Unchanged
         }
     }
 }
@@ -177,15 +347,38 @@ struct Slot {
     read_after: u64,
     /// The revision space was used up: nothing is published any more.
     frozen: bool,
+    /// The last read's geometry was refused: what the window system reported
+    /// describes no window. Kept so a window system that goes on reporting it
+    /// is diagnosed once, not on every read.
+    refusing: bool,
+    /// What the cell has to say and has not handed to a delivery yet: at
+    /// most one refusal (the first of the current run of refused reads) and
+    /// the freeze, which happens once.
+    unreported_refusal: Option<InvalidGeometry>,
+    unreported_freeze: Option<flui_platform::WindowRevisionExhausted>,
+    /// A note the first read carried, which no delivery has taken yet.
+    unreported_note: Option<Note>,
 }
 
 /// One window's last published [`WindowState`] and its staleness.
 ///
 /// A backend marks the cell stale on every OS event that may change the window
 /// (`WM_SIZE`, `windowDidResize`, `fullscreenchange`, or a
-/// command it just issued). The next [`state_with`](Self::state_with) reads the
-/// OS again, with no lock held across the read, and publishes the sample; a
-/// sample equal to the published one keeps its revision.
+/// command it just issued). The next read of the cell reads the OS again,
+/// with no lock held across the read, and publishes the sample; a sample equal
+/// to the published one keeps its revision. A host reads through two methods:
+/// [`read`](Self::read) for a caller of `PlatformWindow::state`, which
+/// announces a new revision at the owner's turn, and
+/// [`refresh`](Self::refresh) or [`publish_report`](Self::publish_report)
+/// for a change its window system reported, which announce it as the host's
+/// own event.
+///
+/// A read whose geometry describes no window (a size over a scale of zero, a
+/// NaN the window system sent) loses its geometry and nothing else
+/// ([`Sample`]): the published geometry stands, the read's other facts are
+/// published, and the next invalidation reads again. This is the one place
+/// that decides it, for every host. What the cell has to say of it is said
+/// by the window's delivery in its turn ([`StateDiagnostic`]).
 ///
 /// Threads may read at once. A sample begun before an invalidation that
 /// another read has already published past is discarded, so once the read
@@ -236,12 +429,32 @@ impl WindowStateCell {
         self.last.lock().read_after != self.invalidations.load(Ordering::Acquire)
     }
 
-    /// A cell publishing `initial`, stale: the first `state_with` reads the OS.
-    /// Its capabilities are stamped with a capabilities owner no other window
+    /// A cell publishing `initial`, stale: the first read asks the OS.
+    #[cfg(any(test, target_vendor = "apple", x11_host, wayland_host))]
+    pub(crate) fn new(initial: WindowState) -> Self {
+        Self::open(Sample::from(initial))
+    }
+
+    /// A cell publishing the first read of its window, stale: the next read
+    /// asks the OS again. A first read whose geometry describes no window
+    /// opens with no geometry and its other facts (the capabilities among
+    /// them, so commands are admitted against what the window honours), and
+    /// the refusal is said with the window's first delivery that hands the
+    /// cell's diagnostics on.
+    ///
+    /// The capabilities are stamped with a capabilities owner no other window
     /// of the process has, which every later snapshot keeps, so a command
     /// admitted for another window, or against capabilities built by hand,
     /// never opens on this one.
-    pub(crate) fn new(mut initial: WindowState) -> Self {
+    pub(crate) fn open(first_read: Sample) -> Self {
+        let Sample {
+            state: mut initial,
+            refused,
+            note,
+        } = first_read;
+        if refused.is_some() {
+            initial = on_published_geometry(initial, None);
+        }
         initial.capabilities = initial.capabilities.owned_by(next_capabilities_owner());
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         let journal = {
@@ -256,6 +469,10 @@ impl WindowStateCell {
                 state: initial,
                 read_after: 0,
                 frozen: false,
+                refusing: refused.is_some(),
+                unreported_refusal: refused,
+                unreported_freeze: None,
+                unreported_note: note,
             }),
             invalidations: AtomicU64::new(1),
             #[cfg(all(debug_assertions, feature = "native-capture"))]
@@ -285,11 +502,116 @@ impl WindowStateCell {
         self.last.lock().state.clone()
     }
 
+    /// The snapshot for a caller that reads the window
+    /// (`PlatformWindow::state`): the published one, read again with
+    /// `sample` first when something invalidated the cell.
+    ///
+    /// The reader may hold borrows the handler or a `tracing` subscriber
+    /// takes again, so nothing is said or announced from here: a revision
+    /// this read publishes is announced, and what the cell has to say is
+    /// said, by `delivery` in the window's own turn
+    /// ([`WindowDelivery::state_changed_after_read`],
+    /// [`WindowDelivery::diagnose`]).
+    pub(crate) fn read(
+        &self,
+        delivery: &WindowDelivery,
+        sample: impl FnOnce() -> Sample,
+    ) -> WindowState {
+        let published = self.noted_read(delivery, sample);
+        if published.changed {
+            delivery.state_changed_after_read();
+        }
+        published.state
+    }
+
+    /// The window system reported a change: read the window again with
+    /// `sample` for its state publisher, announcing nothing (the publisher's
+    /// caller raises `state_changed` for [`Publication::Changed`]).
+    pub(crate) fn refresh(
+        &self,
+        delivery: &WindowDelivery,
+        sample: impl FnOnce() -> Sample,
+    ) -> Publication {
+        self.invalidate();
+        let published = self.noted_read(delivery, sample);
+        published.outcome()
+    }
+
+    /// The published snapshot, read again with `sample` when something
+    /// invalidated the cell, announcing nothing: for a host that announces a
+    /// revision itself, later or under its own rule (the X11 window reads
+    /// inside a command and announces at the command's end, or follows a
+    /// marked window once a turn). What the cell has to say goes to
+    /// `delivery` as from every read.
+    #[cfg(x11_host)]
+    pub(crate) fn read_unannounced(
+        &self,
+        delivery: &WindowDelivery,
+        sample: impl FnOnce() -> Sample,
+    ) -> Published {
+        self.noted_read(delivery, sample)
+    }
+
+    /// The window system reported a change, or a command was just carried
+    /// out: read the window again with `sample`, and raise
+    /// `WindowHandler::state_changed` through `delivery` when that published a
+    /// new revision. Answers the snapshot now published.
+    pub(crate) fn publish_report(
+        &self,
+        delivery: &WindowDelivery,
+        sample: impl FnOnce() -> Sample,
+    ) -> WindowState {
+        self.invalidate();
+        let published = self.noted_read(delivery, sample);
+        if published.changed {
+            delivery.dispatch_state_changed();
+        }
+        published.state
+    }
+
+    /// A read through [`Self::state_with`] whose note, and whatever the cell
+    /// has to say, go to `delivery`, which says them in the window's turn.
+    fn noted_read(&self, delivery: &WindowDelivery, sample: impl FnOnce() -> Sample) -> Published {
+        let mut note = None;
+        let published = self.state_with(|| {
+            let mut read = sample();
+            note = read.note.take();
+            read
+        });
+        let (refusal, freeze, opening_note) = {
+            let mut slot = self.last.lock();
+            (
+                slot.unreported_refusal.take(),
+                slot.unreported_freeze.take(),
+                slot.unreported_note.take(),
+            )
+        };
+        if let Some(refused) = refusal {
+            delivery.diagnose(move || StateDiagnostic::Refused(refused).emit());
+        }
+        if let Some(error) = freeze {
+            delivery.diagnose(move || StateDiagnostic::Frozen(error).emit());
+        }
+        for Note(note) in opening_note.into_iter().chain(note) {
+            delivery.diagnose(note);
+        }
+        published
+    }
+
+    /// A read that announces and says nothing, for a test that only needs the
+    /// cell current.
+    #[cfg(test)]
+    pub(crate) fn read_quietly(&self, sample: impl FnOnce() -> Sample) -> Published {
+        self.state_with(sample)
+    }
+
     /// The snapshot: the last published one while nothing has invalidated the
-    /// cell, otherwise the result of `sample` published.
+    /// cell, otherwise the result of `sample` published. Announces nothing
+    /// and says nothing: a host reads through [`Self::read`],
+    /// [`Self::refresh`] or [`Self::publish_report`].
     ///
     /// `sample` runs with no lock held, so it may call the OS.
-    pub(crate) fn state_with(&self, sample: impl FnOnce() -> WindowState) -> Published {
+    fn state_with(&self, sample: impl FnOnce() -> Sample) -> Published {
         let invalidations = self.invalidations.load(Ordering::Acquire);
         {
             let slot = self.last.lock();
@@ -300,14 +622,16 @@ impl WindowStateCell {
                 };
             }
         }
-        self.publish(sample(), invalidations)
+        self.commit(sample(), invalidations)
     }
 
     /// Publish a sample read after `invalidations`: the previous snapshot when
     /// nothing differs or a read begun later has published already, otherwise
-    /// the next revision. At the last revision the cell freezes on its final
-    /// snapshot, with one diagnostic, and publishes nothing again.
-    fn publish(&self, sample: WindowState, invalidations: u64) -> Published {
+    /// the next revision. A sample whose geometry was refused publishes its
+    /// other facts on the published geometry. At the last revision the cell
+    /// freezes on its final snapshot, with one diagnostic, and publishes
+    /// nothing again.
+    fn commit(&self, sample: Sample, invalidations: u64) -> Published {
         let mut slot = self.last.lock();
         if slot.read_after > invalidations {
             return Published {
@@ -321,6 +645,20 @@ impl WindowStateCell {
                 state: slot.state.clone(),
                 changed: false,
             };
+        }
+        let Sample {
+            state: mut sample,
+            refused,
+            note: _,
+        } = sample;
+        match refused {
+            None => slot.refusing = false,
+            Some(refused) => {
+                sample = on_published_geometry(sample, Some(&slot.state));
+                if !std::mem::replace(&mut slot.refusing, true) {
+                    slot.unreported_refusal = Some(refused);
+                }
+            }
         }
         match slot.state.successor(sample) {
             Ok(next) => {
@@ -343,7 +681,7 @@ impl WindowStateCell {
             }
             Err(error) => {
                 slot.frozen = true;
-                tracing::warn!(%error, "a window stops publishing state changes");
+                slot.unreported_freeze = Some(error);
                 Published {
                     state: slot.state.clone(),
                     changed: false,
@@ -358,9 +696,11 @@ mod tests {
     use std::cell::Cell;
 
     use flui_foundation::geometry::Size;
-    use flui_platform::{WindowGeometry, WindowRevision, WindowState};
+    use flui_platform::{
+        InvalidGeometry, WindowExtent, WindowGeometry, WindowRevision, WindowState,
+    };
 
-    use super::{WindowStateCell, held_to};
+    use super::{Sample, SampledGeometry, WindowStateCell, held_to};
 
     /// A size is held to the window's limits on each axis alone, and a
     /// maximum below the minimum wins, as the window systems that clamp a
@@ -370,7 +710,8 @@ mod tests {
         use flui_platform::SizeConstraints;
 
         let size = Size::new;
-        let both = SizeConstraints::new(Some(size(400.0, 300.0)), Some(size(900.0, 700.0)));
+        let limits = |min, max| SizeConstraints::try_new(min, max).expect("finite limits");
+        let both = limits(Some(size(400.0, 300.0)), Some(size(900.0, 700.0)));
         let rows = [
             ("inside", both, size(640.0, 480.0), size(640.0, 480.0)),
             ("below", both, size(200.0, 100.0), size(400.0, 300.0)),
@@ -389,19 +730,19 @@ mod tests {
             ),
             (
                 "a minimum only",
-                SizeConstraints::new(Some(size(400.0, 300.0)), None),
+                limits(Some(size(400.0, 300.0)), None),
                 size(200.0, 5000.0),
                 size(400.0, 5000.0),
             ),
             (
                 "a maximum only",
-                SizeConstraints::new(None, Some(size(900.0, 700.0))),
+                limits(None, Some(size(900.0, 700.0))),
                 size(200.0, 5000.0),
                 size(200.0, 700.0),
             ),
             (
                 "a maximum below the minimum",
-                SizeConstraints::new(Some(size(500.0, 500.0)), Some(size(300.0, 300.0))),
+                limits(Some(size(500.0, 500.0)), Some(size(300.0, 300.0))),
                 size(400.0, 400.0),
                 size(300.0, 300.0),
             ),
@@ -411,16 +752,261 @@ mod tests {
         }
     }
 
-    fn state(width: f64) -> WindowState {
-        WindowState::new(
-            WindowGeometry::new(None, Size::new(width, 100.0)),
-            Size::new(width, 100.0),
-        )
+    /// A read of a window `width` wide, as a host's sample answers it, with
+    /// `focused` as its focus: its geometry refused for a width no window
+    /// has.
+    fn read(width: f64, focused: bool) -> Sample {
+        let geometry =
+            WindowExtent::try_new(Size::new(width, 100.0)).map(|extent| SampledGeometry {
+                outer: WindowGeometry::unplaced(extent),
+                content: extent,
+                normal: None,
+            });
+        Sample::read(geometry, |state| state.with_focused(focused))
+    }
+
+    fn state(width: f64) -> Sample {
+        read(width, false)
+    }
+
+    fn window(width: f64) -> WindowState {
+        let sample = state(width);
+        assert_eq!(sample.refused, None, "a finite width");
+        sample.state
+    }
+
+    /// A read whose geometry describes no window publishes nothing of its
+    /// geometry and is not repeated until the window is invalidated again;
+    /// the next read that describes a window publishes it.
+    #[test]
+    fn a_read_that_describes_no_window_publishes_nothing() {
+        let cell = WindowStateCell::new(window(1.0));
+        let first = cell.state_with(|| state(2.0));
+        assert!(first.changed);
+        for width in [f64::INFINITY, f64::NAN, -1.0] {
+            cell.invalidate();
+            let refused = cell.state_with(|| state(width));
+            assert!(!refused.changed, "{width}");
+            assert_eq!(refused.state, first.state, "{width}");
+            let kept = cell.state_with(|| panic!("a refused read is not repeated"));
+            assert_eq!(kept.state, first.state, "{width}");
+        }
+        cell.invalidate();
+        let recovered = cell.state_with(|| state(3.0));
+        assert!(recovered.changed);
+        assert_eq!(
+            recovered.state.revision.get(),
+            first.state.revision.get() + 1,
+            "the refused reads took no revision"
+        );
+        assert_eq!(recovered.state.content_size, Size::new(3.0, 100.0));
+    }
+
+    /// A read whose geometry describes no window costs it only its geometry:
+    /// the published geometry and metrics stand, and every other fact it read
+    /// is published.
+    #[test]
+    fn a_refused_geometry_keeps_the_published_one_and_publishes_the_other_facts() {
+        let cell = WindowStateCell::new(window(1.0));
+        let first = cell.state_with(|| state(2.0));
+        cell.invalidate();
+        let focused = cell.state_with(|| read(f64::NAN, true));
+        assert!(focused.changed, "the focus is published");
+        assert!(focused.state.focused);
+        assert_eq!(focused.state.outer, first.state.outer);
+        assert_eq!(focused.state.content_size, first.state.content_size);
+        assert_eq!(focused.state.metrics, first.state.metrics);
+        cell.invalidate();
+        let unchanged = cell.state_with(|| read(f64::INFINITY, true));
+        assert!(!unchanged.changed, "nothing else changed");
+    }
+
+    /// A read of a window `width` wide with `facts` put on it.
+    fn read_as(width: f64, facts: impl FnOnce(WindowState) -> WindowState) -> Sample {
+        let geometry =
+            WindowExtent::try_new(Size::new(width, 100.0)).map(|extent| SampledGeometry {
+                outer: WindowGeometry::unplaced(extent),
+                content: extent,
+                normal: None,
+            });
+        Sample::read(geometry, facts)
+    }
+
+    fn metrics(scale: f64) -> flui_foundation::geometry::WindowMetrics {
+        flui_foundation::geometry::WindowMetrics::try_new(Size::new(200, 100), scale)
+            .expect("drawable metrics")
+    }
+
+    /// The drawable metrics go with the geometry: a refused read whose own
+    /// metrics are drawable (a scale its window system reported apart from
+    /// the rectangle) publishes none of them over the published geometry.
+    /// The rule predates the cell's shared refused-geometry function; this
+    /// row holds it through that function, and fails if it publishes the
+    /// read's metrics.
+    #[test]
+    fn a_refused_geometry_keeps_the_published_metrics() {
+        let cell = WindowStateCell::new(window(1.0));
+        let first =
+            cell.state_with(|| read_as(2.0, |state| state.with_metrics(Some(metrics(1.0)))));
+        cell.invalidate();
+        let refused = cell.state_with(|| {
+            read_as(f64::NAN, |state| {
+                state.with_metrics(Some(metrics(2.0))).with_focused(true)
+            })
+        });
+        assert!(refused.changed, "the focus is published");
+        assert_eq!(refused.state.metrics, first.state.metrics);
+    }
+
+    /// A first read whose geometry is refused follows the rule every later
+    /// one does: no geometry, and so no drawable metrics either.
+    #[test]
+    fn a_refused_first_read_opens_with_no_metrics() {
+        let cell = WindowStateCell::open(read_as(f64::NAN, |state| {
+            state.with_metrics(Some(metrics(2.0)))
+        }));
+        let opened = cell.last.lock().state.clone();
+        assert_eq!(opened.content_size, WindowExtent::ZERO);
+        assert_eq!(opened.metrics, None);
+    }
+
+    /// A window whose first read was refused has no rectangle to return to:
+    /// a later refused read that reports it maximized publishes none, never
+    /// the empty rectangle it opened with.
+    #[test]
+    fn a_window_that_never_had_a_rectangle_returns_nowhere() {
+        use flui_platform::WindowMode;
+
+        let cell = WindowStateCell::open(state(f64::NAN));
+        cell.invalidate();
+        let maximized = cell
+            .state_with(|| read_as(f64::NAN, |state| state.with_mode(WindowMode::Maximized)))
+            .state;
+        assert_eq!(maximized.mode, WindowMode::Maximized);
+        assert_eq!(maximized.outer, WindowGeometry::EMPTY);
+        assert_eq!(maximized.normal_geometry, None);
+    }
+
+    /// On a refused read the rectangle a window returns to stays what the
+    /// contract says it is, whatever mode the read reports: the last
+    /// published rectangle for a window that left the normal mode, none for
+    /// one that came back to it.
+    #[test]
+    fn a_refused_geometry_keeps_the_normal_geometry_true_to_the_mode() {
+        use flui_platform::WindowMode;
+
+        let cell = WindowStateCell::new(window(1.0));
+        let normal = cell.state_with(|| state(2.0)).state;
+        cell.invalidate();
+        let maximized = cell
+            .state_with(|| read_as(f64::NAN, |state| state.with_mode(WindowMode::Maximized)))
+            .state;
+        assert_eq!(maximized.mode, WindowMode::Maximized);
+        assert_eq!(
+            maximized.normal_geometry,
+            Some(normal.outer),
+            "it returns to where it was"
+        );
+        cell.invalidate();
+        let fullscreen = cell
+            .state_with(|| read_as(f64::NAN, |state| state.with_mode(WindowMode::Fullscreen)))
+            .state;
+        assert_eq!(
+            fullscreen.normal_geometry,
+            Some(normal.outer),
+            "and still does"
+        );
+        cell.invalidate();
+        let restored = cell
+            .state_with(|| read_as(f64::NAN, |state| state.with_mode(WindowMode::Normal)))
+            .state;
+        assert_eq!(restored.mode, WindowMode::Normal);
+        assert_eq!(
+            restored.normal_geometry, None,
+            "a normal window returns nowhere"
+        );
+    }
+
+    /// A note a read carries (a fact its host could not publish) is said by
+    /// the window's delivery in its turn, never from inside the read, where
+    /// the reader's borrows are held.
+    #[test]
+    fn a_reads_note_is_said_in_the_windows_turn() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use flui_platform::input_capabilities::InputCapabilities;
+        use flui_testing::window_handler::RecordingWindowHandler;
+
+        use crate::owner::window_delivery::WindowDelivery;
+
+        let delivery = WindowDelivery::new(
+            RecordingWindowHandler::new(),
+            InputCapabilities::UNAVAILABLE,
+        );
+        let cell = WindowStateCell::new(window(1.0));
+        let said = Arc::new(AtomicBool::new(false));
+        let noted = Arc::clone(&said);
+        let _ = cell.read(&delivery, || {
+            state(2.0).noting(move || noted.store(true, Ordering::SeqCst))
+        });
+        assert!(
+            !said.load(Ordering::SeqCst),
+            "nothing is said from the read"
+        );
+        delivery.deliver_queued();
+        assert!(said.load(Ordering::SeqCst), "the window's turn says it");
+    }
+
+    /// The first refusal of a run of refused reads is said, once; a read that
+    /// describes a window ends the run, and the next refusal is said again.
+    #[test]
+    fn a_run_of_refused_reads_is_said_once() {
+        let cell = WindowStateCell::new(window(1.0));
+        let unreported = |cell: &WindowStateCell| cell.last.lock().unreported_refusal.take();
+        for width in [f64::NAN, -1.0, f64::INFINITY] {
+            cell.invalidate();
+            let _ = cell.state_with(|| state(width));
+        }
+        assert!(
+            matches!(
+                unreported(&cell),
+                Some(InvalidGeometry::Extent { width, .. }) if width.is_nan()
+            ),
+            "the first of the run"
+        );
+        cell.invalidate();
+        let _ = cell.state_with(|| state(-2.0));
+        assert_eq!(unreported(&cell), None, "the run goes on");
+        cell.invalidate();
+        let _ = cell.state_with(|| state(5.0));
+        cell.invalidate();
+        let _ = cell.state_with(|| state(-3.0));
+        assert_eq!(
+            unreported(&cell),
+            Some(InvalidGeometry::Extent {
+                width: -3.0,
+                height: 100.0
+            }),
+            "a new run"
+        );
+    }
+
+    /// A first read whose geometry describes no window opens the cell with
+    /// no geometry and the read's other facts, and the refusal is waiting to
+    /// be said.
+    #[test]
+    fn a_cell_opens_on_a_refused_first_read_with_its_other_facts() {
+        let cell = WindowStateCell::open(read(f64::NAN, true));
+        let opened = cell.last.lock().state.clone();
+        assert_eq!(opened.outer, WindowGeometry::EMPTY);
+        assert!(opened.focused);
+        assert!(cell.last.lock().unreported_refusal.is_some());
     }
 
     #[test]
     fn invalidation_during_a_sample_stays_stale() {
-        let cell = WindowStateCell::new(state(1.0));
+        let cell = WindowStateCell::new(window(1.0));
         let samples = Cell::new(0);
         let _ = cell.state_with(|| {
             samples.set(samples.get() + 1);
@@ -444,7 +1030,7 @@ mod tests {
     /// the window changed and the other read published the change.
     #[test]
     fn a_read_overtaken_by_a_later_one_publishes_nothing() {
-        let cell = WindowStateCell::new(state(1.0));
+        let cell = WindowStateCell::new(window(1.0));
         let _ = cell.state_with(|| state(1.0));
         cell.invalidate();
         let overtaken = cell.state_with(|| {
@@ -463,7 +1049,7 @@ mod tests {
 
     #[test]
     fn an_exhausted_revision_freezes_the_cell() {
-        let mut last = state(1.0);
+        let mut last = window(1.0);
         last.revision = WindowRevision::LAST;
         let cell = WindowStateCell::new(last.clone());
         for attempt in 0..3 {

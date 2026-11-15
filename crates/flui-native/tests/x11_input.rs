@@ -1127,14 +1127,14 @@ fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager(
     fixture.settle();
     let moved = fixture.window.state().outer;
     let (from, to) = (
-        before.position.expect("a position"),
-        moved.position.expect("a position"),
+        before.position().expect("a position"),
+        moved.position().expect("a position"),
     );
     assert!(
         to.x > from.x + 30.0 && to.y > from.y + 15.0,
         "the bar moved the window: {from:?} to {to:?}"
     );
-    assert_eq!(moved.size, before.size);
+    assert_eq!(moved.size(), before.size());
 
     // A drag on the right edge, inside the band along it.
     let xtest = Xtest::new(&fixture);
@@ -1145,7 +1145,7 @@ fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager(
     }
     xtest.send(BUTTON_RELEASE_EVENT, 1, (0, 0));
     fixture.settle();
-    let widened = fixture.window.state().content_size;
+    let widened = fixture.window.state().content_size.get();
     assert!(
         widened.width > 430.0 && widened.height == 300.0,
         "the edge widened the window: {widened:?}"

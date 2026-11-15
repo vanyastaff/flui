@@ -149,7 +149,9 @@ mod text_input;
 pub mod text_store;
 mod unsupported;
 mod window;
+mod window_capabilities;
 mod window_frame;
+mod window_geometry;
 mod window_handler;
 mod window_insets;
 mod window_state;
@@ -215,17 +217,21 @@ pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::{
-    CursorError, InputLatency, WindowAppearance, WindowExecutionState, WindowId, WindowIdMint,
-    WindowMaterial, WindowOptions, WindowReveal,
+    CursorError, InputLatency, InvalidWindowOption, OpeningGeometry, WindowAppearance,
+    WindowExecutionState, WindowId, WindowIdMint, WindowMaterial, WindowOption, WindowOptions,
+    WindowReveal,
+};
+pub use window_capabilities::{
+    CapabilitiesOwner, CapabilityParts, WindowCapabilities, WindowCapability,
 };
 pub use window_frame::{
     AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,
 };
+pub use window_geometry::{InvalidGeometry, WindowExtent, WindowGeometry};
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{
-    AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CapabilityParts,
-    CommandRefusal, PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities,
-    WindowCommand, WindowControl, WindowGeometry, WindowMode, WindowRevision,
-    WindowRevisionExhausted, WindowState, WindowStateParts,
+    AdmissionError, AdmittedCommand, ApplyError, CommandRefusal, PlatformFailure, SizeConstraints,
+    SubmitError, WindowCommand, WindowControl, WindowMode, WindowRevision, WindowRevisionExhausted,
+    WindowState, WindowStateParts,
 };

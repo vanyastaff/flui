@@ -97,6 +97,11 @@ struct State {
     reevaluate_exit: bool,
     /// Whether the owner opens the windows other threads ask for.
     opens_windows: bool,
+    /// The first failure to post the turn a window asked for, said in the
+    /// next owner turn: the window that asked may hold borrows a `tracing`
+    /// subscriber takes, so nothing is said where it asks. The work stays
+    /// owed either way.
+    unreported_window_post: Option<String>,
 }
 
 impl State {
@@ -153,6 +158,7 @@ impl OwnerSignal {
                 opens: VecDeque::new(),
                 reevaluate_exit: false,
                 opens_windows: false,
+                unreported_window_post: None,
             }),
             notify,
             owner: Mutex::new(std::thread::current().id()),
@@ -414,9 +420,10 @@ impl OwnerSignal {
             }
         }
         if let Err(error) = self.schedule() {
-            contain_owner_callback(
-                || tracing::error!(%error, "a window's owner turn could not be posted"),
-            );
+            self.state
+                .lock()
+                .unreported_window_post
+                .get_or_insert_with(|| error.to_string());
         }
     }
 
@@ -438,7 +445,18 @@ impl OwnerSignal {
 
     /// Resume every window that asked, outside the state lock.
     fn run_window_wakes(&self) {
-        let resumes = std::mem::take(&mut self.state.lock().window_wakes);
+        let (resumes, unreported) = {
+            let mut state = self.state.lock();
+            (
+                std::mem::take(&mut state.window_wakes),
+                state.unreported_window_post.take(),
+            )
+        };
+        if let Some(error) = unreported {
+            contain_owner_callback(
+                || tracing::error!(%error, "a window's owner turn could not be posted"),
+            );
+        }
         for resume in resumes {
             contain_owner_callback(|| resume());
             contain_owner_callback(|| drop(resume));

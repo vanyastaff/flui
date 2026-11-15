@@ -153,11 +153,12 @@ pub(crate) const fn window_capabilities(
     gate: &Result<Since<SystemBackdrop>, Unsupported>,
     presentation: Option<CapabilityAbsence>,
 ) -> WindowCapabilities {
-    use flui_platform::Availability::{Emulated, Native};
+    use flui_platform::Availability;
+    use flui_platform::WindowCapability::{Absent, Emulated, Native};
+    let mut capabilities = WindowCapabilities::NONE;
     // A tablet shows a touch keyboard (`InputPane`), whose occlusion this host
     // does not read yet.
-    let mut capabilities =
-        WindowCapabilities::NONE.without_keyboard_inset(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    capabilities.reports_keyboard_inset = Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;
@@ -174,16 +175,16 @@ pub(crate) const fn window_capabilities(
     capabilities.hides = Native;
     capabilities.activates = Native;
     capabilities.closes = Native;
-    capabilities.observes_position = Native;
-    capabilities.observes_minimized = Native;
-    capabilities.places_at_open = Native;
+    capabilities.observes_position = Availability::Native;
+    capabilities.observes_minimized = Availability::Native;
+    capabilities.places_at_open = Availability::Native;
     capabilities.material = Native;
     // From the frame statistics of the swap chain the renderer presents
     // through, which it hands the surface target before each present.
-    capabilities.reports_presentation = Native;
-    if let Some(absence) = presentation {
-        capabilities = capabilities.without_presentation_feedback(absence);
-    }
+    capabilities.reports_presentation = match presentation {
+        Some(absence) => Absent(absence),
+        None => Native,
+    };
     super::material::below_the_gate(capabilities, gate)
 }
 
@@ -204,6 +205,9 @@ impl WindowsWindow {
         apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
         drag: Arc<dyn crate::owner::windows::HostDrag>,
     ) -> Result<Rc<Self>, OpenWindowError> {
+        // The numbers the window is built from: the open checked them before
+        // the id was taken, so this answers the same.
+        let opening = options.geometry()?;
         let crate::owner::windows::control::OwnerShares {
             app_hooks,
             frames,
@@ -220,11 +224,12 @@ impl WindowsWindow {
         // whose ownership has not yet transferred to a context and wrapper.
         let (identity, created) = crate::owner::windows::WindowIdentity::admit(
             crate::owner::windows::WindowIdentity::source(),
-            || Self::create_native(&options, displays.as_ref()),
+            || Self::create_native(&options, &opening, displays.as_ref()),
         );
         let (hwnd, requested, scale_factor, normal) = created?;
         Self::install_native(
             options,
+            opening,
             handler,
             windows,
             app_hooks,
@@ -251,6 +256,7 @@ impl WindowsWindow {
     /// fullscreen, the rectangle it returns to (screen coordinates).
     fn create_native(
         options: &WindowOptions,
+        opening: &flui_platform::OpeningGeometry,
         displays: &dyn crate::owner::windows::HostDisplays,
     ) -> Result<(HWND, Size<i32>, f64, Option<RECT>), OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
@@ -286,7 +292,7 @@ impl WindowsWindow {
             let target = options
                 .display
                 .and_then(|id| snapshot.as_ref().and_then(|snapshot| snapshot.get(id)));
-            let spot = open_spot(options, target, system_scale, |dpi, content| {
+            let spot = open_spot(options, opening, target, system_scale, |dpi, content| {
                 outer_size(
                     style.0,
                     ex_style.0,
@@ -339,6 +345,7 @@ impl WindowsWindow {
     )]
     fn install_native(
         options: WindowOptions,
+        opening: flui_platform::OpeningGeometry,
         handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
         app_hooks: Rc<RefCell<AppHooks>>,
@@ -425,8 +432,9 @@ impl WindowsWindow {
                 focused: false,
             }));
 
-            let constraints = SizeConstraints::new(options.min_size, options.max_size);
-            let snapshot = Arc::new(WindowStateCell::new(sample_state(
+            let constraints = opening.constraints;
+            let capabilities = windows.capabilities();
+            let snapshot = Arc::new(WindowStateCell::open(sample_state(
                 hwnd,
                 &state,
                 OwnerTracking {
@@ -438,7 +446,7 @@ impl WindowsWindow {
                     active: false,
                     hovered: false,
                     occluded: false,
-                    capabilities: windows.capabilities(),
+                    capabilities,
                     frame: options.frame,
                 },
             )));
@@ -504,6 +512,7 @@ impl WindowsWindow {
                 hooks: Rc::clone(&window_hooks),
                 preferences: Rc::clone(&preferences),
                 scale: scale.clone(),
+                refusing_zero_dpi: std::cell::Cell::new(false),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
@@ -1536,12 +1545,17 @@ impl PlatformWindow for WindowsWindow {
     /// `WM_NCHITTEST`, which answers from them without running framework code
     /// (ADR-0286). Windows starts its edge swipes whatever a window says, so a
     /// `SystemGestureExclusion` region is not honoured and the input
-    /// capabilities say so. A window that is gone, or a call off the owner
-    /// thread, keeps nothing.
+    /// capabilities say so. A window that is gone keeps nothing and answers
+    /// `NoWindow`, as a command to it answers `Closed`: the handle may name
+    /// another window by then.
     fn set_input_regions(
         &self,
         regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), Unsupported> {
+        let gone = Unsupported::new(UnsupportedReason::NoWindow);
+        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
+            return Err(gone);
+        }
         let scale = self.state.lock().scale_factor;
         super::proc::with_window_context(self.hwnd, "set_input_regions", |ctx| {
             // `WM_NCHITTEST` borrows them only while it reads a slice and runs
@@ -1551,8 +1565,8 @@ impl PlatformWindow for WindowsWindow {
             let mut projected = std::mem::take(&mut *ctx.input_regions.borrow_mut());
             let _changed = projected.update(regions, scale, None);
             *ctx.input_regions.borrow_mut() = projected;
-        });
-        Ok(())
+        })
+        .ok_or(gone)
     }
 }
 

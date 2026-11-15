@@ -131,11 +131,21 @@ enum Delivery {
     /// one of its handler's methods), so every delivery queued ahead of it,
     /// the close's `closed` included, reaches the handler first.
     Clear(Option<RetirementNotice>),
+    /// A diagnostic the window has to say, said in the window's turn
+    /// ([`WindowDelivery::diagnose`]); said also after `closed`, as it is no
+    /// obligation of the handler.
+    Diagnostic(Diagnostic),
 }
 
 /// Run by a queued clear once the handler is let go (Win32 orders its
 /// window-destroyed notice after the handler's release this way).
 type RetirementNotice = Box<dyn FnOnce() + Send>;
+
+/// A diagnostic a window hands its delivery to be said in the window's turn,
+/// outside whatever borrows the code that found it held. One that panics (a
+/// `tracing` subscriber's panic) is contained, logged and discarded, as on
+/// every owner callback path, and the queue goes on.
+type Diagnostic = Box<dyn FnOnce() + Send>;
 
 /// Closes a window whose queued close request the handler granted, without
 /// asking it again.
@@ -544,15 +554,56 @@ impl WindowDelivery {
     /// the owner for a turn that delivers it ([`Self::deliver_queued`]).
     fn queue_for_owner(&self, delivery: Delivery) {
         self.dispatch.lock().pending.push_back(delivery);
-        let wake = self.owner_turn.lock().clone();
-        if let Some(wake) = wake {
-            wake();
-        } else {
+        if !self.ask_for_owner_turn() {
             // Still queued: the owner's next delivery to this window drains it.
             tracing::warn!(
                 "a window delivery raised off its owner thread waits for the owner's next one"
             );
         }
+    }
+
+    /// Ask the owner for a turn that delivers what is queued; `false` where
+    /// the window's loop gave it no way to ask ([`Self::resume_through`]).
+    fn ask_for_owner_turn(&self) -> bool {
+        let wake = self.owner_turn.lock().clone();
+        wake.map(|wake| wake()).is_some()
+    }
+
+    /// A read of the window (`PlatformWindow::state`) found the window system
+    /// ahead of the published snapshot and published a new revision: the
+    /// `state_changed` it is owed is queued, never called from the read.
+    ///
+    /// Whoever reads a window may hold a borrow the handler takes again (an
+    /// application's window queues read under theirs), and the handler is
+    /// user code, which runs at the owner's turn and outside any borrow
+    /// (ADR-0254 §4). So the read answers its caller with the new snapshot,
+    /// and the announcement waits in the window's FIFO: a drain already
+    /// running delivers it when the method it runs returns, the owner's next
+    /// turn delivers it where the loop gives the window one
+    /// ([`Self::resume_through`]), and elsewhere it goes ahead of the window's
+    /// next delivery, so a frame never runs before the state change it follows.
+    ///
+    /// A host announces a change its window system reported with
+    /// [`Self::publish_state`] or [`Self::dispatch_state_changed`]: that is
+    /// the host's own event, with no caller above it.
+    pub(crate) fn state_changed_after_read(&self) {
+        self.dispatch
+            .lock()
+            .pending
+            .push_back(Delivery::StateChanged);
+        let _asked = self.ask_for_owner_turn();
+    }
+
+    /// Say a diagnostic of the window (its state cell's), in the window's turn and
+    /// never here: whoever reads the window may hold borrows a `tracing`
+    /// subscriber takes again. It waits in the FIFO as an announcement after
+    /// a read does ([`Self::state_changed_after_read`]).
+    pub(crate) fn diagnose(&self, diagnostic: impl FnOnce() + Send + 'static) {
+        self.dispatch
+            .lock()
+            .pending
+            .push_back(Delivery::Diagnostic(Box::new(diagnostic)));
+        let _asked = self.ask_for_owner_turn();
     }
 
     /// Ask for the owner turns that deliver what other threads raise; `wake`
@@ -634,6 +685,10 @@ impl WindowDelivery {
             }
             return None;
         }
+        if let Delivery::Diagnostic(diagnostic) = delivery {
+            contain_owner_callback(diagnostic);
+            return None;
+        }
         if self.closed.load(Ordering::SeqCst) {
             // `closed` is the last obligation.
             return None;
@@ -711,7 +766,9 @@ impl WindowDelivery {
                 handler.surface_changed(change);
             })
             .or_resume(()),
-            Delivery::Clear(_) => unreachable!("BUG: a clear was delivered above"),
+            Delivery::Clear(_) | Delivery::Diagnostic(_) => {
+                unreachable!("BUG: a clear or a diagnostic was delivered above")
+            }
         }
         None
     }

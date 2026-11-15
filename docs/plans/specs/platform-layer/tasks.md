@@ -313,7 +313,7 @@ graph LR
 
 | ID | Задача | Зависит от | Крейты и файлы | Гейты | Тесты | Где |
 |---|---|---|---|---|---|---|
-| **LY104** | **Снимок окна несёт только истинные конечные факты.** Win32 отказывает нулевому DPI в `change_dpi`, и снимок не может нести неконечную геометрию; `state()` окна headless читает, не сбрасывая сообщённый снимок; чтение снимка не доставляет `state_changed` под чужими заимствованиями (`WindowHandle::is_open()`); возможности X11 и Wayland строятся от `NONE`; у `WindowCapabilities` один enum на слот (`Native`, `Emulated`, `Absent(причина)`), правила цветового режима Android и unbuffered-dispatch уходят из `capabilities.rs`; `set_input_regions` закрытого окна отвечает одинаково на каждом хосте | — | `crates/flui-platform/src/window_state.rs`, `crates/flui-native/src/window/{capabilities.rs,windows/*,headless.rs,linux/*}`, `crates/flui-app/src/app/window_control.rs` | `workspace`, `reach`, гейт API-замыкания, `cross-typecheck` | строка conformance «геометрия снимка конечна» на каждом хосте; replay записи `window_state` проверяет то, что видит потребитель; `state_changed`, повторно входящий в очереди команд; строка conformance закрытого окна для `set_input_regions`; каждый падает при откате | L + W + T |
+| **LY104** | **Снимок окна несёт только истинные конечные факты.** Win32 отказывает нулевому DPI в `change_dpi`, и снимок не может нести неконечную геометрию; `state()` окна headless читает, не сбрасывая сообщённый снимок; чтение снимка не доставляет `state_changed` под чужими заимствованиями (`WindowHandle::is_open()`); возможности X11 и Wayland строятся от `NONE`; у каждого слота `WindowCapabilities`, против которого допускается команда, и у трёх отчётов один enum (`Native`, `Emulated`, `Absent(причина)`), а четыре слота, которых не отказывает ни одна команда (`observes_position`, `observes_minimized`, `places_at_open` и `frame_rate_hint`, чей глагол сам отвечает причиной), остаются `Availability`; плохая геометрия выборки стоит ей только геометрии: ячейка хранит опубликованную и публикует остальные факты; размер и пределы `WindowOptions`, которые отказала бы команда, отказывают открытие, правила цветового режима Android и unbuffered-dispatch уходят из `capabilities.rs`; `set_input_regions` закрытого окна отвечает одинаково на каждом хосте | — | `crates/flui-platform/src/window_state.rs`, `crates/flui-native/src/window/{capabilities.rs,windows/*,headless.rs,linux/*}`, `crates/flui-app/src/app/window_control.rs` | `workspace`, `reach`, гейт API-замыкания, `cross-typecheck` | строка conformance «геометрия снимка конечна» на каждом хосте; replay записи `window_state` проверяет то, что видит потребитель; `state_changed`, повторно входящий в очереди команд; строка conformance закрытого окна для `set_input_regions`; каждый падает при откате | L + W + T |
 | **LY105** | **Хост X11: устаревшее состояние и ограниченная работа.** Окно без оконного менеджера читает режим `Normal` и перечитывает поддержку по `DestroyNotify` окна `_NET_SUPPORTING_WM_CHECK`; удалённое устройство XInput2 распознаётся по флагу, а не по `type_`; цикл разбирает за ход то, что поставил один read, читает каждое устаревшее окно один раз и сливает движения; `XkbMapNotify` помечает keymap, а не компилирует её; списки RandR ограничены, смена рабочего стола читает только рабочую область; чтение выделения без `INCR` проверяет тип и формат; `pump_for` и `run_loop` делят один `turn()`; запрос устройства сверх `MAX_DEVICES` не делается; `tracing::warn!` — после мьютекса наблюдений | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/x11*`, `preferences/linux.rs`, `ARCHITECTURE.md` (обработчики с ограниченной работой на событие) | `module-dag`, `file-length`, `globals` | X-сервер без менеджера: режим `Normal`, `SetMode` исполняется; таблица `removed_devices`/`added_devices` по инфо в форме провода через функцию обработчика; счёт запросов на ход; выделение с чужим типом отвергается; каждый падает при откате | L; Dev: Linux (X11) |
 | **LY106** | **Хост Wayland: ограниченные данные композитора и гигиена протокола.** Клиентская рамка ограничивает масштаб и площадь рисования и держит ограниченный набор буферов на часть; на устройство один представленный, ещё не назначенный offer, и он уничтожается; `damage_buffer` только с версии 4 `wl_surface`; ушедшие seat и указатель снимают свои grab и фокус клавиатуры (удержанные клавиши получают KeyUp); реестр не хранит глобалы, которых не привязывает; источник drag берёт разрешение на запись до вызова провайдера приложения; одновременные чтения clipboard делят один ответ; ввод пользуется глобалами цикла, состояние указателя рамки — на seat; случаи `wayland_window`, которым нужен протокол сверх xdg-shell или seat (`wayland_window::optional`), CI гоняет и под headless Weston, и под headless sway (`cargo xtask wayland-optional`, где недостающее — падение), остальной `wayland_window` — под Weston: sway 1.9 тайлит и предлагает `xdg_wm_base` 2, так что maximize не исполняет; пропустивший тест говорит это в выводе | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/wayland*`, `transfer/linux/*`, `drag/wayland/*`, `.github/workflows/*` | `module-dag`, `file-length`, `ci-verify` | враждебный масштаб не выделяет гигабайт; композитор, не отдающий буферы; поток `data_offer` без `selection` не растёт; seat, ушедший с удержанной кнопкой; каждый падает при откате; `wayland_window::optional` под sway | L; Dev: Linux (Wayland) |
 | **LY107** | **Ядро владельца: одна точка вызова, одно решение на отказ.** Обработчик раскладки клавиатуры — один `HandlerSlot` в `owner/` для каждого цикла, `OwnerTurnSlot` реализует `HandlerSlot`; исход паники `exit_policy` решает `AppDelivery::exit_policy` один раз (ADR-0258, ADR-0281), а не хост; `AppDelivery::question` сохраняет ответ обработчика, когда падает отчёт после него; правило «наступивший срок не крутит цикл» — одно, через `WakeDeadline::{take_due, arm}`; у `Services::page_origin` и запечатанного `Platform` нет тел по умолчанию; `bind` ставит `delivering`; `owner/handlers.rs` назван по содержимому, тесты `OwnerSignal` — рядом с `signal.rs`; лестница хостов в `lib.rs` написана один раз; маркеры и формулировки удержания после ADR-0281 убраны | LY105, LY106 | `crates/flui-native/src/owner/*`, `input/{linux,windows,headless}*`, `host.rs`, `platform.rs`, `lib.rs`, `tools/xtask/src/globals/fixture.rs` | `module-dag`, `globals`, `panic-boundary`, `markers`, `file-length` | повторная регистрация обработчика раскладки одинакова на каждом цикле; паника `exit_policy` — одна строка таблицы на все хосты; вето конца сессии переживает панику отчёта; trybuild: `impl Services` без `page_origin` не компилируется; каждый падает при откате | L + W + T; Dev: macOS (насос AppKit) |
@@ -3243,7 +3243,7 @@ graph LR
   (на macOS — ответ AppKit), Win32 частота кадров, drag пером и касанием в OLE, хаптика Linux,
   `Absent`, неизвестный `WriteMode`, headless. Тесты: `every_error_carries_its_reason`
   (`each reason answers retry and message`); `window_command_validate` (каждая команда с
-  `NotOnThisDevice` и `NotYetOnThisHost`, `an_absence_left_in_an_available_slot_is_no_difference`,
+  `NotOnThisDevice` и `NotYetOnThisHost`, `a_capability_restored_is_the_one_never_taken_away` (до LY104 — `an_absence_left_in_an_available_slot_is_no_difference`),
   `no_absence_is_retryable`); `native_capability_absences`,
   `native_window_gate_table`, строки `PointerIcons` и `BackgroundBlur` в `os_version_gate_table`.
   Каждый падает при откате своей правки (проверено). На устройствах iOS, Android и macOS пути не
@@ -5396,6 +5396,89 @@ graph LR
   `native_host_suites_only_build_their_packages` существует (`tools/xtask/src/tasks.rs`).
   **Остаётся.** Пути файлов в записях отмеченных строк (больше всего в LY27–LY34) остались
   путями на момент слияния, часть из них переехала.
+- [x] **LY104** — PR #2647, ветка `platform/snapshot-integrity` от `main` @ `3f4aea639`: снимок окна
+  держит только верные и конечные факты. Шесть находок проверки сделанных задач, все
+  подтверждены по коду.
+  (1) *Не-конечная геометрия.* Win32 передавал DPI из `WM_DPICHANGED` в `change_dpi` без
+  проверки; при DPI 0 масштаб становился нулём, и снимок публиковал `inf` в размере содержимого
+  и внешнем прямоугольнике, после чего отличался сам от себя при каждом чтении. Исправлено
+  типами, а не проверкой в каждом хосте: `WindowGeometry` (конечная позиция и `WindowExtent`) и
+  `WindowExtent` (стороны конечны и неотрицательны) строятся только через `try_new`;
+  `WindowState::content_size` и границы `SizeConstraints` — `WindowExtent`. Сэмплы хостов
+  возвращают `Result<WindowState, InvalidGeometry>`, а решение одно на всех —
+  `WindowStateCell`: чтение, чьи числа окна не описывают, ничего не публикует и не повторяется
+  до следующей инвалидации. `WindowScale` Win32 хранит `NonZeroU32`; `change_dpi` при нуле
+  ничего не меняет. `WindowOptions::constraints` — единственное чтение пределов, с которыми
+  окно открывается.
+  (2) *Чтение headless-окна стирало сообщённый снимок.* `state()` звал `publish_state()`,
+  который сбрасывал `reported`. Теперь чтение ничего не меняет; сбрасывают только `simulate_*`
+  и `apply`. Тест воспроизведения (`WindowStateTarget`) читает окно после каждого снимка и
+  сверяет с опубликованным.
+  (3) *`state()` звал обработчик под чужими заимствованиями.* ADR-0254 §4 и его драйвер
+  («код пользователя выполняется в ход владельца, вне любого заимствования») решения не
+  требуют менять: ревизия, опубликованная чтением, объявляется через FIFO окна в следующий ход
+  владельца (`WindowDelivery::state_changed_after_read`), а изменение, о котором сообщила
+  оконная система, по-прежнему из колбэка хоста. Так сделано во всех восьми хостах; ADR-0254
+  получил запись об уточнении, без смены решения. `WindowHandle::is_open` отвечает, открыто ли
+  окно, не читая его; `WindowCommandQueues::handle_for`/`window_for` спрашивают его.
+  (4) X11 и Wayland строят возможности от `WindowCapabilities::NONE`, как остальные хосты.
+  (5) Возможность и причина её отсутствия — одно значение `WindowCapability { Native, Emulated,
+  Absent(CapabilityAbsence) }` в `WindowCapabilities` и в `CapabilityParts`; приватный массив
+  причин, `Result<Availability, CapabilityAbsence>` и дублирующие методы
+  (`presentation_feedback`, `without_*`, `refusal`, `availability`) удалены. Правила Android
+  про цветовой режим и unbuffered dispatch вынесены из `window/capabilities.rs` в модель окна
+  `window/activity.rs` (в файлы платформ `display/android` и `input/android` их не пускает
+  `module-dag`); их гейты — в `version::gate::android`.
+  (6) `set_input_regions` закрытого окна отвечает `NoWindow` на Win32, X11, Wayland и AppKit,
+  как на UIKit и headless; строка в `a_closed_window_refuses`.
+  Тесты и откат. С откатом исправлений (headless `state()`, `rescale` при нуле,
+  `set_input_regions` Win32, синхронная доставка из чтения, `handle.state().is_ok()` в
+  `handle_for`) падают: `window_handle_contract` (`looking_a_window_up_reads_nothing_of_it`,
+  «RefCell already borrowed»), `window_handler_obligation_table`
+  (`a_revision_a_read_published_is_announced_at_the_owners_turn`),
+  `a_window_takes_no_dpi_of_zero`, `native_recording_contracts` (четыре случая на проверке
+  чтения) и `the_win32_window_conforms` (три нарушения: `a_closed_window_refuses`,
+  `a_report_that_describes_no_window_publishes_nothing`, расхождение метрик); с исправлениями
+  все зелёные. Новые conformance-строки ловят свои дефекты на headless-фикстуре с
+  неисправностями (`a_window_that_publishes_a_report_of_no_window_is_caught`,
+  `a_closed_window_that_takes_input_regions_is_caught`). Пункты 1 и 5 в старом виде не
+  выражаются новыми типами: их держат таблица `window_geometry`,
+  `a_read_that_describes_no_window_publishes_nothing`,
+  `a_refusal_answers_the_reason_the_capability_holds` и полные списки возможностей
+  (`an_x11_window_has_the_capabilities_it_names`, `a_wayland_window_has_the_capabilities_it_names`).
+  Проверки. Windows: nextest `-p flui-native -p flui-platform -p flui-testing -p flui-view` —
+  955 из 959; не проходят и без этого изменения trybuild-снимки (`flui-platform`: три фикстуры,
+  `flui-native`: `owner_platform_is_not_send`; диагностика компилятора) и
+  `an_intent_opens_its_link_or_documents` (путь `file:` на Windows-хосте); окна `flui-app`,
+  `flui-runtime`, `flui-interaction` — 79; clippy семи крейтов `--all-targets -D warnings`;
+  `xtask checks`. WSL (Ubuntu 24.04, 1.100.0): clippy `-p flui-native -p flui-testing`;
+  nextest без композитора — 950 из 973 (22 теста `drag::x11` падают на `DISPLAY` WSLg и
+  проходят под Xvfb: 152 из 152; trybuild — как выше); Wayland под headless Weston — 95 из 95.
+  Не запускалось: macOS, iOS, Android и wasm32 (правки `window/apple/*`, `window/android.rs`,
+  `window/web.rs` сделаны без сборки; их проверяет `cross-typecheck` и `wasm-check` CI).
+  **Раунд правок проверки** (две стандартные проверки, три треда Codex, проверка спеки).
+  Плохая геометрия выборки стоит ей только геометрии: хост отдаёт ячейке `Sample` (факты и
+  `Result` геометрии), ячейка хранит опубликованную геометрию и метрики и публикует остальное
+  (фокус, видимость, режим, закрытие); все восемь хостов читают через `read`, `refresh` и
+  `publish_report` ячейки. Диагностика ячейки и сбой поста хода окна произносятся в ходе
+  владельца, не внутри чтения; web-окно просит ход через сигнал владельца; голый
+  `HeadlessPlatform` без петли и состояние-зависимые причины отсутствия записаны в `docs/gaps.md`.
+  `WindowOptions::min_size`/`max_size` — `WindowExtent`, и каждый хост отказывает открытию с
+  размером или пределами, которые отказала бы команда (`OpenWindowError::InvalidOption`, с именем опции);
+  `AdmissionError::InvalidGeometry` несёт числа. Удалены `WindowGeometry::sized`,
+  `WindowCapability::availability` и `absence` (без продакшен-вызовов). Android отказывает
+  `set_input_regions` после выхода в отставку; Win32 сообщает серию DPI 0 один раз. ADR-0254
+  переписан как текущее правило (решения 1, 2, 4, 6) без дописанных поправок. Тесты, падающие
+  при откате: `a_refused_geometry_keeps_the_published_one_and_publishes_the_other_facts`,
+  `a_bad_report_keeps_the_geometry_and_publishes_the_rest`, строка conformance
+  `a_report_that_describes_no_window_publishes_nothing` на headless,
+  `options_that_describe_no_window_open_none`,
+  `an_opening_is_refused_for_what_a_command_is_refused_for`,
+  `restore_keeps_the_configured_normal_bounds_for_a_frame_that_is_no_extent`,
+  `a_run_of_zero_dpi_messages_is_reported_once`, `a_refusal_equals_itself`. Проверки: Windows —
+  clippy workspace `--all-targets -D warnings`, nextest шести крейтов 1262 из 1264 (две известные
+  ошибки базы), `xtask checks`; WSL — clippy `-p flui-native -p flui-testing`, lib-тесты
+  `window::` 115 из 115. Не собиралось: macOS, iOS, Android, wasm32.
 - [ ] **LY108** — ветка `app/handler-answers`, PR #2641. Открытая часть: размещение окна мимо
   `StorageCapability` приложения
   ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); как хост

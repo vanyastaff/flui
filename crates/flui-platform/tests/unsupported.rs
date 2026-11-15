@@ -84,7 +84,14 @@ fn carries<E: Error + 'static>(make: fn(Unsupported) -> E, read: fn(&E) -> Optio
 
 fn window_commands() {
     carries(AdmissionError::from, AdmissionError::unsupported);
-    assert_eq!(AdmissionError::InvalidGeometry.unsupported(), None);
+    assert_eq!(
+        AdmissionError::InvalidGeometry(flui_platform::InvalidGeometry::Empty {
+            width: 0.0,
+            height: 0.0
+        })
+        .unsupported(),
+        None
+    );
     carries(
         |unsupported| SubmitError::from(AdmissionError::from(unsupported)),
         SubmitError::unsupported,

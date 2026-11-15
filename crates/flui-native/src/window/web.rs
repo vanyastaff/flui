@@ -32,7 +32,7 @@ use crate::{
     owner::web::WebLoop,
     owner::window_delivery::WindowDelivery,
     text::WindowTextInput,
-    window::state::{ReportedFacts, WindowStateCell},
+    window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCell},
 };
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, PlatformWindow, Unsupported, UnsupportedReason,
@@ -79,8 +79,9 @@ pub(crate) struct StatePublisher {
 }
 
 impl StatePublisher {
-    /// The page's report of the window now.
-    fn sample(&self) -> WindowState {
+    /// The page's report of the window now; a box that is no extent costs it
+    /// its geometry and nothing else.
+    fn sample(&self) -> Sample {
         sample_state(
             &self.canvas,
             &self.state,
@@ -89,28 +90,24 @@ impl StatePublisher {
         )
     }
 
-    /// The published state, read from the page again first when something
-    /// invalidated it; `WindowHandler::state_changed` is raised when that produced a new
-    /// revision.
+    /// The published state for a caller that reads the window
+    /// (`PlatformWindow::state`), read from the page again first when
+    /// something invalidated it. A revision the read publishes is announced
+    /// at the owner's turn, never from the read.
     fn current(&self) -> WindowState {
-        let published = self.cell.state_with(|| self.sample());
-        if published.changed {
-            self.delivery.dispatch_state_changed();
-        }
-        published.state
+        self.cell.read(&self.delivery, || self.sample())
     }
 
-    /// The window may differ from its published state: read it again.
+    /// The page reported a change: read the window again, and raise
+    /// `WindowHandler::state_changed` when that produced a new revision.
     pub(crate) fn publish(&self) {
-        self.cell.invalidate();
-        let _ = self.current();
+        self.cell.publish_report(&self.delivery, || self.sample());
     }
 
     /// Read the page again for the window's state publisher, announcing
     /// nothing.
     fn read(&self) -> crate::owner::window_delivery::Publication {
-        self.cell.invalidate();
-        self.cell.state_with(|| self.sample()).outcome()
+        self.cell.refresh(&self.delivery, || self.sample())
     }
 }
 
@@ -121,7 +118,7 @@ fn sample_state(
     state: &Mutex<WebWindowState>,
     display: Option<flui_platform::DisplayId>,
     hovered: bool,
-) -> WindowState {
+) -> Sample {
     let (title, size, focused, hidden, execution, metrics) = {
         let state = state.lock();
         (
@@ -149,32 +146,40 @@ fn sample_state(
             .fullscreen_element()
             .is_some_and(|element| element.contains(Some(canvas)))
     });
-    let state = WindowState::new(WindowGeometry::new(None, size), size)
-        .with_mode(if fullscreen {
-            WindowMode::Fullscreen
-        } else {
-            WindowMode::Normal
-        })
-        // A page cannot hide its canvas from the user: it is shown.
-        .with_visible(true)
-        .with_focused(focused)
-        .with_title(Some(title))
-        .with_resizable(false)
-        .with_frame(flui_platform::WindowFrame::None)
-        .with_display(display);
-    ReportedFacts {
-        metrics,
-        appearance: page_appearance(),
-        // The page owns the viewport; the canvas has no safe area of its own.
-        insets: flui_platform::WindowInsets::ZERO.with_keyboard(keyboard_over(canvas, size.height)),
-        execution,
-        occluded: hidden,
-        hovered,
-        // A page has no activation apart from the canvas's focus.
-        active: focused,
-        capabilities: page_capabilities(),
-    }
-    .onto(state)
+    let geometry = flui_platform::WindowExtent::try_new(size).map(|extent| SampledGeometry {
+        outer: WindowGeometry::unplaced(extent),
+        content: extent,
+        normal: None,
+    });
+    Sample::read(geometry, |state| {
+        let state = state
+            .with_mode(if fullscreen {
+                WindowMode::Fullscreen
+            } else {
+                WindowMode::Normal
+            })
+            // A page cannot hide its canvas from the user: it is shown.
+            .with_visible(true)
+            .with_focused(focused)
+            .with_title(Some(title))
+            .with_resizable(false)
+            .with_frame(flui_platform::WindowFrame::None)
+            .with_display(display);
+        ReportedFacts {
+            metrics,
+            appearance: page_appearance(),
+            // The page owns the viewport; the canvas has no safe area of its own.
+            insets: flui_platform::WindowInsets::ZERO
+                .with_keyboard(keyboard_over(canvas, size.height)),
+            execution,
+            occluded: hidden,
+            hovered,
+            // A page has no activation apart from the canvas's focus.
+            active: focused,
+            capabilities: page_capabilities(),
+        }
+        .onto(state)
+    })
 }
 
 /// The soft keyboard over `canvas`, at rest where it is: the browser names
@@ -529,7 +534,7 @@ impl WebWindow {
             delivery: Arc::new(delivery),
             displays,
             redraw: std::cell::OnceCell::new(),
-            snapshot: Arc::new(WindowStateCell::new(initial)),
+            snapshot: Arc::new(WindowStateCell::open(initial)),
         })
     }
 
@@ -1152,19 +1157,18 @@ impl crate::host_window::HostWindow for WebWindow {
 /// (`Platform::window_capabilities`).
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = flui_platform::Availability::Native;
-    capabilities.enters_fullscreen = flui_platform::Availability::Native;
+    capabilities.sets_title = flui_platform::WindowCapability::Native;
+    capabilities.enters_fullscreen = flui_platform::WindowCapability::Native;
     // The page keeps its tab: the canvas is retired and its embedder told.
-    capabilities.closes = flui_platform::Availability::Emulated;
+    capabilities.closes = flui_platform::WindowCapability::Emulated;
     // A browser names when an animation frame starts (the
     // `requestAnimationFrame` timestamp), never when the frame it painted
-    // reached the screen.
-    // A page has no system gesture edges. Every browser can tell the keyboard
-    // from its visual viewport (`keyboard_over`), which is an estimate;
-    // `page_capabilities` says where it names the keyboard itself.
-    capabilities.reports_keyboard_inset = flui_platform::Availability::Emulated;
+    // reached the screen: the presentation report stays the platform's
+    // absence, as a page's system gesture edges do. Every browser can tell
+    // the keyboard from its visual viewport (`keyboard_over`), which is an
+    // estimate; `page_capabilities` says where it names the keyboard itself.
+    capabilities.reports_keyboard_inset = flui_platform::WindowCapability::Emulated;
     capabilities
-        .without_presentation_feedback(flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM)
 }
 
 /// What this page's window honours: [`window_capabilities`], with the
@@ -1175,7 +1179,7 @@ fn page_capabilities() -> WindowCapabilities {
         .and_then(|window| virtual_keyboard(&window))
         .is_some()
     {
-        capabilities.reports_keyboard_inset = flui_platform::Availability::Native;
+        capabilities.reports_keyboard_inset = flui_platform::WindowCapability::Native;
     }
     capabilities
 }
@@ -1201,17 +1205,23 @@ impl host::Window<WebLoop> for WebWindow {
         handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
+        // Refused for what a command is refused for; a canvas takes no limits.
+        let content = options.geometry()?.content;
 
         let id = owner.with_state(|state| state.window_ids.next())?;
         let window = Self::try_new(
             id,
             &options.title,
-            options.size.width,
-            options.size.height,
+            content.width(),
+            content.height(),
             Arc::clone(&owner.displays),
             WindowDelivery::new(handler, owner.input.availability()),
         )?;
         let _ = window.redraw.set(Arc::new(owner.frame_requests()));
+        // What waits in the window's FIFO (a revision a read published, the
+        // state cell's diagnostics) is delivered in an owner turn the page
+        // posts, not left for the window's next delivery.
+        window.delivery.resume_through_signal(&owner.signal);
 
         // The RAF loop and the owner's wake reach the window's delivery
         // through the loop's state.

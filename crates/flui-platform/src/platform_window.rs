@@ -100,9 +100,9 @@ pub enum WindowAt {
 ///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     RedrawRequester,
 ///     SurfaceTarget, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-///     WindowGeometry, WindowId, WindowIdMint, WindowMaterial, WindowMode, WindowState,
+///     WindowExtent, WindowGeometry, WindowId, WindowIdMint, WindowMaterial, WindowMode,
+///     WindowState,
 /// };
-/// use flui_foundation::geometry::Size;
 ///
 /// struct Offscreen(WindowId);
 ///
@@ -118,7 +118,7 @@ pub enum WindowAt {
 ///         Arc::new(flui_platform::testing::NoNativeSurface)
 ///     }
 ///     fn state(&self) -> WindowState {
-///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+///         WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
 ///     }
 ///     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
 ///         // Under the capabilities of its own snapshot, which honour
@@ -202,9 +202,8 @@ pub enum WindowAt {
 ///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     RedrawRequester,
 ///     SurfaceTarget, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-///     WindowGeometry, WindowId, WindowMaterial, WindowMode, WindowState,
+///     WindowExtent, WindowGeometry, WindowId, WindowMaterial, WindowMode, WindowState,
 /// };
-/// use flui_foundation::geometry::Size;
 ///
 /// struct Offscreen(WindowId);
 ///
@@ -220,7 +219,7 @@ pub enum WindowAt {
 ///         Arc::new(flui_platform::testing::NoNativeSurface)
 ///     }
 ///     fn state(&self) -> WindowState {
-///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+///         WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
 ///     }
 ///     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
 ///         // Under the capabilities of its own snapshot, which honour
@@ -323,6 +322,12 @@ pub trait PlatformWindow {
     /// the revision grows when something differs from the previous call and
     /// stays when nothing does. The snapshot describes what the OS did, not
     /// what a command asked for. Call it on the owner thread.
+    ///
+    /// **A read runs no handler.** A window that finds its window system
+    /// ahead of the snapshot it published answers with the new one, and
+    /// delivers the [`state_changed`](crate::WindowHandler::state_changed) it
+    /// owes at the owner's turn, never from inside this call: the caller may
+    /// hold a borrow the handler takes again (ADR-0254 §4).
     ///
     /// Required, with no default: a window that cannot publish a state of its
     /// own says so with a snapshot built from what it knows, not by inheriting

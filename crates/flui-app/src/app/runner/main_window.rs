@@ -993,6 +993,9 @@ where
     V: View + Clone + 'static,
     F: FnMut(&AppHandle) -> V + 'static,
 {
+    // Before anything starts, on every platform alike: window options no
+    // window can be asked for start nothing.
+    super::check_window_options(&application.config)?;
     // Before anything starts, so a conflict opens no window and installs
     // nothing (ADR-0152 §1).
     let capabilities = std::mem::take(&mut application.capabilities);

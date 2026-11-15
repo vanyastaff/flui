@@ -126,14 +126,19 @@ struct Fixture {
 }
 
 fn mounted(placement: Placement) -> Fixture {
-    let window: Rc<dyn flui_platform::PlatformWindow> =
-        Rc::new(crate::testing::TestWindow::new().focused(true).with_sizes(
+    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(
+        crate::testing::TestWindow::new().focused(true).with_sizes(
             Size::new(
                 i32::try_from(SURFACE.0).expect("the width fits"),
                 i32::try_from(SURFACE.1).expect("the height fits"),
             ),
-            Size::new(f64::from(SURFACE.0), f64::from(SURFACE.1)),
-        ));
+            flui_platform::WindowExtent::try_new(Size::new(
+                f64::from(SURFACE.0),
+                f64::from(SURFACE.1),
+            ))
+            .expect("an extent"),
+        ),
+    );
     let ui_runtime = UiRuntime::for_test_with_window(Rc::clone(&window));
     let graph = ui_runtime
         .presentation_widgets_for_test(ui_runtime.presentation_id())

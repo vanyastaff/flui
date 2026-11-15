@@ -37,12 +37,12 @@ impl PlacementDisplay {
             f64::from(self.origin.x) / scale,
             f64::from(self.origin.y) / scale,
         );
-        WindowGeometry::new(
-            geometry
-                .position
-                .map(|at| Point::new(at.x + origin.x, at.y + origin.y)),
-            geometry.size,
-        )
+        // A sum that leaves the finite numbers moves nothing.
+        geometry
+            .at(geometry
+                .position()
+                .map(|at| Point::new(at.x + origin.x, at.y + origin.y)))
+            .unwrap_or(geometry)
     }
 
     /// The display options measure their position on: the one `wanted` names
@@ -130,6 +130,7 @@ impl OpenPlan {
     /// placed at open is left to the window manager.
     pub(crate) fn new(
         options: &WindowOptions,
+        opening: &flui_platform::OpeningGeometry,
         capabilities: &WindowCapabilities,
         display: PlacementDisplay,
         inset: Size<f64>,
@@ -154,13 +155,13 @@ impl OpenPlan {
         };
         let (at, content_size) = match returns_to {
             Some(geometry) => (
-                geometry.position,
+                geometry.position(),
                 Size::new(
-                    (geometry.size.width - inset.width).max(1.0),
-                    (geometry.size.height - inset.height).max(1.0),
+                    (geometry.size().width - inset.width).max(1.0),
+                    (geometry.size().height - inset.height).max(1.0),
                 ),
             ),
-            None => (options.position, options.size),
+            None => (opening.position, opening.content.get()),
         };
         let hidden_until_first_frame =
             options.visible && options.reveal == WindowReveal::AfterFirstFrame;
@@ -259,8 +260,23 @@ mod tests {
             .position(Some(Point::new(100.0, 50.0)))
     }
 
+    fn geometry(position: Option<Point<f64>>, size: Size<f64>) -> WindowGeometry {
+        WindowGeometry::try_new(position, size).expect("a finite rectangle")
+    }
+
+    /// The checked numbers `options` open a window at.
+    fn geometry_of(options: &WindowOptions) -> flui_platform::OpeningGeometry {
+        options.geometry().expect("valid options")
+    }
+
     fn plan(options: &WindowOptions) -> OpenPlan {
-        OpenPlan::new(options, &ALL, DISPLAY, Size::new(0.0, 0.0))
+        OpenPlan::new(
+            options,
+            &geometry_of(options),
+            &ALL,
+            DISPLAY,
+            Size::new(0.0, 0.0),
+        )
     }
 
     #[test]
@@ -335,7 +351,13 @@ mod tests {
         // an offset from the usable area and reopens where it was.
         let main_display = PlacementDisplay::choose(Some(&snapshot), Some(main_id));
         let options = options().position(Some(Point::new(10.0, 22.0)));
-        let planned = OpenPlan::new(&options, &ALL, main_display, Size::new(0.0, 0.0));
+        let planned = OpenPlan::new(
+            &options,
+            &geometry_of(&options),
+            &ALL,
+            main_display,
+            Size::new(0.0, 0.0),
+        );
         assert_eq!(planned.position, Some(Point::new(1940, 100)));
     }
 
@@ -366,16 +388,13 @@ mod tests {
                 Some(Point::new(1920, 1)),
             ),
             ("no position", None, DISPLAY, None),
+            // A position that is not finite is refused with the options
+            // (`WindowOptions::geometry`); a finite one can still leave the
+            // finite numbers once it is scaled.
             (
-                "infinite",
-                Some(Point::new(f64::INFINITY, 0.0)),
-                DISPLAY,
-                None,
-            ),
-            (
-                "not a number",
-                Some(Point::new(0.0, f64::NAN)),
-                DISPLAY,
+                "scaled past every number",
+                Some(Point::new(f64::MAX, 0.0)),
+                scaled,
                 None,
             ),
             (
@@ -393,7 +412,13 @@ mod tests {
         ];
         for (case, position, display, expected) in table {
             let options = options().position(position);
-            let planned = OpenPlan::new(&options, &ALL, display, Size::new(0.0, 0.0));
+            let planned = OpenPlan::new(
+                &options,
+                &geometry_of(&options),
+                &ALL,
+                display,
+                Size::new(0.0, 0.0),
+            );
             assert_eq!(planned.position, expected, "{case}");
         }
     }
@@ -402,7 +427,13 @@ mod tests {
     fn open_plan_leaves_placement_to_a_window_that_cannot_be_placed() {
         let mut capabilities = ALL;
         capabilities.places_at_open = flui_platform::Availability::Unavailable;
-        let planned = OpenPlan::new(&options(), &capabilities, DISPLAY, Size::new(0.0, 0.0));
+        let planned = OpenPlan::new(
+            &options(),
+            &geometry_of(&options()),
+            &capabilities,
+            DISPLAY,
+            Size::new(0.0, 0.0),
+        );
         assert_eq!(planned.position, None);
         assert_eq!(planned.content_size, Size::new(800.0, 600.0));
     }
@@ -449,21 +480,26 @@ mod tests {
         ];
         for (case, mode, capabilities, expected) in table {
             let options = options().mode(mode);
-            let planned = OpenPlan::new(&options, &capabilities, DISPLAY, Size::new(0.0, 0.0));
+            let planned = OpenPlan::new(
+                &options,
+                &geometry_of(&options),
+                &capabilities,
+                DISPLAY,
+                Size::new(0.0, 0.0),
+            );
             assert_eq!(planned.mode, expected, "{case}");
         }
     }
 
     #[test]
     fn open_plan_opens_a_maximized_window_at_the_rectangle_it_returns_to() {
-        let returns_to =
-            WindowGeometry::new(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
+        let returns_to = geometry(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
         let frame = Size::new(2.0, 30.0);
         let maximized = options()
             .mode(WindowMode::Maximized)
             .normal_geometry(Some(returns_to));
 
-        let planned = OpenPlan::new(&maximized, &ALL, DISPLAY, frame);
+        let planned = OpenPlan::new(&maximized, &geometry_of(&maximized), &ALL, DISPLAY, frame);
         assert_eq!(planned.position, Some(Point::new(2220, 200)));
         assert_eq!(
             planned.content_size,
@@ -474,7 +510,7 @@ mod tests {
         // measured theirs from.
         assert_eq!(
             planned.normal_geometry,
-            Some(WindowGeometry::new(
+            Some(geometry(
                 Some(Point::new(2220.0, 200.0)),
                 Size::new(1000.0, 700.0)
             ))
@@ -485,31 +521,35 @@ mod tests {
             origin: Point::new(1920, 56),
             scale_factor: 2.0,
         };
-        let relative = WindowGeometry::new(Some(Point::new(100.0, 50.0)), Size::new(1000.0, 700.0));
+        let relative = geometry(Some(Point::new(100.0, 50.0)), Size::new(1000.0, 700.0));
         let on_scaled = options()
             .mode(WindowMode::Maximized)
             .normal_geometry(Some(relative));
-        let planned = OpenPlan::new(&on_scaled, &ALL, scaled, Size::new(0.0, 0.0));
+        let planned = OpenPlan::new(
+            &on_scaled,
+            &geometry_of(&on_scaled),
+            &ALL,
+            scaled,
+            Size::new(0.0, 0.0),
+        );
         assert_eq!(
-            planned
-                .normal_geometry
-                .and_then(|geometry| geometry.position),
+            planned.normal_geometry.and_then(WindowGeometry::position),
             Some(Point::new(1060.0, 78.0))
         );
 
         // A normal window ignores the rectangle it has no use for.
         let normal = options().normal_geometry(Some(returns_to));
-        let planned = OpenPlan::new(&normal, &ALL, DISPLAY, frame);
+        let planned = OpenPlan::new(&normal, &geometry_of(&normal), &ALL, DISPLAY, frame);
         assert_eq!(planned.position, Some(Point::new(2020, 50)));
         assert_eq!(planned.content_size, Size::new(800.0, 600.0));
         assert_eq!(planned.normal_geometry, None);
 
         // A rectangle smaller than the frame still has a content area.
-        let tiny = WindowGeometry::new(None, Size::new(1.0, 1.0));
+        let tiny = geometry(None, Size::new(1.0, 1.0));
         let tiny = options()
             .mode(WindowMode::Fullscreen)
             .normal_geometry(Some(tiny));
-        let planned = OpenPlan::new(&tiny, &ALL, DISPLAY, frame);
+        let planned = OpenPlan::new(&tiny, &geometry_of(&tiny), &ALL, DISPLAY, frame);
         assert_eq!(planned.content_size, Size::new(1.0, 1.0));
         assert_eq!(
             planned.position, None,
@@ -519,8 +559,7 @@ mod tests {
 
     #[test]
     fn open_plan_takes_no_frame_from_a_window_without_the_systems() {
-        let returns_to =
-            WindowGeometry::new(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
+        let returns_to = geometry(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
         let frame = Size::new(2.0, 30.0);
         // (case, frame asked for, content size)
         let table = [
@@ -537,7 +576,7 @@ mod tests {
                 .frame(frame_asked)
                 .mode(WindowMode::Maximized)
                 .normal_geometry(Some(returns_to));
-            let planned = OpenPlan::new(&options, &ALL, DISPLAY, frame);
+            let planned = OpenPlan::new(&options, &geometry_of(&options), &ALL, DISPLAY, frame);
             assert_eq!(planned.content_size, expected, "{case}");
         }
     }

@@ -164,6 +164,35 @@ mod runner_open;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+mod window_options;
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn window_options_refuse_the_start() {
+    run_table(
+        "window_options_refuse_the_start",
+        &[
+            (
+                "window_options::a_minimum_with_a_zero_side_refuses_the_start",
+                window_options::a_minimum_with_a_zero_side_refuses_the_start as fn(),
+            ),
+            (
+                "window_options::a_minimum_above_the_maximum_refuses_the_start",
+                window_options::a_minimum_above_the_maximum_refuses_the_start as fn(),
+            ),
+        ],
+    );
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 #[test]
 fn runner_open() {
     run_table(

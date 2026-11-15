@@ -133,10 +133,11 @@ changing it then changes no type.
 `WindowCapabilities` gains two report capabilities beside `reports_presentation`, each with its
 absence:
 
-- `reports_keyboard_inset`, cleared by `without_keyboard_inset(absence)`, read by
-  `keyboard_inset()`;
-- `reports_system_gestures`, cleared by `without_system_gestures(absence)`, read by
-  `system_gestures()`.
+- `reports_keyboard_inset`;
+- `reports_system_gestures`.
+
+Each is a `WindowCapability`: `Native` or `Emulated` where the window reports, `Absent` with the
+`CapabilityAbsence` where it does not.
 
 | Host | keyboard | system gestures |
 |---|---|---|

@@ -21,7 +21,7 @@ pub(crate) mod frame {
     //! own scale.
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayInfo, SizeConstraints};
+    use flui_platform::{DisplayInfo, SizeConstraints, WindowExtent};
 
     /// Any content limit at or beyond this counts as AppKit's "no limit"
     /// (`contentMaxSize` defaults to `CGFLOAT_MAX`, or `FLT_MAX` on older systems).
@@ -114,9 +114,16 @@ pub(crate) mod frame {
         };
         let min = Size::new(floor(min.width), floor(min.height));
         let max = Size::new(ceiling(max.width), ceiling(max.height));
+        // Finite and not negative by `floor` and `ceiling`, so each is an
+        // extent.
+        let limit = |size: Size<f64>| WindowExtent::try_new(size).ok();
         SizeConstraints::new(
-            (min.width > 0.0 || min.height > 0.0).then_some(min),
-            (max.width < f64::MAX || max.height < f64::MAX).then_some(max),
+            (min.width > 0.0 || min.height > 0.0)
+                .then(|| limit(min))
+                .flatten(),
+            (max.width < f64::MAX || max.height < f64::MAX)
+                .then(|| limit(max))
+                .flatten(),
         )
     }
 
@@ -125,8 +132,12 @@ pub(crate) mod frame {
         constraints: SizeConstraints,
     ) -> (Size<f64>, Size<f64>) {
         (
-            constraints.min.unwrap_or(Size::new(0.0, 0.0)),
-            constraints.max.unwrap_or(Size::new(f64::MAX, f64::MAX)),
+            constraints
+                .min
+                .map_or(Size::new(0.0, 0.0), WindowExtent::get),
+            constraints
+                .max
+                .map_or(Size::new(f64::MAX, f64::MAX), WindowExtent::get),
         )
     }
 
@@ -275,6 +286,7 @@ pub(crate) mod frame {
         fn content_limits_become_constraints_and_back() {
             let none = (Size::new(0.0, 0.0), Size::new(f64::MAX, f64::MAX));
             let default_max = Size::new(f64::from(f32::MAX), f64::from(f32::MAX));
+            let limits = |min, max| SizeConstraints::try_new(min, max).expect("finite limits");
             // (name, appkit min, appkit max, constraints)
             let rows = [
                 ("appkit's defaults", none.0, none.1, SizeConstraints::NONE),
@@ -288,19 +300,19 @@ pub(crate) mod frame {
                     "a minimum only",
                     Size::new(320.0, 240.0),
                     none.1,
-                    SizeConstraints::new(Some(Size::new(320.0, 240.0)), None),
+                    limits(Some(Size::new(320.0, 240.0)), None),
                 ),
                 (
                     "a maximum only",
                     none.0,
                     Size::new(1600.0, 1200.0),
-                    SizeConstraints::new(None, Some(Size::new(1600.0, 1200.0))),
+                    limits(None, Some(Size::new(1600.0, 1200.0))),
                 ),
                 (
                     "both",
                     Size::new(320.0, 240.0),
                     Size::new(1600.0, 1200.0),
-                    SizeConstraints::new(
+                    limits(
                         Some(Size::new(320.0, 240.0)),
                         Some(Size::new(1600.0, 1200.0)),
                     ),
@@ -309,7 +321,7 @@ pub(crate) mod frame {
                     "a limit on the width alone",
                     Size::new(0.0, 0.0),
                     Size::new(1600.0, f64::MAX),
-                    SizeConstraints::new(None, Some(Size::new(1600.0, f64::MAX))),
+                    limits(None, Some(Size::new(1600.0, f64::MAX))),
                 ),
                 (
                     "numbers that are not numbers mean no limit",
@@ -432,20 +444,22 @@ pub(crate) mod mode {
         heading: Option<WindowMode>,
         every: flui_platform::WindowCapabilities,
     ) -> flui_platform::WindowCapabilities {
-        use flui_platform::Availability::Unavailable;
+        // A window in this state has no such command: AppKit takes none for it.
+        const ABSENT: flui_platform::WindowCapability =
+            flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
 
         let mut honoured = every;
         if !flags.resizable {
-            honoured.maximizes = Unavailable;
-            honoured.enters_fullscreen = Unavailable;
+            honoured.maximizes = ABSENT;
+            honoured.enters_fullscreen = ABSENT;
         }
         if flags.fullscreen {
-            honoured.sets_frame = Unavailable;
-            honoured.hides = Unavailable;
+            honoured.sets_frame = ABSENT;
+            honoured.hides = ABSENT;
         }
         let mode = heading.unwrap_or_else(|| mode_of(flags.mode_flags()));
         if flags.fullscreen || mode != WindowMode::Normal {
-            honoured.sets_resizable = Unavailable;
+            honoured.sets_resizable = ABSENT;
         }
         honoured
     }
@@ -924,7 +938,8 @@ pub(crate) mod mode {
 
         #[test]
         fn a_window_honours_the_mode_and_style_commands_its_flags_allow() {
-            use flui_platform::Availability::{self, Native, Unavailable};
+            use flui_platform::WindowCapability::{self, Native};
+            const ABSENT: WindowCapability = WindowCapability::NOT_ON_THIS_PLATFORM;
             use flui_platform::WindowCapabilities;
 
             let mut every = WindowCapabilities::NONE;
@@ -937,11 +952,11 @@ pub(crate) mod mode {
             #[derive(Debug, PartialEq)]
             struct Row {
                 flags: &'static str,
-                maximizes: Availability,
-                enters_fullscreen: Availability,
-                sets_resizable: Availability,
-                sets_frame: Availability,
-                hides: Availability,
+                maximizes: WindowCapability,
+                enters_fullscreen: WindowCapability,
+                sets_resizable: WindowCapability,
+                sets_frame: WindowCapability,
+                hides: WindowCapability,
             }
             let rows = [
                 Row {
@@ -955,16 +970,16 @@ pub(crate) mod mode {
                 // A fixed-size window is neither zoomed nor made full screen.
                 Row {
                     flags: "",
-                    maximizes: Unavailable,
-                    enters_fullscreen: Unavailable,
+                    maximizes: ABSENT,
+                    enters_fullscreen: ABSENT,
                     sets_resizable: Native,
                     sets_frame: Native,
                     hides: Native,
                 },
                 Row {
                     flags: "Z",
-                    maximizes: Unavailable,
-                    enters_fullscreen: Unavailable,
+                    maximizes: ABSENT,
+                    enters_fullscreen: ABSENT,
                     sets_resizable: Native,
                     sets_frame: Native,
                     hides: Native,
@@ -974,7 +989,7 @@ pub(crate) mod mode {
                     flags: "ZR",
                     maximizes: Native,
                     enters_fullscreen: Native,
-                    sets_resizable: Unavailable,
+                    sets_resizable: ABSENT,
                     sets_frame: Native,
                     hides: Native,
                 },
@@ -982,15 +997,15 @@ pub(crate) mod mode {
                     flags: "MR",
                     maximizes: Native,
                     enters_fullscreen: Native,
-                    sets_resizable: Unavailable,
+                    sets_resizable: ABSENT,
                     sets_frame: Native,
                     hides: Native,
                 },
                 Row {
                     flags: "M",
-                    maximizes: Unavailable,
-                    enters_fullscreen: Unavailable,
-                    sets_resizable: Unavailable,
+                    maximizes: ABSENT,
+                    enters_fullscreen: ABSENT,
+                    sets_resizable: ABSENT,
                     sets_frame: Native,
                     hides: Native,
                 },
@@ -999,9 +1014,9 @@ pub(crate) mod mode {
                     flags: "FR",
                     maximizes: Native,
                     enters_fullscreen: Native,
-                    sets_resizable: Unavailable,
-                    sets_frame: Unavailable,
-                    hides: Unavailable,
+                    sets_resizable: ABSENT,
+                    sets_frame: ABSENT,
+                    hides: ABSENT,
                 },
             ];
             for expected in rows {
@@ -1025,7 +1040,8 @@ pub(crate) mod mode {
         /// flags to say the mode.
         #[test]
         fn a_window_heading_for_normal_may_be_made_fixed_size() {
-            use flui_platform::Availability::{Native, Unavailable};
+            use flui_platform::WindowCapability::{self, Native};
+            const ABSENT: WindowCapability = WindowCapability::NOT_ON_THIS_PLATFORM;
             use flui_platform::WindowCapabilities;
 
             let mut every = WindowCapabilities::NONE;
@@ -1041,7 +1057,7 @@ pub(crate) mod mode {
             assert_eq!(fixed(flags("MR"), sequence.heading(now)), Native);
             assert_eq!(
                 fixed(flags("MR"), None),
-                Unavailable,
+                ABSENT,
                 "the flags alone say miniaturized"
             );
             assert_eq!(
@@ -1068,7 +1084,7 @@ pub(crate) mod mode {
             assert_eq!(sequence.heading(now), Some(Minimized));
             assert_eq!(
                 fixed(flags("R"), sequence.heading(now)),
-                Unavailable,
+                ABSENT,
                 "heading for the Dock"
             );
         }
@@ -1180,13 +1196,14 @@ pub(crate) mod mode {
         /// it heads for: AppKit restyles no full-screen window.
         #[test]
         fn a_full_screen_window_heading_for_normal_stays_resizable() {
-            use flui_platform::Availability::Unavailable;
+            use flui_platform::WindowCapability;
+            const ABSENT: WindowCapability = WindowCapability::NOT_ON_THIS_PLATFORM;
             use flui_platform::WindowCapabilities;
 
             let mut every = WindowCapabilities::NONE;
-            every.sets_resizable = flui_platform::Availability::Native;
+            every.sets_resizable = flui_platform::WindowCapability::Native;
             let honoured = capabilities_of(flags("FR"), Some(Normal), every);
-            assert_eq!(honoured.sets_resizable, Unavailable);
+            assert_eq!(honoured.sets_resizable, ABSENT);
         }
     }
 }

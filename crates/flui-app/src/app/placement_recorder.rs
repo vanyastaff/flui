@@ -105,16 +105,26 @@ pub(crate) fn restore_into(
     options.position = resolved.offset_in_display;
     options.mode = resolved.mode;
     // A window that opens away from normal returns to the bounds it was
-    // remembered at: outer, so the content size plus the frame.
-    options.normal_geometry = (resolved.mode != WindowMode::Normal).then(|| {
-        WindowGeometry::new(
-            resolved.offset_in_display,
-            Size::new(
-                resolved.size.width + frame.width,
-                resolved.size.height + frame.height,
-            ),
-        )
-    });
+    // remembered at: outer, so the content size plus the frame. A frame
+    // measured as no extent gives no such bounds: the window keeps the ones
+    // its configuration gave, and the refusal is reported.
+    if resolved.mode == WindowMode::Normal {
+        options.normal_geometry = None;
+        return;
+    }
+    match WindowGeometry::try_new(
+        resolved.offset_in_display,
+        Size::new(
+            resolved.size.width + frame.width,
+            resolved.size.height + frame.height,
+        ),
+    ) {
+        Ok(normal) => options.normal_geometry = Some(normal),
+        Err(refused) => tracing::warn!(
+            %refused,
+            "the remembered bounds a window returns to describe no window; it keeps its configured ones"
+        ),
+    }
 }
 
 /// Follows one window's published state and writes its placement to storage.

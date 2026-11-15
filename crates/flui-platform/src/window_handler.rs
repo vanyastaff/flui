@@ -96,6 +96,9 @@ pub trait WindowHandler {
     /// reads the snapshot and compares it with the one it saw last. A host
     /// calls it inside the OS callback that reported the change where the OS
     /// gives one (each step of a Win32 live resize, inside its modal loop).
+    /// It is never called from inside a read of the window
+    /// ([`PlatformWindow::state`](crate::PlatformWindow::state)): a revision
+    /// a read published is announced at the owner's turn.
     fn state_changed(&self);
 
     /// The platform wants a frame for this window, with what it reported

@@ -92,8 +92,7 @@ pub(crate) mod configure {
 
     use flui_foundation::geometry::Size;
     use flui_platform::{
-        Availability, CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCommand,
-        WindowFrame, WindowMode,
+        CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCapability, WindowMode,
     };
 
     /// `xdg_toplevel.state` values.
@@ -278,68 +277,44 @@ pub(crate) mod configure {
         states: ToplevelStates,
         activation: Activation,
     ) -> WindowCapabilities {
-        let mut capabilities = WindowCapabilities::ALL
-            // The text-input protocol reports no keyboard geometry, and a
-            // desktop compositor keeps no edges for system gestures.
-            .without_keyboard_inset(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
-            .without_system_gestures(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
-            .unavailable(
-                &WindowCommand::SetPosition(flui_foundation::geometry::Point::new(0.0, 0.0)),
-                CapabilityAbsence::NOT_ON_THIS_PLATFORM,
-            )
-            .unavailable(&WindowCommand::Hide, CapabilityAbsence::NOT_ON_THIS_PLATFORM)
-            .unavailable(&WindowCommand::Show, CapabilityAbsence::NOT_ON_THIS_PLATFORM)
-            .unavailable(
-                &WindowCommand::SetMaterial(flui_platform::WindowMaterial::System),
-                CapabilityAbsence::NOT_ON_THIS_PLATFORM,
-            );
-        match activation {
-            Activation::Offered => capabilities.activates = Availability::Emulated,
-            Activation::Missing => {
-                capabilities = capabilities.unavailable(
-                    &WindowCommand::Activate,
-                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
-                );
+        use WindowCapability::{Absent, Emulated, Native};
+
+        let on_this_device = Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
+        let offered = |mode: fn(WmCapabilities) -> bool| {
+            if announced.is_none_or(mode) {
+                Native
+            } else {
+                on_this_device
             }
-        }
-        if let Some(absence) = decoration {
-            capabilities =
-                capabilities.unavailable(&WindowCommand::SetFrame(WindowFrame::System), absence);
-        }
-        if let Some(absence) = app_title_bar {
-            capabilities = capabilities.without_app_title_bar(absence);
-        }
-        if states.tiled_by_compositor() {
-            capabilities = capabilities.unavailable(
-                &WindowCommand::SetSize(Size::new(1.0, 1.0)),
-                CapabilityAbsence::NOT_ON_THIS_DEVICE,
-            );
-        }
-        capabilities.sets_resizable = Availability::Emulated;
-        capabilities.observes_position = Availability::Unavailable;
-        capabilities.observes_minimized = Availability::Unavailable;
-        capabilities.places_at_open = Availability::Unavailable;
-        capabilities.frame_rate_hint = Availability::Unavailable;
-        if let Some(announced) = announced {
-            if !announced.maximize {
-                capabilities = capabilities.unavailable(
-                    &WindowCommand::SetMode(WindowMode::Maximized),
-                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
-                );
-            }
-            if !announced.fullscreen {
-                capabilities = capabilities.unavailable(
-                    &WindowCommand::SetMode(WindowMode::Fullscreen),
-                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
-                );
-            }
-            if !announced.minimize {
-                capabilities = capabilities.unavailable(
-                    &WindowCommand::SetMode(WindowMode::Minimized),
-                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
-                );
-            }
-        }
+        };
+        // Each capability the window has is named, so one the contract gains
+        // is absent here until this host carries it out. What stays as
+        // `NONE` has it is the platform's: the position, hiding and showing,
+        // a material, the keyboard's geometry (the text-input protocol
+        // reports none) and system gesture edges (a desktop compositor keeps
+        // none), with nothing observed of the position or of a minimized
+        // window, no placement at open and no refresh-rate request. The
+        // presentation report is the compositor's to offer
+        // (`presentation::reported`).
+        let mut capabilities = WindowCapabilities::NONE;
+        capabilities.sets_title = Native;
+        capabilities.sets_constraints = Native;
+        capabilities.closes = Native;
+        capabilities.sets_size = if states.tiled_by_compositor() {
+            on_this_device
+        } else {
+            Native
+        };
+        capabilities.sets_resizable = Emulated;
+        capabilities.sets_frame = decoration.map_or(Native, Absent);
+        capabilities.app_title_bar = app_title_bar.map_or(Native, Absent);
+        capabilities.activates = match activation {
+            Activation::Offered => Emulated,
+            Activation::Missing => on_this_device,
+        };
+        capabilities.minimizes = offered(|announced| announced.minimize);
+        capabilities.maximizes = offered(|announced| announced.maximize);
+        capabilities.enters_fullscreen = offered(|announced| announced.fullscreen);
         capabilities
     }
 
@@ -349,12 +324,12 @@ pub(crate) mod configure {
         let mut width = size.width;
         let mut height = size.height;
         if let Some(max) = constraints.max {
-            width = width.min(max.width);
-            height = height.min(max.height);
+            width = width.min(max.width());
+            height = height.min(max.height());
         }
         if let Some(min) = constraints.min {
-            width = width.max(min.width);
-            height = height.max(min.height);
+            width = width.max(min.width());
+            height = height.max(min.height());
         }
         Size::new(width.max(1.0), height.max(1.0))
     }
@@ -492,7 +467,14 @@ pub(crate) mod configure {
 
     #[cfg(test)]
     mod tests {
+        use flui_platform::{WindowCommand, WindowFrame};
+
         use super::*;
+
+        /// Limits with these bounds.
+        fn bounded(min: Option<Size<f64>>, max: Option<Size<f64>>) -> SizeConstraints {
+            SizeConstraints::try_new(min, max).expect("finite limits")
+        }
 
         fn array(values: &[u32]) -> Vec<u8> {
             values
@@ -576,7 +558,7 @@ pub(crate) mod configure {
                 "back to the normal size"
             );
 
-            let limits = SizeConstraints::new(
+            let limits = bounded(
                 Some(Size::new(200.0, 150.0)),
                 Some(Size::new(1000.0, 700.0)),
             );
@@ -594,10 +576,10 @@ pub(crate) mod configure {
 
             // New limits hold a window in normal mode, never one the
             // compositor sizes.
-            sizing.constrain(SizeConstraints::new(Some(Size::new(300.0, 300.0)), None));
+            sizing.constrain(bounded(Some(Size::new(300.0, 300.0)), None));
             assert_eq!(sizing.content(), Size::new(300.0, 300.0));
             assert!(sizing.configure(1920, 1080, maximized, none));
-            sizing.constrain(SizeConstraints::new(None, Some(Size::new(100.0, 100.0))));
+            sizing.constrain(bounded(None, Some(Size::new(100.0, 100.0))));
             assert_eq!(sizing.content(), Size::new(1920.0, 1080.0));
         }
 
@@ -626,6 +608,58 @@ pub(crate) mod configure {
             );
         }
 
+        /// Every capability of a Wayland window whose compositor offers
+        /// everything, named: a capability the contract gains does not
+        /// compile here until this host says whether its window has it, and
+        /// none is had for not being taken away. The presentation report is
+        /// the compositor's (`presented::reported`).
+        #[test]
+        fn a_wayland_window_has_the_capabilities_it_names() {
+            use WindowCapability::{Emulated, Native};
+            use flui_platform::{Availability, CapabilityParts};
+
+            let every_mode = WmCapabilities {
+                window_menu: true,
+                maximize: true,
+                fullscreen: true,
+                minimize: true,
+            };
+            let honoured = capabilities(
+                Some(every_mode),
+                None,
+                None,
+                ToplevelStates::default(),
+                Activation::Offered,
+            );
+            assert_eq!(
+                honoured.into_parts(),
+                CapabilityParts {
+                    sets_title: Native,
+                    sets_position: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    sets_size: Native,
+                    sets_constraints: Native,
+                    sets_resizable: Emulated,
+                    sets_frame: Native,
+                    app_title_bar: Native,
+                    minimizes: Native,
+                    maximizes: Native,
+                    enters_fullscreen: Native,
+                    hides: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    shows: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    activates: Emulated,
+                    closes: Native,
+                    material: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    observes_position: Availability::Unavailable,
+                    observes_minimized: Availability::Unavailable,
+                    places_at_open: Availability::Unavailable,
+                    frame_rate_hint: Availability::Unavailable,
+                }
+            );
+        }
+
         /// The capabilities follow what the compositor announces, and a
         /// command the client can never carry out on Wayland, or that this
         /// host does not carry out yet, is refused with its own reason.
@@ -642,15 +676,15 @@ pub(crate) mod configure {
             assert!(unannounced.maximizes.is_available());
             assert!(unannounced.minimizes.is_available());
             assert!(unannounced.sets_size.is_available());
-            assert_eq!(unannounced.sets_resizable, Availability::Emulated);
+            assert_eq!(unannounced.sets_resizable, WindowCapability::Emulated);
             assert_eq!(
                 capabilities(None, None, None, free, Activation::Missing).sets_frame,
-                Availability::Native,
+                WindowCapability::Native,
                 "a compositor that draws frames takes the command"
             );
             assert_eq!(
                 capabilities(None, None, None, free, Activation::Offered).activates,
-                Availability::Emulated,
+                WindowCapability::Emulated,
                 "the compositor decides what an activation request does"
             );
             assert!(
@@ -998,7 +1032,7 @@ pub(crate) mod presented {
 
     use std::time::Duration;
 
-    use flui_platform::{CapabilityAbsence, WindowCapabilities};
+    use flui_platform::{CapabilityAbsence, WindowCapabilities, WindowCapability};
 
     /// The time a `presented` event carries, from its three words: the
     /// seconds split into high and low halves, and the nanoseconds.
@@ -1015,20 +1049,19 @@ pub(crate) mod presented {
     /// where it offers no `wp_presentation`, a window learns nothing of when
     /// its frames are shown.
     pub(crate) const fn reported(
-        capabilities: WindowCapabilities,
+        mut capabilities: WindowCapabilities,
         offered: bool,
     ) -> WindowCapabilities {
-        if offered {
-            capabilities
+        capabilities.reports_presentation = if offered {
+            WindowCapability::Native
         } else {
-            capabilities.without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_DEVICE)
-        }
+            WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
+        };
+        capabilities
     }
 
     #[cfg(test)]
     mod tests {
-        use flui_platform::{Availability, UnsupportedReason};
-
         use super::*;
 
         /// A `presented` event's words make the time it names; nanoseconds
@@ -1051,14 +1084,12 @@ pub(crate) mod presented {
         /// report, for want of the device's compositor, not the platform.
         #[test]
         fn the_report_follows_the_compositor() {
-            let offered = reported(WindowCapabilities::ALL, true);
-            assert_eq!(offered.presentation_feedback(), Ok(Availability::Native));
-            let missing = reported(WindowCapabilities::ALL, false);
+            let offered = reported(WindowCapabilities::NONE, true);
+            assert_eq!(offered.reports_presentation, WindowCapability::Native);
+            let missing = reported(WindowCapabilities::NONE, false);
             assert_eq!(
-                missing
-                    .presentation_feedback()
-                    .map_err(|absent| absent.reason),
-                Err(UnsupportedReason::NotOnThisDevice)
+                missing.reports_presentation,
+                WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
             );
         }
     }
@@ -1183,7 +1214,7 @@ mod toplevel {
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
     use crate::window::state::{
-        ReportedFacts, WindowStateCell, not_carried_out, system_frame_or_none,
+        ReportedFacts, SampledGeometry, WindowStateCell, not_carried_out, system_frame_or_none,
     };
 
     /// What the compositor said of one window since the owner last looked,
@@ -1527,7 +1558,9 @@ mod toplevel {
             (output, scale)
         }
 
-        fn state(&self) -> WindowState {
+        /// The read these facts make; a size that is no extent costs it its
+        /// geometry and nothing else.
+        fn state(&self) -> crate::window::state::Sample {
             let applied = self.applied;
             let entered = first_live(&applied.told.outputs, |output| self.live.contains(output));
             let (output, scale) = self.output_and_scale();
@@ -1540,50 +1573,59 @@ mod toplevel {
                 .own_frame(decoration, states)
                 .map_or(0.0, |frame| frame.header());
             let outer = Size::new(content.width, content.height + header);
-            let state = WindowState::new(WindowGeometry::new(None, outer), content)
-                .with_mode(states.mode())
-                // A toplevel has no hidden state of its own: it is shown
-                // until it closes.
-                .with_visible(!self.closed)
-                .with_focused(states.activated)
-                .with_title(Some(applied.title.clone()))
-                .with_constraints(applied.constraints)
-                .with_resizable(applied.resizable)
-                .with_frame(applied.reported_frame(decoration))
-                .with_display(output.map(|output| output.display));
-            ReportedFacts {
-                metrics: scale::metrics(content, scale),
-                appearance: self.portal.appearance(),
-                insets: flui_platform::WindowInsets::ZERO,
-                execution: WindowExecutionState::Running,
-                // What the compositor says it draws: a surface it maps (a
-                // configured window with a frame) enters an output, and one
-                // it does not draw (covered, on a hidden workspace, its
-                // outputs off, minimized) is suspended. A configured window
-                // the compositor has not shown yet enters no output until it
-                // draws its first frame, so it is not occluded: it would
-                // otherwise never be given that frame.
-                occluded: Sight {
-                    configured: applied.configured,
-                    shown: self.shown,
-                    on_output: entered.is_some(),
-                    suspended: states.suspended,
-                }
-                .occluded(),
-                hovered: self.hovered,
-                active: states.activated,
-                capabilities: presented::reported(
-                    capabilities(
-                        applied.told.wm,
-                        decoration.absence(),
-                        decoration.app_title_bar_absence(),
-                        states,
-                        self.activation,
+            let geometry = WindowGeometry::try_new(None, outer).and_then(|outer| {
+                Ok(SampledGeometry {
+                    outer,
+                    content: flui_platform::WindowExtent::try_new(content)?,
+                    normal: None,
+                })
+            });
+            crate::window::state::Sample::read(geometry, |state| {
+                let state = state
+                    .with_mode(states.mode())
+                    // A toplevel has no hidden state of its own: it is shown
+                    // until it closes.
+                    .with_visible(!self.closed)
+                    .with_focused(states.activated)
+                    .with_title(Some(applied.title.clone()))
+                    .with_constraints(applied.constraints)
+                    .with_resizable(applied.resizable)
+                    .with_frame(applied.reported_frame(decoration))
+                    .with_display(output.map(|output| output.display));
+                ReportedFacts {
+                    metrics: scale::metrics(content, scale),
+                    appearance: self.portal.appearance(),
+                    insets: flui_platform::WindowInsets::ZERO,
+                    execution: WindowExecutionState::Running,
+                    // What the compositor says it draws: a surface it maps (a
+                    // configured window with a frame) enters an output, and one
+                    // it does not draw (covered, on a hidden workspace, its
+                    // outputs off, minimized) is suspended. A configured window
+                    // the compositor has not shown yet enters no output until it
+                    // draws its first frame, so it is not occluded: it would
+                    // otherwise never be given that frame.
+                    occluded: Sight {
+                        configured: applied.configured,
+                        shown: self.shown,
+                        on_output: entered.is_some(),
+                        suspended: states.suspended,
+                    }
+                    .occluded(),
+                    hovered: self.hovered,
+                    active: states.activated,
+                    capabilities: presented::reported(
+                        capabilities(
+                            applied.told.wm,
+                            decoration.absence(),
+                            decoration.app_title_bar_absence(),
+                            states,
+                            self.activation,
+                        ),
+                        self.reports_presentation,
                     ),
-                    self.reports_presentation,
-                ),
-            }
-            .onto(state)
+                }
+                .onto(state)
+            })
         }
     }
 
@@ -1596,6 +1638,12 @@ mod toplevel {
             options: &WindowOptions,
             handler: Rc<dyn WindowHandler>,
         ) -> Result<Rc<Self>, OpenWindowError> {
+            // Refused before an id is taken, for what a command is refused for.
+            let flui_platform::OpeningGeometry {
+                content,
+                constraints,
+                ..
+            } = options.geometry()?;
             let WindowSeed {
                 id,
                 protocol,
@@ -1666,8 +1714,7 @@ mod toplevel {
                 .as_ref()
                 .map(|exporter| exporter.export_toplevel(&surface, &queue, Arc::clone(&record)));
             toplevel.set_title(options.title.clone());
-            let constraints = SizeConstraints::new(options.min_size, options.max_size);
-            let size = clamp(options.size, constraints);
+            let size = clamp(content.get(), constraints);
             match options.mode {
                 WindowMode::Maximized => toplevel.set_maximized(),
                 WindowMode::Fullscreen => toplevel.set_fullscreen(None),
@@ -1733,10 +1780,13 @@ mod toplevel {
                     InputCapabilities::UNAVAILABLE,
                     frames,
                 )),
-                state: Arc::new(WindowStateCell::new(WindowState::new(
-                    WindowGeometry::new(None, size),
-                    size,
-                ))),
+                // Until the first configure, below: the size asked for, held
+                // to the limits asked for.
+                state: Arc::new(WindowStateCell::new({
+                    let asked = flui_platform::WindowExtent::try_new(size)
+                        .expect("BUG: a checked size held to checked limits is an extent");
+                    WindowState::new(WindowGeometry::unplaced(asked), asked)
+                })),
                 record,
                 surface,
                 roles: RefCell::new(Some(roles)),
@@ -1795,7 +1845,7 @@ mod toplevel {
             window.carry_out_protocol();
             // The window's first snapshot holds the first configure; the
             // handler hears nothing before its capability snapshot.
-            let _ = window.state.state_with(|| window.sample());
+            let _ = window.state.refresh(&window.delivery, || window.sample());
             notices.mark_stale_on_wake(&window.state);
             window
                 .delivery
@@ -1818,7 +1868,7 @@ mod toplevel {
         }
 
         /// The window's state as the compositor and the owner describe it now.
-        fn sample(&self) -> WindowState {
+        fn sample(&self) -> crate::window::state::Sample {
             let applied = self.applied.borrow();
             Sample {
                 applied: &applied,
@@ -2001,15 +2051,13 @@ mod toplevel {
         /// Read the window again for its state publisher, announcing
         /// nothing: `WindowDelivery::dispatch_state_changed` does.
         fn read_state(&self) -> Publication {
-            self.state.invalidate();
-            self.state.state_with(|| self.sample()).outcome()
+            self.state.refresh(&self.delivery, || self.sample())
         }
 
-        /// Read the window again and tell its handler when the snapshot
-        /// changed.
+        /// The compositor reported a change: read the window again and tell
+        /// its handler when the snapshot changed.
         fn refresh_state(&self) {
-            self.state.invalidate();
-            let _ = PlatformWindow::state(self);
+            self.state.publish_report(&self.delivery, || self.sample());
         }
 
         /// Carry out what the compositor told the window since the last
@@ -2287,7 +2335,7 @@ mod toplevel {
         header: f64,
     ) {
         let extent = |size: Option<Size<f64>>| {
-            size.map_or((0, 0), |size| {
+            size.map_or((0, 0), |size: Size<f64>| {
                 let height = protocol_extent(size.height);
                 (
                     protocol_extent(size.width),
@@ -2300,7 +2348,10 @@ mod toplevel {
             })
         };
         let (min, max) = if resizable {
-            (extent(constraints.min), extent(constraints.max))
+            (
+                extent(constraints.min.map(flui_platform::WindowExtent::get)),
+                extent(constraints.max.map(flui_platform::WindowExtent::get)),
+            )
         } else {
             (extent(Some(size)), extent(Some(size)))
         };
@@ -2516,12 +2567,10 @@ mod toplevel {
             })
         }
 
+        /// A revision this read publishes is announced at the owner's turn,
+        /// never from the read.
         fn state(&self) -> WindowState {
-            let published = self.state.state_with(|| self.sample());
-            if published.changed {
-                self.delivery.dispatch_state_changed();
-            }
-            published.state
+            self.state.read(&self.delivery, || self.sample())
         }
 
         fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
@@ -2658,6 +2707,9 @@ mod toplevel {
             &self,
             regions: &[flui_platform::input_regions::InputRegion],
         ) -> Result<(), Unsupported> {
+            if self.closed.get() {
+                return Err(Unsupported::new(UnsupportedReason::NoWindow));
+            }
             let scale = self
                 .state
                 .published()
