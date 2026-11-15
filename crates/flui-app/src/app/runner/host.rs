@@ -1297,9 +1297,8 @@ impl flui_native::AppHandler for RunnerHandler {
 
 /// Routes the platform's exit question to this thread's `AppRuntime`, instead
 /// of letting a platform backend decide, alone, whether "every window this
-/// backend tracks just closed" means "exit" — the live-loop wiring `issue
-/// #555`'s `ExitPolicy`/`AppRuntime::should_exit` names as its own
-/// deliberately-deferred follow-up (see `ExitPolicy`'s own doc). Call once,
+/// backend tracks just closed" means "exit": the application's `ExitPolicy`
+/// decides, through `AppRuntime::should_exit`. Call once,
 /// immediately after [`install_owner_platform`], from every backend that
 /// wants this: today, that is `run_desktop` only — Android, the web and iOS
 /// never ask the exit policy.
@@ -1350,7 +1349,7 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
     let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy);
 
     // The exit policy is otherwise only asked when a window closes, so a
-    // veto owed to a running keep-alive service (issue #558) would be
+    // veto owed to a running keep-alive service would be
     // PERMANENT once the last window is gone — nothing left to close,
     // nothing to re-ask, and the process would linger forever. Close that
     // loop: when a keep-alive service reports its exit (on whatever worker

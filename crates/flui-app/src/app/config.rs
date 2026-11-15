@@ -46,7 +46,7 @@ impl Default for DiagnosticsProfile {
 /// # Frame pacing has no field here
 ///
 /// `vsync`/`target_fps` fields previously lived here, advisory-only and
-/// never wired to the real present path — issue #556 removed the unwired
+/// never wired to the real present path — this crate removed the unwired
 /// `vsync`/`target_fps` fields rather than leave a persistently misleading
 /// shape a caller could reasonably expect to govern pacing. Both are
 /// removed, not deprecated: a frame-configuration field is wired end to end
@@ -196,13 +196,13 @@ pub struct AppConfig {
     /// Governs when the platform loop exits once every hosted window has
     /// closed. See [`ExitPolicy`]'s own doc for the drain-before-decide
     /// rule; `run_desktop`'s bootstrap installs this into the live platform
-    /// event loop (issue #555's native-lifecycle wiring). Not present on
+    /// event loop. Not present on
     /// iOS: [`ExitPolicy`]/`AppRuntime` are themselves not compiled there
     /// (`run_ios` never reads any field of this config beyond ignoring it
     /// entirely — see that function's own doc).
     pub exit_policy: ExitPolicy,
 
-    /// Host-injected background executors (issue #557).
+    /// Host-injected background executors.
     ///
     /// `None` (the default): the runtime constructs its own worker pools,
     /// lazily, on first background spawn. `Some`: all background work routes
@@ -257,7 +257,7 @@ pub struct AppConfig {
     /// the rest through `Renderer::surface_color`.
     pub surface_color: flui_engine::SurfaceColor,
 
-    /// Optional per-window close-request veto (issue #558): asked, for
+    /// Optional per-window close-request veto: asked, for
     /// each window opened with this config, whether that window may
     /// actually close when the user requests it.
     ///
@@ -277,7 +277,7 @@ pub struct AppConfig {
     /// close-request veto policy.
     pub close_request_handler: Option<CloseRequestHandler>,
 
-    /// Application services to start at bootstrap (issue #558) — durable,
+    /// Application services to start at bootstrap — durable,
     /// app-lifetime background work with a declared
     /// [`ServiceLifetime`](super::lifecycle::ServiceLifetime) (does the
     /// last window closing stop the app, or does the service keep it
@@ -736,7 +736,7 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
         // that keep it (the desktop runner, through `FirstReveal`) and callers
         // that do not (`run_direct`, the bare `open_secondary_window`). The
         // paths that keep it opt in at their own open site
-        // (`runner::desktop::rendered_window_options`), so nothing can open a
+        // (`runner::desktop::OpeningWindow::open`), so nothing can open a
         // window at alpha 0 that no one will ever reveal.
         Self::default()
             .title(config.title.clone())

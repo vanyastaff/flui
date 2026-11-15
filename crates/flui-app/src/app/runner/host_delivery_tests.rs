@@ -152,11 +152,13 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
             crate::app::runner::window_routes::WindowRoutes::of(&*a_window).route_frame_requested(
                 move |_| {
                     a_seen.fetch_add(1, Ordering::SeqCst);
+                    flui_platform::FrameOutcome::Produced
                 },
             );
             crate::app::runner::window_routes::WindowRoutes::of(&*b_window).route_frame_requested(
                 move |_| {
                     b_seen.fetch_add(1, Ordering::SeqCst);
+                    flui_platform::FrameOutcome::Produced
                 },
             );
             APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Rc::clone(&a_window)));

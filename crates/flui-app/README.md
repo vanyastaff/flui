@@ -67,7 +67,7 @@ spacing, radius, and motion belong to `flui-material` / `flui-cupertino`;
 appearance is per-presentation (`MediaQueryData::platform_brightness`) and the
 resolved theme is published by an in-tree inherited widget. See
 [ADR-0042](../../docs/adr/ADR-0042-theming-ownership.md); the app-shell widgets
-that implement it are tracked in issue #573.
+that implement it are tracked separately.
 
 ## Known architectural debt
 
@@ -85,9 +85,9 @@ the first hosted UI runtime. The remaining hosting gap is content and rendering:
 registers no frame callback for the new window. Production multi-presentation
 rendering therefore still needs per-window frame pumps, constraints, sinks,
 and submit routing, plus root attachment to a non-primary presentation; that
-work remains with issue #559. Logical scheduling (`UpdateScheduler`), physical
-pacing, and raster scheduling also remain split across issue #556's remaining
-slices. Gesture state is UI runtime-owned but intentionally models one presentation
+work remains open. Logical scheduling (`UpdateScheduler`), physical
+pacing, and raster scheduling also remain split.
+Gesture state is UI runtime-owned but intentionally models one presentation
 per UI runtime until that second real presentation consumer exists.
 
 ## Documentation

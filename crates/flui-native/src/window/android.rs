@@ -916,16 +916,21 @@ struct AndroidSurface {
     /// The looper thread, the one that creates and replaces the surface.
     looper: std::thread::ThreadId,
     /// A counted reference to the native window the target last handed out,
-    /// so the pointer in that handle stays valid as long as the target
-    /// lives, whatever the glue does with its own reference.
+    /// so the pointer in that handle stays valid, whatever the glue does
+    /// with its own reference, until the target drops or hands out the
+    /// window that replaced it.
     kept: Mutex<Option<android_activity::ndk::native_window::NativeWindow>>,
     retirement: crate::owner::window_delivery::Retirement,
 }
 
-impl raw_window_handle::HasWindowHandle for AndroidSurface {
-    fn window_handle(
+impl AndroidSurface {
+    /// The Activity's native window, where this target answers at all: on the
+    /// looper thread, before the window's retirement, while the Activity has
+    /// one. Both of the target's handles answer `Unavailable` otherwise.
+    fn native_window(
         &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+    ) -> Result<android_activity::ndk::native_window::NativeWindow, raw_window_handle::HandleError>
+    {
         if std::thread::current().id() != self.looper || self.retirement.is_retired() {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
@@ -933,10 +938,17 @@ impl raw_window_handle::HasWindowHandle for AndroidSurface {
         // live: from `MainEvent::TerminateWindow` (cleared in `post_exec_cmd`
         // once that callback returned) to the next `MainEvent::InitWindow`
         // (set in `pre_exec_cmd` before it). A pause does not clear it.
-        let current = self
-            .app
+        self.app
             .native_window()
-            .ok_or(raw_window_handle::HandleError::Unavailable)?;
+            .ok_or(raw_window_handle::HandleError::Unavailable)
+    }
+}
+
+impl raw_window_handle::HasWindowHandle for AndroidSurface {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let current = self.native_window()?;
         let ptr = {
             let mut kept = self.kept.lock();
             // The kept reference holds its window alive, so an equal address
@@ -952,21 +964,28 @@ impl raw_window_handle::HasWindowHandle for AndroidSurface {
         let raw = raw_window_handle::RawWindowHandle::AndroidNdk(
             raw_window_handle::AndroidNdkWindowHandle::new(ptr),
         );
-        // SAFETY: `ptr` is the ANativeWindow this target holds a counted
-        // reference to (`kept`, `ANativeWindow_acquire`), released no sooner
-        // than the target drops or hands out a different window, so it
-        // outlives every handle borrowed from the target. A surface made from
-        // it is released by the window's handler at `surface_changed(Release)`,
-        // before the Activity replaces its window.
+        // SAFETY: `ptr` is the ANativeWindow `kept` holds a counted reference
+        // to (`ANativeWindow_acquire`), so it is valid until the target drops
+        // or a later call here keeps another window in its place. This
+        // method answers on the looper thread alone, and there the Activity
+        // has another window only after `TerminateWindow`, where the window's
+        // handler released the surface made from this handle
+        // (`surface_changed(Release)`, delivered before the glue lets the
+        // window go). A handle is borrowed to make that surface and is not
+        // kept past it, so none is in use when its window is released.
         #[expect(unsafe_code)]
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }
 }
 
 impl raw_window_handle::HasDisplayHandle for AndroidSurface {
+    /// Answers where [`window_handle`](raw_window_handle::HasWindowHandle::window_handle)
+    /// does: a display handle for a window that has no surface to make would
+    /// say the target is usable when it is not.
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        self.native_window()?;
         let raw = raw_window_handle::RawDisplayHandle::Android(
             raw_window_handle::AndroidDisplayHandle::new(),
         );
