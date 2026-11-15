@@ -1227,6 +1227,10 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
   the task (`tools/xtask/src/perf.rs`) or this rule
   (`tools/xtask/src/change_scope/perf_scope.rs`). A rise that comes from anywhere else, and the
   callgrind half of the job, are left to main.
+- `test-without-agent` runs flui-app's agent tests in the dev profile with debug assertions off,
+  the only build that leaves the driver agent out (ADR-0288 §7), when `without_agent_required`
+  is set: a changed file under `crates/flui-app/src/app/agent/`, flui-app's `build.rs`, or this
+  rule (`tools/xtask/src/change_scope/without_agent_scope.rs`).
 
 A pull request that reaches none of them skips all of them.
 

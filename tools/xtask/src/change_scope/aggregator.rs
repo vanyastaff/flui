@@ -67,10 +67,11 @@ pub(super) struct OnDemand {
 /// workspace), the API contracts when a changed line can change what
 /// `send-positions` reports (a pull request runs that half; `api-closure` stays
 /// on `main`), `miri` when a changed file sits under a source it
-/// interprets whole, and `perf-gates` when a changed file sits under a
+/// interprets whole, `perf-gates` when a changed file sits under a
 /// source that runs for every node of a frame (a pull request runs its
-/// baseline comparison; callgrind stays on `main`).
-pub(super) const ON_DEMAND: [OnDemand; 6] = [
+/// baseline comparison; callgrind stays on `main`), and `test-without-agent` when
+/// a changed file is one it compiles the agent's launch from.
+pub(super) const ON_DEMAND: [OnDemand; 7] = [
     OnDemand {
         job: "test-trybuild",
         output: "trybuild_required",
@@ -99,6 +100,11 @@ pub(super) const ON_DEMAND: [OnDemand; 6] = [
     OnDemand {
         job: "perf-gates",
         output: "perf_required",
+        in_full: true,
+    },
+    OnDemand {
+        job: "test-without-agent",
+        output: "without_agent_required",
         in_full: true,
     },
 ];
@@ -593,6 +599,20 @@ mod tests {
             &run("wide"),
             &without(quiet.clone(), "perf-gates"),
             "'perf-gates': 'ran (success)",
+        );
+        let without_agent = Run {
+            asked: &["without_agent_required"],
+            ..run("wide")
+        };
+        green(
+            &without_agent,
+            &without(quiet.clone(), "test-without-agent"),
+        );
+        red(&without_agent, &quiet, "'test-without-agent': 'skipped");
+        red(
+            &run("wide"),
+            &without(quiet.clone(), "test-without-agent"),
+            "'test-without-agent': 'ran (success)",
         );
         let main = Run {
             event: "push",

@@ -172,8 +172,8 @@ pub(crate) fn install_from_launch(
     false
 }
 
-/// A build without the driver agent: a release build without the `driver`
-/// feature, which `cargo test --release` compiles.
+/// A build without the driver agent: one without debug assertions or the
+/// `driver` feature, which CI's `test-without-agent` job compiles.
 #[cfg(all(test, not(driver_agent)))]
 mod without_the_agent {
     use std::cell::Cell;

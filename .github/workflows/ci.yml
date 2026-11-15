@@ -248,6 +248,7 @@ jobs:
       send_positions_required: ${{ steps.scope.outputs.send_positions_required }}
       miri_required: ${{ steps.scope.outputs.miri_required }}
       perf_required: ${{ steps.scope.outputs.perf_required }}
+      without_agent_required: ${{ steps.scope.outputs.without_agent_required }}
       features_required: ${{ steps.scope.outputs.features_required }}
       hack_args: ${{ steps.scope.outputs.hack_args }}
     steps:
@@ -1098,6 +1099,46 @@ jobs:
         run: cargo +nightly miri test -p flui-engine --lib --locked cancelling_renderer_new
 
   # ─────────────────────────────────────────────────────────────────────────
+  # test-without-agent — flui-app's agent tests in a build without debug
+  # assertions, the only build that leaves the driver agent out
+  # (`cfg(driver_agent)` is a debug build or the `driver` feature): such a
+  # build reads no agent launch value, from the environment or an Android
+  # intent (ADR-0288 §7). No other job compiles those tests. The dev profile
+  # with debug assertions off is that build, without the release profile's
+  # link time. A pull request runs it when its diff reaches the agent's
+  # module or flui-app's build script (`without_agent_required`,
+  # `change_scope::without_agent_scope`).
+  # ─────────────────────────────────────────────────────────────────────────
+  test-without-agent:
+    name: test-without-agent
+    needs: [checks, plan]
+    if: needs.plan.outputs.lane == 'full' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.without_agent_required == 'true')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG_ASSERTIONS: false
+      CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: false
+      CARGO_PROFILE_DEV_OPT_LEVEL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
+      - name: Rust cache (test-without-agent)
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          shared-key: test-without-agent
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo test without debug assertions (flui-app, the agent's launch)
+        run: cargo test --locked -p flui-app --lib agent::
+
+  # ─────────────────────────────────────────────────────────────────────────
   # feature-matrix — xilem-style per-feature clippy via cargo-hack. The plain
   # `clippy` job compiles the whole workspace under feature unification with
   # default features, which can mask a crate that fails to declare a feature
@@ -1385,7 +1426,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, clippy, feature-matrix, feature-scope, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, public-api, api-contracts, perf-gates, size, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, feature-scope, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, public-api, api-contracts, perf-gates, size, deps, doc-test, miri, test-without-agent]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1421,11 +1462,12 @@ jobs:
       #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
       #      full      wide + FULL_JOBS (additional Linux checks) + test-trybuild
-      #                + size + api-contracts + miri + perf-gates
+      #                + size + api-contracts + miri + perf-gates + test-without-agent
       #    and a wide pull request adds test-trybuild when `trybuild_required`,
       #    size when `size_required`, feature-scope when `features_required`,
       #    api-contracts when `send_positions_required`, miri when
-      #    `miri_required` and perf-gates when `perf_required` (ON_DEMAND).
+      #    `miri_required`, perf-gates when `perf_required` and test-without-agent
+      #    when `without_agent_required` (ON_DEMAND).
       #    Every other job must skip. Any other skip (a drifted `if:`, a
       #    cancellation) or a job that ran where it should have skipped fails
       #    the aggregator. Each list must equal the jobs whose `if:` names its
@@ -1443,6 +1485,7 @@ jobs:
           SEND_POSITIONS_REQUIRED: ${{ needs.plan.outputs.send_positions_required }}
           MIRI_REQUIRED: ${{ needs.plan.outputs.miri_required }}
           PERF_REQUIRED: ${{ needs.plan.outputs.perf_required }}
+          WITHOUT_AGENT_REQUIRED: ${{ needs.plan.outputs.without_agent_required }}
           FEATURES_REQUIRED: ${{ needs.plan.outputs.features_required }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify

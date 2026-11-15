@@ -179,7 +179,7 @@ agents; a page cannot close its tab, so the driver closes it. Only a build that 
 reads the launch: a release build without the `driver` feature reads no launch value, from an
 intent's extras, the environment or a page, and a value there is no way into it (Flutter 3.50
 refuses the same for an intent's `route` and entry point). `a_build_without_the_agent_reads_no_launch_value`,
-which only `cargo test --release` compiles, shows it, run weekly by `weekly.yml`'s `release-agent`.
+which only a build without debug assertions compiles, shows it: CI's `test-without-agent` job runs it.
 
 §8. **A role in the hello.** The hello names what its client may do: `Hello.role`, a
 `ClientRole` of `driver` (the default, which a hello may leave out) or `observer`, in protocol
