@@ -5514,20 +5514,20 @@ graph LR
   `cargo hack clippy --each-feature`). Правило отчёта о показе перенесено в тело ADR-0257
   (решения 3 и 6–8 вместо датированного раздела «Amendment»), ADR-0256 §2 говорит, что недоверенные
   цифры поверхности читает как SDR движок, а не wgpu.
-  Проверки на Windows: clippy `--affected=origin/main --all-targets -D warnings` (все зависящие
-  пакеты) — чисто; `xtask checks`, `panic-boundary --self-test` — зелёные; doctests
-  `flui-platform` — 67; nextest `-p flui-platform -p flui-native -p flui-engine -p flui-scheduler
-  -p flui-runtime -p xtask -p flui-app -p flui-testing` — 1435 из 1441. Из шести упавших один
-  относился к этому PR и исправлен: `parity_document_matches_its_source` (правка внесена в
-  `platform-parity.toml`, документ перегенерирован). `native_window_commands` вышел за секундный
-  допуск штампа кадра при 32 занятых слотах сборки и отдельно проходит. Четыре не относятся:
-  `an_intent_opens_its_link_or_documents` (POSIX-путь из file-URL на Windows),
-  `the_driver_agent_contains_every_failure` (падает и на базе, см. LY55) и два trybuild-набора
-  (`flui-platform::compile_fail`, `flui-native::compiler_guards`): у 1.100.0 здесь нет `rust-src`,
-  и rustc не печатает фрагменты std. Не запускалось: код Apple
-  (`http/apple/session.rs`, девять классов с `ContainedIvars`) на этой машине не собирается — у
-  1.100.0 нет Apple-целей, а 1.99.0 не собирает `flui-foundation`; его типизирует job
-  `cross-typecheck`, а на устройстве он не запускался. Linux, wasm32 и Android — только CI.
+  Проверки на Windows (после исправлений по ревью, на слиянии с `main` `942184abe`): clippy
+  `--affected=origin/main --all-targets -D warnings` (все зависящие пакеты) — чисто; `xtask
+  checks`, `panic-boundary` (254 входа, 10 деструкторов, 0 находок) и `--self-test` (35) —
+  зелёные; doctests `flui-platform` — 67; nextest `-p flui-platform -p flui-native -p flui-engine
+  -p flui-app -p flui-testing -p flui-runtime -p flui-scheduler -p xtask` — 1441 из 1445. Четыре
+  упавших падают и на `main` на этом хосте: `an_intent_opens_its_link_or_documents` (POSIX-путь из
+  file-URL на Windows), `the_driver_agent_contains_every_failure` и два trybuild-набора
+  (`flui-platform::compile_fail`, `flui-native::compiler_guards`: rustc здесь не печатает
+  фрагменты std); ни один набор не касается цвета дисплея. `xtask expectations`: одно ожидание,
+  `api/flui.txt`. Не запускалось: код Apple (`http/apple/session.rs`, девять классов с
+  `ContainedIvars`, `tests/appkit_window.rs`) на этой машине не собирается — у 1.100.0 нет
+  Apple-целей, а 1.99.0 не собирает `flui-foundation`; его типизирует job `cross-typecheck`, на
+  устройстве он не запускался. Модели дисплея Linux, Android, web и Apple собраны и прогнаны под
+  `test` на Windows; `tests/wasm32/display.rs` не собирался. Linux, wasm32 и Android — только CI.
 
 ## Отступление от порядка, решённое владельцем
 
