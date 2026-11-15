@@ -1205,7 +1205,6 @@ fn fold_motions(events: Vec<Event>) -> Vec<TurnEvent> {
     folded
 }
 
-
 /// The connection as the loop's last step before it sleeps sees it.
 trait WaitSource {
     type Event;

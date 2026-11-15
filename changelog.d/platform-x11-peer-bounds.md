@@ -1,10 +1,10 @@
 ### Fixed
 
 - X11: a stream of events from the server no longer keeps a window's frames,
-  the owner turn and the wake deadlines waiting. A turn of the loop takes at
-  most 256 events, and a window reads its state from the server once a turn,
-  after them, where every configure, map, focus, property or hover event cost
-  it a blocking read.
+  the owner turn and the wake deadlines waiting. A turn of the loop takes a
+  bounded number of events (`MAX_TURN_EVENTS`), and a window reads its state
+  from the server once a turn, after them, where every configure, map, focus,
+  property or hover event cost it a blocking read.
 - X11: a window follows a window manager that was killed or crashed. It read
   the mode and the frame the dead window manager had left on it, so a
   minimized window stayed `Minimized` for good, could not be restored, and
@@ -20,8 +20,8 @@
   owner that answered with a property of another type or width had its bytes
   returned as text.
 - X11: a change of the desktop or of the work area reads the work area only,
-  not every output; the monitors, outputs and modes read from RandR are
-  bounded.
+  not every output, and one behind a burst of other root-window events is no
+  longer left unread until the next event.
 - Linux: a `tracing` subscriber that samples the system preferences as it
   hears the warning about a refused text scale no longer deadlocks.
 
@@ -29,5 +29,19 @@
 
 - X11: the motions of a pointer that arrive in one turn of the loop are
   delivered as one `PointerEvent::Move` at the last position, with the earlier
-  ones as its coalesced samples (the latest hundred), where each was a move of
-  its own.
+  ones as its coalesced samples (the latest
+  `PointerMove::COALESCED_HISTORY_LIMIT`), where each was a move of its own.
+  The Wayland host still delivers each motion as a move.
+- X11: a panic in a window's handler, or in a `tracing` subscriber, while a
+  turn's events are delivered no longer ends the turn at that event. The
+  events the turn had taken (`MAX_TURN_EVENTS` at most) are delivered first,
+  then the first panic goes on.
+- X11: the displays listed are bounded: a server that lists more monitors than
+  `MAX_MONITORS` has the ones past it left out, and a monitor whose output is
+  past `MAX_OUTPUTS` is listed with no refresh rate and no lasting key.
+- X11: a window manager that speaks only ICCCM (it owns the screen's
+  `WM_S<n>` selection and publishes no `_NET_SUPPORTING_WM_CHECK`, as twm
+  does) counts as running: a window under it takes `SetMode(Minimized)` and
+  observes its minimized mode, and its end is followed like an EWMH window
+  manager's. Maximize, fullscreen and the focus request through
+  `_NET_ACTIVE_WINDOW` stay with EWMH window managers.

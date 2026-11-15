@@ -152,9 +152,7 @@ fn a_button_press_reaches_the_text_input_first() {
         detail: 1,
         ..Default::default()
     };
-    input.event(
-        &x11rb::protocol::Event::XinputButtonPress(press.clone()),
-    );
+    input.event(&x11rb::protocol::Event::XinputButtonPress(press.clone()));
     input.event(&x11rb::protocol::Event::XinputButtonRelease(press));
     assert_eq!(
         *heard.windows.lock().expect("BUG: the list is not poisoned"),

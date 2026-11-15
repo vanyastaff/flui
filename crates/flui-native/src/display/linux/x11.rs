@@ -40,7 +40,9 @@ const PROTOCOL: &str = "X11";
 /// and a session changes a property of the root window now and then, so a
 /// step that heard this many is being sent a stream: it reads what they said
 /// so far, or comes straight back for the rest, and a server that sends
-/// without end is still read.
+/// without end is still read. It is not the owner loop's `MAX_TURN_EVENTS`:
+/// this connection hears no input, which comes in bursts, and serves no
+/// frames or deadlines between its steps.
 const MAX_STEP_EVENTS: usize = 64;
 /// `RESOURCE_MANAGER` is read this far (in 4-byte units): 256 KiB.
 const RESOURCES_LENGTH: u32 = 1 << 16;

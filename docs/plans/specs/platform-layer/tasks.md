@@ -5460,7 +5460,7 @@ graph LR
   (`LoopInput::settle`). (5) Мониторы и опрашиваемые выходы RandR ограничены (по 64), из режимов
   остаются те, что ведёт CRTC; смена рабочего стола читает только рабочую область. (6) Ответ на
   чтение выделения принимается только как байты типа запрошенной формы, иначе запрашивается
-  следующая форма; то же для куска `INCR`. (7) `pump_for` и `run` берут один `X11Loop::turn`.
+  следующая форма; то же для куска `INCR`. (7) `pump_for` и `run_loop` берут один `X11Loop::turn`.
   (8) Изменение иерархии не спрашивает сервер об устройствах, которым нет места, и делает не
   больше 128 запросов. (9) Отказ в масштабе текста сообщается после снятия мьютекса наблюдения.
   По ходу найдено и исправлено: отчёт о hover читал окно на каждое пересечение границы
@@ -5493,6 +5493,23 @@ graph LR
   `file_store_interruption_matrix` падал 2 раза из 5 в общем параллельном прогоне и проходит
   отдельно. Не запускалось: wasm32, Android, Apple; настольный оконный менеджер, кроме openbox;
   сенсорный экран, планшет и тачпад.
+
+  Ревью (два раунда и Codex): шаг дисплеев, остановившийся на `MAX_STEP_EVENTS`, возвращается за
+  остатком, а не ждёт сокет; всё, что ход запускает для своих событий (в том числе отчёт об
+  ошибке сервера через `tracing`), в одном `FirstPanic`; поддержка менеджера читается там, где её
+  спрашивают; окно проверки, которое корень или своё окно, менеджера не называет
+  (`X11Connection::is_peers`, то же правило у requestor-а `INCR`); менеджер только с ICCCM
+  (владелец `WM_S<n>` без `_NET_SUPPORTING_WM_CHECK`) считается работающим
+  (`WindowManager::Icccm`), его конец и `MANAGER` слышны; команда сообщает обработчику о
+  прочитанном только в конце; пачка движений — один `PointerRun`. Тесты, каждый падает при
+  откате (WSL, Xvfb + openbox): `a_randr_reconfiguration_on_a_real_server_is_published` —
+  «no change was published» через 20 с;
+  `a_failure_while_an_event_is_heard_leaves_the_rest_of_the_turn_heard` — configure за паникой не
+  услышан; `a_handler_in_the_turn_a_window_manager_dies_acts_without_it` — `Native` вместо
+  `Unavailable`; `a_check_window_that_is_no_window_managers_is_refused` — то же для fullscreen;
+  `a_window_manager_without_ewmh_is_followed` — `Unavailable` вместо `Native`;
+  `a_window_minimized_as_it_hears_its_show_stays_minimized` — `Normal` вместо `Minimized`.
+  `x11_window` 32, `--lib` 742 из 743 (нестабильный `file_store_interruption_matrix`).
 
 ## Отступление от порядка, решённое владельцем
 

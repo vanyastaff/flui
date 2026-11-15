@@ -1263,33 +1263,50 @@ trait depends on `flui-platform` instead.
     `layouts`, ranges into the text rather than copies of it); a keymap is read
     and compiled once per seat per delivery, its file at most 8 MiB
     (`a_layout_switch_reads_no_keymap`, `layout_names_are_held_in_the_keymap_text`);
-  - an X11 turn takes at most `MAX_TURN_EVENTS` (256) events off the
-    connection and leaves the rest for the turns after, with the frames, the
-    owner turn and the deadlines between them
-    (`a_turn_takes_a_bounded_number_of_events`,
-    `a_stream_of_events_leaves_the_frames_their_turns`); what an event of the
-    turn costs is in the handlers below, and a handler's panic leaves the
-    rest of the turn's events heard, the first going on after the last;
+  - an X11 turn takes at most `MAX_TURN_EVENTS` events off the connection
+    and leaves the rest for the turns after, with the frames, the owner turn
+    and the deadlines between them (`a_turn_takes_a_bounded_number_of_events`);
+    the wait finds an event the connection has already read before it
+    sleeps, so the turn after a capped one runs at once
+    (`a_flood_is_served_turn_after_turn_with_no_sleep_between`). What an
+    event of the turn costs is in the handlers below. The events are off the
+    connection, so whatever one of them runs and however it fails (a
+    handler, a listener, a `tracing` subscriber that hears the loop report a
+    request the server refused), `X11Loop::hear_all` has the rest heard, and
+    the first failure goes on after the last
+    (`a_failure_while_an_event_is_heard_leaves_the_rest_of_the_turn_heard`);
   - an X11 event that may change a window's snapshot (a configure, a map or
     unmap, a reparent, the visibility, the focus, a property of the window,
     the root's active window, a hover the input reports) marks the window and
     makes no request; a change of what the window manager supports (the
-    root's `_NET_SUPPORTED` or `_NET_SUPPORTING_WM_CHECK`, the end of the
-    window manager's own window) marks the support and every window. After
-    the turn's events the support is read once if marked (three properties,
-    and one selection of events per window manager) and each marked window
-    once (a batch of eight requests): a turn reads a window once however many
-    events named it (`a_burst_of_state_events_reads_each_window_once`). A
-    command reads the mode it acts on first if the window is marked
-    (`a_command_acts_on_the_window_as_it_is_now`);
+    root's `_NET_SUPPORTED` or `_NET_SUPPORTING_WM_CHECK`, a window manager's
+    `MANAGER` message, the end of the window manager's own window) marks the
+    support and every window. The support is read once if marked, by
+    whoever asks for it first (a window's read, a command, an opening) or
+    after the turn's events (three properties, the `WM_S<n>` selection's
+    owner where no EWMH window manager answers, and one selection of events
+    per window manager), and each marked window once after the turn's
+    events (a batch of eight requests): a turn reads a window once however
+    many events named it (`a_burst_of_state_events_reads_each_window_once`),
+    so a stream of events leaves the frames their turns
+    (`a_stream_of_events_leaves_the_frames_their_turns`), and a handler that
+    runs in the turn that marked the support reads it new
+    (`a_handler_in_the_turn_a_window_manager_dies_acts_without_it`). A
+    command reads the mode it acts on first if the window is marked, and
+    tells the handler of that read only at its end, once its own state is
+    committed (`a_command_acts_on_the_window_as_it_is_now`,
+    `a_window_minimized_as_it_hears_its_show_stays_minimized`);
   - the X11 motions of one pointer over one window with nothing between them
-    are one event to the drag, the windows' chrome and the input, the last;
-    the input delivers it as one move through the earlier positions, of which
-    a move keeps the latest hundred (`a_pointers_motions_fold_into_the_last`,
+    are one `PointerRun` (`owner::linux::x11`, whose `continued_by` alone
+    says which motions belong together): the drag, the windows' chrome and
+    the text input hear its last, and the input delivers it as one move
+    through the earlier positions, of which a move keeps the latest
+    `PointerMove::COALESCED_HISTORY_LIMIT`
+    (`a_pointers_motions_fold_into_the_last`,
     `a_run_of_motions_is_one_move_through_them`,
     `a_burst_of_motion_is_one_move_through_it`), and a drag session finds the
-    window under the pointer once for the run, in at most 64 round trips
-    (`drag::x11::source`'s `MAX_DEPTH`);
+    window under the pointer once for the run, in at most `MAX_DEPTH` round
+    trips (`drag::x11::source`);
   - an X11 hierarchy change is read from the flags the server sends, since a
     removed device comes with no use
     (`a_hierarchy_change_is_read_from_its_flags`,
@@ -1299,9 +1316,10 @@ trait depends on `flui-platform` instead.
     `handle_hierarchy_changed` and winit's `xinput2_hierarchy_changed` do:
     one query per device the change carries, at once, so a device's events
     later in the same batch find it
-    (`a_pen_plugged_in_mid_batch_draws_as_a_pen`), at most 128 queries a
-    change, and none for a device past the 128 the decoder knows
-    (`a_hierarchy_change_asks_only_for_what_it_names`); an `XIDeviceChanged`
+    (`a_pen_plugged_in_mid_batch_draws_as_a_pen`), at most `MAX_DEVICES`
+    queries a change, and none for a device past the `MAX_DEVICES` the
+    decoder knows (`a_hierarchy_change_asks_only_for_what_it_names`); an
+    `XIDeviceChanged`
     applies the classes it carries, as GTK's `handle_device_changed` does, with
     no query (`a_device_change_brings_its_own_classes`); an XKB keyboard or map
     change marks the keymap, which is read once, before the next key or state
@@ -1310,9 +1328,11 @@ trait depends on `flui-platform` instead.
     (`a_burst_of_keymap_changes_reads_the_keymap_once`); an XKB state change
     names the layout from the names read with the keymap;
   - the X11 display source, on its own thread and connection, hears at most
-    256 events a step; a RandR event reads the RandR state, up to the caps
-    above, a change of `RESOURCE_MANAGER` the scale alone, and a change of
-    the desktop or of the work area the work area alone
+    `MAX_STEP_EVENTS` events a step (`display::linux::x11`), and a step that
+    stopped at that cap comes back for the rest instead of waiting on the
+    socket; a RandR event reads the RandR state, up to the caps above, a
+    change of `RESOURCE_MANAGER` the scale alone, and a change of the desktop
+    or of the work area the work area alone
     (`a_randr_reconfiguration_on_a_real_server_is_published`);
   - an X11 selection read takes its answer only as bytes typed as the form it
     asked for, at most `MAX_TEXT` of them
@@ -3712,10 +3732,11 @@ scheme, a change of the displays, which marks every window), has each window
 the turn marked read itself once, drives the turn, delivers the frames the
 windows asked for, and asks the exit policy when a window closed or the
 application asked again. That is `X11Loop::turn`, the one turn there is:
-`run` takes it, and so does `pump_for`, which a test turns the loop by hand
-with. A request that waits for its reply reads events off the socket into
-libxcb's queue, where `poll` cannot see them, so the loop looks for one before
-it waits; and a window that waits for a frame keeps it from waiting at all.
+`run_loop`, which `run` enters once the application is ready, takes it, and
+so does `pump_for`, which a test turns the loop by hand with. A request that
+waits for its reply reads events off the socket into libxcb's queue, where
+`poll` cannot see them, so the loop looks for one before it waits; and a
+window that waits for a frame keeps it from waiting at all.
 What bounds a turn's work is under "Work per peer event is bounded".
 
 The window (`window::linux::x11::X11Window`) publishes what the server and the
@@ -3733,21 +3754,33 @@ marked, and again after it is carried out. A window is shown while it is
 mapped, waits for its first frame, or is iconic and not hidden: hiding
 withdraws it, iconic or not (`a_minimized_window_that_is_hidden_reads_hidden`).
 What a window honours follows the window manager's support
-(`window::linux::x11::support`): with no window manager, minimize, maximize and
-fullscreen are unavailable on this device and minimizing is not observed; a
-window manager that does not list a state in `_NET_SUPPORTED` leaves that mode
-unavailable; the root's `_NET_SUPPORTED` changing revises every window's
-capabilities, so a command admitted before is superseded. A window manager
-that is killed or crashes changes no property of the root window, so the
-platform hears the end of the window it names in `_NET_SUPPORTING_WM_CHECK`
+(`window::linux::x11::support`), which tells three cases apart
+(`WindowManager`): none runs; one runs that speaks only ICCCM, owning the
+screen's `WM_S<n>` selection (ICCCM §2.8) and publishing no
+`_NET_SUPPORTING_WM_CHECK`, as twm does; one runs that speaks EWMH. With no
+window manager, minimize, maximize and fullscreen are unavailable on this
+device and minimizing is not observed; an ICCCM window manager iconifies
+(`WM_CHANGE_STATE`) and keeps `WM_STATE`, and nothing of EWMH is assumed of
+it; an EWMH window manager that does not list a state in `_NET_SUPPORTED`
+leaves that mode unavailable; the root's `_NET_SUPPORTED` changing revises
+every window's capabilities, so a command admitted before is superseded. A
+window manager that is killed or crashes changes no property of the root
+window, so the platform hears the end of the window it names in
+`_NET_SUPPORTING_WM_CHECK`, or of the selection's owner for an ICCCM one
 (`StructureNotify` selected on it, as GDK's `fetch_net_wm_check_window`
 selects it; Qt's xcb plugin reads `_NET_SUPPORTED` only on the root's
-property change, and keeps a dead window manager's list) and reads the
-support again. Without a window manager, what one wrote on a window
-(`WM_STATE`, `_NET_WM_STATE`, `_NET_FRAME_EXTENTS`) is a dead one's and says
-nothing (`WindowManagerSupport::kept`): the server maps the windows it had
-iconified, so the window reads normal, with no frame, and takes the focus from
-the server (`a_window_outlives_a_window_manager_that_was_killed`,
+property change, and keeps a dead window manager's list), hears a window
+manager announce itself (`MANAGER`), and reads the support again
+(`a_window_manager_without_ewmh_is_followed`). Either window is any id a
+client wrote, so one that is the root or the connection's own names no window
+manager, and its events are never selected (`X11Connection::is_peers`, the
+rule an `INCR` requestor's events follow too;
+`a_check_window_that_is_no_window_managers_is_refused`). Without a window
+manager, what one wrote on a window (`WM_STATE`, `_NET_WM_STATE`,
+`_NET_FRAME_EXTENTS`) is a dead one's and says nothing
+(`WindowManagerSupport::kept`): the server maps the windows it had iconified,
+so the window reads normal, with no frame, and takes the focus from the server
+(`a_window_outlives_a_window_manager_that_was_killed`,
 `what_a_window_manager_wrote_stands_while_it_runs`). The material and the
 frame-rate hint are unavailable on X11; text input waits
 for the host's input method, and the cursor is the input's (below).
@@ -4091,10 +4124,10 @@ and the interlace factor folded into the numerator, in 128 bits
 area the monitor cut to `_NET_WORKAREA` of the current desktop. A whole
 reconfiguration (screen, CRTC and output notifications) is one read of the
 state, and a state whose displays are unchanged wakes nobody. The read stops
-at the caps of `x11_model` (64 monitors, 64 outputs asked about, the modes a
-CRTC runs); a change of the resources reads the scale alone and a change of
-the desktop or of the work area the work area alone, since neither moved an
-output.
+at the caps of `x11_model` (`MAX_MONITORS` monitors, `MAX_OUTPUTS` outputs
+asked about, the modes a CRTC runs); a change of the resources reads the scale
+alone and a change of the desktop or of the work area the work area alone,
+since neither moved an output.
 
 **Native number.** A display answers to a number of the window system: the
 `wl_output` global name on Wayland, and on X11 the **CRTC** (not the RandR
