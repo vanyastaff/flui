@@ -199,15 +199,19 @@ impl<T> Drop for ContainedIvars<T> {
     fn drop(&mut self) {
         // Every class's `dealloc` is this one entry, so the answer after a
         // panic names the ivars whose destructor failed. It runs inside the
-        // boundary, as an argument computed before the call would not.
+        // boundary, as an argument computed before the call would not, and
+        // under a containment of its own, as the first log is: a subscriber
+        // is user code, and an answer that panics ends the process.
         os_entry(
             "dealloc",
             (),
             AfterPanic::Answer(|()| {
-                tracing::error!(
-                    ivars = std::any::type_name::<T>(),
-                    "the destructor that panicked was of these ivars"
-                );
+                contain_owner_callback(|| {
+                    tracing::error!(
+                        ivars = std::any::type_name::<T>(),
+                        "the destructor that panicked was of these ivars"
+                    );
+                });
             }),
             || {
                 // SAFETY: the value is initialized from `new` on, this is the
@@ -505,22 +509,7 @@ mod tests {
     /// Red-check: destroy the value without the boundary.
     #[test]
     fn contained_ivars_keep_a_destructors_panic_inside_the_boundary() {
-        struct Fails;
-        impl Drop for Fails {
-            fn drop(&mut self) {
-                panic!("a destructor's failure");
-            }
-        }
-        struct Ivars {
-            _handler: Fails,
-            captures: Payload,
-        }
-
-        let destroyed = Arc::new(AtomicBool::new(false));
-        let ivars = ContainedIvars::new(Ivars {
-            _handler: Fails,
-            captures: Payload(Arc::clone(&destroyed)),
-        });
+        let (ivars, destroyed) = failing_ivars();
         assert!(
             !ivars.captures.0.load(Ordering::SeqCst),
             "the ivars are read through the wrapper, untouched"
@@ -540,6 +529,57 @@ mod tests {
             destroyed.load(Ordering::SeqCst),
             "the captures after the failing field are destroyed"
         );
+    }
+
+    /// A subscriber that panics on the diagnostics after an ivars' destructor
+    /// panicked leaves the teardown complete and the process running: each
+    /// log after the caught panic is contained, as the first one is.
+    /// Red-check: log the ivars' type without its own containment (the
+    /// answer's panic ends the process).
+    #[test]
+    fn contained_ivars_survive_a_subscriber_that_panics() {
+        let (ivars, destroyed) = failing_ivars();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Recorder {
+            panics: true,
+            seen: Arc::clone(&seen),
+        };
+        tracing::subscriber::with_default(recorder, || drop(ivars));
+        assert!(
+            destroyed.load(Ordering::SeqCst),
+            "the captures after the failing field are destroyed"
+        );
+        assert!(
+            seen.lock()
+                .expect("the recorder is not poisoned")
+                .is_empty(),
+            "no event was recorded: the subscriber panicked on each"
+        );
+    }
+
+    /// A destructor that panics.
+    struct Fails;
+
+    impl Drop for Fails {
+        fn drop(&mut self) {
+            panic!("a destructor's failure");
+        }
+    }
+
+    /// Ivars whose first field's destructor panics, and whose second records
+    /// that it was destroyed.
+    struct Ivars {
+        _handler: Fails,
+        captures: Payload,
+    }
+
+    fn failing_ivars() -> (ContainedIvars<Ivars>, Arc<AtomicBool>) {
+        let destroyed = Arc::new(AtomicBool::new(false));
+        let ivars = ContainedIvars::new(Ivars {
+            _handler: Fails,
+            captures: Payload(Arc::clone(&destroyed)),
+        });
+        (ivars, destroyed)
     }
 
     /// A panic payload whose destructor is user code: it records that it ran.
