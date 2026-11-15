@@ -1123,6 +1123,9 @@ pub struct IOSWindow {
     /// Set once the window closes for good, and by its [`Drop`] before the
     /// view is released; shared with its surface targets.
     closed: Arc<AtomicBool>,
+    /// The last read found a safe area FLUI cannot publish: a run of them is
+    /// said once.
+    refusing_safe_area: AtomicBool,
     /// Shared with the window's surface targets, which hand out no handle
     /// while the window is detached from a scene.
     lifecycle: Arc<parking_lot::Mutex<IOSLifecycle>>,
@@ -1230,6 +1233,7 @@ impl IOSWindow {
                 flui_platform::WindowExtent::ZERO,
             )),
             closed: Arc::new(AtomicBool::new(false)),
+            refusing_safe_area: AtomicBool::new(false),
             lifecycle: Arc::new(parking_lot::Mutex::new(IOSLifecycle {
                 execution: WindowExecutionState::Detached,
                 focused: false,
@@ -1446,7 +1450,21 @@ impl IOSWindow {
                 content: extent,
                 normal: None,
             });
-        Sample::read(geometry, |state| {
+        // A safe area FLUI cannot publish is published as none, and said once
+        // per run of such reads, in the window's turn: never from inside the
+        // read, under the reader's borrows.
+        let (safe_area, refused_safe_area) =
+            match flui_platform::WindowInsets::ZERO.try_with_safe_area(metrics.safe_area) {
+                Ok(insets) => {
+                    self.refusing_safe_area.store(false, Ordering::Relaxed);
+                    (insets, None)
+                }
+                Err(error) => (
+                    flui_platform::WindowInsets::ZERO,
+                    (!self.refusing_safe_area.swap(true, Ordering::Relaxed)).then_some(error),
+                ),
+            };
+        let sample = Sample::read(geometry, |state| {
             let state = state
                 // A scene cannot hide its window; in the background the system
                 // keeps it from the screen, which is its occlusion.
@@ -1466,13 +1484,7 @@ impl IOSWindow {
                 } else {
                     WindowAppearance::Light
                 },
-                insets: flui_platform::WindowInsets::ZERO
-                    .try_with_safe_area(metrics.safe_area)
-                    .unwrap_or_else(|error| {
-                        tracing::warn!(%error, "UIKit reported a safe area FLUI cannot publish; none is");
-                        flui_platform::WindowInsets::ZERO
-                    })
-                    .with_keyboard(metrics.keyboard),
+                insets: safe_area.with_keyboard(metrics.keyboard),
                 execution: self.execution_now(),
                 occluded: !foreground,
                 hovered: self.delivery.hovered(),
@@ -1481,7 +1493,13 @@ impl IOSWindow {
                 capabilities: scene_capabilities(),
             }
             .onto(state)
-        })
+        });
+        match refused_safe_area {
+            Some(error) => sample.noting(move || {
+                tracing::warn!(%error, "UIKit reported a safe area FLUI cannot publish; none is");
+            }),
+            None => sample,
+        }
     }
 
     /// Read the scene again for its state publisher, announcing nothing.

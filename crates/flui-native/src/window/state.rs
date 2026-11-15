@@ -95,13 +95,16 @@ impl SampledGeometry {
 /// published geometry and publishes the focus, visibility, mode, occlusion,
 /// execution state and every other fact the read found
 /// ([`WindowStateCell`]).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct Sample {
     /// The facts read, on the geometry read or, when that was refused, on
     /// no geometry, which the cell replaces with the published one.
     state: WindowState,
     /// Why the geometry read describes no window.
     refused: Option<InvalidGeometry>,
+    /// What the host found while reading that its window should say, said by
+    /// the window's delivery in its turn, never from inside the read.
+    note: Option<Note>,
 }
 
 impl Sample {
@@ -116,12 +119,33 @@ impl Sample {
             Ok(geometry) => Self {
                 state: facts(geometry.state()),
                 refused: None,
+                note: None,
             },
             Err(refused) => Self {
                 state: facts(SampledGeometry::EMPTY.state()),
                 refused: Some(refused),
+                note: None,
             },
         }
+    }
+
+    /// This read, with `note` for its window to say in the window's turn: a
+    /// fact the host could not publish, which a `tracing` event inside the
+    /// read would report under the reader's borrows. The host says it once
+    /// per run of such reads, as the cell says a refused geometry.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn noting(mut self, note: impl FnOnce() + Send + 'static) -> Self {
+        self.note = Some(Note(Box::new(note)));
+        self
+    }
+}
+
+/// What a read found for its window to say ([`Sample::noting`]).
+pub(crate) struct Note(Box<dyn FnOnce() + Send>);
+
+impl std::fmt::Debug for Note {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Note")
     }
 }
 
@@ -131,6 +155,7 @@ impl From<WindowState> for Sample {
         Self {
             state,
             refused: None,
+            note: None,
         }
     }
 }
@@ -324,6 +349,8 @@ struct Slot {
     /// the freeze, which happens once.
     unreported_refusal: Option<InvalidGeometry>,
     unreported_freeze: Option<flui_platform::WindowRevisionExhausted>,
+    /// A note the first read carried, which no delivery has taken yet.
+    unreported_note: Option<Note>,
 }
 
 /// One window's last published [`WindowState`] and its staleness.
@@ -416,6 +443,7 @@ impl WindowStateCell {
         let Sample {
             state: mut initial,
             refused,
+            note,
         } = first_read;
         if refused.is_some() {
             initial = on_published_geometry(initial, None);
@@ -437,6 +465,7 @@ impl WindowStateCell {
                 refusing: refused.is_some(),
                 unreported_refusal: refused,
                 unreported_freeze: None,
+                unreported_note: note,
             }),
             invalidations: AtomicU64::new(1),
             #[cfg(all(debug_assertions, feature = "native-capture"))]
@@ -481,8 +510,7 @@ impl WindowStateCell {
         delivery: &WindowDelivery,
         sample: impl FnOnce() -> Sample,
     ) -> WindowState {
-        let published = self.state_with(sample);
-        self.hand_diagnostics_to(delivery);
+        let published = self.noted_read(delivery, sample);
         if published.changed {
             delivery.state_changed_after_read();
         }
@@ -498,8 +526,7 @@ impl WindowStateCell {
         sample: impl FnOnce() -> Sample,
     ) -> Publication {
         self.invalidate();
-        let published = self.state_with(sample);
-        self.hand_diagnostics_to(delivery);
+        let published = self.noted_read(delivery, sample);
         published.outcome()
     }
 
@@ -513,22 +540,28 @@ impl WindowStateCell {
         sample: impl FnOnce() -> Sample,
     ) -> WindowState {
         self.invalidate();
-        let published = self.state_with(sample);
-        self.hand_diagnostics_to(delivery);
+        let published = self.noted_read(delivery, sample);
         if published.changed {
             delivery.dispatch_state_changed();
         }
         published.state
     }
 
-    /// Hand what the cell has to say to `delivery`, which says it in the
-    /// window's turn.
-    fn hand_diagnostics_to(&self, delivery: &WindowDelivery) {
-        let (refusal, freeze) = {
+    /// A read through [`Self::state_with`] whose note, and whatever the cell
+    /// has to say, go to `delivery`, which says them in the window's turn.
+    fn noted_read(&self, delivery: &WindowDelivery, sample: impl FnOnce() -> Sample) -> Published {
+        let mut note = None;
+        let published = self.state_with(|| {
+            let mut read = sample();
+            note = read.note.take();
+            read
+        });
+        let (refusal, freeze, opening_note) = {
             let mut slot = self.last.lock();
             (
                 slot.unreported_refusal.take(),
                 slot.unreported_freeze.take(),
+                slot.unreported_note.take(),
             )
         };
         if let Some(refused) = refusal {
@@ -537,13 +570,12 @@ impl WindowStateCell {
         if let Some(error) = freeze {
             delivery.diagnose(move || StateDiagnostic::Frozen(error).emit());
         }
+        for Note(note) in opening_note.into_iter().chain(note) {
+            delivery.diagnose(note);
+        }
+        published
     }
 
-    /// The snapshot: the last published one while nothing has invalidated the
-    /// cell, otherwise the result of `sample` published. Announces nothing
-    /// and says nothing: a host reads through [`Self::read`],
-    /// [`Self::refresh`] or [`Self::publish_report`].
-    ///
     /// A read that announces and says nothing, for a test that only needs the
     /// cell current.
     #[cfg(test)]
@@ -551,6 +583,11 @@ impl WindowStateCell {
         self.state_with(sample)
     }
 
+    /// The snapshot: the last published one while nothing has invalidated the
+    /// cell, otherwise the result of `sample` published. Announces nothing
+    /// and says nothing: a host reads through [`Self::read`],
+    /// [`Self::refresh`] or [`Self::publish_report`].
+    ///
     /// `sample` runs with no lock held, so it may call the OS.
     fn state_with(&self, sample: impl FnOnce() -> Sample) -> Published {
         let invalidations = self.invalidations.load(Ordering::Acquire);
@@ -590,6 +627,7 @@ impl WindowStateCell {
         let Sample {
             state: mut sample,
             refused,
+            note: _,
         } = sample;
         match refused {
             None => slot.refusing = false,
@@ -845,6 +883,37 @@ mod tests {
             restored.normal_geometry, None,
             "a normal window returns nowhere"
         );
+    }
+
+    /// A note a read carries (a fact its host could not publish) is said by
+    /// the window's delivery in its turn, never from inside the read, where
+    /// the reader's borrows are held.
+    #[test]
+    fn a_reads_note_is_said_in_the_windows_turn() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use flui_platform::input_capabilities::InputCapabilities;
+        use flui_testing::window_handler::RecordingWindowHandler;
+
+        use crate::owner::window_delivery::WindowDelivery;
+
+        let delivery = WindowDelivery::new(
+            RecordingWindowHandler::new(),
+            InputCapabilities::UNAVAILABLE,
+        );
+        let cell = WindowStateCell::new(window(1.0));
+        let said = Arc::new(AtomicBool::new(false));
+        let noted = Arc::clone(&said);
+        let _ = cell.read(&delivery, || {
+            state(2.0).noting(move || noted.store(true, Ordering::SeqCst))
+        });
+        assert!(
+            !said.load(Ordering::SeqCst),
+            "nothing is said from the read"
+        );
+        delivery.deliver_queued();
+        assert!(said.load(Ordering::SeqCst), "the window's turn says it");
     }
 
     /// The first refusal of a run of refused reads is said, once; a read that
