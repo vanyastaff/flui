@@ -29,10 +29,18 @@ impl CargoTarget {
             links_dev_dependencies: self.kind == TargetKind::Example,
         }
     }
+    /// The package id of the workspace member the build compiles.
+    pub(crate) fn package_id(&self) -> &PackageId {
+        &self.package
+    }
+
+    /// The arguments that select this target in a `cargo` command. The
+    /// package is named by its id, which a dependency that shares its name
+    /// cannot make ambiguous ("multiple packages match").
     pub(crate) fn cargo_args(&self) -> Vec<String> {
         let mut args = vec![
             "--package".into(),
-            self.package_name.clone(),
+            self.package.repr.clone(),
             if self.crate_type == CrateType::StaticLib {
                 "--lib"
             } else if self.kind == TargetKind::Example {
@@ -463,14 +471,63 @@ mod tests {
         }
     }
 
-    /// The `--package` and `--bin` of the binary selected without either at
-    /// `dir`, or the refusal.
-    fn selected(dir: &Path) -> Result<Vec<String>, String> {
+    /// The binary selected without `--package` or `--bin` at `dir`, as
+    /// `<package>::<bin>`, or the refusal.
+    fn selected(dir: &Path) -> Result<String, String> {
+        select(dir)
+            .map(|target| format!("{}::{}", target.package_name, target.name))
+            .map_err(|error| error.to_string())
+    }
+
+    fn select(dir: &Path) -> crate::build::error::BuildResult<super::CargoTarget> {
         tokio::runtime::Runtime::new()
             .expect("a runtime")
             .block_on(select_target(dir, &BuildUnit::DefaultBinary))
-            .map(|target| target.cargo_args())
-            .map_err(|error| error.to_string())
+    }
+
+    /// The arguments that select a member name it so that a dependency of
+    /// the same name does not make cargo's `--package` ambiguous.
+    #[test]
+    fn a_member_is_named_apart_from_a_dependency_of_its_name() {
+        let fixture = tempfile::tempdir().expect("a temporary directory");
+        let package = |version: &str, rest: &str| {
+            format!(
+                "[package]\nname = \"app\"\nversion = \"{version}\"\nedition = \"2024\"\n{rest}"
+            )
+        };
+        write(
+            fixture.path(),
+            &[
+                (
+                    "ws/Cargo.toml",
+                    &package(
+                        "0.1.0",
+                        "[workspace]\n[dependencies]\nold = { package = \"app\", path = \"../old\" }\n",
+                    ),
+                ),
+                ("ws/src/main.rs", "fn main() {}\n"),
+                ("old/Cargo.toml", &package("0.2.0", "")),
+                ("old/src/lib.rs", ""),
+            ],
+        );
+        let ws = fixture.path().join("ws");
+        let args = select(&ws).expect("the member's binary").cargo_args();
+        let [flag, spec, ..] = args.as_slice() else {
+            panic!("--package and its value: {args:?}");
+        };
+        assert_eq!(flag, "--package");
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let output = std::process::Command::new(cargo)
+            .current_dir(&ws)
+            .env("CARGO_NET_OFFLINE", "true")
+            .args(["tree", "--depth", "0", "--package", spec])
+            .output()
+            .expect("cargo tree");
+        assert!(
+            output.status.success(),
+            "`--package {spec}` names one package: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     /// The binary `cargo run` runs without `--package` or `--bin`: at a
@@ -503,9 +560,7 @@ mod tests {
         );
         assert_eq!(
             selected(&root),
-            Ok(["--package", "app", "--bin", "app"]
-                .map(str::to_owned)
-                .to_vec()),
+            Ok("app::app".to_owned()),
             "a root package's default member"
         );
 
@@ -526,7 +581,7 @@ mod tests {
         );
         assert_eq!(
             selected(&members),
-            Ok(["--package", "a", "--bin", "a"].map(str::to_owned).to_vec()),
+            Ok("a::a".to_owned()),
             "the one `default-run` among the default members"
         );
         write(&members, &[("a/Cargo.toml", &package("a", ""))]);

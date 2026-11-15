@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt::Display;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cargo_metadata::{Metadata, Node, Package, PackageId};
 
@@ -118,7 +118,7 @@ impl LinkedCrates {
             &metadata.packages,
             nodes,
             build.root,
-            &Registries::configured_at(build.dir),
+            &Registries::configured_at(build.dir, CargoEnv::of_process()),
         )
         .map_err(|reason| failed(&reason))
     }
@@ -375,26 +375,50 @@ struct Registries {
     files: BTreeMap<String, String>,
 }
 
+/// What of a process's environment cargo reads its configuration by.
+#[derive(Debug, Default)]
+struct CargoEnv {
+    /// `CARGO_HOME` as the process has it.
+    cargo_home: Option<OsString>,
+    /// The user's home directory.
+    home: Option<PathBuf>,
+    /// Each `CARGO_REGISTRIES_<NAME>_INDEX`, by its name part.
+    registry_indexes: BTreeMap<String, String>,
+}
+
+impl CargoEnv {
+    /// This process's environment, which the cargo it starts inherits.
+    fn of_process() -> Self {
+        Self {
+            cargo_home: std::env::var_os("CARGO_HOME"),
+            home: std::env::home_dir(),
+            registry_indexes: std::env::vars_os()
+                .filter_map(|(key, value)| {
+                    let key = key.into_string().ok()?;
+                    let name = key
+                        .strip_prefix("CARGO_REGISTRIES_")?
+                        .strip_suffix("_INDEX")?;
+                    Some((name.to_owned(), value.into_string().ok()?))
+                })
+                .collect(),
+        }
+    }
+}
+
 impl Registries {
-    /// The registries cargo configures for a command run in `dir`. A file
-    /// that is not TOML is skipped: cargo refused it before it listed
-    /// anything.
-    fn configured_at(dir: &Path) -> Self {
-        let variables = std::env::vars_os()
-            .filter_map(|(key, value)| {
-                let key = key.into_string().ok()?;
-                let name = key
-                    .strip_prefix("CARGO_REGISTRIES_")?
-                    .strip_suffix("_INDEX")?;
-                Some((name.to_owned(), value.into_string().ok()?))
-            })
-            .collect();
-        // As cargo's `home::cargo_home_with_cwd`: an empty variable is unset,
-        // and a relative one is read against the directory cargo runs in.
-        let cargo_home = std::env::var_os("CARGO_HOME")
+    /// The registries cargo configures for a command run in `dir` with
+    /// `env`. A file that is not TOML is skipped: cargo refused it before it
+    /// listed anything.
+    fn configured_at(dir: &Path, env: CargoEnv) -> Self {
+        // As cargo's `home::cargo_home_with_cwd_env`: an empty `CARGO_HOME` is
+        // unset, and a relative one is read against the directory cargo runs
+        // in.
+        let cargo_home = env
+            .cargo_home
             .filter(|home| !home.is_empty())
             .map(|home| dir.join(home))
-            .or_else(|| std::env::home_dir().map(|home| home.join(".cargo")));
+            .or_else(|| env.home.map(|home| home.join(".cargo")));
+        let variables = env.registry_indexes;
         let mut files = BTreeMap::new();
         for cargo_dir in dir
             .ancestors()
@@ -442,7 +466,7 @@ mod tests {
 
     use cargo_metadata::{Node, Package};
 
-    use super::{Edges, LinkedBuild, LinkedCrates, Registries};
+    use super::{CargoEnv, Edges, LinkedBuild, LinkedCrates, Registries};
 
     const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
@@ -747,9 +771,12 @@ mod tests {
         }
     }
 
-    /// The registries a command run in a directory reads: the nearest
-    /// `.cargo/config` above `.cargo/config.toml` beside it, a nearer
-    /// directory's above a farther one's.
+    /// The registries a command run in a directory reads: a variable above
+    /// every file, the nearest `.cargo/config` above `.cargo/config.toml`
+    /// beside it, a nearer directory's above a farther one's, then the file
+    /// in `CARGO_HOME`, which a relative value names under the directory
+    /// cargo runs in and an empty one leaves to the home directory's
+    /// `.cargo`.
     #[test]
     fn registries_are_read_from_the_nearest_configuration() {
         let project = tempfile::tempdir().expect("a temporary directory");
@@ -772,16 +799,61 @@ mod tests {
             "app/.cargo/config.toml",
             "[registries.flui-near]\nindex = \"https://unread.example.com/index\"\n",
         );
-        let registries = Registries::configured_at(&project.path().join("app/src"));
+        write(
+            "app/src/cargo-home/config.toml",
+            "[registries.flui-home]\nindex = \"https://home.example.com/index\"\n\
+             [registries.flui-outer]\nindex = \"https://unread.example.com/index\"\n",
+        );
+        write(
+            "user/.cargo/config.toml",
+            "[registries.flui-user]\nindex = \"https://user.example.com/index\"\n",
+        );
+        let dir = project.path().join("app/src");
+        let registries = Registries::configured_at(
+            &dir,
+            CargoEnv {
+                cargo_home: Some("cargo-home".into()),
+                home: Some(project.path().join("user")),
+                registry_indexes: BTreeMap::from([(
+                    "FLUI_OUTER".to_owned(),
+                    "https://variable.example.com/index".to_owned(),
+                )]),
+            },
+        );
         assert_eq!(
             registries.index_of("flui-near"),
             Some("sparse+https://near.example.com/index/")
         );
         assert_eq!(
             registries.index_of("flui-outer"),
+            Some("https://variable.example.com/index")
+        );
+        assert_eq!(
+            registries.index_of("flui-home"),
+            Some("https://home.example.com/index"),
+            "a relative CARGO_HOME under the directory cargo runs in"
+        );
+        assert_eq!(registries.index_of("flui-user"), None);
+        assert_eq!(registries.index_of("flui-unconfigured"), None);
+
+        let unset = Registries::configured_at(
+            &dir,
+            CargoEnv {
+                cargo_home: Some("".into()),
+                home: Some(project.path().join("user")),
+                registry_indexes: BTreeMap::new(),
+            },
+        );
+        assert_eq!(
+            unset.index_of("flui-user"),
+            Some("https://user.example.com/index"),
+            "an empty CARGO_HOME leaves the home directory's"
+        );
+        assert_eq!(
+            unset.index_of("flui-outer"),
             Some("https://outer.example.com/index")
         );
-        assert_eq!(registries.index_of("flui-unconfigured"), None);
+        assert_eq!(unset.index_of("flui-home"), None);
     }
 
     /// A procedural macro the build compiles is listed with its kind before
