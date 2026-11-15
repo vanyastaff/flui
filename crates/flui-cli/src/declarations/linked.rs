@@ -365,7 +365,8 @@ impl<'a> Listed<'a> {
 /// `CARGO_REGISTRIES_<NAME>_INDEX` first, then `[registries.<name>] index`
 /// of `.cargo/config.toml` (or `.cargo/config`, which cargo prefers when
 /// both are there) in that directory and in each above it, the nearest
-/// first, then of the one in `$CARGO_HOME`.
+/// first, then of the one in `$CARGO_HOME`, each with the files it
+/// `include`s ([`registries_of`]).
 #[derive(Debug, Default)]
 struct Registries {
     /// Each variable's index, by the name part of the variable
@@ -425,25 +426,15 @@ impl Registries {
             .map(|dir| dir.join(".cargo"))
             .chain(cargo_home)
         {
-            let Some(table) = ["config", "config.toml"].iter().find_map(|file| {
-                std::fs::read_to_string(cargo_dir.join(file))
-                    .ok()?
-                    .parse::<toml::Table>()
-                    .ok()
-            }) else {
+            let Some(file) = ["config", "config.toml"]
+                .iter()
+                .map(|file| cargo_dir.join(file))
+                .find(|file| file.is_file())
+            else {
                 continue;
             };
-            let configured = table
-                .get("registries")
-                .and_then(toml::Value::as_table)
-                .into_iter()
-                .flatten();
-            for (name, registry) in configured {
-                if let Some(index) = registry.get("index").and_then(toml::Value::as_str) {
-                    files
-                        .entry(name.clone())
-                        .or_insert_with(|| index.to_owned());
-                }
+            for (name, index) in registries_of(&file, &mut BTreeSet::new(), 0) {
+                files.entry(name).or_insert(index);
             }
         }
         Self { variables, files }
@@ -456,6 +447,64 @@ impl Registries {
             .or_else(|| self.files.get(name))
             .map(String::as_str)
     }
+}
+
+/// How deep `include`s nest before the rest is not read.
+const INCLUDE_DEPTH: usize = 16;
+
+/// The `[registries.<name>] index` values one cargo configuration file sets,
+/// its `include`s merged as cargo merges them (stable since cargo 1.93; the
+/// `include` key of cargo's configuration reference and `load_includes` in
+/// cargo's `src/context/mod.rs`): each included file first, left to right,
+/// a later one over an earlier, then the file's own values over them all.
+/// An include is a path ending in `.toml`, or a table with its `path` and
+/// `optional`, relative to the including file's directory. A file already
+/// being read (a cycle, which cargo refuses) or deeper than
+/// [`INCLUDE_DEPTH`] adds nothing; so does a file that cannot be read or is
+/// not TOML, which cargo refused before it listed anything.
+fn registries_of(
+    file: &Path,
+    reading: &mut BTreeSet<PathBuf>,
+    depth: usize,
+) -> BTreeMap<String, String> {
+    let mut registries = BTreeMap::new();
+    if depth > INCLUDE_DEPTH || !reading.insert(file.to_path_buf()) {
+        return registries;
+    }
+    let Some(table) = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+    else {
+        return registries;
+    };
+    let base = file.parent().unwrap_or(Path::new(""));
+    let includes = table
+        .get("include")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|include| match include {
+            toml::Value::String(path) => Some(path.as_str()),
+            toml::Value::Table(include) => include.get("path").and_then(toml::Value::as_str),
+            _ => None,
+        })
+        // As cargo checks it: the extension exactly `toml`.
+        .filter(|path| Path::new(path).extension() == Some(std::ffi::OsStr::new("toml")));
+    for include in includes {
+        registries.extend(registries_of(&base.join(include), reading, depth + 1));
+    }
+    let own = table
+        .get("registries")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, registry)| {
+            let index = registry.get("index").and_then(toml::Value::as_str)?;
+            Some((name.clone(), index.to_owned()))
+        });
+    registries.extend(own);
+    reading.remove(file);
+    registries
 }
 
 #[cfg(test)]
@@ -801,8 +850,20 @@ mod tests {
         );
         write(
             "app/src/cargo-home/config.toml",
-            "[registries.flui-home]\nindex = \"https://home.example.com/index\"\n\
+            "include = [\"extra/first.toml\", { path = \"extra/second.toml\", optional = true }]\n\
+             [registries.flui-home]\nindex = \"https://home.example.com/index\"\n\
              [registries.flui-outer]\nindex = \"https://unread.example.com/index\"\n",
+        );
+        write(
+            "app/src/cargo-home/extra/first.toml",
+            "include = [\"../config.toml\"]\n\
+             [registries.flui-included]\nindex = \"https://first.example.com/index\"\n\
+             [registries.flui-later]\nindex = \"https://first.example.com/later\"\n\
+             [registries.flui-home]\nindex = \"https://first.example.com/home\"\n",
+        );
+        write(
+            "app/src/cargo-home/extra/second.toml",
+            "[registries.flui-later]\nindex = \"https://second.example.com/later\"\n",
         );
         write(
             "user/.cargo/config.toml",
@@ -831,7 +892,18 @@ mod tests {
         assert_eq!(
             registries.index_of("flui-home"),
             Some("https://home.example.com/index"),
-            "a relative CARGO_HOME under the directory cargo runs in"
+            "a relative CARGO_HOME under the directory cargo runs in, its own value over an \
+             included one"
+        );
+        assert_eq!(
+            registries.index_of("flui-included"),
+            Some("https://first.example.com/index"),
+            "a registry an included file names, the include back to the file skipped"
+        );
+        assert_eq!(
+            registries.index_of("flui-later"),
+            Some("https://second.example.com/later"),
+            "a later include over an earlier one"
         );
         assert_eq!(registries.index_of("flui-user"), None);
         assert_eq!(registries.index_of("flui-unconfigured"), None);
