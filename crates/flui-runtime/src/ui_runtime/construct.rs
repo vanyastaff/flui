@@ -212,7 +212,7 @@ impl UiRuntime {
             preferences: RefCell::new(preferences),
             motion_override: Cell::new(flui_animation::MotionOverride::FollowSystem),
             error_view_builder: Cell::new(None),
-            link_declarations: Cell::new(flui_view::navigation::LinkDeclarations::new()),
+            open_declarations: Cell::new(flui_view::navigation::OpenDeclarations::new()),
             page_origin: RefCell::new(None),
             geometry_turn: std::rc::Rc::new(RefCell::new(None)),
             owner_frame,

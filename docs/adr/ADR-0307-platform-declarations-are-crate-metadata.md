@@ -121,10 +121,11 @@ proguard = "android/proguard-rules.pro"
   type. Without these keys the operating system never hands the application its links or files,
   so a crate that uses them states `schema = 3`. The links are the application's own: `url-schemes`
   and `associated-domains` (its own or a feature's) in a crate another crate of the build links,
-  by a normal or build edge, are refused by name. `#[flui::main]` reads the same `url-schemes` and
-  `associated-domains` of the crate it marks as it compiles, a feature's under `cfg!`, and the run
-  that function starts admits them unless the application gives `Application::declares`, so the
-  URLs the application admits (ADR-0330 §5) are the ones its manifests register.
+  by a normal or build edge, are refused by name. `#[flui::main]` reads the same `url-schemes`,
+  `associated-domains` and `file-types` of the crate it marks as it compiles, a feature's under
+  `cfg!`, as an `OpenDeclarations` value, and the run that function starts admits them unless the
+  application gives `Application::declares`, so the URLs the application admits (ADR-0330 §5) are
+  the ones its manifests register.
 
 ```toml
 [package.metadata.flui.declares]

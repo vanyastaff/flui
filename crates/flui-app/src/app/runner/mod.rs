@@ -400,8 +400,8 @@ where
 /// before; refused while this thread's loop state is borrowed, which only an
 /// entry called from inside a run's own callback finds.
 pub(in crate::app) fn swap_entry_declarations(
-    declarations: Option<flui_view::navigation::LinkDeclarations>,
-) -> Result<Option<flui_view::navigation::LinkDeclarations>, std::cell::BorrowMutError> {
+    declarations: Option<flui_view::navigation::OpenDeclarations>,
+) -> Result<Option<flui_view::navigation::OpenDeclarations>, std::cell::BorrowMutError> {
     host::APP_RUNTIME.with(|slot| {
         let mut state = slot.try_borrow_mut()?;
         Ok(std::mem::replace(
@@ -412,7 +412,7 @@ pub(in crate::app) fn swap_entry_declarations(
 }
 
 /// What [`swap_entry_declarations`] recorded, while its entry runs.
-pub(in crate::app) fn entry_declarations() -> Option<flui_view::navigation::LinkDeclarations> {
+pub(in crate::app) fn entry_declarations() -> Option<flui_view::navigation::OpenDeclarations> {
     host::APP_RUNTIME.with(|slot| {
         slot.try_borrow()
             .ok()

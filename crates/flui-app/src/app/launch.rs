@@ -96,15 +96,18 @@ impl Application {
         self
     }
 
-    /// The URLs the application opens: its own schemes and the web domains it
-    /// is associated with, the ones its `[package.metadata.flui.declares]`
-    /// registers with the operating system (ADR-0307). A URL the operating
-    /// system opens the application with is opened in the `Router` of the
-    /// window it addresses only when it is declared. Without this call a run
-    /// declares what `#[flui::main]` read from the manifest of the crate whose
-    /// entry function starts it, else nothing, so an application without
-    /// either opens no URL; declarations given here replace the manifest's.
-    pub fn declares(mut self, declarations: flui_view::navigation::LinkDeclarations) -> Self {
+    /// What the application opens: its own URL schemes, the web domains it is
+    /// associated with and its file types, the ones its
+    /// `[package.metadata.flui.declares]` registers with the operating system
+    /// (ADR-0307). A URL the operating system opens the application with is
+    /// opened in the `Router` of the window it addresses only when it is
+    /// declared, and a declared scheme or file type keeps the application one
+    /// instance on Linux and Windows (`single-instance`). Without this call a
+    /// run declares what `#[flui::main]` read from the manifest of the crate
+    /// whose entry function starts it, else nothing, so an application
+    /// without either opens no URL; declarations given here replace the
+    /// manifest's.
+    pub fn declares(mut self, declarations: flui_view::navigation::OpenDeclarations) -> Self {
         self.opening.declarations = Some(declarations);
         self
     }

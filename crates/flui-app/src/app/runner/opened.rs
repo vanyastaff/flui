@@ -21,7 +21,7 @@ use flui_foundation::PresentationAddress;
 use flui_foundation::panic::FirstPanic;
 use flui_platform::{MAX_OPENED_ITEMS, OpenTarget, Opened, OpenedFile, PlatformWindow};
 use flui_runtime::ui_runtime::UiRuntime;
-use flui_view::navigation::LinkDeclarations;
+use flui_view::navigation::OpenDeclarations;
 
 use super::host::APP_RUNTIME;
 use crate::app::window_registry::WindowRegistry;
@@ -34,7 +34,7 @@ pub(crate) type OpenFilesCallback = Rc<dyn Fn(&[OpenedFile])>;
 #[derive(Clone, Default)]
 pub(crate) struct OpenSettings {
     /// The URL schemes and domains it opens.
-    pub(crate) declarations: Option<LinkDeclarations>,
+    pub(crate) declarations: Option<OpenDeclarations>,
     /// Where its opened files go.
     pub(crate) on_open_files: Option<OpenFilesCallback>,
     /// Whether the application runs as one instance; `None` leaves it to
@@ -74,7 +74,7 @@ impl OpenSettings {
         // Android keep one themselves, and each page on the Web is an
         // application of its own.
         let kept_here = cfg!(any(target_os = "linux", windows));
-        if !kept_here || !self.single_instance.unwrap_or(self.declares_a_scheme()) {
+        if !kept_here || !self.single_instance.unwrap_or(self.declares_a_launch()) {
             return None;
         }
         let app_id = identity.app_id().map(|app_id| app_id.as_str().to_owned());
@@ -96,20 +96,24 @@ impl OpenSettings {
         not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
     ))]
     pub(crate) fn single_instance_id(&self, _identity: &flui_log::AppIdentity) -> Option<String> {
-        if cfg!(any(target_os = "linux", windows)) && self.declares_a_scheme() {
+        if cfg!(any(target_os = "linux", windows)) && self.declares_a_launch() {
             tracing::warn!(
-                "the application declares a URL scheme but is built without flui's \
-                 `single-instance` feature: each link it is launched with opens a second process"
+                "the application declares a URL scheme or a file type but is built without flui's \
+                 `single-instance` feature: each link or file it is launched with opens a second \
+                 process"
             );
         }
         None
     }
 
-    /// Whether the application declares a URL scheme.
+    /// Whether the application declares a URL scheme or a file type: what
+    /// the system launches it with again while it runs.
     #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-    fn declares_a_scheme(&self) -> bool {
-        self.declarations
-            .is_some_and(|declarations| !declarations.declared_url_schemes().is_empty())
+    fn declares_a_launch(&self) -> bool {
+        self.declarations.is_some_and(|declarations| {
+            !declarations.declared_url_schemes().is_empty()
+                || !declarations.declared_file_types().is_empty()
+        })
     }
 }
 
@@ -154,7 +158,7 @@ impl OpenRouting {
 
     /// The URL schemes and domains the application opens, which every UI
     /// runtime of the run is given before its first presentation opens.
-    pub(crate) fn declarations(&self) -> LinkDeclarations {
+    pub(crate) fn declarations(&self) -> OpenDeclarations {
         self.settings.declarations.unwrap_or_default()
     }
 
@@ -168,7 +172,7 @@ impl OpenRouting {
     /// the page's origin. Before its first presentation can hear an opened
     /// URL.
     pub(crate) fn admit_in(&self, ui_runtime: &UiRuntime) {
-        ui_runtime.set_link_declarations(self.declarations());
+        ui_runtime.set_open_declarations(self.declarations());
         // Cloned, so no borrow is held while the log line reaches its subscriber.
         let origin = self.page_origin.borrow().clone();
         if let Some(origin) = origin.as_deref()
@@ -368,13 +372,13 @@ fn open_urls(
 #[cfg(all(test, feature = "single-instance", any(target_os = "linux", windows)))]
 mod tests {
     use flui_log::{AppId, AppIdentity};
-    use flui_view::navigation::LinkDeclarations;
+    use flui_view::navigation::{FileTypeDeclaration, OpenDeclarations};
 
     use super::OpenSettings;
 
     /// One instance is kept under the application id when the application
-    /// declares a URL scheme or asks for it, and not when it turns it off,
-    /// declares only web domains, or has no id.
+    /// declares a URL scheme or a file type or asks for it, and not when it
+    /// turns it off, declares only web domains, or has no id.
     #[test]
     fn one_instance_follows_the_declarations_unless_the_application_says() {
         let named = AppIdentity::try_new("Notes")
@@ -382,18 +386,30 @@ mod tests {
             .with_app_id(AppId::try_new("com.example.Notes").expect("an id"));
         let unnamed = AppIdentity::try_new("Notes").expect("a display name");
         let settings =
-            |declarations: Option<LinkDeclarations>, single: Option<bool>| OpenSettings {
+            |declarations: Option<OpenDeclarations>, single: Option<bool>| OpenSettings {
                 declarations,
                 single_instance: single,
                 ..OpenSettings::default()
             };
-        let scheme = Some(LinkDeclarations::new().url_schemes(&["notes"]));
-        let domain = Some(LinkDeclarations::new().associated_domains(&["example.com"]));
+        let scheme = Some(OpenDeclarations::new().url_schemes(&["notes"]));
+        let domain = Some(OpenDeclarations::new().associated_domains(&["example.com"]));
+        const NOTE: &[FileTypeDeclaration] = &[FileTypeDeclaration::new(
+            "note",
+            "application/x-notes-note",
+            "Note",
+        )];
+        let file_type = Some(OpenDeclarations::new().file_types(NOTE));
         let id = Some("com.example.Notes".to_owned());
         let cases = [
             (
                 "a declared scheme",
                 settings(scheme, None),
+                &named,
+                id.clone(),
+            ),
+            (
+                "a declared file type",
+                settings(file_type, None),
                 &named,
                 id.clone(),
             ),

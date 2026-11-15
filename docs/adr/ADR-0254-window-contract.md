@@ -399,8 +399,8 @@ at its own integrity level or above. An app id outside reverse DNS, or a session
 keep one instance (no bus, a mutex or pipe it cannot open), is warned about and the process
 runs as an instance of its own. macOS, iOS and Android keep one instance themselves and
 each Web page is an application of its own: `start_single` starts their host as `start_with`
-does. `flui-app` asks for one instance when the application declares a URL scheme or calls
-`Application::single_instance(true)`, and `single_instance(false)` turns it off. All of it is
+does. `flui-app` asks for one instance when the application declares a URL scheme or a file type
+or calls `Application::single_instance(true)`, and `single_instance(false)` turns it off. All of it is
 `flui`'s `single-instance` feature, off by default: without it the session-bus and pipe code is
 not linked and `Application::single_instance` is absent, so each launch is a process of its own,
 and `flui build` and `flui run` refuse a Linux or Windows build of an application that declares URL

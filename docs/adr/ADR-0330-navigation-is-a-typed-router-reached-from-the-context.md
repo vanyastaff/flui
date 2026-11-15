@@ -287,7 +287,7 @@ impl OpenedUrl {
     pub fn same_origin(&self, other: &Self) -> bool;
 }
 #[derive(Clone, Copy, Default)]
-pub struct LinkDeclarations { /* url_schemes, associated_domains: &'static [&'static str] */ }
+pub struct OpenDeclarations { /* url_schemes, associated_domains: &'static [&'static str] */ }
 #[non_exhaustive]
 pub enum OpenUrlRefused {
     TooLong { len: usize }, Malformed { url: String, reason: &'static str }, Path(RouteParseError),
@@ -300,7 +300,7 @@ impl UiRuntime {
     pub fn navigate(&self, presentation: PresentationId, intent: NavigationIntent)
         -> Result<(), NavigationRefused>;
     pub fn open_url(&self, presentation: PresentationId, url: &str) -> Result<(), OpenUrlRefused>;
-    pub fn set_link_declarations(&self, declarations: LinkDeclarations);
+    pub fn set_open_declarations(&self, declarations: OpenDeclarations);
     pub fn set_page_origin(&self, origin: &str) -> Result<(), OpenUrlRefused>;
 }
 ```
@@ -336,7 +336,7 @@ bytes is refused before any of it is copied. `OpenedUrl::parse` splits it as RFC
 B does, and its path is the URL's path, as Flutter and go_router read `uri.path`:
 `myapp:///note/3` and `https://example.com/note/3` open `/note/3`, `myapp://note/3` opens `/3`
 (`note` is the host), an empty path opens `/`, the query joins the `RoutePath` (§1) and the
-fragment is dropped. The URL is then admitted by the application's `LinkDeclarations`, the
+fragment is dropped. The URL is then admitted by the application's `OpenDeclarations`, the
 `url-schemes` and `associated-domains` its `[package.metadata.flui.declares]` lists (ADR-0307): an
 `http` or `https` URL by its host, compared whole and without regard to case, any other by its
 scheme; a UI runtime declares nothing until its runner sets them, so it opens nothing. On the web

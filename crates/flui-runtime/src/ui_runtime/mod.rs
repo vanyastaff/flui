@@ -177,7 +177,7 @@ pub struct UiRuntime {
     error_view_builder: Cell<Option<flui_view::ErrorViewBuilder>>,
     /// The URLs the application declares it opens, which [`Self::open_url`]
     /// admits; none until the runner sets them.
-    link_declarations: Cell<flui_view::navigation::LinkDeclarations>,
+    open_declarations: Cell<flui_view::navigation::OpenDeclarations>,
     /// The origin of the page the application runs in on the web, whose URLs
     /// [`Self::open_url`] admits beside the declarations; `None` elsewhere.
     page_origin: RefCell<Option<flui_view::navigation::OpenedUrl>>,

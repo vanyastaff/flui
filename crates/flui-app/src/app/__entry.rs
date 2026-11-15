@@ -2,7 +2,7 @@
 //!
 //! The attribute reads the crate's `[package.metadata.flui.declares]` as it
 //! compiles, and the function it marks starts with [`declare`]: the URL
-//! schemes and web domains the manifest registers with the operating system
+//! schemes, web domains and file types the manifest registers with the operating system
 //! are the ones a run that function starts opens, unless the application
 //! gives its own with [`Application::declares`](crate::Application::declares).
 //!
@@ -16,11 +16,11 @@
 #[cfg(target_os = "android")]
 pub use android_activity::AndroidApp;
 /// What the application opens.
-pub use flui_view::navigation::LinkDeclarations;
+pub use flui_view::navigation::{FileTypeDeclaration, OpenDeclarations};
 
 /// How many entries [`join`] gives for `parts`.
 #[must_use]
-pub const fn joined_len(parts: &[&[&'static str]]) -> usize {
+pub const fn joined_len<T>(parts: &[&[T]]) -> usize {
     let mut len = 0;
     let mut part = 0;
     while part < parts.len() {
@@ -32,19 +32,20 @@ pub const fn joined_len(parts: &[&[&'static str]]) -> usize {
 
 /// The entries of `parts` in order, in one array: the manifest's own list
 /// followed by the lists of the features the crate is compiled with, which
-/// the attribute chooses with `cfg!` and leaves empty otherwise.
+/// the attribute chooses with `cfg!` and leaves empty otherwise. `fill` is
+/// the value every entry starts as, overwritten by the joined ones.
 ///
 /// # Panics
 ///
 /// When `N` is not [`joined_len`] of `parts`, as the compilation of the
 /// attribute's constant.
 #[must_use]
-pub const fn join<const N: usize>(parts: &[&[&'static str]]) -> [&'static str; N] {
+pub const fn join<T: Copy, const N: usize>(parts: &[&[T]], fill: T) -> [T; N] {
     assert!(
         joined_len(parts) == N,
         "BUG: an array joins as many entries as its parts hold"
     );
-    let mut joined = [""; N];
+    let mut joined = [fill; N];
     let mut at = 0;
     let mut part = 0;
     while part < parts.len() {
@@ -62,7 +63,7 @@ pub const fn join<const N: usize>(parts: &[&[&'static str]]) -> [&'static str; N
 /// Record `declarations` for the runs started on this thread until the
 /// returned value drops, at the end of the entry function: a run reads them
 /// as it starts when its `Application` declares nothing itself.
-pub fn declare(declarations: LinkDeclarations) -> Declared {
+pub fn declare(declarations: OpenDeclarations) -> Declared {
     let previous = match crate::app::runner::swap_entry_declarations(Some(declarations)) {
         Ok(previous) => Restore::Previous(previous),
         Err(_busy) => {
@@ -93,7 +94,7 @@ enum Restore {
     /// Nothing was recorded, so nothing is undone.
     Nothing,
     /// What was recorded before the entry started.
-    Previous(Option<LinkDeclarations>),
+    Previous(Option<OpenDeclarations>),
 }
 
 impl std::fmt::Debug for Declared {

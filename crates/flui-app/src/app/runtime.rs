@@ -335,7 +335,7 @@ pub(crate) struct AppRuntime {
     /// from its crate's `[package.metadata.flui.declares]` and recorded while
     /// that function runs, for an application that set no
     /// `Application::declares`.
-    pub(super) entry_declarations: Option<flui_view::navigation::LinkDeclarations>,
+    pub(super) entry_declarations: Option<flui_view::navigation::OpenDeclarations>,
     /// The URL scheme registration an unpackaged Windows run makes once its
     /// main window shows its first frame, taken by that frame.
     #[cfg(windows)]

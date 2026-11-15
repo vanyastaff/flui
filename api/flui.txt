@@ -99,7 +99,7 @@ impl Default for flui::Application
 impl core::fmt::Debug for flui::Application
 pub fn flui::Application::capability<C: flui::platform::capability::Capability>(self, provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
 pub fn flui::Application::config(self, config: flui::AppConfig) -> Self
-pub fn flui::Application::declares(self, declarations: flui::view::navigation::LinkDeclarations) -> Self
+pub fn flui::Application::declares(self, declarations: flui::view::navigation::OpenDeclarations) -> Self
 pub fn flui::Application::new() -> Self
 pub fn flui::Application::on_open_files(self, callback: impl Fn(&[flui::platform::OpenedFile]) + 'static) -> Self
 pub fn flui::Application::on_ready(self, callback: impl FnOnce(&flui::AppHandle) + 'static) -> Self
@@ -25323,22 +25323,35 @@ reexport flui::view::key::ValueKey => flui::foundation::ValueKey
 reexport flui::view::key::ViewKey => flui::foundation::ViewKey
 reexport flui::view::key::WithKey => flui::foundation::WithKey
 pub mod flui::view::navigation
-pub struct flui::view::navigation::LinkDeclarations { .. }
-impl Clone for flui::view::navigation::LinkDeclarations
-impl Copy for flui::view::navigation::LinkDeclarations
-impl Default for flui::view::navigation::LinkDeclarations
-impl Eq for flui::view::navigation::LinkDeclarations
-impl PartialEq for flui::view::navigation::LinkDeclarations
-impl core::fmt::Debug for flui::view::navigation::LinkDeclarations
-impl core::marker::StructuralPartialEq for flui::view::navigation::LinkDeclarations
-pub const fn flui::view::navigation::LinkDeclarations::associated_domains(self, associated_domains: &'static [&'static str]) -> Self
-pub const fn flui::view::navigation::LinkDeclarations::declared_url_schemes(&self) -> &'static [&'static str]
-pub const fn flui::view::navigation::LinkDeclarations::new() -> Self
-pub const fn flui::view::navigation::LinkDeclarations::url_schemes(self, url_schemes: &'static [&'static str]) -> Self
-pub fn flui::view::navigation::LinkDeclarations::admit(&self, url: &flui::view::navigation::OpenedUrl) -> Result<(), flui::view::navigation::OpenUrlRefused>
+pub struct flui::view::navigation::FileTypeDeclaration { .. }
+impl Clone for flui::view::navigation::FileTypeDeclaration
+impl Copy for flui::view::navigation::FileTypeDeclaration
+impl Eq for flui::view::navigation::FileTypeDeclaration
+impl PartialEq for flui::view::navigation::FileTypeDeclaration
+impl core::fmt::Debug for flui::view::navigation::FileTypeDeclaration
+impl core::marker::StructuralPartialEq for flui::view::navigation::FileTypeDeclaration
+pub const fn flui::view::navigation::FileTypeDeclaration::extension(&self) -> &'static str
+pub const fn flui::view::navigation::FileTypeDeclaration::mime(&self) -> &'static str
+pub const fn flui::view::navigation::FileTypeDeclaration::name(&self) -> &'static str
+pub const fn flui::view::navigation::FileTypeDeclaration::new(extension: &'static str, mime: &'static str, name: &'static str) -> Self
 reexport flui::view::navigation::NavigationIntent => flui::widgets::NavigationIntent
 reexport flui::view::navigation::NavigationOp => flui::widgets::NavigationOp
 reexport flui::view::navigation::NavigationRefused => flui::widgets::NavigationRefused
+pub struct flui::view::navigation::OpenDeclarations { .. }
+impl Clone for flui::view::navigation::OpenDeclarations
+impl Copy for flui::view::navigation::OpenDeclarations
+impl Default for flui::view::navigation::OpenDeclarations
+impl Eq for flui::view::navigation::OpenDeclarations
+impl PartialEq for flui::view::navigation::OpenDeclarations
+impl core::fmt::Debug for flui::view::navigation::OpenDeclarations
+impl core::marker::StructuralPartialEq for flui::view::navigation::OpenDeclarations
+pub const fn flui::view::navigation::OpenDeclarations::associated_domains(self, associated_domains: &'static [&'static str]) -> Self
+pub const fn flui::view::navigation::OpenDeclarations::declared_file_types(&self) -> &'static [flui::view::navigation::FileTypeDeclaration]
+pub const fn flui::view::navigation::OpenDeclarations::declared_url_schemes(&self) -> &'static [&'static str]
+pub const fn flui::view::navigation::OpenDeclarations::file_types(self, file_types: &'static [flui::view::navigation::FileTypeDeclaration]) -> Self
+pub const fn flui::view::navigation::OpenDeclarations::new() -> Self
+pub const fn flui::view::navigation::OpenDeclarations::url_schemes(self, url_schemes: &'static [&'static str]) -> Self
+pub fn flui::view::navigation::OpenDeclarations::admit(&self, url: &flui::view::navigation::OpenedUrl) -> Result<(), flui::view::navigation::OpenUrlRefused>
 #[non_exhaustive] pub enum flui::view::navigation::OpenUrlRefused
 impl Clone for flui::view::navigation::OpenUrlRefused
 impl Eq for flui::view::navigation::OpenUrlRefused
@@ -35641,9 +35654,9 @@ pub fn flui_runtime::ui_runtime::UiRuntime::set_device_pixel_ratio_for(&self, id
 pub fn flui_runtime::ui_runtime::UiRuntime::set_error_view_builder(&self, builder: Option<flui::view::ErrorViewBuilder>)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_frame_failure_detail(&self, detail: flui::app::FrameFailureDetail)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_frame_failure_handler(&self, handler: Option<flui::app::FrameFailureHandler>)
-pub fn flui_runtime::ui_runtime::UiRuntime::set_link_declarations(&self, declarations: flui::view::navigation::LinkDeclarations)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_motion_override(&self, preference: flui::animation::MotionOverride)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_now_secs_for_test(&self, secs: f64)
+pub fn flui_runtime::ui_runtime::UiRuntime::set_open_declarations(&self, declarations: flui::view::navigation::OpenDeclarations)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_page_origin(&self, origin: &str) -> Result<(), flui::view::navigation::OpenUrlRefused>
 pub fn flui_runtime::ui_runtime::UiRuntime::set_performance_overlay(&self, enabled: bool)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_pointer_resampling(&self, id: flui::foundation::PresentationId, policy: flui::app::PointerResampling) -> Result<(), flui_runtime::presentation::PointerResamplingError>

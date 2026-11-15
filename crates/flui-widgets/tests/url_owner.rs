@@ -17,7 +17,7 @@ use std::time::Duration;
 use flui_foundation::ChangeNotifier;
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::CloseReason;
-use flui_view::navigation::{LinkDeclarations, OpenUrlRefused, OpenedUrl};
+use flui_view::navigation::{OpenDeclarations, OpenUrlRefused, OpenedUrl};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     AnimatedBuilder, NavigationIntent, NavigationOp, NavigationRefused, PopScope, RouteParseError,
@@ -703,7 +703,7 @@ fn an_origin_is_scheme_host_and_port() {
     );
 }
 fn declarations_admit_by_scheme_and_by_domain() {
-    let declared = LinkDeclarations::new()
+    let declared = OpenDeclarations::new()
         .url_schemes(&["myapp", "https"])
         .associated_domains(&["Example.com"]);
     let admit = |url: &str| declared.admit(&OpenedUrl::parse(url).expect("a URL"));
@@ -734,7 +734,7 @@ fn declarations_admit_by_scheme_and_by_domain() {
         Err(OpenUrlRefused::UndeclaredDomain { host: None })
     );
     assert_eq!(
-        LinkDeclarations::default().admit(&OpenedUrl::parse("myapp:///").expect("a URL")),
+        OpenDeclarations::default().admit(&OpenedUrl::parse("myapp:///").expect("a URL")),
         Err(OpenUrlRefused::UndeclaredScheme {
             scheme: "myapp".to_owned()
         }),
@@ -778,8 +778,8 @@ pub(crate) fn an_opened_url_navigates_only_when_declared() {
         }),
         "a fresh host declares nothing"
     );
-    host.set_link_declarations(
-        LinkDeclarations::new()
+    host.set_open_declarations(
+        OpenDeclarations::new()
             .url_schemes(&["myapp"])
             .associated_domains(&["example.com"]),
     );
@@ -915,7 +915,7 @@ fn recording_router(
 
 fn declaring_host() -> HeadlessHost {
     let host = HeadlessHost::new(HeadlessWindow::new(400, 400));
-    host.set_link_declarations(LinkDeclarations::new().url_schemes(&["myapp"]));
+    host.set_open_declarations(OpenDeclarations::new().url_schemes(&["myapp"]));
     host
 }
 

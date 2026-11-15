@@ -1697,7 +1697,7 @@ impl HeadlessHost {
 
     /// Open `url` in `window`, as a runner opens a URL the platform hands
     /// that window: split, admitted by the declarations
-    /// [`set_link_declarations`](Self::set_link_declarations) set, and
+    /// [`set_open_declarations`](Self::set_open_declarations) set, and
     /// applied to the window's `Router` as a `Go` (ADR-0330 §5). The Router's
     /// edit is built by the next [`pump`](Self::pump).
     ///
@@ -1716,8 +1716,8 @@ impl HeadlessHost {
 
     /// Set the URL schemes and associated domains the application declares,
     /// which [`open_url`](Self::open_url) admits; a fresh host declares none.
-    pub fn set_link_declarations(&self, declarations: flui_view::navigation::LinkDeclarations) {
-        self.ui_runtime.set_link_declarations(declarations);
+    pub fn set_open_declarations(&self, declarations: flui_view::navigation::OpenDeclarations) {
+        self.ui_runtime.set_open_declarations(declarations);
     }
 
     /// Run as a page of `origin` (`https://app.example.com`), as the web
