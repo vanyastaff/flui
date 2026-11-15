@@ -10,5 +10,8 @@
   macOS bundle, the Linux desktop entry, the one-instance check, `flui doctor` and `flui add`
   read the same crates.
 - `flui build ios` reads the declarations of the package it built, not of every member of the
-  workspace, and `flui build android` and `flui doctor` those of what cargo builds by default in
-  the project's directory.
+  workspace, and `flui build android`, `flui run` and `flui doctor` those of what cargo builds by
+  default in the project's directory: the package there, or at a workspace's root its default
+  members, also when the root is a package itself.
+- `flui add` prints what the added crate declares for every platform the application builds
+  for, so a feature only its Android build turns on counts on any host.
