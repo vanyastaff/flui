@@ -78,12 +78,18 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
     spelled_as_named(Verdict::ALL, Verdict::name);
     {
         use flui_protocol::native_recording::{
-            Absence, Appearance, Availability, Backend, CancelReason, DynamicRange, Execution,
-            FailureKind, Gamut, GestureComponent, GesturePhase, MemoryPressureLevel, Modifier,
-            PointerKind, ScrollPhase, ScrollUnit, SessionEndPhase, Stream, ViewportStatus,
-            WheelAxis, WindowMode,
+            Absence, Appearance, Availability, Backend, CancelReason, CloseAnswer, CloseCause,
+            DynamicRange, Execution, FailureKind, Gamut, GestureComponent, GesturePhase,
+            InputPurpose, MemoryPressureLevel, Modifier, PointerKind, ScrollPhase, ScrollUnit,
+            SessionEndPhase, StoreError, StoreLockKind, Stream, ViewportStatus, WheelAxis,
+            WindowMode,
         };
         spelled_as_named(Absence::ALL, Absence::name);
+        spelled_as_named(CloseAnswer::ALL, CloseAnswer::name);
+        spelled_as_named(CloseCause::ALL, CloseCause::name);
+        spelled_as_named(InputPurpose::ALL, InputPurpose::name);
+        spelled_as_named(StoreError::ALL, StoreError::name);
+        spelled_as_named(StoreLockKind::ALL, StoreLockKind::name);
         spelled_as_named(Appearance::ALL, Appearance::name);
         spelled_as_named(Availability::ALL, Availability::name);
         spelled_as_named(Execution::ALL, Execution::name);

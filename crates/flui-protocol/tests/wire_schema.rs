@@ -218,7 +218,7 @@ impl Surface {
                 }
                 Value::Array(items) => {
                     for item in items {
-                        walk(item, &format!("{path}/*"), out);
+                        walk(item, &format!("{path}/{}", variant_segment(item)), out);
                     }
                 }
                 _ => {}
@@ -233,6 +233,27 @@ impl Surface {
         }
         out
     }
+}
+
+/// The path segment of an item of a schema array: a variant of an internally tagged union by
+/// its tag (`row=store_lock`, a required property with a constant value), so a variant added to
+/// a union is told apart from a field made required in a variant already there; any other item
+/// is `*`, so an item inserted in the middle does not move the others.
+fn variant_segment(item: &Value) -> String {
+    let tag = item
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| {
+            let required = item.get("required")?.as_array()?;
+            properties.iter().find_map(|(name, property)| {
+                let value = property.get("const")?.as_str()?;
+                required
+                    .iter()
+                    .any(|field| field.as_str() == Some(name.as_str()))
+                    .then(|| format!("{name}={value}"))
+            })
+        });
+    tag.unwrap_or_else(|| "*".to_owned())
 }
 
 /// What makes `newer` not additive to `older`: a property, enumerated string or
@@ -260,11 +281,23 @@ fn additivity_violations(older: &Value, newer: &Value, renamed: &[(&str, &str)])
         new.required
             .difference(&old.required)
             .filter(|path| {
+                let segments: Vec<&str> = path.split('/').collect();
+                // A field of a tagged variant `older` lacks is part of a new variant, which an
+                // older reader refuses by its tag; nothing it read became required.
+                if let Some(at) = segments.iter().position(|segment| segment.contains('=')) {
+                    let tag = segments[at].split('=').next().unwrap_or_default();
+                    let variant = segments[..=at].join("/");
+                    if !old.required.contains(&format!("{variant}/required/{tag}")) {
+                        return false;
+                    }
+                }
                 // The type the field is required in: the path up to `required`, or up to the
-                // first erased index, whichever comes first.
-                let owner: Vec<&str> = path
-                    .split('/')
-                    .take_while(|segment| *segment != "required" && *segment != "*")
+                // first erased index or variant, whichever comes first.
+                let owner: Vec<&str> = segments
+                    .into_iter()
+                    .take_while(|segment| {
+                        *segment != "required" && *segment != "*" && !segment.contains('=')
+                    })
                     .collect();
                 older.pointer(&owner.join("/")).is_some()
             })
@@ -398,6 +431,37 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
     assert_eq!(
         additivity_violations(&older, &required, &[]),
         ["field made required: /Node/required/name"]
+    );
+
+    // A tagged union: a new variant with a field of its own is additive, since an older reader
+    // refuses it by its tag; a field made required in a variant already there is not.
+    let union = |variants: Value| serde_json::json!({"Union": {"oneOf": variants}});
+    let variant = |tag: &str, fields: &[&str]| {
+        let mut required = vec![serde_json::json!("row")];
+        required.extend(fields.iter().map(|field| serde_json::json!(field)));
+        serde_json::json!({
+            "type": "object",
+            "properties": {"row": {"type": "string", "const": tag}},
+            "required": required,
+        })
+    };
+    let one = union(serde_json::json!([variant("reading", &["reading"])]));
+    let with_variant = union(serde_json::json!([
+        variant("reading", &["reading"]),
+        variant("closed", &["cause"]),
+    ]));
+    assert!(
+        additivity_violations(&one, &with_variant, &[]).is_empty(),
+        "a new variant of a tagged union is additive: {:?}",
+        additivity_violations(&one, &with_variant, &[])
+    );
+    let with_required = union(serde_json::json!([variant(
+        "reading",
+        &["reading", "cause"]
+    )]));
+    assert_eq!(
+        additivity_violations(&one, &with_required, &[]),
+        ["field made required: /Union/oneOf/row=reading/required/cause"]
     );
 
     let mut new_definition = older.clone();
