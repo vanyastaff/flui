@@ -5,6 +5,10 @@
 - **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
   for §3's repaint half only: a `NotShown` retry republishes the held scene version instead of
   calling `mark_needs_full_repaint_for`; the wake half (`wake_frame()`) stands.
+  [ADR-0335](ADR-0335-a-withheld-frame-commits-nothing-and-joins-the-dropped-frame-backoff.md)
+  for §3's commit (a withheld frame commits nothing) and §4's park (past the budget each attempt
+  waits out the dropped-frame backoff, and the withheld streak clears only when a frame presents
+  or finds no damage, or the window is shown again).
 - **Related:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7 (wall-clock wake); [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) (the fallback gate)
 
 *A `Result<bool>` cannot say "this frame owed the screen something and did not
@@ -64,7 +68,7 @@ match site that had to classify it (`raster_lane.rs`).
 
 ### 3. `NotShown` is retained, and the retention is two-part
 
-The frame tail commits the tree but does not finish the frame:
+The frame tail commits nothing (ADR-0335 §1) and does not finish the frame:
 
 ```rust
 retry_needed = true;          // wake_frame()
@@ -101,7 +105,8 @@ asleep — the lifecycle gate never engages and the loop is unbounded.
 
 So the cap lives in the frame tail: `MAX_NOT_SHOWN_RETRIES = 128`, with the
 per-presentation streak on `PresentationState` (`record_frame_withheld` /
-`clear_not_shown_streak`). Past the cap the frame parks instead of re-arming.
+`clear_not_shown_streak`). Past the cap each attempt waits out the dropped-frame backoff
+(ADR-0335 §2).
 
 The value is chosen against measurement: the withheld cold-start transient ran
 at most 12 consecutive attempts (~132 ms), so 128 sits ~10× above the worst
@@ -111,11 +116,10 @@ frames on a surface that never returns, too small reintroduces the blank window
 this exists to fix. In ordinary runs the cap never engages — a backstop against
 the pathological case, not a limit the ordinary transient touches.
 
-Exhausting the budget is not permanent. The streak is cleared by any frame
-that ends otherwise, so it bounds a *continuous* withdrawal rather than
-disabling retention; and a real platform event still dirties the pipeline and
-produces an attempt of its own. Recovery does not depend on the counter being
-reset by hand.
+Exhausting the budget does not park the frame (ADR-0335 §2): each further attempt waits out the
+dropped-frame backoff, which doubles to one second, until a frame presents or finds no damage, and
+a window shown again after it was hidden starts a new budget once a running wait ends. A surface
+that returns therefore shows the tree within a second, with no unrelated event needed.
 
 ## Alternatives considered
 
@@ -133,7 +137,7 @@ reset by hand.
 
 **Accepted cost.** A surface that stays unavailable while frames are enabled
 repaints at the fallback deadline's pace for up to `MAX_NOT_SHOWN_RETRIES`
-attempts before parking — the same steady-state trade the
+attempts, then once per backoff interval (ADR-0335 §2) — the same steady-state trade the
 `SubmitVerdict::SurfaceStale` arm already documents and accepts. In the
 measured runs the loop is never observed in steady state: the withheld streak
 occurs once, at cold start, and does not recur.

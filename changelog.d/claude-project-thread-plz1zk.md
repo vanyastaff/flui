@@ -71,3 +71,9 @@
   returns to idle and one left running is suspended, and a scope whose callbacks still wait is
   given completion demand, so the presentation's next segment runs them. Before, the runtime's next
   frame panicked on the retained segment and the application stopped drawing.
+- **`flui-runtime`**: a frame whose sink answers `SubmitVerdict::NotShown` commits nothing: pointer
+  input waits for the frame that shows the tree instead of hit-testing a tree the screen did not
+  show. A surface that withholds frames past the retry budget is tried again after the
+  dropped-frame backoff instead of parking, so the tree and its held input reach the screen within
+  a second of the surface's return
+  ([ADR-0335](/docs/adr/ADR-0335-a-withheld-frame-commits-nothing-and-joins-the-dropped-frame-backoff.md)).

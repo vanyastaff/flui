@@ -399,7 +399,7 @@ impl UiRuntime {
             if shows_current_tree
                 && matches!(
                     render_verdict,
-                    SubmitVerdict::Presented | SubmitVerdict::NoPresent | SubmitVerdict::NotShown
+                    SubmitVerdict::Presented | SubmitVerdict::NoPresent
                 )
             {
                 producer.reset_frame_failure_streak();
@@ -452,57 +452,29 @@ impl UiRuntime {
                         "Frame skipped: no damage (no present)"
                     );
                 }
-                // The backend had content in hand and could not put it on
-                // screen. Everything `NoPresent` does about the TREE still
-                // applies — the pipeline ran, produced a scene, and that
-                // scene is the latest one this presentation has — but the
-                // frame itself is NOT finished, and treating it as finished
-                // is how a window ends up permanently blank: the work that
-                // produced this scene has already been consumed out of the
-                // pipeline, so a loop that parks here has nothing left to
-                // wake it and nothing left to draw if it did.
+                // The backend had content in hand and could not put it on screen (ADR-0335). The
+                // frame commits nothing: the tree revision stays uncommitted, the input regions of
+                // the last presented frame stay in force, and pointer input waits for the frame
+                // that shows the tree (ADR-0305 §4). The work that produced the scene was consumed
+                // out of the pipeline, so the retry repaints in full, until ADR-0304 §7 retries
+                // from the held version: a wake alone would find nothing dirty and park with the
+                // tree never shown.
                 //
-                // Hence the same two-part retention the submit-failure arms
-                // below use, and for the identical reason issue #637
-                // records: `wake_frame()` alone re-opens the segment gate
-                // but not `PipelineOwner`'s own dirty tracking, so the
-                // retry pump would find nothing to do, produce `Idle`, and
-                // clear the flag having never reached `render_scene`.
-                // `mark_needs_full_repaint_for` is what gives the retry
-                // real work.
-                //
-                // The retry is paced by the runner's fallback gate
-                // (`keeps_frame_gate_open` / `FallbackWake`, ADR-0058) — one
-                // pipeline pass per display period — and capped here at
-                // `MAX_NOT_SHOWN_RETRIES` consecutive attempts.
-                //
-                // The cap is load-bearing, not belt-and-braces. A window that
-                // AppKit reports as occluded does stop reaching this arm, but
-                // by a route that does NOT cover this condition: occlusion
-                // reaches the frame loop as
-                // `windowDidChangeOcclusionState:` -> `WindowVisibility` ->
-                // `AppLifecycleState::Hidden` -> `frames_enabled == false`, and
-                // the visibility bit there is AppKit's `occlusionState`. What
-                // withdraws the drawable, however, is the *swapchain's* own
-                // availability, and the two disagree — the cold-start trace
-                // that motivated this arm has `occlusionState` reporting the
-                // window visible throughout while the drawable was
-                // unavailable for 12 consecutive frames. Wherever they
-                // disagree and stay disagreeing (a window on an inactive
-                // Space, a display asleep) the lifecycle gate never engages and
-                // an unbounded retry is an unbounded loop. The transient that
-                // clears is the common case; the cap is what makes the
-                // pathological one terminate.
+                // The first `MAX_NOT_SHOWN_RETRIES` consecutive attempts retry on the next display
+                // period, which rides out a drawable that is withdrawn for a few frames (AppKit's
+                // cold start withholds about 12 while `occlusionState` reports the window visible,
+                // so the lifecycle gate does not engage). Past that budget the withdrawal is not
+                // a transient (a window on an inactive Space, a display asleep): each further
+                // attempt waits out the dropped-frame backoff, which doubles to one second, so
+                // the presentation shows its tree within a second of the surface's return and
+                // costs at most one paint per second until then. A key or button press ends the
+                // wait early, as for any dropped frame.
                 SubmitVerdict::NotShown => {
                     // The frame never reached the screen, so frame-aligned
                     // haptics wait: a retry that presents before their
                     // deadline plays them, otherwise they resolve `Suppressed`.
-                    held.absorb(self.commit_painted_frame(producer, tree_revision, &input_regions));
                     producer.record_frame_dropped();
                     let streak = producer.record_frame_withheld();
-                    // The retry below repaints the tree held input waits for; a parked frame owes
-                    // only the replay, and no repaint for the input either.
-                    tail.replay_committed_input = shows_current_tree;
                     if streak <= MAX_NOT_SHOWN_RETRIES {
                         // Armed before the trace: a subscriber's panic there keeps the retry.
                         tail.retry_needed = true;
@@ -514,31 +486,35 @@ impl UiRuntime {
                          retaining it — retry armed via wake_frame()"
                         );
                     } else {
-                        // Budget exhausted: park rather than retry. The tree
-                        // stays committed (the scene above is still the latest
-                        // this presentation has).
-                        //
-                        // Reset the streak with the park, not on the next
-                        // presented frame alone. Left above the limit, the
-                        // very next event-driven frame that lands here — the
-                        // drawable still unavailable, which is exactly the
-                        // case this cap exists for — would increment the stale
-                        // count and park again immediately, never opening the
-                        // fresh retry burst the comment above promises. If the
-                        // drawable returned asynchronously afterwards the
-                        // window could stay blank until some unrelated event
-                        // forced a successful frame. Clearing here makes the
-                        // cap a bound on a *continuous* withdrawal, never a
-                        // permanent disable: the next real event gets a full
-                        // budget again.
-                        producer.clear_not_shown_streak();
-                        tracing::warn!(
-                            frame = frame_number,
-                            streak,
-                            "Frame withheld by the surface for {} consecutive attempts; \
-                         giving up until the next real event",
-                            MAX_NOT_SHOWN_RETRIES
-                        );
+                        // The streak stays above the budget until a frame presents or finds no
+                        // damage, or the window is shown again after it was hidden (a new
+                        // withdrawal), so the next attempt waits out the backoff too instead of
+                        // opening another burst. A settlement of an older tree and a given-up
+                        // device (ADR-0267) arm nothing: the current tree is owed by its own frame,
+                        // and a given-up device holds its frames. A frame that shows the current
+                        // tree has no pending frame painted from it or a later one, since each
+                        // painted segment advances the tree revision (ADR-0048), so the failed
+                        // frame's guard for one has nothing to guard here.
+                        let mut held = FirstPanic::new();
+                        if shows_current_tree && !producer.device_abandoned() {
+                            producer.note_frame_failure();
+                            Self::arm_failure_retry(producer);
+                            // The mark's platform wake is user code and can unwind: the wait is
+                            // armed first, and the panic is held until the trace below ran.
+                            held.contain(|| self.mark_needs_full_repaint_for(producer));
+                        }
+                        held.contain(|| {
+                            tracing::debug!(
+                                frame = frame_number,
+                                streak,
+                                "Frame withheld by the surface past {} consecutive attempts; \
+                             retrying after the dropped-frame backoff",
+                                MAX_NOT_SHOWN_RETRIES
+                            );
+                        });
+                        if let Some(payload) = held.into_payload() {
+                            resume_unwind(payload);
+                        }
                     }
                 }
                 SubmitVerdict::Retry | SubmitVerdict::SurfaceStale => {

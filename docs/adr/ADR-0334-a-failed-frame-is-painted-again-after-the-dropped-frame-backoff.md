@@ -62,7 +62,8 @@ and spends none on a window the host knows is refused.
   `FrameFailureReport`, since the sink already logged the cause. A key or button press ends the
   wait early, as for any dropped frame.
 - **§2.** A clean segment that painted a scene does not reset the streak. The scene's verdict
-  does, once the frame commits the current tree (`Presented`, `NoPresent`, `NotShown`). A clean
+  does, once the frame commits the current tree (`Presented`, `NoPresent`; a `NotShown` frame
+  commits nothing, ADR-0335 §1). A clean
   segment that painted nothing still resets it, and so does one whose scene reaches no sink. An
   older queued frame's commit leaves the streak, and the wait a newer failed frame armed.
 - **§3.** A settlement that commits an older tree, with no pending frame painted from the current
@@ -106,7 +107,7 @@ Tests in `crates/flui-runtime/src/ui_runtime/frame_commit_state_tests.rs`:
 - `held_input_behind_a_failed_frame_asks_for_the_frame_that_shows_the_tree` (§1, §2): the input
   held behind a failed frame replays on the retried frame's commit, and the older frame's
   settlement leaves the wait standing;
-- `a_parked_withheld_settlement_leaves_the_failed_frames_retry` (§2): a parked `NotShown`
+- `a_withheld_settlement_of_an_older_tree_leaves_the_failed_frames_retry` (§2): a withheld (`NotShown`)
   settlement of an older frame leaves the wait standing;
 - `a_settlement_of_an_older_tree_asks_for_the_current_one` (§3): a settlement of an older tree
   with no input held asks for a repaint, and asks for none while a frame from the current tree is
@@ -165,5 +166,6 @@ stops after the one retry of a panicked resize.
 
 ## More information
 
-`docs/gaps.md` (the ADR-0305 line) lists what a settlement still does not owe: a frame answered
-`NotShown` commits its tree, and the hold covers pointer events only.
+`docs/gaps.md` (the ADR-0305 line) lists what a settlement still does not owe: the hold covers
+pointer events only. A frame answered `NotShown` waits out the same backoff once its withdrawal
+outlasts its budget (ADR-0335 §2).

@@ -667,7 +667,13 @@ impl UiRuntime {
             );
             return;
         };
+        let shown_again = presentation.clock().is_hidden() && !hidden;
         presentation.clock().set_hidden(hidden);
+        if shown_again {
+            // A withdrawal of its surface from here on is a new one, ridden out at the display
+            // rate once any dropped-frame wait already running ends (ADR-0335 §2).
+            presentation.clear_not_shown_streak();
+        }
         presentation.sync_haptics_visibility();
         if !hidden && !presentation.clock().demand_mask().is_empty() {
             self.wake_frame();
