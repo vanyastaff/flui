@@ -221,13 +221,13 @@ accessed from multiple threads ([tauri-apps/tauri@9318ab84b8 crates/tauri-utils/
 ### 6. The linked set comes from `cargo metadata`
 
 `flui-cli` finds the capability crates an application links by reading `cargo metadata`, which
-lists every resolved package with its `[package.metadata]`, transitive dependencies included.
-Which of those packages a build links, and with which features, is
-[ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) §3. It does not use `DEP_*`
-build-script variables, which reach only a direct
+lists every resolved package with its `[package.metadata]` and its enabled features, transitive
+dependencies included. It does not use `DEP_*` build-script variables, which reach only a direct
 dependent, and no capability crate patches a manifest from a build script. `links` is for a crate
 that exports a global native symbol; a capability crate that carries its state in the native
-object (ADR-0152) exports none and needs neither `links` nor a `build.rs`.
+object (ADR-0152) exports none and needs neither `links` nor a `build.rs`. The crates of the
+linked set and their features are read as
+[ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) §3 states.
 
 ### 7. Declarations are strict, feature-gated Cargo metadata
 

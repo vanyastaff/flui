@@ -66,24 +66,36 @@ One entry, `Declarations::collect(Build, targets)`, serves the Android, iOS, mac
 writers, the one-instance check and `flui doctor`. A `Build` is a directory, a `Selection` and
 the features the build turns on. The selection is what the build compiles: a named member, an
 example of one (which links its package's dev-dependencies), or cargo's default for the
-directory, which is the package there and at a workspace's root its default members, whether the
-root is virtual or a package itself (`a_run_reads_the_package_cargo_runs`). A packager reads the
-member its build compiled (`BuildArtifacts::package`), not the member's siblings
+directory, which is the package there and at a workspace's root its default member, whether the
+root is virtual or a package itself (`a_run_reads_the_package_cargo_runs`). A build compiles one
+application: the default selection at a root with several default members fails naming them,
+because one application's manifests do not join another's declarations, and the package built
+stays the application when a crate of its build depends on it
+(`only_the_application_declares_the_links_it_opens`). A packager reads the member its build
+compiled (`BuildArtifacts::package`), not the member's siblings
 (`a_desktop_entry_registers_what_the_built_member_opens`,
 `an_ios_bundle_reads_the_declarations_of_the_built_member`). Android builds `cargo ndk build
---lib` in the project's directory and `flui run` runs `cargo run` there, both without naming a
-package, so both read the default selection.
+--lib` in the project's directory without naming a package, so it reads the default selection.
+`flui run` reads the package whose binary `cargo run` runs, selected as `flui build` selects a
+desktop binary, with the features the run builds with, which one function gives both the cargo
+command and the check (`a_desktop_run_checks_what_it_builds`).
 
-A crate is its `PackageId` from end to end. Cargo is asked for the compiled packages by id, so a
+A crate is its `PackageId` from end to end. Cargo is asked for the compiled package by id, so a
 dependency that carries the application's name is not mistaken for it
-(`a_dependency_may_share_the_applications_name`). Each line of the listing resolves to the one
-package of the graph it names, by its source where two packages share a name and a version, and
-a listing that names no package for a line, or leaves out a compiled package, fails the build
-instead of producing a smaller manifest (`a_listing_reads_back_as_each_crates_features`).
+(`a_dependency_may_share_the_applications_name`). The listing is read with its depths: each line
+resolves among the dependencies of the crate it is listed under, by name and version, and where
+that crate depends on two packages of one name and version, by the source the package's id names
+(a git reference encoded as cargo prints it, a sparse index with its `sparse+`). A registry cargo
+lists by its configured name stands for any registry's crate there, which only the parent tells
+apart. A line that names no package, or a listing that leaves out the compiled package, fails the
+build instead of producing a smaller manifest (`a_listing_reads_back_as_each_crates_features`,
+`a_fork_on_an_encoded_branch_keeps_its_features`).
 
-`flui add` prints what the added crate declares for every platform the application builds for:
-it reads the same listing for every target, so a feature only the Android build turns on counts
-on any host, and a feature only the application's tests turn on does not
+`flui add` prints what the added crate declares for each platform whose manifests the build
+writes, from that platform's build on any host: the Android permissions of the Android build (a
+feature only it turns on included) and the Apple accessed APIs of the iOS build, never what a
+feature only another platform's build or the application's tests turn on. It finds the crate by
+the application's dependency edge, or the facade's, not by its name
 (`add_links_a_capability_and_shows_its_registration`).
 
 The table is strict: an unknown key, a schema newer than the CLI reads, a feature the crate lacks

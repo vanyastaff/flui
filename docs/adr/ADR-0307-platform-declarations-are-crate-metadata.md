@@ -149,12 +149,15 @@ For each target it builds, the CLI reads two things in the application's directo
 --target <triple>` over normal edges, without procedural macros, lists the crates the artifact
 links and the features the build enables for each, resolved as `cargo build` resolves them, for
 the member the build compiles or for what cargo builds there by default (the package of the
-directory, or at a workspace's root its default members). `cargo metadata --filter-platform
-<triple>` gives each crate's table and the edges between the crates. A crate is one package id
-throughout: cargo is asked for the packages the build compiles by their ids, and each line of
-the listing is matched to the one package it names, by its source where two packages share a
-name and a version. The CLI takes every linked crate's table, plus the parts of the features the
-build enables for it.
+directory, or at a workspace's root its default member). A root whose default members are several
+selects no application: one application's manifests do not join another's declarations, so such a
+build names its package. The package a build compiles is the application, and every other crate of
+its build a dependency, even where one depends on it. `cargo metadata --filter-platform <triple>`
+gives each crate's table and the edges between the crates. A crate is one package id throughout:
+cargo is asked for the package the build compiles by its id, and each line of the listing is
+matched among the dependencies of the crate it is listed under, by the source its package id
+names where that crate depends on two packages of one name and version. The CLI takes every
+linked crate's table, plus the parts of the features the build enables for it.
 
 What the artifact does not link contributes nothing: a dependency only another target links, a
 dev-dependency and a feature only one turns on, a build script's dependency, a procedural macro
@@ -272,7 +275,10 @@ the facade, or for a name the facade does not carry and the application already 
 a crate name, added with `cargo add` from the FLUI checkout the application's other FLUI
 dependencies come from when that checkout has it. It then reads the linked crate's table and
 prints the registration line, `.plugin(flui::services::system::SystemPlugin::default())`, or
-`flui_system::…` without the facade, with what the crate declares for the manifests. It does not
+`flui_system::…` without the facade, with what the crate declares for each platform's manifests,
+read from that platform's build whatever the host: the Android permissions of the application's
+Android build and the Apple accessed APIs of its iOS build. The crate is the one the application's
+dependency edge (or the facade's) resolves to. It does not
 edit the application's source. A change whose crate states no plugin is undone, `Cargo.lock`
 included. Linking a linked capability changes nothing. An unknown name fails with the facade's
 capability features. `--json` emits one `add.done` event. `name`, which ADR-0154 §7 sketched as
@@ -299,9 +305,16 @@ a key arrives with its first consumer.
   a crate turns on, none of which declares anything; an example's build, for which its package's
   dev-dependencies count). `declarations::linked::tests::a_listing_reads_back_as_each_crates_features`
   (the listing of `cargo tree` as the packages and their features: one name and version from a
-  registry, a fork and a directory kept apart, a listing without a compiled package refused);
-  `declarations::tests::a_run_reads_the_package_cargo_runs` (the default members at a workspace's
+  registry, a fork on an encoded branch and a directory kept apart, registries listed by name or
+  by index, a listing without the compiled package refused) and
+  `declarations::linked::tests::a_fork_on_an_encoded_branch_keeps_its_features` (cargo's own
+  listing and graph of a git dependency on `fix/a+b`);
+  `declarations::tests::a_run_reads_the_package_cargo_runs` (the default member at a workspace's
   root, virtual or a package itself, and the package of the directory inside a member);
+  `declarations::tests::only_the_application_declares_the_links_it_opens` (the package built is
+  the application when an example's dev-dependency depends on it; several default members are
+  refused by name); `commands::run::tests::a_desktop_run_checks_what_it_builds` (`flui run` reads
+  the package `cargo run` builds, with the features it builds with);
   `declarations::tests::a_dependency_may_share_the_applications_name`;
   `build::tests::desktop_artifacts::a_desktop_entry_registers_what_the_built_member_opens` and
   `build::tests::ios_artifacts::an_ios_bundle_reads_the_declarations_of_the_built_member` (a

@@ -5447,14 +5447,17 @@ graph LR
   этой сборки. `declarations/linked.rs` (`LinkedCrates`) берёт крейты и фичи из
   `cargo tree --target <triple> -e normal,no-proc-macro` (для примера ещё `dev`), таблицы и
   рёбра — из `cargo metadata --filter-platform`. Крейт всюду — `PackageId`: cargo спрашивается
-  по id собираемых пакетов, строка листинга сопоставляется с одним пакетом графа (по источнику,
-  когда имя и версия есть у нескольких), листинг без собираемого пакета — ошибка. Один вход
+  по id собираемого пакета, строка листинга (с глубиной) сопоставляется среди зависимостей
+  крейта над ней, по источнику из id пакета, когда у него два пакета одного имени и версии;
+  листинг без собираемого пакета — ошибка. Один вход
   `Declarations::collect(Build, targets)`; `Selection` называет, что собирает сборка: выбор
-  cargo по умолчанию (пакет каталога, в корне workspace — его default-members, будь корень
-  виртуальным или пакетом), пакет или пример. Через него читают манифест Android, `Info.plist` и
-  privacy manifest iOS, бандл macOS, desktop entry Linux, проверка одного экземпляра и
-  `flui doctor`; упаковщик читает пакет, который собрал (`BuildArtifacts::package`). `flui add`
-  показывает декларации крейта для всех платформ приложения. У Windows писателя манифеста в CLI
+  cargo по умолчанию (пакет каталога, в корне workspace — его default-member, будь корень
+  виртуальным или пакетом; несколько default-members — отказ с их именами), пакет или пример.
+  Собираемый пакет — приложение, остальные крейты сборки — зависимости. Через него читают
+  манифест Android, `Info.plist` и privacy manifest iOS, бандл macOS, desktop entry Linux и
+  `flui doctor`; упаковщик читает пакет, который собрал (`BuildArtifacts::package`); `flui run`
+  читает пакет, который запускает `cargo run`, с фичами запуска. `flui add` находит крейт по
+  ребру приложения и показывает декларации каждой платформы из её сборки. У Windows писателя манифеста в CLI
   нет: незапакованный запуск регистрирует то, что `#[flui::main]` прочитал под `cfg!`. R5.12,
   R5.2, D18 и строка LY56 приведены к ADR-0307, остаток ADR-0154 §7 записан в `docs/gaps.md`,
   строка паритета о манифестах песочницы исправлена.
@@ -5462,16 +5465,21 @@ graph LR
   (семь разрешений вместо двух: dev-зависимость и её фича, зависимость build-скрипта,
   процедурный макрос и фича его копии); `the_manifest_declares_what_the_linked_crates_need`
   (`INTERNET` в манифесте фасада без `http`); `only_the_application_declares_the_links_it_opens`
-  (схема dev-зависимости в сборке тестового крейта); `a_listing_reads_back_as_each_crates_features`
+  (схема dev-зависимости в сборке тестового крейта; пример отказан, когда его dev-зависимость
+  зависит от пакета); `a_listing_reads_back_as_each_crates_features`
   (фичи реестра, форка и каталога одного имени и версии слиты; листинг без собираемого пакета
-  принят); `a_run_reads_the_package_cargo_runs` (в корне-пакете прочитан корень, а не
-  default-member); `a_dependency_may_share_the_applications_name` («specification `notes` is
+  принят; ветка `fix%2Fa%2Bb` не найдена; близнецы двух реестров по имени — «several»; sparse
+  по индексу — «none»); `a_fork_on_an_encoded_branch_keeps_its_features` (на настоящих cargo и
+  git: «names none of the 2»); `a_run_reads_the_package_cargo_runs` (в корне-пакете прочитан корень, а не
+  default-member); `a_desktop_run_checks_what_it_builds` (в корне с двумя default-members отказ
+  вместо проверки `app`; без фичи `flui/driver` отказ); `a_dependency_may_share_the_applications_name` («specification `notes` is
   ambiguous»); `a_desktop_entry_registers_what_the_built_member_opens` (в записи схема соседнего
   пакета); `an_ios_bundle_reads_the_declarations_of_the_built_member` (отказ по таблице соседнего
   пакета); `add_links_a_capability_and_shows_its_registration` (`FOREGROUND_SERVICE` от фичи
-  тестов; без `READ_PHONE_STATE` от фичи Android-сборки).
+  тестов; без `READ_PHONE_STATE` от фичи Android-сборки; `CAMERA` от фичи iOS-сборки в
+  Android; старый `flui-sys` того же имени вместо крейта фасада).
   Проверки на Windows: clippy `-p flui-cli --all-targets -D warnings`, `xtask checks`, nextest
-  `-p flui-cli` — 143 из 146; остальные три, `agent::browser`, падают и на `main` («named pipes do not
+  `-p flui-cli` — все, кроме трёх `agent::browser`, которые падают и на `main` («named pipes do not
   support I/O timeouts»).
   Не запущено: сборки Android, iOS и macOS (нет SDK, устройства и Mac; `stage_macos_app` на этом
   хосте не компилируется); Linux и wasm32 — на CI.
