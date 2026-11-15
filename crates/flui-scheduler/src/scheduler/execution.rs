@@ -417,7 +417,7 @@ impl OwnerFrame {
                 recovery.attempt(|| scheduler.abort_frame_impl());
                 // The abort skipped the post-frame dispatch that settles each segment, so the
                 // segment a panicking pipeline completed or left running would refuse the next
-                // one; the callbacks it owes keep their completion demand.
+                // one; a scope whose callbacks still wait is given completion demand.
                 recovery.attempt(|| self.settle_aborted_segments());
             }
             // Begin can fail before installing a FrameTiming (for example on

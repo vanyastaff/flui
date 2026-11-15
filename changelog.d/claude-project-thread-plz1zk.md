@@ -68,6 +68,9 @@
   tree resets it.
 - **`flui-scheduler`**: a host frame whose pipeline panics after a presentation completed its
   segment, or inside it, no longer leaves that segment active. The completed segment's scope
-  returns to idle and one left running is suspended, and a scope whose callbacks still wait keeps
-  its completion demand, so the presentation's next segment runs them. Before, the runtime's next
+  returns to idle and one left running is suspended, and a scope whose callbacks still wait is
+  given completion demand, so the presentation's next segment runs them. Before, the runtime's next
   frame panicked on the retained segment and the application stopped drawing.
+- **`flui-runtime`**: a presentation waiting out a failed frame's backoff no longer asks for a
+  frame at each owner turn for a post-frame callback it accepted: the callback waits for the
+  retry, which runs it.

@@ -282,8 +282,7 @@ issue #1162 shaped it this way.
 **The `frame_scheduled` contract for a catcher:** `handle_begin_frame`
 cleared `frame_scheduled` before any callback ran. Abort cleanup re-arms it
 only for work accepted behind the failure (one-shot callbacks, microtasks,
-tasks), and a failed
-post-frame batch only for its queued tail: that work
+tasks), and a failed post-frame batch only for its queued tail: that work
 was promised a frame and nothing else asks for one once the caller resumes
 the panic. The failed entry was already removed, so the request cannot
 re-drive it. It does not re-arm for the failure itself, which would hot-loop

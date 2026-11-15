@@ -764,8 +764,8 @@ impl PresentationFrameScope {
     /// Reissue retained successor demand after the host clears its wake latch.
     /// The runtime calls this only for an eligible presentation; hidden or
     /// withdrawn geometry retains its debt without forcing an idle busy loop.
-    /// A segment an aborted frame suspended has published geometry and its
-    /// demand, so its presentation is admitted to resume it.
+    /// A segment an aborted frame suspended has its demand, so its
+    /// presentation is admitted to resume it once its layout is published.
     pub fn rearm_completion_demand(&self) {
         if self.has_completion_demand()
             && let Some(scheduler) = self.scheduler.upgrade()
