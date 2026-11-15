@@ -252,6 +252,18 @@ fn the_first_state_is_written_at_once() {
     assert_eq!(fixture.stored_offset(), Some(Point::new(100.0, 80.0)));
 }
 
+/// A window whose window system reported no rectangle yet (its first reads
+/// were refused) and that reads maximized has no place to remember: nothing
+/// is written, never a 1x1 placement.
+fn a_window_with_no_rectangle_writes_no_placement() {
+    let fixture = Fixture::new();
+    let nowhere = WindowState::new(WindowGeometry::EMPTY, flui_platform::WindowExtent::ZERO)
+        .with_mode(WindowMode::Maximized);
+    fixture.observe(&nowhere, Duration::ZERO);
+    fixture.recorder.tick(fixture.after(WRITE_INTERVAL * 2));
+    assert_eq!(fixture.storage.contents(&NAME), None);
+}
+
 fn changes_inside_the_interval_are_held_and_written_when_it_is_over() {
     let fixture = Fixture::new();
     fixture.observe(&at(100.0, 80.0), Duration::ZERO);
@@ -565,6 +577,10 @@ fn placement_recorder() {
             (
                 "the_first_state_is_written_at_once",
                 the_first_state_is_written_at_once as fn(),
+            ),
+            (
+                "a_window_with_no_rectangle_writes_no_placement",
+                a_window_with_no_rectangle_writes_no_placement as fn(),
             ),
             (
                 "changes_inside_the_interval_are_held_and_written_when_it_is_over",

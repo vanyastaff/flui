@@ -516,6 +516,19 @@ fn from_state_refuses_a_window_with_no_area() {
         ),
         None
     );
+    // Away from normal with no rectangle to return to, which a window whose
+    // window system reported none yet publishes: no 1x1 placement either.
+    for mode in [WindowMode::Maximized, WindowMode::Fullscreen] {
+        assert_eq!(
+            WindowPlacement::from_state(
+                &WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO).with_mode(mode),
+                &DESK.displays,
+                false
+            ),
+            None,
+            "{mode:?}"
+        );
+    }
 }
 
 #[test]

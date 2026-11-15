@@ -1103,13 +1103,15 @@ trait depends on `flui-platform` instead.
   Every backend keeps its last snapshot in a `window::state::WindowStateCell`
   (built like `DisplaySource`): an OS event marks the cell stale, the next read
   samples the OS with no lock held, and a sample equal to the published one
-  keeps the revision. A read whose numbers describe no window (a rectangle
-  over a scale of zero, a NaN the window system sent) builds no sample, since
-  the snapshot's geometry types hold no such number: the cell keeps the
-  published snapshot, says so once, and reads again at the next invalidation
-  (`a_read_that_describes_no_window_publishes_nothing`; the conformance check
-  `a_report_that_describes_no_window_publishes_nothing` where a fixture can
-  make its window system report one). The Win32 window keeps a DPI that is
+  keeps the revision. A host hands the cell a `Sample`: the facts it read and
+  its geometry as a `Result`. What a refused geometry keeps and what the read
+  still publishes is the contract's rule, stated in `flui-platform`'s
+  ARCHITECTURE.md ("A snapshot holds no number that is not a window's"); the
+  cell applies it at a window's opening and after, says the refusal once per
+  run of them in the window's turn, and reads again at the next invalidation
+  (`a_refused_geometry_keeps_the_published_one_and_publishes_the_other_facts`;
+  the conformance check `a_report_that_describes_no_window_publishes_nothing`
+  where a fixture can make its window system report one). The Win32 window keeps a DPI that is
   never zero (`WindowScale`), and a `WM_DPICHANGED` naming zero changes
   nothing. The handler's `state_changed` is raised after the publish, outside
   the cell, only when the revision grew, and by one of two routes. A change
@@ -1118,8 +1120,9 @@ trait depends on `flui-platform` instead.
   published (`PlatformWindow::state` finding the cell stale: after a system
   wake, or on UIKit, which rereads on every call) is queued with
   `WindowDelivery::state_changed_after_read` and delivered at the owner's
-  next turn, or ahead of the window's next delivery where the loop gives the
-  window no turn of its own (UIKit, the page): the reader may hold a borrow
+  next turn, which every host asks its loop for (a bare `HeadlessPlatform`
+  with no owner loop delivers it ahead of the window's next delivery, as
+  `docs/gaps.md` records): the reader may hold a borrow
   the handler takes again, and the handler never runs from inside a read
   (`a_revision_a_read_published_is_announced_at_the_owners_turn`). The
   headless window's read changes nothing either: a snapshot its simulated

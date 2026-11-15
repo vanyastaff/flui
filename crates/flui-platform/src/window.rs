@@ -110,7 +110,7 @@ pub struct WindowOptions {
     pub frame: WindowFrame,
     /// The smallest content size, if limited. A limit that encloses no area,
     /// or a minimum above [`max_size`](Self::max_size), refuses the open
-    /// ([`constraints`](Self::constraints)).
+    /// ([`geometry`](Self::geometry)).
     pub min_size: Option<WindowExtent>,
     /// The largest content size, if limited.
     pub max_size: Option<WindowExtent>,

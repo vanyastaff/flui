@@ -84,8 +84,21 @@ this one path (ADR-0151 §9).
   the content size is a `WindowExtent`, and so is each bound of
   `SizeConstraints`. A window system's report can be numbers no window has (a
   size over a scale of zero, a NaN a compositor sent); a host builds the
-  values with `try_new`, and the report it cannot build them from is no state
-  change. A NaN in a snapshot would also never equal itself, so every read
+  values with `try_new`, and a report it cannot build them from costs the
+  snapshot its geometry and nothing else (`flui-native`'s window state cell
+  holds the rule for every host):
+  - the outer rectangle, the content extent and the drawable metrics stay the
+    published ones (a window's first snapshot has an empty rectangle and no
+    metrics);
+  - `normal_geometry` follows the mode the report gives, as the field's own
+    rule says: none for a normal window; the published outer rectangle for a
+    window that left the normal mode since, when it encloses an area, none
+    otherwise; the published one for a window already away from it;
+  - every other fact of the report (focus, activation, visibility, mode,
+    occlusion, execution state, a close, the capabilities) is published as
+    from any report.
+
+  A NaN in a snapshot would also never equal itself, so every read
   would publish a revision (`window_geometry` table,
   `a_refusal_equals_itself`). What a command asks of its numbers
   (a positive size, a minimum not above the maximum) stays admission's

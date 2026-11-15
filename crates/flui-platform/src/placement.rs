@@ -156,6 +156,11 @@ impl WindowPlacement {
         } else {
             state.normal_geometry.unwrap_or(state.outer)
         };
+        // A rectangle with no area is no place a window was: a window whose
+        // window system has reported none yet has nothing to remember.
+        if normal.size().width <= 0.0 || normal.size().height <= 0.0 {
+            return None;
+        }
         let frame_width = (state.outer.size().width - state.content_size.width()).max(0.0);
         let frame_height = (state.outer.size().height - state.content_size.height()).max(0.0);
         let size = if state.mode == WindowMode::Normal {

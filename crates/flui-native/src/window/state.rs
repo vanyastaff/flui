@@ -172,7 +172,9 @@ impl From<WindowState> for Sample {
 ///   window in another mode than normal returns to, whatever mode the read
 ///   reports: none for a normal window; the published outer rectangle for a
 ///   window that left the normal mode since, since that is where it was in
-///   it; the published one for a window that was already away from it.
+///   it (none when that rectangle encloses no area: a window whose first
+///   read was refused has nowhere known to return to); the published one
+///   for a window that was already away from it.
 fn on_published_geometry(mut sample: WindowState, published: Option<&WindowState>) -> WindowState {
     sample.metrics = None;
     let Some(published) = published else {
@@ -185,7 +187,12 @@ fn on_published_geometry(mut sample: WindowState, published: Option<&WindowState
     sample.content_size = published.content_size;
     sample.normal_geometry = match (published.mode, sample.mode) {
         (_, WindowMode::Normal) => None,
-        (WindowMode::Normal, _) => Some(published.outer),
+        // A window whose published rectangle encloses no area (its first read
+        // was refused too) has nowhere known to return to.
+        (WindowMode::Normal, _) => {
+            let size = published.outer.size();
+            (size.width > 0.0 && size.height > 0.0).then_some(published.outer)
+        }
         _ => published.normal_geometry,
     };
     sample
@@ -833,6 +840,9 @@ mod tests {
     /// The drawable metrics go with the geometry: a refused read whose own
     /// metrics are drawable (a scale its window system reported apart from
     /// the rectangle) publishes none of them over the published geometry.
+    /// The rule predates the cell's shared refused-geometry function; this
+    /// row holds it through that function, and fails if it publishes the
+    /// read's metrics.
     #[test]
     fn a_refused_geometry_keeps_the_published_metrics() {
         let cell = WindowStateCell::new(window(1.0));
@@ -858,6 +868,23 @@ mod tests {
         let opened = cell.last.lock().state.clone();
         assert_eq!(opened.content_size, WindowExtent::ZERO);
         assert_eq!(opened.metrics, None);
+    }
+
+    /// A window whose first read was refused has no rectangle to return to:
+    /// a later refused read that reports it maximized publishes none, never
+    /// the empty rectangle it opened with.
+    #[test]
+    fn a_window_that_never_had_a_rectangle_returns_nowhere() {
+        use flui_platform::WindowMode;
+
+        let cell = WindowStateCell::open(state(f64::NAN));
+        cell.invalidate();
+        let maximized = cell
+            .state_with(|| read_as(f64::NAN, |state| state.with_mode(WindowMode::Maximized)))
+            .state;
+        assert_eq!(maximized.mode, WindowMode::Maximized);
+        assert_eq!(maximized.outer, WindowGeometry::EMPTY);
+        assert_eq!(maximized.normal_geometry, None);
     }
 
     /// On a refused read the rectangle a window returns to stays what the
