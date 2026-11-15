@@ -167,11 +167,27 @@ headless Weston (`weston --backend=headless --socket=…`) and sets
 `wayland_input` harness, the Wayland host's input from a real seat, starts an
 Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
 it skips itself without `Xvfb` or `weston`, and fails then under
-`FLUI_REQUIRE_WAYLAND`. Weston
-13 has no `xdg_activation_v1`, so there
-`an_activation_asks_the_compositor_with_a_token` checks only the refusal; the
-token's whole path (asked, answered, handed back, the window left behind its
-cover) runs only against a sway started by hand. On Windows the Win32 window
+`FLUI_REQUIRE_WAYLAND`. The cases whose subject a compositor may not offer
+are `wayland_window::optional`: a protocol beside xdg-shell (`xdg-decoration`,
+`wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`), a seat, a second
+output. On a compositor that lacks one, a case says in its output what it
+skipped and what it checked instead, and the Wayland run shows each case's
+output at its end. Weston 13 lacks all of them, so on it
+`an_activation_asks_the_compositor_with_a_token` checks only the refusal, and
+`a_window_draws_at_the_compositors_fractional_scale` only a whole scale. CI
+therefore runs those cases a second time under a headless sway, through
+`cargo xtask wayland-optional`, which sets
+`FLUI_REQUIRE_COMPOSITOR=fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign`:
+a case that finds one of the listed subjects missing fails. Locally, start a
+sway with the two lines of the CI step's config (`output * scale 1.5`, and
+`for_window [title="a floating frame"] floating enable`) under
+`WLR_BACKENDS=headless WLR_RENDERER=pixman`, and run the task with
+`WAYLAND_DISPLAY` naming its socket. The second-output case
+(`a_window_moved_to_another_output_names_its_display`) runs in neither: it
+needs a Weston on its X11 backend with `--output-count=2`, and sway leaves a
+window on the output it went fullscreen on. Sway tiles its windows and
+carries out no maximize, so the rest of `wayland_window::` runs on Weston
+only. On Windows the Win32 window
 tests and the contract's share the desktop's foreground, and on macOS the
 AppKit window cases share it and its Spaces: each set runs one at a time
 (test group `desktop-foreground`).
@@ -1116,6 +1132,7 @@ cargo xtask deps --strict --only policy                       # deps job: cargo-
 cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the wide and full lanes; advisories.yml runs it daily on main
 cargo xtask doc-strict                                        # doc job
 cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-native under Xvfb (FLUI_HEADLESS=1), then its Wayland tests
+cargo xtask wayland-optional                                  # same job: the Wayland cases Weston cannot run, under the headless sway the step starts
 cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope reaches
 cargo xtask test --nested --nested-group native               # test-nested: generated projects and facade consumers
 cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites (CI runs each shard alone: --trybuild-shard facade, core or view)
@@ -1262,7 +1279,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
 | `clippy` | `cargo xtask lint` (in `gate`), then, on main only, `cargo xtask native-features` | `native-features` lints flui-native with default features off, once each for none, `x11`, `wayland` and `testing`, with and without `--all-targets`: part of `feature-matrix`; from a Windows or macOS checkout pass `--target x86_64-unknown-linux-gnu` |
-| `test` | `cargo xtask test --fast`, `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl` (main only), then `cargo xtask build-all-targets` | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
+| `test` | `cargo xtask test --fast`, `cargo xtask wayland-optional` (under a headless sway the step starts), `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl` (main only), then `cargo xtask build-all-targets` | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
 | `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild --trybuild-shard <shard>` (`facade`, `core` or `view`) | compile-fail suites in three shards on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; each shard builds only its own test targets with the whole run's features; without `--trybuild-shard` the command runs every suite, and plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
