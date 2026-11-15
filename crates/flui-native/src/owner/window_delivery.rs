@@ -152,11 +152,25 @@ struct DispatchState {
 struct Drain<'a> {
     state: &'a Mutex<DispatchState>,
     active: bool,
+    /// How many deliveries are still queued ahead of the one that began this
+    /// drain: other threads raised them first, and they are delivered first.
+    /// `None` once that delivery was taken, and for a drain that began with
+    /// none of its own.
+    ahead_of_own: Option<usize>,
+}
+
+/// A delivery taken off the FIFO.
+struct Taken {
+    delivery: Delivery,
+    /// It is the delivery that began the drain, whose caller waits for its
+    /// answer.
+    began_drain: bool,
 }
 
 impl<'a> Drain<'a> {
     fn begin(state: &'a Mutex<DispatchState>, delivery: Delivery) -> Option<Self> {
         let mut guard = state.lock();
+        let ahead = guard.pending.len();
         guard.pending.push_back(delivery);
         if guard.dispatching {
             return None;
@@ -165,6 +179,7 @@ impl<'a> Drain<'a> {
         Some(Self {
             state,
             active: true,
+            ahead_of_own: Some(ahead),
         })
     }
 
@@ -178,13 +193,19 @@ impl<'a> Drain<'a> {
         Some(Self {
             state,
             active: true,
+            ahead_of_own: None,
         })
     }
 
-    fn next(&mut self) -> Option<Delivery> {
+    fn next(&mut self) -> Option<Taken> {
         let mut state = self.state.lock();
         if let Some(delivery) = state.pending.pop_front() {
-            return Some(delivery);
+            let began_drain = self.ahead_of_own == Some(0);
+            self.ahead_of_own = self.ahead_of_own.and_then(|ahead| ahead.checked_sub(1));
+            return Some(Taken {
+                delivery,
+                began_drain,
+            });
         }
         state.dispatching = false;
         self.active = false;
@@ -479,14 +500,14 @@ impl WindowDelivery {
     }
 
     /// Queue `delivery` and, unless a drain already runs, drain the FIFO.
-    /// Returns the result of the first input the drain delivered.
-    fn drain(&self, delivery: Delivery) -> Option<DispatchEventResult> {
+    fn drain(&self, delivery: Delivery) {
         if !self.handler.is_owner_thread() {
             self.queue_for_owner(delivery);
-            return None;
+            return;
         }
-        let drain = Drain::begin(&self.dispatch, delivery)?;
-        self.run(drain)
+        if let Some(drain) = Drain::begin(&self.dispatch, delivery) {
+            let _ = self.run(drain);
+        }
     }
 
     /// Keep a delivery raised on another thread (a command applied from a
@@ -538,19 +559,26 @@ impl WindowDelivery {
         }
     }
 
+    /// Run `drain` to its end. Returns the handler's answer to the delivery
+    /// that began it, when that was an input: what other threads queued ahead
+    /// is delivered first, and an input among it was answered where it was
+    /// raised, so its answer is not this caller's.
     fn run(&self, mut drain: Drain<'_>) -> Option<DispatchEventResult> {
         let _after = AfterRun(self.after_run);
-        let mut input_result = None;
+        let mut own_answer = None;
         let failure = loop {
-            let Some(delivery) = drain.next() else {
-                return input_result;
+            let Some(taken) = drain.next() else {
+                return own_answer;
             };
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: a handler's panic stops the drain but the queued tail is delivered"
             )]
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.deliver(delivery, &mut input_result);
+                let answer = self.deliver(taken.delivery);
+                if taken.began_drain {
+                    own_answer = answer;
+                }
             }));
             if let Err(failure) = outcome {
                 break failure;
@@ -559,25 +587,27 @@ impl WindowDelivery {
         // Every delivery the platform queued was accepted: the tail is still
         // delivered, each in its own containment, and the first panic resumes
         // afterwards. A later panic does not replace it.
-        while let Some(delivery) = drain.next() {
-            contain_owner_callback(|| self.deliver(delivery, &mut None));
+        while let Some(taken) = drain.next() {
+            contain_owner_callback(|| {
+                let _ = self.deliver(taken.delivery);
+            });
         }
         std::panic::resume_unwind(failure)
     }
 
-    /// One delivery of the window's FIFO; an input records its result in
-    /// `input_result`.
-    fn deliver(&self, delivery: Delivery, input_result: &mut Option<DispatchEventResult>) {
+    /// One delivery of the window's FIFO. An input the handler was asked
+    /// returns its answer, the default when the window let go of its handler.
+    fn deliver(&self, delivery: Delivery) -> Option<DispatchEventResult> {
         if let Delivery::Clear(retired) = delivery {
             self.clear_now();
             if let Some(retired) = retired {
                 contain_owner_callback(retired);
             }
-            return;
+            return None;
         }
         if self.closed.load(Ordering::SeqCst) {
             // `closed` is the last obligation.
-            return;
+            return None;
         }
         match delivery {
             Delivery::Snapshot => {
@@ -589,18 +619,12 @@ impl WindowDelivery {
                 let snapshot_failure = self.deliver_snapshot_if_due();
                 let called = call(&self.handler(), |handler| handler.input(event));
                 let Some(first) = snapshot_failure else {
-                    let result = called.or_resume(DispatchEventResult::default());
-                    input_result.get_or_insert(result);
-                    return;
+                    return Some(called.or_resume(DispatchEventResult::default()));
                 };
                 // The snapshot's panic came first: the input still had its
                 // delivery, and a panic of its own does not replace that one.
-                match called {
-                    Called::Returned(result) => {
-                        input_result.get_or_insert(result);
-                    }
-                    Called::Panicked(second) => second.contain("a window handler's input"),
-                    Called::Vacant => {}
+                if let Called::Panicked(second) = called {
+                    second.contain("a window handler's input");
                 }
                 first.resume();
             }
@@ -639,7 +663,7 @@ impl WindowDelivery {
                     if later.is_none() {
                         *self.close_answer.lock() = Some(CloseDecision::KeepOpen);
                     }
-                    return;
+                    return None;
                 }
                 let decision = call(&self.handler(), |handler| handler.close_requested())
                     .or_resume(CloseDecision::Close);
@@ -660,6 +684,7 @@ impl WindowDelivery {
             .or_resume(()),
             Delivery::Clear(_) => unreachable!("BUG: a clear was delivered above"),
         }
+        None
     }
 
     /// Deliver the capability snapshot when the handler has not had it. Its
@@ -685,7 +710,8 @@ impl WindowDelivery {
 
     /// Deliver an input event.
     ///
-    /// The outer drain returns the handler's result for its own event. A
+    /// The outer drain returns the handler's result for its own event,
+    /// whatever other threads queued ahead of it. A
     /// nested one is queued, never dropped, and answered at once because its
     /// result is not known until the running method returns (ADR-0207 §7): a
     /// key gets [`DispatchEventResult::DEFERRED_UNHANDLED`], so its platform
@@ -824,6 +850,8 @@ impl WindowDelivery {
             Drain {
                 state: &self.dispatch,
                 active: true,
+                // The request's answer is left in `close_answer`.
+                ahead_of_own: None,
             }
         };
         let _ = self.run(drain);
