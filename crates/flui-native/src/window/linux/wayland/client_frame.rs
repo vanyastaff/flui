@@ -50,14 +50,15 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::input_regions::ResizeEdge;
 
 use super::configure::{TiledEdges, ToplevelStates, WmCapabilities};
-use super::scale::{BufferScale, MAX_CONTENT_EXTENT};
+use super::scale::BufferScale;
 use crate::input::regions::ProjectedInputRegions;
 use crate::input::regions::presses::{ChromePress, ChromePresses, PressButton, device_point};
 use crate::owner::linux::wayland::user_input::MAX_SEATS;
+use crate::window::state::device_extent;
 
 /// The title bar's height, in logical pixels.
 pub(crate) const HEADER: f64 = 37.0;
@@ -78,11 +79,11 @@ const RADIUS: f64 = 8.0;
 /// still count as a double press, in milliseconds: GTK's default.
 pub(crate) const DOUBLE_CLICK: u32 = 400;
 /// The widest or tallest a frame surface is drawn, in device pixels: the
-/// widest a window's content is ([`MAX_CONTENT_EXTENT`]), so every window
+/// largest surface a renderer draws ([`MAX_SURFACE_EXTENT`](flui_platform::MAX_SURFACE_EXTENT)), so every window
 /// that publishes metrics has its title bar. Past it a compositor's
 /// configure asks for more memory than any screen shows, and the frame is
 /// not drawn.
-pub(crate) const MAX_EXTENT: u32 = MAX_CONTENT_EXTENT.unsigned_abs();
+pub(crate) const MAX_EXTENT: u32 = flui_platform::MAX_SURFACE_EXTENT;
 /// The most device pixels a frame surface is drawn with: a title bar
 /// [`MAX_EXTENT`] wide and [`HEADER`] tall at [`BufferScale::MAX`]. The two
 /// sides' caps alone leave room for a square of a gibibyte, which a narrow
@@ -1281,14 +1282,6 @@ fn segment_distance(px: f64, py: f64, a: (f64, f64), b: (f64, f64)) -> f64 {
     (px - cx).hypot(py - cy)
 }
 
-/// A device extent for `logical` at `scale`: rounded, at least one pixel;
-/// `None` for one that is no size or past [`MAX_EXTENT`].
-pub(crate) fn device_extent(logical: f64, scale: f64) -> Option<u32> {
-    let device = (logical * scale).round();
-    (device.is_finite() && device >= 1.0 && device <= f64::from(MAX_EXTENT))
-        .then(|| channel_index(device))
-}
-
 /// What a title bar is drawn from, beside its frame: the look, the button
 /// hovered and the one held, and the title.
 #[derive(Debug, Clone, Copy)]
@@ -1302,7 +1295,7 @@ pub(crate) struct HeaderLook<'a> {
 /// The title bar of `frame` at `scale`: its background (rounded at the top
 /// corners of a floating window), a line along its foot, its buttons with
 /// their icons, and the title centred between them. `None` where the bar is
-/// not shown or its extent is no size, past [`MAX_EXTENT`] on a side or past
+/// not shown, its extent is no size, or its pixels are past
 /// [`MAX_PIXELS`] in all.
 pub(crate) fn paint_header(
     frame: &Frame,
@@ -1310,10 +1303,10 @@ pub(crate) fn paint_header(
     look: HeaderLook<'_>,
 ) -> Option<Pixels> {
     let rect = frame.rect(Piece::Header)?;
-    let scale = scale.get();
+    let (ratio, scale) = (scale.ratio(), scale.get());
     let mut pixels = Pixels::try_new(
-        device_extent(rect.width, scale)?,
-        device_extent(rect.height, scale)?,
+        device_extent(rect.width, ratio)?,
+        device_extent(rect.height, ratio)?,
     )?;
     let colors = look.look;
     pixels.fill(colors.background());
@@ -1356,7 +1349,7 @@ pub(crate) fn paint_header(
         );
     }
     if let Some(title) = look.title {
-        let room = device_extent(frame.title_room(), scale).unwrap_or(0);
+        let room = device_extent(frame.title_room(), ratio).unwrap_or(0);
         let shown = title.width.min(room);
         if shown > 0 {
             let left = (pixels.width.saturating_sub(shown)) / 2;
@@ -1478,7 +1471,7 @@ pub(crate) fn margin_size(rect: Rect, viewported: bool) -> Option<(u32, u32)> {
     if viewported {
         return Some((1, 1));
     }
-    let within = |logical: f64| device_extent(logical.min(f64::from(MAX_EXTENT)), 1.0);
+    let within = |logical: f64| device_extent(logical, DevicePixelRatio::ONE);
     Some((within(rect.width)?, within(rect.height)?))
 }
 
@@ -1540,7 +1533,7 @@ pub(crate) mod title {
             if text.is_empty() || !(room.is_finite() && room > 0.0) {
                 return None;
             }
-            let scale = scale.get();
+            let (ratio, scale) = (scale.ratio(), scale.get());
             let style = TextStyle::default()
                 .with_font_size(TITLE_SIZE)
                 .with_font_weight(FontWeight::W600);
@@ -1567,8 +1560,8 @@ pub(crate) mod title {
                 })
                 .ok()?;
             let metrics = layout.metrics();
-            let width = device_extent(metrics.max_line_width.min(room), scale)?;
-            let height = device_extent(metrics.height, scale)?;
+            let width = device_extent(metrics.max_line_width.min(room), ratio)?;
+            let height = device_extent(metrics.height, ratio)?;
             let bytes = usize::try_from(u64::from(width) * u64::from(height)).ok()?;
             let mut coverage = vec![0_u8; bytes];
             let shaped = layout.to_shaped(None);

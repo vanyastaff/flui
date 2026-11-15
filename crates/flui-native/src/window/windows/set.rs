@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use windows::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::UpdateWindow,
@@ -34,6 +34,7 @@ use crate::owner::windows::{ClassWindows, WindowsLoop};
 use crate::version::gate::Since;
 use crate::version::gate::windows::WindowsBuild;
 use crate::window::config::WindowConfiguration;
+use crate::window::state::device_extent;
 
 /// The windows of FLUI's class the platform tracks, keyed by HWND, and the
 /// configuration they open with (hotkeys, debouncing, fullscreen behavior).
@@ -510,9 +511,15 @@ pub(crate) fn open_spot(
         .filter(|scale| scale.is_finite() && *scale > 0.0)
         .unwrap_or(system_scale);
     let dpi = ((scale * f64::from(USER_DEFAULT_SCREEN_DPI)).round() as u32).max(1);
+    // The hosts' one extent rule; a side that is no size stays none.
+    let extent = |logical: f64| {
+        DevicePixelRatio::try_new(scale)
+            .and_then(|ratio| device_extent(logical, ratio))
+            .map_or(0, u32::cast_signed)
+    };
     let content = (
-        logical_to_device(opening.content.width(), scale),
-        logical_to_device(opening.content.height(), scale),
+        extent(opening.content.width()),
+        extent(opening.content.height()),
     );
     let outer = outer_of(dpi, content);
     let anchor = target.map_or((0, 0), |display| {

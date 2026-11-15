@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 
 use flui_foundation::geometry::{DevicePixelRatio, Size, WindowMetrics};
+use flui_platform::MAX_SURFACE_EXTENT;
 
 /// The scale a surface's buffer is drawn at: the scale the compositor
 /// named, up to [`Self::MAX`].
@@ -49,6 +50,11 @@ impl BufferScale {
         self.0.get()
     }
 
+    /// The scale as a device pixel ratio.
+    pub(crate) const fn ratio(self) -> DevicePixelRatio {
+        self.0
+    }
+
     /// This scale, lowered where `content` logical pixels drawn at it would
     /// pass [`MAX_CONTENT_EXTENT`] device pixels on a side, so they fit;
     /// this scale where the content is no size.
@@ -66,12 +72,9 @@ impl BufferScale {
 }
 
 /// The widest or tallest a window's content is drawn, in device pixels:
-/// the largest surface the renderer configures. `flui-engine` asks its
-/// device for textures no larger (`renderer.rs`, `required_limits`) and
-/// refuses a surface past it (`WindowSlot::resize`); this crate may not
-/// name the engine, so the number is stated here as well (`docs/gaps.md`,
-/// "Native Linux host").
-pub(crate) const MAX_CONTENT_EXTENT: i32 = 16_384;
+/// the largest surface a renderer draws ([`MAX_SURFACE_EXTENT`]), signed
+/// as window metrics count device pixels.
+pub(crate) const MAX_CONTENT_EXTENT: i32 = MAX_SURFACE_EXTENT.cast_signed();
 
 /// The metrics of a window whose content is `content` logical pixels
 /// drawn at `scale`, which [`buffer_scale`] fitted to it. `None` where it

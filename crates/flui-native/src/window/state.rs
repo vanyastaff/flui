@@ -319,6 +319,33 @@ pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
     }
 }
 
+/// A window's logical side `logical` at `ratio` in whole device pixels, as
+/// every host hands a window extent to its window system or draws a surface
+/// of the window: snapped to the device grid, at least one pixel, and at most
+/// [`MAX_SURFACE_EXTENT`](flui_platform::MAX_SURFACE_EXTENT), past which the
+/// side is clamped, since no renderer draws a larger surface. `None` for a
+/// side that is not finite or not positive.
+#[cfg(any(windows, x11_host, wayland_host, test))]
+pub(crate) fn device_extent(
+    logical: f64,
+    ratio: flui_foundation::geometry::DevicePixelRatio,
+) -> Option<u32> {
+    use flui_platform::MAX_SURFACE_EXTENT;
+    if !(logical.is_finite() && logical > 0.0) {
+        return None;
+    }
+    // A product past `f64::MAX` is infinite, which the clamp also bounds.
+    let pixels = flui_foundation::geometry::snap(ratio.to_device(logical))
+        .clamp(1.0, f64::from(MAX_SURFACE_EXTENT));
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a whole number clamped to 1..=MAX_SURFACE_EXTENT just above"
+    )]
+    let pixels = pixels as u32;
+    Some(pixels)
+}
+
 /// What a read of the cell answered.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Published {
@@ -1261,6 +1288,47 @@ mod mapping {
             for (system, decided, expected) in modes {
                 assert_eq!(decided, expected, "{system}: {case}");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod extent {
+    use flui_foundation::geometry::DevicePixelRatio;
+    use flui_platform::MAX_SURFACE_EXTENT;
+
+    use super::device_extent;
+
+    /// The one logical-to-device extent: snapped, at least a pixel, clamped
+    /// at the largest surface, and no extent for a side that is none.
+    #[test]
+    fn a_logical_side_becomes_a_device_extent_every_host_can_draw() {
+        let ratio = |ratio: f64| DevicePixelRatio::try_new(ratio).expect("a positive ratio");
+        let max = f64::from(MAX_SURFACE_EXTENT);
+        for (case, logical, scale, extent) in [
+            ("at one", 800.0, 1.0, Some(800)),
+            ("at a fractional scale", 401.0, 1.5, Some(602)),
+            ("a half pixel rounds up", 0.5, 5.0, Some(3)),
+            ("a sliver is one pixel", 0.01, 1.0, Some(1)),
+            (
+                "the largest surface",
+                max / 2.0,
+                2.0,
+                Some(MAX_SURFACE_EXTENT),
+            ),
+            (
+                "past the largest surface",
+                max,
+                2.0,
+                Some(MAX_SURFACE_EXTENT),
+            ),
+            ("past every number", f64::MAX, 2.0, Some(MAX_SURFACE_EXTENT)),
+            ("no size", 0.0, 1.0, None),
+            ("negative", -10.0, 1.0, None),
+            ("not a number", f64::NAN, 1.0, None),
+            ("infinite", f64::INFINITY, 1.0, None),
+        ] {
+            assert_eq!(device_extent(logical, ratio(scale)), extent, "{case}");
         }
     }
 }

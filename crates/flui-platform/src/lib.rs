@@ -227,7 +227,7 @@ pub use window_capabilities::{
 pub use window_frame::{
     AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,
 };
-pub use window_geometry::{InvalidGeometry, WindowExtent, WindowGeometry};
+pub use window_geometry::{InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, WindowGeometry};
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{

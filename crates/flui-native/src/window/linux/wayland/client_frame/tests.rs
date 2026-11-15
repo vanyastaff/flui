@@ -1,4 +1,4 @@
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_painting::text_layout::FontCollection;
 
 use super::title::TitleText;
@@ -490,7 +490,8 @@ fn a_hostile_scale_draws_no_gibibyte() {
         "at the largest scale"
     );
 
-    let side = device_extent(37.0, 442.0).expect("within the largest extent");
+    let side = device_extent(37.0, DevicePixelRatio::try_new(442.0).expect("a ratio"))
+        .expect("within the largest extent");
     assert_eq!(side, 16_354);
     assert!(
         Pixels::try_new(side, side).is_none(),
@@ -704,24 +705,27 @@ fn damage_is_sent_with_the_request_the_surface_has() {
     }
 }
 
-/// A frame the compositor sizes past any screen or does not show is not
+/// A frame the compositor sizes past any screen is drawn at the largest
+/// extent, as every host clamps a window extent; one it does not show is not
 /// drawn, and a margin is a transparent image.
 #[test]
-fn a_frame_past_the_largest_extent_is_not_drawn() {
+fn a_frame_past_the_largest_extent_is_drawn_at_it() {
     let plain = PLAIN;
     let wide = Frame {
         content: Size::new(1e7, 300.0),
         ..floating()
     };
-    assert!(paint_header(&wide, BufferScale::ONE, plain).is_none());
+    let bar = paint_header(&wide, BufferScale::ONE, plain).expect("drawn");
+    assert_eq!((bar.width, bar.height), (MAX_EXTENT, 37));
     let fullscreen = framed(ToplevelStates {
         fullscreen: true,
         ..ToplevelStates::default()
     });
     assert!(paint_header(&fullscreen, BufferScale::ONE, plain).is_none());
-    assert_eq!(device_extent(f64::INFINITY, 1.0), None);
-    assert_eq!(device_extent(0.2, 1.0), None);
-    assert_eq!(device_extent(36.5, 1.0), Some(37));
+    let one = DevicePixelRatio::ONE;
+    assert_eq!(device_extent(f64::INFINITY, one), None);
+    assert_eq!(device_extent(0.2, one), Some(1));
+    assert_eq!(device_extent(36.5, one), Some(37));
     let margin = paint_margin(3, 2).expect("drawn");
     assert!(margin.data.iter().all(|byte| *byte == 0));
     assert!(paint_margin(0, 2).is_none());

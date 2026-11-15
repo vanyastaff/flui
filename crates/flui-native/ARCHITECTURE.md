@@ -693,16 +693,21 @@ trait depends on `flui-platform` instead.
   the published state (`window::state`), the one rule that decides a window's
   mode from what its window system says (`window::state::mode_of` over
   `ModeFlags`: minimized before fullscreen before maximized;
-  AppKit's flags, the X11 window manager's properties and the Win32
+  AppKit's flags, the X11 window manager's properties, the Wayland
+  toplevel's configured states and the Win32
   window's tracked mode each read their report into the flags and nothing
-  else), the desktop window configuration
+  else), the one rule that turns a logical window extent into device pixels
+  (`window::state::device_extent`: snapped, at least one pixel, clamped at
+  `flui_platform::MAX_SURFACE_EXTENT`, which every host that hands its window
+  system an extent or draws a surface of its own reads), the desktop window configuration
   (`window::config`, crate-private: its windows open with F11 as the
   fullscreen key) and the acknowledgement
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
   `PendingWindowInstallation`, `InstallationCancelled`).
   `window::state::mapping` reads one table through the X11
-  window manager's properties, AppKit's raw flags (which keep full screen
+  window manager's properties, the Wayland toplevel's states (which never
+  say minimized, a column of their own), AppKit's raw flags (which keep full screen
   above a miniaturized flag, a row of their own) and the Win32 tracked mode.
   Whether a window is seen is three facts of its snapshot, `visible`, its
   mode and `occluded`, which `WindowState::is_seen` reads together; each
@@ -791,12 +796,13 @@ trait depends on `flui-platform` instead.
   platform's amounts in the unit it picks, each axis turned to FLUI's
   direction by whether it moves the offset or the content, an idle axis
   `+0.0` whichever zero the platform reported, a non-finite amount refused,
-  which AppKit delivers as a zero step and the Web and Android
-  drop) and `event_timestamp_ns` (public at the crate root).
+  which AppKit and Wayland deliver as a zero step and the Web, Android and X11
+  drop; Win32's and Wayland's distances counted in steps of 1/120 detent are
+  read by one `DetentSteps`) and `event_timestamp_ns` (public at the crate root).
   `input::keys::mapping` reads one table of keys through the Win32 scancode
   table, the AppKit keycode table, the DOM's number and the keyboard-types
   adapter; `input::scroll::mapping` reads one table of turns through the
-  Win32 registry, the Web's, Android's and AppKit's steps. Beside it, one file per platform, each pure
+  Win32 registry, the Web's, Android's, AppKit's, X11's and Wayland's steps. Beside it, one file per platform, each pure
   half forbidding `unsafe`: `windows/` (`mod.rs`: `InputWindows`, the
   class's input hook, which keeps each window's `InputWindow` keyed by its
   identity, and `raw`, the messages decoded; `direct_manipulation.rs`, the
@@ -1272,8 +1278,8 @@ trait depends on `flui-platform` instead.
   (`window::linux::wayland::scale`): whatever fractional, preferred or output
   scale the compositor names, the window's content and its own frame are
   drawn at no more than `BufferScale::MAX`, lowered further where a
-  configure's size at that scale would pass `MAX_CONTENT_EXTENT` device
-  pixels, the largest surface the engine configures, so the window still
+  configure's size at that scale would pass `flui_platform::MAX_SURFACE_EXTENT` device
+  pixels, the largest surface a renderer draws, so the window still
   draws at a size the renderer accepts; only a window with no viewport, at
   scale one, publishes no metrics past it
   (`a_window_publishes_what_a_surface_can_be`). A window's own frame follows
@@ -1282,7 +1288,7 @@ trait depends on `flui-platform` instead.
   keeps one action asked for, which a later press replaces. It draws each of
   its five pieces at most once a turn, at the window's `BufferScale`, none
   wider or taller than `client_frame::MAX_EXTENT`, which is
-  `MAX_CONTENT_EXTENT`, so every window that publishes metrics has its frame
+  `MAX_SURFACE_EXTENT`, so every window that publishes metrics has its frame
   (`a_window_that_publishes_metrics_draws_its_whole_frame`), and none of more
   than `MAX_PIXELS`, into at most `MAX_BUFFERS`
   buffers a piece: one the compositor released is drawn into again, and

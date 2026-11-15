@@ -4,7 +4,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
@@ -56,7 +56,7 @@ use crate::host::WindowFacets;
 use crate::owner::windows::WINDOW_CLASS_NAME;
 use crate::text::WindowTextInput;
 use crate::version::gate::Since;
-use crate::window::state::WindowStateCell;
+use crate::window::state::{WindowStateCell, device_extent};
 use crate::{
     owner::OpenWindowError, owner::window_delivery::WindowDelivery, owner::windows::AppHooks,
 };
@@ -136,6 +136,19 @@ fn backend_error(what: &str, error: windows::core::Error) -> ApplyError {
 fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), ApplyError> {
     checked_logical_to_device(x, scale)
         .zip(checked_logical_to_device(y, scale))
+        .ok_or(ApplyError::Platform(PlatformFailure::OutOfRange))
+}
+
+/// A command's logical content size in device pixels by the hosts' one
+/// extent rule ([`device_extent`]): a side past the largest surface a
+/// renderer draws is clamped to it. Refused before any call for a side or
+/// scale that is no size.
+fn device_size(size: Size<f64>, scale: f64) -> Result<(i32, i32), ApplyError> {
+    let ratio = DevicePixelRatio::try_new(scale)
+        .ok_or(ApplyError::Platform(PlatformFailure::OutOfRange))?;
+    let side = |logical: f64| device_extent(logical, ratio).map(u32::cast_signed);
+    side(size.width)
+        .zip(side(size.height))
         .ok_or(ApplyError::Platform(PlatformFailure::OutOfRange))
 }
 
@@ -839,12 +852,12 @@ impl WindowsWindow {
     /// - a fullscreen window takes the size for the bounds it returns to.
     ///
     /// # Errors
-    /// [`ApplyError::Platform`] for a size beyond what Win32
-    /// can represent, before any call; [`ApplyError::Platform`] when
+    /// [`ApplyError::Platform`] for a size or scale that is no size (a side
+    /// past the largest surface is clamped), before any call; [`ApplyError::Platform`] when
     /// Win32 refuses or fails the resize.
     fn set_inner_size(&self, size: Size<f64>) -> Result<(), ApplyError> {
         let scale = self.state.lock().scale_factor;
-        let content = device_pair(size.width, size.height, scale)?;
+        let content = device_size(size, scale)?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_inner_size", |ctx| {
             ctx.mode
                 .get()

@@ -27,8 +27,8 @@ use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 
 use crate::Opened;
 use flui_platform::{
-    ApplyError, DispatchEventResult, PlatformFailure, PlatformWindow, SizeConstraints,
-    WindowCommand, WindowMode, WindowOptions, WindowReveal, WindowState,
+    ApplyError, DispatchEventResult, MAX_SURFACE_EXTENT, PlatformFailure, PlatformWindow,
+    SizeConstraints, WindowCommand, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use windows::Win32::{
@@ -1213,8 +1213,6 @@ fn geometry_win32_cannot_hold_is_refused() {
     let window = open(&platform, options());
     let before = window.state();
     for command in [
-        WindowCommand::SetSize(Size::new(1.0e10, 100.0)),
-        WindowCommand::SetSize(Size::new(100.0, 1.0e10)),
         WindowCommand::SetPosition(Point::new(1.0e12, 0.0)),
         WindowCommand::SetPosition(Point::new(0.0, -1.0e12)),
     ] {
@@ -1233,6 +1231,46 @@ fn geometry_win32_cannot_hold_is_refused() {
     let after = window.state();
     assert_eq!(after.content_size, before.content_size);
     assert_eq!(after.outer, before.outer);
+}
+
+/// A size past the largest surface a renderer draws is given that surface, by
+/// the rule every host clamps a window extent with, where Win32 alone would
+/// take a window no renderer can draw.
+fn a_size_past_the_largest_surface_is_clamped_to_it() {
+    let platform = platform();
+    let window = open(&platform, options());
+    for (command, wide) in [
+        (WindowCommand::SetSize(Size::new(1.0e10, 100.0)), true),
+        (WindowCommand::SetSize(Size::new(100.0, 1.0e10)), false),
+    ] {
+        window
+            .admit_and_apply(command.clone())
+            .unwrap_or_else(|refusal| panic!("{command:?} refused: {refusal:?}"));
+        settle();
+        let state = window.state();
+        let physical = state.metrics.expect("a drawable window").physical();
+        let (long, short, device) = if wide {
+            (
+                state.content_size.width(),
+                state.content_size.height(),
+                physical.width,
+            )
+        } else {
+            (
+                state.content_size.height(),
+                state.content_size.width(),
+                physical.height,
+            )
+        };
+        // Win32 holds a window within its own track size as well, so the
+        // side is at most the largest surface, and the other side at most
+        // what Win32 lets a window be.
+        assert!(
+            u32::try_from(device).is_ok_and(|device| device <= MAX_SURFACE_EXTENT),
+            "{command:?}: {long} logical pixels, {device} device pixels"
+        );
+        assert!(long > short, "{command:?}: {long} grew past {short}");
+    }
 }
 
 fn press_f11(window: &Rc<dyn HostWindow>) {
@@ -2170,6 +2208,10 @@ fn native_window_commands() {
         (
             "geometry_win32_cannot_hold_is_refused",
             geometry_win32_cannot_hold_is_refused,
+        ),
+        (
+            "a_size_past_the_largest_surface_is_clamped_to_it",
+            a_size_past_the_largest_surface_is_clamped_to_it,
         ),
         (
             "the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through",

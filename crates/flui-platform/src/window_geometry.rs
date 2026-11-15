@@ -116,6 +116,16 @@ impl Eq for InvalidGeometry {}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WindowExtent(Size<f64>);
 
+/// The longest side, in device pixels, of a surface a window may ask a
+/// renderer to draw.
+///
+/// The renderer asks its GPU for textures no larger and refuses a surface past
+/// it; a host hands its window system no window extent past it, and a host
+/// that chooses the scale its buffer is drawn at lowers the scale until the
+/// content fits. Every GPU FLUI targets offers at least this much on desktop
+/// and on phones from the last several years.
+pub const MAX_SURFACE_EXTENT: u32 = 16 * 1024;
+
 impl WindowExtent {
     /// No extent in either dimension.
     pub const ZERO: Self = Self(Size::new(0.0, 0.0));

@@ -765,11 +765,8 @@ pub(crate) mod placement {
 
     #![forbid(unsafe_code)]
 
-    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{DisplayInfo, DisplaySnapshot, InvalidGeometry, WindowGeometry};
-
-    /// The largest extent a window is given, in device pixels.
-    pub(crate) const MAX_EXTENT: u16 = 32_767;
 
     /// Whether `scale` is a scale: finite and positive.
     pub(crate) fn is_scale(scale: f64) -> bool {
@@ -790,15 +787,13 @@ pub(crate) mod placement {
         Some(whole)
     }
 
-    /// A logical length at `scale` as a window extent in device pixels:
-    /// rounded, at least one pixel and at most [`MAX_EXTENT`]. `None` for a
-    /// length or scale that is not finite and positive.
+    /// A logical length at `scale` as a window extent in device pixels, by
+    /// the hosts' one rule ([`state::device_extent`](crate::window::state::device_extent)),
+    /// whose largest extent fits X11's 16 bits. `None` for a length or scale
+    /// that is not finite and positive.
     pub(crate) fn device_extent(logical: f64, scale: f64) -> Option<u16> {
-        if !(is_scale(scale) && logical.is_finite() && logical > 0.0) {
-            return None;
-        }
-        let pixels = (logical * scale).round().clamp(1.0, f64::from(MAX_EXTENT));
-        u16::try_from(whole(pixels, 1, i32::from(MAX_EXTENT))?).ok()
+        let ratio = DevicePixelRatio::try_new(scale)?;
+        u16::try_from(crate::window::state::device_extent(logical, ratio)?).ok()
     }
 
     /// A logical coordinate at `scale` as an X11 coordinate in device pixels,
@@ -940,25 +935,21 @@ pub(crate) mod placement {
 
         #[test]
         fn logical_numbers_become_x11_numbers_only_when_they_fit() {
+            let max = u16::try_from(flui_platform::MAX_SURFACE_EXTENT)
+                .expect("the largest surface fits X11's 16 bits");
             // (case, logical, scale, extent, coordinate)
             let table = [
                 ("whole", 100.0, 1.0, Some(100), Some(100)),
                 ("scaled and rounded", 10.3, 1.5, Some(15), Some(15)),
                 ("a fraction of a pixel is one", 0.2, 1.0, Some(1), Some(0)),
                 ("negative", -40.0, 2.0, None, Some(-80)),
-                ("past the extent", 40_000.0, 1.0, Some(MAX_EXTENT), None),
-                (
-                    "past 16 bits by scale",
-                    20_000.0,
-                    2.0,
-                    Some(MAX_EXTENT),
-                    None,
-                ),
+                ("past the extent", 40_000.0, 1.0, Some(max), None),
+                ("past 16 bits by scale", 20_000.0, 2.0, Some(max), None),
                 (
                     "the last coordinate",
                     32_767.0,
                     1.0,
-                    Some(MAX_EXTENT),
+                    Some(max),
                     Some(32_767),
                 ),
                 ("the first coordinate", -32_768.0, 1.0, None, Some(-32_768)),
@@ -1190,7 +1181,7 @@ pub(crate) mod hints {
                     1.0,
                     SizeLimits {
                         min: None,
-                        max: Some((32_767, 10)),
+                        max: Some((flui_platform::MAX_SURFACE_EXTENT.cast_signed(), 10)),
                     },
                 ),
             ];
