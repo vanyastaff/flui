@@ -987,7 +987,7 @@ impl ClassTokens {
                 (Some(TokenTree::Ident(key)), Some(TokenTree::Punct(equals)))
                     if key == "ivars" && equals.as_char() == '=' =>
                 {
-                    Some((line(key.span()), inner.collect()))
+                    Some((line(key.span()), inner.collect::<TokenStream>()))
                 }
                 _ => None,
             }
@@ -996,7 +996,10 @@ impl ClassTokens {
             .iter()
             .position(|tree| matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ';'))
             .map_or(tokens, |semi| {
-                trees[declared + semi + 1..].iter().cloned().collect()
+                trees[declared + semi + 1..]
+                    .iter()
+                    .cloned()
+                    .collect::<TokenStream>()
             });
         Self { name, ivars, impls }
     }

@@ -197,7 +197,10 @@ impl<T> std::ops::Deref for ContainedIvars<T> {
 )]
 impl<T> Drop for ContainedIvars<T> {
     fn drop(&mut self) {
-        os_entry("dealloc", (), AfterPanic::Answer(|()| ()), || {
+        // The ivars' type is logged with a failure: every class's `dealloc`
+        // is this one entry.
+        let ivars = std::any::type_name::<T>();
+        os_entry("dealloc", ivars, AfterPanic::Answer(|_| ()), || {
             // SAFETY: the value is initialized from `new` on, this is the
             // only place that destroys it, and `drop` runs once: nothing
             // reads it afterwards.
@@ -516,7 +519,11 @@ mod tests {
         tracing::subscriber::with_default(recorder, || drop(ivars));
         assert_eq!(
             *seen.lock().expect("the recorder is not poisoned"),
-            ["logged: a destructor's failure"]
+            [
+                format!("args: {:?}", std::any::type_name::<Ivars>()),
+                "logged: a destructor's failure".to_owned()
+            ],
+            "the failure names the class's ivars"
         );
         assert!(
             destroyed.load(Ordering::SeqCst),
