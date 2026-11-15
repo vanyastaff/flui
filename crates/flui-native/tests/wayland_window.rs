@@ -751,13 +751,16 @@ mod optional {
         }
     }
 
-    /// Every name `FLUI_REQUIRE_COMPOSITOR` lists is a subject a case of this
-    /// module checks, so a misspelt one fails the run even where the
-    /// compositor offers every subject and no case reads the list.
-    #[test]
-    fn the_required_subjects_are_ones_a_case_knows() {
+    /// The compositor a case of this module runs against, as the module's
+    /// [`super::platform`] gives it, once `FLUI_REQUIRE_COMPOSITOR` is read:
+    /// a name of no subject fails every case before it runs, whether or not
+    /// the compositor offers what the case needs, and with no compositor.
+    fn platform(case: &str) -> Option<WaylandPlatform> {
         let required = Optional::required();
-        eprintln!("the compositor must offer {required:?}");
+        if !required.is_empty() {
+            eprintln!("{case}: the compositor must offer {required:?}");
+        }
+        super::platform(case)
     }
 
     /// A window the compositor moves to another output of the same scale names

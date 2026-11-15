@@ -1228,8 +1228,10 @@ trait depends on `flui-platform` instead.
   binds (each on its own, and a seat that goes is followed no more), and
   keeps one action asked for, which a later press replaces. It draws each of
   its five pieces at most once a turn, at the window's `BufferScale`, none
-  wider or taller than `client_frame::MAX_EXTENT` whatever size a configure
-  gives and none of more than `MAX_PIXELS`, into at most `MAX_BUFFERS`
+  wider or taller than `client_frame::MAX_EXTENT`, which is
+  `MAX_CONTENT_EXTENT`, so every window that publishes metrics has its frame
+  (`a_window_that_publishes_metrics_draws_its_title_bar`), and none of more
+  than `MAX_PIXELS`, into at most `MAX_BUFFERS`
   buffers a piece: one the compositor released is drawn into again, and
   where it releases none the oldest is destroyed for the next
   (`a_hostile_scale_draws_no_gibibyte`,
@@ -1243,9 +1245,12 @@ trait depends on `flui-platform` instead.
   (`a_seat_that_goes_leaves_no_input_behind`), whose held keys are released
   (`a_seat_that_goes_releases_the_keys_it_held`). A drag session watches the
   one grab it started under (`user_input::Inputs::watch`): a release over its
-  surface or its seat's removal, in either order, ends the session as
-  cancelled, since the compositor says nothing of a drag it ignored or one
-  whose seat went (`a_watched_grab_ends_when_its_seat_goes`); a seat that
+  surface, its seat's removal in either order, or its pointer going while
+  the grab is held ends the session as cancelled, since the compositor says
+  nothing of a drag it ignored or one whose seat went
+  (`a_watched_grab_ends_when_its_seat_goes`,
+  `a_watched_grab_ends_when_its_pointer_goes`), and the window that started
+  it closing ends it too; a seat that
   goes takes the move, resize or menu its press asked of a window's frame
   and leaves a close, minimize or maximize
   (`a_seat_that_goes_leaves_the_actions_that_name_no_seat`). The Wayland seats' queue of

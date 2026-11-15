@@ -400,9 +400,10 @@ impl Shared {
             .flatten()
     }
 
-    /// A seat key no seat had.
-    fn seat_key(&self) -> SeatKey {
-        SeatKey(next_label(&self.seat_keys))
+    /// A seat key no seat had; `None` once every key was issued, or off
+    /// the owner thread.
+    fn seat_key(&self) -> Option<SeatKey> {
+        next_label(&self.seat_keys).map(SeatKey)
     }
 
     fn record(&self, wire: Wire) {
@@ -413,9 +414,10 @@ impl Shared {
         self.record(Wire::Seat(SeatWire { time, event }));
     }
 
-    /// A device label no object had.
-    fn label(&self) -> NativeDevice {
-        NativeDevice(next_label(&self.labels))
+    /// A device label no object had; `None` once every label was issued,
+    /// or off the owner thread.
+    fn label(&self) -> Option<NativeDevice> {
+        next_label(&self.labels).map(NativeDevice)
     }
 
     /// The frame `surface` is a surface of, with its window's own surface
@@ -511,11 +513,12 @@ impl TextRecorder for Shared {
 }
 
 /// The next label `mint` issues: labels start at one and are minted by the
-/// dispatch, on the owner thread. Zero anywhere else, where no object is
-/// made to carry one, and once every label was issued.
-fn next_label(mint: &OwnerCell<IdMint<NonZeroU64>>) -> u64 {
-    mint.with(|mint| mint.next().map_or(0, NonZeroU64::get))
-        .unwrap_or(0)
+/// dispatch, on the owner thread. `None` anywhere else, where no object is
+/// made to carry one, and once every label was issued: the object that
+/// would carry it is refused, so no two share one.
+fn next_label(mint: &OwnerCell<IdMint<NonZeroU64>>) -> Option<u64> {
+    mint.with(|mint| mint.next().ok().map(NonZeroU64::get))
+        .flatten()
 }
 
 /// The surface key of window `id`.
@@ -577,7 +580,10 @@ impl SeatInput {
             tracing::debug!(name, "a Wayland seat past {MAX_SEATS} was not bound");
             return;
         }
-        let key = self.shared.seat_key();
+        let Some(key) = self.shared.seat_key() else {
+            tracing::debug!(name, "a Wayland seat past the last seat key was not bound");
+            return;
+        };
         let seat = registry.bind::<WlSeat, SeatData, WaylandState>(
             name,
             version.min(SEAT_VERSION),
@@ -1064,7 +1070,7 @@ impl WaylandInput for SeatInput {
                     .filter_map(|seat| seat.pointer.as_mut())
                 {
                     if pointer.pinch.is_none() {
-                        pointer.pinch = Some(pinch(&manager, pointer, queue, &self.shared));
+                        pointer.pinch = pinch(&manager, pointer, queue, &self.shared);
                     }
                 }
                 objects.gestures = Some((name, manager));
@@ -1674,22 +1680,23 @@ fn tablet_seat(
     )
 }
 
-/// The pinch of `pointer`.
+/// The pinch of `pointer`; `None` past the last device label.
 fn pinch(
     manager: &ZwpPointerGesturesV1,
     pointer: &PointerObjects,
     queue: &QueueHandle<WaylandState>,
     shared: &Arc<Shared>,
-) -> ZwpPointerGesturePinchV1 {
-    manager.get_pinch_gesture(
+) -> Option<ZwpPointerGesturePinchV1> {
+    let device = shared.label()?;
+    Some(manager.get_pinch_gesture(
         &pointer.pointer,
         queue,
         PinchData {
             shared: Arc::downgrade(shared),
-            device: shared.label(),
+            device,
             pointer: pointer.device,
         },
-    )
+    ))
 }
 
 /// Let go of a removed seat's objects. Every device of it, its tablet tools
@@ -1740,7 +1747,7 @@ fn release_seat(seat: SeatObjects, shared: &Shared, time: WireTime) {
 /// release reaches a pointer that is gone, and the windows' frames follow it
 /// no more.
 fn release_pointer(pointer: PointerObjects, seat: &WlSeat, shared: &Shared, time: WireTime) {
-    shared.last_input.left(seat);
+    shared.last_input.pointer_gone(seat);
     shared.unfollow(seat);
     if let Some(pinch) = pointer.pinch {
         if let Some(data) = pinch.data::<PinchData>() {
@@ -1877,8 +1884,10 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                 return;
             };
             if capabilities.contains(Capability::Pointer) {
-                if held.pointer.is_none() {
-                    let device = shared.label();
+                // A pointer past the last device label is not made.
+                if held.pointer.is_none()
+                    && let Some(device) = shared.label()
+                {
                     let pointer = seat.get_pointer(
                         queue,
                         PointerData {
@@ -1901,7 +1910,7 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                     };
                     objects.pinch = gestures
                         .as_ref()
-                        .map(|manager| pinch(manager, &objects, queue, &shared));
+                        .and_then(|manager| pinch(manager, &objects, queue, &shared));
                     held.pointer = Some(objects);
                     shared.record_seat(
                         time,
@@ -1929,8 +1938,9 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                 gone_keyboard = held.keyboard.take();
             }
             if capabilities.contains(Capability::Touch) {
-                if held.touch.is_none() {
-                    let device = shared.label();
+                if held.touch.is_none()
+                    && let Some(device) = shared.label()
+                {
                     held.touch = Some((
                         seat.get_touch(
                             queue,
@@ -2420,6 +2430,12 @@ impl Dispatch<ZwpTabletSeatV2, SeatData> for WaylandState {
             && let Some(shared) = data.shared.upgrade()
             && let Some(tool) = id.data::<ToolData>()
         {
+            // A tool past the last device label has none to carry.
+            let Some(device) = shared.label() else {
+                tracing::debug!("a Wayland tablet tool past the last device label was refused");
+                id.destroy();
+                return;
+            };
             // The seat keeps its tools, which go with it.
             let kept = shared.objects.with(|objects| {
                 let seat = objects
@@ -2435,9 +2451,7 @@ impl Dispatch<ZwpTabletSeatV2, SeatData> for WaylandState {
                 id.destroy();
                 return;
             }
-            let _ = tool
-                .held
-                .set((Arc::downgrade(&shared), shared.label(), data.seat));
+            let _ = tool.held.set((Arc::downgrade(&shared), device, data.seat));
         }
     }
 
@@ -2697,6 +2711,26 @@ mod tests {
         arrival, queue, read_keymap,
     };
     use crate::input::linux::xkb::GROUP_NAME_READS;
+
+    /// Labels and seat keys start at one and are never shared: past the
+    /// last one the mint issues none, and the seat or device that would
+    /// carry it is refused instead of sharing a sentinel.
+    #[test]
+    fn a_label_past_the_last_is_none() {
+        use std::num::NonZeroU64;
+
+        use flui_foundation::sequence::IdMint;
+
+        use crate::owner::slot::OwnerCell;
+
+        let mint: OwnerCell<IdMint<NonZeroU64>> = OwnerCell::new();
+        assert_eq!(super::next_label(&mint), Some(1));
+        assert_eq!(super::next_label(&mint), Some(2));
+        mint.with(|mint| *mint = IdMint::starting_after(u64::MAX - 1));
+        assert_eq!(super::next_label(&mint), Some(u64::MAX));
+        assert_eq!(super::next_label(&mint), None, "every label was issued");
+        assert_eq!(super::next_label(&mint), None);
+    }
 
     /// A compositor that sends keymap after keymap before the loop delivers
     /// leaves one queued per seat, the newest: the older files are closed

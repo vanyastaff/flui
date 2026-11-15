@@ -54,7 +54,7 @@ use flui_foundation::geometry::Size;
 use flui_platform::input_regions::ResizeEdge;
 
 use super::configure::{TiledEdges, ToplevelStates, WmCapabilities};
-use super::scale::BufferScale;
+use super::scale::{BufferScale, MAX_CONTENT_EXTENT};
 use crate::input::regions::ProjectedInputRegions;
 use crate::input::regions::presses::{ChromePress, ChromePresses, PressButton, device_point};
 use crate::owner::linux::wayland::user_input::MAX_SEATS;
@@ -77,10 +77,12 @@ const RADIUS: f64 = 8.0;
 /// The longest a second press on the title bar may follow the first and
 /// still count as a double press, in milliseconds: GTK's default.
 pub(crate) const DOUBLE_CLICK: u32 = 400;
-/// The widest or tallest a frame surface is drawn, in device pixels: past
-/// it a compositor's configure asks for more memory than any screen shows,
-/// and the frame is not drawn.
-pub(crate) const MAX_EXTENT: u32 = 16_384;
+/// The widest or tallest a frame surface is drawn, in device pixels: the
+/// widest a window's content is ([`MAX_CONTENT_EXTENT`]), so every window
+/// that publishes metrics has its title bar. Past it a compositor's
+/// configure asks for more memory than any screen shows, and the frame is
+/// not drawn.
+pub(crate) const MAX_EXTENT: u32 = MAX_CONTENT_EXTENT.unsigned_abs();
 /// The most device pixels a frame surface is drawn with: a title bar
 /// [`MAX_EXTENT`] wide and [`HEADER`] tall at [`BufferScale::MAX`]. The two
 /// sides' caps alone leave room for a square of a gibibyte, which a narrow

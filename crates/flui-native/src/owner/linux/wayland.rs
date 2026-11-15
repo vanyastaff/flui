@@ -49,7 +49,7 @@ pub(crate) use event_loop::{
     CursorGlobals, DragWindow, FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow,
     MAX_OUTPUTS, OutputFacts, PresentationTime, SeatText, SeatWindow, SeatWindowText, TextEvent,
     TextRecorder, TextWire, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost,
-    WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable, bindable,
 };
 
 pub(crate) mod user_input {
@@ -190,6 +190,26 @@ pub(crate) mod user_input {
             self.grabs.retain(|(grab, _)| grab.seat != *seat);
         }
 
+        /// `seat`'s pointer went while the seat stays: the grab it held ends,
+        /// and a watched grab it still held has ended, since no release can
+        /// come for it. A drag the compositor took had the pointer leave the
+        /// surface first, so a grab that left is no longer held and its
+        /// session goes on.
+        pub(crate) fn pointer_gone(&mut self, seat: &Seat) {
+            let held = self
+                .grabs
+                .iter()
+                .find(|(grab, _)| grab.seat == *seat)
+                .map(|(grab, _)| grab.serial);
+            if let (Some(serial), Some(watched)) = (held, self.watched.as_mut())
+                && watched.seat == *seat
+                && watched.serial == serial
+            {
+                watched.ended = true;
+            }
+            self.left(seat);
+        }
+
         /// `seat` went: its grab ends, the last input no longer names it, so
         /// no token is asked for under a seat the compositor no longer
         /// knows, and a watched grab of its own has ended, whether its
@@ -316,6 +336,36 @@ pub(crate) mod user_input {
             assert!(
                 gone_after_leave.watched_ended(&1, 5),
                 "the seat went with the drag under way"
+            );
+        }
+
+        /// A seat that keeps its seat but loses its pointer while the
+        /// watched grab is held ends the grab: no release can come. A
+        /// pointer that left the surface first, as a drag the compositor
+        /// took has it, ends nothing; nor does another seat's pointer.
+        #[test]
+        fn a_watched_grab_ends_when_its_pointer_goes() {
+            let mut held = Inputs::default();
+            held.pressed(input(1, 5, 3));
+            held.pressed(input(2, 9, 4));
+            held.watch(1, 5);
+            held.pointer_gone(&2);
+            assert!(!held.watched_ended(&1, 5), "another seat's pointer went");
+            held.pointer_gone(&1);
+            assert!(
+                held.watched_ended(&1, 5),
+                "its pointer went, the button held"
+            );
+            assert_eq!(held.grab_on(&3), None);
+
+            let mut left = Inputs::default();
+            left.pressed(input(1, 5, 3));
+            left.watch(1, 5);
+            left.left(&1);
+            left.pointer_gone(&1);
+            assert!(
+                !left.watched_ended(&1, 5),
+                "the drag took the pointer first"
             );
         }
     }
@@ -1243,6 +1293,12 @@ mod event_loop {
             self.0.with(|inputs| inputs.left(seat));
         }
 
+        /// `seat`'s pointer went while the seat stays. See
+        /// [`Inputs::pointer_gone`].
+        pub(crate) fn pointer_gone(&self, seat: &WlSeat) {
+            self.0.with(|inputs| inputs.pointer_gone(seat));
+        }
+
         /// `seat` went: nothing kept names it any more.
         pub(crate) fn seat_gone(&self, seat: &WlSeat) {
             self.0.with(|inputs| inputs.seat_gone(seat));
@@ -1666,29 +1722,25 @@ mod event_loop {
             _: &Connection,
             queue: &QueueHandle<Self>,
         ) {
-            match event {
-                // A global of version zero is none a client binds: the loop,
-                // its outputs and every feature it offers globals to bind
-                // from version one.
-                wl_registry::Event::Global { version: 0, .. } => {}
-                wl_registry::Event::Global {
+            match bindable(event) {
+                Some(wl_registry::Event::Global {
                     name,
                     interface,
                     version,
-                } if interface == WlOutput::interface().name => {
+                }) if interface == WlOutput::interface().name => {
                     state.bind_output(registry, name, version, queue);
                 }
-                wl_registry::Event::Global {
+                Some(wl_registry::Event::Global {
                     name,
                     interface,
                     version,
-                } => {
+                }) => {
                     if let Some(starting) = &mut state.starting {
                         starting.offer(registry, name, &interface, version, queue);
                     }
                     state.offer_global(registry, name, &interface, version, queue);
                 }
-                wl_registry::Event::GlobalRemove { name } => {
+                Some(wl_registry::Event::GlobalRemove { name }) => {
                     state.remove_output(name);
                     state.input.global_removed(name);
                     state.clipboard.global_removed(name);
@@ -1696,6 +1748,16 @@ mod event_loop {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// `event` as a client acts on it: `None` for a global of version zero,
+    /// which no client binds, so the loop, its outputs, every feature it
+    /// offers globals to and the display watch bind from version one.
+    pub(crate) fn bindable(event: wl_registry::Event) -> Option<wl_registry::Event> {
+        match event {
+            wl_registry::Event::Global { version: 0, .. } => None,
+            event => Some(event),
         }
     }
 
@@ -2833,6 +2895,33 @@ mod event_loop {
                 "the first window held takes it"
             );
             assert_eq!(table.register(third, Rc::new(Idle)).ok(), Some(None));
+        }
+
+        /// A global announced at version zero reaches neither the loop's
+        /// registry dispatch nor the display watch's, which both read the
+        /// registry through `bindable`: no output, loop global or feature's
+        /// global is bound at it. Any other version, and a removal, pass.
+        #[test]
+        fn a_global_of_version_zero_is_bound_by_none() {
+            let global = |version| wl_registry::Event::Global {
+                name: 7,
+                interface: "wl_output".to_owned(),
+                version,
+            };
+            assert!(bindable(global(0)).is_none(), "version zero");
+            for version in [1, 4, u32::MAX] {
+                assert!(
+                    matches!(
+                        bindable(global(version)),
+                        Some(wl_registry::Event::Global { version: told, .. }) if told == version
+                    ),
+                    "version {version}"
+                );
+            }
+            assert!(matches!(
+                bindable(wl_registry::Event::GlobalRemove { name: 7 }),
+                Some(wl_registry::Event::GlobalRemove { name: 7 })
+            ));
         }
 
         /// The last input recorded is the one an activation token names,

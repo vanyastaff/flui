@@ -503,7 +503,37 @@ fn a_hostile_scale_draws_no_gibibyte() {
         f64::from(MAX_EXTENT) * HEADER * BufferScale::MAX
     );
     let widest = Pixels::try_new(MAX_EXTENT, 296).expect("within the area");
-    assert_eq!(widest.data.len(), 4 * 16_384 * 296);
+    assert_eq!(widest.data.len(), 4 * 32_768 * 296);
+}
+
+/// Every window that publishes metrics has its title bar: a window 3 000
+/// logical pixels wide at the largest scale is 24 000 device pixels across,
+/// which its content may be, and so may its frame. The frame stops where
+/// the content does.
+#[test]
+fn a_window_that_publishes_metrics_draws_its_title_bar() {
+    use crate::window::linux::wayland::scale::metrics;
+
+    let largest = BufferScale::try_new(BufferScale::MAX).expect("a scale");
+    for width in [3_000.0, f64::from(MAX_EXTENT) / BufferScale::MAX] {
+        let wide = Frame {
+            content: Size::new(width, 300.0),
+            ..floating()
+        };
+        let published = metrics(wide.content, largest).expect("the content is published");
+        let pixels = paint_header(&wide, largest, PLAIN).expect("its title bar is drawn");
+        assert_eq!(
+            i32::try_from(pixels.width).expect("within i32"),
+            published.physical().width,
+            "{width} wide: the bar spans the content"
+        );
+    }
+    let past = Frame {
+        content: Size::new(f64::from(MAX_EXTENT) / BufferScale::MAX + 1.0, 300.0),
+        ..floating()
+    };
+    assert!(metrics(past.content, largest).is_none());
+    assert!(paint_header(&past, largest, PLAIN).is_none());
 }
 
 /// A compositor that releases no buffer is lent no more than the set: each

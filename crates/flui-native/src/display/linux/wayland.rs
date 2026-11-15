@@ -55,7 +55,9 @@ use super::source::LinuxDisplays;
 use super::view::OutputView;
 use super::wayland_model::{ColorEvent, OutputEvent, TransferRange, WaylandOutputs};
 use crate::error::PlatformError;
-use crate::owner::linux::wayland::{MAX_OUTPUTS, OutputFacts, OutputName, WaylandDisplays};
+use crate::owner::linux::wayland::{
+    MAX_OUTPUTS, OutputFacts, OutputName, WaylandDisplays, bindable,
+};
 use crate::owner::notices::StaleOnWake;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
@@ -364,15 +366,13 @@ impl Dispatch<WlRegistry, ()> for State {
         _: &Connection,
         queue: &QueueHandle<Self>,
     ) {
-        match event {
-            // A global of version zero is none a client binds.
-            wl_registry::Event::Global { version: 0, .. } => {}
-            wl_registry::Event::Global {
+        match bindable(event) {
+            Some(wl_registry::Event::Global {
                 name,
                 interface,
                 version,
-            } => state.bind_global(registry, name, &interface, version, queue),
-            wl_registry::Event::GlobalRemove { name } => state.remove_global(name),
+            }) => state.bind_global(registry, name, &interface, version, queue),
+            Some(wl_registry::Event::GlobalRemove { name }) => state.remove_global(name),
             _ => {}
         }
     }
