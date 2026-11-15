@@ -2942,3 +2942,29 @@ fn an_incr_diagnostic_is_emitted_with_the_session_in_its_cell() {
     );
     assert_eq!(ended.get(), None, "the drop goes on");
 }
+
+/// A session selects the events of an `INCR` requestor, and stops hearing
+/// it after, only where the window is another client's and not the root. A
+/// requestor is any id its client names: selecting on the root would replace
+/// the events the windows hear of it (its property changes, which say what
+/// the window manager supports), and on a window of the connection's own
+/// the events its own feature selected.
+#[test]
+fn a_session_selects_events_only_on_another_clients_window() {
+    let _server = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    // (case, the window, whether the session may select its events)
+    let table = [
+        ("another client's window", other.window, true),
+        ("the root", target.connection.root(), false),
+        ("a window of the connection's own", target.xid, false),
+    ];
+    for (case, window, expected) in table {
+        assert_eq!(target.connection.is_peers(window), expected, "{case}");
+    }
+}

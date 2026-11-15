@@ -41,7 +41,7 @@ use parking_lot::Mutex;
 use rustix::event::{EventfdFlags, eventfd};
 
 use super::protocol::{Environment, Protocol};
-use super::session::{DisplayError, Session, Step, connect};
+use super::session::{DisplayError, Session, Step, connect, stop_requested};
 #[cfg(wayland_host)]
 use super::view::display_of_native_number;
 use super::view::{FreshIds, NativeIds, OutputView};
@@ -289,6 +289,13 @@ fn run(
                     wake(signal);
                 }
                 Err(error) => return Some(error.to_string()),
+            }
+            // A step may return without waiting on the stop (a stream read
+            // as far as its cap, events queued meanwhile), so it is looked
+            // at between steps too: a peer that sends without end never
+            // holds the thread.
+            if stop_requested(stop.as_fd()) {
+                return None;
             }
         }
     }));
