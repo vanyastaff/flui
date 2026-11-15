@@ -23,7 +23,7 @@ use flui_native::testing::wayland::{
 use flui_native::{ExitAnswer, HostWindow, Platform as _, WaylandPlatform};
 use flui_platform::WindowFrame;
 use flui_platform::{
-    Availability, PlatformWindow, UnsupportedReason, WindowCommand, WindowOptions,
+    PlatformWindow, UnsupportedReason, WindowCapability, WindowCommand, WindowOptions,
 };
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -937,7 +937,7 @@ mod optional {
         }
         assert_eq!(
             activates,
-            Availability::Emulated,
+            WindowCapability::Emulated,
             "the compositor decides what an activation does"
         );
         let activated = |window: &dyn HostWindow| {
@@ -1022,7 +1022,7 @@ mod optional {
             state.frame.has_system_title_bar(),
             "{context}: the window draws its own frame exactly when decorated: {own:?}"
         );
-        let content = state.content_size;
+        let content = state.content_size.get();
         if own.has_header() {
             let header = client_frame_header(&own);
             assert_eq!(
@@ -1031,7 +1031,7 @@ mod optional {
                 "{context}: the geometry is the title bar and the content"
             );
             assert_eq!(
-                state.outer.size.height,
+                state.outer.size().height,
                 content.height + header,
                 "{context}: the outer size holds the title bar"
             );
@@ -1154,8 +1154,8 @@ mod optional {
         assert_eq!(
             (f64::from(physical.width), f64::from(physical.height)),
             (
-                expected(state.content_size.width),
-                expected(state.content_size.height)
+                expected(state.content_size.width()),
+                expected(state.content_size.height())
             ),
             "the drawable area is the logical size at {scale}"
         );

@@ -1682,6 +1682,111 @@ mod tests {
         (window, handle.window.get())
     }
 
+    /// A handler that applies a command while the turn's read announces the
+    /// window's change has the command follow the window again inside the
+    /// announcement; the turn's read then leaves the newer focus it told the
+    /// accessibility bridge of in place, rather than putting back its own.
+    /// Run on a display with no window manager (CI's), where `Activate`
+    /// takes the focus at once.
+    #[test]
+    fn a_command_applied_during_the_announcement_keeps_the_focus_it_told() {
+        use std::cell::RefCell;
+        use std::rc::{Rc, Weak};
+
+        use flui_platform::{WindowCommand, WindowOptions};
+        use flui_testing::window_commands::AdmitAndApply as _;
+        use flui_testing::window_handler::RecordingWindowHandler;
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt as _};
+
+        use crate::platform::Platform as _;
+
+        let Ok(platform) = crate::X11Platform::try_new() else {
+            eprintln!("no X server answers: nothing to run");
+            return;
+        };
+        let owner = platform.owner();
+        assert_no_window_manager(owner.connection.xcb());
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(WindowOptions::default(), handler.clone())
+            .expect("an X11 window opens");
+        let target = window.surface_target();
+        let handle = target.window_handle().expect("an open window has a handle");
+        let RawWindowHandle::Xcb(handle) = handle.as_raw() else {
+            panic!("an X11 window hands out an XCB handle");
+        };
+        let xid = handle.window.get();
+        owner.windows.read_stale();
+        let x11 = window
+            .as_any()
+            .downcast_ref::<crate::window::linux::x11::X11Window>()
+            .expect("the X11 platform opens X11 windows");
+        assert!(
+            !window.state().focused,
+            "the window opens without the focus"
+        );
+
+        let held: Rc<RefCell<Weak<dyn crate::host_window::HostWindow>>> =
+            Rc::new(RefCell::new(Rc::downgrade(&window)));
+        let activated = Rc::new(std::cell::Cell::new(false));
+        {
+            let held = Rc::clone(&held);
+            let activated = Rc::clone(&activated);
+            handler.react_to_state_change(move || {
+                if activated.replace(true) {
+                    return;
+                }
+                if let Some(window) = held.borrow().upgrade() {
+                    window
+                        .admit_and_apply(WindowCommand::Activate)
+                        .expect("the window takes the focus");
+                }
+            });
+        }
+        let xcb = owner.connection.xcb();
+        xcb.configure_window(xid, &ConfigureWindowAux::new().x(53).y(29))
+            .expect("request");
+        xcb.get_input_focus()
+            .expect("request")
+            .reply()
+            .expect("the server answers");
+        owner.windows.event(&configured(xid));
+        owner.windows.read_stale();
+
+        assert!(activated.get(), "the handler ran during the announcement");
+        let focused = window.state().focused;
+        assert!(focused, "the command gave the window the focus");
+        assert_eq!(
+            x11.told_focus(),
+            focused,
+            "the bridge was last told the focus the window has"
+        );
+    }
+
+    /// A case that moves or focuses its window by its own requests runs on a
+    /// display no window manager holds, as CI's is: under one, those requests
+    /// are the manager's to decide. A manager owns the screen's `WM_S0`
+    /// selection (ICCCM §2.8); finding one fails the case with that reason
+    /// instead of a bare assertion later.
+    fn assert_no_window_manager(connection: &impl x11rb::connection::Connection) {
+        use x11rb::protocol::xproto::ConnectionExt as _;
+
+        let owner = connection
+            .intern_atom(false, b"WM_S0")
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|atom| connection.get_selection_owner(atom.atom).ok())
+            .and_then(|cookie| cookie.reply().ok())
+            .map_or(x11rb::NONE, |reply| reply.owner);
+        assert_eq!(
+            owner,
+            x11rb::NONE,
+            "a window manager runs on this display (it owns WM_S0): this case needs one \
+             with none, as CI's `xvfb-run` display is"
+        );
+    }
+
     /// The server configured `window`: an event that may change its snapshot.
     fn configured(window: u32) -> Event {
         use x11rb::protocol::xproto::ConfigureNotifyEvent;
@@ -1883,7 +1988,10 @@ mod tests {
     /// ends early (refused, failed, unwound) leaves the announcement to that
     /// turn, not to whatever else wakes the loop. Here the window was moved
     /// behind its back and the move heard, and a command reads it. On the X
-    /// server `DISPLAY` names; passes as untested where none answers.
+    /// server `DISPLAY` names; passes as untested where none answers. It runs
+    /// on a display no window manager holds, as CI's is: under one, the move
+    /// is a request the manager decides, and nothing has moved when the
+    /// command reads.
     #[test]
     fn a_command_that_reads_its_window_anew_asks_for_a_turn() {
         use flui_platform::WindowCommand;
@@ -1895,6 +2003,7 @@ mod tests {
             return;
         };
         let owner = platform.owner();
+        assert_no_window_manager(owner.connection.xcb());
         let (window, xid) = hidden_window(&platform);
         owner.windows.read_stale();
         let title = WindowCommand::SetTitle("read anew".to_owned())

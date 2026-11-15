@@ -11,8 +11,9 @@ use flui_platform::{
     DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
     MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
     SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
-    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowFrame,
-    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowState,
+    WindowAppearance, WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState,
+    WindowExtent, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
+    WindowState,
 };
 
 fn preferences_round_trip_through_their_parts() {
@@ -80,23 +81,26 @@ fn a_display_round_trips_through_its_parts() {
 
 fn a_window_state_round_trips_through_its_parts() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
-    let capabilities = WindowCapabilities::ALL
-        .unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST)
-        .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_DEVICE)
-        .without_keyboard_inset(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
-        .without_system_gestures(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    let mut capabilities =
+        WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    capabilities.reports_presentation =
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
+    capabilities.reports_keyboard_inset = WindowCapability::NOT_ON_THIS_PLATFORM;
+    capabilities.reports_system_gestures =
+        WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     let metrics = WindowMetrics::try_new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
     let state = WindowState::new(
-        WindowGeometry::new(Some(Point::new(10.0, 20.0)), Size::new(820.0, 640.0)),
-        Size::new(800.0, 600.0),
+        WindowGeometry::try_new(Some(Point::new(10.0, 20.0)), Size::new(820.0, 640.0))
+            .expect("a finite rectangle"),
+        extent(800.0, 600.0),
     )
     .with_mode(WindowMode::Maximized)
-    .with_normal_geometry(Some(WindowGeometry::new(None, Size::new(400.0, 300.0))))
+    .with_normal_geometry(Some(WindowGeometry::unplaced(extent(400.0, 300.0))))
     .with_visible(true)
     .with_occluded(false)
     .with_focused(true)
     .with_title(Some("Notes".to_owned()))
-    .with_constraints(SizeConstraints::new(Some(Size::new(200.0, 100.0)), None))
+    .with_constraints(SizeConstraints::new(Some(extent(200.0, 100.0)), None))
     .with_resizable(false)
     .with_frame(WindowFrame::AppTitleBar(AppTitleBar::new()))
     .with_metrics(Some(metrics))
@@ -117,34 +121,34 @@ fn a_window_state_round_trips_through_its_parts() {
     let parts = state.clone().into_parts();
     assert_eq!(
         parts.capabilities.material,
-        Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+        WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     );
     assert_eq!(
         parts.capabilities.reports_presentation,
-        Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
     );
     assert_eq!(
         parts.capabilities.reports_system_gestures,
-        Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+        WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     );
     assert_eq!(
-        state
-            .capabilities
-            .keyboard_inset()
-            .map_err(|absent| absent.reason),
-        Err(flui_platform::UnsupportedReason::NotOnThisPlatform)
+        state.capabilities.reports_keyboard_inset,
+        WindowCapability::NOT_ON_THIS_PLATFORM
     );
-    assert_eq!(parts.capabilities.sets_title, Ok(Availability::Native));
+    assert_eq!(parts.capabilities.sets_title, WindowCapability::Native);
+    assert_eq!(parts.capabilities.frame_rate_hint, Availability::Native);
     assert_eq!(parts.into_state(), state);
+}
+
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
 }
 
 fn parts_leave_the_revision_and_owner_to_the_publishing_window() {
     let owner = CapabilitiesOwner::new(NonZeroU64::MIN);
-    let first = WindowState::new(
-        WindowGeometry::new(None, Size::new(1.0, 1.0)),
-        Size::new(1.0, 1.0),
-    )
-    .with_capabilities(WindowCapabilities::ALL.owned_by(owner));
+    let first = WindowState::new(WindowGeometry::unplaced(extent(1.0, 1.0)), extent(1.0, 1.0))
+        .with_capabilities(WindowCapabilities::ALL.owned_by(owner));
     let published = first
         .successor(first.clone().with_focused(true))
         .expect("a revision is left");

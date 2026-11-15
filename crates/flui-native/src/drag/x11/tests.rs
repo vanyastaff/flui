@@ -400,8 +400,34 @@ fn server() -> std::sync::MutexGuard<'static, Option<RustConnection>> {
         *server = RustConnection::connect(None)
             .ok()
             .map(|(connection, _)| connection);
+        if let Some(connection) = server.as_ref() {
+            assert_no_window_manager(connection);
+        }
     }
     server
+}
+
+/// The live cases run on a display no window manager holds, as CI's is: a
+/// manager reparents and refocuses their windows and takes their
+/// `ConfigureWindow` requests as its own to decide, so the cases would fail
+/// on what it does, not on the transfer. A manager owns the screen's
+/// `WM_S0` selection (ICCCM §2.8).
+fn assert_no_window_manager(connection: &RustConnection) {
+    use x11rb::protocol::xproto::ConnectionExt as _;
+
+    let owner = connection
+        .intern_atom(false, b"WM_S0")
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .and_then(|atom| connection.get_selection_owner(atom.atom).ok())
+        .and_then(|cookie| cookie.reply().ok())
+        .map_or(x11rb::NONE, |reply| reply.owner);
+    assert_eq!(
+        owner,
+        x11rb::NONE,
+        "a window manager runs on this display (it owns WM_S0): the live drag cases \
+         need one with none, as CI's `xvfb-run` display is"
+    );
 }
 
 /// The transfer and one window of its connection a source drags over.

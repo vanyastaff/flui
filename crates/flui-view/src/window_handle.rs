@@ -63,6 +63,16 @@ impl WindowHandle {
         self.open()?.control.submit(command)
     }
 
+    /// Whether the window is still open: `false` once it has closed or its
+    /// host is gone, when every other call answers closed.
+    ///
+    /// Reads nothing of the window, so it is the question to ask where only
+    /// that matters: [`state`](Self::state) reads the window's snapshot.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        self.open().is_ok()
+    }
+
     /// The window's last published state, with the
     /// [`capabilities`](WindowState::capabilities) that say which commands it
     /// honours.

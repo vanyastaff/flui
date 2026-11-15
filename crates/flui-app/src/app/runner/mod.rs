@@ -358,6 +358,21 @@ where
     crate::app::Application::new().run(root)
 }
 
+/// The one check of an application's window options, before any runner
+/// starts, on every platform: the numbers a window command would refuse (a
+/// size or position that is not finite, a size or limit that encloses no
+/// area, a minimum above the maximum) refuse the start, naming the option.
+/// A host checks the options of every window it opens later itself
+/// (`WindowOptions::geometry`).
+pub(in crate::app) fn check_window_options(
+    config: &crate::app::AppConfig,
+) -> Result<(), LaunchError> {
+    flui_platform::WindowOptions::from(config)
+        .geometry()
+        .map(drop)
+        .map_err(LaunchError::InvalidWindowOption)
+}
+
 /// [`Application::run`](crate::Application::run) on this platform.
 pub(in crate::app) fn run<V>(
     application: crate::app::Application,
@@ -396,6 +411,10 @@ where
         // configured its own subscriber first keeps it.
         let _installation = super::logging::init_managed_logging(&config);
         let opening = opening.or_entry_declarations();
+        // Before anything starts, as on the desktop: window options no window
+        // can be asked for start nothing, though these hosts size their
+        // window themselves.
+        check_window_options(&config)?;
         // Android's `AndroidApp` before anything is installed, so a run with
         // no entry leaves nothing behind.
         #[cfg(target_os = "android")]
@@ -651,7 +670,7 @@ mod tests {
                 let matches_marker = APP_RUNTIME
                     .with(|slot| {
                         slot.borrow()
-                            .with_redraw_window(|w| w.state().outer.size == marker_size)
+                            .with_redraw_window(|w| w.state().outer.size() == marker_size)
                     })
                     .unwrap_or(false);
                 saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);

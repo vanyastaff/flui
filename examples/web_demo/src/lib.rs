@@ -140,8 +140,8 @@ pub fn start() {
     handler.logged.set(opened.metrics);
     log(&format!(
         "Window created: {}x{} (scale: {})",
-        opened.content_size.width,
-        opened.content_size.height,
+        opened.content_size.width(),
+        opened.content_size.height(),
         opened.metrics.map_or(1.0, |metrics| metrics.scale().get())
     ));
 

@@ -68,7 +68,7 @@ impl MediaQuerySource {
         Self {
             data: RefCell::new(MediaQueryData {
                 size: snapshot.metrics.map_or(
-                    snapshot.content_size,
+                    snapshot.content_size.get(),
                     flui_foundation::geometry::WindowMetrics::logical,
                 ),
                 device_pixel_ratio,

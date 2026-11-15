@@ -31,9 +31,12 @@ struct StubControl {
 impl WindowControl for StubControl {
     fn state(&self) -> WindowState {
         let size = Size::new(320.0, 240.0);
-        WindowState::new(WindowGeometry::new(None, size), size)
-            .with_title(Some("Stub".to_owned()))
-            .with_capabilities(WindowCapabilities::ALL)
+        WindowState::new(
+            WindowGeometry::try_new(None, size).expect("a finite size"),
+            flui_platform::WindowExtent::try_new(size).expect("a finite size"),
+        )
+        .with_title(Some("Stub".to_owned()))
+        .with_capabilities(WindowCapabilities::ALL)
     }
     fn submit(&self, command: WindowCommand) -> Result<(), SubmitError> {
         let admitted = command.admit(&self.state().capabilities)?;
@@ -153,7 +156,12 @@ fn commands_reach_the_control_checked_and_in_order() {
     handle.set_frame(frame).expect("accepted");
     assert_eq!(
         handle.set_size(Size::new(0.0, 10.0)),
-        Err(SubmitError::Admission(AdmissionError::InvalidGeometry)),
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry(
+            flui_platform::InvalidGeometry::Empty {
+                width: 0.0,
+                height: 10.0
+            }
+        ))),
         "a size that describes no window is refused before the control"
     );
     handle.hide().expect("accepted");
@@ -217,7 +225,10 @@ struct Overtaken {
 impl WindowControl for Overtaken {
     fn state(&self) -> WindowState {
         let size = Size::new(320.0, 240.0);
-        let first = WindowState::new(WindowGeometry::new(None, size), size);
+        let first = WindowState::new(
+            WindowGeometry::try_new(None, size).expect("a finite size"),
+            flui_platform::WindowExtent::try_new(size).expect("a finite size"),
+        );
         if self.reads.replace(self.reads.get() + 1) == 0 {
             let newer = first
                 .successor(first.clone().with_title(Some("newer".to_owned())))

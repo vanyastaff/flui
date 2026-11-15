@@ -65,8 +65,8 @@ pub enum UnsupportedReason {
 
 /// Why a capability that lasts is not here: an [`UnsupportedReason`] that no
 /// later attempt changes. A host records it against the capability and every
-/// refusal of it answers it
-/// ([`WindowCapabilities::unavailable`](crate::WindowCapabilities::unavailable)).
+/// refusal of it answers it: a window capability the window lacks holds it
+/// ([`WindowCapability::Absent`](crate::WindowCapability::Absent)).
 ///
 /// It holds one of three reasons:
 /// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform),
@@ -74,7 +74,7 @@ pub enum UnsupportedReason {
 /// [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost), named by the
 /// constants of the same names and read back with [`reason`](Self::reason).
 /// The vocabulary is [`UnsupportedReason`]'s; this type only narrows it. A
-/// capability is published as `Unavailable` until the host publishes it
+/// capability is published as absent until the host publishes it
 /// again, so a reason that asks to be tried again
 /// ([`Unavailable`](UnsupportedReason::Unavailable)) is not one it can carry,
 /// nor are the reasons about a declaration, a window or a registration
@@ -117,8 +117,8 @@ const _: () = assert!(
 
 impl CapabilityAbsence {
     /// No device of this platform has it
-    /// ([`UnsupportedReason::NotOnThisPlatform`]). What a capability set to
-    /// `Unavailable` by hand answers, and the default.
+    /// ([`UnsupportedReason::NotOnThisPlatform`]). What a window that honours
+    /// nothing answers for each capability, and the default.
     pub const NOT_ON_THIS_PLATFORM: Self = Self(Lasting::Platform);
     /// The platform has it and this device or its operating system build
     /// lacks it ([`UnsupportedReason::NotOnThisDevice`]).

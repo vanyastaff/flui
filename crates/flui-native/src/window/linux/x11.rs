@@ -374,10 +374,7 @@ pub(crate) mod support {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::{
-        Availability, CapabilityAbsence, WindowCapabilities, WindowCommand, WindowMaterial,
-        WindowMode,
-    };
+    use flui_platform::{Availability, CapabilityAbsence, WindowCapabilities, WindowCapability};
 
     /// The `_NET_SUPPORTED` atoms this model reads, as the server numbered
     /// them.
@@ -476,46 +473,58 @@ pub(crate) mod support {
     /// moves and resizes at the window's request (ADR-0286 §10), so it needs a
     /// window manager that takes `_NET_WM_MOVERESIZE`.
     pub(crate) fn capabilities(support: WindowManagerSupport) -> WindowCapabilities {
-        let device = CapabilityAbsence::NOT_ON_THIS_DEVICE;
-        let mut capabilities = WindowCapabilities::ALL
-            .unavailable(
-                &WindowCommand::SetMaterial(WindowMaterial::System),
-                CapabilityAbsence::NOT_ON_THIS_PLATFORM,
-            )
-            // The GPU driver presents through the Present extension on a
-            // connection of its own, and the server reports a present's
-            // completion to that connection alone: no other client learns when
-            // the window's frames reached the screen.
-            .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
-            // X11 has no on-screen keyboard protocol and no system gesture
-            // edges.
-            .without_keyboard_inset(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
-            .without_system_gestures(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
-        capabilities.frame_rate_hint = Availability::Unavailable;
-        if !support.moves_and_resizes {
-            capabilities = capabilities.without_app_title_bar(device);
-        }
-        if !support.managed() {
-            capabilities =
-                capabilities.unavailable(&WindowCommand::SetMode(WindowMode::Minimized), device);
-            capabilities.observes_minimized = Availability::Unavailable;
-        }
-        if !support.maximizes {
-            capabilities =
-                capabilities.unavailable(&WindowCommand::SetMode(WindowMode::Maximized), device);
-        }
-        if !support.fullscreen {
-            capabilities =
-                capabilities.unavailable(&WindowCommand::SetMode(WindowMode::Fullscreen), device);
-        }
+        use WindowCapability::{Absent, Native};
+
+        // What the window manager answers for, where one runs and lists it.
+        let from_the_window_manager = |supported: bool| {
+            if supported {
+                Native
+            } else {
+                Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
+            }
+        };
+        // Each capability the window has is named, so one the contract gains
+        // is absent here until this host carries it out. What stays as
+        // `NONE` has it is the platform's: a material behind the window, the
+        // presentation report (the GPU driver presents through the Present
+        // extension on a connection of its own, and the server reports a
+        // present's completion to that connection alone), the keyboard's
+        // geometry and system gesture edges (X11 has no on-screen keyboard
+        // protocol and no such edges), and a refresh-rate request.
+        let mut capabilities = WindowCapabilities::NONE;
+        capabilities.sets_title = Native;
+        capabilities.sets_position = Native;
+        capabilities.sets_size = Native;
+        capabilities.sets_constraints = Native;
+        capabilities.sets_resizable = Native;
+        capabilities.sets_frame = Native;
+        capabilities.hides = Native;
+        capabilities.shows = Native;
+        capabilities.activates = Native;
+        capabilities.closes = Native;
+        capabilities.observes_position = Availability::Native;
+        capabilities.places_at_open = Availability::Native;
+        capabilities.app_title_bar = from_the_window_manager(support.moves_and_resizes);
+        capabilities.minimizes = from_the_window_manager(support.managed());
+        capabilities.observes_minimized = if support.managed() {
+            Availability::Native
+        } else {
+            Availability::Unavailable
+        };
+        capabilities.maximizes = from_the_window_manager(support.maximizes);
+        capabilities.enters_fullscreen = from_the_window_manager(support.fullscreen);
         capabilities
     }
 
     #[cfg(test)]
     mod tests {
-        use flui_platform::{AdmissionError, UnsupportedReason};
+        use flui_platform::{
+            AdmissionError, CapabilityParts, UnsupportedReason, WindowCommand, WindowMaterial,
+            WindowMode,
+        };
 
         use super::*;
+        use crate::window::capabilities::CapabilityReading as _;
 
         const ATOMS: SupportAtoms = SupportAtoms {
             maximized_horz: 302,
@@ -589,34 +598,43 @@ pub(crate) mod support {
             for (case, manager, supported, [minimizes, maximizes, fullscreen, observes]) in table {
                 let honoured =
                     capabilities(WindowManagerSupport::read(*manager, supported, &ATOMS));
-                assert_eq!(honoured.minimizes, *minimizes, "{case}: minimizes");
-                assert_eq!(honoured.maximizes, *maximizes, "{case}: maximizes");
                 assert_eq!(
-                    honoured.enters_fullscreen, *fullscreen,
+                    honoured.minimizes.availability(),
+                    *minimizes,
+                    "{case}: minimizes"
+                );
+                assert_eq!(
+                    honoured.maximizes.availability(),
+                    *maximizes,
+                    "{case}: maximizes"
+                );
+                assert_eq!(
+                    honoured.enters_fullscreen.availability(),
+                    *fullscreen,
                     "{case}: fullscreen"
                 );
                 assert_eq!(honoured.observes_minimized, *observes, "{case}: observes");
                 for always in [
-                    honoured.sets_title,
-                    honoured.sets_position,
-                    honoured.sets_size,
-                    honoured.sets_constraints,
-                    honoured.sets_resizable,
-                    honoured.sets_frame,
-                    honoured.hides,
-                    honoured.shows,
-                    honoured.activates,
-                    honoured.closes,
+                    honoured.sets_title.availability(),
+                    honoured.sets_position.availability(),
+                    honoured.sets_size.availability(),
+                    honoured.sets_constraints.availability(),
+                    honoured.sets_resizable.availability(),
+                    honoured.sets_frame.availability(),
+                    honoured.hides.availability(),
+                    honoured.shows.availability(),
+                    honoured.activates.availability(),
+                    honoured.closes.availability(),
                     honoured.observes_position,
                     honoured.places_at_open,
                 ] {
                     assert_eq!(always, Native, "{case}: what the server does itself");
                 }
                 assert_eq!(honoured.frame_rate_hint, Unavailable, "{case}");
-                assert_eq!(honoured.material, Unavailable, "{case}");
+                assert_eq!(honoured.material.availability(), Unavailable, "{case}");
                 let moves = *manager == Extended && supported.contains(&ATOMS.moveresize);
                 assert_eq!(
-                    honoured.app_title_bar,
+                    honoured.app_title_bar.availability(),
                     if moves { Native } else { Unavailable },
                     "{case}: a title bar of the application's"
                 );
@@ -689,6 +707,48 @@ pub(crate) mod support {
             );
             assert_eq!(reason(WindowCommand::SetMode(WindowMode::Normal)), None);
         }
+
+        /// Every capability of an X11 window under a window manager that lists
+        /// everything, named: a capability the contract gains does not compile
+        /// here until this host says whether its window has it, and none is
+        /// had for not being taken away.
+        #[test]
+        fn an_x11_window_has_the_capabilities_it_names() {
+            use WindowCapability::Native;
+
+            let honoured = capabilities(WindowManagerSupport::read(
+                WindowManager::Extended,
+                &[302, 303, 304, 305],
+                &ATOMS,
+            ));
+            assert_eq!(
+                honoured.into_parts(),
+                CapabilityParts {
+                    sets_title: Native,
+                    sets_position: Native,
+                    sets_size: Native,
+                    sets_constraints: Native,
+                    sets_resizable: Native,
+                    sets_frame: Native,
+                    app_title_bar: Native,
+                    minimizes: Native,
+                    maximizes: Native,
+                    enters_fullscreen: Native,
+                    hides: Native,
+                    shows: Native,
+                    activates: Native,
+                    closes: Native,
+                    material: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    observes_position: Availability::Native,
+                    observes_minimized: Availability::Native,
+                    places_at_open: Availability::Native,
+                    frame_rate_hint: Availability::Unavailable,
+                }
+            );
+        }
     }
 }
 
@@ -706,7 +766,7 @@ pub(crate) mod placement {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayInfo, DisplaySnapshot, WindowGeometry};
+    use flui_platform::{DisplayInfo, DisplaySnapshot, InvalidGeometry, WindowGeometry};
 
     /// The largest extent a window is given, in device pixels.
     pub(crate) const MAX_EXTENT: u16 = 32_767;
@@ -813,9 +873,16 @@ pub(crate) mod placement {
 
     /// `bounds`, in device pixels, at `scale` as the logical geometry the
     /// window state publishes; a scale that is not one is taken as 1.
-    pub(crate) fn logical_geometry(bounds: Bounds<i32>, scale: f64) -> WindowGeometry {
+    ///
+    /// # Errors
+    /// [`InvalidGeometry`] when the rectangle over the scale describes no
+    /// window.
+    pub(crate) fn logical_geometry(
+        bounds: Bounds<i32>,
+        scale: f64,
+    ) -> Result<WindowGeometry, InvalidGeometry> {
         let scale = if is_scale(scale) { scale } else { 1.0 };
-        WindowGeometry::new(
+        WindowGeometry::try_new(
             Some(Point::new(
                 f64::from(bounds.origin.x) / scale,
                 f64::from(bounds.origin.y) / scale,
@@ -932,11 +999,11 @@ pub(crate) mod placement {
             assert_eq!(outer.size.width, i32::MAX);
             assert_eq!(
                 logical_geometry(Bounds::new(Point::new(98, 50), Size::new(646, 514)), 2.0),
-                WindowGeometry::new(Some(Point::new(49.0, 25.0)), Size::new(323.0, 257.0))
+                WindowGeometry::try_new(Some(Point::new(49.0, 25.0)), Size::new(323.0, 257.0))
             );
             assert_eq!(
                 logical_geometry(Bounds::new(Point::new(4, 2), Size::new(8, 6)), f64::NAN),
-                WindowGeometry::new(Some(Point::new(4.0, 2.0)), Size::new(8.0, 6.0)),
+                WindowGeometry::try_new(Some(Point::new(4.0, 2.0)), Size::new(8.0, 6.0)),
                 "a scale that is not one is 1"
             );
         }
@@ -1018,7 +1085,7 @@ pub(crate) mod hints {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::Size;
-    use flui_platform::SizeConstraints;
+    use flui_platform::{SizeConstraints, WindowExtent};
 
     use super::placement::device_extent;
 
@@ -1044,10 +1111,10 @@ pub(crate) mod hints {
                 max: held,
             };
         }
-        let device = |size: Size<f64>| {
+        let device = |size: WindowExtent| {
             Some((
-                i32::from(device_extent(size.width, scale)?),
-                i32::from(device_extent(size.height, scale)?),
+                i32::from(device_extent(size.width(), scale)?),
+                i32::from(device_extent(size.height(), scale)?),
             ))
         };
         SizeLimits {
@@ -1070,10 +1137,11 @@ pub(crate) mod hints {
 
         #[test]
         fn a_window_asks_the_limits_it_was_given() {
-            let constraints = SizeConstraints::new(
+            let constraints = SizeConstraints::try_new(
                 Some(Size::new(200.0, 150.0)),
                 Some(Size::new(2000.0, 1500.0)),
-            );
+            )
+            .expect("finite limits");
             let content = Size::new(640, 480);
             // (case, constraints, resizable, scale, limits)
             let table = [
@@ -1116,7 +1184,8 @@ pub(crate) mod hints {
                 ),
                 (
                     "a limit past the extent is held at it",
-                    SizeConstraints::new(None, Some(Size::new(1.0e9, 10.0))),
+                    SizeConstraints::try_new(None, Some(Size::new(1.0e9, 10.0)))
+                        .expect("finite limits"),
                     true,
                     1.0,
                     SizeLimits {

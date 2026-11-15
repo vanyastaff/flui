@@ -260,7 +260,7 @@ mod cases {
     fn open_peer(target: &Client, role: Role) -> Peer {
         let peer = Peer::open(role);
         target.until("sway to tile the peer beside the window", || {
-            target.window.state().content_size.width < f64::from(OUTPUT.0) / 2.0
+            target.window.state().content_size.width() < f64::from(OUTPUT.0) / 2.0
         });
         // The frame drawn at the new size reaches sway on the next turns.
         for _ in 0..10 {

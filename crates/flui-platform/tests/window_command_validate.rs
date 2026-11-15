@@ -3,11 +3,12 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, CapabilitiesOwner,
-    CapabilityAbsence, ControlsOffset, InvalidControlsOffset, KeyboardInset, SizeConstraints,
+    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, CapabilitiesOwner, CapabilityAbsence,
+    ControlsOffset, InvalidControlsOffset, InvalidGeometry, KeyboardInset, SizeConstraints,
     SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
-    WindowCommand, WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial,
-    WindowMode, WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
+    WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFrame,
+    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOption, WindowOptions,
+    WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -15,15 +16,20 @@ fn size(width: f64, height: f64) -> Size<f64> {
 }
 
 fn constraints(min: Option<Size<f64>>, max: Option<Size<f64>>) -> WindowCommand {
-    WindowCommand::SetConstraints(SizeConstraints::new(min, max))
+    WindowCommand::SetConstraints(SizeConstraints::try_new(min, max).expect("finite limits"))
 }
 
-fn invalid(command: &WindowCommand) {
+/// `command` is refused before any OS call, and the refusal names the numbers.
+fn invalid(command: &WindowCommand, refused: InvalidGeometry) {
     assert_eq!(
         command.validate(),
-        Err(AdmissionError::InvalidGeometry),
+        Err(AdmissionError::InvalidGeometry(refused)),
         "{command:?} must be refused before any OS call"
     );
+}
+
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(size(width, height)).expect("an extent")
 }
 
 fn valid(command: &WindowCommand) {
@@ -45,41 +51,77 @@ fn a_window_opens_with_balanced_input_unless_it_asks_for_low_latency() {
 }
 
 fn position_must_be_finite() {
-    invalid(&WindowCommand::SetPosition(Point::new(f64::NAN, 0.0)));
-    invalid(&WindowCommand::SetPosition(Point::new(0.0, f64::INFINITY)));
-    invalid(&WindowCommand::SetPosition(Point::new(
-        f64::NEG_INFINITY,
-        1.0,
-    )));
+    for (x, y) in [
+        (f64::NAN, 0.0),
+        (0.0, f64::INFINITY),
+        (f64::NEG_INFINITY, 1.0),
+    ] {
+        invalid(
+            &WindowCommand::SetPosition(Point::new(x, y)),
+            InvalidGeometry::Position { x, y },
+        );
+    }
     valid(&WindowCommand::SetPosition(Point::new(-1920.0, -40.0)));
 }
 
 fn size_must_be_finite_and_positive() {
-    invalid(&WindowCommand::SetSize(size(0.0, 100.0)));
-    invalid(&WindowCommand::SetSize(size(100.0, -1.0)));
-    invalid(&WindowCommand::SetSize(size(f64::NAN, 100.0)));
-    invalid(&WindowCommand::SetSize(size(100.0, f64::INFINITY)));
+    invalid(
+        &WindowCommand::SetSize(size(0.0, 100.0)),
+        InvalidGeometry::Empty {
+            width: 0.0,
+            height: 100.0,
+        },
+    );
+    for (width, height) in [(100.0, -1.0), (f64::NAN, 100.0), (100.0, f64::INFINITY)] {
+        invalid(
+            &WindowCommand::SetSize(size(width, height)),
+            InvalidGeometry::Extent { width, height },
+        );
+    }
     valid(&WindowCommand::SetSize(size(1.0, 1.0)));
 }
 
+/// A limit with no area is refused at admission; one that is no extent at all
+/// cannot be put in a command.
 fn constraints_with_a_bad_bound_are_refused() {
-    invalid(&constraints(Some(size(0.0, 10.0)), None));
-    invalid(&constraints(None, Some(size(10.0, f64::NAN))));
-    invalid(&constraints(
-        Some(size(-5.0, 10.0)),
-        Some(size(100.0, 100.0)),
-    ));
+    invalid(
+        &constraints(Some(size(0.0, 10.0)), None),
+        InvalidGeometry::Empty {
+            width: 0.0,
+            height: 10.0,
+        },
+    );
+    invalid(
+        &constraints(None, Some(size(10.0, 0.0))),
+        InvalidGeometry::Empty {
+            width: 10.0,
+            height: 0.0,
+        },
+    );
+    for bad in [
+        size(10.0, f64::NAN),
+        size(-5.0, 10.0),
+        size(f64::INFINITY, 10.0),
+    ] {
+        assert!(
+            SizeConstraints::try_new(None, Some(bad)).is_err(),
+            "{bad:?}"
+        );
+        assert!(
+            SizeConstraints::try_new(Some(bad), Some(size(100.0, 100.0))).is_err(),
+            "{bad:?}"
+        );
+    }
 }
 
 fn minimum_above_maximum_in_either_dimension_is_refused() {
-    invalid(&constraints(
-        Some(size(200.0, 50.0)),
-        Some(size(100.0, 100.0)),
-    ));
-    invalid(&constraints(
-        Some(size(50.0, 200.0)),
-        Some(size(100.0, 100.0)),
-    ));
+    for min in [extent(200.0, 50.0), extent(50.0, 200.0)] {
+        let max = extent(100.0, 100.0);
+        invalid(
+            &WindowCommand::SetConstraints(SizeConstraints::new(Some(min), Some(max))),
+            InvalidGeometry::Limits { min, max },
+        );
+    }
     valid(&constraints(
         Some(size(100.0, 100.0)),
         Some(size(100.0, 100.0)),
@@ -88,6 +130,78 @@ fn minimum_above_maximum_in_either_dimension_is_refused() {
         Some(size(50.0, 50.0)),
         Some(size(100.0, 100.0)),
     ));
+}
+
+/// An opening asks for its size, limits and position as the commands do, and
+/// is refused for the same numbers, the error naming the option: nothing a
+/// command could not ask for reaches a host at open.
+fn an_opening_is_refused_for_what_a_command_is_refused_for() {
+    let refusal = |command: WindowCommand| match command.validate() {
+        Ok(()) => None,
+        Err(AdmissionError::InvalidGeometry(refused)) => Some(refused),
+        Err(other) => panic!("{other:?} is no geometry refusal"),
+    };
+    let named = |options: &WindowOptions| {
+        options
+            .geometry()
+            .err()
+            .map(|refused| (refused.option, refused.refused))
+    };
+    let limits = [
+        (
+            Some(extent(800.0, 600.0)),
+            Some(extent(400.0, 300.0)),
+            WindowOption::Limits,
+        ),
+        (
+            Some(extent(800.0, 600.0)),
+            Some(extent(900.0, 300.0)),
+            WindowOption::Limits,
+        ),
+        (Some(WindowExtent::ZERO), None, WindowOption::MinSize),
+        (None, Some(extent(0.0, 300.0)), WindowOption::MaxSize),
+        (
+            Some(extent(400.0, 300.0)),
+            Some(extent(800.0, 600.0)),
+            WindowOption::Limits,
+        ),
+        (None, None, WindowOption::Limits),
+    ];
+    for (min, max, option) in limits {
+        let options = WindowOptions::default().min_size(min).max_size(max);
+        let command = WindowCommand::SetConstraints(SizeConstraints::new(min, max));
+        assert_eq!(
+            named(&options),
+            refusal(command).map(|refused| (option, refused)),
+            "{min:?} {max:?}"
+        );
+    }
+    for asked in [
+        size(0.0, 600.0),
+        size(f64::NAN, 600.0),
+        size(800.0, -1.0),
+        size(800.0, 600.0),
+    ] {
+        let options = WindowOptions::default().size(asked);
+        assert_eq!(
+            named(&options),
+            refusal(WindowCommand::SetSize(asked)).map(|refused| (WindowOption::Size, refused)),
+            "{asked:?}"
+        );
+    }
+    for at in [
+        Point::new(f64::NAN, 0.0),
+        Point::new(0.0, f64::INFINITY),
+        Point::new(-1920.0, 40.0),
+    ] {
+        let options = WindowOptions::default().position(Some(at));
+        assert_eq!(
+            named(&options),
+            refusal(WindowCommand::SetPosition(at))
+                .map(|refused| (WindowOption::Position, refused)),
+            "{at:?}"
+        );
+    }
 }
 
 fn open_or_absent_constraints_are_valid() {
@@ -140,7 +254,7 @@ fn a_controls_offset_is_finite_and_non_negative() {
 fn a_window_that_cannot_take_the_app_title_bar_opens_with_the_system_frame() {
     let bar = WindowFrame::AppTitleBar(AppTitleBar::new());
     let mut takes_it = WindowCapabilities::NONE;
-    takes_it.app_title_bar = Availability::Native;
+    takes_it.app_title_bar = WindowCapability::Native;
     assert_eq!(bar.at_open(&takes_it), bar);
     assert_eq!(bar.at_open(&WindowCapabilities::NONE), WindowFrame::System);
     for frame in [WindowFrame::System, WindowFrame::None] {
@@ -163,7 +277,7 @@ fn commands_without_numbers_are_always_valid() {
     }
 }
 
-type Capability = fn(&mut WindowCapabilities) -> &mut Availability;
+type Capability = fn(&mut WindowCapabilities) -> &mut WindowCapability;
 
 /// What admitting `command` against `capabilities` answers, the token aside.
 fn admits(
@@ -214,9 +328,9 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
     for (command, capability) in rows {
         let mut all = WindowCapabilities::ALL;
         assert_eq!(admits(&command, &all), Ok(()), "{command:?}");
-        *capability(&mut all) = Availability::Emulated;
+        *capability(&mut all) = WindowCapability::Emulated;
         assert_eq!(admits(&command, &all), Ok(()), "{command:?} emulated");
-        *capability(&mut all) = Availability::Unavailable;
+        *capability(&mut all) = WindowCapability::NOT_ON_THIS_PLATFORM;
         assert_eq!(
             admits(&command, &all),
             Err(AdmissionError::Unsupported(Unsupported::new(
@@ -244,18 +358,23 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
                 UnsupportedReason::NotYetOnThisHost,
             ),
         ] {
-            let marked = WindowCapabilities::ALL.unavailable(&command, absence);
+            let mut marked = WindowCapabilities::ALL.unavailable(&command, absence);
             assert_eq!(
-                marked.availability(&command),
-                Availability::Unavailable,
+                marked.capability(&command),
+                WindowCapability::Absent(absence),
                 "{command:?} taken away, {absence:?}"
             );
+            assert_eq!(
+                *capability(&mut marked),
+                WindowCapability::Absent(absence),
+                "{command:?} is admitted against its own field"
+            );
+            assert!(!marked.permits(&command), "{command:?}");
             assert_eq!(
                 admits(&command, &marked),
                 Err(AdmissionError::Unsupported(Unsupported::new(reason))),
                 "{command:?} without its capability, {absence:?}"
             );
-            assert_eq!(marked.refusal(&command), absence, "{command:?}");
             assert_ne!(marked, WindowCapabilities::ALL, "{command:?}");
         }
         assert_ne!(
@@ -266,15 +385,14 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
     }
 }
 
-/// An absence matters only while its capability is unavailable: a host that
-/// makes the capability available again publishes the same capabilities as
-/// one that never marked it, and the revision does not move for the absence
-/// left behind.
-fn an_absence_left_in_an_available_slot_is_no_difference() {
+/// A host that makes a capability available again publishes the same
+/// capabilities as one that never marked it absent, and the revision does not
+/// move: the absence went with the value that held it.
+fn a_capability_restored_is_the_one_never_taken_away() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
     let mut restored =
         WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
-    restored.material = Availability::Native;
+    restored.material = WindowCapability::Native;
     assert_eq!(restored, WindowCapabilities::ALL);
     assert_eq!(
         hash_of(&restored),
@@ -290,7 +408,7 @@ fn an_absence_left_in_an_available_slot_is_no_difference() {
         .expect("an equal sample");
     assert_eq!(
         next.revision, published.revision,
-        "an absence in an available slot moved the revision"
+        "a capability restored moved the revision"
     );
     assert_eq!(
         next.capabilities.revision(),
@@ -367,14 +485,18 @@ fn admit_checks_numbers_before_capabilities() {
     let bad = WindowCommand::SetSize(size(-1.0, 10.0));
     assert_eq!(
         admits(&bad, &WindowCapabilities::NONE),
-        Err(AdmissionError::InvalidGeometry)
+        Err(AdmissionError::InvalidGeometry(InvalidGeometry::Extent {
+            width: -1.0,
+            height: 10.0
+        }))
     );
 }
 
 fn base_state() -> WindowState {
     WindowState::new(
-        WindowGeometry::new(Some(Point::new(10.0, 20.0)), size(800.0, 600.0)),
-        size(784.0, 561.0),
+        WindowGeometry::try_new(Some(Point::new(10.0, 20.0)), size(800.0, 600.0))
+            .expect("a finite rectangle"),
+        WindowExtent::try_new(size(784.0, 561.0)).expect("a finite extent"),
     )
 }
 
@@ -433,7 +555,7 @@ fn metrics(width: i32, height: i32, scale: f64) -> WindowMetrics {
 /// Every fact the snapshot holds is a difference the revision moves for.
 fn each_window_fact_advances_the_revision() {
     let mut honours_title = WindowCapabilities::NONE;
-    honours_title.sets_title = Availability::Native;
+    honours_title.sets_title = WindowCapability::Native;
     let facts: [(&str, WindowState); 12] = [
         ("focus", base_state().with_focused(true)),
         ("visibility", base_state().with_visible(false)),
@@ -509,7 +631,7 @@ fn a_report_that_is_not_drawable_keeps_the_metrics() {
     assert_eq!(with_mode.revision.get(), 2);
     assert_eq!(with_mode.metrics, Some(metrics(800, 600, 1.0)));
     assert_eq!(
-        WindowState::new(WindowGeometry::new(None, size(0.0, 0.0)), size(0.0, 0.0)).metrics,
+        WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO).metrics,
         None,
         "nothing drawable reported yet"
     );
@@ -563,7 +685,7 @@ fn shown_minimized_and_occluded_are_three_facts() {
 /// ignored.
 fn the_capabilities_revision_moves_only_with_the_capabilities() {
     let mut honours_title = WindowCapabilities::ALL;
-    honours_title.sets_title = Availability::Unavailable;
+    honours_title.sets_title = WindowCapability::NOT_ON_THIS_PLATFORM;
     let first = base_state()
         .successor(base_state().with_capabilities(WindowCapabilities::ALL))
         .expect("capabilities change");
@@ -637,7 +759,7 @@ fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
     );
 
     let mut without_fullscreen = WindowCapabilities::ALL;
-    without_fullscreen.enters_fullscreen = Availability::Unavailable;
+    without_fullscreen.enters_fullscreen = WindowCapability::NOT_ON_THIS_PLATFORM;
     let revised = published
         .successor(base_state().with_capabilities(without_fullscreen))
         .expect("a capability changes");
@@ -730,6 +852,10 @@ fn window_command_validate() {
                 minimum_above_maximum_in_either_dimension_is_refused,
             ),
             (
+                "an_opening_is_refused_for_what_a_command_is_refused_for",
+                an_opening_is_refused_for_what_a_command_is_refused_for,
+            ),
+            (
                 "open_or_absent_constraints_are_valid",
                 open_or_absent_constraints_are_valid,
             ),
@@ -802,13 +928,17 @@ fn window_command_validate() {
                 a_token_opens_only_on_the_window_it_was_admitted_for,
             ),
             (
-                "an_absence_left_in_an_available_slot_is_no_difference",
-                an_absence_left_in_an_available_slot_is_no_difference,
+                "a_capability_restored_is_the_one_never_taken_away",
+                a_capability_restored_is_the_one_never_taken_away,
             ),
             ("no_absence_is_retryable", no_absence_is_retryable),
             (
                 "the_presentation_report_answers_why_it_is_missing",
                 the_presentation_report_answers_why_it_is_missing,
+            ),
+            (
+                "a_refusal_answers_the_reason_the_capability_holds",
+                a_refusal_answers_the_reason_the_capability_holds,
             ),
         ],
     );
@@ -818,26 +948,21 @@ fn window_command_validate() {
 /// it honours, and one left behind once it reports again is no difference.
 fn the_presentation_report_answers_why_it_is_missing() {
     assert_eq!(
-        WindowCapabilities::ALL.presentation_feedback(),
-        Ok(Availability::Native)
+        WindowCapabilities::ALL.reports_presentation,
+        WindowCapability::Native
     );
     assert_eq!(
-        WindowCapabilities::NONE
-            .presentation_feedback()
-            .map_err(|absent| absent.reason),
-        Err(UnsupportedReason::NotOnThisPlatform),
-        "set by hand, the platform's"
+        WindowCapabilities::NONE.reports_presentation,
+        WindowCapability::NOT_ON_THIS_PLATFORM,
+        "a window that reports nothing: the platform's"
     );
-    let host = WindowCapabilities::ALL
-        .without_presentation_feedback(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
-    assert_eq!(
-        host.presentation_feedback(),
-        Err(Unsupported::new(UnsupportedReason::NotYetOnThisHost))
-    );
+    let mut host = WindowCapabilities::ALL;
+    host.reports_presentation = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    assert!(!host.reports_presentation.is_available());
+    let mut device = WindowCapabilities::ALL;
+    device.reports_presentation = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
     assert_ne!(
-        host,
-        WindowCapabilities::ALL
-            .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_DEVICE),
+        host, device,
         "the absence is part of what the window honours"
     );
     let shown = flui_platform::FramePresented::new(flui_platform::EventTime::from_nanos(1));
@@ -847,7 +972,34 @@ fn the_presentation_report_answers_why_it_is_missing() {
         "a zero refresh, a variable rate, is no interval"
     );
     let mut restored = host;
-    restored.reports_presentation = Availability::Native;
+    restored.reports_presentation = WindowCapability::Native;
     assert_eq!(restored, WindowCapabilities::ALL);
     assert_eq!(hash_of(&restored), hash_of(&WindowCapabilities::ALL));
+}
+
+/// A capability is one value, so the reason a refusal answers is the one the
+/// field holds now: marking a capability absent a second time, by its command
+/// or by its field, leaves no earlier reason behind to answer in its place.
+fn a_refusal_answers_the_reason_the_capability_holds() {
+    let material = WindowCommand::SetMaterial(WindowMaterial::System);
+    let mut capabilities =
+        WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    capabilities.material = WindowCapability::Native;
+    assert_eq!(admits(&material, &capabilities), Ok(()));
+    capabilities.material = WindowCapability::NOT_ON_THIS_PLATFORM;
+    assert_eq!(
+        admits(&material, &capabilities),
+        Err(AdmissionError::Unsupported(Unsupported::new(
+            UnsupportedReason::NotOnThisPlatform
+        ))),
+        "the reason set last, not the one marked first"
+    );
+    assert_eq!(
+        capabilities.capability(&material),
+        capabilities.material,
+        "a command reads the field it is admitted against"
+    );
+    let parts = capabilities.into_parts();
+    assert_eq!(parts.material, capabilities.material);
+    assert_eq!(parts.into_capabilities(), capabilities);
 }
