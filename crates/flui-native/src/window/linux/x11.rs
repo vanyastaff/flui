@@ -417,6 +417,17 @@ pub(crate) mod support {
                 moves_and_resizes: lists(atoms.moveresize),
             }
         }
+
+        /// What the properties a window manager keeps on a window say
+        /// (`written`: its mode in `WM_STATE` and `_NET_WM_STATE`, its frame
+        /// in `_NET_FRAME_EXTENTS`), which stands only while a window manager
+        /// runs. One that was killed or crashed leaves them on the windows it
+        /// managed, and the server maps those again as its connection closes,
+        /// so without a window manager they are a dead one's and say nothing:
+        /// the window is in normal mode and has no frame.
+        pub(crate) fn kept<T: Default>(self, written: T) -> T {
+            if self.managed { written } else { T::default() }
+        }
     }
 
     /// What an X11 window honours under `support`. A title bar of the
@@ -555,6 +566,35 @@ pub(crate) mod support {
                     if moves { Native } else { Unavailable },
                     "{case}: a title bar of the application's"
                 );
+            }
+        }
+
+        /// The mode a window manager wrote on a window is the window's while
+        /// that window manager runs: an iconic, fullscreen window whose window
+        /// manager was killed is a mapped window in normal mode.
+        #[test]
+        fn what_a_window_manager_wrote_stands_while_it_runs() {
+            use crate::window::linux::x11::mode::{NetWmState, WmState, mode_flags};
+            use crate::window::state::mode_of;
+
+            let written = || {
+                mode_flags(
+                    Some(WmState::Iconic),
+                    NetWmState {
+                        hidden: true,
+                        fullscreen: true,
+                        ..NetWmState::default()
+                    },
+                )
+            };
+            // (case, managed, mode)
+            let table = [
+                ("its window manager runs", true, WindowMode::Minimized),
+                ("its window manager is gone", false, WindowMode::Normal),
+            ];
+            for (case, managed, mode) in table {
+                let support = WindowManagerSupport::read(managed, &[304], &ATOMS);
+                assert_eq!(mode_of(support.kept(written())), mode, "{case}");
             }
         }
 

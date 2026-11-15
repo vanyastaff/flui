@@ -53,13 +53,14 @@ pub mod decode {
     use flui_platform::input_capabilities::PointerKindSet;
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
-        PenTool, PointerButton, PointerEvent, PointerKind, ScrollPrecision, ScrollUnit,
+        PenTool, PointerButton, PointerEvent, PointerKind, PointerMove, ScrollPrecision, ScrollUnit,
     };
 
     use crate::input::assembly::{
         ContactRegistry, ContactScroll, DecodeError, GestureComponent, GestureDelta, GesturePhase,
-        GestureReading, NativeCancel, NativeClock, NativeContact, NativeDevice, NativeReading,
-        NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
+        GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact, NativeDevice,
+        NativeReading, NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction,
+        ReadingTime, decode,
     };
     use crate::input::linux::xkb::{XkbModifier, modifiers_of};
     use crate::input::scroll::{WheelAmount, wheel_step};
@@ -272,6 +273,75 @@ pub mod decode {
         pub scrolls: Vec<ScrollAxis>,
     }
 
+    /// One device of a hierarchy change, as the server sends it
+    /// (`XIHierarchyInfo`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct HierarchyInfo {
+        /// The device's id.
+        pub id: u16,
+        /// What the device is to the server (`XIMasterPointer` to
+        /// `XIFloatingSlave`). A device the change removed has none: the
+        /// server sends 0 for it, so what it was is read from the flags.
+        pub device_use: u16,
+        /// What happened to it (`XIMasterAdded` to `XIDeviceDisabled`).
+        pub flags: u32,
+    }
+
+    /// Which kind of device a hierarchy change takes away.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Gone {
+        Master,
+        Slave,
+    }
+
+    impl HierarchyInfo {
+        /// `XIMasterAdded`.
+        pub const MASTER_ADDED: u32 = 1 << 0;
+        /// `XIMasterRemoved`.
+        pub const MASTER_REMOVED: u32 = 1 << 1;
+        /// `XISlaveAdded`.
+        pub const SLAVE_ADDED: u32 = 1 << 2;
+        /// `XISlaveRemoved`.
+        pub const SLAVE_REMOVED: u32 = 1 << 3;
+        /// `XISlaveAttached`.
+        pub const SLAVE_ATTACHED: u32 = 1 << 4;
+        /// `XIDeviceEnabled`.
+        pub const DEVICE_ENABLED: u32 = 1 << 6;
+        /// `XIDeviceDisabled`.
+        pub const DEVICE_DISABLED: u32 = 1 << 7;
+        /// `XIMasterPointer`, the use of a master pointer.
+        pub const MASTER_POINTER: u16 = 1;
+
+        /// What the change takes away, if it takes this device: a removal
+        /// says which kind in its flag, and a disabled device, which the
+        /// server still lists, in its use.
+        fn gone(self) -> Option<Gone> {
+            if self.flags & Self::MASTER_REMOVED != 0 {
+                Some(Gone::Master)
+            } else if self.flags & Self::SLAVE_REMOVED != 0 {
+                Some(Gone::Slave)
+            } else if self.flags & Self::DEVICE_DISABLED != 0 {
+                Some(if self.device_use == Self::MASTER_POINTER {
+                    Gone::Master
+                } else {
+                    Gone::Slave
+                })
+            } else {
+                None
+            }
+        }
+
+        /// Whether the change brings this device: added, enabled or attached,
+        /// and not taken away by the same change.
+        fn arrived(self) -> bool {
+            let brought = Self::MASTER_ADDED
+                | Self::SLAVE_ADDED
+                | Self::DEVICE_ENABLED
+                | Self::SLAVE_ATTACHED;
+            self.flags & brought != 0 && self.gone().is_none()
+        }
+    }
+
     /// What a slave pointer is to FLUI.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     #[expect(
@@ -418,10 +488,9 @@ pub mod decode {
             NativeDevice(self.next_label)
         }
 
-        /// The hierarchy reports `slaves` and `masters` removed or disabled:
-        /// each ends its contacts and is removed, so an id the server lists
-        /// again is a new device.
-        pub fn removed(
+        /// `slaves` and `masters` are gone: each ends its contacts and is
+        /// removed, so an id the server lists again is a new device.
+        fn removed(
             &mut self,
             slaves: &[XiSlave],
             masters: &[XiMaster],
@@ -474,22 +543,40 @@ pub mod decode {
             out
         }
 
-        /// A hierarchy change: `removed_slaves` and `removed_masters` go, and
-        /// each of `added` (added, enabled or attached) is described by
-        /// `query`, which asks the server for that one device; `None` when it
-        /// lists no enabled pointer by that id. One query per device the
-        /// change names, so its cost is the change's own size.
+        /// A hierarchy change, as the server sent it: what it removes or
+        /// disables goes first, then each device it adds, enables or attaches
+        /// is described by `query`, which asks the server for that one
+        /// device; `None` when it lists no enabled pointer by that id.
+        ///
+        /// A change asks at most [`MAX_DEVICES`] times however many devices
+        /// it names, and never for a device it could not know: once
+        /// [`MAX_DEVICES`] are known, only those are asked about again.
         pub fn hierarchy(
             &mut self,
-            removed_slaves: &[XiSlave],
-            removed_masters: &[XiMaster],
-            added: &[u16],
+            change: &[HierarchyInfo],
             mut query: impl FnMut(u16) -> Option<DeviceDescription>,
             time: EventTime,
         ) -> DeviceChanges {
-            let mut out = self.removed(removed_slaves, removed_masters, time);
-            for id in added {
-                if let Some(device) = query(*id) {
+            let gone = |wanted: Gone| {
+                change
+                    .iter()
+                    .filter(move |info| info.gone() == Some(wanted))
+            };
+            let slaves: Vec<XiSlave> = gone(Gone::Slave).map(|info| XiSlave(info.id)).collect();
+            let masters: Vec<XiMaster> = gone(Gone::Master).map(|info| XiMaster(info.id)).collect();
+            let mut out = self.removed(&slaves, &masters, time);
+            let mut asked = 0;
+            for info in change.iter().filter(|info| info.arrived()) {
+                if asked == MAX_DEVICES {
+                    break;
+                }
+                let known = self.devices.contains_key(&XiSlave(info.id))
+                    || self.masters.contains_key(&XiMaster(info.id));
+                if !known && self.is_full() {
+                    continue;
+                }
+                asked += 1;
+                if let Some(device) = query(info.id) {
                     out.extend(self.described(&device, time));
                 }
             }
@@ -826,6 +913,85 @@ pub mod decode {
                 }
             }
             decoded
+        }
+
+        /// What `motions`, the motions of one device over the window
+        /// `surface` that the server sent with nothing between them, oldest
+        /// first, deliver there: one move at the last position, which carries
+        /// the earlier ones as the positions it passed through, so a burst
+        /// costs its window one move. A motion that carries scrolling is
+        /// delivered on its own, as [`event`](Self::event) delivers it,
+        /// between the moves before and after it.
+        pub fn motions(
+            &mut self,
+            surface: NativeSurface,
+            scale: f64,
+            motions: &[XiEvent],
+        ) -> Vec<PlatformInput> {
+            let mut out = Vec::new();
+            let mut moves: Vec<&XiEvent> = Vec::new();
+            for motion in motions.iter().filter(|motion| !motion.emulated) {
+                let only_moves =
+                    matches!(motion.action, XiAction::Motion) && !self.carries_scrolling(motion);
+                let same_device = moves.last().is_none_or(|last| {
+                    (last.master, last.source) == (motion.master, motion.source)
+                });
+                if !(only_moves && same_device) {
+                    self.moved_through(surface, scale, &std::mem::take(&mut moves), &mut out);
+                }
+                if only_moves {
+                    moves.push(motion);
+                } else {
+                    out.extend(self.event(surface, scale, motion).inputs);
+                }
+            }
+            self.moved_through(surface, scale, &moves, &mut out);
+            out
+        }
+
+        /// One move of the contact `moves` move, at the last of them, through
+        /// the earlier ones: the latest
+        /// [`PointerMove::COALESCED_HISTORY_LIMIT`] of them, the history a
+        /// move keeps of a burst however long it is.
+        fn moved_through(
+            &mut self,
+            surface: NativeSurface,
+            scale: f64,
+            moves: &[&XiEvent],
+            out: &mut Vec<PlatformInput>,
+        ) {
+            let Some((last, passed)) = moves.split_last() else {
+                return;
+            };
+            let Some(target) = self.target_of(last) else {
+                return;
+            };
+            if let Some(first) = moves.first()
+                && target.kind != PointerKind::Touch
+            {
+                self.switch_contact(first, surface, scale, target, out);
+            }
+            let reading = |pointers: &Self, motion: &XiEvent| {
+                Self::reading(motion, surface, scale, target, ReadingAction::Move)
+                    .with_sensors(pointers.sensors(motion))
+            };
+            let current = reading(self, last);
+            if passed.is_empty() {
+                self.assemble(&current, out);
+                return;
+            }
+            let kept = passed
+                .len()
+                .saturating_sub(PointerMove::COALESCED_HISTORY_LIMIT);
+            let mut batch = MoveBatch::new();
+            for motion in &passed[kept..] {
+                batch.push_coalesced(reading(self, motion));
+            }
+            out.extend(
+                batch
+                    .decode(&mut self.contacts, &current)
+                    .unwrap_or_else(DecodeError::into_inputs),
+            );
         }
 
         /// The master's cursor moves to `target` (a pen takes it over, or
@@ -1175,7 +1341,7 @@ pub(crate) use live::X11Input;
 mod live {
     //! The loop's input over the platform's connection.
 
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use std::rc::Rc;
     use std::sync::Arc;
@@ -1197,8 +1363,8 @@ mod live {
     };
 
     use super::decode::{
-        Axis, AxisLabel, DeviceChanges, DeviceDescription, ScrollAxis, X11Pointers, XiAction,
-        XiEvent, XiMaster, XiSlave, XiTime, valuators,
+        Axis, AxisLabel, DeviceChanges, DeviceDescription, HierarchyInfo, ScrollAxis, X11Pointers,
+        XiAction, XiEvent, XiMaster, XiSlave, XiTime, valuators,
     };
     use crate::input::assembly::{NativeCancel, NativeClock, NativeSurface};
     use crate::input::availability;
@@ -1281,6 +1447,10 @@ mod live {
         /// The name of the layout the keyboard is in.
         layout: RefCell<String>,
         layout_listeners: RefCell<Vec<Box<dyn FnMut()>>>,
+        /// The server's keymap changed since it was last read: it is read
+        /// again before the next event that reads it, or once the turn's
+        /// events are heard, so a burst of changes costs one read.
+        keymap_stale: Cell<bool>,
         /// The windows' text input, which every key goes through: the
         /// input method of the focused field takes it or lets it through.
         text: Rc<dyn LoopText>,
@@ -1522,6 +1692,7 @@ mod live {
                 state: Rc::new(RefCell::new(state)),
                 layout: RefCell::new(layout),
                 layout_listeners: RefCell::new(Vec::new()),
+                keymap_stale: Cell::new(false),
                 text,
             });
             if xinput {
@@ -1647,19 +1818,25 @@ mod live {
         /// A hierarchy change: what it removes goes, and each device it adds,
         /// enables or attaches is asked of the server by its own id (as GTK's
         /// `handle_hierarchy_changed` and winit's `xinput2_hierarchy_changed`
-        /// do), so a change costs one query per device it names, and a
-        /// device's events after it in the same batch find it known.
+        /// do), so a change costs one query per device it names, up to the
+        /// devices the decoder knows, and a device's events after it in the
+        /// same batch find it known.
         fn hierarchy(
             &self,
             change: &xinput::HierarchyEvent,
         ) -> Vec<(Arc<WindowDelivery>, Delivery)> {
-            let (slaves, masters) = removed_devices(change);
-            let added = added_devices(change);
+            let change: Vec<HierarchyInfo> = change
+                .infos
+                .iter()
+                .map(|info| HierarchyInfo {
+                    id: info.deviceid,
+                    device_use: u16::from(info.type_),
+                    flags: u32::from(info.flags),
+                })
+                .collect();
             self.device_changes(|pointers, time| {
                 pointers.hierarchy(
-                    &slaves,
-                    &masters,
-                    &added,
+                    &change,
                     |id| self.query(id).into_iter().find(|device| device.id == id),
                     time,
                 )
@@ -1761,6 +1938,35 @@ mod live {
             })
         }
 
+        /// What a pointer's motion delivers: `last`, and the motions
+        /// `passed` it came through in the same turn, as one move.
+        fn pointer_motions(
+            &self,
+            window: xproto::Window,
+            passed: &[Event],
+            last: XiEvent,
+        ) -> Vec<(Arc<WindowDelivery>, Delivery)> {
+            let motions: Vec<XiEvent> = passed
+                .iter()
+                .filter_map(copied_event)
+                .filter(|(passed, _)| *passed == window)
+                .map(|(_, motion)| motion)
+                .chain(std::iter::once(last))
+                .collect();
+            self.with_state(|state| {
+                let Some(target) = state.windows.get(&window) else {
+                    return Vec::new();
+                };
+                let delivery = Arc::clone(&target.delivery);
+                state
+                    .pointers
+                    .motions(surface_of(target.window), target.scale.get(), &motions)
+                    .into_iter()
+                    .map(|input| (Arc::clone(&delivery), Delivery::Input(input)))
+                    .collect()
+            })
+        }
+
         /// What a key event delivers.
         fn key_event(&self, event: &xinput::KeyPressEvent, state: KeyState) -> Option<X11Key> {
             let repeat = u32::from(event.flags) & u32::from(xinput::KeyEventFlags::KEY_REPEAT) != 0;
@@ -1821,9 +2027,15 @@ mod live {
             })
         }
 
-        /// Read the keymap again and tell the listeners if the layout's name
-        /// moved.
-        fn reread_keymap(&self) {
+        /// Read the keymap again if the server changed it since the last
+        /// read, and tell the listeners if the layout's name moved. An X
+        /// keymap is bounded by the protocol (key codes 8 to 255, four
+        /// groups), so one read is bounded work; however many changes the
+        /// server reported since, they cost this one.
+        fn read_stale_keymap(&self) {
+            if !self.keymap_stale.take() {
+                return;
+            }
             self.keymap_changed();
             if self.read_layout() {
                 self.layout_changed();
@@ -1987,63 +2199,6 @@ mod live {
         }
     }
 
-    /// The devices a hierarchy change reports added, enabled or attached,
-    /// and not removed or disabled by it: each is asked of the server.
-    fn added_devices(event: &xinput::HierarchyEvent) -> Vec<u16> {
-        let has = |info: &xinput::HierarchyInfo, flags: &[xinput::HierarchyMask]| {
-            flags
-                .iter()
-                .any(|flag| u32::from(info.flags) & u32::from(*flag) != 0)
-        };
-        event
-            .infos
-            .iter()
-            .filter(|info| {
-                has(
-                    info,
-                    &[
-                        xinput::HierarchyMask::MASTER_ADDED,
-                        xinput::HierarchyMask::SLAVE_ADDED,
-                        xinput::HierarchyMask::DEVICE_ENABLED,
-                        xinput::HierarchyMask::SLAVE_ATTACHED,
-                    ],
-                ) && !has(
-                    info,
-                    &[
-                        xinput::HierarchyMask::MASTER_REMOVED,
-                        xinput::HierarchyMask::SLAVE_REMOVED,
-                        xinput::HierarchyMask::DEVICE_DISABLED,
-                    ],
-                )
-            })
-            .map(|info| info.deviceid)
-            .collect()
-    }
-
-    /// The devices a hierarchy change reports removed or disabled.
-    fn removed_devices(event: &xinput::HierarchyEvent) -> (Vec<XiSlave>, Vec<XiMaster>) {
-        let gone = |info: &&xinput::HierarchyInfo, flag: xinput::HierarchyMask| {
-            u32::from(info.flags)
-                & (u32::from(flag) | u32::from(xinput::HierarchyMask::DEVICE_DISABLED))
-                != 0
-        };
-        let slaves = event
-            .infos
-            .iter()
-            .filter(|info| gone(info, xinput::HierarchyMask::SLAVE_REMOVED))
-            .filter(|info| info.type_ == DeviceType::SLAVE_POINTER)
-            .map(|info| XiSlave(info.deviceid))
-            .collect();
-        let masters = event
-            .infos
-            .iter()
-            .filter(|info| gone(info, xinput::HierarchyMask::MASTER_REMOVED))
-            .filter(|info| info.type_ == DeviceType::MASTER_POINTER)
-            .map(|info| XiMaster(info.deviceid))
-            .collect();
-        (slaves, masters)
-    }
-
     impl LoopInput for X11Input {
         fn capabilities(&self) -> InputCapabilities {
             let present = self.with_state(|state| state.pointers.present());
@@ -2100,7 +2255,7 @@ mod live {
             deliver(deliveries);
         }
 
-        fn event(&self, event: &Event) -> bool {
+        fn event(&self, event: &Event, passed: &[Event]) -> bool {
             let deliveries = match event {
                 Event::XinputKeyPress(key) | Event::XinputKeyRelease(key) => {
                     let state = if matches!(event, Event::XinputKeyPress(_)) {
@@ -2108,6 +2263,8 @@ mod live {
                     } else {
                         KeyState::Up
                     };
+                    // A key is read with the keymap the server has now.
+                    self.read_stale_keymap();
                     // The text input delivers it, with no borrow of the input
                     // held: now, or once the input method answered for it.
                     if let Some(key) = self.key_event(key, state) {
@@ -2144,15 +2301,15 @@ mod live {
                     Vec::new()
                 }
                 Event::XkbStateNotify(state) => {
+                    // The state is the state of the keymap the server has now.
+                    self.read_stale_keymap();
                     if self.keyboard_state(state) && self.read_layout() {
                         self.layout_changed();
                     }
                     Vec::new()
                 }
                 Event::XkbNewKeyboardNotify(_) | Event::XkbMapNotify(_) => {
-                    // An X keymap is bounded by the protocol (key codes 8 to
-                    // 255, four groups), so reading it again is bounded work.
-                    self.reread_keymap();
+                    self.keymap_stale.set(true);
                     Vec::new()
                 }
                 Event::FocusOut(focus) => {
@@ -2173,13 +2330,21 @@ mod live {
                             // the press that may move its caret.
                             self.text.pointer_pressed(window);
                         }
-                        self.pointer_event(window, &xi)
+                        if passed.is_empty() {
+                            self.pointer_event(window, &xi)
+                        } else {
+                            self.pointer_motions(window, passed, xi)
+                        }
                     }
                     None => return false,
                 },
             };
             deliver(deliveries);
             true
+        }
+
+        fn settle(&self) {
+            self.read_stale_keymap();
         }
 
         fn set_cursor(&self, window: WindowRef, cursor: CursorIcon) -> Result<(), CursorError> {

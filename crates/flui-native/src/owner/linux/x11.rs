@@ -20,21 +20,46 @@
 //! 2. delivers a wake deadline that came due as a frame request to every
 //!    window ([`WakeDeadline`], which keeps a deadline no frame could service
 //!    from spinning the loop);
-//! 3. hands every event the server sent to the windows
-//!    ([`LoopWindows::event`]);
+//! 3. takes the events the server sent, at most [`MAX_TURN_EVENTS`] of them,
+//!    and hands each to the features and the windows
+//!    ([`LoopWindows::event`]); the rest wait for the next turn;
 //! 4. begins the owner turn, delivers what the system's sources queued (host
-//!    notices, the portal's colour scheme, a change of the displays), and
-//!    drives the turn (the application's wake callback, a window's work raised
-//!    on another thread);
+//!    notices, the portal's colour scheme, a change of the displays), has
+//!    each window the turn's events may have changed read itself once
+//!    ([`LoopWindows::read_stale`]), and drives the turn (the application's
+//!    wake callback, a window's work raised on another thread);
 //! 5. delivers the frames the windows asked for, then asks the exit policy if a
 //!    window closed or the application asked again;
-//! 6. reads the events the turn's requests left queued, and waits only when
-//!    none is queued and no window waits for a frame.
+//! 6. looks for an event already read, and waits only when none is and no
+//!    window waits for a frame.
+//!
+//! `X11Loop::turn` is steps 1 to 5, and the one turn there is: `run` and a
+//! test's `pump_for` both take it.
 //!
 //! A request that waits for its reply (a window reading its state) may read
 //! events off the socket into libxcb's queue, where `poll` cannot see them;
-//! step 6 takes them before the loop waits, so none waits for an unrelated
+//! step 6 takes one before the loop waits, so none waits for an unrelated
 //! wake.
+//!
+//! # What bounds a turn
+//!
+//! The server is a peer: a stream of its events must not keep the frames, the
+//! owner turn or a deadline from their turn. So a turn's work does not grow
+//! with what the server sends:
+//!
+//! - a turn takes at most [`MAX_TURN_EVENTS`] events off the connection;
+//! - an event that may change a window's snapshot only marks the window: the
+//!   window asks the server for its state once in the turn, after the events,
+//!   however many of them named it (`LoopWindows::read_stale`); a change of
+//!   what the window manager supports is read once a turn the same way;
+//! - the motions of one pointer over one window that came with nothing
+//!   between them are one event to every feature, the last, and the input
+//!   delivers the earlier ones with it as the positions one move passed
+//!   through;
+//! - a change of the keymap only marks it: it is read once, before the next
+//!   key or as the events end (`LoopInput::settle`);
+//! - a handler's panic leaves the rest of the turn's events heard, and the
+//!   first goes on after the last of them.
 //!
 //! # What the loop names
 //!
@@ -47,7 +72,6 @@
 //! request) rings the [`Doorbell`].
 
 use std::cell::Cell;
-use std::collections::VecDeque;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -327,7 +351,14 @@ pub(crate) trait LoopInput {
 
     /// An event the server sent; `true` when it was input's alone, `false`
     /// when the windows hear it too (a focus change the input also follows).
-    fn event(&self, event: &Event) -> bool;
+    /// `passed` are the motions a pointer's motion came through in the same
+    /// turn, with nothing between them, oldest first, which are delivered with
+    /// it as one move; empty for every other event.
+    fn event(&self, event: &Event, passed: &[Event]) -> bool;
+
+    /// The turn's events are heard: what they marked changed and left to be
+    /// read once (the keymap) is read now.
+    fn settle(&self);
 
     /// An OS drag session took the pointer from `window` mid-press: its
     /// contacts end with their capture lost, since no release will reach them.
@@ -541,8 +572,16 @@ pub(crate) trait HostDisplays: StaleOnWake {
 /// thread, with no lock of the loop held.
 pub(crate) trait LoopWindows: OpenWindows {
     /// An event the server sent. The window it names handles it; an event of
-    /// the root window may concern every window.
+    /// the root window may concern every window. One that may change a
+    /// window's snapshot marks the window and reads nothing:
+    /// [`read_stale`](Self::read_stale) does, once a turn.
     fn event(&self, event: &Event);
+
+    /// Each window an event of this turn, or [`refresh`](Self::refresh),
+    /// marked reads itself again, once, and its handler hears
+    /// `state_changed` for a new revision; what the window manager supports
+    /// is read first, once, if an event said it may have changed.
+    fn read_stale(&self);
 
     /// A pointer event the server sent, asked before the input hears it:
     /// `true` when a window took it for its chrome (a press on a title bar or
@@ -565,7 +604,8 @@ pub(crate) trait LoopWindows: OpenWindows {
     fn take_closed(&self) -> bool;
 
     /// What every window reads beside its own reports changed (the displays):
-    /// each reads itself again.
+    /// each is marked, and reads itself again at
+    /// [`read_stale`](Self::read_stale).
     fn refresh(&self);
 
     /// The colour scheme the system applies changed.
@@ -748,87 +788,136 @@ impl X11Loop {
         }
     }
 
-    /// Pump the loop by hand for `span`, as [`run`](host::Loop::run) does on
-    /// each turn, for a test that owns the platform's thread and opens its
-    /// windows without running the platform (a window fixture's `settle`).
-    /// No application handler is bound: no wake deadline, no exit policy.
+    /// Turn the loop by hand for `span`, each turn the one
+    /// [`run`](host::Loop::run) takes, for a test that owns the platform's
+    /// thread and opens its windows without running the platform (a window
+    /// fixture's `settle`). No application handler is bound, so its
+    /// questions go unanswered: no wake deadline arms, and a quit or an exit
+    /// the loop would end on ends nothing here.
     ///
     /// # Errors
     /// [`PlatformError::EventLoop`] when the connection fails.
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn pump_for(&self, span: std::time::Duration) -> Result<(), PlatformError> {
-        let deadline = web_time::Instant::now() + span;
+        let until = web_time::Instant::now() + span;
         let mut turns = Turns::default();
         loop {
-            self.doorbell.answer();
-            self.dispatch_events(&mut turns)?;
-            self.text.deliver(web_time::Instant::now());
-            // The application's primary selection is asked for its text here,
-            // at the turn, with nothing of the loop held.
-            self.clipboard.deliver();
-            let turn = self.signal.begin_turn();
-            self.read_sources(&mut turns, None);
-            let _ = turn.drive_in(&self.turn);
-            self.windows.deliver_frames();
-            let _ = self.windows.take_closed();
-            if web_time::Instant::now() >= deadline {
+            let _: TurnEnd = self.turn(&mut turns, None)?;
+            if web_time::Instant::now() >= until {
                 return Ok(());
             }
-            self.drag.expire(web_time::Instant::now());
-            let wake_at = earliest(Some(deadline), self.drag.deadline());
-            self.wait(&mut turns, earliest(wake_at, self.text.deadline()))?;
+            let wake_at = earliest(Some(until), self.wake_at(&mut turns));
+            self.wait(&mut turns, wake_at)?;
         }
     }
 
-    /// Hand every event the server sent, and those a turn's requests left
-    /// queued, to the windows, until none is queued.
+    /// One turn of the loop (the module's steps 1 to 5): what `run` and
+    /// `pump_for` both take.
+    fn turn(
+        &self,
+        turns: &mut Turns,
+        host_notices: Option<&dyn LinuxNotices>,
+    ) -> Result<TurnEnd, PlatformError> {
+        self.doorbell.answer();
+        if turns
+            .deadline
+            .take_due(web_time::Instant::now(), self.windows.frames())
+        {
+            self.windows.redraw_for_deadline();
+        }
+        self.dispatch_events(turns)?;
+        self.text.deliver(web_time::Instant::now());
+        // The application's primary selection is asked for its text here,
+        // at the turn, with nothing of the loop held.
+        self.clipboard.deliver();
+        let turn = self.signal.begin_turn();
+        self.read_sources(turns, host_notices);
+        self.windows.read_stale();
+        if turn.drive_in(&self.turn) {
+            return Ok(TurnEnd::Quit);
+        }
+        self.windows.deliver_frames();
+        let reevaluate = self.exit_reevaluation.replace(false);
+        if (self.windows.take_closed() || reevaluate)
+            && self.windows.is_empty()
+            && self.signal.accepting()
+            && self.exit_allowed()
+            // Asked with no lock held, the policy may have opened a
+            // window: one opened meanwhile keeps the loop.
+            && self.windows.is_empty()
+        {
+            return Ok(TurnEnd::Quit);
+        }
+        self.drag.expire(web_time::Instant::now());
+        Ok(TurnEnd::Wait)
+    }
+
+    /// When the loop wakes with nothing to read: the application's wake
+    /// deadline, a drag's fetch or a held key running out of time.
+    fn wake_at(&self, turns: &mut Turns) -> Option<web_time::Instant> {
+        let wake_at = earliest(
+            self.wake_deadline(&mut turns.deadline),
+            self.drag.deadline(),
+        );
+        earliest(wake_at, self.text.deadline())
+    }
+
+    /// Hand the turn's events to the features and the windows: those the
+    /// connection has, [`MAX_TURN_EVENTS`] at most, so a server that sends
+    /// without end leaves the rest of the turn its time. A handler's panic
+    /// leaves the events after it heard: they are off the connection, and
+    /// nothing else would hear them; the first panic is raised again after
+    /// the last.
     fn dispatch_events(&self, turns: &mut Turns) -> Result<(), PlatformError> {
         // A session started since the last turn took its window's press:
         // the input ends it before the events after it, the session's now.
         for window in self.drag.pointers_taken() {
             self.input.pointer_taken(window);
         }
-        loop {
-            let event = match turns.queued.pop_front() {
-                Some(event) => event,
-                None => match self.connection.xcb().poll_for_event() {
-                    Ok(Some(event)) => event,
-                    Ok(None) => return Ok(()),
-                    Err(error) => {
-                        return Err(PlatformError::EventLoop {
-                            message: format!("the X server connection failed: {error}"),
-                        });
-                    }
-                },
-            };
+        let events = turn_events(self.connection.xcb(), &mut turns.queued).map_err(|error| {
+            PlatformError::EventLoop {
+                message: format!("the X server connection failed: {error}"),
+            }
+        })?;
+        let mut failure = FirstPanic::new();
+        for TurnEvent { passed, event } in fold_motions(events) {
             if let Event::Error(error) = &event {
                 // A request on a window the server no longer has (a property
                 // read racing a close): the request's own reply says so too.
                 tracing::debug!(?error, "the X server refused a request");
                 continue;
             }
-            // A drag message, or the answer to a fetch, is the drag's alone;
-            // the drag contains what a window's handler raises as it hears it.
-            if self.drag.event(&event) {
-                continue;
-            }
-            // The text input hears a focus change before the input ends the
-            // keyboard's keys there, so a key it holds reaches the window
-            // first. A handler's panic in what the text input or the input
-            // delivered still leaves the windows the event, a focus change
-            // they follow too; the first panic is raised again after.
-            // A press a window takes for its chrome reaches neither the text
-            // input nor the input, nor does its release.
-            if self.windows.chrome_event(&event) {
-                continue;
-            }
-            let mut failure = FirstPanic::new();
-            failure.contain(|| self.text.event(&event));
-            if failure.contain(|| self.input.event(&event)) != Some(true) {
-                failure.contain(|| self.windows.event(&event));
-            }
-            failure.resume();
+            failure.contain(|| self.hear(&event, &passed));
         }
+        // What the events marked and left to be read once.
+        failure.contain(|| self.input.settle());
+        failure.resume();
+        Ok(())
+    }
+
+    /// Hand one event to the features that hear it, in their order.
+    fn hear(&self, event: &Event, passed: &[Event]) {
+        // A drag message, or the answer to a fetch, is the drag's alone;
+        // the drag contains what a window's handler raises as it hears it.
+        if self.drag.event(event) {
+            return;
+        }
+        // A press a window takes for its chrome reaches neither the text
+        // input nor the input, nor does its release.
+        if self.windows.chrome_event(event) {
+            return;
+        }
+        // The text input hears a focus change before the input ends the
+        // keyboard's keys there, so a key it holds reaches the window
+        // first. A handler's panic in what the text input or the input
+        // delivered still leaves the windows the event, a focus change
+        // they follow too; the first panic is raised again after.
+        let mut failure = FirstPanic::new();
+        failure.contain(|| self.text.event(event));
+        if failure.contain(|| self.input.event(event, passed)) != Some(true) {
+            failure.contain(|| self.windows.event(event));
+        }
+        failure.resume();
     }
 
     /// Deliver what the system's sources queued for the owner: the host's
@@ -894,7 +983,7 @@ impl X11Loop {
         })?;
         match before {
             BeforeWait::Event(event) => {
-                turns.queued.push_back(event);
+                turns.queued = Some(event);
                 return Ok(());
             }
             BeforeWait::Frame => return Ok(()),
@@ -918,39 +1007,11 @@ impl X11Loop {
     /// exit the policy allows, or a failed connection.
     fn run_loop(&self, host_notices: Option<&dyn LinuxNotices>) -> Result<(), PlatformError> {
         let mut turns = Turns::default();
-        let mut deadline = WakeDeadline::default();
-        loop {
-            self.doorbell.answer();
-            if deadline.take_due(web_time::Instant::now(), self.windows.frames()) {
-                self.windows.redraw_for_deadline();
-            }
-            self.dispatch_events(&mut turns)?;
-            self.text.deliver(web_time::Instant::now());
-            // The application's primary selection is asked for its text here,
-            // at the turn, with nothing of the loop held.
-            self.clipboard.deliver();
-            let turn = self.signal.begin_turn();
-            self.read_sources(&mut turns, host_notices);
-            if turn.drive_in(&self.turn) {
-                return Ok(());
-            }
-            self.windows.deliver_frames();
-            let reevaluate = self.exit_reevaluation.replace(false);
-            if (self.windows.take_closed() || reevaluate)
-                && self.windows.is_empty()
-                && self.signal.accepting()
-                && self.exit_allowed()
-                // Asked with no lock held, the policy may have opened a
-                // window: one opened meanwhile keeps the loop.
-                && self.windows.is_empty()
-            {
-                return Ok(());
-            }
-            self.drag.expire(web_time::Instant::now());
-            let wake_at = earliest(self.wake_deadline(&mut deadline), self.drag.deadline());
-            let wake_at = earliest(wake_at, self.text.deadline());
+        while self.turn(&mut turns, host_notices)? == TurnEnd::Wait {
+            let wake_at = self.wake_at(&mut turns);
             self.wait(&mut turns, wake_at)?;
         }
+        Ok(())
     }
 
     /// The instant the application asks the loop to wake at, armed by the
@@ -979,10 +1040,90 @@ fn earliest(
 /// What a run of the loop keeps from one turn to the next.
 #[derive(Default)]
 struct Turns {
-    /// Events a turn's requests left queued, where `poll` cannot see them.
-    queued: VecDeque<Event>,
+    /// The event the last wait found already read, where `poll` cannot see
+    /// it: the next turn's first.
+    queued: Option<Event>,
     /// The display snapshot the windows last read themselves against.
     displays: Option<DisplayRevision>,
+    /// The application's wake deadline as the turns armed it.
+    deadline: WakeDeadline,
+}
+
+/// How a turn of the loop ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnEnd {
+    /// The loop waits for the next event, wake or deadline.
+    Wait,
+    /// The application quit, or its last window closed and its exit policy
+    /// lets the loop end.
+    Quit,
+}
+
+/// The most events one turn takes off the connection. A read of the socket
+/// brings at most 4 KiB, some 128 events, and a burst of input between two
+/// frames is a few dozen; a server that sends more than this in one turn is
+/// served over several, with the frames, the owner turn and the deadlines
+/// between them.
+pub(crate) const MAX_TURN_EVENTS: usize = 256;
+
+/// The events of one turn: the one the last wait found, then those the
+/// connection has read or reads now, [`MAX_TURN_EVENTS`] at most. What is
+/// left stays with the connection, where the wait finds it before it sleeps.
+fn turn_events<S: WaitSource>(
+    source: &S,
+    queued: &mut Option<S::Event>,
+) -> Result<Vec<S::Event>, S::Error> {
+    let mut events: Vec<S::Event> = queued.take().into_iter().collect();
+    while events.len() < MAX_TURN_EVENTS
+        && let Some(event) = source.take_event()?
+    {
+        events.push(event);
+    }
+    Ok(events)
+}
+
+/// One event of a turn as the features hear it.
+#[derive(Debug)]
+struct TurnEvent {
+    /// For a pointer's motion, the motions of that pointer over that window
+    /// the server sent just before it, oldest first: the positions the
+    /// pointer passed through on its way to `event`. Empty for any other
+    /// event.
+    passed: Vec<Event>,
+    event: Event,
+}
+
+/// Whether `later` is the next motion of the pointer `earlier` moved over the
+/// same window: XInput 2 motions of one device, from one source, to one
+/// window.
+fn continues_motion(earlier: &Event, later: &Event) -> bool {
+    match (earlier, later) {
+        (Event::XinputMotion(earlier), Event::XinputMotion(later)) => {
+            (earlier.event, earlier.deviceid, earlier.sourceid)
+                == (later.event, later.deviceid, later.sourceid)
+        }
+        _ => false,
+    }
+}
+
+/// `events` with each run of one pointer's motions folded into its last, in
+/// order: every feature hears where the pointer is, once, and the input
+/// alone reads what it passed through. Any other event between two motions
+/// keeps them apart, so nothing is heard out of its order.
+fn fold_motions(events: Vec<Event>) -> Vec<TurnEvent> {
+    let mut folded: Vec<TurnEvent> = Vec::with_capacity(events.len());
+    for event in events {
+        match folded.last_mut() {
+            Some(last) if continues_motion(&last.event, &event) => {
+                last.passed.push(std::mem::replace(&mut last.event, event));
+            }
+            _ => folded.push(TurnEvent {
+                passed: Vec::new(),
+                event,
+            }),
+        }
+    }
+    folded
 }
 
 /// The connection as the loop's last step before it sleeps sees it.
@@ -1290,7 +1431,294 @@ mod tests {
     use std::collections::VecDeque;
     use std::time::Duration;
 
-    use super::{BeforeWait, WaitSource, before_wait, wait_for};
+    use x11rb::protocol::Event;
+    use x11rb::protocol::xinput::ButtonPressEvent;
+
+    use super::{
+        BeforeWait, MAX_TURN_EVENTS, WaitSource, before_wait, fold_motions, turn_events, wait_for,
+    };
+
+    /// An event that may change a window's snapshot makes no request: the
+    /// window asks the server for its state once, after the turn's events,
+    /// however many of them named it, and a change of what the window
+    /// manager supports is read once the same way. Counted in the requests
+    /// the platform's connection makes, each of which takes the next
+    /// sequence number, on the X server `DISPLAY` names; passes as untested
+    /// where none answers.
+    #[test]
+    fn a_burst_of_state_events_reads_each_window_once() {
+        use flui_platform::WindowOptions;
+        use flui_testing::window_handler::RecordingWindowHandler;
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        use x11rb::protocol::xproto::{
+            self, ConfigureNotifyEvent, ConnectionExt as _, FocusInEvent, PropertyNotifyEvent,
+        };
+
+        use crate::platform::Platform as _;
+
+        let Ok(platform) = crate::X11Platform::try_new() else {
+            eprintln!("no X server answers: nothing to run");
+            return;
+        };
+        let owner = platform.owner();
+        let xcb = owner.connection.xcb();
+        let root = owner.connection.root();
+        let open = || {
+            let window = platform
+                .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+                .expect("an X11 window opens");
+            let target = window.surface_target();
+            let handle = target.window_handle().expect("an open window has a handle");
+            let RawWindowHandle::Xcb(handle) = handle.as_raw() else {
+                panic!("an X11 window hands out an XCB handle");
+            };
+            (window, handle.window.get())
+        };
+        let (_first_window, first) = open();
+        let (_second_window, second) = open();
+        let atom = |name: &[u8]| {
+            xcb.intern_atom(false, name)
+                .expect("request")
+                .reply()
+                .expect("the atom")
+                .atom
+        };
+        let active_window = atom(b"_NET_ACTIVE_WINDOW");
+        let supported = atom(b"_NET_SUPPORTED");
+        let net_wm_state = atom(b"_NET_WM_STATE");
+        let property = |window: xproto::Window, atom: xproto::Atom| {
+            Event::PropertyNotify(PropertyNotifyEvent {
+                window,
+                atom,
+                ..PropertyNotifyEvent::default()
+            })
+        };
+        let configured = |window: xproto::Window| {
+            Event::ConfigureNotify(ConfigureNotifyEvent {
+                event: window,
+                window,
+                ..ConfigureNotifyEvent::default()
+            })
+        };
+        let focused = |window: xproto::Window| {
+            Event::FocusIn(FocusInEvent {
+                event: window,
+                ..FocusInEvent::default()
+            })
+        };
+        let probes = Cell::new(0);
+        // The requests made so far, these probes aside.
+        let requests_made = || {
+            let cookie = xcb.get_input_focus().expect("request");
+            let sequence = cookie.sequence_number();
+            cookie.reply().expect("the server answers");
+            probes.set(probes.get() + 1);
+            sequence - probes.get()
+        };
+        // What the windows opened with is read.
+        owner.windows.read_stale();
+
+        // One window's read, and the read of what the window manager
+        // supports, each measured on its own.
+        let before = requests_made();
+        owner.windows.event(&configured(first));
+        owner.windows.read_stale();
+        let one_window = requests_made() - before;
+        assert!(one_window > 0, "a marked window reads itself");
+        let before = requests_made();
+        owner.windows.event(&property(root, supported));
+        owner.windows.read_stale();
+        let support = requests_made() - before - 2 * one_window;
+        assert!(support > 0, "a change of the support is read");
+
+        // (case, the events of a turn, the windows read, whether the support
+        //  is read)
+        let table: [(&str, Vec<Event>, u64, u64); 5] = [
+            ("nothing", vec![], 0, 0),
+            (
+                "a burst of one window's events",
+                [
+                    configured(first),
+                    focused(first),
+                    property(first, net_wm_state),
+                ]
+                .into_iter()
+                .cycle()
+                .take(1_000)
+                .collect(),
+                1,
+                0,
+            ),
+            (
+                "both windows' events",
+                [configured(first), configured(second)]
+                    .into_iter()
+                    .cycle()
+                    .take(1_000)
+                    .collect(),
+                2,
+                0,
+            ),
+            (
+                "the active window changing a thousand times",
+                vec![property(root, active_window); 1_000],
+                2,
+                0,
+            ),
+            (
+                "the support changing a thousand times",
+                vec![property(root, supported); 1_000],
+                2,
+                1,
+            ),
+        ];
+        for (case, events, windows, support_reads) in table {
+            let before = requests_made();
+            for event in &events {
+                owner.windows.event(event);
+            }
+            assert_eq!(requests_made(), before, "{case}: an event reads nothing");
+            owner.windows.read_stale();
+            assert_eq!(
+                requests_made() - before,
+                windows * one_window + support_reads * support,
+                "{case}: read once the events are heard"
+            );
+            owner.windows.read_stale();
+            assert_eq!(
+                requests_made() - before,
+                windows * one_window + support_reads * support,
+                "{case}: nothing is left to read"
+            );
+        }
+    }
+
+    /// A server that sends without end has a turn take [`MAX_TURN_EVENTS`]
+    /// events, the one the last wait found first, and leaves the rest with
+    /// the connection for the turns after: the frames, the owner turn and the
+    /// deadlines come between.
+    #[test]
+    fn a_turn_takes_a_bounded_number_of_events() {
+        /// A case, the event the last wait found, how many events the
+        /// connection has, the first and last event taken, how many are left.
+        type Row = (&'static str, Option<u32>, u32, Option<(u32, u32)>, usize);
+
+        let cap = u32::try_from(MAX_TURN_EVENTS).expect("the cap fits");
+        let table: [Row; 5] = [
+            ("nothing", None, 0, None, 0),
+            ("the event the wait found", Some(7), 0, Some((7, 7)), 0),
+            ("a few", None, 3, Some((0, 2)), 0),
+            (
+                "a flood",
+                None,
+                10_000,
+                Some((0, cap - 1)),
+                10_000 - MAX_TURN_EVENTS,
+            ),
+            (
+                "a flood behind the event the wait found",
+                Some(77_777),
+                10_000,
+                Some((77_777, cap - 2)),
+                10_001 - MAX_TURN_EVENTS,
+            ),
+        ];
+        for (case, found, sent, ends, left) in table {
+            let source = Wire::default();
+            source.queued.borrow_mut().extend(0..sent);
+            let mut queued = found;
+            let Ok(events) = turn_events(&source, &mut queued);
+            assert_eq!(
+                events.first().copied().zip(events.last().copied()),
+                ends,
+                "{case}"
+            );
+            assert!(events.len() <= MAX_TURN_EVENTS, "{case}: {}", events.len());
+            assert_eq!(queued, None, "{case}: the wait's event is taken");
+            assert_eq!(source.queued.borrow().len(), left, "{case}: left");
+        }
+    }
+
+    /// A motion of device `device`, from `source`, over `window`, at `x`.
+    fn motion(window: u32, device: u16, source: u16, x: i32) -> Event {
+        Event::XinputMotion(ButtonPressEvent {
+            event: window,
+            deviceid: device,
+            sourceid: source,
+            event_x: x << 16,
+            ..ButtonPressEvent::default()
+        })
+    }
+
+    /// A press over `window`.
+    fn press(window: u32) -> Event {
+        Event::XinputButtonPress(ButtonPressEvent {
+            event: window,
+            deviceid: 2,
+            sourceid: 9,
+            ..ButtonPressEvent::default()
+        })
+    }
+
+    /// One pointer's motions over one window with nothing between them are
+    /// one event, the last, which carries the earlier ones; anything between
+    /// two motions keeps them apart, so every event is heard in its order.
+    #[test]
+    fn a_pointers_motions_fold_into_the_last() {
+        /// An event as it is heard: where its motion is, `None` for a press,
+        /// and where the motions it carries are.
+        type Heard = (Option<i32>, Vec<i32>);
+
+        fn heard(events: Vec<Event>) -> Vec<Heard> {
+            let x = |event: &Event| match event {
+                Event::XinputMotion(motion) => Some(motion.event_x >> 16),
+                _ => None,
+            };
+            fold_motions(events)
+                .iter()
+                .map(|folded| {
+                    (
+                        x(&folded.event),
+                        folded.passed.iter().filter_map(x).collect(),
+                    )
+                })
+                .collect()
+        }
+        let at = |x| motion(1, 2, 9, x);
+        // (case, the turn's events, each event as it is heard)
+        let table: [(&str, Vec<Event>, Vec<Heard>); 7] = [
+            ("nothing", vec![], vec![]),
+            ("one motion", vec![at(1)], vec![(Some(1), vec![])]),
+            (
+                "a burst",
+                vec![at(1), at(2), at(3)],
+                vec![(Some(3), vec![1, 2])],
+            ),
+            (
+                "a press between two bursts",
+                vec![at(1), at(2), press(1), at(3), at(4)],
+                vec![(Some(2), vec![1]), (None, vec![]), (Some(4), vec![3])],
+            ),
+            (
+                "another window",
+                vec![at(1), motion(5, 2, 9, 2)],
+                vec![(Some(1), vec![]), (Some(2), vec![])],
+            ),
+            (
+                "another master pointer",
+                vec![at(1), motion(1, 12, 9, 2)],
+                vec![(Some(1), vec![]), (Some(2), vec![])],
+            ),
+            (
+                "another device of the same master",
+                vec![at(1), motion(1, 2, 11, 2)],
+                vec![(Some(1), vec![]), (Some(2), vec![])],
+            ),
+        ];
+        for (case, events, expected) in table {
+            assert_eq!(heard(events), expected, "{case}");
+        }
+    }
 
     /// A connection with events on the wire, which a flush reads into the
     /// queue, as libxcb's does.

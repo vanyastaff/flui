@@ -10,11 +10,26 @@
 //! map state, its mode properties (`WM_STATE`, `_NET_WM_STATE`), the input
 //! focus and the active window (`_NET_ACTIVE_WINDOW`), asked in one batch and
 //! then answered. An event that may change any of them (a configure, a map or
-//! unmap, a property, the focus, the visibility) marks the snapshot stale and
-//! publishes it again, and the handler hears `state_changed` for a new
-//! revision. What a window honours follows what the window manager supports
-//! (`support`), so a window on a server with no window manager neither
-//! claims to minimize nor waits for a maximize nobody carries out.
+//! unmap, a property, the focus, the visibility) only marks the window; the
+//! loop has each marked window read itself once a turn, after the turn's
+//! events (`LoopWindows::read_stale`), so a stream of events costs a window
+//! one read a turn, and the handler hears `state_changed` for a new revision.
+//! Between two reads a handler sees the last snapshot, unless it reads the
+//! state itself. What a window honours follows what the window manager
+//! supports (`support`), so a window on a server with no window manager
+//! neither claims to minimize nor waits for a maximize nobody carries out.
+//!
+//! # A window manager that goes
+//!
+//! A window manager names a window of its own in `_NET_SUPPORTING_WM_CHECK`,
+//! and the platform hears that window's end (`StructureNotify` on it, as GDK
+//! selects it in `fetch_net_wm_check_window`): a window manager that was
+//! killed or crashed changes no property of the root window, but the server
+//! destroys its windows. What it supported is read again then, and every
+//! window with it. Without a window manager the mode and frame properties
+//! on a window are a dead one's (`WindowManagerSupport::kept`): the server
+//! maps the windows it had iconified, so a window reads normal, with no
+//! frame, and is focused by the server directly.
 //!
 //! # Commands
 //!
@@ -381,6 +396,9 @@ pub struct X11Window {
     /// The chrome regions a press is answered from, and the window's presses
     /// on them (ADR-0286 §10).
     chrome: RefCell<Chrome>,
+    /// An event said the window may differ from its snapshot, and the loop
+    /// has not had it read itself since.
+    unread: Cell<bool>,
     closed: Cell<bool>,
     /// Where the X window is in its end.
     native: Cell<NativeWindow>,
@@ -444,11 +462,33 @@ impl X11Window {
         self.cell.state_with(|| self.sample()).outcome()
     }
 
-    /// The window may differ from its last snapshot: read it again, raise
-    /// `state_changed` for a new revision, tell the bridge of a change of
-    /// focus, and ask for a frame when the content changed size.
+    /// An event of the server's says the window may differ from its last
+    /// snapshot: the next read of its state asks the server, and the loop
+    /// has the window follow it once this turn
+    /// (`LoopWindows::read_stale`). No request is made here, so what a
+    /// stream of events costs does not grow with it.
+    fn mark_stale(&self) {
+        self.cell.invalidate();
+        self.unread.set(true);
+        if let Some(windows) = self.windows.upgrade() {
+            windows.unread.set(true);
+        }
+    }
+
+    /// The window differs from its last snapshot by something it just did
+    /// itself (a command, its opening, its reveal): read it again now and
+    /// follow what it reads.
     fn refresh_state(&self) {
         self.cell.invalidate();
+        self.follow_state();
+    }
+
+    /// Follow the window's state: raise `state_changed` for a new revision,
+    /// tell the bridge of a change of focus, and ask for a frame when the
+    /// content changed size. The server is asked only if the snapshot is
+    /// stale.
+    fn follow_state(&self) {
+        self.unread.set(false);
         let state = PlatformWindow::state(self);
         let (focus_changed, resized) = {
             let mut record = self.record.borrow_mut();
@@ -488,7 +528,10 @@ impl X11Window {
             state.active = false;
             return state;
         };
-        let outer = outer_bounds(read.origin, read.content, read.frame);
+        // What a window manager wrote on the window stands while one runs.
+        let frame = support.kept(read.frame);
+        let mode = mode_of(support.kept(mode_flags(read.wm_state, read.net_state)));
+        let outer = outer_bounds(read.origin, read.content, frame);
         let display = snapshot
             .as_ref()
             .and_then(|snapshot| display_of(snapshot, outer).or_else(|| snapshot.primary()));
@@ -497,13 +540,13 @@ impl X11Window {
         self.input_scale.set(scale);
         // Remembered for a window whose platform is gone.
         record.support = support;
-        let mode = mode_of(mode_flags(read.wm_state, read.net_state));
         // Shown while mapped, waiting for its first frame to be, or iconic: a
-        // window manager unmaps the windows it iconifies (ICCCM 4.1.4), and
-        // only the application withdraws one.
+        // window manager unmaps the windows it iconifies (ICCCM 4.1.4). One
+        // the application hid is withdrawn, iconic or not, and stays hidden
+        // while the window manager still says iconic of it.
         let visible = record.reveal_pending
             || read.map_state != MapState::UNMAPPED
-            || mode == WindowMode::Minimized;
+            || (record.shown && mode == WindowMode::Minimized);
         // Mapped under an unmapped ancestor (a window manager's frame on
         // another workspace) or fully covered.
         let occluded = read.map_state == MapState::UNVIEWABLE || record.obscured;
@@ -520,10 +563,11 @@ impl X11Window {
             _ => record.normal_geometry,
         };
         if mode == WindowMode::Normal
+            && support.managed
             && record.frame.has_system_title_bar()
             && let Some(windows) = self.windows.upgrade()
         {
-            windows.frame_inset.record(read.frame.added());
+            windows.frame_inset.record(frame.added());
         }
         let metrics = WindowMetrics::try_new(read.content, scale).ok();
         let state = WindowState::new(geometry, content_size)
@@ -772,7 +816,7 @@ impl X11Window {
                 if let Err(error) = self.xcb().flush() {
                     tracing::debug!(%error, "cannot toggle an X11 window's maximize");
                 }
-                self.refresh_state();
+                self.mark_stale();
             }
         }
         self.chrome.borrow_mut().held = Some(press.detail);
@@ -1327,14 +1371,14 @@ impl X11Window {
                         [ICONIC_STATE, 0, 0, 0, 0],
                     ));
                 }
-                self.refresh_state();
+                self.mark_stale();
             }
             Event::VisibilityNotify(visibility) => {
                 self.record.borrow_mut().obscured = visibility.state == Visibility::FULLY_OBSCURED;
-                self.refresh_state();
+                self.mark_stale();
             }
             Event::PropertyNotify(property) if self.atoms.concerns_window(property.atom) => {
-                self.refresh_state();
+                self.mark_stale();
             }
             Event::ClientMessage(message)
                 if message.type_ == self.atoms.wm_protocols
@@ -1355,7 +1399,7 @@ impl X11Window {
             | Event::UnmapNotify(_)
             | Event::ReparentNotify(_)
             | Event::FocusIn(_)
-            | Event::FocusOut(_) => self.refresh_state(),
+            | Event::FocusOut(_) => self.mark_stale(),
             _ => {}
         }
     }
@@ -1689,6 +1733,15 @@ pub struct X11Windows {
     frames: FrameCount,
     frame_inset: Arc<FrameInset>,
     support: Cell<WindowManagerSupport>,
+    /// The window manager's own window (`_NET_SUPPORTING_WM_CHECK`), whose
+    /// end the platform hears: a window manager that is killed changes no
+    /// property of the root window, but the server destroys its windows.
+    window_manager: Cell<Option<xproto::Window>>,
+    /// An event said what the window manager supports may have changed, and
+    /// it has not been read since.
+    support_unread: Cell<bool>,
+    /// A window is marked and has not read itself since.
+    unread: Cell<bool>,
     appearance: Cell<WindowAppearance>,
     /// The window that had the focus last, whether or not it still has: the
     /// one a forwarded launch brings forward.
@@ -1738,6 +1791,9 @@ impl X11Windows {
             frames: FrameCount::default(),
             frame_inset: Arc::new(FrameInset::default()),
             support: Cell::new(WindowManagerSupport::default()),
+            window_manager: Cell::new(None),
+            support_unread: Cell::new(false),
+            unread: Cell::new(false),
             appearance: Cell::new(WindowAppearance::Light),
             last_focused: Cell::new(None),
             forwarded_activation: Cell::new(None),
@@ -1749,7 +1805,7 @@ impl X11Windows {
 
     /// Read what the window manager supports from the root window: its
     /// supporting window, which names itself in turn while the window manager
-    /// runs, and its `_NET_SUPPORTED`.
+    /// runs and whose end is heard from here on, and its `_NET_SUPPORTED`.
     fn read_support(&self) {
         let xcb = self.connection.xcb();
         let root = self.connection.root();
@@ -1769,7 +1825,24 @@ impl X11Windows {
             .value32()?
             .next()
         };
-        let managed = window_of(root).is_some_and(|check| window_of(check) == Some(check));
+        let names_itself = |check: &xproto::Window| window_of(*check) == Some(*check);
+        // The window's events are selected once per window manager. It may
+        // go, and its id be given to another client's window, between the
+        // read and the selection, so it is read again after (as GDK's
+        // `fetch_net_wm_check_window` does).
+        let heard = |check: &xproto::Window| {
+            self.window_manager.get() == Some(*check)
+                || (xcb
+                    .change_window_attributes(
+                        *check,
+                        &ChangeWindowAttributesAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+                    )
+                    .is_ok_and(|selected| selected.check().is_ok())
+                    && names_itself(check))
+        };
+        let window_manager = window_of(root).filter(names_itself).filter(heard);
+        self.window_manager.set(window_manager);
+        let managed = window_manager.is_some();
         let supported: Vec<u32> = xcb
             .get_property(false, root, atoms.net_supported, AtomEnum::ATOM, 0, 1024)
             .ok()
@@ -1951,6 +2024,7 @@ impl X11Windows {
                 support,
                 scale,
             }),
+            unread: Cell::new(false),
             closed: Cell::new(false),
             chrome: RefCell::default(),
             native: Cell::new(NativeWindow::Live),
@@ -1994,19 +2068,31 @@ impl X11Windows {
         Ok(window)
     }
 
-    /// The window an event names, and the root window's events, which may
-    /// concern every window.
+    /// The window an event names, and the events that may concern every
+    /// window: the root window's, and the end of the window manager's own
+    /// window.
     fn route(&self, event: &Event) {
         let root = self.connection.root();
         if let Event::PropertyNotify(property) = event
             && property.window == root
         {
             if self.atoms.concerns_support(property.atom) {
-                self.read_support();
-                self.refresh_all();
+                self.support_unread.set(true);
+                self.mark_all();
             } else if property.atom == self.atoms.net_active_window {
-                self.refresh_all();
+                self.mark_all();
             }
+            return;
+        }
+        if let Event::DestroyNotify(destroyed) = event
+            && Some(destroyed.window) == self.window_manager.get()
+        {
+            // The window manager went, with or without a word on the root
+            // window: nothing it supported stands, and nothing it left on a
+            // window says anything.
+            self.window_manager.set(None);
+            self.support_unread.set(true);
+            self.mark_all();
             return;
         }
         let xid = match event {
@@ -2030,10 +2116,10 @@ impl X11Windows {
         }
     }
 
-    /// Every window reads itself again.
-    fn refresh_all(&self) {
-        for window in self.open_windows() {
-            window.refresh_state();
+    /// Every window may differ from its snapshot.
+    fn mark_all(&self) {
+        for window in self.table.borrow().windows.values() {
+            window.mark_stale();
         }
     }
 }
@@ -2110,6 +2196,26 @@ impl LoopWindows for X11Windows {
         self.route(event);
     }
 
+    fn read_stale(&self) {
+        if self.support_unread.take() {
+            self.read_support();
+        }
+        if !self.unread.take() {
+            return;
+        }
+        // Each window follows its state with no borrow of the table held:
+        // its handler hears `state_changed`, and may open or close windows.
+        // One handler's panic leaves the other windows read, and the first
+        // goes on after the last.
+        let mut failure = FirstPanic::new();
+        for window in self.open_windows() {
+            if window.unread.get() {
+                failure.contain(|| window.follow_state());
+            }
+        }
+        failure.resume();
+    }
+
     fn chrome_event(&self, event: &Event) -> bool {
         let xid = match event {
             Event::XinputButtonPress(event)
@@ -2148,13 +2254,13 @@ impl LoopWindows for X11Windows {
     }
 
     fn refresh(&self) {
-        self.refresh_all();
+        self.mark_all();
     }
 
     fn observe_appearance(&self, appearance: WindowAppearance) {
         let changed = self.appearance.replace(appearance) != appearance;
         if changed {
-            self.refresh_all();
+            self.mark_all();
         }
     }
 

@@ -59,7 +59,166 @@ pub(crate) const CASES: &[(&str, fn())] = &[
         "a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager",
         a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager,
     ),
+    (
+        "a_burst_of_motion_is_one_move_through_it",
+        a_burst_of_motion_is_one_move_through_it,
+    ),
+    (
+        "a_master_pointer_comes_and_goes_with_the_hierarchy",
+        a_master_pointer_comes_and_goes_with_the_hierarchy,
+    ),
 ];
+
+/// The motions the server sent before the loop turned reach the window as
+/// one move at the last position, which carries the earlier ones: a burst
+/// costs the window one move, and no position of it is lost.
+fn a_burst_of_motion_is_one_move_through_it() {
+    /// How many motions the server sends at once.
+    const BURST: i16 = 40;
+
+    park_pointer();
+    let handler = RecordingWindowHandler::new();
+    let mut fixture = X11Fixture::open_with("motion burst", Rc::clone(&handler));
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::Activate)
+        .expect("the window activates");
+    fixture.settle();
+    let xtest = Xtest::new(&fixture);
+    xtest.move_to(20, 40);
+    handler.take_calls();
+    for step in 1..=BURST {
+        fixture
+            .server
+            .xtest_fake_input(
+                MOTION_NOTIFY_EVENT,
+                0,
+                0,
+                fixture.root(),
+                xtest.origin.0 + 20 + step,
+                xtest.origin.1 + 40,
+                0,
+            )
+            .expect("request");
+    }
+    // Two round trips: the server has sent the window every motion before
+    // the loop turns.
+    for _ in 0..2 {
+        fixture
+            .server
+            .get_input_focus()
+            .expect("request")
+            .reply()
+            .expect("the focus");
+    }
+    run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+
+    let moves: Vec<_> = pointer_events(&handler)
+        .into_iter()
+        .filter_map(|event| match event {
+            PointerEvent::Move(movement) => Some(movement),
+            _ => None,
+        })
+        .collect();
+    let positions: Vec<f64> = moves
+        .iter()
+        .flat_map(|movement| {
+            movement
+                .coalesced()
+                .iter()
+                .chain(std::iter::once(movement.current()))
+                .map(|sample| sample.position.get().x)
+        })
+        .collect();
+    let expected: Vec<f64> = (1..=BURST).map(|step| f64::from(20 + step)).collect();
+    assert_eq!(positions, expected, "every position, in order");
+    assert!(
+        moves.len() <= 2,
+        "{} moves for a burst the loop read at once",
+        moves.len()
+    );
+}
+
+/// A master pointer the server adds is a mouse the window hears of, and one
+/// it removes is taken away. The server reports a removed device with no
+/// use, so only the flag says a master pointer went.
+fn a_master_pointer_comes_and_goes_with_the_hierarchy() {
+    use flui_platform::pointer::PointerKind;
+    use x11rb::protocol::xinput::{
+        self, ChangeMode, ConnectionExt as _, HierarchyChange, HierarchyChangeData,
+        HierarchyChangeDataAddMaster, HierarchyChangeDataRemoveMaster,
+    };
+
+    let handler = RecordingWindowHandler::new();
+    let fixture = X11Fixture::open_with("second master", Rc::clone(&handler));
+    handler.take_calls();
+    let server = &fixture.server;
+    let mice = |events: Vec<PointerEvent>, added: bool| -> Vec<_> {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                PointerEvent::DeviceAdded(change) if added => Some(change),
+                PointerEvent::DeviceRemoved(change) if !added => Some(change),
+                _ => None,
+            })
+            .filter(|change| change.kind == PointerKind::Mouse)
+            .map(|change| change.device)
+            .collect()
+    };
+    // A client says which XInput 2 it speaks before its first request.
+    server
+        .xinput_xi_query_version(2, 2)
+        .expect("request")
+        .reply()
+        .expect("XInput 2");
+    // The lengths are in 4-byte units: the header, then the change.
+    server
+        .xinput_xi_change_hierarchy(&[HierarchyChange {
+            len: 3,
+            data: HierarchyChangeData::AddMaster(HierarchyChangeDataAddMaster {
+                send_core: true,
+                enable: true,
+                name: b"flui".to_vec(),
+            }),
+        }])
+        .expect("request")
+        .check()
+        .expect("the server adds a master pointer");
+    run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+    let added = mice(pointer_events(&handler), true);
+    assert_eq!(added.len(), 1, "the new master's cursor is announced");
+
+    let master = server
+        .xinput_xi_query_device(xinput::Device::ALL_MASTER)
+        .expect("request")
+        .reply()
+        .expect("the masters")
+        .infos
+        .into_iter()
+        .find(|info| info.name == b"flui pointer")
+        .expect("the master pointer the server added")
+        .deviceid;
+    handler.take_calls();
+    server
+        .xinput_xi_change_hierarchy(&[HierarchyChange {
+            len: 3,
+            data: HierarchyChangeData::RemoveMaster(HierarchyChangeDataRemoveMaster {
+                deviceid: master,
+                return_mode: ChangeMode::FLOAT,
+                return_pointer: 0,
+                return_keyboard: 0,
+            }),
+        }])
+        .expect("request")
+        .check()
+        .expect("the server removes the master pointer");
+    run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+    assert_eq!(
+        mice(pointer_events(&handler), false),
+        added,
+        "the master that went is the one that came"
+    );
+}
 
 /// `dead_acute` (`keysymdef.h`).
 const DEAD_ACUTE: u32 = 0xfe51;

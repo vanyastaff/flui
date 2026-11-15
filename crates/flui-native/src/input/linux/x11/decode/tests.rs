@@ -6,8 +6,8 @@ use flui_platform::pointer::{
 };
 
 use super::{
-    Axis, AxisLabel, DeviceDescription, DeviceRole, ScrollAxis, X11Pointers, XiAction, XiEvent,
-    XiMaster, XiSlave, XiTime, button, role, valuators,
+    Axis, AxisLabel, DeviceDescription, DeviceRole, HierarchyInfo, ScrollAxis, X11Pointers,
+    XiAction, XiEvent, XiMaster, XiSlave, XiTime, button, role, valuators,
 };
 use crate::input::assembly::{NativeCancel, NativeClock, NativeSurface};
 
@@ -82,6 +82,24 @@ fn stylus() -> DeviceDescription {
             axis(4, AxisLabel::TiltY, -64.0, 63.0),
         ],
         ..device(STYLUS, "Wacom Intuos S Pen stylus")
+    }
+}
+
+/// The use the server sends for a slave pointer (`XISlavePointer`).
+const SLAVE_POINTER: u16 = 3;
+/// The use the server sends for a detached slave (`XIFloatingSlave`).
+const FLOATING_SLAVE: u16 = 5;
+/// The use the server sends for a device a change removed: none.
+const NO_USE: u16 = 0;
+/// `XISlaveDetached`.
+const SLAVE_DETACHED: u32 = 1 << 5;
+
+/// One device of a hierarchy change as the server sends it.
+const fn info(id: u16, device_use: u16, flags: u32) -> HierarchyInfo {
+    HierarchyInfo {
+        id,
+        device_use,
+        flags,
     }
 }
 
@@ -487,6 +505,173 @@ fn x_buttons_are_flui_buttons() {
     assert_ne!(button(10), button(11));
 }
 
+/// What a hierarchy change takes away and what it asks the server about are
+/// read from each device's flags as the server sends them. A removed device
+/// arrives with no use (the server has none for it any more), so its flag
+/// alone says it went; only a disabled one, which the server still lists, is
+/// told apart by its use.
+#[test]
+fn a_hierarchy_change_is_read_from_its_flags() {
+    use HierarchyInfo as Info;
+
+    /// A second master pointer, as `xinput create-master` makes one.
+    const SECOND_MASTER: u16 = 14;
+    /// A device the decoder has not met.
+    const NEW: u16 = 30;
+
+    let mouse = PointerKind::Mouse;
+    let pen = PointerKind::Pen { tool: PenTool::Tip };
+    let touch = PointerKind::Touch;
+    // (case, the device as the change reports it, the kinds removed, the ids
+    //  asked of the server)
+    let table: &[(&str, HierarchyInfo, &[PointerKind], &[u16])] = &[
+        (
+            "a master pointer removed",
+            info(SECOND_MASTER, NO_USE, Info::MASTER_REMOVED),
+            &[mouse],
+            &[],
+        ),
+        (
+            "a pen unplugged",
+            info(STYLUS, NO_USE, Info::SLAVE_REMOVED),
+            &[pen],
+            &[],
+        ),
+        (
+            "a touch screen disabled",
+            info(SCREEN, SLAVE_POINTER, Info::DEVICE_DISABLED),
+            &[touch],
+            &[],
+        ),
+        (
+            "a detached pen disabled",
+            info(STYLUS, FLOATING_SLAVE, Info::DEVICE_DISABLED),
+            &[pen],
+            &[],
+        ),
+        (
+            "a master pointer disabled",
+            info(SECOND_MASTER, Info::MASTER_POINTER, Info::DEVICE_DISABLED),
+            &[mouse],
+            &[],
+        ),
+        (
+            "a device the decoder never knew removed (a keyboard)",
+            info(20, NO_USE, Info::SLAVE_REMOVED),
+            &[],
+            &[],
+        ),
+        (
+            "a master the decoder never knew removed (a master keyboard)",
+            info(15, NO_USE, Info::MASTER_REMOVED),
+            &[],
+            &[],
+        ),
+        (
+            "a pen detached, which is still plugged in",
+            info(STYLUS, FLOATING_SLAVE, SLAVE_DETACHED),
+            &[],
+            &[],
+        ),
+        (
+            "a pen attached again",
+            info(STYLUS, SLAVE_POINTER, Info::SLAVE_ATTACHED),
+            &[],
+            &[STYLUS],
+        ),
+        (
+            "a pointer plugged in",
+            info(NEW, SLAVE_POINTER, Info::SLAVE_ADDED | Info::DEVICE_ENABLED),
+            &[],
+            &[NEW],
+        ),
+        (
+            "a pointer plugged in and unplugged by one change",
+            info(NEW, NO_USE, Info::SLAVE_ADDED | Info::SLAVE_REMOVED),
+            &[],
+            &[],
+        ),
+    ];
+    let time = EventTime::from_nanos(9);
+    for (case, change, removed, asked) in table {
+        let mut pointers = pointers();
+        let _ = pointers.described(
+            &DeviceDescription {
+                master: true,
+                pointer: false,
+                ..device(SECOND_MASTER, "second pointer")
+            },
+            time,
+        );
+        let known = pointers.devices.len() + pointers.masters.len();
+        let mut queried = Vec::new();
+        let changes = pointers.hierarchy(
+            &[*change],
+            |id| {
+                queried.push(id);
+                None
+            },
+            time,
+        );
+        let gone: Vec<PointerKind> = changes
+            .into_iter()
+            .filter_map(|(_, input)| match input {
+                PlatformInput::Pointer(PointerEvent::DeviceRemoved(change)) => Some(change.kind),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(gone, *removed, "{case}: removed");
+        assert_eq!(queried, *asked, "{case}: asked of the server");
+        assert_eq!(
+            pointers.devices.len() + pointers.masters.len(),
+            known - removed.len(),
+            "{case}: a device that went no longer counts against the devices known"
+        );
+    }
+}
+
+/// A master pointer removed with a button held ends its press and leaves the
+/// window: the server sends its removal with no use, and nothing else tells
+/// the window the cursor is gone.
+#[test]
+fn a_removed_master_pointer_ends_its_press() {
+    const SECOND_MASTER: u16 = 14;
+    let time = EventTime::from_nanos(9);
+    let mut pointers = pointers();
+    let _ = pointers.described(
+        &DeviceDescription {
+            master: true,
+            pointer: false,
+            ..device(SECOND_MASTER, "second pointer")
+        },
+        time,
+    );
+    let on_second = |action| XiEvent {
+        master: XiMaster(SECOND_MASTER),
+        detail: 1,
+        ..event(action, XTEST, (3.0, 3.0))
+    };
+    let _ = pointers.event(SURFACE, 1.0, &on_second(XiAction::Enter));
+    let _ = pointers.event(SURFACE, 1.0, &on_second(XiAction::ButtonPress));
+    let removed = pointers.hierarchy(
+        &[info(SECOND_MASTER, NO_USE, HierarchyInfo::MASTER_REMOVED)],
+        |_| None,
+        time,
+    );
+    let events = pointer_events(removed.into_iter().map(|(_, input)| input).collect());
+    assert!(
+        matches!(
+            events.as_slice(),
+            [
+                PointerEvent::Cancel(cancel),
+                PointerEvent::Leave(_),
+                PointerEvent::DeviceRemoved(_),
+            ] if cancel.reason == CancelReason::DeviceRemoved
+        ),
+        "{events:?}"
+    );
+}
+
 /// A pen unplugged and plugged back in before the list is read again (the
 /// hierarchy reports both, the server lists it under the same id) ends its
 /// stroke and comes back as a new device: no press stays down.
@@ -508,15 +693,18 @@ fn a_pen_plugged_back_in_under_its_id_is_a_new_pen() {
     ))
     .expect("the pen's press");
     let time = EventTime::from_nanos(9);
-    let mut changes = pointers.removed(&[XiSlave(STYLUS)], &[], time);
-    changes.extend(pointers.devices(
-        &[
-            master(),
-            device(XTEST, "Virtual core XTEST pointer"),
-            touchpad(),
-            screen(),
-            stylus(),
-        ],
+    let mut changes = pointers.hierarchy(
+        &[info(STYLUS, NO_USE, HierarchyInfo::SLAVE_REMOVED)],
+        |_| None,
+        time,
+    );
+    changes.extend(pointers.hierarchy(
+        &[info(
+            STYLUS,
+            SLAVE_POINTER,
+            HierarchyInfo::SLAVE_ADDED | HierarchyInfo::DEVICE_ENABLED,
+        )],
+        |id| (id == STYLUS).then(stylus),
         time,
     ));
     let events = pointer_events(changes.into_iter().map(|(_, input)| input).collect());
@@ -722,9 +910,11 @@ fn a_pen_plugged_in_mid_batch_draws_as_a_pen() {
     );
     let mut asked = Vec::new();
     let plugged = pointers.hierarchy(
-        &[],
-        &[],
-        &[STYLUS],
+        &[info(
+            STYLUS,
+            SLAVE_POINTER,
+            HierarchyInfo::SLAVE_ADDED | HierarchyInfo::DEVICE_ENABLED,
+        )],
         |id| {
             asked.push(id);
             (id == STYLUS).then(stylus)
@@ -775,29 +965,148 @@ fn a_pen_plugged_in_mid_batch_draws_as_a_pen() {
 }
 
 #[test]
-/// A hierarchy change costs one query per device it names, however many
-/// changes come: 10 000 changes each adding a device ask 10 000 times, never
-/// the whole list, and the devices known stay bounded.
+/// A hierarchy change costs one query per device it names, never the whole
+/// list, and none for a device the decoder has no room to know: 10 000
+/// changes each adding a device ask until `MAX_DEVICES` are known and no
+/// more, as does one change that names 10 000 devices, and one that names
+/// 10 000 devices the server then lists no pointer for asks `MAX_DEVICES`
+/// times.
 fn a_hierarchy_change_asks_only_for_what_it_names() {
     let time = EventTime::from_nanos(5);
-    let mut pointers = X11Pointers::new(NativeClock::epoch_only());
-    let _ = pointers.devices(&[master()], time);
-    let mut asked = 0;
-    for id in 100..10_100 {
-        let _ = pointers.hierarchy(
-            &[],
-            &[],
-            &[id],
-            |queried| {
-                asked += 1;
-                Some(device(queried, "Spurious pointer"))
-            },
-            time,
-        );
+    let added = |id| {
+        info(
+            id,
+            SLAVE_POINTER,
+            HierarchyInfo::SLAVE_ADDED | HierarchyInfo::DEVICE_ENABLED,
+        )
+    };
+    let spurious = |id| Some(device(id, "Spurious pointer"));
+    let many: Vec<HierarchyInfo> = (100..10_100).map(added).collect();
+    // The master is known before the changes come.
+    let room = super::MAX_DEVICES - 1;
+    // (case, the changes, what the server answers, queries made)
+    type Answer = fn(u16) -> Option<DeviceDescription>;
+    let one_each: Vec<&[HierarchyInfo]> = many.chunks(1).collect();
+    let table: [(&str, Vec<&[HierarchyInfo]>, Answer, usize); 3] = [
+        ("a change per device", one_each, spurious, room),
+        ("one change naming them all", vec![&many], spurious, room),
+        (
+            "one change naming devices the server lists no pointer for",
+            vec![&many],
+            |_| None,
+            super::MAX_DEVICES,
+        ),
+    ];
+    for (case, changes, answer, expected) in table {
+        let mut pointers = X11Pointers::new(NativeClock::epoch_only());
+        let _ = pointers.devices(&[master()], time);
+        let mut asked = 0;
+        for change in changes {
+            let _ = pointers.hierarchy(
+                change,
+                |queried| {
+                    asked += 1;
+                    answer(queried)
+                },
+                time,
+            );
+        }
+        assert_eq!(asked, expected, "{case}: queries made");
+        let known = pointers.devices.len() + pointers.masters.len();
+        assert!(known <= super::MAX_DEVICES, "{case}: {known} devices known");
     }
-    assert_eq!(asked, 10_000, "queries made");
-    let known = pointers.devices.len() + pointers.masters.len();
-    assert!(known <= super::MAX_DEVICES, "{known} devices known");
+}
+
+#[test]
+/// The motions of one device with nothing between them are one move at the
+/// last position, which carries the earlier ones as the positions it came
+/// through, in order, the latest hundred of them: a burst costs its window one
+/// move, however long it is.
+/// A motion that scrolls, and a motion of another device, are delivered
+/// where they came, each between the moves around it; a scroll that leaves
+/// the cursor where it was moves nothing.
+fn a_run_of_motions_is_one_move_through_them() {
+    let at = |x: f64| event(XiAction::Motion, XTEST, (x, 5.0));
+    let scrolled = |x: f64, value: f64| XiEvent {
+        valuators: vec![(3, value)],
+        ..event(XiAction::Motion, TOUCHPAD, (x, 5.0))
+    };
+    /// What a run delivers: each move's position and the positions it
+    /// carries, and each scroll's detents.
+    #[derive(Debug, PartialEq)]
+    enum Heard {
+        Move(f64, Vec<f64>),
+        Scroll(f64),
+    }
+    let moved = |x: f64, through: &[f64]| Heard::Move(x, through.to_vec());
+    // (case, the run, what the window hears)
+    let table: [(&str, Vec<XiEvent>, Vec<Heard>); 5] = [
+        ("one motion", vec![at(1.0)], vec![moved(1.0, &[])]),
+        (
+            "a burst",
+            vec![at(1.0), at(2.0), at(3.0), at(4.0)],
+            vec![moved(4.0, &[1.0, 2.0, 3.0])],
+        ),
+        (
+            "a scroll between two bursts",
+            vec![
+                at(1.0),
+                at(2.0),
+                scrolled(2.0, 100.0),
+                scrolled(2.0, 115.0),
+                at(3.0),
+                at(4.0),
+            ],
+            vec![moved(2.0, &[1.0]), Heard::Scroll(1.0), moved(4.0, &[3.0])],
+        ),
+        (
+            "an emulated motion is no input",
+            vec![
+                at(1.0),
+                XiEvent {
+                    emulated: true,
+                    ..at(9.0)
+                },
+                at(2.0),
+            ],
+            vec![moved(2.0, &[1.0])],
+        ),
+        (
+            "ten thousand motions",
+            (0..10_000).map(|x| at(f64::from(x))).collect(),
+            vec![moved(
+                9_999.0,
+                &(9_899..9_999).map(f64::from).collect::<Vec<_>>(),
+            )],
+        ),
+    ];
+    for (case, run, expected) in table {
+        let mut pointers = pointers();
+        let _ = feed(
+            &mut pointers,
+            &[
+                event(XiAction::Enter, XTEST, (0.0, 5.0)),
+                // Where the touchpad's scrolling starts.
+                scrolled(0.0, 100.0),
+            ],
+        );
+        let heard: Vec<Heard> = pointer_events(pointers.motions(SURFACE, 1.0, &run))
+            .into_iter()
+            .map(|event| match event {
+                PointerEvent::Move(movement) => Heard::Move(
+                    movement.current().position.get().x,
+                    movement
+                        .coalesced()
+                        .iter()
+                        .map(|sample| sample.position.get().x)
+                        .collect(),
+                ),
+                PointerEvent::Scroll(scroll) => Heard::Scroll(scroll.delta.y()),
+                other => panic!("{case}: neither a move nor a scroll: {other:?}"),
+            })
+            .collect();
+        assert_eq!(heard, expected, "{case}");
+    }
 }
 
 #[test]
