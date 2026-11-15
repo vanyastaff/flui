@@ -988,12 +988,18 @@ trait depends on `flui-platform` instead.
     `handlers::PresentationReports`, which the `WindowDelivery` keeps and
     `dispatch_frame` empties into the next frame request
     (`FrameRequest::presented`): the newest report wins, a report no later
-    than one kept or carried is dropped, and one still ahead of the request's
-    delivery waits. A report stamped more than a second ahead of the event
-    clock's reading when it arrives is dropped there, for every host
-    (`REPORT_LEAD`): kept, it would outrank each later report until the clock
-    reached it, and a rebase saturated at the timeline's end would silence
-    the window for good. The headless window reports what a test injects
+    than one kept or carried is dropped. A report is of a frame already
+    shown, so a stamp ahead of the event clock's reading when the report
+    arrives is held at that reading while it lies within `REPORT_LEAD` (a
+    rebase's error, a compositor that adds its display's latency): kept at
+    its stamp, it would wait for the clock while the next report replaced
+    it, and a host whose every stamp leads would report nothing while it
+    presents. A stamp further ahead is no time of a frame, and the report is
+    dropped: kept, a rebase saturated at the timeline's end would silence the
+    window for good. Every host's reports pass there, and no host judges a
+    stamp's lead itself: the Win32 window hands on the swap chain's stamp
+    and its counter reading as they are. A request still holds back a report
+    whose arrival reading is later than its own. The headless window reports what a test injects
     (`HeadlessHostWindow::simulate_presented`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
     an X11 present completes on the GPU driver's connection),
@@ -4286,7 +4292,8 @@ numbered with the registries in creation order. The `preferences` row is the sch
 (`flui-protocol`'s `native_recording::Preferences`), and both mirrors convert
 through `flui_platform::PreferenceParts`, whose public fields make a new
 preference a compile error in each until it is mirrored; a display converts
-through `DisplayParts` and `ColorParts` the same way, and a snapshot through
+through `DisplayParts` the same way (a colour variant added to `DisplayColor` is
+refused as unmirrored until the codec writes it), and a snapshot through
 `WindowStateParts` and `CapabilityParts`. A display's id is issued
 by its platform's registry and means nothing outside it, so a recording writes
 its number as a label, a snapshot names its display by the same label, and a
