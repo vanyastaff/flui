@@ -7,20 +7,20 @@
 //!
 //! | Point | Where |
 //! |-------|-------|
-//! | a grant's session body; the admitting gate, read before it | `LockArbiter::run_one` (`lock.rs`) |
-//! | a store's settle, in a scope that parks each failure in the admitting gate as it is caught | `LockArbiter::run_one` (`lock.rs`) |
-//! | a grant refused (synchronous, queue full) | `LockArbiter::defer_or_refuse` (`lock.rs`) |
-//! | the caller's grant when an earlier queued grant fails: queued if asynchronous, retained if synchronous | `LockArbiter::request` (`lock.rs`) |
-//! | queued grants dropped unrun, by a detach or with the store | `LockArbiter::clear`, `Drop for LockArbiter` (`lock.rs`) |
-//! | the gate a store follows, replaced outside the borrow | `LockArbiter::set_gate` (`lock.rs`) |
+//! | a grant's session body; the admitting gate, read before it | `LockArbiter::run_one` (`flui-interaction` `text_input/arbiter.rs`) |
+//! | a store's settle, in a scope that parks each failure in the admitting gate as it is caught | `LockArbiter::run_one` (`flui-interaction` `text_input/arbiter.rs`) |
+//! | a grant refused (synchronous, queue full) | `LockArbiter::request`, `defer` (`flui-interaction` `text_input/arbiter.rs`) |
+//! | the caller's grant when an earlier queued grant fails: queued if asynchronous, retained if synchronous | `LockArbiter::request` (`flui-interaction` `text_input/arbiter.rs`) |
+//! | queued grants dropped unrun, by a detach or with the store | `LockArbiter::clear`, `Drop for LockArbiter` (`flui-interaction` `text_input/arbiter.rs`) |
+//! | the gate a store follows, replaced outside the borrow | `LockArbiter::set_gate` (`flui-interaction` `text_input/arbiter.rs`) |
 //! | a parked failure no owner took when the gate's last clone goes | `CommitGate`'s failure cell (`lock.rs`), which discards it as a scope does |
-//! | the in-memory owner listener, and its snapshot | `InMemoryTextStore::settle` (`in_memory.rs`) |
-//! | a replaced in-memory owner listener or observer, and both when the store goes | `InMemoryTextStore::set_owner_listener`, `set_observer`, `Drop` (`in_memory.rs`) |
-//! | observer notifications and the observer snapshot, in the caller's scope (a settle's included) | `InMemoryTextStore::flush_notifications` (`in_memory.rs`), `EditableTextStore::flush_notifications`, `notify` (`flui-widgets` `text/text_store.rs`) |
-//! | the flush before a request: a failure there refuses it and retains the grant | `request_lock` of `InMemoryTextStore` (`in_memory.rs`) and `EditableTextStore` (`flui-widgets` `text/text_store.rs`) |
+//! | the in-memory owner listener, and its snapshot | `InMemoryTextStore::settle` (`flui-interaction` `testing/text_store.rs`) |
+//! | a replaced in-memory owner listener or observer, and both when the store goes | `InMemoryTextStore::set_owner_listener`, `set_observer`, `Drop` (`flui-interaction` `testing/text_store.rs`) |
+//! | observer notifications and the observer snapshot, in the caller's scope (a settle's included) | `InMemoryTextStore::flush_notifications` (`flui-interaction` `testing/text_store.rs`), `EditableTextStore::flush_notifications`, `notify` (`flui-widgets` `text/text_store.rs`) |
+//! | the flush before a request: a failure there refuses it and retains the grant | `request_lock` of `InMemoryTextStore` (`flui-interaction` `testing/text_store.rs`) and `EditableTextStore` (`flui-widgets` `text/text_store.rs`) |
 //! | the flush after a request's grants, behind what the last one's settle parked in the gate that admitted it ([`OwnerCalls::run_behind_parked`], [`OwnerCalls::parking_gate`]) | `request_lock`, `run_deferred_grants` of both stores |
 //! | a grant a detached field refuses | `EditableTextStore::request_lock` (`flui-widgets` `text/text_store.rs`) |
-//! | a grant's body reading or editing the in-memory store: no borrow is held across it, and an application edit wins | `InMemoryTextStore::open` (`in_memory.rs`) |
+//! | a grant's body reading or editing the in-memory store: no borrow is held across it, and an application edit wins | `InMemoryTextStore::open` (`flui-interaction` `testing/text_store.rs`) |
 //! | `on_changed`, and its snapshot, taken when the edit is accepted (a session written back, a key or semantic edit before it runs), so a rebuild the edit causes cannot drop or redirect it | `EditObserver::accept`, `EditObserver::deliver` (`flui-widgets` `text/editable_text.rs`), from `EditableTextStore::settle` and from a key edit's `EditObserver::around`, which contains the edit's listener notification so the owner still hears of the change |
 //! | the controller's listeners, and the controller snapshot | `EditableTextStore::settle` (`flui-widgets` `text/text_store.rs`) |
 //! | a replaced or detached `EditableText` observer; the observer, `on_changed` and the controller when the store outlives its field | `EditableTextStore::set_observer`, `detach`, `Drop` (`flui-widgets` `text/text_store.rs`), `EditObserver::retire` |
@@ -29,15 +29,15 @@
 //! | the cursor-area loop: the store's notifications, the platform's cursor area, the loop rescheduled before a failure is resumed | `CursorAreaLoop::fire` (`flui-widgets` `text/editable_text.rs`) |
 //! | a blur's detach, with the token taken before it | the field's focus listener (`flui-widgets` `text/editable_text.rs`) |
 //! | dispose: detaching the client and the store, the attachment, the controller listener, each run though an earlier one failed | `EditableTextState::dispose` (`flui-widgets` `text/editable_text.rs`) |
-//! | a store installing the presentation's gate, behind what its grants of other stores parked there ([`OwnerCalls::run_parking`]) | `TextInputOwner::attach` (`flui-interaction` `text_input.rs`) |
-//! | a client a closed owner rejects, store then callback | `retire_rejected`, from `TextInputOwner::attach` and `TextInputHandle::attach` (`flui-interaction` `text_input.rs`) |
-//! | the platform's `set_ime_allowed`, retried by the next attach until an enable completes | `TextInputOwner::attach`, `detach`; at close, `close_host_call` (`flui-interaction` `text_input.rs`) |
-//! | the platform's `set_ime_cursor_area` | `TextInputOwner::set_cursor_area` (`flui-interaction` `text_input.rs`) |
-//! | `on_session_start`, the projection, and the dispatched client snapshot | `TextInputOwner::dispatch` (`flui-interaction` `text_input.rs`) |
-//! | clients replaced or detached, and what their destruction parks; once the client is active, attach parks its failures and returns the token | `TextInputOwner::attach`, `detach` (`flui-interaction` `text_input.rs`) |
-//! | stores retired at an anchor | `TextInputOwner::run_deferred_grants` (`flui-interaction` `text_input.rs`) |
-//! | a pull host's `focus_store` and `complete_composition` from the owner's queue, the completed store, and the host clone; a failure parked before them is taken first on the owner's turn (`complete_composition`, the anchor) and left for that turn by `attach` and `detach` | `TextInputOwner::apply_host_ops` (`flui-interaction` `text_input.rs`), drained by `attach`, `detach`, `complete_composition` and `run_deferred_grants` |
-//! | a push completion committed in place, and its store; at close, the queued grants of a store whose commit waits behind the frame | `TextInputOwner::complete_composition`, `close_with_mode` (`flui-interaction` `text_input.rs`) |
+//! | a store installing the presentation's gate, behind what its grants of other stores parked there ([`OwnerCalls::run_parking`]) | `TextInputOwner::attach` (`flui-interaction` `text_input/mod.rs`) |
+//! | a client a closed owner rejects, store then callback | `retire_rejected`, from `TextInputOwner::attach` and `TextInputHandle::attach` (`flui-interaction` `text_input/mod.rs`) |
+//! | the platform's `set_ime_allowed`, retried by the next attach until an enable completes | `TextInputOwner::attach`, `detach`; at close, `close_host_call` (`flui-interaction` `text_input/mod.rs`) |
+//! | the platform's `set_ime_cursor_area` | `TextInputOwner::set_cursor_area` (`flui-interaction` `text_input/mod.rs`) |
+//! | `on_session_start`, the projection, and the dispatched client snapshot | `TextInputOwner::dispatch` (`flui-interaction` `text_input/mod.rs`) |
+//! | clients replaced or detached, and what their destruction parks; once the client is active, attach parks its failures and returns the token | `TextInputOwner::attach`, `detach` (`flui-interaction` `text_input/mod.rs`) |
+//! | stores retired at an anchor | `TextInputOwner::run_deferred_grants` (`flui-interaction` `text_input/mod.rs`) |
+//! | a pull host's `focus_store` and `complete_composition` from the owner's queue, the completed store, and the host clone; a failure parked before them is taken first on the owner's turn (`complete_composition`, the anchor) and left for that turn by `attach` and `detach` | `TextInputOwner::apply_host_ops` (`flui-interaction` `text_input/mod.rs`), drained by `attach`, `detach`, `complete_composition` and `run_deferred_grants` |
+//! | a push completion committed in place, and its store; at close, the queued grants of a store whose commit waits behind the frame | `TextInputOwner::complete_composition`, `close_with_mode` (`flui-interaction` `text_input/mod.rs`) |
 //! | diagnostics (`tracing` runs a user-installed subscriber) | `TextInputOwner::attach`, `detach`, `dispatch`; `EditableTextState::dispose`, the blur detach and the cursor-area loop |
 //!
 //! Presentation close (`TextInputOwner::close_with_mode` and its `Drop`)
