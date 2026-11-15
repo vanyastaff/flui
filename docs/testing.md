@@ -167,11 +167,8 @@ headless Weston (`weston --backend=headless --socket=…`) and sets
 `wayland_input` harness, the Wayland host's input from a real seat, starts an
 Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
 it skips itself without `Xvfb` or `weston`, and fails then under
-`FLUI_REQUIRE_WAYLAND`. Weston
-13 has no `xdg_activation_v1`, so there
-`an_activation_asks_the_compositor_with_a_token` checks only the refusal; the
-token's whole path (asked, answered, handed back, the window left behind its
-cover) runs only against a sway started by hand. On Windows the Win32 window
+`FLUI_REQUIRE_WAYLAND`. Which compositor runs which Wayland case is in
+[its own section](#which-compositor-runs-which-wayland-case). On Windows the Win32 window
 tests and the contract's share the desktop's foreground, and on macOS the
 AppKit window cases share it and its Spaces: each set runs one at a time
 (test group `desktop-foreground`).
@@ -205,6 +202,40 @@ command (so a contributor can run it standalone) *and* a step in
 `ci` are not themselves invoked from CI). A check folded into `cargo xtask
 checks` gets both at once, since that job runs it. A command with no CI step
 only runs when someone remembers to run it by hand.
+
+### Which compositor runs which Wayland case
+
+The native Wayland host's window cases (`wayland_window::`) run against the
+compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
+
+| Cases | In CI | Why there |
+|-------|-------|-----------|
+| `wayland_window::` outside `optional` | headless Weston 13, in `cargo xtask test` | The conformance kit and `a_window_maximized_before_fullscreen_returns_to_normal` maximize a window. Sway tiles and, at 1.9, offers `xdg_wm_base` 2 with no `wm_capabilities`, so it carries out no maximize and the window cannot know. |
+| `wayland_window::optional::` | headless Weston 13, where each says what it skipped, then a headless sway, in `cargo xtask wayland-optional` | Their subjects are what a compositor may not offer: `xdg-decoration`, `wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`, a seat. Weston 13 lacks all five. |
+| `a_window_moved_to_another_output_names_its_display` | none: a case of `optional`, it says under both runs that it skipped | It needs two outputs and a compositor that returns a window to the output it left: Weston on its X11 backend with `--output-count=2`. Sway leaves a window on the output it went fullscreen on. |
+
+A case of `optional` that meets a compositor without its subject says in its
+output what it skipped and what it checked instead, and both Wayland runs
+show each case's output at their end. `FLUI_REQUIRE_COMPOSITOR`, a variable
+of the test suite and not of a crate's consumer, is a comma-separated list of
+the subjects the compositor must offer (`fractional-scale`, `seat`,
+`two-outputs`, `xdg-activation`, `xdg-decoration`, `xdg-foreign`, the names
+`Optional::ALL` in `tests/wayland_window.rs` holds): a case that finds a
+listed one missing fails, and a name of no subject fails every case of the
+module. `cargo xtask wayland-optional` lists the five a sway offers, and a
+Weston run with two outputs lists `two-outputs`. What no CI compositor runs
+is in [gaps](gaps.md#native-linux-host-wayland-and-x11).
+
+The `test` job starts the sway. To run the task locally, start one the same
+way: a configuration of two lines (`output * scale 1.5`, which makes a
+surface's preferred scale a fraction, and
+`for_window [title="a floating frame"] floating enable`, the window whose
+request for its own frame sway honours), under
+`WLR_BACKENDS=headless WLR_RENDERER=pixman`, with `WAYLAND_DISPLAY` naming
+its socket for the task. An output scaled past the largest scale a buffer is
+drawn at (`output * scale 20`) runs
+`a_window_draws_at_the_compositors_fractional_scale` on a hostile scale: the
+window draws at the largest.
 
 ### What `cargo xtask test` runs
 
@@ -1116,6 +1147,7 @@ cargo xtask deps --strict --only policy                       # deps job: cargo-
 cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the wide and full lanes; advisories.yml runs it daily on main
 cargo xtask doc-strict                                        # doc job
 cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-native under Xvfb (FLUI_HEADLESS=1), then its Wayland tests
+cargo xtask wayland-optional                                  # same job: the Wayland cases Weston cannot run, under the headless sway the step starts
 cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope reaches
 cargo xtask test --nested --nested-group native               # test-nested: generated projects and facade consumers
 cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites (CI runs each shard alone: --trybuild-shard facade, core or view)
@@ -1262,7 +1294,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
 | `clippy` | `cargo xtask lint` (in `gate`), then, on main only, `cargo xtask native-features` | `native-features` lints flui-native with default features off, once each for none, `x11`, `wayland` and `testing`, with and without `--all-targets`: part of `feature-matrix`; from a Windows or macOS checkout pass `--target x86_64-unknown-linux-gnu` |
-| `test` | `cargo xtask test --fast`, `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl` (main only), then `cargo xtask build-all-targets` | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
+| `test` | `cargo xtask test --fast`, `cargo xtask wayland-optional` (under a headless sway the step starts), `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl` (main only), then `cargo xtask build-all-targets` | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
 | `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild --trybuild-shard <shard>` (`facade`, `core` or `view`) | compile-fail suites in three shards on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; each shard builds only its own test targets with the whole run's features; without `--trybuild-shard` the command runs every suite, and plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |

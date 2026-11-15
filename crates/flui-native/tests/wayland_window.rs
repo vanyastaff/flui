@@ -4,6 +4,9 @@
 //!
 //! The cases need a compositor: they run where `WAYLAND_DISPLAY` names one (a
 //! headless Weston in a test session) and say they were skipped elsewhere.
+//! The cases of [`optional`] need more of it than xdg-shell: each says what
+//! it could not run on a compositor that lacks it, and they run a second
+//! time under a headless sway, which has what Weston lacks.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -14,8 +17,8 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Size, WindowMetrics};
 use flui_native::testing::app::{self, AppCall};
 use flui_native::testing::wayland::{
-    ClientFrameReport, bridge_focus, client_frame_report, compositor_report, fullscreen_on,
-    offers_activation, outputs, portal_parent, present, run_for, suspend,
+    ClientFrameReport, MAX_BUFFER_SCALE, bridge_focus, client_frame_report, compositor_report,
+    fullscreen_on, offers_activation, outputs, portal_parent, present, run_for, suspend,
 };
 use flui_native::{ExitAnswer, HostWindow, Platform as _, WaylandPlatform};
 use flui_platform::WindowFrame;
@@ -40,6 +43,15 @@ fn platform(case: &str) -> Option<WaylandPlatform> {
         return None;
     }
     Some(WaylandPlatform::try_new().expect("the compositor WAYLAND_DISPLAY names answers"))
+}
+
+/// The height of the title bar a window draws itself.
+fn client_frame_header(report: &ClientFrameReport) -> f64 {
+    report
+        .pieces
+        .iter()
+        .find(|(piece, _)| *piece == "header")
+        .map_or(0.0, |(_, (_, _, _, height))| *height)
 }
 
 /// A Wayland window for the conformance checks. Dropping it closes the window
@@ -89,11 +101,17 @@ impl WaylandFixture {
         }
     }
 
-    /// The scale the compositor asks the window's buffer to be drawn at: the
-    /// fractional one it prefers for the surface, else the whole one, else
-    /// that of the output the surface
-    /// entered, as the display source reads it on its own connection.
+    /// The scale the window's buffer is to be drawn at: the one the
+    /// compositor asks for, up to the largest a buffer is drawn at. The
+    /// compositor's is the fractional one it prefers for the surface, else
+    /// the whole one, else that of the output the surface entered, as the
+    /// display source reads it on its own connection.
     fn scale(&self) -> f64 {
+        self.asked_scale().min(MAX_BUFFER_SCALE)
+    }
+
+    /// The scale the compositor asks the window's buffer to be drawn at.
+    fn asked_scale(&self) -> f64 {
         let Some(report) = compositor_report(self.window.as_ref()) else {
             return 1.0;
         };
@@ -317,92 +335,6 @@ fn a_window_maximized_before_fullscreen_returns_to_normal() {
     );
 }
 
-/// A window the compositor moves to another output of the same scale names
-/// that output's display, its handler hears the change, and its scale stays;
-/// moved back, it names the first display again. A client has no other way to
-/// put its window on an output than fullscreen on it, so that is how the test
-/// moves it. Needs a compositor with two outputs and a seat: Weston on its X11
-/// backend with `--output-count=2` (desktop-shell places a fullscreen window on
-/// the output it names only when it activates it, which needs a seat). With
-/// one output it says it was skipped, unless `FLUI_REQUIRE_TWO_OUTPUTS` is set
-/// (the two-output run sets it), where it fails instead.
-#[test]
-fn a_window_moved_to_another_output_names_its_display() {
-    use flui_platform::WindowMode::Normal;
-
-    let case = "a_window_moved_to_another_output_names_its_display";
-    let Some(platform) = platform(case) else {
-        return;
-    };
-    let announced = outputs(&platform);
-    if announced.len() < 2 {
-        assert!(
-            std::env::var_os("FLUI_REQUIRE_TWO_OUTPUTS").is_none(),
-            "{case}: FLUI_REQUIRE_TWO_OUTPUTS is set and the compositor announces {announced:?}"
-        );
-        eprintln!("{case}: skipped, the compositor announces one output");
-        return;
-    }
-    let mut fixture = WaylandFixture::open(platform, "moved between outputs");
-    let on_output = |fixture: &WaylandFixture| {
-        compositor_report(fixture.window.as_ref())
-            .expect("a Wayland window")
-            .outputs
-    };
-    let entered = on_output(&fixture);
-    let [first_output] = entered[..] else {
-        panic!("the window opens on one output: {entered:?}");
-    };
-    let before = fixture.window.state();
-    let first = before.display.expect("the window names its display");
-    let other = announced
-        .iter()
-        .copied()
-        .find(|output| *output != first_output)
-        .expect("a second output");
-
-    fixture.handler.take_calls();
-    assert!(fullscreen_on(
-        &fixture.platform,
-        fixture.window.as_ref(),
-        other
-    ));
-    fixture.settle();
-    assert_eq!(on_output(&fixture), vec![other], "the compositor moved it");
-    let moved = fixture.window.state();
-    let second = moved.display.expect("the moved window names its display");
-    assert_ne!(second, first, "the window names the output it moved to");
-    let displays = fixture
-        .platform
-        .display_snapshot()
-        .expect("the displays are read");
-    assert!(
-        displays.displays().iter().any(|info| info.id == second),
-        "{second:?} is a display of the snapshot: {displays:?}"
-    );
-    assert_eq!(
-        moved.metrics.map(WindowMetrics::scale),
-        before.metrics.map(WindowMetrics::scale),
-        "both outputs have one scale"
-    );
-    assert!(
-        fixture.handler.count(&HandlerCall::StateChanged) > 0,
-        "the handler hears the move"
-    );
-
-    fixture
-        .window
-        .admit_and_apply(WindowCommand::SetMode(Normal))
-        .expect("the window leaves fullscreen");
-    fixture.settle();
-    assert_eq!(
-        fixture.window.state().display,
-        Some(first),
-        "back on the first output: {:?}",
-        on_output(&fixture)
-    );
-}
-
 /// A window the compositor suspends (occluded) is given no frame, and gives up
 /// no frame callback however long it waits; the frame asked for meanwhile is
 /// delivered once the compositor shows it again. Neither Weston 13 nor sway
@@ -478,145 +410,6 @@ fn a_window_waits_for_its_first_frame_unoccluded() {
     );
     window.close_for_cleanup();
     run_for(&platform, Duration::from_millis(100)).expect("the loop turns");
-}
-
-/// `xdg_toplevel.state`'s `activated`.
-const ACTIVATED: u32 = 4;
-
-/// A window tells its accessibility bridge each change of the compositor's
-/// activation: activated as it opens, and not once another window takes it.
-/// Where the compositor activates no window (a headless Weston has no seat),
-/// only the first half runs, and the test says so.
-#[test]
-fn the_accessibility_bridge_follows_the_compositors_activation() {
-    let case = "the_accessibility_bridge_follows_the_compositors_activation";
-    let Some(platform) = platform(case) else {
-        return;
-    };
-    let fixture = WaylandFixture::open(platform, "activated first");
-    let activated = |window: &dyn HostWindow| {
-        compositor_report(window)
-            .expect("a Wayland window")
-            .states
-            .contains(&ACTIVATED)
-    };
-    let first = fixture.window.as_ref();
-    assert_eq!(bridge_focus(first), Some(activated(first)), "as it opened");
-    if !activated(first) {
-        eprintln!("{case}: the compositor activates no window; the change was not run");
-        return;
-    }
-    let second = fixture
-        .platform
-        .open_window(
-            WindowOptions::default().title("activated second"),
-            RecordingWindowHandler::new() as _,
-        )
-        .expect("a second window opens");
-    for _ in 0..10 {
-        run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
-        second
-            .surface_target()
-            .pre_present_notify(flui_platform::SwapChainStatistics::None);
-        let _ = present(second.as_ref());
-        if activated(second.as_ref()) && !activated(first) {
-            break;
-        }
-    }
-    run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
-    assert!(
-        activated(second.as_ref()) && !activated(first),
-        "the compositor moved its activation to the second window"
-    );
-    assert_eq!(bridge_focus(second.as_ref()), Some(true));
-    assert_eq!(
-        bridge_focus(first),
-        Some(false),
-        "the first window told its bridge it is no longer active"
-    );
-    second.close_for_cleanup();
-    eprintln!("{case}: the activation moved, and both bridges heard it");
-}
-
-/// `WindowCommand::Activate` asks the compositor for an activation token and
-/// hands it back once it comes: the window does not focus itself, the
-/// compositor decides from the token. A token that names no user input asks
-/// for attention: a window covered by a second one stays behind it (sway
-/// marks it urgent). Where the compositor takes no activation request
-/// (Weston 13 has no `xdg_activation_v1`), the command is refused at
-/// admission as the device's; where it activates no window (no seat), the
-/// covering half is not run, and the test says so.
-#[test]
-fn an_activation_asks_the_compositor_with_a_token() {
-    let case = "an_activation_asks_the_compositor_with_a_token";
-    let Some(platform) = platform(case) else {
-        return;
-    };
-    let mut fixture = WaylandFixture::open(platform, "activated on request");
-    let capabilities = fixture.window.state().capabilities;
-    let activates = capabilities.activates;
-    if !offers_activation(&fixture.platform) {
-        let refused = WindowCommand::Activate
-            .admit(&capabilities)
-            .expect_err("a compositor without xdg-activation takes no activation");
-        assert_eq!(
-            refused.unsupported().map(|unsupported| unsupported.reason),
-            Some(UnsupportedReason::NotOnThisDevice),
-            "refused as this compositor's"
-        );
-        eprintln!("{case}: the compositor offers no xdg-activation; the request was not run");
-        return;
-    }
-    assert_eq!(
-        activates,
-        Availability::Emulated,
-        "the compositor decides what an activation does"
-    );
-    let activated = |window: &dyn HostWindow| {
-        compositor_report(window)
-            .expect("a Wayland window")
-            .states
-            .contains(&ACTIVATED)
-    };
-    let cover = fixture
-        .platform
-        .open_window(
-            WindowOptions::default().title("covering"),
-            RecordingWindowHandler::new() as _,
-        )
-        .expect("a second window opens");
-    for _ in 0..10 {
-        run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
-        cover
-            .surface_target()
-            .pre_present_notify(flui_platform::SwapChainStatistics::None);
-        let _ = present(cover.as_ref());
-    }
-    fixture.settle();
-    let covered = !activated(fixture.window.as_ref());
-    fixture
-        .window
-        .admit_and_apply(WindowCommand::Activate)
-        .unwrap_or_else(|refusal| panic!("Activate was refused: {refusal:?}"));
-    fixture.settle();
-    let report = compositor_report(fixture.window.as_ref()).expect("a Wayland window");
-    assert_eq!(
-        (report.activation_tokens, report.activations),
-        (1, 1),
-        "the compositor answered the token request the command made, and the window handed \
-         the token back"
-    );
-    let came_forward = activated(fixture.window.as_ref());
-    if covered {
-        // The token names no user input (the test gives none), so the
-        // compositor is asked for the user's attention, never the focus.
-        assert!(
-            !came_forward,
-            "an activation with no user input behind it took the focus from the window in front"
-        );
-    }
-    cover.close_for_cleanup();
-    eprintln!("{case}: covered {covered}, activated after the request {came_forward}");
 }
 
 fn frames(handler: &RecordingWindowHandler) -> usize {
@@ -822,317 +615,6 @@ fn a_deadline_its_frame_left_due_again_gets_another_frame() {
     );
 }
 
-/// `zxdg_toplevel_decoration_v1.mode`'s server side.
-const SERVER_SIDE: u32 = 2;
-
-/// Who draws a window's frame, as the compositor's configure and the
-/// window's own surfaces say, checked against the snapshot: where the
-/// compositor answered with its frame (`xdg-decoration`'s server side) the
-/// window draws none, and elsewhere the window draws its own exactly when it
-/// is decorated, a title bar above its content inside its geometry.
-fn assert_frame_agrees(fixture: &WaylandFixture, context: &str) {
-    let mode = compositor_report(fixture.window.as_ref())
-        .expect("a Wayland window")
-        .frame_mode;
-    let own = client_frame_report(fixture.window.as_ref()).expect("a Wayland window");
-    let state = fixture.window.state();
-    if mode == Some(SERVER_SIDE) {
-        assert!(
-            !own.has_header(),
-            "{context}: the compositor draws the frame, and the window draws none: {own:?}"
-        );
-        assert!(
-            state.frame.has_system_title_bar(),
-            "{context}: the compositor's frame"
-        );
-        return;
-    }
-    assert_eq!(
-        own.has_header(),
-        state.frame.has_system_title_bar(),
-        "{context}: the window draws its own frame exactly when decorated: {own:?}"
-    );
-    let content = state.content_size;
-    if own.has_header() {
-        let header = client_frame_header(&own);
-        assert_eq!(
-            own.geometry,
-            Some((0.0, -header, content.width, content.height + header)),
-            "{context}: the geometry is the title bar and the content"
-        );
-        assert_eq!(
-            state.outer.size.height,
-            content.height + header,
-            "{context}: the outer size holds the title bar"
-        );
-    } else if let Some(geometry) = own.geometry {
-        assert_eq!(
-            geometry,
-            (0.0, 0.0, content.width, content.height),
-            "{context}: with no frame the geometry is the content"
-        );
-    }
-}
-
-/// The height of the title bar a window draws itself.
-fn client_frame_header(report: &ClientFrameReport) -> f64 {
-    report
-        .pieces
-        .iter()
-        .find(|(piece, _)| *piece == "header")
-        .map_or(0.0, |(_, (_, _, _, height))| *height)
-}
-
-/// A window's frame is the compositor's where it draws one, and the window's
-/// own where it leaves the frame to the client: turned off and on, the
-/// snapshot says who draws it each time, and where the compositor overrules
-/// the request (sway draws a frame around every tiled window) the command is
-/// no longer offered. A compositor without `xdg-decoration` (Weston) draws no
-/// frame, so the window draws its own and takes the command. Under sway the
-/// test's config floats the window titled "a floating frame", whose request
-/// sway honours.
-#[test]
-fn a_window_has_the_frame_its_compositor_leaves_it() {
-    use flui_platform::UnsupportedReason::NotOnThisDevice;
-
-    let case = "a_window_has_the_frame_its_compositor_leaves_it";
-    for title in ["a floating frame", "a tiled frame"] {
-        let Some(platform) = platform(case) else {
-            return;
-        };
-        let mut fixture = WaylandFixture::open(platform, title);
-        let refusal = |fixture: &WaylandFixture, wanted: bool| {
-            WindowCommand::SetFrame(if wanted {
-                WindowFrame::System
-            } else {
-                WindowFrame::None
-            })
-            .admit(&fixture.window.state().capabilities)
-            .err()
-            .and_then(|refused| refused.unsupported().map(|unsupported| unsupported.reason))
-        };
-        assert!(
-            fixture.window.state().frame.has_system_title_bar(),
-            "{title}: a window opened decorated has a frame, whoever draws it"
-        );
-        assert_frame_agrees(&fixture, &format!("{title}, opened"));
-        let first = fixture.window.state().frame.has_system_title_bar();
-        for wanted in [!first, first] {
-            if let Some(reason) = refusal(&fixture, wanted) {
-                assert_eq!(reason, NotOnThisDevice, "{title}");
-                eprintln!("{case}: {title}: the compositor decides the frame");
-                break;
-            }
-            fixture
-                .window
-                .admit_and_apply(WindowCommand::SetFrame(if wanted {
-                    WindowFrame::System
-                } else {
-                    WindowFrame::None
-                }))
-                .expect("an offered command is applied");
-            fixture.settle();
-            let context = format!("{title}, after SetFrame with the system frame {wanted}");
-            assert_frame_agrees(&fixture, &context);
-            let decorated = fixture.window.state().frame.has_system_title_bar();
-            if decorated == wanted {
-                eprintln!("{case}: {context}: honoured");
-            } else {
-                assert_eq!(
-                    refusal(&fixture, !decorated),
-                    Some(NotOnThisDevice),
-                    "{context}: an overruled request is no longer offered"
-                );
-                eprintln!("{case}: {context}: overruled by the compositor");
-                break;
-            }
-        }
-    }
-}
-
-/// A window draws its buffer at the fractional scale the compositor prefers
-/// for its surface (`wp_fractional_scale_v1`, a numerator over 120): the
-/// snapshot's scale is that fraction, and its drawable area the logical size
-/// times it, rounded half away from zero as the protocol asks. Where the
-/// compositor sends none (Weston), the scale is a whole one.
-#[test]
-fn a_window_draws_at_the_compositors_fractional_scale() {
-    let case = "a_window_draws_at_the_compositors_fractional_scale";
-    let Some(platform) = platform(case) else {
-        return;
-    };
-    let fixture = WaylandFixture::open(platform, "a fractional scale");
-    let report = compositor_report(fixture.window.as_ref()).expect("a Wayland window");
-    let state = fixture.window.state();
-    let metrics = state.metrics.expect("a configured window has metrics");
-    let Some(numerator) = report.fractional_scale else {
-        assert_eq!(metrics.scale().get().fract(), 0.0, "a whole scale");
-        eprintln!("{case}: the compositor sends no fractional scale");
-        return;
-    };
-    let scale = f64::from(numerator) / 120.0;
-    assert_eq!(metrics.scale().get(), scale, "the compositor's fraction");
-    let physical = metrics.physical();
-    let expected = |logical: f64| (logical * scale).round();
-    assert_eq!(
-        (f64::from(physical.width), f64::from(physical.height)),
-        (
-            expected(state.content_size.width),
-            expected(state.content_size.height)
-        ),
-        "the drawable area is the logical size at {scale}"
-    );
-    eprintln!("{case}: drawn at {scale} ({numerator}/120): {metrics:?}");
-}
-
-/// A second client of the compositor, which reads a window's export apart
-/// from the window: it imports the handle as a portal does
-/// (`zxdg_importer_v2`), and hears when the compositor revokes it.
-mod foreign_client {
-    use wayland_client::globals::{GlobalListContents, registry_queue_init};
-    use wayland_client::protocol::wl_registry::{self, WlRegistry};
-    use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
-    use wayland_protocols::xdg::foreign::zv2::client::zxdg_imported_v2::{self, ZxdgImportedV2};
-    use wayland_protocols::xdg::foreign::zv2::client::zxdg_importer_v2::{self, ZxdgImporterV2};
-
-    #[derive(Default)]
-    pub(super) struct Heard {
-        destroyed: bool,
-    }
-
-    impl Dispatch<WlRegistry, GlobalListContents> for Heard {
-        fn event(
-            _: &mut Self,
-            _: &WlRegistry,
-            _: wl_registry::Event,
-            _: &GlobalListContents,
-            _: &Connection,
-            _: &QueueHandle<Self>,
-        ) {
-        }
-    }
-
-    impl Dispatch<ZxdgImporterV2, ()> for Heard {
-        fn event(
-            _: &mut Self,
-            _: &ZxdgImporterV2,
-            _: zxdg_importer_v2::Event,
-            (): &(),
-            _: &Connection,
-            _: &QueueHandle<Self>,
-        ) {
-        }
-    }
-
-    impl Dispatch<ZxdgImportedV2, ()> for Heard {
-        fn event(
-            heard: &mut Self,
-            _: &ZxdgImportedV2,
-            event: zxdg_imported_v2::Event,
-            (): &(),
-            _: &Connection,
-            _: &QueueHandle<Self>,
-        ) {
-            if let zxdg_imported_v2::Event::Destroyed = event {
-                heard.destroyed = true;
-            }
-        }
-    }
-
-    /// The other client.
-    pub(super) struct ForeignClient {
-        queue: EventQueue<Heard>,
-        heard: Heard,
-        /// The compositor announces `zxdg_exporter_v2`.
-        pub(super) exporter_offered: bool,
-        importer: Option<ZxdgImporterV2>,
-        imported: Option<ZxdgImportedV2>,
-    }
-
-    impl ForeignClient {
-        /// Connect to the compositor `WAYLAND_DISPLAY` names.
-        pub(super) fn connect() -> Self {
-            let connection = Connection::connect_to_env().expect("the compositor answers");
-            let (globals, queue) =
-                registry_queue_init::<Heard>(&connection).expect("the registry is read");
-            let exporter_offered = globals.contents().with_list(|list| {
-                list.iter()
-                    .any(|global| global.interface == "zxdg_exporter_v2")
-            });
-            let importer = globals
-                .bind::<ZxdgImporterV2, _, _>(&queue.handle(), 1..=1, ())
-                .ok();
-            Self {
-                queue,
-                heard: Heard::default(),
-                exporter_offered,
-                importer,
-                imported: None,
-            }
-        }
-
-        /// Import `handle` as a portal would, and wait for the compositor.
-        pub(super) fn import(&mut self, handle: &str) {
-            let importer = self
-                .importer
-                .as_ref()
-                .expect("an importer beside the exporter");
-            self.imported =
-                Some(importer.import_toplevel(handle.to_owned(), &self.queue.handle(), ()));
-            self.queue
-                .roundtrip(&mut self.heard)
-                .expect("the compositor answers");
-        }
-
-        /// Whether the compositor revoked what was imported, as of now.
-        pub(super) fn revoked(&mut self) -> bool {
-            self.queue
-                .roundtrip(&mut self.heard)
-                .expect("the compositor answers");
-            self.heard.destroyed
-        }
-    }
-}
-
-/// A window the compositor exports (`xdg-foreign` v2) hands out the portal
-/// parent `wayland:<handle>`, which another client imports as a valid window,
-/// and which names nothing once the window closes: the compositor revokes the
-/// import, and the window hands out no parent. Where the compositor offers no
-/// exporter (Weston), there is no parent.
-#[test]
-fn a_portal_parent_names_the_exported_window() {
-    let case = "a_portal_parent_names_the_exported_window";
-    let Some(platform) = platform(case) else {
-        return;
-    };
-    let mut fixture = WaylandFixture::open(platform, "a portal's parent");
-    let mut other = foreign_client::ForeignClient::connect();
-    let parent = portal_parent(fixture.window.as_ref());
-    if !other.exporter_offered {
-        assert_eq!(parent, None, "no export without an exporter");
-        eprintln!("{case}: the compositor offers no xdg-foreign");
-        return;
-    }
-    let parent = parent.expect("an exported window names its portal parent");
-    let handle = parent
-        .strip_prefix("wayland:")
-        .unwrap_or_else(|| panic!("a Wayland portal parent: {parent}"));
-    other.import(handle);
-    assert!(
-        !other.revoked(),
-        "the compositor knows {handle} as a window"
-    );
-
-    fixture.close();
-    assert!(other.revoked(), "the closed window's export is revoked");
-    assert_eq!(
-        portal_parent(fixture.window.as_ref()),
-        None,
-        "a closed window names no parent"
-    );
-    eprintln!("{case}: {parent} imported, then revoked with the window");
-}
-
 /// The platform's display connection answers the display every window target
 /// of the platform answers, and keeps answering it after the window closed,
 /// when the target answers nothing (ADR-0305 §2).
@@ -1175,4 +657,664 @@ fn a_surface_targets_display_equals_the_platforms_connection() {
             .as_raw(),
         display
     );
+}
+
+/// The cases whose subject a compositor may not offer: a protocol beside
+/// xdg-shell, a second output, a seat. Each says what it could not run on the
+/// compositor it met, and fails instead where `FLUI_REQUIRE_COMPOSITOR` lists
+/// what it lacked ([`Optional::missing`]). CI's headless Weston 13 lacks most
+/// of them, so `cargo xtask wayland-optional` runs this module again under a
+/// headless sway, requiring what sway offers.
+mod optional {
+    use super::*;
+
+    /// What a case needs of the compositor that one may not offer.
+    #[derive(Debug, Clone, Copy)]
+    enum Optional {
+        /// A second output.
+        TwoOutputs,
+        /// A seat, without which a compositor activates no window.
+        Seat,
+        /// `xdg_activation_v1`.
+        XdgActivation,
+        /// `zxdg_decoration_manager_v1`.
+        XdgDecoration,
+        /// `wp_fractional_scale_manager_v1`.
+        FractionalScale,
+        /// `zxdg_exporter_v2`.
+        XdgForeign,
+    }
+
+    impl Optional {
+        /// Every subject, which `FLUI_REQUIRE_COMPOSITOR` names from.
+        const ALL: [Self; 6] = [
+            Self::TwoOutputs,
+            Self::Seat,
+            Self::XdgActivation,
+            Self::XdgDecoration,
+            Self::FractionalScale,
+            Self::XdgForeign,
+        ];
+
+        /// The subjects `FLUI_REQUIRE_COMPOSITOR`, a comma-separated list,
+        /// names. A name of no subject fails the case that reads it: a typo
+        /// would otherwise turn a required case back into a passing skip.
+        fn required() -> Vec<Self> {
+            let listed = std::env::var("FLUI_REQUIRE_COMPOSITOR").unwrap_or_default();
+            listed
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(|name| {
+                    Self::ALL
+                        .into_iter()
+                        .find(|subject| subject.name() == name)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "FLUI_REQUIRE_COMPOSITOR names `{name}`, no subject of {:?}",
+                                Self::ALL.map(Self::name)
+                            )
+                        })
+                })
+                .collect()
+        }
+
+        /// The name `FLUI_REQUIRE_COMPOSITOR` lists it by.
+        const fn name(self) -> &'static str {
+            match self {
+                Self::TwoOutputs => "two-outputs",
+                Self::Seat => "seat",
+                Self::XdgActivation => "xdg-activation",
+                Self::XdgDecoration => "xdg-decoration",
+                Self::FractionalScale => "fractional-scale",
+                Self::XdgForeign => "xdg-foreign",
+            }
+        }
+
+        /// The compositor lacks it, so `case` could not run its subject and
+        /// ran `instead`. That is said in the case's output; where
+        /// `FLUI_REQUIRE_COMPOSITOR`, a comma-separated list, names it, the
+        /// case fails: the run was to prove the subject on a compositor that
+        /// has it.
+        fn missing(self, case: &str, instead: &str) {
+            assert!(
+                !Self::required()
+                    .iter()
+                    .any(|subject| subject.name() == self.name()),
+                "{case}: FLUI_REQUIRE_COMPOSITOR lists {}, which the compositor lacks",
+                self.name()
+            );
+            eprintln!(
+                "{case}: skipped, the compositor lacks `{}`; {instead}",
+                self.name()
+            );
+        }
+    }
+
+    /// The compositor a case of this module runs against, as the module's
+    /// [`super::platform`] gives it, once `FLUI_REQUIRE_COMPOSITOR` is read:
+    /// a name of no subject fails every case before it runs, whether or not
+    /// the compositor offers what the case needs, and with no compositor.
+    fn platform(case: &str) -> Option<WaylandPlatform> {
+        let required = Optional::required();
+        if !required.is_empty() {
+            eprintln!("{case}: the compositor must offer {required:?}");
+        }
+        super::platform(case)
+    }
+
+    /// A window the compositor moves to another output of the same scale names
+    /// that output's display, its handler hears the change, and its scale stays;
+    /// moved back, it names the first display again. A client has no other way to
+    /// put its window on an output than fullscreen on it, so that is how the test
+    /// moves it. Needs a compositor with two outputs and a seat: Weston on its X11
+    /// backend with `--output-count=2` (desktop-shell places a fullscreen window on
+    /// the output it names only when it activates it, which needs a seat). Sway
+    /// leaves a window on the output it went fullscreen on, so the way back is
+    /// Weston's. With one output the case is skipped.
+    #[test]
+    fn a_window_moved_to_another_output_names_its_display() {
+        use flui_platform::WindowMode::Normal;
+
+        let case = "a_window_moved_to_another_output_names_its_display";
+        let Some(platform) = platform(case) else {
+            return;
+        };
+        let announced = outputs(&platform);
+        if announced.len() < 2 {
+            Optional::TwoOutputs.missing(case, "nothing of the case ran");
+            return;
+        }
+        let mut fixture = WaylandFixture::open(platform, "moved between outputs");
+        let on_output = |fixture: &WaylandFixture| {
+            compositor_report(fixture.window.as_ref())
+                .expect("a Wayland window")
+                .outputs
+        };
+        let entered = on_output(&fixture);
+        let [first_output] = entered[..] else {
+            panic!("the window opens on one output: {entered:?}");
+        };
+        let before = fixture.window.state();
+        let first = before.display.expect("the window names its display");
+        let other = announced
+            .iter()
+            .copied()
+            .find(|output| *output != first_output)
+            .expect("a second output");
+
+        fixture.handler.take_calls();
+        assert!(fullscreen_on(
+            &fixture.platform,
+            fixture.window.as_ref(),
+            other
+        ));
+        fixture.settle();
+        assert_eq!(on_output(&fixture), vec![other], "the compositor moved it");
+        let moved = fixture.window.state();
+        let second = moved.display.expect("the moved window names its display");
+        assert_ne!(second, first, "the window names the output it moved to");
+        let displays = fixture
+            .platform
+            .display_snapshot()
+            .expect("the displays are read");
+        assert!(
+            displays.displays().iter().any(|info| info.id == second),
+            "{second:?} is a display of the snapshot: {displays:?}"
+        );
+        assert_eq!(
+            moved.metrics.map(WindowMetrics::scale),
+            before.metrics.map(WindowMetrics::scale),
+            "both outputs have one scale"
+        );
+        assert!(
+            fixture.handler.count(&HandlerCall::StateChanged) > 0,
+            "the handler hears the move"
+        );
+
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetMode(Normal))
+            .expect("the window leaves fullscreen");
+        fixture.settle();
+        assert_eq!(
+            fixture.window.state().display,
+            Some(first),
+            "back on the first output: {:?}",
+            on_output(&fixture)
+        );
+    }
+
+    /// `xdg_toplevel.state`'s `activated`.
+    const ACTIVATED: u32 = 4;
+
+    /// A window tells its accessibility bridge each change of the compositor's
+    /// activation: activated as it opens, and not once another window takes it.
+    /// Where the compositor activates no window (a headless Weston has no seat),
+    /// only the first half runs, and the test says so.
+    #[test]
+    fn the_accessibility_bridge_follows_the_compositors_activation() {
+        let case = "the_accessibility_bridge_follows_the_compositors_activation";
+        let Some(platform) = platform(case) else {
+            return;
+        };
+        let fixture = WaylandFixture::open(platform, "activated first");
+        let activated = |window: &dyn HostWindow| {
+            compositor_report(window)
+                .expect("a Wayland window")
+                .states
+                .contains(&ACTIVATED)
+        };
+        let first = fixture.window.as_ref();
+        assert_eq!(bridge_focus(first), Some(activated(first)), "as it opened");
+        if !activated(first) {
+            Optional::Seat.missing(
+                case,
+                "no window is activated, so only the bridge as the window opened was checked",
+            );
+            return;
+        }
+        let second = fixture
+            .platform
+            .open_window(
+                WindowOptions::default().title("activated second"),
+                RecordingWindowHandler::new() as _,
+            )
+            .expect("a second window opens");
+        for _ in 0..10 {
+            run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
+            second
+                .surface_target()
+                .pre_present_notify(flui_platform::SwapChainStatistics::None);
+            let _ = present(second.as_ref());
+            if activated(second.as_ref()) && !activated(first) {
+                break;
+            }
+        }
+        run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+        assert!(
+            activated(second.as_ref()) && !activated(first),
+            "the compositor moved its activation to the second window"
+        );
+        assert_eq!(bridge_focus(second.as_ref()), Some(true));
+        assert_eq!(
+            bridge_focus(first),
+            Some(false),
+            "the first window told its bridge it is no longer active"
+        );
+        second.close_for_cleanup();
+        eprintln!("{case}: the activation moved, and both bridges heard it");
+    }
+
+    /// `WindowCommand::Activate` asks the compositor for an activation token and
+    /// hands it back once it comes: the window does not focus itself, the
+    /// compositor decides from the token. A token that names no user input asks
+    /// for attention: a window covered by a second one stays behind it (sway
+    /// marks it urgent). Where the compositor takes no activation request
+    /// (Weston 13 has no `xdg_activation_v1`), the command is refused at
+    /// admission as the device's; where it activates no window (no seat), the
+    /// covering half is not run, and the test says so.
+    #[test]
+    fn an_activation_asks_the_compositor_with_a_token() {
+        let case = "an_activation_asks_the_compositor_with_a_token";
+        let Some(platform) = platform(case) else {
+            return;
+        };
+        let mut fixture = WaylandFixture::open(platform, "activated on request");
+        let capabilities = fixture.window.state().capabilities;
+        let activates = capabilities.activates;
+        if !offers_activation(&fixture.platform) {
+            let refused = WindowCommand::Activate
+                .admit(&capabilities)
+                .expect_err("a compositor without xdg-activation takes no activation");
+            assert_eq!(
+                refused.unsupported().map(|unsupported| unsupported.reason),
+                Some(UnsupportedReason::NotOnThisDevice),
+                "refused as this compositor's"
+            );
+            Optional::XdgActivation.missing(case, "only the refusal was checked");
+            return;
+        }
+        assert_eq!(
+            activates,
+            Availability::Emulated,
+            "the compositor decides what an activation does"
+        );
+        let activated = |window: &dyn HostWindow| {
+            compositor_report(window)
+                .expect("a Wayland window")
+                .states
+                .contains(&ACTIVATED)
+        };
+        let cover = fixture
+            .platform
+            .open_window(
+                WindowOptions::default().title("covering"),
+                RecordingWindowHandler::new() as _,
+            )
+            .expect("a second window opens");
+        for _ in 0..10 {
+            run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
+            cover
+                .surface_target()
+                .pre_present_notify(flui_platform::SwapChainStatistics::None);
+            let _ = present(cover.as_ref());
+        }
+        fixture.settle();
+        let covered = !activated(fixture.window.as_ref());
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::Activate)
+            .unwrap_or_else(|refusal| panic!("Activate was refused: {refusal:?}"));
+        fixture.settle();
+        let report = compositor_report(fixture.window.as_ref()).expect("a Wayland window");
+        assert_eq!(
+            (report.activation_tokens, report.activations),
+            (1, 1),
+            "the compositor answered the token request the command made, and the window handed \
+         the token back"
+        );
+        let came_forward = activated(fixture.window.as_ref());
+        if covered {
+            // The token names no user input (the test gives none), so the
+            // compositor is asked for the user's attention, never the focus.
+            assert!(
+                !came_forward,
+                "an activation with no user input behind it took the focus from the window in front"
+            );
+        } else {
+            Optional::Seat.missing(
+                case,
+                "no window is activated, so the token was not asked from behind a cover",
+            );
+        }
+        cover.close_for_cleanup();
+        eprintln!("{case}: covered {covered}, activated after the request {came_forward}");
+    }
+
+    /// `zxdg_toplevel_decoration_v1.mode`'s server side.
+    const SERVER_SIDE: u32 = 2;
+
+    /// Who draws a window's frame, as the compositor's configure and the
+    /// window's own surfaces say, checked against the snapshot: where the
+    /// compositor answered with its frame (`xdg-decoration`'s server side) the
+    /// window draws none, and elsewhere the window draws its own exactly when it
+    /// is decorated, a title bar above its content inside its geometry.
+    fn assert_frame_agrees(fixture: &WaylandFixture, context: &str) {
+        let mode = compositor_report(fixture.window.as_ref())
+            .expect("a Wayland window")
+            .frame_mode;
+        let own = client_frame_report(fixture.window.as_ref()).expect("a Wayland window");
+        let state = fixture.window.state();
+        if mode == Some(SERVER_SIDE) {
+            assert!(
+                !own.has_header(),
+                "{context}: the compositor draws the frame, and the window draws none: {own:?}"
+            );
+            assert!(
+                state.frame.has_system_title_bar(),
+                "{context}: the compositor's frame"
+            );
+            return;
+        }
+        assert_eq!(
+            own.has_header(),
+            state.frame.has_system_title_bar(),
+            "{context}: the window draws its own frame exactly when decorated: {own:?}"
+        );
+        let content = state.content_size;
+        if own.has_header() {
+            let header = client_frame_header(&own);
+            assert_eq!(
+                own.geometry,
+                Some((0.0, -header, content.width, content.height + header)),
+                "{context}: the geometry is the title bar and the content"
+            );
+            assert_eq!(
+                state.outer.size.height,
+                content.height + header,
+                "{context}: the outer size holds the title bar"
+            );
+        } else if let Some(geometry) = own.geometry {
+            assert_eq!(
+                geometry,
+                (0.0, 0.0, content.width, content.height),
+                "{context}: with no frame the geometry is the content"
+            );
+        }
+    }
+
+    /// A window's frame is the compositor's where it draws one, and the window's
+    /// own where it leaves the frame to the client: turned off and on, the
+    /// snapshot says who draws it each time, and where the compositor overrules
+    /// the request (sway draws a frame around every tiled window) the command is
+    /// no longer offered. A compositor without `xdg-decoration` (Weston) draws no
+    /// frame, so the window draws its own and takes the command. Under sway the
+    /// test's config floats the window titled "a floating frame", whose request
+    /// sway honours.
+    #[test]
+    fn a_window_has_the_frame_its_compositor_leaves_it() {
+        use flui_platform::UnsupportedReason::NotOnThisDevice;
+
+        let case = "a_window_has_the_frame_its_compositor_leaves_it";
+        for title in ["a floating frame", "a tiled frame"] {
+            let Some(platform) = platform(case) else {
+                return;
+            };
+            let mut fixture = WaylandFixture::open(platform, title);
+            let refusal = |fixture: &WaylandFixture, wanted: bool| {
+                WindowCommand::SetFrame(if wanted {
+                    WindowFrame::System
+                } else {
+                    WindowFrame::None
+                })
+                .admit(&fixture.window.state().capabilities)
+                .err()
+                .and_then(|refused| refused.unsupported().map(|unsupported| unsupported.reason))
+            };
+            assert!(
+                fixture.window.state().frame.has_system_title_bar(),
+                "{title}: a window opened decorated has a frame, whoever draws it"
+            );
+            assert_frame_agrees(&fixture, &format!("{title}, opened"));
+            let answered = compositor_report(fixture.window.as_ref())
+                .expect("a Wayland window")
+                .frame_mode;
+            if answered.is_none() {
+                Optional::XdgDecoration.missing(
+                    case,
+                    "the frame is the window's own, which is what was checked",
+                );
+            }
+            let first = fixture.window.state().frame.has_system_title_bar();
+            for wanted in [!first, first] {
+                if let Some(reason) = refusal(&fixture, wanted) {
+                    assert_eq!(reason, NotOnThisDevice, "{title}");
+                    eprintln!("{case}: {title}: the compositor decides the frame");
+                    break;
+                }
+                fixture
+                    .window
+                    .admit_and_apply(WindowCommand::SetFrame(if wanted {
+                        WindowFrame::System
+                    } else {
+                        WindowFrame::None
+                    }))
+                    .expect("an offered command is applied");
+                fixture.settle();
+                let context = format!("{title}, after SetFrame with the system frame {wanted}");
+                assert_frame_agrees(&fixture, &context);
+                let decorated = fixture.window.state().frame.has_system_title_bar();
+                if decorated == wanted {
+                    eprintln!("{case}: {context}: honoured");
+                } else {
+                    assert_eq!(
+                        refusal(&fixture, !decorated),
+                        Some(NotOnThisDevice),
+                        "{context}: an overruled request is no longer offered"
+                    );
+                    eprintln!("{case}: {context}: overruled by the compositor");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// A window draws its buffer at the fractional scale the compositor prefers
+    /// for its surface (`wp_fractional_scale_v1`, a numerator over 120): the
+    /// snapshot's scale is that fraction, and its drawable area the logical size
+    /// times it, rounded half away from zero as the protocol asks. A fraction
+    /// past the largest scale a buffer is drawn at is drawn at that one (a
+    /// sway output scaled 20 runs it). Where the compositor sends none
+    /// (Weston), the scale is a whole one.
+    #[test]
+    fn a_window_draws_at_the_compositors_fractional_scale() {
+        let case = "a_window_draws_at_the_compositors_fractional_scale";
+        let Some(platform) = platform(case) else {
+            return;
+        };
+        let fixture = WaylandFixture::open(platform, "a fractional scale");
+        let report = compositor_report(fixture.window.as_ref()).expect("a Wayland window");
+        let state = fixture.window.state();
+        let metrics = state.metrics.expect("a configured window has metrics");
+        let Some(numerator) = report.fractional_scale else {
+            assert_eq!(metrics.scale().get().fract(), 0.0, "a whole scale");
+            Optional::FractionalScale.missing(case, "only the whole scale was checked");
+            return;
+        };
+        let asked = f64::from(numerator) / 120.0;
+        let scale = asked.min(MAX_BUFFER_SCALE);
+        assert_eq!(
+            metrics.scale().get(),
+            scale,
+            "the compositor's fraction, {asked}, up to the largest"
+        );
+        let physical = metrics.physical();
+        let expected = |logical: f64| (logical * scale).round();
+        assert_eq!(
+            (f64::from(physical.width), f64::from(physical.height)),
+            (
+                expected(state.content_size.width),
+                expected(state.content_size.height)
+            ),
+            "the drawable area is the logical size at {scale}"
+        );
+        eprintln!("{case}: drawn at {scale} ({numerator}/120): {metrics:?}");
+    }
+
+    /// A second client of the compositor, which reads a window's export apart
+    /// from the window: it imports the handle as a portal does
+    /// (`zxdg_importer_v2`), and hears when the compositor revokes it.
+    mod foreign_client {
+        use wayland_client::globals::{GlobalListContents, registry_queue_init};
+        use wayland_client::protocol::wl_registry::{self, WlRegistry};
+        use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
+        use wayland_protocols::xdg::foreign::zv2::client::zxdg_imported_v2::{
+            self, ZxdgImportedV2,
+        };
+        use wayland_protocols::xdg::foreign::zv2::client::zxdg_importer_v2::{
+            self, ZxdgImporterV2,
+        };
+
+        #[derive(Default)]
+        pub(super) struct Heard {
+            destroyed: bool,
+        }
+
+        impl Dispatch<WlRegistry, GlobalListContents> for Heard {
+            fn event(
+                _: &mut Self,
+                _: &WlRegistry,
+                _: wl_registry::Event,
+                _: &GlobalListContents,
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+            }
+        }
+
+        impl Dispatch<ZxdgImporterV2, ()> for Heard {
+            fn event(
+                _: &mut Self,
+                _: &ZxdgImporterV2,
+                _: zxdg_importer_v2::Event,
+                (): &(),
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+            }
+        }
+
+        impl Dispatch<ZxdgImportedV2, ()> for Heard {
+            fn event(
+                heard: &mut Self,
+                _: &ZxdgImportedV2,
+                event: zxdg_imported_v2::Event,
+                (): &(),
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+                if let zxdg_imported_v2::Event::Destroyed = event {
+                    heard.destroyed = true;
+                }
+            }
+        }
+
+        /// The other client.
+        pub(super) struct ForeignClient {
+            queue: EventQueue<Heard>,
+            heard: Heard,
+            /// The compositor announces `zxdg_exporter_v2`.
+            pub(super) exporter_offered: bool,
+            importer: Option<ZxdgImporterV2>,
+            imported: Option<ZxdgImportedV2>,
+        }
+
+        impl ForeignClient {
+            /// Connect to the compositor `WAYLAND_DISPLAY` names.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a test's second client reads the whole registry of the compositor under test"
+            )]
+            pub(super) fn connect() -> Self {
+                let connection = Connection::connect_to_env().expect("the compositor answers");
+                let (globals, queue) =
+                    registry_queue_init::<Heard>(&connection).expect("the registry is read");
+                let exporter_offered = globals.contents().with_list(|list| {
+                    list.iter()
+                        .any(|global| global.interface == "zxdg_exporter_v2")
+                });
+                let importer = globals
+                    .bind::<ZxdgImporterV2, _, _>(&queue.handle(), 1..=1, ())
+                    .ok();
+                Self {
+                    queue,
+                    heard: Heard::default(),
+                    exporter_offered,
+                    importer,
+                    imported: None,
+                }
+            }
+
+            /// Import `handle` as a portal would, and wait for the compositor.
+            pub(super) fn import(&mut self, handle: &str) {
+                let importer = self
+                    .importer
+                    .as_ref()
+                    .expect("an importer beside the exporter");
+                self.imported =
+                    Some(importer.import_toplevel(handle.to_owned(), &self.queue.handle(), ()));
+                self.queue
+                    .roundtrip(&mut self.heard)
+                    .expect("the compositor answers");
+            }
+
+            /// Whether the compositor revoked what was imported, as of now.
+            pub(super) fn revoked(&mut self) -> bool {
+                self.queue
+                    .roundtrip(&mut self.heard)
+                    .expect("the compositor answers");
+                self.heard.destroyed
+            }
+        }
+    }
+
+    /// A window the compositor exports (`xdg-foreign` v2) hands out the portal
+    /// parent `wayland:<handle>`, which another client imports as a valid window,
+    /// and which names nothing once the window closes: the compositor revokes the
+    /// import, and the window hands out no parent. Where the compositor offers no
+    /// exporter (Weston), there is no parent.
+    #[test]
+    fn a_portal_parent_names_the_exported_window() {
+        let case = "a_portal_parent_names_the_exported_window";
+        let Some(platform) = platform(case) else {
+            return;
+        };
+        let mut fixture = WaylandFixture::open(platform, "a portal's parent");
+        let mut other = foreign_client::ForeignClient::connect();
+        let parent = portal_parent(fixture.window.as_ref());
+        if !other.exporter_offered {
+            assert_eq!(parent, None, "no export without an exporter");
+            Optional::XdgForeign.missing(case, "only the absence of a parent was checked");
+            return;
+        }
+        let parent = parent.expect("an exported window names its portal parent");
+        let handle = parent
+            .strip_prefix("wayland:")
+            .unwrap_or_else(|| panic!("a Wayland portal parent: {parent}"));
+        other.import(handle);
+        assert!(
+            !other.revoked(),
+            "the compositor knows {handle} as a window"
+        );
+
+        fixture.close();
+        assert!(other.revoked(), "the closed window's export is revoked");
+        assert_eq!(
+            portal_parent(fixture.window.as_ref()),
+            None,
+            "a closed window names no parent"
+        );
+        eprintln!("{case}: {parent} imported, then revoked with the window");
+    }
 }

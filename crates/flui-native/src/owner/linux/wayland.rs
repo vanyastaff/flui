@@ -46,20 +46,24 @@ pub use event_loop::OutputName;
 pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    DragWindow, FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS,
-    OutputFacts, PresentationTime, SeatText, SeatWindow, SeatWindowText, TextEvent, TextRecorder,
-    TextWire, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost, WaylandInput,
-    WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    CursorGlobals, DragWindow, FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow,
+    MAX_OUTPUTS, OutputFacts, PresentationTime, SeatText, SeatWindow, SeatWindowText, TextEvent,
+    TextRecorder, TextWire, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost,
+    WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable, bindable,
 };
 
-pub(crate) mod activation {
-    //! What the loop and its windows say of an activation (`xdg-activation`):
-    //! the user input a token names, the token itself, and the token a
-    //! launcher handed the process.
+pub(crate) mod user_input {
+    //! What the seats' input keeps of the user inputs a later request names
+    //! ([`Inputs`]): the last one, which an activation token names, and each
+    //! seat's pointer grab, which a drag starts under.
 
     #![forbid(unsafe_code)]
 
-    use std::ffi::OsString;
+    /// The seats the input binds, and so the most pointers a window's own
+    /// frame follows. A seat is a user at the machine, and a compositor with
+    /// more than a few is unheard of; a compositor announcing seats without
+    /// end is not bound past this.
+    pub(crate) const MAX_SEATS: usize = 16;
 
     /// A user input as an activation token names it: the seat it came from,
     /// the serial the compositor gave its event (a key, a button, a touch,
@@ -73,6 +77,304 @@ pub(crate) mod activation {
         /// The surface the input went to.
         pub(crate) surface: Surface,
     }
+
+    /// The user inputs the seats reported that a later request names: the
+    /// last one, which an activation token names, and the press that began
+    /// each seat's pointer grab while a button is held, which a drag starts
+    /// under. A seat has one grab at most, and a seat that goes leaves
+    /// nothing here but the end of a watched grab, so what is kept is
+    /// bounded by the seats bound.
+    #[derive(Debug)]
+    pub(crate) struct Inputs<Seat, Surface> {
+        last: Option<UserInput<Seat, Surface>>,
+        /// Each seat's grab: the press that began it and how many buttons
+        /// hold it now.
+        grabs: Vec<(UserInput<Seat, Surface>, u32)>,
+        /// The grab a drag session started under, and whether it ended in a
+        /// way no drag under it survives. See [`Self::watch`].
+        watched: Option<Watched<Seat>>,
+    }
+
+    /// The grab a drag session started under, by its seat and the serial of
+    /// its press.
+    #[derive(Debug)]
+    struct Watched<Seat> {
+        seat: Seat,
+        serial: u32,
+        /// Its last button went up over its surface, or its seat went.
+        ended: bool,
+    }
+
+    impl<Seat, Surface> Default for Inputs<Seat, Surface> {
+        fn default() -> Self {
+            Self {
+                last: None,
+                grabs: Vec::new(),
+                watched: None,
+            }
+        }
+    }
+
+    impl<Seat: Clone + PartialEq, Surface: PartialEq> Inputs<Seat, Surface> {
+        /// The seats report `input`, which is now the last.
+        pub(crate) fn record(&mut self, input: UserInput<Seat, Surface>) {
+            self.last = Some(input);
+        }
+
+        /// The last input; `None` before any.
+        pub(crate) const fn latest(&self) -> Option<&UserInput<Seat, Surface>> {
+            self.last.as_ref()
+        }
+
+        /// A button of `press.seat`'s pointer went down: the first one held
+        /// begins the seat's grab, on `press.surface` under `press.serial`.
+        pub(crate) fn pressed(&mut self, press: UserInput<Seat, Surface>) {
+            match self
+                .grabs
+                .iter_mut()
+                .find(|(grab, _)| grab.seat == press.seat)
+            {
+                Some((_, held)) => *held = held.saturating_add(1),
+                None => self.grabs.push((press, 1)),
+            }
+        }
+
+        /// A button of `seat`'s pointer went up: the last one held ends the
+        /// seat's grab.
+        pub(crate) fn released(&mut self, seat: &Seat) {
+            let mut ended = None;
+            self.grabs.retain_mut(|(grab, held)| {
+                if grab.seat == *seat {
+                    *held = held.saturating_sub(1);
+                    if *held == 0 {
+                        ended = Some(grab.serial);
+                    }
+                }
+                *held > 0
+            });
+            if let (Some(serial), Some(watched)) = (ended, self.watched.as_mut())
+                && watched.seat == *seat
+                && watched.serial == serial
+            {
+                // A drag takes the pointer from its surface before any
+                // release: one that reached the surface means none began.
+                watched.ended = true;
+            }
+        }
+
+        /// Watch the grab `seat`'s press `serial` began, which a drag
+        /// session starts under, in place of any grab watched before: from
+        /// here [`Self::watched_ended`] says whether it ended in a way no
+        /// drag under it survives.
+        pub(crate) fn watch(&mut self, seat: Seat, serial: u32) {
+            self.watched = Some(Watched {
+                seat,
+                serial,
+                ended: false,
+            });
+        }
+
+        /// Whether the grab `seat`'s press `serial` began is the one watched
+        /// and ended since it was: its last button went up over its surface,
+        /// so the compositor took no drag from it, or its seat went, taking
+        /// any drag under it along.
+        pub(crate) fn watched_ended(&self, seat: &Seat, serial: u32) -> bool {
+            self.watched.as_ref().is_some_and(|watched| {
+                watched.ended && watched.seat == *seat && watched.serial == serial
+            })
+        }
+
+        /// `seat`'s pointer left its surface, or went, which ends any grab
+        /// it held: no release reaches a surface the pointer left.
+        pub(crate) fn left(&mut self, seat: &Seat) {
+            self.grabs.retain(|(grab, _)| grab.seat != *seat);
+        }
+
+        /// `seat`'s pointer went while the seat stays: the grab it held ends,
+        /// and so does a watched grab of the seat's, whether or not a leave
+        /// came first. Weston (`weston_seat_release_pointer`) and wlroots
+        /// (`wlr_seat_set_capabilities`) send the focused surface a leave
+        /// before the capabilities, so a grab's leave tells nothing here: a
+        /// drag the compositor ignored would never end, and one it took is
+        /// cancelled by the compositor with its pointer, which the session
+        /// hears and ends on at most once.
+        pub(crate) fn pointer_gone(&mut self, seat: &Seat) {
+            if let Some(watched) = self.watched.as_mut()
+                && watched.seat == *seat
+            {
+                watched.ended = true;
+            }
+            self.left(seat);
+        }
+
+        /// `seat` went: its grab ends, the last input no longer names it, so
+        /// no token is asked for under a seat the compositor no longer
+        /// knows, and a watched grab of its own has ended, whether its
+        /// button was still held or already released.
+        pub(crate) fn seat_gone(&mut self, seat: &Seat) {
+            self.left(seat);
+            if self.last.as_ref().is_some_and(|last| last.seat == *seat) {
+                self.last = None;
+            }
+            if let Some(watched) = self.watched.as_mut()
+                && watched.seat == *seat
+            {
+                watched.ended = true;
+            }
+        }
+
+        /// The press that began a grab `surface` holds now; `None` when no
+        /// button is held there.
+        pub(crate) fn grab_on(&self, surface: &Surface) -> Option<&UserInput<Seat, Surface>> {
+            self.grabs
+                .iter()
+                .find(|(grab, _)| grab.surface == *surface)
+                .map(|(grab, _)| grab)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn input(seat: u32, serial: u32, surface: u32) -> UserInput<u32, u32> {
+            UserInput {
+                seat,
+                serial,
+                surface,
+            }
+        }
+
+        /// A seat's grab begins with its first button and ends with its
+        /// last, or as its pointer leaves; the watched grab a release ended
+        /// is one a drag started under it never began.
+        #[test]
+        fn a_grab_lasts_while_a_button_is_held() {
+            let mut inputs = Inputs::default();
+            inputs.pressed(input(1, 10, 7));
+            inputs.pressed(input(1, 11, 7));
+            assert_eq!(
+                inputs.grab_on(&7),
+                Some(&input(1, 10, 7)),
+                "the first press"
+            );
+            inputs.watch(1, 10);
+            inputs.released(&1);
+            assert_eq!(inputs.grab_on(&7), Some(&input(1, 10, 7)), "one still held");
+            assert!(!inputs.watched_ended(&1, 10));
+            inputs.released(&1);
+            assert_eq!(inputs.grab_on(&7), None);
+            assert!(inputs.watched_ended(&1, 10), "ended by a release");
+            assert!(!inputs.watched_ended(&1, 11), "the grab of 10 is watched");
+
+            inputs.pressed(input(2, 20, 8));
+            inputs.watch(2, 20);
+            assert!(!inputs.watched_ended(&1, 10), "watched in its place");
+            inputs.left(&2);
+            assert_eq!(inputs.grab_on(&8), None, "the pointer left");
+            assert!(!inputs.watched_ended(&2, 20), "no release reached it");
+        }
+
+        /// A seat removed with a button held leaves no grab and is not the
+        /// last input: a compositor adding and removing seats without end
+        /// grows nothing, and no token asked after names a seat that is
+        /// gone.
+        #[test]
+        fn a_seat_that_goes_leaves_no_input_behind() {
+            let mut inputs = Inputs::default();
+            inputs.pressed(input(1, 5, 3));
+            inputs.record(input(1, 5, 3));
+            for seat in 2..10_002 {
+                inputs.record(input(seat, seat, 7));
+                inputs.pressed(input(seat, seat, 7));
+                inputs.seat_gone(&seat);
+                assert_eq!(inputs.grab_on(&7), None, "seat {seat} is gone");
+                assert_eq!(inputs.latest(), None, "seat {seat} is gone");
+            }
+            assert_eq!(inputs.grabs.len(), 1, "the seat still here keeps its grab");
+            assert_eq!(inputs.grab_on(&3), Some(&input(1, 5, 3)));
+            inputs.record(input(1, 6, 3));
+            inputs.seat_gone(&1);
+            assert_eq!(inputs.latest(), None);
+        }
+
+        /// A drag session's grab ends when its seat goes, in either order
+        /// one read may carry: the release, then the seat's removal; or the
+        /// removal with the button still held. A compositor that ignored
+        /// the drag says nothing of it either way, and the session ends on
+        /// what is recorded here. Another seat's going ends nothing.
+        #[test]
+        fn a_watched_grab_ends_when_its_seat_goes() {
+            let mut released_then_gone = Inputs::default();
+            released_then_gone.pressed(input(1, 5, 3));
+            released_then_gone.watch(1, 5);
+            released_then_gone.released(&1);
+            released_then_gone.seat_gone(&1);
+            assert!(
+                released_then_gone.watched_ended(&1, 5),
+                "released, then the seat went"
+            );
+
+            let mut gone_held = Inputs::default();
+            gone_held.pressed(input(1, 5, 3));
+            gone_held.pressed(input(2, 9, 4));
+            gone_held.watch(1, 5);
+            gone_held.seat_gone(&2);
+            assert!(!gone_held.watched_ended(&1, 5), "another seat went");
+            gone_held.seat_gone(&1);
+            assert!(gone_held.watched_ended(&1, 5), "gone with its button held");
+
+            let mut gone_after_leave = Inputs::default();
+            gone_after_leave.pressed(input(1, 5, 3));
+            gone_after_leave.watch(1, 5);
+            gone_after_leave.left(&1);
+            assert!(!gone_after_leave.watched_ended(&1, 5), "the drag began");
+            gone_after_leave.seat_gone(&1);
+            assert!(
+                gone_after_leave.watched_ended(&1, 5),
+                "the seat went with the drag under way"
+            );
+        }
+
+        /// A seat that keeps its seat but loses its pointer ends the watched
+        /// grab, in the order a compositor sends it (a leave, then the
+        /// capabilities) and with no leave at all. A leave alone ends
+        /// nothing, nor does another seat's pointer going.
+        #[test]
+        fn a_watched_grab_ends_when_its_pointer_goes() {
+            let mut held = Inputs::default();
+            held.pressed(input(1, 5, 3));
+            held.pressed(input(2, 9, 4));
+            held.watch(1, 5);
+            held.pointer_gone(&2);
+            assert!(!held.watched_ended(&1, 5), "another seat's pointer went");
+            held.pointer_gone(&1);
+            assert!(
+                held.watched_ended(&1, 5),
+                "its pointer went, no leave first"
+            );
+            assert_eq!(held.grab_on(&3), None);
+
+            let mut left = Inputs::default();
+            left.pressed(input(1, 5, 3));
+            left.watch(1, 5);
+            left.left(&1);
+            assert!(!left.watched_ended(&1, 5), "a leave alone ends nothing");
+            left.pointer_gone(&1);
+            assert!(left.watched_ended(&1, 5), "a leave, then its pointer went");
+        }
+    }
+}
+
+pub(crate) mod activation {
+    //! What the loop and its windows say of an activation (`xdg-activation`):
+    //! the token a request is answered with, and the token a launcher
+    //! handed the process. The user input a token names is
+    //! [`UserInput`](super::user_input::UserInput).
+
+    #![forbid(unsafe_code)]
+
+    use std::ffi::OsString;
 
     /// An activation token: what the compositor answered a token request
     /// with, or what a launcher handed the process. Opaque; only the
@@ -358,7 +660,6 @@ mod event_loop {
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
     use rustix::io::Errno;
     use wayland_client::backend::{ObjectId, WaylandError};
-    use wayland_client::globals::{GlobalListContents, registry_queue_init};
     use wayland_client::protocol::wl_compositor::WlCompositor;
     use wayland_client::protocol::wl_output::{self, WlOutput};
     use wayland_client::protocol::wl_registry::{self, WlRegistry};
@@ -382,7 +683,8 @@ mod event_loop {
     use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
     use web_time::Instant;
 
-    use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, UserInput, launch_token};
+    use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, launch_token};
+    use super::user_input::{Inputs, UserInput};
     use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, poll_timeout};
     use crate::error::PlatformError;
     use crate::executor::NativeExecutor;
@@ -515,7 +817,7 @@ mod event_loop {
         /// The frame it draws itself where the compositor draws none, which
         /// the pointer over the frame's surfaces reaches instead of the
         /// window's input.
-        pub(crate) frame: Arc<dyn FramePointer>,
+        pub(crate) frame: Rc<dyn FramePointer>,
         /// Its text, which a seat's `zwp_text_input_v3` in the window drives;
         /// `None` where its text input is no Wayland one.
         pub(crate) text: Option<Arc<dyn SeatWindowText>>,
@@ -523,20 +825,20 @@ mod event_loop {
 
     /// A window's own frame as the seats' input reaches it: the window
     /// feature's, which draws it. The input asks it whether a surface is the
-    /// frame's and tells it what the pointer does there; the frame records
-    /// it, and the window carries it out as it settles. Called by a dispatch
-    /// on the owner thread, with no cell of the input borrowed; it runs no
-    /// handler and calls back into nothing.
-    pub(crate) trait FramePointer: Send + Sync {
+    /// frame's and tells it what each seat's pointer does there; the frame
+    /// records it seat by seat, and the window carries it out as it settles.
+    /// Called by a dispatch on the owner thread, with no cell of the input
+    /// borrowed; it runs no handler and calls back into nothing.
+    pub(crate) trait FramePointer {
         /// Whether `surface` is one of the frame's.
         fn holds(&self, surface: &WlSurface) -> bool;
 
-        /// The pointer is at (`x`, `y`), surface-local, on `surface`, one of
-        /// the frame's: the cursor it shows there.
-        fn moved(&self, surface: &WlSurface, x: f64, y: f64) -> CursorIcon;
+        /// `seat`'s pointer is at (`x`, `y`), surface-local, on `surface`,
+        /// one of the frame's: the cursor it shows there.
+        fn moved(&self, seat: &WlSeat, surface: &WlSurface, x: f64, y: f64) -> CursorIcon;
 
-        /// The pointer left the frame's surfaces.
-        fn left(&self);
+        /// `seat`'s pointer left the frame's surfaces.
+        fn left(&self, seat: &WlSeat);
 
         /// Button `code` (evdev) of `seat`'s pointer went down or up over the
         /// frame at `time` (the compositor's milliseconds), as the event
@@ -544,17 +846,22 @@ mod event_loop {
         /// names that seat and serial.
         fn button(&self, seat: &WlSeat, serial: u32, time: u32, code: u32, pressed: bool);
 
-        /// The pointer is at (`x`, `y`), surface-local, on the window's own
-        /// surface: a press on a title bar of the application's is answered
-        /// from there, and a press on it held moves the window once the
-        /// pointer travels (ADR-0286 §11).
-        fn content_moved(&self, x: f64, y: f64);
+        /// `seat`'s pointer is at (`x`, `y`), surface-local, on the window's
+        /// own surface: a press on a title bar of the application's is
+        /// answered from there, and a press on it held moves the window once
+        /// the pointer travels (ADR-0286 §11).
+        fn content_moved(&self, seat: &WlSeat, x: f64, y: f64);
 
         /// Button `code` (evdev) of `seat`'s pointer went down or up over the
         /// window's own surface, as the event numbered `serial`: whether the
         /// window's chrome took it, which keeps it from the window's input.
         /// The release of a press it took is taken too.
         fn content_button(&self, seat: &WlSeat, serial: u32, code: u32, pressed: bool) -> bool;
+
+        /// `seat` went, or its pointer did: what the frame kept of that
+        /// pointer goes with it, and an action it asked for is not carried
+        /// out.
+        fn seat_gone(&self, seat: &WlSeat);
     }
 
     /// What one seat's `zwp_text_input_v3` reported, recorded in the seats'
@@ -662,6 +969,21 @@ mod event_loop {
         pub(crate) scale: i32,
     }
 
+    /// The loop's globals a theme cursor is drawn with: the input draws it
+    /// from the loop's `wl_shm` on a surface of the loop's `wl_compositor`,
+    /// and binds neither a second time.
+    #[derive(Clone)]
+    pub(crate) struct CursorGlobals {
+        /// The connection the globals are on.
+        pub(crate) connection: Connection,
+        /// The owner's event queue.
+        pub(crate) queue: QueueHandle<WaylandState>,
+        /// `wl_compositor`, which makes the cursor's surface.
+        pub(crate) compositor: WlCompositor,
+        /// `wl_shm`, the shared memory the theme's images are in.
+        pub(crate) shm: WlShm,
+    }
+
     /// What the loop and its windows ask of the seats' input: the input
     /// feature's (`input::linux::wayland`), which the table registers.
     ///
@@ -682,6 +1004,10 @@ mod event_loop {
 
         /// The compositor removed global `name`.
         fn global_removed(&self, name: u32);
+
+        /// The loop's globals a theme cursor is drawn with, handed over once
+        /// as the loop starts, where the compositor has shared memory.
+        fn cursor_globals(&self, globals: CursorGlobals);
 
         /// Deliver to the windows what the seats reported since the last
         /// turn, and a held key's repeat that came due.
@@ -913,101 +1239,71 @@ mod event_loop {
     ///
     /// Beside it, the press that began each seat's pointer grab while a button
     /// is held: a drag starts only under the serial of the grab its origin
-    /// surface holds.
+    /// surface holds. See [`Inputs`].
     #[derive(Clone, Default)]
-    pub(crate) struct LastInput(Arc<OwnerCell<Inputs>>);
-
-    /// What [`LastInput`] keeps.
-    #[derive(Default)]
-    struct Inputs {
-        last: Option<SeatInput>,
-        /// Each seat's grab: the press that began it and how many buttons
-        /// hold it now.
-        grabs: Vec<(SeatInput, u32)>,
-        /// The grab whose last button went up last, by its seat and the
-        /// serial of its press: a drag started under it never began, since
-        /// a drag takes the pointer from its surface before any release.
-        released: Option<(WlSeat, u32)>,
-    }
+    pub(crate) struct LastInput(Arc<OwnerCell<Inputs<WlSeat, WlSurface>>>);
 
     impl LastInput {
         /// The seats report `input`, which is now the last: a key, a button
         /// or a touch going down, or the keyboard entering a surface.
         pub(crate) fn record(&self, input: SeatInput) {
-            self.0.with(|inputs| inputs.last = Some(input));
+            self.0.with(|inputs| inputs.record(input));
         }
 
         /// The last input; `None` before any, or off the owner thread.
         pub(crate) fn latest(&self) -> Option<SeatInput> {
-            self.0.with(|inputs| inputs.last.clone()).flatten()
+            self.0.with(|inputs| inputs.latest().cloned()).flatten()
         }
 
         /// A button of `press.seat`'s pointer went down: the first one held
         /// begins the seat's grab, on `press.surface` under `press.serial`.
         pub(crate) fn pressed(&self, press: SeatInput) {
-            self.0.with(|inputs| {
-                match inputs
-                    .grabs
-                    .iter_mut()
-                    .find(|(grab, _)| grab.seat == press.seat)
-                {
-                    Some((_, held)) => *held = held.saturating_add(1),
-                    None => inputs.grabs.push((press, 1)),
-                }
-            });
+            self.0.with(|inputs| inputs.pressed(press));
         }
 
         /// A button of `seat`'s pointer went up: the last one held ends the
         /// seat's grab.
         pub(crate) fn released(&self, seat: &WlSeat) {
-            self.0.with(|inputs| {
-                let mut ended = None;
-                inputs.grabs.retain_mut(|(grab, held)| {
-                    if grab.seat == *seat {
-                        *held = held.saturating_sub(1);
-                        if *held == 0 {
-                            ended = Some((grab.seat.clone(), grab.serial));
-                        }
-                    }
-                    *held > 0
-                });
-                if ended.is_some() {
-                    inputs.released = ended;
-                }
-            });
+            self.0.with(|inputs| inputs.released(seat));
         }
 
-        /// Whether the grab `seat`'s press `serial` began ended with a
-        /// release that reached its surface; `false` off the owner thread.
-        pub(crate) fn released_grab(&self, seat: &WlSeat, serial: u32) -> bool {
+        /// Watch the grab `seat`'s press `serial` began, which a drag
+        /// session starts under. See [`Inputs::watch`].
+        pub(crate) fn watch(&self, seat: WlSeat, serial: u32) {
+            self.0.with(|inputs| inputs.watch(seat, serial));
+        }
+
+        /// Whether the watched grab of `seat`'s press `serial` ended: its
+        /// last button went up over its surface, or its seat went; `false`
+        /// off the owner thread.
+        pub(crate) fn watched_ended(&self, seat: &WlSeat, serial: u32) -> bool {
             self.0
-                .with(|inputs| {
-                    inputs
-                        .released
-                        .as_ref()
-                        .is_some_and(|(held, at)| held == seat && *at == serial)
-                })
+                .with(|inputs| inputs.watched_ended(seat, serial))
                 .unwrap_or(false)
         }
 
-        /// `seat`'s pointer left its surface, which ends any grab it held:
-        /// no release reaches a surface the pointer left.
+        /// `seat`'s pointer left its surface, or went, which ends any grab
+        /// it held: no release reaches a surface the pointer left.
         pub(crate) fn left(&self, seat: &WlSeat) {
-            self.0
-                .with(|inputs| inputs.grabs.retain(|(grab, _)| grab.seat != *seat));
+            self.0.with(|inputs| inputs.left(seat));
+        }
+
+        /// `seat`'s pointer went while the seat stays. See
+        /// [`Inputs::pointer_gone`].
+        pub(crate) fn pointer_gone(&self, seat: &WlSeat) {
+            self.0.with(|inputs| inputs.pointer_gone(seat));
+        }
+
+        /// `seat` went: nothing kept names it any more.
+        pub(crate) fn seat_gone(&self, seat: &WlSeat) {
+            self.0.with(|inputs| inputs.seat_gone(seat));
         }
 
         /// The press that began a grab `surface` holds now; `None` when no
         /// button is held there, or off the owner thread.
         pub(crate) fn grab_on(&self, surface: &WlSurface) -> Option<SeatInput> {
             self.0
-                .with(|inputs| {
-                    inputs
-                        .grabs
-                        .iter()
-                        .find(|(grab, _)| grab.surface == *surface)
-                        .map(|(grab, _)| grab.clone())
-                })
+                .with(|inputs| inputs.grab_on(surface).cloned())
                 .flatten()
         }
     }
@@ -1239,6 +1535,117 @@ mod event_loop {
         clipboard: Arc<dyn WaylandClipboard>,
         /// The seats' data devices, which the clipboard and drag share.
         devices: DataDevices,
+        /// The globals the loop binds for itself, while it starts: each is
+        /// bound as the compositor first announces it, and the loop takes
+        /// them once the registry was read. `None` from then on, when a
+        /// global of one of those kinds is bound no more.
+        starting: Option<LoopGlobals>,
+    }
+
+    /// The globals the loop binds for itself, each the first of its kind the
+    /// compositor announces.
+    #[derive(Default)]
+    struct LoopGlobals {
+        compositor: Option<WlCompositor>,
+        wm_base: Option<XdgWmBase>,
+        viewporter: Option<WpViewporter>,
+        subcompositor: Option<WlSubcompositor>,
+        shm: Option<WlShm>,
+        decoration: Option<ZxdgDecorationManagerV1>,
+        fractional_scale: Option<WpFractionalScaleManagerV1>,
+        exporter: Option<ZxdgExporterV2>,
+        presentation: Option<PresentationTime>,
+        activation: Option<XdgActivationV1>,
+    }
+
+    impl LoopGlobals {
+        /// Bind global `name` if it is of a kind the loop binds and the
+        /// first of it announced.
+        fn offer(
+            &mut self,
+            registry: &WlRegistry,
+            name: u32,
+            interface: &str,
+            version: u32,
+            queue: &QueueHandle<WaylandState>,
+        ) {
+            /// Bind `name` into `slot` at the version announced, no newer
+            /// than `newest`, unless one of its kind is bound.
+            fn first<I>(
+                slot: &mut Option<I>,
+                registry: &WlRegistry,
+                (name, version, newest): (u32, u32, u32),
+                queue: &QueueHandle<WaylandState>,
+            ) where
+                I: Proxy + 'static,
+                WaylandState: Dispatch<I, ()>,
+            {
+                if slot.is_none() {
+                    let bound =
+                        registry.bind::<I, (), WaylandState>(name, version.min(newest), queue, ());
+                    *slot = Some(bound);
+                }
+            }
+            let global = |newest: u32| (name, version, newest);
+            if interface == WlCompositor::interface().name {
+                first(
+                    &mut self.compositor,
+                    registry,
+                    global(COMPOSITOR_VERSION),
+                    queue,
+                );
+            } else if interface == XdgWmBase::interface().name {
+                first(&mut self.wm_base, registry, global(WM_BASE_VERSION), queue);
+            } else if interface == WpViewporter::interface().name {
+                first(
+                    &mut self.viewporter,
+                    registry,
+                    global(VIEWPORTER_VERSION),
+                    queue,
+                );
+            } else if interface == WlSubcompositor::interface().name {
+                first(&mut self.subcompositor, registry, global(1), queue);
+            } else if interface == WlShm::interface().name {
+                first(&mut self.shm, registry, global(1), queue);
+            } else if interface == ZxdgDecorationManagerV1::interface().name {
+                first(
+                    &mut self.decoration,
+                    registry,
+                    global(DECORATION_VERSION),
+                    queue,
+                );
+            } else if interface == WpFractionalScaleManagerV1::interface().name {
+                first(
+                    &mut self.fractional_scale,
+                    registry,
+                    global(FRACTIONAL_SCALE_VERSION),
+                    queue,
+                );
+            } else if interface == ZxdgExporterV2::interface().name {
+                first(
+                    &mut self.exporter,
+                    registry,
+                    global(EXPORTER_VERSION),
+                    queue,
+                );
+            } else if interface == XdgActivationV1::interface().name {
+                first(
+                    &mut self.activation,
+                    registry,
+                    global(ACTIVATION_VERSION),
+                    queue,
+                );
+            } else if interface == WpPresentation::interface().name && self.presentation.is_none() {
+                let clock = PresentationClock::default();
+                let manager = registry.bind::<WpPresentation, PresentationClock, WaylandState>(
+                    name,
+                    version.min(PRESENTATION_VERSION),
+                    queue,
+                    clock.clone(),
+                );
+                self.presentation = Some(PresentationTime { manager, clock });
+            }
+        }
     }
 
     impl WaylandState {
@@ -1297,29 +1704,38 @@ mod event_loop {
         }
     }
 
-    impl Dispatch<WlRegistry, GlobalListContents> for WaylandState {
+    /// The registry keeps no list of what the compositor announces: a global
+    /// is bound as it is announced, by the loop or by a feature, or not at
+    /// all, and a removal is told to those that bind. A compositor announcing
+    /// globals without end grows nothing here.
+    impl Dispatch<WlRegistry, ()> for WaylandState {
         fn event(
             state: &mut Self,
             registry: &WlRegistry,
             event: wl_registry::Event,
-            _: &GlobalListContents,
+            (): &(),
             _: &Connection,
             queue: &QueueHandle<Self>,
         ) {
-            match event {
-                wl_registry::Event::Global {
+            match bindable(event) {
+                Some(wl_registry::Event::Global {
                     name,
                     interface,
                     version,
-                } if interface == WlOutput::interface().name => {
+                }) if interface == WlOutput::interface().name => {
                     state.bind_output(registry, name, version, queue);
                 }
-                wl_registry::Event::Global {
+                Some(wl_registry::Event::Global {
                     name,
                     interface,
                     version,
-                } => state.offer_global(registry, name, &interface, version, queue),
-                wl_registry::Event::GlobalRemove { name } => {
+                }) => {
+                    if let Some(starting) = &mut state.starting {
+                        starting.offer(registry, name, &interface, version, queue);
+                    }
+                    state.offer_global(registry, name, &interface, version, queue);
+                }
+                Some(wl_registry::Event::GlobalRemove { name }) => {
                     state.remove_output(name);
                     state.input.global_removed(name);
                     state.clipboard.global_removed(name);
@@ -1327,6 +1743,16 @@ mod event_loop {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// `event` as a client acts on it: `None` for a global of version zero,
+    /// which no client binds, so the loop, its outputs, every feature it
+    /// offers globals to and the display watch bind from version one.
+    pub(crate) fn bindable(event: wl_registry::Event) -> Option<wl_registry::Event> {
+        match event {
+            wl_registry::Event::Global { version: 0, .. } => None,
+            event => Some(event),
         }
     }
 
@@ -1659,44 +2085,8 @@ mod event_loop {
                 .map_err(|error| init(&format!("no compositor at {}", socket.display()), &error))?;
             let connection =
                 Connection::from_socket(stream).map_err(|error| init("the connection", &error))?;
-            let (globals, queue) = registry_queue_init::<WaylandState>(&connection)
-                .map_err(|error| init("the registry", &error))?;
+            let mut queue = connection.new_event_queue::<WaylandState>();
             let handle = queue.handle();
-            let compositor = globals
-                .bind::<WlCompositor, _, _>(&handle, 1..=COMPOSITOR_VERSION, ())
-                .map_err(|error| init("wl_compositor", &error))?;
-            let wm_base = globals
-                .bind::<XdgWmBase, _, _>(&handle, 1..=WM_BASE_VERSION, ())
-                .map_err(|error| {
-                    tracing::error!(%error, "Wayland: xdg_wm_base");
-                    crate::version::requirement::missing(crate::version::requirement::XDG_WM_BASE)
-                })?;
-            let viewporter = globals
-                .bind::<WpViewporter, _, _>(&handle, 1..=VIEWPORTER_VERSION, ())
-                .ok();
-            let decoration = globals
-                .bind::<ZxdgDecorationManagerV1, _, _>(&handle, 1..=DECORATION_VERSION, ())
-                .ok();
-            let fractional_scale = globals
-                .bind::<WpFractionalScaleManagerV1, _, _>(&handle, 1..=FRACTIONAL_SCALE_VERSION, ())
-                .ok();
-            let exporter = globals
-                .bind::<ZxdgExporterV2, _, _>(&handle, 1..=EXPORTER_VERSION, ())
-                .ok();
-            let presentation = {
-                let clock = PresentationClock::default();
-                globals
-                    .bind::<WpPresentation, _, _>(&handle, 1..=PRESENTATION_VERSION, clock.clone())
-                    .ok()
-                    .map(|manager| PresentationTime { manager, clock })
-            };
-            let activation = globals
-                .bind::<XdgActivationV1, _, _>(&handle, 1..=ACTIVATION_VERSION, ())
-                .ok();
-            let subcompositor = globals
-                .bind::<WlSubcompositor, _, _>(&handle, 1..=1, ())
-                .ok();
-            let shm = globals.bind::<WlShm, _, _>(&handle, 1..=1, ()).ok();
             let live = LiveOutputs::default();
             let last_input = LastInput::default();
             let input = H::input(last_input.clone());
@@ -1708,18 +2098,44 @@ mod event_loop {
                 input: Arc::clone(&input),
                 clipboard: Arc::clone(&clipboard),
                 devices: devices.clone(),
+                starting: Some(LoopGlobals::default()),
             };
-            let announced = globals.contents().with_list(|list| {
-                list.iter()
-                    .map(|global| (global.name, global.interface.clone(), global.version))
-                    .collect::<Vec<_>>()
-            });
-            for (name, interface, version) in announced {
-                if interface == WlOutput::interface().name {
-                    state.bind_output(globals.registry(), name, version, &handle);
-                } else {
-                    state.offer_global(globals.registry(), name, &interface, version, &handle);
-                }
+            // The compositor announces every global it has before it answers
+            // the round trip: the registry's dispatch binds each as it comes
+            // and keeps none.
+            let _registry = connection.display().get_registry(&handle, ());
+            queue
+                .roundtrip(&mut state)
+                .map_err(|error| init("the registry", &error))?;
+            let LoopGlobals {
+                compositor,
+                wm_base,
+                viewporter,
+                subcompositor,
+                shm,
+                decoration,
+                fractional_scale,
+                exporter,
+                presentation,
+                activation,
+            } = state
+                .starting
+                .take()
+                .expect("BUG: the loop's globals are taken once, here");
+            let compositor = compositor
+                .ok_or_else(|| init("wl_compositor", &"the compositor announces none"))?;
+            let wm_base = wm_base.ok_or_else(|| {
+                tracing::error!("Wayland: the compositor announces no xdg_wm_base");
+                crate::version::requirement::missing(crate::version::requirement::XDG_WM_BASE)
+            })?;
+            // A theme cursor is drawn with the loop's own globals.
+            if let Some(shm) = &shm {
+                input.cursor_globals(CursorGlobals {
+                    connection: connection.clone(),
+                    queue: handle.clone(),
+                    compositor: compositor.clone(),
+                    shm: shm.clone(),
+                });
             }
             // The seats bound so far get their data devices now: the first
             // window opens before the loop's first turn, and a seat's
@@ -2476,6 +2892,35 @@ mod event_loop {
             assert_eq!(table.register(third, Rc::new(Idle)).ok(), Some(None));
         }
 
+        /// `bindable` drops a global announced at version zero and passes
+        /// any other version and a removal. The test proves the function
+        /// alone: its two callers, the loop's registry dispatch
+        /// (`Dispatch<WlRegistry, ()> for WaylandState`) and the display
+        /// watch's (`display::linux::wayland`), need a compositor to run,
+        /// and dropping either call fails nothing here.
+        #[test]
+        fn a_global_of_version_zero_is_bound_by_none() {
+            let global = |version| wl_registry::Event::Global {
+                name: 7,
+                interface: "wl_output".to_owned(),
+                version,
+            };
+            assert!(bindable(global(0)).is_none(), "version zero");
+            for version in [1, 4, u32::MAX] {
+                assert!(
+                    matches!(
+                        bindable(global(version)),
+                        Some(wl_registry::Event::Global { version: told, .. }) if told == version
+                    ),
+                    "version {version}"
+                );
+            }
+            assert!(matches!(
+                bindable(wl_registry::Event::GlobalRemove { name: 7 }),
+                Some(wl_registry::Event::GlobalRemove { name: 7 })
+            ));
+        }
+
         /// The last input recorded is the one an activation token names,
         /// on the owner thread only: another thread reads none.
         #[test]
@@ -2503,8 +2948,8 @@ mod event_loop {
         }
 
         /// A grab is the first press a seat's pointer holds, kept until its
-        /// last button goes up or the pointer leaves its surface, and only a
-        /// release names the grab it ended.
+        /// last button goes up or the pointer leaves its surface; a watched
+        /// grab ends with a release over its surface, not with a leave.
         #[test]
         fn a_grab_is_the_first_press_held_until_its_last_release() {
             let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
@@ -2526,21 +2971,25 @@ mod event_loop {
             grabs.pressed(press(3));
             grabs.pressed(press(4));
             assert_eq!(serial(&grabs), Some(3), "the grab's first press");
+            grabs.watch(seat.clone(), 3);
             grabs.released(&seat);
             assert_eq!(serial(&grabs), Some(3), "a button still holds it");
             grabs.released(&seat);
             assert_eq!(serial(&grabs), None, "the last release ends it");
             assert!(
-                grabs.released_grab(&seat, 3),
+                grabs.watched_ended(&seat, 3),
                 "a release ended the grab of 3"
             );
             grabs.pressed(press(9));
+            grabs.watch(seat.clone(), 9);
             grabs.left(&seat);
             assert_eq!(serial(&grabs), None, "a leave ends it");
             assert!(
-                !grabs.released_grab(&seat, 9),
+                !grabs.watched_ended(&seat, 9),
                 "no release reached the surface the grab of 9 left"
             );
+            grabs.seat_gone(&seat);
+            assert!(grabs.watched_ended(&seat, 9), "its seat went");
         }
     }
 }

@@ -129,4 +129,40 @@ impl Client {
             assert!(Instant::now() < deadline, "timed out waiting for the read");
         }
     }
+
+    /// Start `count` reads with `start`, every one before the loop turns
+    /// again, and turn until each has ended: how many were answered `text`,
+    /// and how many were refused as unavailable.
+    pub(crate) fn reads_at_once(
+        &self,
+        count: usize,
+        text: &str,
+        start: impl Fn(Resolver<ClipboardRead>),
+    ) -> (usize, usize) {
+        let mut pending: Vec<Completion<ClipboardRead>> = (0..count)
+            .map(|_| {
+                let (completion, resolver) = self.answers.source.pending::<ClipboardRead>();
+                start(resolver);
+                completion
+            })
+            .collect();
+        let (mut answered, mut refused) = (0, 0);
+        let deadline = Instant::now() + STEP;
+        while !pending.is_empty() {
+            self.turn();
+            pending.retain_mut(|completion| {
+                let Some(outcome) = completion.poll() else {
+                    return true;
+                };
+                match outcome.expect("the read is answered, not abandoned") {
+                    Ok(Some(read)) if &*read == text => answered += 1,
+                    Err(flui_platform::ClipboardError::Unavailable) => refused += 1,
+                    other => panic!("a read ended with {other:?}"),
+                }
+                false
+            });
+            assert!(Instant::now() < deadline, "timed out waiting for the reads");
+        }
+        (answered, refused)
+    }
 }

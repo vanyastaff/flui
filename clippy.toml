@@ -29,6 +29,10 @@ disallowed-methods = [
     # A widget reads the platform whose conventions it follows from `PlatformConvention::of`;
     # only the app runner, which installs that value at the root, takes the compile target.
     { path = "flui_platform::TargetPlatform::current", reason = "ADR-0028: read the platform from flui_view::environment::PlatformConvention::of; the runner is the one root default" },
+    # A Wayland compositor is a peer whose every collection the host bounds (flui-native
+    # ARCHITECTURE.md). This helper keeps each global the compositor announces in a list
+    # that only grows with them.
+    { path = "wayland_client::globals::registry_queue_init", reason = "it keeps every global the compositor announces: read the registry through a `Dispatch<WlRegistry, ()>` that binds a global as it is announced and keeps none" },
 ]
 
 # A hash table on an owner or frame path hashes with `rustc_hash` (FxHashMap/FxHashSet); a

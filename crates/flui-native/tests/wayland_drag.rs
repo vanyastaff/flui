@@ -111,12 +111,21 @@ mod cases {
                 a_session_from_the_window_drops_on_another_client,
             ),
             trial(
+                "a_send_past_the_writers_asks_the_provider_nothing",
+                a_send_past_the_writers_asks_the_provider_nothing,
+            ),
+            trial(
                 "a_refused_session_ends_cancelled",
                 a_refused_session_ends_cancelled,
             ),
             trial(
                 "a_session_after_the_release_ends_cancelled",
                 a_session_after_the_release_ends_cancelled,
+            ),
+            // Last: it moves sway's pointer device to another seat and back.
+            trial(
+                "a_session_whose_pointer_goes_ends_once",
+                a_session_whose_pointer_goes_ends_once,
             ),
         ];
         libtest_mimic::run(&arguments, trials).exit();
@@ -180,6 +189,35 @@ mod cases {
 
         fn release(&self) {
             self.cursor(&["release", "button1"]);
+        }
+
+        /// Attach sway's pointer device to seat `seat`, which takes the
+        /// pointer capability from the seat it leaves.
+        fn attach_to(&self, seat: &str) {
+            let inputs = Command::new("swaymsg")
+                .arg("-s")
+                .arg(&self.socket)
+                .args(["-r", "-t", "get_inputs"])
+                .output()
+                .expect("swaymsg runs");
+            let inputs = String::from_utf8_lossy(&inputs.stdout);
+            let device = inputs
+                .split("\"identifier\": \"")
+                .skip(1)
+                .find_map(|device| {
+                    let (identifier, rest) = device.split_once('"')?;
+                    let kind = rest.split("\"type\": \"").nth(1)?.split('"').next()?;
+                    (kind == "pointer").then(|| identifier.to_owned())
+                })
+                .expect("sway has a pointer device");
+            let status = Command::new("swaymsg")
+                .arg("-s")
+                .arg(&self.socket)
+                .args(["seat", seat, "attach", &device])
+                .stdout(Stdio::null())
+                .status()
+                .expect("swaymsg runs");
+            assert!(status.success(), "sway attaches {device} to {seat}");
         }
 
         /// Move to `to` from `from` in steps, the window turning between
@@ -480,12 +518,16 @@ mod cases {
     }
 
     /// The text a window's sessions offer.
-    const DRAGGED: &[u8] = b"dragged from the window";
+    const DRAGGED: &str = "dragged from the window";
 
     /// A session offering text and its identity, allowing a copy or a move,
     /// counting the provider's answers in `served` and telling `ended` how
     /// it ended.
-    fn session(served: &Rc<Cell<u32>>, ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
+    fn session(
+        text: &str,
+        served: &Rc<Cell<u32>>,
+        ended: &Rc<Cell<Option<OsDragEnd>>>,
+    ) -> OsDragRequest {
         let key = DragSessionKey::new(
             ProcessNonce::from_raw(NonZeroU64::new(0xF1A1).expect("non-zero")),
             UiRuntimeId::new_gen(
@@ -497,6 +539,7 @@ mod cases {
             DragSessionId::from_wire(NonZeroU64::new(7).expect("non-zero")),
         );
         let (served, ended) = (Rc::clone(served), Rc::clone(ended));
+        let text = text.to_owned();
         OsDragRequest {
             key,
             pointer: None,
@@ -511,9 +554,7 @@ mod cases {
             provider: Box::new(move |RepresentationIndex(index)| {
                 served.set(served.get() + 1);
                 match index {
-                    0 => Ok(TransferPayload::Text(
-                        String::from_utf8(DRAGGED.to_vec()).expect("UTF-8"),
-                    )),
+                    0 => Ok(TransferPayload::Text(text.clone())),
                     _ => Err(TransferError::Cancelled),
                 }
             }),
@@ -526,6 +567,7 @@ mod cases {
     fn start_session(
         client: &Client,
         pointer: &Pointer,
+        text: &str,
         served: &Rc<Cell<u32>>,
         ended: &Rc<Cell<Option<OsDragEnd>>>,
     ) {
@@ -534,14 +576,14 @@ mod cases {
             .drag_source()
             .expect("a Wayland window starts sessions");
         assert!(
-            drag.start(session(served, ended)).is_err(),
+            drag.start(session(text, served, ended)).is_err(),
             "no session starts with no button held"
         );
         pointer.to(ON_WINDOW);
         client.turn();
         pointer.press();
         client.until("a session to start under the press", || {
-            drag.start(session(served, ended)).is_ok()
+            drag.start(session(text, served, ended)).is_ok()
         });
     }
 
@@ -573,10 +615,11 @@ mod cases {
             Role::Target(Wanted {
                 mime: Some(TEXT.to_owned()),
                 action: DndAction::Copy,
+                unread: 0,
             }),
         );
         let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
-        start_session(&client, &pointer, &served, &ended);
+        start_session(&client, &pointer, DRAGGED, &served, &ended);
         pointer.glide(&client, ON_WINDOW, ON_PEER);
         until_peer(
             &client,
@@ -586,7 +629,7 @@ mod cases {
         );
         pointer.release();
         until_peer(&client, &peer, "the text", |heard| {
-            *heard == Heard::Received(DRAGGED.to_vec())
+            *heard == Heard::Received(DRAGGED.as_bytes().to_vec())
         });
         client.until("the session to end", || ended.get().is_some());
         assert_eq!(
@@ -595,6 +638,105 @@ mod cases {
             "dropped with the copy the client took"
         );
         assert_eq!(served.get(), 1, "the provider served the one read");
+        client.window.close_for_cleanup();
+    }
+
+    /// A session sway took, whose seat loses its pointer mid-drag (the
+    /// pointer device moves to another seat), ends cancelled exactly once:
+    /// the window hears a leave and then the seat's new capabilities, and
+    /// sway cancels the source too, which finds the session over.
+    fn a_session_whose_pointer_goes_ends_once(_: &Session) {
+        let client = Client::open("drag source");
+        let pointer = Pointer::new();
+        let peer = open_peer(
+            &client,
+            Role::Target(Wanted {
+                mime: Some(TEXT.to_owned()),
+                action: DndAction::Copy,
+                unread: 0,
+            }),
+        );
+        let drag = client
+            .window
+            .drag_source()
+            .expect("a Wayland window starts sessions");
+        let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
+        let ends = Rc::new(Cell::new(0_u32));
+        let counted = || {
+            let mut request = session(DRAGGED, &served, &ended);
+            let (ends, ended) = (Rc::clone(&ends), Rc::clone(&ended));
+            request.on_end = Box::new(move |end| {
+                ends.set(ends.get() + 1);
+                ended.set(Some(end));
+            });
+            request
+        };
+        pointer.to(ON_WINDOW);
+        client.turn();
+        pointer.press();
+        client.until("a session to start under the press", || {
+            drag.start(counted()).is_ok()
+        });
+        pointer.glide(&client, ON_WINDOW, ON_PEER);
+        until_peer(&client, &peer, "the session enter", |heard| {
+            matches!(heard, Heard::Entered(_))
+        });
+        pointer.attach_to("flui-elsewhere");
+        client.until("the session to end", || ended.get().is_some());
+        for _ in 0..10 {
+            client.turn();
+        }
+        pointer.attach_to("seat0");
+        assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+        assert_eq!(ends.get(), 1, "the session ends once");
+        assert_eq!(served.get(), 0, "nothing was read");
+        client.window.close_for_cleanup();
+    }
+
+    /// A target that asks for the session's text again and again on pipes it
+    /// never reads holds the session's four writers, each blocked on a megabyte
+    /// its pipe has no room for. Every `send` past them is answered with
+    /// nothing, and the application is asked for nothing: its provider is
+    /// run for the four writes that had a place, and the target's own read,
+    /// the last asked, ends empty.
+    fn a_send_past_the_writers_asks_the_provider_nothing(_: &Session) {
+        /// The writes of a session's data at once.
+        const WRITERS: u32 = 4;
+        let client = Client::open("drag source");
+        let pointer = Pointer::new();
+        let peer = open_peer(
+            &client,
+            Role::Target(Wanted {
+                mime: Some(TEXT.to_owned()),
+                action: DndAction::Copy,
+                unread: 9,
+            }),
+        );
+        let megabyte = "x".repeat(1 << 20);
+        let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
+        start_session(&client, &pointer, &megabyte, &served, &ended);
+        pointer.glide(&client, ON_WINDOW, ON_PEER);
+        until_peer(&client, &peer, "the session enter", |heard| {
+            matches!(heard, Heard::Entered(_))
+        });
+        pointer.release();
+        until_peer(&client, &peer, "its read to end", |heard| {
+            matches!(heard, Heard::Received(_))
+        });
+        client.until("the session to end", || ended.get().is_some());
+        assert_eq!(
+            served.get(),
+            WRITERS,
+            "the provider is asked for the writes that had a place"
+        );
+        assert!(
+            peer.heard().contains(&Heard::Received(Vec::new())),
+            "the read past the writers ends with nothing: {:?}",
+            peer.heard()
+                .iter()
+                .filter(|heard| !matches!(heard, Heard::Received(bytes) if !bytes.is_empty()))
+                .collect::<Vec<_>>()
+        );
         client.window.close_for_cleanup();
     }
 
@@ -608,10 +750,11 @@ mod cases {
             Role::Target(Wanted {
                 mime: None,
                 action: DndAction::Copy,
+                unread: 0,
             }),
         );
         let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
-        start_session(&client, &pointer, &served, &ended);
+        start_session(&client, &pointer, DRAGGED, &served, &ended);
         pointer.glide(&client, ON_WINDOW, ON_PEER);
         until_peer(&client, &peer, "the session enter", |heard| {
             matches!(heard, Heard::Entered(_))
@@ -650,7 +793,7 @@ mod cases {
         // sway has the release before the window reads it.
         pointer.release();
         let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
-        drag.start(session(&served, &ended))
+        drag.start(session(DRAGGED, &served, &ended))
             .expect("the window has heard no release yet");
         client.until("the session to end", || ended.get().is_some());
         assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));

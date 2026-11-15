@@ -156,6 +156,16 @@ mod cases {
             Some("written by the second"),
             "the first client no longer owns the selection and reads the second's"
         );
+        // Ten reads before the selection's owner answered one are one read
+        // of its offer: the four that may wait share its answer, and the
+        // rest are refused at once, with no thread waiting on each.
+        assert_eq!(
+            first.reads_at_once(10, "written by the second", |answer| {
+                first.platform.clipboard().read_text(answer);
+            }),
+            (4, 6),
+            "(answered, refused)"
+        );
         // The scenario every host runs: a concealed write pastes back and
         // stays out of the history (ADR-0152 §6). It runs under the input
         // the keyboard's return brought: Weston drops a selection set under

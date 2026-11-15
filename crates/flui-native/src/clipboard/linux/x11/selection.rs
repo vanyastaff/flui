@@ -62,6 +62,7 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
+use crate::clipboard::linux::MAX_READERS;
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, admit_text, owned_text};
 
@@ -73,11 +74,6 @@ pub(super) const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
 /// The most `INCR` writes at once: a requestor that never deletes its
 /// property holds one until its timeout, and more are refused.
 pub(super) const MAX_WRITERS: usize = 4;
-
-/// The most reads of a selection waiting at once. A handle shares one read
-/// among all its readers, so each waiting read is another handle's; more
-/// are refused at once as [`ClipboardError::Unavailable`].
-pub(super) const MAX_READERS: usize = 4;
 
 /// The most bytes of text the `INCR` writes hold at once, each shared text
 /// counted once: room for the text owned now and one an ended ownership

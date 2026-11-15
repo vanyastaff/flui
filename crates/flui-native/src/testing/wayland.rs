@@ -11,6 +11,11 @@ pub use crate::owner::linux::wayland::OutputName;
 use crate::owner::linux::wayland::WaylandLoop;
 use crate::platform::HostPlatform;
 use crate::window::linux::wayland::WaylandWindow;
+use crate::window::linux::wayland::scale::BufferScale;
+
+/// The largest scale a window's buffer is drawn at, whatever scale its
+/// compositor names.
+pub const MAX_BUFFER_SCALE: f64 = BufferScale::MAX;
 
 /// Run the loop of `platform`, a `WaylandPlatform`, for `span`: read what the
 /// compositor sends, let each window carry it out, and deliver what is due,
@@ -176,6 +181,13 @@ pub struct ClientFrameReport {
     /// (`"move"`, `"resize"`, `"menu"`, and the modes and close it carried
     /// out), with the serial of the input it named.
     pub requests: Vec<(&'static str, u32)>,
+    /// The most buffers any surface of the frame keeps now: the ones the
+    /// compositor holds and the released ones it draws into again.
+    pub buffers: usize,
+    /// The most buffers any surface of the frame made since the frame was
+    /// drawn first: a compositor that releases what it showed has the
+    /// frame draw into it again instead of making another.
+    pub buffers_made: usize,
 }
 
 impl ClientFrameReport {
@@ -195,6 +207,8 @@ pub fn client_frame_report(window: &dyn HostWindow) -> Option<ClientFrameReport>
     let said = window.client_frame_said();
     let rect = |rect: Rect| (rect.x, rect.y, rect.width, rect.height);
     Some(ClientFrameReport {
+        buffers: said.buffers,
+        buffers_made: said.made,
         geometry: said.geometry.map(rect),
         pieces: said
             .pieces
