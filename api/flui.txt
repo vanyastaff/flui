@@ -12126,6 +12126,7 @@ pub const fn flui::platform::DisplayColor::headroom(self) -> Result<flui::platfo
 pub const fn flui::platform::DisplayColor::high(gamut: flui::platform::ColorGamut, headroom: Result<flui::platform::Headroom, flui::platform::CapabilityAbsence>) -> Self
 pub const fn flui::platform::DisplayColor::into_parts(self) -> flui::platform::ColorParts
 pub const fn flui::platform::DisplayColor::standard(gamut: flui::platform::ColorGamut) -> Self
+pub fn flui::platform::DisplayColor::try_new(color_space: flui::platform::SurfaceColorSpace, headroom: Result<flui::platform::Headroom, flui::platform::CapabilityAbsence>) -> Result<Self, flui::platform::InvalidDisplayColor>
 pub trait flui::platform::DisplayConnection: raw_window_handle::borrowed::HasDisplayHandle + Send + Sync + 'static
 pub struct flui::platform::DisplayId { .. }
 impl Clone for flui::platform::DisplayId

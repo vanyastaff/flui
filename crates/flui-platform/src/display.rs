@@ -609,6 +609,27 @@ impl DisplayColor {
             headroom,
         }
     }
+
+    /// The colour of a display that shows surfaces in `color_space`, with
+    /// `headroom` or why there is none to read: for a caller that holds the
+    /// two as values, a decoded record among them.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayColor`] for a standard dynamic range with a headroom
+    /// other than [`Headroom::SDR`], which no display has: what
+    /// [`standard`](Self::standard) and [`high`](Self::high) cannot build.
+    pub fn try_new(
+        color_space: SurfaceColorSpace,
+        headroom: Result<Headroom, CapabilityAbsence>,
+    ) -> Result<Self, InvalidDisplayColor> {
+        match color_space.dynamic_range {
+            DynamicRange::Standard if headroom != Ok(Headroom::SDR) => Err(InvalidDisplayColor),
+            DynamicRange::Standard | DynamicRange::High => Ok(Self {
+                color_space,
+                headroom,
+            }),
+        }
+    }
 }
 
 /// The monotone version of a [`DisplaySnapshot`]. Never wraps: a source that
@@ -970,24 +991,13 @@ impl ColorParts {
     /// The colour these fields describe.
     ///
     /// # Errors
-    /// [`InvalidDisplayColor`] for a standard dynamic range with a headroom
-    /// other than [`Headroom::SDR`], which no display has: what
-    /// [`DisplayColor::standard`] and [`DisplayColor::high`] cannot build.
+    /// [`InvalidDisplayColor`], as [`DisplayColor::try_new`] gives it.
     pub fn try_into_color(self) -> Result<DisplayColor, InvalidDisplayColor> {
         let Self {
             gamut,
             dynamic_range,
             headroom,
         } = self;
-        match dynamic_range {
-            DynamicRange::Standard if headroom != Ok(Headroom::SDR) => Err(InvalidDisplayColor),
-            DynamicRange::Standard | DynamicRange::High => Ok(DisplayColor {
-                color_space: SurfaceColorSpace {
-                    gamut,
-                    dynamic_range,
-                },
-                headroom,
-            }),
-        }
+        DisplayColor::try_new(SurfaceColorSpace::new(gamut, dynamic_range), headroom)
     }
 }

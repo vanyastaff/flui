@@ -4931,7 +4931,7 @@ graph LR
   headroom, отличным от `Headroom::SDR` (`InvalidDisplayColor`); кодек записи отказывает такой
   строке при чтении. В записи `headless_platform_reads.jsonl` была именно такая строка (стандартный
   диапазон без headroom), она исправлена на high-range. Тесты:
-  `colour_parts_validate_as_the_constructors_do`, `a_display_colour_that_contradicts_itself_is_refused`,
+  `a_display_colour_takes_only_a_headroom_its_range_has` (таблица `DisplayColor::try_new`), `a_display_colour_that_contradicts_itself_is_refused`,
   doctest `compile_fail` на запись в поле. `api/flui.txt` поправлен вручную: генератор вызывает
   `rustup run nightly`, а `rustup` на этой машине запускать нельзя; сверяет job `public-api`.
   (5) Нечисловой headroom поверхности wgpu отдаёт как `None`, и движок читал его как «дисплей

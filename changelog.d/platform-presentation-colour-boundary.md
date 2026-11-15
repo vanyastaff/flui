@@ -2,9 +2,10 @@
 
 - **`flui-platform`**: `DisplayColor`'s fields are private, read through `DisplayColor::color_space()`
   and `DisplayColor::headroom()`, so a standard-range display cannot be given a headroom after it is
-  built. `ColorParts::into_color` is `ColorParts::try_into_color` and `DisplayParts::into_info` is
-  `DisplayParts::try_into_info`: both refuse a standard dynamic range with a headroom other than
-  `Headroom::SDR` (`InvalidDisplayColor`).
+  built. `DisplayColor::try_new` builds one from a colour space and a headroom,
+  `ColorParts::into_color` is `ColorParts::try_into_color` and `DisplayParts::into_info` is
+  `DisplayParts::try_into_info`: all three refuse a standard dynamic range with a headroom other
+  than `Headroom::SDR` (`InvalidDisplayColor`).
 - **`flui-scheduler`**: `FrameClock::next_presentation_after` names the refresh after the newest
   report where that report lies after the reading, never the report itself: a report is of a frame
   already shown.
