@@ -491,30 +491,29 @@ impl OwnerFrame {
     /// Settle the segments of a frame that aborted before its post-frame dispatch. A segment the
     /// frame completed stays completed, so its callbacks stay eligible and the presentation may
     /// enter its next segment. A segment still running keeps its callback debt as a suspended
-    /// one, which the presentation's next segment resumes; like any suspended debt it asks for no
-    /// frame, which would re-drive the failure. Returns whether a segment the frame completed
-    /// owes a callback, for which the next frame is asked.
-    pub(crate) fn settle_aborted_segments(&self) -> bool {
-        let mut completed = Vec::new();
+    /// one, which the presentation's next segment resumes. Either way a scope whose callbacks
+    /// still wait gets its completion demand back, which entering the segment consumed, so the
+    /// runtime admits that next segment through its own gates (`has_completion_demand`). No
+    /// frame is asked here: re-driving the frame at once would re-drive its failure.
+    pub(crate) fn settle_aborted_segments(&self) {
+        let queue = self.post_frame.queue.borrow();
         self.post_frame.scopes.borrow_mut().retain(|scope| {
             let Some(scope) = scope.upgrade() else {
                 return false;
             };
-            match scope.phase.get() {
-                SegmentPhase::Completing => {
-                    scope.phase.set(SegmentPhase::Idle);
-                    completed.push(scope);
+            let next = match scope.phase.get() {
+                SegmentPhase::Completing => SegmentPhase::Idle,
+                SegmentPhase::Running => SegmentPhase::Suspended,
+                SegmentPhase::Idle | SegmentPhase::Suspended | SegmentPhase::Servicing => {
+                    return true;
                 }
-                SegmentPhase::Running => scope.phase.set(SegmentPhase::Suspended),
-                SegmentPhase::Idle | SegmentPhase::Suspended | SegmentPhase::Servicing => {}
+            };
+            scope.phase.set(next);
+            if !scope.closed.get() && queue.iter().any(|entry| entry.target.belongs_to(&scope)) {
+                scope.next_demand.set(true);
             }
             true
         });
-        !completed.is_empty()
-            && self.post_frame.queue.borrow().iter().any(|entry| {
-                entry.target.eligible()
-                    && completed.iter().any(|scope| entry.target.belongs_to(scope))
-            })
     }
 
     /// Return an uninvoked tail to the already-validated queue. Original IDs

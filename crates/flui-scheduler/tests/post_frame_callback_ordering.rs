@@ -418,8 +418,12 @@ fn an_aborted_frame_leaves_a_completed_segment_free_to_begin_the_next() {
         "the aborted frame runs no post-frame callback"
     );
     assert!(
-        scheduler.is_frame_scheduled(),
-        "the completed segment's callback asks for the frame that runs it"
+        presentation.has_completion_demand(),
+        "the completed segment's callback keeps the demand that admits the next segment"
+    );
+    assert!(
+        !scheduler.is_frame_scheduled(),
+        "the abort drives no frame at once, which would re-drive the failure"
     );
 
     let entered = owner
@@ -474,6 +478,10 @@ fn an_aborted_frame_suspends_the_segment_it_left_running() {
     assert!(
         !scheduler.is_frame_scheduled(),
         "a segment left running asks for no frame, which would re-drive the failure"
+    );
+    assert!(
+        presentation.has_completion_demand(),
+        "the suspended segment's callback keeps the demand that admits its resume"
     );
 
     let resumed = owner

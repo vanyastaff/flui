@@ -1616,10 +1616,10 @@ impl UpdateScheduler {
     /// This method requests the next frame only for one-shot callbacks,
     /// microtasks and tasks still queued behind the failed one: they were
     /// accepted for a frame, and the failed one was already removed, so the
-    /// request cannot re-drive it. The owner's frame drive then asks for one
-    /// for the callbacks a presentation segment completed in the aborted frame
-    /// owes (`OwnerFrame::settle_aborted_segments`); a segment left running is
-    /// suspended and asks for none. It
+    /// request cannot re-drive it. The owner's frame drive then gives a
+    /// presentation segment the aborted frame completed or left running its
+    /// completion demand back for the callbacks it owes, and asks no frame
+    /// for them (`OwnerFrame::settle_aborted_segments`). It
     /// does not re-arm for the failure itself, which would hot-loop a caller
     /// that keeps re-driving a deterministically panicking frame; a caller
     /// that catches the resumed panic and wants another frame calls
