@@ -673,41 +673,62 @@ impl UiRuntime {
                 }
             }
             PlatformInput::DragDrop(drag_drop_event) => {
+                let drag_drop_kind = drag_drop_kind(&drag_drop_event);
+                let committed = presentation.frame_commit_state() == FrameCommitState::Committed;
+                // The tree a hit test would read is not on screen: an enter or a move waits for
+                // the commit of the frame that shows it, as pointer input does, while a drop and
+                // a leave the OS already acted on are delivered now (ADR-0211 §16, ADR-0305 §4).
+                let drag_drop_event = if committed {
+                    drag_drop_event
+                } else {
+                    let Some(now) = self.drag.hold(presentation.id(), drag_drop_event) else {
+                        tracing::trace!(
+                            drag_drop_kind,
+                            "drag-and-drop input held for the frame that shows the tree"
+                        );
+                        return Applied::default();
+                    };
+                    now
+                };
                 // An OS drag over this window: the receivers under it answer, and the
                 // answers reach the OS as drop feedback (ADR-0211 §5). Like the
                 // other routed kinds it requests a frame, since a receiver may restyle.
-                tracing::trace!(
-                    drag_drop_kind = drag_drop_kind(&drag_drop_event),
-                    "drag-and-drop input delivered"
-                );
+                tracing::trace!(drag_drop_kind, "drag-and-drop input delivered");
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
-                let mut hit_panic = FirstPanic::new();
+                // Hovers still held from before the window showed its tree move first, so the
+                // events of one window reach its receivers in order. A drop is not preceded by
+                // them: it lands where the OS's answer came from, and a held position goes with it.
+                let release_first = committed
+                    && matches!(
+                        drag_drop_event,
+                        DragDropEvent::Entered { .. } | DragDropEvent::Moved { .. }
+                    );
+                let mut delivery = FirstPanic::new();
                 let dispatch = Self::dispatch_after_pending_motion(presentation, || {
-                    self.drag
-                        .deliver(presentation.id(), drag_drop_event, &mut |position, kind| {
-                            let mut result = flui_interaction::pointer::HitTestResult::new();
-                            // A busy tree answers nothing rather than "over
-                            // nothing", which would make every receiver leave.
-                            match presentation.renderer().hit_test_in_view(
-                                &mut result,
-                                position,
-                                kind,
-                                0,
-                            ) {
-                                ViewHitTest::Answered { panic } => {
-                                    if let Some(payload) = panic {
-                                        hit_panic.record(payload);
-                                    }
-                                    Some(result.path().to_vec())
-                                }
-                                ViewHitTest::TreeBusy => None,
-                            }
-                        });
+                    // Each step's hit test ran before the receivers it found were told, and an
+                    // earlier step's failure comes before a later one's.
+                    if release_first {
+                        self.release_held_drags_contained(presentation, &mut delivery);
+                    }
+                    let mut hit_panic = FirstPanic::new();
+                    let mut delivered = FirstPanic::new();
+                    delivered.contain(|| {
+                        self.drag.deliver(
+                            presentation.id(),
+                            drag_drop_event,
+                            &mut |position, kind| {
+                                Self::drag_hit_test(presentation, position, kind, &mut hit_panic)
+                            },
+                        );
+                    });
+                    hit_panic.absorb(delivered);
+                    delivery.absorb(hit_panic);
                 });
-                // The hit test ran before the receivers it found were told.
-                hit_panic.absorb(dispatch);
-                self.finish_addressed_input_dispatch(presentation, hit_panic);
+                // A failure flushing pending motion came before the delivery's.
+                let mut dispatch = dispatch;
+                dispatch.absorb(delivery);
+                self.finish_addressed_input_dispatch(presentation, dispatch);
                 Applied::default()
             }
             PlatformInput::Capabilities(capabilities) => {
@@ -716,6 +737,72 @@ impl UiRuntime {
                 tracing::debug!(?capabilities, "input capabilities received");
                 Applied::default()
             }
+        }
+    }
+
+    /// The hit-test path under `position` in `presentation`'s tree for a drag's pointer of
+    /// `kind`, innermost first; a render object's panic in the test is recorded into `hit_panic`.
+    /// A busy tree answers nothing rather than "over nothing", which would make every receiver
+    /// leave.
+    fn drag_hit_test(
+        presentation: &PresentationState,
+        position: flui_foundation::geometry::Offset<f64>,
+        kind: flui_interaction::events::PointerKind,
+        hit_panic: &mut FirstPanic,
+    ) -> Option<Vec<flui_interaction::pointer::HitTestEntry>> {
+        let mut result = flui_interaction::pointer::HitTestResult::new();
+        match presentation
+            .renderer()
+            .hit_test_in_view(&mut result, position, kind, 0)
+        {
+            ViewHitTest::Answered { panic } => {
+                if let Some(payload) = panic {
+                    hit_panic.record(payload);
+                }
+                Some(result.path().to_vec())
+            }
+            ViewHitTest::TreeBusy => None,
+        }
+    }
+
+    /// Move the OS drag hovers `presentation` held for a commit, by the rule that held them:
+    /// only while the presentation is `Committed` (ADR-0211 §16). Requests a frame once
+    /// something was delivered, since a receiver may restyle.
+    pub(super) fn release_committed_held_drags(&self, presentation: &PresentationState) {
+        if presentation.frame_commit_state() != FrameCommitState::Committed {
+            return;
+        }
+        if self.drag.held_count(presentation.id()) == 0 {
+            return;
+        }
+        let clock = presentation.clock();
+        clock.stamp_input_epoch(clock.now());
+        let mut release = FirstPanic::new();
+        self.release_held_drags_contained(presentation, &mut release);
+        self.finish_addressed_input_dispatch(presentation, release);
+    }
+
+    /// Move each OS drag hover `presentation` holds, one at a time, into `failures`: a hover's
+    /// hit test ran before the receivers it found were told, and each hover's failures come
+    /// before the next one's.
+    fn release_held_drags_contained(
+        &self,
+        presentation: &PresentationState,
+        failures: &mut FirstPanic,
+    ) {
+        // One step per hover held now: each takes its position before a receiver runs, and a
+        // step that fails before taking one cannot repeat forever.
+        for _ in 0..self.drag.held_count(presentation.id()) {
+            let mut hit_panic = FirstPanic::new();
+            let mut released = FirstPanic::new();
+            released.contain(|| {
+                self.drag
+                    .release_next_held(presentation.id(), &mut |position, kind| {
+                        Self::drag_hit_test(presentation, position, kind, &mut hit_panic)
+                    });
+            });
+            hit_panic.absorb(released);
+            failures.absorb(hit_panic);
         }
     }
 

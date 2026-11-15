@@ -77,3 +77,9 @@
   dropped-frame backoff instead of parking, so the tree and its held input reach the screen within
   a second of the surface's return
   ([ADR-0335](/docs/adr/ADR-0335-a-withheld-frame-commits-nothing-and-joins-the-dropped-frame-backoff.md)).
+- **`flui-runtime`**, **`flui-interaction`**: an OS drag that moves over a window whose current
+  tree is not on screen yet waits for the frame that shows it, as pointer input does, so drop
+  targets answer from what the user sees. A drop is not held: it lands at once on the target whose
+  answer the OS used. A build that removes the target a drag's last move was accepted by withdraws
+  that answer at once, so the OS refuses the drop instead of telling the source a move succeeded
+  that no target took ([ADR-0211](/docs/adr/ADR-0211-unified-drag-and-drop.md) §16).

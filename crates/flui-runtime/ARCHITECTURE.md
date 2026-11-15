@@ -726,7 +726,8 @@ matches is `Settled::Stale` (ADR-0305 §4). The frame's
 telemetry is recorded against the `FrameTelemetryCut` taken at submit: its own frame id and only
 the inputs stamped before it; a frame that fails inline meanwhile takes only the inputs stamped
 since (`FrameTelemetryCut::after`).
-Pointer input held for a commit replays when the settled frame shows the current tree and the
+Pointer input and OS drag hovers held for a commit replay, pointer input first (ADR-0211 §16),
+when the settled frame shows the current tree and the
 presentation is committed, the rule that held it; an older
 frame's settlement leaves it for the later frame, and asks for a repaint when no later frame is
 still pending. Pinned by

@@ -45,7 +45,29 @@ struct TrackerState {
     /// Bumped by every move, so an autoscroll pass a move reentered keeps the
     /// frames that move asked for.
     moves: u64,
+    /// The receiver that accepted the last move went away and the owner has not yet told the OS
+    /// (or the in-window session) that nothing accepts: the number of the last debt, kept until the
+    /// owner passes that debt or a newer one on, so a failure telling it is retried, whatever else
+    /// clears the acceptance, and a call that returns late never clears a debt it did not see.
+    owed_withdrawal: Option<OwedWithdrawal>,
+    /// How many acceptances this drag has lost, so each debt has its own number.
+    withdrawals: u64,
     ended: bool,
+}
+
+/// One withdrawal a tracker owes, numbered in the order its drag lost acceptances, so passing an
+/// older one on leaves a newer one owed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct OwedWithdrawal(u64);
+
+impl TrackerState {
+    fn owe_withdrawal(&mut self) {
+        self.withdrawals = self
+            .withdrawals
+            .checked_add(1)
+            .expect("BUG: one drag loses fewer than 2^64 acceptances");
+        self.owed_withdrawal = Some(OwedWithdrawal(self.withdrawals));
+    }
 }
 
 struct Entered {
@@ -105,9 +127,6 @@ pub(crate) enum Dropped {
 /// What a tick changed that the drag's owner must pass on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Ticked {
-    /// The receiver that accepted the last move went away: nothing accepts
-    /// until the next move.
-    pub(crate) accepting_gone: bool,
     /// A receiver scrolled its content under the drag: what is under the
     /// pointer may have changed though the pointer did not move.
     pub(crate) scrolled: bool,
@@ -334,23 +353,58 @@ impl DropTracker {
     /// runs once per hover, and one autoscroll frame runs.
     pub(crate) fn tick(&self, view: &DragView<'_>, now: EventTime) -> Ticked {
         let mut failure = ClosePanic::new();
-        let accepting_gone = self.leave_unregistered(view, &mut failure);
+        self.leave_unregistered(view, &mut failure);
         self.spring_load(view, now, &mut failure);
         let scrolled = self.autoscroll_frame(view, now, &mut failure);
         failure.finish();
-        Ticked {
-            accepting_gone,
-            scrolled,
+        Ticked { scrolled }
+    }
+
+    /// Forget the receiver that accepted the last move once its ticket no longer holds it, so no
+    /// drop goes to it, and owe its withdrawal (`owed_withdrawal`). No receiver runs: the ones
+    /// that went leave at the next [`tick`](Self::tick).
+    pub(crate) fn forget_unregistered_acceptance(&self) {
+        let mut state = self.0.borrow_mut();
+        if state.ended {
+            return;
+        }
+        let gone = state.accepting.as_ref().is_some_and(|accepting| {
+            !state.entered.iter().any(|entered| {
+                entered.is(accepting.key, &accepting.receiver) && entered.is_registered()
+            })
+        });
+        if gone {
+            state.accepting = None;
+            state.owe_withdrawal();
         }
     }
 
-    /// Leave every entered receiver whose ticket no longer holds it; whether
-    /// the one that accepted the last move was among them.
-    fn leave_unregistered(&self, view: &DragView<'_>, failure: &mut ClosePanic) -> bool {
-        let (gone, lost) = {
+    /// The withdrawal owed since the receiver that accepted the last move went away, until the
+    /// owner passes it on ([`withdrawal_passed_on`](Self::withdrawal_passed_on)).
+    pub(crate) fn owed_withdrawal(&self) -> Option<OwedWithdrawal> {
+        let state = self.0.borrow();
+        if state.ended {
+            return None;
+        }
+        state.owed_withdrawal
+    }
+
+    /// The owner told the OS, or the in-window session, an answer that replaces `owed` and every
+    /// older debt. A debt owed after `owed` was read stays owed.
+    pub(crate) fn withdrawal_passed_on(&self, owed: OwedWithdrawal) {
+        let mut state = self.0.borrow_mut();
+        if state.owed_withdrawal.is_some_and(|current| current <= owed) {
+            state.owed_withdrawal = None;
+        }
+    }
+
+    /// Leave every entered receiver whose ticket no longer holds it; when the one that accepted the
+    /// last move was among them, its withdrawal is owed.
+    fn leave_unregistered(&self, view: &DragView<'_>, failure: &mut ClosePanic) {
+        let gone = {
             let mut state = self.0.borrow_mut();
             if state.ended {
-                return false;
+                return;
             }
             let (kept, gone): (Vec<Entered>, Vec<Entered>) = std::mem::take(&mut state.entered)
                 .into_iter()
@@ -362,15 +416,15 @@ impl DropTracker {
             });
             if lost {
                 state.accepting = None;
+                state.owe_withdrawal();
             }
-            (gone, lost)
+            gone
         };
         for entered in gone {
             if entered.announced && !self.is_ended() {
                 failure.invoke(|| entered.receiver.drag_left(view));
             }
         }
-        lost
     }
 
     fn spring_load(&self, view: &DragView<'_>, now: EventTime, failure: &mut ClosePanic) {
@@ -454,7 +508,8 @@ impl DropTracker {
         scrolling
     }
 
-    /// When the tracker next has work: the earliest pending spring-loading or
+    /// When the tracker next has work: at once while a withdrawal is owed, else the earliest
+    /// pending spring-loading or
     /// autoscroll frame. A hover that carries no time yet asks for a turn at
     /// once, which stamps it.
     pub(crate) fn next_deadline(&self) -> Option<EventTime> {
@@ -463,6 +518,11 @@ impl DropTracker {
             return None;
         }
         let at_once = EventTime::from_nanos(0);
+        // A withdrawal a failure left owed is told again at the next turn, not at an unrelated
+        // wake, before the OS resolves a drop from the answer it still holds.
+        if state.owed_withdrawal.is_some() {
+            return Some(at_once);
+        }
         let springs = state.entered.iter().filter_map(|entered| {
             let spring = entered.spring.as_ref()?;
             if spring.fired {

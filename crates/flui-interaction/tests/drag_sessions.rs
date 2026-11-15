@@ -76,6 +76,8 @@ struct RecordingSource {
     concluded: Mutex<Vec<DataTransferId>>,
     /// Concluding a drop panics, as a failing backend would.
     fail_conclude: std::sync::atomic::AtomicBool,
+    /// The next drop feedback panics after it is recorded, as a failing backend would.
+    fail_feedback: std::sync::atomic::AtomicBool,
     requests: Mutex<Vec<(DataTransferId, RepresentationIndex, TransferCompleter)>>,
 }
 
@@ -93,6 +95,12 @@ impl DragTransport for RecordingSource {
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
         self.feedback.lock().push((id, feedback));
+        assert!(
+            !self
+                .fail_feedback
+                .swap(false, std::sync::atomic::Ordering::SeqCst),
+            "feedback failure"
+        );
     }
 
     fn conclude_drop(&self, id: DataTransferId) {
@@ -513,6 +521,22 @@ impl Fixture {
                 .map(|()| result.path().to_vec())
         };
         self.owner.deliver(presentation, event, &mut hit);
+    }
+
+    /// Release the hovers held for `presentation`, one at a time, hit-testing as
+    /// [`Self::deliver`] does.
+    fn release(&self, presentation: PresentationId) {
+        let probe = Rc::clone(&self.probe);
+        let mut hit = move |position: Offset<f64>, kind: PointerKind| {
+            let mut result = HitTestResult::new();
+            probe
+                .probe(position, kind, &mut result)
+                .ok()
+                .map(|()| result.path().to_vec())
+        };
+        for _ in 0..self.owner.held_count(presentation) {
+            self.owner.release_next_held(presentation, &mut hit);
+        }
     }
 }
 
@@ -1741,6 +1765,50 @@ fn an_undated_hover_still_comes_due() {
     });
 }
 
+fn a_held_hover_spring_loads_only_once_released() {
+    in_lane(|f| {
+        let _spot = f.spring_spot("W", 0.0, 100.0, Some(COPY), Some(spring(100)));
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.owner.tick(time_at(0));
+        assert_eq!(f.owner.next_deadline(), Some(time_at(100)));
+        let returned = f.owner.hold(
+            f.presentation,
+            DragDropEvent::Moved {
+                id,
+                allowed: COPY,
+                position: Point::new(6.0, 6.0),
+            },
+        );
+        assert!(returned.is_none(), "a move is held");
+        assert_eq!(
+            f.owner.next_deadline(),
+            None,
+            "a held hover asks for no turn"
+        );
+        f.owner.tick(time_at(500));
+        assert_eq!(count(&f.log, "W:spring"), 0, "{:?}", logged(&f.log));
+        f.release(f.presentation);
+        assert_eq!(f.owner.held_count(f.presentation), 0);
+        f.owner.tick(time_at(600));
+        f.owner.tick(time_at(1000));
+        assert_eq!(
+            count(&f.log, "W:spring"),
+            1,
+            "the released hover comes due again: {:?}",
+            logged(&f.log)
+        );
+    });
+}
+
 fn a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop() {
     in_lane(|f| {
         let gone = f.unregistered("G", Some(COPY), Some(spring(100)));
@@ -1831,6 +1899,204 @@ fn a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop() {
         );
         assert_eq!(count(&f.log, "K:dropped COPY"), 0, "{:?}", logged(&f.log));
         assert_eq!(count(&f.log, "K:left"), 1);
+
+        // Unmounted by a build, with no turn before the OS resolves a drop: the answer is
+        // withdrawn when the build ends, so the OS never resolves a drop from it.
+        let built_away = f.unregistered("B", Some(COPY), None);
+        let ticket = f.register(&built_away, 0.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        assert_eq!(
+            f.source.feedback.lock().last(),
+            Some(&(id, DropFeedback { accept: Some(COPY) }))
+        );
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        f.owner.withdraw_unregistered_answers();
+        assert_eq!(
+            f.source.feedback.lock().last(),
+            Some(&(id, DropFeedback { accept: None })),
+            "the OS hears that nothing accepts as soon as the build ends"
+        );
+        assert_eq!(
+            count(&f.log, "B:left"),
+            0,
+            "the receiver leaves at the next tick"
+        );
+        f.owner.tick(time_at(300));
+        assert_eq!(count(&f.log, "B:left"), 1);
+    });
+}
+
+/// Two drags whose receiver a build unmounts, and telling the OS about the first fails: the
+/// second's answer is still withdrawn, and the failure propagates after it.
+fn a_withdrawal_that_fails_still_withdraws_the_other_answers() {
+    in_lane(|f| {
+        let gone = f.unregistered("G", Some(COPY), None);
+        let ticket = f.register(&gone, 0.0, 100.0);
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let offer = f.text_offer();
+            ids.push(offer.id());
+            f.deliver(
+                f.presentation,
+                DragDropEvent::Entered {
+                    offer,
+                    allowed: COPY,
+                    position: Some(Point::new(5.0, 5.0)),
+                },
+            );
+        }
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        f.source
+            .fail_feedback
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let failure = catch_unwind(AssertUnwindSafe(|| f.owner.withdraw_unregistered_answers()))
+            .expect_err("telling the OS fails");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("feedback failure")
+        );
+        let feedback = f.source.feedback.lock().clone();
+        for id in &ids {
+            assert_eq!(
+                feedback.iter().rev().find(|(answered, _)| answered == id),
+                Some(&(*id, DropFeedback { accept: None })),
+                "every drag's answer is withdrawn"
+            );
+        }
+        // The drag whose withdrawal failed is told again after the next build; the other is not.
+        let withdrawals = |id: DataTransferId| {
+            f.source
+                .feedback
+                .lock()
+                .iter()
+                .filter(|(answered, feedback)| *answered == id && feedback.accept.is_none())
+                .count()
+        };
+        let before = (withdrawals(ids[0]), withdrawals(ids[1]));
+        f.owner.withdraw_unregistered_answers();
+        assert_eq!(
+            (withdrawals(ids[0]), withdrawals(ids[1])),
+            (before.0 + 1, before.1),
+            "only the failed withdrawal is repeated"
+        );
+    });
+}
+
+/// A receiver goes away without a build, and telling the OS at the tick fails: the next tick
+/// tells it again, once.
+fn a_withdrawal_that_fails_in_a_tick_is_told_again() {
+    in_lane(|f| {
+        let gone = f.unregistered("T", Some(COPY), None);
+        let ticket = f.register(&gone, 0.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        let withdrawals = || {
+            f.source
+                .feedback
+                .lock()
+                .iter()
+                .filter(|(answered, feedback)| *answered == id && feedback.accept.is_none())
+                .count()
+        };
+        f.source
+            .fail_feedback
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let failure = catch_unwind(AssertUnwindSafe(|| f.owner.tick(time_at(10))))
+            .expect_err("telling the OS fails");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("feedback failure")
+        );
+        assert_eq!(count(&f.log, "T:left"), 1, "{:?}", logged(&f.log));
+        assert_eq!(withdrawals(), 1);
+        assert_eq!(
+            f.owner.next_deadline(),
+            Some(EventTime::from_nanos(0)),
+            "an owed withdrawal asks for the next turn at once"
+        );
+        f.owner.tick(time_at(20));
+        assert_eq!(withdrawals(), 2, "the failed withdrawal is told again");
+        f.owner.tick(time_at(30));
+        f.owner.withdraw_unregistered_answers();
+        assert_eq!(withdrawals(), 2, "and only once it was heard");
+        assert_ne!(f.owner.next_deadline(), Some(EventTime::from_nanos(0)));
+    });
+}
+
+/// A withdrawal fails, then the move after it fails to reach the OS too: the withdrawal is still
+/// owed, and the next build tells the OS.
+fn a_move_the_os_never_heard_keeps_the_withdrawal_owed() {
+    in_lane(|f| {
+        let gone = f.unregistered("M", Some(COPY), None);
+        let ticket = f.register(&gone, 0.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        let fail_next = || {
+            f.source
+                .fail_feedback
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        };
+        let withdrawals = || {
+            f.source
+                .feedback
+                .lock()
+                .iter()
+                .filter(|(answered, feedback)| *answered == id && feedback.accept.is_none())
+                .count()
+        };
+        fail_next();
+        catch_unwind(AssertUnwindSafe(|| f.owner.withdraw_unregistered_answers()))
+            .expect_err("telling the OS fails");
+        fail_next();
+        catch_unwind(AssertUnwindSafe(|| {
+            f.deliver(
+                f.presentation,
+                DragDropEvent::Moved {
+                    id,
+                    allowed: COPY,
+                    position: Point::new(500.0, 500.0),
+                },
+            );
+        }))
+        .expect_err("the move's answer fails to reach the OS");
+        let before = withdrawals();
+        f.owner.withdraw_unregistered_answers();
+        assert_eq!(withdrawals(), before + 1, "the withdrawal is still owed");
     });
 }
 
@@ -2919,8 +3185,24 @@ fn drag_sessions() {
                 an_undated_hover_still_comes_due,
             ),
             (
+                "a_held_hover_spring_loads_only_once_released",
+                a_held_hover_spring_loads_only_once_released,
+            ),
+            (
                 "a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop",
                 a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop,
+            ),
+            (
+                "a_withdrawal_that_fails_still_withdraws_the_other_answers",
+                a_withdrawal_that_fails_still_withdraws_the_other_answers,
+            ),
+            (
+                "a_withdrawal_that_fails_in_a_tick_is_told_again",
+                a_withdrawal_that_fails_in_a_tick_is_told_again,
+            ),
+            (
+                "a_move_the_os_never_heard_keeps_the_withdrawal_owed",
+                a_move_the_os_never_heard_keeps_the_withdrawal_owed,
             ),
             (
                 "a_replaced_registration_is_a_new_receiver",

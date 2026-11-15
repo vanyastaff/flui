@@ -166,6 +166,6 @@ stops after the one retry of a panicked resize.
 
 ## More information
 
-`docs/gaps.md` (the ADR-0305 line) lists what a settlement still does not owe: the hold covers
-pointer events only. A frame answered `NotShown` waits out the same backoff once its withdrawal
-outlasts its budget (ADR-0335 §2).
+`docs/gaps.md` (the ADR-0305 line) lists what a settlement still does not owe. The hold covers
+pointer input and an OS drag's hover (ADR-0211 §16). A frame answered `NotShown` waits out the same
+backoff once its withdrawal outlasts its budget (ADR-0335 §2).

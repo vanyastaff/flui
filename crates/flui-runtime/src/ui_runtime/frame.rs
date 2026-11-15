@@ -40,7 +40,15 @@ impl UiRuntime {
     #[must_use]
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<flui_layer::Scene> {
         match self
-            .enter(|ui_runtime| ui_runtime.draw_frame_entered(constraints))
+            .enter(|ui_runtime| {
+                let mut first = FirstPanic::new();
+                let drawn = first.contain(|| ui_runtime.draw_frame_entered(constraints));
+                // As `render_frame` does after the build, whether the frame ends or unwinds
+                // (ADR-0211 §16).
+                first.contain(|| ui_runtime.drag.withdraw_unregistered_answers());
+                first.resume();
+                drawn.expect("BUG: a draw that produced no outcome holds its panic")
+            })
             .1
         {
             // (the third tuple element, `any_retry_needed`, is a retry-arming
@@ -802,11 +810,23 @@ impl UiRuntime {
         subscriber_panic
     }
 
+    /// Replays the input `presentation` held for a commit: its pointer input, then the OS drag
+    /// hovers it held. A failure in the pointer replay does not strand the hovers; the first
+    /// failure resumes after both.
+    pub(super) fn replay_committed_held_input(&self, presentation: &PresentationState) {
+        let mut held = FirstPanic::new();
+        held.contain(|| self.replay_committed_held_pointer_input(presentation));
+        held.contain(|| self.release_committed_held_drags(presentation));
+        if let Some(payload) = held.into_payload() {
+            resume_unwind(payload);
+        }
+    }
+
     /// Replays the pointer input `presentation` held for a commit, by the rule that held it:
     /// only while the presentation is `Committed`. A commit that leaves it uncommitted (an older
     /// frame settled while a later one waits, a text barrier, a segment in flight) leaves the
     /// input held for the commit that clears it.
-    pub(super) fn replay_committed_held_pointer_input(&self, presentation: &PresentationState) {
+    fn replay_committed_held_pointer_input(&self, presentation: &PresentationState) {
         if presentation.frame_commit_state() != FrameCommitState::Committed {
             return;
         }
@@ -943,7 +963,19 @@ impl UiRuntime {
             .root_pipeline_owner()
             .with(PipelineOwner::device_pixel_ratio);
         let constraints = BoxConstraints::tight(Size::new(width as f64 / dpr, height as f64 / dpr));
-        let (producer_id, outcome, any_retry_needed) = self.draw_frame_entered(constraints);
+        let mut drawing = FirstPanic::new();
+        let drawn = drawing.contain(|| self.draw_frame_entered(constraints));
+        // A receiver this build unmounted no longer answers for the drag it accepted: the OS is
+        // told before it can resolve a drop from that answer, after a frame that unwound as well
+        // (ADR-0211 §16). A failure telling it waits for the frame's own work, so a painted scene
+        // is still submitted and its obligations kept, and resumes once the frame is done.
+        let mut withdrawal = FirstPanic::new();
+        withdrawal.contain(|| self.drag.withdraw_unregistered_answers());
+        let Some((producer_id, outcome, any_retry_needed)) = drawn else {
+            drawing.absorb(withdrawal);
+            drawing.resume();
+            unreachable!("BUG: a draw that produced no outcome holds its panic");
+        };
         // The presentation whose segment produced `outcome` above is never
         // inferred as `primary()`: test scaffolding can attach content to a
         // secondary and exercises this attribution. Production secondary
@@ -1035,7 +1067,13 @@ impl UiRuntime {
                     if let Some(later) = later.into_payload() {
                         flui_foundation::panic::discard_payload(later);
                     }
-                    resume_unwind(payload);
+                    // A failure telling the OS about a drag came before the sink's.
+                    withdrawal.record(payload);
+                    resume_unwind(
+                        withdrawal
+                            .into_payload()
+                            .expect("BUG: a payload was just recorded"),
+                    );
                 }
                 (None, Ok(())) => {
                     unreachable!("BUG: the submit closure returns only after the sink answered")
@@ -1187,10 +1225,13 @@ impl UiRuntime {
         // Held input the commit released replays before the first panic resumes, as a queued
         // frame's settlement does, so a panic that came first does not strand it.
         if replay_committed_input {
-            hover_panic.contain(|| self.replay_committed_held_pointer_input(producer));
+            hover_panic.contain(|| self.replay_committed_held_input(producer));
         }
-        if let Some(payload) = hover_panic.into_payload() {
-            resume_unwind(payload);
+        if hover_panic.is_held() {
+            // A failure telling the OS about a drag came before these.
+            withdrawal.absorb(hover_panic);
+            withdrawal.resume();
+            unreachable!("BUG: a held panic resumes");
         }
 
         // Animation continuation wake — deliberately placed AFTER
@@ -1247,7 +1288,9 @@ impl UiRuntime {
         let wake_panic = self.wake_pending_pointer_samples();
         self.wake_for_late_demand(retry_needed);
         delivery_panic.absorb(wake_panic);
-        if let Some(payload) = delivery_panic.into_payload() {
+        // A failure telling the OS about a drag came before the frame's delivery.
+        withdrawal.absorb(delivery_panic);
+        if let Some(payload) = withdrawal.into_payload() {
             resume_unwind(payload);
         }
         presented
