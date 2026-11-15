@@ -244,13 +244,16 @@ impl UiRuntime {
         self.last_frame_time.set(Some(now));
         // Idle work runs until the instant the platform names for this frame's
         // present, else until the next refresh the presentation's newest
-        // presentation report places, else until the host's deadline.
+        // presentation report places, else until the host's deadline. The
+        // refresh is the next one after the host's own reading: the frame's
+        // time is its vsync, which the owner may reach a refresh or more
+        // late, and a refresh between the two has passed.
         let deadline = pending
             .and_then(|(request, presentation)| {
                 request
                     .target_present
                     .and_then(|shown| self.instant_of(shown))
-                    .or_else(|| presentation.clock().next_presentation_after(now))
+                    .or_else(|| presentation.clock().next_presentation_after(sampled))
             })
             .map_or_else(
                 || clock.idle_deadline(now),

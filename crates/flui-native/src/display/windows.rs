@@ -158,8 +158,8 @@ pub(crate) mod sample {
     ) -> Result<DisplayColor, CapabilityAbsence> {
         let output = output.ok_or(CapabilityAbsence::NOT_ON_THIS_DEVICE)?;
         match output.color_space {
-            OutputColorSpace::Srgb => Ok(DisplayColor::standard(ColorGamut::Srgb)),
-            OutputColorSpace::WideGamutSdr => Ok(DisplayColor::standard(ColorGamut::Rec2020)),
+            OutputColorSpace::Srgb => Ok(DisplayColor::Standard(ColorGamut::Srgb)),
+            OutputColorSpace::WideGamutSdr => Ok(DisplayColor::Standard(ColorGamut::Rec2020)),
             OutputColorSpace::Hdr10 => {
                 let headroom = output
                     .sdr_white_level
@@ -171,7 +171,7 @@ pub(crate) mod sample {
                         Headroom::from_luminance(output.max_luminance, white_nits)
                             .map_err(|_| CapabilityAbsence::NOT_ON_THIS_DEVICE)
                     });
-                Ok(DisplayColor::high(ColorGamut::Rec2020, headroom))
+                Ok(DisplayColor::High(ColorGamut::Rec2020, headroom))
             }
             OutputColorSpace::Unread => Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         }
@@ -204,17 +204,17 @@ pub(crate) mod sample {
         fn dxgi_colour_reports_map_to_the_display_colour() {
             assert_eq!(
                 display_color(Some(output(DXGI_SRGB, 270.0, Some(1000)))),
-                Ok(DisplayColor::standard(ColorGamut::Srgb)),
+                Ok(DisplayColor::Standard(ColorGamut::Srgb)),
                 "HDR off is SDR whatever the panel's peak"
             );
             assert_eq!(
                 display_color(Some(output(DXGI_WIDE_SDR, 400.0, None))),
-                Ok(DisplayColor::standard(ColorGamut::Rec2020))
+                Ok(DisplayColor::Standard(ColorGamut::Rec2020))
             );
             // HDR on, a 1000-nit peak, SDR white at 250 nits (level 3125).
             assert_eq!(
                 display_color(Some(output(DXGI_HDR10, 1000.0, Some(3125)))),
-                Ok(DisplayColor::high(
+                Ok(DisplayColor::High(
                     ColorGamut::Rec2020,
                     Ok(Headroom::try_new(4.0).expect("headroom"))
                 ))
@@ -223,7 +223,7 @@ pub(crate) mod sample {
             // (level 6000): the panel shows nothing above white.
             assert_eq!(
                 display_color(Some(output(DXGI_HDR10, 400.0, Some(6000)))),
-                Ok(DisplayColor::high(ColorGamut::Rec2020, Ok(Headroom::SDR)))
+                Ok(DisplayColor::High(ColorGamut::Rec2020, Ok(Headroom::SDR)))
             );
             assert_eq!(
                 display_color(None),
@@ -249,7 +249,7 @@ pub(crate) mod sample {
             ] {
                 assert_eq!(
                     display_color(Some(output(DXGI_HDR10, peak, level))),
-                    Ok(DisplayColor::high(
+                    Ok(DisplayColor::High(
                         ColorGamut::Rec2020,
                         Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
                     )),

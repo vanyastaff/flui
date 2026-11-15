@@ -67,8 +67,8 @@ fn the_fixture_counts_every_kind() {
     };
     assert_eq!(
         Kind::ALL.map(count),
-        [16, 4, 4, 1, 8],
-        "extern fns, Objective-C methods, COM methods, handlers, callbacks"
+        [16, 4, 6, 4, 1, 8],
+        "extern fns, Objective-C methods and destructors, COM methods, handlers, callbacks"
     );
     assert_eq!(
         report.adapters.len(),
@@ -235,6 +235,103 @@ fn start() {
     );
 }
 
+/// The findings of a crate whose boundary module also holds `ivars`, and
+/// whose `feature.rs` holds `feature`.
+fn findings_with_ivars(ivars: &str, feature: &str) -> Vec<(String, Problem)> {
+    let boundary = format!("{BOUNDARY}\n{ivars}");
+    let source = memory(&[
+        ("c/src/lib.rs", "mod feature;\nmod owner;\n"),
+        ("c/src/owner.rs", "pub(crate) mod panic_boundary;\n"),
+        ("c/src/owner/panic_boundary.rs", &boundary),
+        ("c/src/feature.rs", feature),
+    ]);
+    check(&source, "c/src/lib.rs")
+        .expect("the crate resolves and parses")
+        .findings
+        .into_iter()
+        .map(|finding| (finding.what, finding.kind))
+        .collect()
+}
+
+const CONTAINED_IVARS: &str = r#"
+pub(crate) struct ContainedIvars<T>(std::mem::ManuallyDrop<T>);
+impl<T> Drop for ContainedIvars<T> {
+    fn drop(&mut self) {
+        os_entry("dealloc", (), AfterPanic::Answer(|()| ()), || unsafe {
+            std::mem::ManuallyDrop::drop(&mut self.0)
+        });
+    }
+}
+"#;
+
+fn class_ivars_are_the_boundary_type_by_path_or_by_import() {
+    let class = |head: &str, ivars: &str| {
+        format!("{head}\ndefine_class!(\n    #[ivars = {ivars}]\n    struct View;\n);\n")
+    };
+    // (the file's imports, the ivars, whether they are the boundary's)
+    let cases = [
+        (
+            "use crate::owner::panic_boundary::ContainedIvars;",
+            "ContainedIvars<State>",
+            true,
+        ),
+        (
+            "use crate::owner::panic_boundary::*;",
+            "ContainedIvars<State>",
+            true,
+        ),
+        (
+            "",
+            "crate::owner::panic_boundary::ContainedIvars<State>",
+            true,
+        ),
+        ("", "ContainedIvars<State>", false),
+        ("", "State", false),
+        ("", "Rc<ContainedIvars<State>>", false),
+        ("", "(State, Other)", false),
+    ];
+    for (head, ivars, contained) in cases {
+        let expected = if contained {
+            Vec::new()
+        } else {
+            vec![("View::dealloc".to_owned(), Problem::Unguarded)]
+        };
+        assert_eq!(
+            findings_with_ivars(CONTAINED_IVARS, &class(head, ivars)),
+            expected,
+            "`{head}` with `#[ivars = {ivars}]`"
+        );
+    }
+}
+
+fn a_class_without_ivars_or_a_drop_has_no_destructor_to_judge() {
+    let found = findings_with_ivars(
+        CONTAINED_IVARS,
+        "define_class!(\n    #[unsafe(super(NSObject))]\n    struct Marker;\n);\n",
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+fn the_ivars_type_destroys_its_value_inside_the_boundary() {
+    assert_eq!(
+        findings_with_ivars(
+            "pub(crate) struct ContainedIvars<T>(std::mem::ManuallyDrop<T>);\n",
+            ""
+        ),
+        [("struct ContainedIvars".to_owned(), Problem::Identity)],
+        "ivars without a `Drop` leak what they hold, or drop it nowhere"
+    );
+    assert_eq!(
+        findings_with_ivars(
+            "pub(crate) struct ContainedIvars<T>(T);\n\
+             impl<T> Drop for ContainedIvars<T> {\n    fn drop(&mut self) { release(self) }\n}\n",
+            ""
+        ),
+        [("ContainedIvars::drop".to_owned(), Problem::Unguarded)],
+        "a `Drop` that is not the boundary's call"
+    );
+}
+
 #[test]
 fn panic_boundary_contract() {
     crate::table_test::run_table(
@@ -291,6 +388,18 @@ fn panic_boundary_contract() {
             (
                 "an_os_crate_path_written_out_is_an_entry",
                 an_os_crate_path_written_out_is_an_entry,
+            ),
+            (
+                "class_ivars_are_the_boundary_type_by_path_or_by_import",
+                class_ivars_are_the_boundary_type_by_path_or_by_import,
+            ),
+            (
+                "a_class_without_ivars_or_a_drop_has_no_destructor_to_judge",
+                a_class_without_ivars_or_a_drop_has_no_destructor_to_judge,
+            ),
+            (
+                "the_ivars_type_destroys_its_value_inside_the_boundary",
+                the_ivars_type_destroys_its_value_inside_the_boundary,
             ),
         ],
     );

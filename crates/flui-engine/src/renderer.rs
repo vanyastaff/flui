@@ -2482,11 +2482,11 @@ mod tests {
         use flui_platform::{ColorGamut, DisplayColor, Headroom};
         use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
 
-        let hdr_monitor = DisplayColor::high(
+        let hdr_monitor = DisplayColor::High(
             ColorGamut::Rec2020,
             Ok(Headroom::try_new(4.0).expect("headroom")),
         );
-        let sdr_monitor = DisplayColor::standard(ColorGamut::Srgb);
+        let sdr_monitor = DisplayColor::Standard(ColorGamut::Srgb);
         let caps = wgpu::SurfaceCapabilities {
             formats: vec![Format::Bgra8Unorm, Format::Rgba16Float],
             format_capabilities: vec![
