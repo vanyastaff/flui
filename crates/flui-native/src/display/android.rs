@@ -106,26 +106,6 @@ pub(crate) mod sample {
         Ok(DisplayColor::high(gamut, headroom))
     }
 
-    /// The `ActivityInfo.COLOR_MODE_*` value an Activity's window asks its
-    /// display for to show `mode` (`Window.setColorMode`); `None` for the
-    /// default, which the window has without asking.
-    pub(crate) fn activity_color_mode(
-        mode: flui_platform::os_options::AndroidColorMode,
-    ) -> Option<i32> {
-        use flui_platform::os_options::AndroidColorMode;
-
-        /// `ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT`.
-        const COLOR_MODE_WIDE_COLOR_GAMUT: i32 = 1;
-        /// `ActivityInfo.COLOR_MODE_HDR`.
-        const COLOR_MODE_HDR: i32 = 2;
-        match mode {
-            AndroidColorMode::WideColorGamut => Some(COLOR_MODE_WIDE_COLOR_GAMUT),
-            AndroidColorMode::Hdr => Some(COLOR_MODE_HDR),
-            // `Default`, and a mode the contract adds later, ask for nothing.
-            _ => None,
-        }
-    }
-
     impl RawDisplay {
         /// `Display.DEFAULT_DISPLAY`, the built-in screen.
         pub(crate) const DEFAULT_DISPLAY_ID: i32 = 0;
@@ -423,28 +403,11 @@ pub(crate) mod sample {
             assert_eq!(requested_frame_rate(FrameRateHint::Default, None), 0.0);
         }
 
-        /// The Activity window asks for the colour mode the application's
-        /// surface is requested in, and asks nothing for the default.
-        fn an_activity_asks_for_the_colour_mode_of_its_surface() {
-            use flui_platform::os_options::AndroidColorMode;
-
-            assert_eq!(activity_color_mode(AndroidColorMode::Default), None);
-            assert_eq!(
-                activity_color_mode(AndroidColorMode::WideColorGamut),
-                Some(1)
-            );
-            assert_eq!(activity_color_mode(AndroidColorMode::Hdr), Some(2));
-        }
-
         #[test]
         fn android_display_table() {
             crate::table_test::run_table(
                 "android_display_table",
                 &[
-                    (
-                        "an_activity_asks_for_the_colour_mode_of_its_surface",
-                        an_activity_asks_for_the_colour_mode_of_its_surface as fn(),
-                    ),
                     (
                         "a_display_without_size_or_density_is_not_described",
                         a_display_without_size_or_density_is_not_described as fn(),

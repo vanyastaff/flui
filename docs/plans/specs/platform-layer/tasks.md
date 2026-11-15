@@ -3197,7 +3197,7 @@ graph LR
   (на macOS — ответ AppKit), Win32 частота кадров, drag пером и касанием в OLE, хаптика Linux,
   `Absent`, неизвестный `WriteMode`, headless. Тесты: `every_error_carries_its_reason`
   (`each reason answers retry and message`); `window_command_validate` (каждая команда с
-  `NotOnThisDevice` и `NotYetOnThisHost`, `an_absence_left_in_an_available_slot_is_no_difference`,
+  `NotOnThisDevice` и `NotYetOnThisHost`, `a_capability_restored_is_the_one_never_taken_away` (до LY104 — `an_absence_left_in_an_available_slot_is_no_difference`),
   `no_absence_is_retryable`); `native_capability_absences`,
   `native_window_gate_table`, строки `PointerIcons` и `BackgroundBlur` в `os_version_gate_table`.
   Каждый падает при откате своей правки (проверено). На устройствах iOS, Android и macOS пути не
@@ -4871,6 +4871,66 @@ graph LR
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
   публичный путь keyboard layout.
+- [x] **LY104** — ветка `platform/snapshot-integrity` от `main` @ `3f4aea639`: снимок окна
+  держит только верные и конечные факты. Шесть находок проверки сделанных задач, все
+  подтверждены по коду.
+  (1) *Не-конечная геометрия.* Win32 передавал DPI из `WM_DPICHANGED` в `change_dpi` без
+  проверки; при DPI 0 масштаб становился нулём, и снимок публиковал `inf` в размере содержимого
+  и внешнем прямоугольнике, после чего отличался сам от себя при каждом чтении. Исправлено
+  типами, а не проверкой в каждом хосте: `WindowGeometry` (конечная позиция и `WindowExtent`) и
+  `WindowExtent` (стороны конечны и неотрицательны) строятся только через `try_new`;
+  `WindowState::content_size` и границы `SizeConstraints` — `WindowExtent`. Сэмплы хостов
+  возвращают `Result<WindowState, InvalidGeometry>`, а решение одно на всех —
+  `WindowStateCell`: чтение, чьи числа окна не описывают, ничего не публикует и не повторяется
+  до следующей инвалидации. `WindowScale` Win32 хранит `NonZeroU32`; `change_dpi` при нуле
+  ничего не меняет. `WindowOptions::constraints` — единственное чтение пределов, с которыми
+  окно открывается.
+  (2) *Чтение headless-окна стирало сообщённый снимок.* `state()` звал `publish_state()`,
+  который сбрасывал `reported`. Теперь чтение ничего не меняет; сбрасывают только `simulate_*`
+  и `apply`. Тест воспроизведения (`WindowStateTarget`) читает окно после каждого снимка и
+  сверяет с опубликованным.
+  (3) *`state()` звал обработчик под чужими заимствованиями.* ADR-0254 §4 и его драйвер
+  («код пользователя выполняется в ход владельца, вне любого заимствования») решения не
+  требуют менять: ревизия, опубликованная чтением, объявляется через FIFO окна в следующий ход
+  владельца (`WindowDelivery::state_changed_after_read`), а изменение, о котором сообщила
+  оконная система, по-прежнему из колбэка хоста. Так сделано во всех восьми хостах; ADR-0254
+  получил запись об уточнении, без смены решения. `WindowHandle::is_open` отвечает, открыто ли
+  окно, не читая его; `WindowCommandQueues::handle_for`/`window_for` спрашивают его.
+  (4) X11 и Wayland строят возможности от `WindowCapabilities::NONE`, как остальные хосты.
+  (5) Возможность и причина её отсутствия — одно значение `WindowCapability { Native, Emulated,
+  Absent(CapabilityAbsence) }` в `WindowCapabilities` и в `CapabilityParts`; приватный массив
+  причин, `Result<Availability, CapabilityAbsence>` и дублирующие методы
+  (`presentation_feedback`, `without_*`, `refusal`, `availability`) удалены. Правила Android
+  про цветовой режим и unbuffered dispatch вынесены из `window/capabilities.rs` в модель окна
+  `window/activity.rs` (в файлы платформ `display/android` и `input/android` их не пускает
+  `module-dag`); их гейты — в `version::gate::android`.
+  (6) `set_input_regions` закрытого окна отвечает `NoWindow` на Win32, X11, Wayland и AppKit,
+  как на UIKit и headless; строка в `a_closed_window_refuses`.
+  Тесты и откат. С откатом исправлений (headless `state()`, `rescale` при нуле,
+  `set_input_regions` Win32, синхронная доставка из чтения, `handle.state().is_ok()` в
+  `handle_for`) падают: `window_handle_contract` (`looking_a_window_up_reads_nothing_of_it`,
+  «RefCell already borrowed»), `window_handler_obligation_table`
+  (`a_revision_a_read_published_is_announced_at_the_owners_turn`),
+  `a_window_takes_no_dpi_of_zero`, `native_recording_contracts` (четыре случая на проверке
+  чтения) и `the_win32_window_conforms` (три нарушения: `a_closed_window_refuses`,
+  `a_report_that_describes_no_window_publishes_nothing`, расхождение метрик); с исправлениями
+  все зелёные. Новые conformance-строки ловят свои дефекты на headless-фикстуре с
+  неисправностями (`a_window_that_publishes_a_report_of_no_window_is_caught`,
+  `a_closed_window_that_takes_input_regions_is_caught`). Пункты 1 и 5 в старом виде не
+  выражаются новыми типами: их держат таблица `window_geometry`,
+  `a_read_that_describes_no_window_publishes_nothing`,
+  `a_refusal_answers_the_reason_the_capability_holds` и полные списки возможностей
+  (`an_x11_window_has_the_capabilities_it_names`, `a_wayland_window_has_the_capabilities_it_names`).
+  Проверки. Windows: nextest `-p flui-native -p flui-platform -p flui-testing -p flui-view` —
+  955 из 959; не проходят и без этого изменения trybuild-снимки (`flui-platform`: три фикстуры,
+  `flui-native`: `owner_platform_is_not_send`; диагностика компилятора) и
+  `an_intent_opens_its_link_or_documents` (путь `file:` на Windows-хосте); окна `flui-app`,
+  `flui-runtime`, `flui-interaction` — 79; clippy семи крейтов `--all-targets -D warnings`;
+  `xtask checks`. WSL (Ubuntu 24.04, 1.100.0): clippy `-p flui-native -p flui-testing`;
+  nextest без композитора — 950 из 973 (22 теста `drag::x11` падают на `DISPLAY` WSLg и
+  проходят под Xvfb: 152 из 152; trybuild — как выше); Wayland под headless Weston — 95 из 95.
+  Не запускалось: macOS, iOS, Android и wasm32 (правки `window/apple/*`, `window/android.rs`,
+  `window/web.rs` сделаны без сборки; их проверяет `cross-typecheck` и `wasm-check` CI).
 
 ## Отступление от порядка, решённое владельцем
 

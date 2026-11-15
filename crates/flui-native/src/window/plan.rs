@@ -494,9 +494,7 @@ mod tests {
             .normal_geometry(Some(relative));
         let planned = OpenPlan::new(&on_scaled, &ALL, scaled, Size::new(0.0, 0.0));
         assert_eq!(
-            planned
-                .normal_geometry
-                .and_then(|geometry| geometry.position()),
+            planned.normal_geometry.and_then(WindowGeometry::position),
             Some(Point::new(1060.0, 78.0))
         );
 

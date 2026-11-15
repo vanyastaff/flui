@@ -24,14 +24,13 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
-use crate::display::android::sample::activity_color_mode;
 use crate::host::{self, WindowFacets, WindowPositions};
-use crate::input::android::latency::unbuffered_input_sources;
 use crate::input::regions::ProjectedInputRegions;
 use crate::owner::android::java_view::{ActivityDragSource, JavaView, KeyboardReport};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
 };
+use crate::window::activity::{activity_color_mode, unbuffered_input_sources};
 use crate::window::capabilities::{ActivityFacts, activity_capabilities, pointer_icon_absence};
 use crate::window::keyboard_motion::KeyboardMotion;
 
