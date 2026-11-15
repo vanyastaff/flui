@@ -39,7 +39,7 @@ use objc2_ui_kit::{
 
 use super::super::client::{DocumentChange, InputContext, MarkedText, TextClient, Typed};
 use super::super::traits::{KeyboardTraits, keyboard_traits};
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
 
 /// What the target of the keyboard's log lines is.
@@ -50,19 +50,19 @@ define_class!(
     #[unsafe(super(UITextPosition, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "FluiTextPosition"]
-    #[ivars = Utf16Offset]
+    #[ivars = ContainedIvars<Utf16Offset>]
     pub(super) struct TextPosition;
 );
 
 impl TextPosition {
     fn new(mtm: MainThreadMarker, offset: Utf16Offset) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(offset);
+        let this = Self::alloc(mtm).set_ivars(ContainedIvars::new(offset));
         // SAFETY: NSObject's designated initializer, on a fresh allocation.
         unsafe { msg_send![super(this), init] }
     }
 
     fn offset(&self) -> Utf16Offset {
-        *self.ivars()
+        **self.ivars()
     }
 }
 
@@ -77,7 +77,7 @@ define_class!(
     #[unsafe(super(UITextRange, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "FluiTextRange"]
-    #[ivars = Ends]
+    #[ivars = ContainedIvars<Ends>]
     pub(super) struct TextRange;
 
     impl TextRange {
@@ -106,10 +106,10 @@ define_class!(
 
 impl TextRange {
     fn new(mtm: MainThreadMarker, range: Utf16Range) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ends {
+        let this = Self::alloc(mtm).set_ivars(ContainedIvars::new(Ends {
             start: TextPosition::new(mtm, range.start()),
             end: TextPosition::new(mtm, range.end()),
-        });
+        }));
         // SAFETY: NSObject's designated initializer, on a fresh allocation.
         unsafe { msg_send![super(this), init] }
     }
@@ -137,7 +137,7 @@ define_class!(
     #[unsafe(super(UIView, UIResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "FluiTextInputView"]
-    #[ivars = ResponderIvars]
+    #[ivars = ContainedIvars<ResponderIvars>]
     pub(super) struct TextInputView;
 
     impl TextInputView {
@@ -482,13 +482,13 @@ impl TextInputView {
     /// tells `delivery`'s window the Return and Backspace presses.
     pub(super) fn new(mtm: MainThreadMarker, delivery: Weak<WindowDelivery>) -> Retained<Self> {
         let client = TextClient::new();
-        let this = Self::alloc(mtm).set_ivars(ResponderIvars {
+        let this = Self::alloc(mtm).set_ivars(ContainedIvars::new(ResponderIvars {
             client: Rc::clone(&client),
             delivery,
             traits: Cell::new(KeyboardTraits::DEFAULT),
             tokenizer: OnceCell::new(),
             input_delegate: RefCell::new(None),
-        });
+        }));
         // SAFETY: UIView's designated initializer, on a fresh allocation.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: CGRect::ZERO] };
         // The context holds the view weakly: the view holds the client.

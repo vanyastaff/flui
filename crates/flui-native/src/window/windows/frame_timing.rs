@@ -72,12 +72,17 @@ struct SyncPoint {
     ticks: u64,
 }
 
-/// A present a swap chain's frame statistics newly report shown, placed against a counter
-/// reading.
+/// A present a swap chain's frame statistics newly report shown, with the counter reading it
+/// was read at: both on the performance counter, as time since its zero.
+///
+/// The two are handed on as they are. What a stamp ahead of the reading means is decided where
+/// every host's reports pass (`PresentationReports`), not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ShownPresent {
-    /// How long before the reading the refresh it was shown at began.
-    pub(crate) age: Duration,
+    /// When the refresh it was shown at began.
+    pub(crate) shown_at: Duration,
+    /// When the statistics were read.
+    pub(crate) read_at: Duration,
     /// The refresh period the two latest reports measure: the counter time between their
     /// refreshes over the refreshes between them. `None` until two reports name different
     /// refreshes.
@@ -99,9 +104,8 @@ pub(crate) struct PresentTracker {
 
 impl PresentTracker {
     /// The present a read names shown (`PresentCount`, `SyncRefreshCount`, `SyncQPCTime`),
-    /// placed against the counter reading `now`; `None` for a read that names the present or the
-    /// refresh the last one did, names nothing shown yet (a zero or negative counter time), or a
-    /// refresh after the reading.
+    /// with the counter reading `now` it was read at; `None` for a read that names the present or
+    /// the refresh the last one did, or names nothing shown yet (a zero or negative counter time).
     pub(crate) fn read(
         &mut self,
         present: u32,
@@ -117,9 +121,6 @@ impl PresentTracker {
             return None;
         }
         let ticks = u64::try_from(sync_ticks).ok().filter(|&ticks| ticks > 0)?;
-        if ticks > now {
-            return None;
-        }
         let to_duration = |ticks: u64| {
             let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(frequency.get());
             Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
@@ -137,7 +138,8 @@ impl PresentTracker {
             ticks,
         });
         Some(ShownPresent {
-            age: to_duration(now - ticks),
+            shown_at: to_duration(ticks),
+            read_at: to_duration(now),
             refresh,
         })
     }
@@ -187,7 +189,7 @@ pub(crate) fn presentation_absence(
 mod tests {
     use super::*;
 
-    /// A shown present is placed by its age before the reading, and two reports a few refreshes
+    /// A shown present keeps its distance from the reading, and two reports a few refreshes
     /// apart measure the period between them.
     #[test]
     fn a_shown_present_is_aged_and_two_reads_measure_the_period() {
@@ -196,7 +198,10 @@ mod tests {
         let first = tracker
             .read(10, 100, 1_000_000, 1_050_000, MHZ_10)
             .expect("a first report");
-        assert_eq!(first.age, Duration::from_millis(5));
+        assert_eq!(
+            first.read_at.saturating_sub(first.shown_at),
+            Duration::from_millis(5)
+        );
         assert_eq!(first.refresh, None, "one report measures no period");
 
         let second = tracker
@@ -249,7 +254,21 @@ mod tests {
         assert_eq!(after.refresh, None);
     }
 
-    /// Statistics that name nothing shown, or a refresh after the reading, place no present.
+    /// A refresh after the reading is handed on with its lead: the reports' seam decides what a
+    /// stamp ahead means, for every host alike.
+    #[test]
+    fn a_refresh_after_the_reading_is_handed_on_with_its_lead() {
+        let ahead = PresentTracker::default()
+            .read(1, 1, 200, 100, MHZ_10)
+            .expect("a refresh after the reading");
+        assert_eq!(
+            ahead.shown_at.saturating_sub(ahead.read_at),
+            Duration::from_micros(10),
+            "100 ticks at 10 MHz after the reading"
+        );
+    }
+
+    /// Statistics that name nothing shown place no present.
     #[test]
     fn statistics_that_name_no_shown_present_place_none() {
         let read = |present, refresh, ticks| {
@@ -257,7 +276,6 @@ mod tests {
         };
         assert_eq!(read(0, 0, 0), None, "nothing shown yet");
         assert_eq!(read(1, 1, -5), None);
-        assert_eq!(read(1, 1, 200), None, "after the reading");
     }
 
     const MHZ_10: NonZeroU64 = NonZeroU64::new(10_000_000).unwrap();

@@ -96,14 +96,14 @@ pub(crate) mod sample {
         let report = report?;
         let gamut = crate::display::source::p3_or_srgb(report.wide_gamut);
         if !report.hdr {
-            return Ok(DisplayColor::standard(gamut));
+            return Ok(DisplayColor::Standard(gamut));
         }
         let headroom = report
             .highest_hdr_sdr_ratio
             .and_then(|ratio| Headroom::try_new(ratio).ok())
             .filter(|headroom| *headroom > Headroom::SDR)
             .ok_or(CapabilityAbsence::NOT_ON_THIS_DEVICE);
-        Ok(DisplayColor::high(gamut, headroom))
+        Ok(DisplayColor::High(gamut, headroom))
     }
 
     impl RawDisplay {
@@ -310,7 +310,7 @@ pub(crate) mod sample {
             };
             assert_eq!(
                 reported.info(id).map(|info| info.color),
-                Some(Ok(DisplayColor::standard(ColorGamut::DisplayP3)))
+                Some(Ok(DisplayColor::Standard(ColorGamut::DisplayP3)))
             );
         }
 
@@ -345,16 +345,16 @@ pub(crate) mod sample {
             );
             assert_eq!(
                 display_color(Ok(report(false, false, None))),
-                Ok(DisplayColor::standard(ColorGamut::Srgb))
+                Ok(DisplayColor::Standard(ColorGamut::Srgb))
             );
             assert_eq!(
                 display_color(Ok(report(true, false, Some(4.0)))),
-                Ok(DisplayColor::standard(ColorGamut::DisplayP3)),
+                Ok(DisplayColor::Standard(ColorGamut::DisplayP3)),
                 "a ratio without HDR is no high range"
             );
             assert_eq!(
                 display_color(Ok(report(true, true, Some(4.92)))),
-                Ok(DisplayColor::high(
+                Ok(DisplayColor::High(
                     ColorGamut::DisplayP3,
                     Ok(Headroom::try_new(4.92).expect("headroom"))
                 ))
@@ -368,7 +368,7 @@ pub(crate) mod sample {
             ] {
                 assert_eq!(
                     display_color(Ok(report(true, true, ratio))),
-                    Ok(DisplayColor::high(
+                    Ok(DisplayColor::High(
                         ColorGamut::DisplayP3,
                         Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
                     )),

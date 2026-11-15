@@ -71,9 +71,15 @@ and `Mailbox` needs a pacer FLUI does not have.
    shifted one: ADR-0236 decision 8's argument against an offset stands, and the tick is never the
    presentation time.
 3. **`target_present` bounds idle work.** When a request names it, idle-priority tasks run only
-   until that instant and the host's own deadline is not asked; otherwise the deadline is the
-   host's, as before. It travels with the vsync in `HostInput::Frame`, so a recorded session
-   replays the same bound.
+   until that instant and the host's own deadline is not asked. A frame whose request names none
+   bounds its idle work by the next refresh on the grid the presentation's newest report starts
+   (decision 6), while that report is at most eight refreshes old: the first refresh after the
+   host's own reading when the frame starts, and after the report, since the frame's vsync is
+   earlier than both and a refresh that has passed bounds nothing. A live report trails the frame
+   that reads it by the frames in flight (three to four refreshes, measured on Windows), so eight
+   is still a display presenting this window; an older one belongs to a window that was idle, and
+   the display may have changed its rate since. Otherwise the deadline is the host's. The bound
+   travels with the vsync in `HostInput::Frame`, so a recorded session replays it.
 4. **Frame latency is a typed setting.** `FrameLatency` is `#[non_exhaustive]`: `Balanced` is two
    frames in flight, the measured default, and `Low` is one. `AppConfig::frame_latency` sets it,
    each runner applies it to its renderer after creation, and the renderer
@@ -83,6 +89,40 @@ and `Mailbox` needs a pacer FLUI does not have.
 5. **`Fifo` stays the only present mode.** `Mailbox` never blocks `present()`, so the wake-driven
    loop would spin at tens of thousands of frames a second, the defect ADR-0058 removed. It enters
    with a pacer that does not rely on the present call blocking, under its own ADR.
+6. **A request carries presentation feedback.** The quality bar (ADR-0151 §16) asks that
+   presentation feedback reach the frame clock on the one event timeline; it joins the request
+   rather than a handler method of its own, so the frame clock reads it where it plans the frame
+   and a recording carries it with the frame that delivered it.
+   `FrameRequest::presented: Option<FramePresented { at: EventTime, refresh: Option<Duration> }>`
+   is the newest earlier frame of the window that the platform reported shown since the window's
+   last request: when the display started showing it, and the refresh interval then (a zero
+   interval, a variable rate, is none). It is a report, never a prediction; a time the platform
+   names in advance stays `target_present`. Every host's reports pass one seam in the core host
+   (`PresentationReports`), which holds the stamp's rules:
+   - a report no later than one already kept or carried is a repeat or out of order, and is
+     dropped, so a window's reports never run backwards;
+   - a stamp ahead of the event clock's reading when the report arrives by at most `REPORT_LEAD`
+     is the frame's time as the platform measured it (the two readings a rebase takes, a
+     compositor that adds its display's latency), and the report is carried with that stamp: the
+     stamp is the phase of the refresh grid the frame clock plans on (decision 3), and the clock
+     names the refresh after a report that lies after its reading;
+   - a stamp further ahead is no time of a frame (a prediction, a stamp left on another clock, a
+     saturated rebase), and the report is dropped, so one wrong stamp never holds back the reports
+     after it;
+   - the next request carries the newest report that arrived before it, whatever its stamp, so a
+     host whose every stamp leads the clock still reports on every request.
+
+   A host rebases its stamp against its reading of the platform's clock and hands it on; no host
+   judges how far ahead a stamp may lie. `HostInput::Frame` carries the report, and so does a
+   recording.
+7. **Whether a window reports is a capability,** `WindowCapabilities::reports_presentation`, with
+   its reason kept beside it (`presentation_feedback() -> Result<Availability, Unsupported>`): no
+   verb answers for it, as a verb answers for the frame-rate hint.
+8. **Where only the presenter can read it, the presenter hands it to the surface target**
+   (`SurfaceTarget::pre_present_notify(SwapChainStatistics)`): DXGI's frame statistics belong to
+   the swap chain the renderer owns, so the renderer reads them before each present and the host
+   rebases them (`Dxgi`, or `DxgiDisjoint` when they broke off). A compositor protocol the host
+   speaks itself (`wp_presentation`) needs nothing from the presenter.
 
 ### Consequences
 
@@ -107,8 +147,21 @@ and `Mailbox` needs a pacer FLUI does not have.
 - `a_frame_latency_setting_reaches_the_configuration_and_survives_release` (flui-engine) pins the
   stored setting, and the `recording_vocabulary` row for `Frame` pins `target_present` through a
   recording's round trip.
+- `a_presentation_report_bounds_the_idle_work_of_a_later_frame` (flui-runtime) pins the bound by
+  the report's grid and the stale report; `the_idle_work_of_a_frame_reached_late_ends_at_a_refresh_still_ahead`
+  pins that the next refresh is one after the frame's start, never the report itself;
+  `the_next_refresh_lies_on_the_grid_the_report_starts` (flui-scheduler) pins the grid of a
+  report that lies after the reading.
+- `a_presentation_report_rides_the_next_request`,
+  `a_report_stamped_far_ahead_does_not_outrank_the_reports_after_it` and
+  `a_stream_of_stamps_that_lead_the_clock_reaches_every_request` (flui-native, the seam) pin the
+  stamp's rules; `a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it` and
+  `a_window_whose_stamps_lead_the_clock_reports_on_every_request` pin them through a headless
+  window; `a_presentation_and_the_input_before_it_are_on_one_timeline` (flui-testing) pins the
+  one timeline.
 - A backend's timestamp is confirmed by an executed run on that platform; `docs/platform-parity.md`
-  names it when it exists.
+  names it when it exists. The conformance row `presentation_is_reported_exactly_when_claimed` has
+  run on Win32 with DXGI statistics and on Weston with `wp_presentation`.
 
 ## Pros and cons of the options
 
@@ -135,37 +188,3 @@ and `Mailbox` needs a pacer FLUI does not have.
 Revisit when a backend reports a platform timestamp: the rebase it uses (the browser's time origin,
 `CACurrentMediaTime`, `CLOCK_MONOTONIC` for Choreographer) is its own decision, run on that
 platform, and `target_present` is then filled where the platform names it (`targetTimestamp`).
-
-## Amendment (2026-10-28): the request carries presentation feedback
-
-The quality bar (ADR-0151 §16) asks that presentation feedback reach the frame clock on the one
-event timeline. It joins the request rather than a handler method of its own: the frame clock reads
-it where it plans the frame, and the recording carries it with the frame that delivered it.
-
-1. **`FrameRequest::presented: Option<FramePresented { at: EventTime, refresh: Option<Duration> }>`**
-   is the newest earlier frame of the window that the platform reported shown since the window's
-   last request: when the display started showing it, and the refresh interval then (a zero
-   interval, a variable rate, is none). It is a report, never a prediction; a time the platform
-   names in advance stays `target_present`. A report no later than one already carried is dropped,
-   and one still ahead of the request's delivery waits, so a window's reports never run backwards.
-   `HostInput::Frame` carries it, and so does a recording.
-2. **Whether a window reports is a capability,** `WindowCapabilities::reports_presentation`, with
-   its reason kept beside it (`presentation_feedback() -> Result<Availability, Unsupported>`): no
-   verb answers for it, as a verb answers for the frame-rate hint.
-3. **Where only the presenter can read it, the presenter hands it to the surface target**
-   (`SurfaceTarget::pre_present_notify(SwapChainStatistics)`): DXGI's frame statistics belong to
-   the swap chain the renderer owns, so the renderer reads them before each present and the host
-   rebases them (`Dxgi`, or `DxgiDisjoint` when they broke off). A compositor protocol the host
-   speaks itself (`wp_presentation`) needs nothing from the presenter.
-4. **§3 is amended:** a frame whose request names no `target_present` bounds its idle work by the
-   next refresh on the grid the presentation's newest report starts, while that report is at most
-   eight refreshes old; otherwise the host's deadline applies, as before. A live report trails the
-   frame that reads it by the frames in flight (three to four refreshes, measured on Windows), so
-   eight is still a display presenting this window; an older one belongs to a window that was idle,
-   and the display may have changed its rate since. The frame tick stays the vsync instant
-   (decision 2).
-
-Confirmation: `a_presentation_report_bounds_the_idle_work_of_a_later_frame` (flui-runtime, the
-bound and the stale report), `a_presentation_and_the_input_before_it_are_on_one_timeline`
-(flui-testing), the conformance row `presentation_is_reported_exactly_when_claimed`, run on Win32
-with DXGI statistics and on Weston with `wp_presentation`.

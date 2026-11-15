@@ -18,6 +18,11 @@
 //! where the state behind it may be torn mid-dispatch, the end of the process
 //! (`docs/PANIC-POLICY.md`: a panic is a bug report, never control flow).
 //!
+//! One entry has no body in this crate: the `dealloc` objc2 generates for a
+//! class declared with `define_class!`, which destroys the class's ivars. A
+//! class keeps them in `ContainedIvars`, whose destructor is that call, and
+//! the same task checks each class for it.
+//!
 //! Recoverable owner callbacks have a boundary of their own inside an entry:
 //! the call point (`super::call_point`) settles a handler's slot apart from
 //! its call, and callback invocation and capture cleanup are contained
@@ -127,6 +132,97 @@ where
     }
 }
 
+/// The ivars of a class this crate declares with objc2's `define_class!`,
+/// destroyed inside the boundary.
+///
+/// objc2 generates the class's `dealloc`, an `extern "C-unwind"` method that
+/// drops the ivars in place. Whoever releases the object last runs it: an
+/// autorelease pool UIKit drains, a session letting go of its delegate, a
+/// `Retained` of the crate's own. So the destructors of the ivars are an OS
+/// entry with nothing of the crate above them, and what they own may be the
+/// application's (a window's handler, a callback's captures). Declared as
+/// `#[ivars = ContainedIvars<T>]`, the value is destroyed by one call of
+/// [`os_entry`]: a destructor's panic is logged there, the fields after the
+/// failing one are destroyed as it unwinds, and `dealloc` goes on to the
+/// superclass's. `cargo xtask panic-boundary` holds every class of the crate
+/// to this type.
+///
+/// The value is read through `Deref` (`self.ivars().field`) and never moves:
+/// it is destroyed in place, where objc2 keeps it pinned.
+///
+/// Public where it is defined, because a public class names it as its
+/// `DefinedClass::Ivars`; the module is private, so it is nameable only
+/// inside the crate.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    all(test, not(target_arch = "wasm32"))
+))]
+#[derive(Debug)]
+pub struct ContainedIvars<T>(std::mem::ManuallyDrop<T>);
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    all(test, not(target_arch = "wasm32"))
+))]
+impl<T> ContainedIvars<T> {
+    /// `ivars`, for `set_ivars`.
+    pub(crate) const fn new(ivars: T) -> Self {
+        Self(std::mem::ManuallyDrop::new(ivars))
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    all(test, not(target_arch = "wasm32"))
+))]
+impl<T> std::ops::Deref for ContainedIvars<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    all(test, not(target_arch = "wasm32"))
+))]
+#[expect(
+    unsafe_code,
+    reason = "the ivars are destroyed in place, once, inside the boundary"
+)]
+impl<T> Drop for ContainedIvars<T> {
+    fn drop(&mut self) {
+        // Every class's `dealloc` is this one entry, so the answer after a
+        // panic names the ivars whose destructor failed. It runs inside the
+        // boundary, as an argument computed before the call would not, and
+        // under a containment of its own, as the first log is: a subscriber
+        // is user code, and an answer that panics ends the process.
+        os_entry(
+            "dealloc",
+            (),
+            AfterPanic::Answer(|()| {
+                contain_owner_callback(|| {
+                    tracing::error!(
+                        ivars = std::any::type_name::<T>(),
+                        "the destructor that panicked was of these ivars"
+                    );
+                });
+            }),
+            || {
+                // SAFETY: the value is initialized from `new` on, this is the
+                // only place that destroys it, and `drop` runs once: nothing
+                // reads it afterwards.
+                unsafe { std::mem::ManuallyDrop::drop(&mut self.0) }
+            },
+        );
+    }
+}
+
 /// End the process from inside an entry that has nothing to answer.
 #[cfg(any(
     target_os = "windows",
@@ -182,6 +278,7 @@ pub(crate) fn contain_owner_callback(body: impl FnOnce()) {
 #[cfg(any(
     target_os = "windows",
     target_os = "macos",
+    target_os = "ios",
     target_os = "android",
     all(test, not(target_arch = "wasm32"))
 ))]
@@ -243,7 +340,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use super::{AfterPanic, contain_os_entry, contain_owner_callback, os_entry};
+    use super::{AfterPanic, ContainedIvars, contain_os_entry, contain_owner_callback, os_entry};
 
     /// A subscriber that records, in order, the `args` and `panic` fields of
     /// each event and the events whose message is `answered`; or panics on
@@ -271,6 +368,7 @@ mod tests {
             match field.name() {
                 "panic" => self.0.push(format!("logged: {value}")),
                 "args" => self.0.push(format!("args: {value}")),
+                "ivars" => self.0.push(format!("ivars: {value}")),
                 _ => {}
             }
         }
@@ -403,6 +501,85 @@ mod tests {
             )
         });
         assert_eq!(answered, 3);
+    }
+
+    /// A class's ivars whose destructor panics are destroyed inside the
+    /// boundary: the panic is logged and does not reach objc2's `dealloc`,
+    /// and what the ivars hold after the failing field is still destroyed.
+    /// Red-check: destroy the value without the boundary.
+    #[test]
+    fn contained_ivars_keep_a_destructors_panic_inside_the_boundary() {
+        let (ivars, destroyed) = failing_ivars();
+        assert!(
+            !ivars.captures.0.load(Ordering::SeqCst),
+            "the ivars are read through the wrapper, untouched"
+        );
+
+        let (recorder, seen) = Recorder::recording();
+        tracing::subscriber::with_default(recorder, || drop(ivars));
+        assert_eq!(
+            *seen.lock().expect("the recorder is not poisoned"),
+            [
+                "logged: a destructor's failure".to_owned(),
+                format!("ivars: {}", std::any::type_name::<Ivars>()),
+            ],
+            "the failure names the class's ivars"
+        );
+        assert!(
+            destroyed.load(Ordering::SeqCst),
+            "the captures after the failing field are destroyed"
+        );
+    }
+
+    /// A subscriber that panics on the diagnostics after an ivars' destructor
+    /// panicked leaves the teardown complete and the process running: each
+    /// log after the caught panic is contained, as the first one is.
+    /// Red-check: log the ivars' type without its own containment (the
+    /// answer's panic ends the process).
+    #[test]
+    fn contained_ivars_survive_a_subscriber_that_panics() {
+        let (ivars, destroyed) = failing_ivars();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Recorder {
+            panics: true,
+            seen: Arc::clone(&seen),
+        };
+        tracing::subscriber::with_default(recorder, || drop(ivars));
+        assert!(
+            destroyed.load(Ordering::SeqCst),
+            "the captures after the failing field are destroyed"
+        );
+        assert!(
+            seen.lock()
+                .expect("the recorder is not poisoned")
+                .is_empty(),
+            "no event was recorded: the subscriber panicked on each"
+        );
+    }
+
+    /// A destructor that panics.
+    struct Fails;
+
+    impl Drop for Fails {
+        fn drop(&mut self) {
+            panic!("a destructor's failure");
+        }
+    }
+
+    /// Ivars whose first field's destructor panics, and whose second records
+    /// that it was destroyed.
+    struct Ivars {
+        _handler: Fails,
+        captures: Payload,
+    }
+
+    fn failing_ivars() -> (ContainedIvars<Ivars>, Arc<AtomicBool>) {
+        let destroyed = Arc::new(AtomicBool::new(false));
+        let ivars = ContainedIvars::new(Ivars {
+            _handler: Fails,
+            captures: Payload(Arc::clone(&destroyed)),
+        });
+        (ivars, destroyed)
     }
 
     /// A panic payload whose destructor is user code: it records that it ran.

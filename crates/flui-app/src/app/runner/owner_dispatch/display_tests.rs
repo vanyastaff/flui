@@ -508,10 +508,10 @@ fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
     let colour_of = |win: &Win| super::super::host::display_color_of(win.window.as_ref());
     assert_eq!(
         colour_of(&left),
-        Some(DisplayColor::standard(ColorGamut::Srgb))
+        Some(DisplayColor::Standard(ColorGamut::Srgb))
     );
 
-    let hdr = DisplayColor::high(
+    let hdr = DisplayColor::High(
         ColorGamut::Rec2020,
         Ok(Headroom::try_new(3.0).expect("headroom")),
     );

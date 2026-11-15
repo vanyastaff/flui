@@ -70,7 +70,7 @@ use crate::host;
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::call_point::{Called, Field, call, install, retire};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel};
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::owner::sources::SystemPreferenceSource;
 use crate::{
     owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::AppHandler,
@@ -1034,11 +1034,12 @@ define_class!(
     // SAFETY:
     // - `NSObject` has no subclassing requirements beyond what the runtime
     //   already provides.
-    // - This class does not implement `Drop`.
+    // - This class does not implement `Drop` and has no ivars: UIKit makes
+    //   it through `NSObject`'s `init`, and the platform is reached through
+    //   the thread-local session slot (`DELEGATE_STATE`).
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "FluiAppDelegate"]
-    #[ivars = FluiDelegateIvars]
     pub struct FluiAppDelegate;
 
     impl FluiAppDelegate {
@@ -1108,10 +1109,6 @@ define_class!(
     // only those declared above, with UIKit's signatures, on the main thread.
     unsafe impl UIApplicationDelegate for FluiAppDelegate {}
 );
-
-/// The delegate holds no state of its own; the platform is reached through
-/// the thread-local session slot (see [`DELEGATE_STATE`]).
-pub struct FluiDelegateIvars;
 
 impl FluiAppDelegate {
     fn with_platform(body: impl FnOnce(&IOSLoop)) {
@@ -1722,7 +1719,7 @@ define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "FluiSceneDelegate"]
-    #[ivars = SceneDelegateIvars]
+    #[ivars = ContainedIvars<SceneDelegateIvars>]
     pub struct FluiSceneDelegate;
     impl FluiSceneDelegate {
         /// UIKit needs the initialised delegate; a panic leaves none to give,
@@ -1730,7 +1727,7 @@ define_class!(
         #[unsafe(method_id(init))]
         fn init(this: Allocated<Self>) -> Retained<Self> {
             os_entry("FluiSceneDelegate's init", (), AfterPanic::Abort, || {
-                let this = this.set_ivars(SceneDelegateIvars { origin: RefCell::new(None) });
+                let this = this.set_ivars(ContainedIvars::new(SceneDelegateIvars { origin: RefCell::new(None) }));
                 // SAFETY: `NSObject`'s `init` on the allocated receiver whose
                 // Rust ivars were set just above, as `define_class!` requires.
                 unsafe { objc2::msg_send![super(this), init] }

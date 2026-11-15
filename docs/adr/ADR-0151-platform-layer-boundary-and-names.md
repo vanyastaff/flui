@@ -8,12 +8,6 @@
 - **Amended:** 2026-10-22 — section 8: the Activity enters the core host through one function,
   `android_platform(app)`; the confirmation checks the core host's paths on every target it builds
   a host for.
-- **Amended:** 2026-10-22 — section 16: the boundary every OS entry's body calls is
-  `owner::panic_boundary::os_entry` (`crates/flui-native/src/owner/panic_boundary.rs`), and
-  `cargo xtask panic-boundary` is the gate. A panic out of an `extern "C"` frame is not undefined
-  behaviour, as the section says: since Rust 1.81 it aborts the process, with nothing in FLUI's
-  diagnostics; out of an `extern "C-unwind"` frame it unwinds through foreign frames not written
-  for it. Containment buys a logged failure and an answer the OS understands.
 - **Amended:** 2026-10-27 — sections 2 and 7: three items stay in the contract. `TransferCompleter`
   is the producer half every source makes with its request (`TransferRequest::pending()` returns
   both, so nothing claims a delivery before the request exists), test sources included;
@@ -692,10 +686,18 @@ secrets in diagnostics) are decided by the records the table cites.
 
 - **Zero CPU when idle.** Every OS signal is a notification; a timer poll is a defect, not a
   fallback.
-- **A panic in user code never unwinds into the OS.** A gate checks that every `extern "C"`
-  function and every OS callback passes `panic_boundary`
-  (`crates/flui-platform/src/shared/panic_boundary.rs`); an unwind into C is undefined behaviour,
-  and a missed boundary is invisible in review.
+- **A panic in user code never unwinds into the OS.** Every OS entry into the core host (an
+  `extern` function, an Objective-C or COM method, an AccessKit handler, a closure handed to the
+  OS) is a constant or one call of `owner::panic_boundary::os_entry`
+  (`crates/flui-native/src/owner/panic_boundary.rs`), or of an adapter of its file that is. The
+  `dealloc` objc2 generates for a class the host declares is an OS entry too, with no body in the
+  crate: a class keeps its Rust state in `owner::panic_boundary::ContainedIvars`, whose destructor
+  is one `os_entry` call, so the ivars are destroyed inside the boundary, and a class's own `Drop`
+  follows the entry rule. A panic out of an `extern "C"` frame aborts the process with nothing in
+  FLUI's diagnostics, and out of an `extern "C-unwind"` frame it unwinds through foreign frames
+  not written for it; containment buys a logged failure and an answer the OS understands. A
+  missed boundary is invisible in review, so `cargo xtask panic-boundary` checks every entry and
+  every `define_class!`.
 - **One monotonic timeline** for input, frames and presentation: `EventTime` carries all three.
 - **Presentation feedback reaches the frame clock**, from the source each OS has: DXGI frame
   statistics on Windows, `addPresentedHandler` on Apple platforms, `wp_presentation_time` on
@@ -795,7 +797,8 @@ directories). They add no area to it.
   and macOS AccessKit adapters without a flag, and the AT-SPI adapter builds in every build of the
   Linux host, where a real-loop test reads it from a window under Xvfb.
 - The panic-boundary gate fails on a planted `extern "C"` function or OS callback that does not
-  pass `panic_boundary` (a `--self-test` case, as the other gates have).
+  call `os_entry`, and on a planted `define_class!` whose ivars are not `ContainedIvars` or whose
+  own `Drop` does not call it (`--self-test` cases, as the other gates have).
 - Native behaviour is run per platform and recorded in `docs/platform-parity.md` (a cell is marked
   done only after a run on that platform); a change to a native host shows its run in the pull
   request.

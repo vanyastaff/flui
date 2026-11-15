@@ -62,7 +62,7 @@ use crate::owner::apple::ios::{
     IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer, SceneDelivery,
     SceneInstallation, SceneWindow, SceneWindows,
 };
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::owner::signal::OwnerSignal;
 use crate::owner::window_delivery::{Retirement, WindowDelivery};
 use crate::platform::HostPlatform;
@@ -84,12 +84,8 @@ use flui_platform::{
 use status_bar::FluiViewController;
 pub(crate) use status_bar::IOSSystemChrome;
 
-/// The content view: a `UIView` subclass that forwards touches.
-///
-/// `objc2`'s `define_class!` requires the ivars be declared on the class; the
-/// callback storage is reached through a `Retained` held in an ivar rather
-/// than a raw pointer ivar as the macOS backend does, so the view owns its
-/// callbacks and there is no separate deallocation step.
+/// Where a content view stands between its scene attachments, which decides
+/// whether it may report metrics and for which window.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SamplingAdmission {
     Detached,
@@ -101,6 +97,15 @@ enum SamplingAdmission {
     Retiring,
 }
 
+/// What the content view keeps: its window's delivery, touches and text
+/// input, and what it samples for the window.
+///
+/// The view outlives the window that made it whenever something else still
+/// holds it: UIKit's hierarchy, or the autorelease pool each native callback
+/// pins it in (`pin_for_native_callback`), which UIKit drains after the
+/// callback returned. Its touches belong to it alone. So the view can be the
+/// last owner of all of this, and the class declares these ivars as
+/// `ContainedIvars`, which destroys them inside the panic boundary.
 pub struct FluiViewIvars {
     delivery: Arc<WindowDelivery>,
     /// The window's text input, which keeps the text size captured from the
@@ -157,14 +162,15 @@ define_class!(
     // SAFETY:
     // - `UIView` does not have any subclassing requirements beyond those the
     //   superclass already satisfies.
-    // - The class does not implement `Drop`, so `define_class!`'s
-    //   `dealloc` story is the superclass's.
+    // - The class does not implement `Drop`; the `dealloc` objc2 generates
+    //   destroys its ivars, which `ContainedIvars` keeps inside the panic
+    //   boundary, and then runs the superclass's.
     //
     /// The `UIView` subclass that forwards touches to the window's callbacks.
     #[unsafe(super(UIView))]
     #[thread_kind = MainThreadOnly]
     #[name = "FluiView"]
-    #[ivars = FluiViewIvars]
+    #[ivars = ContainedIvars<FluiViewIvars>]
     struct FluiView;
 
     // Every method runs its body in the panic boundary: a panic answers UIKit
@@ -468,7 +474,7 @@ impl FluiView {
     ) -> Retained<Self> {
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
         let this = mtm.alloc::<Self>();
-        let this = this.set_ivars(FluiViewIvars {
+        let this = this.set_ivars(ContainedIvars::new(FluiViewIvars {
             delivery,
             text: std::cell::OnceCell::new(),
             accessibility: crate::owner::accessibility_slot::AccessibilitySlot::default(),
@@ -488,7 +494,7 @@ impl FluiView {
             dark,
             gesture_stamp: std::cell::Cell::new(None),
             keyboard: std::cell::Cell::new(None),
-        });
+        }));
         // SAFETY: `initWithFrame:` is `UIView`'s designated initializer; the
         // `super(this)` receiver is the partially-initialized allocation with
         // its ivars already set above, which is the `define_class!` idiom.
@@ -2212,7 +2218,7 @@ pub(crate) mod status_bar {
 
     use flui_platform::{PlatformSystemChrome, SystemUiOverlayStyle};
 
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
+    use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 
     use crate::owner::apple::ios::NativeOwner;
 
@@ -2252,8 +2258,8 @@ pub(crate) mod status_bar {
         // - `UIViewController` has no subclassing requirements beyond those the
         //   superclass already satisfies.
         // - The class does not implement `Drop`; its ivars are an `Arc` and a
-        //   `Cell` of a plain integer, so the superclass's `dealloc` is the whole
-        //   story.
+        //   `Cell` of a plain integer, destroyed inside the panic boundary
+        //   like every class's (`ContainedIvars`).
         //
         /// The root view controller, reporting the status-bar style the content
         /// asked for and answering `preferredScreenEdgesDeferringSystemGestures`
@@ -2262,7 +2268,7 @@ pub(crate) mod status_bar {
         #[unsafe(super(UIViewController))]
         #[thread_kind = MainThreadOnly]
         #[name = "FluiViewController"]
-        #[ivars = FluiViewControllerIvars]
+        #[ivars = ContainedIvars<FluiViewControllerIvars>]
         pub(super) struct FluiViewController;
 
         // A panic answers what a plain `UIViewController` would: the default
@@ -2297,10 +2303,12 @@ pub(crate) mod status_bar {
             style: Arc<AtomicU8>,
             deferred_edges: UIRectEdge,
         ) -> Retained<Self> {
-            let this = mtm.alloc::<Self>().set_ivars(FluiViewControllerIvars {
-                style,
-                deferred_edges: Cell::new(deferred_edges),
-            });
+            let this =
+                mtm.alloc::<Self>()
+                    .set_ivars(ContainedIvars::new(FluiViewControllerIvars {
+                        style,
+                        deferred_edges: Cell::new(deferred_edges),
+                    }));
             // SAFETY: `init` reaches UIViewController's designated initializer
             // with no nib; the receiver is the allocation whose ivars were set
             // above, which is the `define_class!` idiom.

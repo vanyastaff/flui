@@ -616,9 +616,14 @@ impl FrameClock {
         }
     }
 
-    /// The first refresh strictly after `now` at which a frame can next reach
-    /// the screen: on the grid of refreshes the newest report starts, one
-    /// refresh interval apart, or the report itself when it lies after `now`.
+    /// The first refresh after both `now` and the newest report at which a
+    /// frame can next reach the screen: on the grid of refreshes that report
+    /// starts, one refresh interval apart.
+    ///
+    /// A report is of a frame already shown, never a prediction, so the
+    /// refresh it names has passed even where it lies after `now` (a reading
+    /// taken before the report arrived): the next one is a refresh after it,
+    /// never the report itself.
     ///
     /// `None` without a report, without a refresh interval in it, or past
     /// eight refreshes from it: a report that
@@ -627,16 +632,18 @@ impl FrameClock {
     #[must_use]
     pub fn next_presentation_after(&self, now: Instant) -> Option<Instant> {
         let report = self.last_presentation.get()?;
-        if report.at > now {
-            return Some(report.at);
-        }
         // Zero is no interval; `FramePresented` already makes it none, and
         // this keeps the division below defined whatever a caller passes.
         let refresh = report.refresh?.as_nanos();
         if refresh == 0 {
             return None;
         }
-        let refreshes = now.duration_since(report.at).as_nanos() / refresh + 1;
+        // Nothing, for a report after `now`.
+        let since_report = now
+            .checked_duration_since(report.at)
+            .unwrap_or_default()
+            .as_nanos();
+        let refreshes = since_report / refresh + 1;
         if refreshes > u128::from(PRESENTATION_GRID_HORIZON) {
             return None;
         }
