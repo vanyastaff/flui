@@ -289,7 +289,7 @@ pub fn run_direct(
 
         // Deliberately unconditional, unlike `run_desktop`'s and
         // `open_secondary_window`'s windows, which route this through the
-        // close-request router (issue #558). Direct mode installs no
+        // close-request router. Direct mode installs no
         // `UiRuntime` at all (see step 6 above and `run_direct`'s own doc), so
         // there is no presentation for a veto to be addressed to and no
         // widget tree that could be holding unsaved work. An embedder that

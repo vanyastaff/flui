@@ -16,11 +16,11 @@ use crate::app::placement_recorder::{
     FLUSH_BUDGET, PlacementRecorder, recall, restore_into, settle,
 };
 
-/// What a window that remembers its placement opened with: where the
-/// placement is kept, and the one read there before the window opened.
+/// What a window that remembers its placement opens with: where the
+/// placement is kept, and the one read there before the window opens.
 ///
-/// [`restore`] makes it and [`keep`] takes it, so storage is resolved and
-/// read once for a window, before it opens, and the recorder starts from the
+/// Storage is resolved and read once for a window, here, and the value
+/// travels with the window to its recorder, which so starts from the
 /// placement the window really opened from.
 pub(super) struct RememberedPlacement {
     storage: Arc<dyn Storage>,
@@ -29,95 +29,101 @@ pub(super) struct RememberedPlacement {
     recalled: Option<WindowPlacement>,
 }
 
-/// Open `options` where `config`'s window was last time, when the
-/// configuration asks to remember placement and the host has storage for it.
-/// Returns what [`keep`] records the window's placement with; `None` for a
-/// window that remembers nothing.
-///
-/// The fit uses what the platform says of its windows before one exists: the
-/// capabilities (a platform that cannot place a window at open keeps size and
-/// mode only) and the frame a decorated window adds to its content size.
-pub(super) fn restore(
-    options: &mut WindowOptions,
-    config: &AppConfig,
-) -> Option<RememberedPlacement> {
-    let name = config.placement?;
-    let Some(storage) = runtime_storage() else {
-        tracing::warn!(
-            storage = name.as_str(),
-            "a window asks to remember its placement but the host has no storage; \
-             give the application an identifier or set `AppConfig::storage_dir`"
-        );
-        return None;
-    };
-    let recalled = recall(&*storage, &name);
-    if let Some(placement) = &recalled {
-        let restored = with_owner_platform(|owner| {
-            let displays = owner.display_snapshot().ok()?;
-            restore_into(
-                options,
-                placement,
-                &displays,
-                &owner.window_capabilities(),
-                |scale| owner.window_frame_inset(scale),
-            );
-            Some(())
-        });
-        if restored.flatten().is_none() {
-            tracing::debug!(
+impl RememberedPlacement {
+    /// What `config`'s window remembers, read from the host's storage now;
+    /// `None` when the configuration asks for no placement or the host has
+    /// no storage to keep one in.
+    pub(super) fn recall(config: &AppConfig) -> Option<Self> {
+        let name = config.placement?;
+        let Some(storage) = runtime_storage() else {
+            tracing::warn!(
                 storage = name.as_str(),
-                "no platform or displays to fit the stored window placement to"
+                "a window asks to remember its placement but the host has no storage; \
+                 give the application an identifier or set `AppConfig::storage_dir`"
             );
-        }
+            return None;
+        };
+        let recalled = recall(&*storage, &name);
+        Some(Self {
+            storage,
+            name,
+            recalled,
+        })
     }
-    Some(RememberedPlacement {
-        storage,
-        name,
-        recalled,
-    })
-}
 
-/// Start recording the placement of the window presented at `address`, which
-/// opened with `remembered`.
-pub(super) fn keep(remembered: RememberedPlacement, address: PresentationAddress) {
-    let RememberedPlacement {
-        storage,
-        name,
-        recalled,
-    } = remembered;
-    let Some(handle) = APP_RUNTIME.with(|slot| slot.borrow().window_commands.handle_for(address))
-    else {
-        return;
-    };
-    // Storage answers on its own thread: wake the owner, which takes the answer
-    // at its next turn.
-    let Some(proxy) = with_owner_platform(flui_native::OwnerPlatform::proxy) else {
-        return;
-    };
-    let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-        let _ = proxy.wake();
-    });
-    let recorder = Rc::new(PlacementRecorder::new(
-        storage,
-        name,
-        recalled.as_ref(),
-        wake_owner,
-    ));
-    let weak = Rc::downgrade(&recorder);
-    let Ok((state, subscription)) = handle.subscribe(move |state| {
-        if let Some(recorder) = weak.upgrade() {
-            recorder.observe(state, &current_displays(), Instant::now());
-        }
-    }) else {
-        return;
-    };
-    recorder.hold(subscription);
-    recorder.observe(&state, &current_displays(), Instant::now());
-    APP_RUNTIME.with(|slot| {
-        slot.borrow_mut()
-            .placement_recorders
-            .push((address, recorder));
-    });
+    /// Open `options` where the window was last time, on `owner`.
+    ///
+    /// The fit uses what the platform says of its windows before one exists:
+    /// the capabilities (a platform that cannot place a window at open keeps
+    /// size and mode only) and the frame a decorated window adds to its
+    /// content size.
+    pub(super) fn restore_into(
+        &self,
+        options: &mut WindowOptions,
+        owner: &flui_native::OwnerPlatform,
+    ) {
+        let Some(placement) = &self.recalled else {
+            return;
+        };
+        let Ok(displays) = owner.display_snapshot() else {
+            tracing::debug!(
+                storage = self.name.as_str(),
+                "no displays to fit the stored window placement to"
+            );
+            return;
+        };
+        restore_into(
+            options,
+            placement,
+            &displays,
+            &owner.window_capabilities(),
+            |scale| owner.window_frame_inset(scale),
+        );
+    }
+
+    /// Start recording the placement of the window presented at `address`,
+    /// which opened with this.
+    pub(super) fn keep(self, address: PresentationAddress) {
+        let Self {
+            storage,
+            name,
+            recalled,
+        } = self;
+        let Some(handle) =
+            APP_RUNTIME.with(|slot| slot.borrow().window_commands.handle_for(address))
+        else {
+            return;
+        };
+        // Storage answers on its own thread: wake the owner, which takes the answer
+        // at its next turn.
+        let Some(proxy) = with_owner_platform(flui_native::OwnerPlatform::proxy) else {
+            return;
+        };
+        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = proxy.wake();
+        });
+        let recorder = Rc::new(PlacementRecorder::new(
+            storage,
+            name,
+            recalled.as_ref(),
+            wake_owner,
+        ));
+        let weak = Rc::downgrade(&recorder);
+        let Ok((state, subscription)) = handle.subscribe(move |state| {
+            if let Some(recorder) = weak.upgrade() {
+                recorder.observe(state, &current_displays(), Instant::now());
+            }
+        }) else {
+            return;
+        };
+        recorder.hold(subscription);
+        recorder.observe(&state, &current_displays(), Instant::now());
+        APP_RUNTIME.with(|slot| {
+            slot.borrow_mut()
+                .placement_recorders
+                .push((address, recorder));
+        });
+    }
 }
 
 /// The window at `address` is closing: write its last placement and forget it.
@@ -176,3 +182,7 @@ fn current_displays() -> DisplaySnapshot {
         })
         .unwrap_or_else(DisplaySnapshot::empty)
 }
+
+#[cfg(all(test, feature = "testing"))]
+#[path = "placement_tests.rs"]
+mod tests;

@@ -3218,7 +3218,7 @@ Opt-in rather than the backend's default, because the reveal report is a
 promise only a frame-loop owner can keep, and the promise is selected at the
 one place that keeps it: `flui-app`'s desktop runner asks for
 `AfterFirstFrame` at its two open sites (the main window and a content-bearing
-secondary window, through `runner::desktop::rendered_window_options`), whose
+secondary window, through `runner::desktop::OpeningWindow::open`), whose
 frame closure performs the reveal. Its shared `From<&AppConfig> for
 WindowOptions` conversion stays at `AtOpen` on purpose — `run_direct` and the
 bare `open_secondary_window` use it and have no frame loop that would reveal.

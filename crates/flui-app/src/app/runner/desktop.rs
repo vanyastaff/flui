@@ -18,6 +18,7 @@ use super::owner_dispatch::{
 };
 use super::placement::RememberedPlacement;
 use super::raster_host::RasterSlot;
+use super::window_routes::WindowRoutes;
 use crate::app::AppConfig;
 
 pub(super) struct RenderedMain {
@@ -45,38 +46,75 @@ impl Drop for InstallRollback {
     }
 }
 
-/// The window options for a window this module's runner will drive:
-/// [`From<&AppConfig>`]'s options with the reveal deferred to the first
-/// presented frame. The deferral is a promise to call
-/// `PlatformWindow::reveal_after_first_frame`, and [`install_desktop_window`]
-/// is what keeps it (the [`FirstReveal`] policy wired into its frame
-/// closure), so only the two open sites that install it — the main window
-/// and a content-bearing secondary window — ask for it. `run_direct` and the
-/// bare `open_secondary_window` convert `AppConfig` directly and reveal at
-/// open, because nothing in them would ever perform the reveal.
+/// What a window this module's runner renders into carries from its open to
+/// its installation: the handler it is opened with, and the placement it
+/// opens from when it remembers one.
 ///
-/// A window that remembers its placement opens where it was: the second
-/// value is what it opened with, which [`install_desktop_window`] takes to
-/// record the placement from then on.
-pub(super) fn rendered_window_options(
-    config: &AppConfig,
-) -> (flui_platform::WindowOptions, Option<RememberedPlacement>) {
-    let mut options = flui_platform::WindowOptions::from(config)
-        .reveal(flui_platform::WindowReveal::AfterFirstFrame);
-    // Read before the window opens, so its first reveal is already in place.
-    let remembered = super::placement::restore(&mut options, config);
-    (options, remembered)
+/// The main window and a content-bearing secondary window are opened with
+/// one; [`install_desktop_window`] takes it.
+pub(super) struct OpeningWindow {
+    routes: Rc<WindowRoutes>,
+    remembered: Option<RememberedPlacement>,
 }
 
-/// Install `root` in `host`, a window opened with
-/// [`rendered_window_options`], whose `remembered` placement it is given.
+impl OpeningWindow {
+    /// What the window `config` describes carries: fresh routes, and its
+    /// remembered placement, read from storage here, before the window
+    /// opens, so its first reveal is already in place.
+    pub(super) fn new(config: &AppConfig) -> Self {
+        Self {
+            routes: WindowRoutes::new(),
+            remembered: RememberedPlacement::recall(config),
+        }
+    }
+
+    /// Open the window on `owner`: [`From<&AppConfig>`]'s options, where the
+    /// window was last time when it remembers a placement, with the reveal
+    /// deferred to the first presented frame.
+    ///
+    /// The deferral is a promise to call
+    /// `PlatformWindow::reveal_after_first_frame`, and
+    /// [`install_desktop_window`] is what keeps it (the [`FirstReveal`]
+    /// policy wired into its frame closure), so only the windows it installs
+    /// open this way. `run_direct` and the bare `open_secondary_window`
+    /// convert `AppConfig` directly and reveal at open, because nothing in
+    /// them would ever perform the reveal.
+    pub(super) fn open(
+        &self,
+        config: &AppConfig,
+        owner: &flui_native::OwnerPlatform,
+    ) -> Result<flui_native::WindowOpen, flui_native::OpenWindowError> {
+        let mut options = flui_platform::WindowOptions::from(config)
+            .reveal(flui_platform::WindowReveal::AfterFirstFrame);
+        if let Some(remembered) = &self.remembered {
+            remembered.restore_into(&mut options, owner);
+        }
+        owner.open_window(options, self.routes.clone())
+    }
+
+    /// The native window exists: the routes it was opened with are found by
+    /// its id from now on.
+    pub(super) fn adopt(&self, window: flui_platform::WindowId) {
+        self.routes.adopt(window);
+    }
+
+    /// Record the placement of the window, presented at `address`, from now
+    /// on, when it remembers one.
+    fn keep_placement(self, address: flui_foundation::PresentationAddress) {
+        if let Some(remembered) = self.remembered {
+            remembered.keep(address);
+        }
+    }
+}
+
+/// Install `root` in `host`, the window `opening` opened.
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
     worker_reload: WorkerReload,
     host: Rc<dyn HostWindow>,
     host_lifecycle: AppLifecycleState,
-    remembered: Option<RememberedPlacement>,
+    opening: OpeningWindow,
 ) -> Result<RenderedMain, crate::app::AppWindowError>
 where
     V: View + Clone + 'static,
@@ -123,7 +161,7 @@ where
     ui_runtime.set_performance_overlay(config.show_performance_overlay);
     ui_runtime.set_motion_override(config.motion_override);
 
-    // Typed frame-failure route (issue #561): failures are contained
+    // Typed frame-failure route: failures are contained
     // per presentation either way; this only adds the embedder's
     // delivery.
     config.install_frame_failure_handler(&ui_runtime);
@@ -297,9 +335,7 @@ where
     // `Platform::run` actually returns, for the clipboard/redraw-window
     // cleanup no per-window close performs.
     let closing_window_id = window.id();
-    if let Some(remembered) = remembered {
-        super::placement::keep(remembered, owner_dispatch.address);
-    }
+    opening.keep_placement(owner_dispatch.address);
     installation.on_close(move || {
         tracing::info!("Window closed");
         super::placement::finish(owner_dispatch.address);
@@ -317,7 +353,7 @@ where
         // window's native teardown (and, before the platform's own
         // callback clear existed, the GPU surface teardown chained
         // behind it) to after the loop was gone: the Wayland post-quit
-        // SIGSEGV of issue #713. Keyed by id, not unconditional, so
+        // SIGSEGV. Keyed by id, not unconditional, so
         // closing a `WindowPolicy::Shared` sibling never unpins the primary.
         // Dropped outside the TLS borrow: the native window's own drop
         // may re-enter platform code.

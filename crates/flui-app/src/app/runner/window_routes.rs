@@ -117,11 +117,20 @@ struct Held {
     /// Every input, in order, with no bound on their number: a bound would
     /// drop input, and a release that is dropped leaves its press held for
     /// good. What bounds them is how long a window is without its input
-    /// route. Every runner sets it in the owner turn that opens the window,
-    /// or, for a deferred open, in the turn its completion asks for; the one
-    /// window whose presentation takes several turns to build (a secondary
-    /// window with content) is revealed by its first frame, so nothing points
-    /// at it before.
+    /// route, which is one owner turn at most:
+    ///
+    /// - the window's capability snapshot is always held, since the platform
+    ///   delivers it inside the call that opens the window;
+    /// - the main window, a bare secondary window, and the Android, iOS, web
+    ///   and direct windows get their route in the call that opens them, or,
+    ///   opened from inside an owner turn, by the end of that turn;
+    /// - a secondary window with content, and a window whose open the
+    ///   platform deferred, get it in the owner's next turn, which the open
+    ///   wakes the owner for. What the window system delivers to the window
+    ///   between those two turns is what waits here.
+    ///
+    /// `every_runner_path_routes_input_by_the_end_of_its_installing_turn`
+    /// holds this for the paths the headless platform runs.
     inputs: VecDeque<PlatformInput>,
     /// A state change is owed.
     state_changed: bool,
@@ -408,6 +417,14 @@ impl WindowRoutes {
             _surface_changed: self.surface_changed.0.borrow_mut(),
             _held: self.held.borrow_mut(),
         }
+    }
+
+    /// How many inputs wait for the input route; `None` once the route is
+    /// set and has heard them all, so input reaches the presentation as it
+    /// arrives.
+    pub(crate) fn inputs_waiting(&self) -> Option<usize> {
+        let waiting = self.held.borrow().inputs.len();
+        (waiting > 0 || !self.input.is_set()).then_some(waiting)
     }
 }
 

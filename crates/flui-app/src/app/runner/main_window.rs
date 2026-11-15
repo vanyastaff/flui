@@ -2,10 +2,9 @@
 #[cfg(test)]
 #[path = "host_delivery_tests.rs"]
 mod host_delivery_tests;
-use super::placement::RememberedPlacement;
 use super::raster_host::RasterFactory;
 use super::{
-    desktop::{RenderedMain, install_desktop_window},
+    desktop::{OpeningWindow, RenderedMain, install_desktop_window},
     host::{
         APP_RUNTIME, OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform,
         install_platform_quit_hook, runtime_wake_callback, with_owner_platform,
@@ -41,7 +40,7 @@ type Installer = Box<
         &AppHandle,
         Rc<dyn HostWindow>,
         flui_scheduler::AppLifecycleState,
-        Option<RememberedPlacement>,
+        OpeningWindow,
     ) -> Result<RenderedMain, AppWindowError>,
 >;
 
@@ -53,12 +52,8 @@ pub(in crate::app) struct MainController {
     open: Option<RenderedMain>,
     installing: Option<RenderedMain>,
     pending: Option<PendingWindow>,
-    /// The handler the window being opened was opened with, until it is
-    /// installed.
-    routes: Option<Rc<super::window_routes::WindowRoutes>>,
-    /// The placement the window being opened was opened from, until it is
-    /// installed.
-    remembered: Option<RememberedPlacement>,
+    /// What the window being opened carries, until it is installed.
+    opening: Option<OpeningWindow>,
     pending_wake: Option<Arc<OpenWake>>,
     closing: bool,
     initial: bool,
@@ -276,11 +271,9 @@ impl MainController {
         }
         // Deferred reveal: this window is installed through
         // `install_desktop_window`, which performs the reveal.
-        let (options, remembered) = super::desktop::rendered_window_options(&self.config);
-        let routes = super::window_routes::WindowRoutes::new();
-        let opened = with_owner_platform(|owner| owner.open_window(options, routes.clone()));
-        self.routes = Some(routes);
-        self.remembered = remembered;
+        let opening = OpeningWindow::new(&self.config);
+        let opened = with_owner_platform(|owner| opening.open(&self.config, owner));
+        self.opening = Some(opening);
         if !self.is_current() {
             match opened {
                 Some(Ok(WindowOpen::Ready(window))) => contain(|| {
@@ -327,10 +320,11 @@ impl MainController {
         }
     }
     fn install(&mut self, window: Rc<dyn HostWindow>) {
-        if let Some(routes) = self.routes.take() {
-            routes.adopt(window.id());
-        }
-        let remembered = self.remembered.take();
+        let opening = self
+            .opening
+            .take()
+            .expect("BUG: a main window is installed once, by the open that carries its routes");
+        opening.adopt(window.id());
         if !self.is_current() {
             contain(|| {
                 super::discard_window(window.as_ref(), "a main window nobody waits for");
@@ -351,7 +345,7 @@ impl MainController {
                 &self.ingress.handle(),
                 Rc::clone(&window),
                 host,
-                remembered,
+                opening,
             )
         }));
         let result = match result {
@@ -1100,7 +1094,7 @@ where
                 let installer_config = config.clone();
                 let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
                 let factory_identity = Arc::clone(&identity);
-                let installer = Box::new(move |handle: &AppHandle, window, host, remembered| {
+                let installer = Box::new(move |handle: &AppHandle, window, host, carried| {
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "ADR-0287: a root factory's panic becomes a window install error"
@@ -1128,7 +1122,7 @@ where
                         reload.clone(),
                         window,
                         host,
-                        remembered,
+                        carried,
                     )
                 });
                 APP_RUNTIME.with(|slot| {
@@ -1140,8 +1134,7 @@ where
                         open: None,
                         installing: None,
                         pending: None,
-                        routes: None,
-                        remembered: None,
+                        opening: None,
                         pending_wake: None,
                         closing: false,
                         initial: startup == StartupWindow::Open,
@@ -1237,8 +1230,7 @@ mod tests {
                 open: None,
                 installing: None,
                 pending: None,
-                routes: None,
-                remembered: None,
+                opening: None,
                 pending_wake: None,
                 closing: false,
                 initial: false,

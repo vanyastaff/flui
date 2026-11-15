@@ -239,7 +239,7 @@ pub fn window_handle(
 }
 
 /// Close the window at `address` programmatically, bypassing its
-/// close-request handler (issue #558).
+/// close-request handler.
 ///
 /// This is how an application finishes a close it kept open: a
 /// [`CloseRequestHandler`](crate::CloseRequestHandler) that answered

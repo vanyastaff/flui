@@ -487,15 +487,26 @@ set the route gives the answer (`WindowRoutes::route_frame_requested` takes
 `dispatch_platform_frame`:
 
 - a frame the owner accepted is `Produced`, whether it ran in the call or
-  joined the owner turn that is running. That turn runs it, and the platform
-  has no later moment to count it, so answering `Declined` would leave work
-  the frame put back at the same instant unasked for;
-- a request the owner refused (the UI runtime was replaced, the presentation
-  is gone or closing, the host is shut) is `Declined`: no frame ran and none
-  will, and `Produced` would have the loop arm the same due instant on every
-  iteration for as long as a deadline nothing serves stays due.
+  joined the owner turn that is running. That turn runs it once, and the
+  platform has no later moment to count it, so answering `Declined` would
+  leave work the frame put back at the same instant unasked for. A host that
+  shuts inside that turn drops the frame it had queued: the platform counted
+  it, asks once more, and that request is refused;
+- a request whose presentation is gone is `Declined`, by name: the UI runtime
+  was replaced (`StaleRuntime`), the binding is another presentation's
+  (`StalePresentation`), the presentation is closing (`PresentationClosing`),
+  or no runtime is left and the host is shut (`RuntimeUnavailable`). No frame
+  ran and none will, and `Produced` would have the loop arm the same due
+  instant on every iteration for as long as a deadline nothing serves stays
+  due;
+- a request off the owner thread (`WrongThread`) or inside a pure publication
+  of the owner's registry (`Busy`) is a defect of this crate, and panics with
+  its invariant: a window calls its handler on the thread that opened it, and
+  nothing native runs inside a pure publication. The window contains the
+  panic and answers `Failed`.
 
-`a_frame_request_is_answered_by_what_became_of_it` holds the mapping, and
+`a_frame_request_is_answered_by_what_became_of_it` holds the mapping, the
+queued frame that runs once and the one a shut host drops, and
 `window_routes_contract` that the window passes the route's answer on.
 
 ### Native execution caps remain presentation-local

@@ -162,7 +162,7 @@ where
         ui_runtime.set_performance_overlay(config.show_performance_overlay);
         ui_runtime.set_motion_override(config.motion_override);
 
-        // Typed frame-failure route (issue #561) — same wiring as the
+        // Typed frame-failure route — same wiring as the
         // desktop bootstrap.
         config.install_frame_failure_handler(&ui_runtime);
         ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
@@ -203,7 +203,7 @@ where
         installation.dev_agent(agent_window);
         let owner_dispatch = installation.dispatcher();
 
-        // 3b. Start config-declared application services (issue #558) —
+        // 3b. Start config-declared application services —
         // same wiring and same failure contract as the desktop bootstrap:
         // the ui_runtime install above resolved the loop's execution services,
         // and a declared service failing to start fails the bootstrap
@@ -282,7 +282,7 @@ where
         // Native close and quit both revoke this binding before observers run.
         installation.terminal_callbacks();
 
-        // 8b. Surface availability (issue #1146): the release that has to
+        // 8b. Surface availability: the release that has to
         // happen before the native window behind the surface dies, and the
         // rebuild for the window that replaces it. `flui-native` reports
         // both out of its own event loop: `Release` on

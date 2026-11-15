@@ -8,7 +8,10 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use flui_runtime::{sink::SubmitVerdict, testing::ScriptedSink, ui_runtime::UiRuntime};
 
@@ -207,11 +210,24 @@ fn an_old_frame_binding_never_reaches_a_new_runtime() {
     teardown_platform_ui_runtime();
 }
 
+/// A driver that counts the frames it runs, whether or not one has a scene
+/// to present, installed for `installation`.
+fn frame_counting_driver(installation: WindowInstall) -> (FrameRegistration, Rc<Cell<u32>>) {
+    let frames = Rc::new(Cell::new(0));
+    let ran = Rc::clone(&frames);
+    let frame = installed_driver(
+        installation,
+        counting_sink(Arc::default()),
+        Some(Box::new(move || ran.set(ran.get() + 1))),
+    );
+    (frame, frames)
+}
+
 /// What a window's frame route answers the platform: `Produced` for a frame
 /// the owner ran, or took into the turn that is running, and `Declined` for a
-/// request whose runtime or presentation is gone. The platform asks again for
-/// work due at one instant after a frame that ran, so a refused request
-/// answered `Produced` would have it ask on every turn of its loop.
+/// request whose presentation is gone. The platform asks again for work due
+/// at one instant after a frame that ran, so a refused request answered
+/// `Produced` would have it ask on every turn of its loop.
 fn a_frame_request_is_answered_by_what_became_of_it() {
     use flui_platform::FrameOutcome;
 
@@ -221,8 +237,10 @@ fn a_frame_request_is_answered_by_what_became_of_it() {
     let replaced_frame = installed_driver(replaced, counting_sink(Arc::default()), None);
     let installation = prepared_runtime();
     let dispatcher = installation.dispatcher();
-    let scenes = Arc::new(AtomicUsize::new(0));
-    let frame = installed_driver(installation, counting_sink(Arc::clone(&scenes)), None);
+    let (frame, frames) = frame_counting_driver(installation);
+    let binding = frame.binding;
+    let ask =
+        move || dispatch_platform_frame(dispatcher, binding, flui_native::frame_request_now());
 
     // (case, dispatcher, binding, answer)
     let rows = [
@@ -241,7 +259,7 @@ fn a_frame_request_is_answered_by_what_became_of_it() {
         (
             "the installed presentation",
             dispatcher,
-            frame.binding,
+            binding,
             FrameOutcome::Produced,
         ),
     ];
@@ -253,33 +271,90 @@ fn a_frame_request_is_answered_by_what_became_of_it() {
         );
     }
     assert_eq!(
-        scenes.load(Ordering::SeqCst),
+        frames.get(),
         1,
         "only the installed presentation ran a frame"
     );
 
     // Asked from inside the owner turn that is running, the frame joins that
-    // turn: the owner accepted it, so it counts.
-    let nested = Rc::new(std::cell::Cell::new(None));
-    let answered = Rc::clone(&nested);
-    let binding = frame.binding;
+    // turn: the owner accepted it, so it counts, and the turn runs it once.
+    let nested = Rc::new(Cell::new(None));
+    let (answered, counted) = (Rc::clone(&nested), Rc::clone(&frames));
     dispatch_platform_ui_runtime(
         dispatcher,
         RuntimeTask::TestCallback(Box::new(move |_| {
-            answered.set(Some(dispatch_platform_frame(
-                dispatcher,
-                binding,
-                flui_native::frame_request_now(),
-            )));
+            answered.set(Some((ask(), counted.get())));
         })),
     )
     .expect("the outer turn");
     assert_eq!(
         nested.get(),
-        Some(FrameOutcome::Produced),
-        "a frame queued behind the running turn"
+        Some((FrameOutcome::Produced, 1)),
+        "a frame queued behind the running turn is accepted before it runs"
     );
-    teardown_platform_ui_runtime();
+    assert_eq!(
+        frames.get(),
+        2,
+        "the turn ran the frame it took: counted once, run once"
+    );
+
+    // A window calls its handler on the thread that opened it: a request from
+    // another one is this crate's defect, never a quiet refusal.
+    let off_thread = std::thread::spawn(ask)
+        .join()
+        .expect_err("a frame request off the owner thread was answered");
+    assert!(
+        flui_foundation::panic::payload_text(off_thread.as_ref())
+            .is_some_and(|text| text.starts_with("BUG:")),
+        "the request off the owner thread names its invariant"
+    );
+
+    // A presentation whose close the owner accepted refuses the frame asked
+    // for behind it, and once it is closed no runtime is left to ask.
+    let closing = Rc::new(Cell::new(None));
+    let answered = Rc::clone(&closing);
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::TestCallback(Box::new(move |_| {
+            close_this_window(dispatcher);
+            answered.set(Some(ask()));
+        })),
+    )
+    .expect("the closing turn");
+    assert_eq!(
+        closing.get(),
+        Some(FrameOutcome::Declined),
+        "a closing presentation"
+    );
+    assert_eq!(ask(), FrameOutcome::Declined, "a host with no runtime left");
+    assert_eq!(frames.get(), 2, "a refused request ran a frame");
+
+    // A frame the running turn took is dropped when the host shuts before
+    // the turn reaches it. The platform counted it once; the request that
+    // count brings is refused, so nothing is asked for twice.
+    let installation = prepared_runtime();
+    let dispatcher = installation.dispatcher();
+    let (frame, frames) = frame_counting_driver(installation);
+    let binding = frame.binding;
+    let ask =
+        move || dispatch_platform_frame(dispatcher, binding, flui_native::frame_request_now());
+    let shut = Rc::new(Cell::new(None));
+    let answered = Rc::clone(&shut);
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::TestCallback(Box::new(move |_| {
+            answered.set(Some(ask()));
+            teardown_platform_ui_runtime();
+        })),
+    )
+    .expect("the turn that shuts the host");
+    assert_eq!(
+        shut.get(),
+        Some(FrameOutcome::Produced),
+        "a frame queued behind the turn that shuts the host"
+    );
+    assert_eq!(frames.get(), 0, "a shut host ran the frame it had queued");
+    assert_eq!(ask(), FrameOutcome::Declined, "a shut host");
 }
 
 fn close_refuses_async_publication_without_cancelling_the_accepted_frame() {
