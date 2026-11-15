@@ -173,8 +173,9 @@ peak is not reported uses `h = 4.0`. The headroom is read when the surface is co
 - The amendment: `the_platform_colour_decides_the_display_state_over_the_surface_report`,
   `a_high_range_display_without_headroom_over_white_gets_no_hdr`,
   `wide_gamut_follows_the_display_gamut`,
-  `a_recreation_after_the_display_changes_resolves_its_new_range` (`flui-engine`),
-  `a_display_colour_change_reaches_the_renderer_before_the_frame` and
+  `a_recreation_after_the_display_changes_resolves_its_new_range`,
+  `a_windows_colour_and_latency_reach_the_backend_once_a_turn` (`flui-engine`; the raster slot
+  hands the backend the display colour before the frame of the same turn) and
   `a_surface_is_set_up_for_the_colour_of_its_window_s_display` (`flui-app`).
 - Not run: any HDR or P3 display on Windows, Linux or the Web, and every Metal space. Those cells in
   `docs/platform-parity.md` stay ❌ until a run on that platform.
