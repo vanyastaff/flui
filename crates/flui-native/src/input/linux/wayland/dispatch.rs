@@ -29,12 +29,10 @@ use flui_platform::{
     CursorError, EventTime, PlatformInput, Unsupported, UnsupportedReason, WindowId,
 };
 use wayland_client::protocol::wl_buffer::WlBuffer;
-use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_keyboard::{self, KeymapFormat, WlKeyboard};
 use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::{self, Capability, WlSeat};
-use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::protocol::wl_touch::{self, WlTouch};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child};
@@ -83,8 +81,8 @@ use crate::input::linux::xkb::{EVDEV_OFFSET, Keyboard, KeymapSource, keymap_leng
 use crate::owner::linux::wayland::ShownCursor;
 use crate::owner::linux::wayland::activation::UserInput;
 use crate::owner::linux::wayland::{
-    FramePointer, LastInput, SeatText, SeatWindow, TextRecorder, TextWire, WaylandInput,
-    WaylandState,
+    CursorGlobals, FramePointer, LastInput, SeatText, SeatWindow, TextRecorder, TextWire,
+    WaylandInput, WaylandState,
 };
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerCell;
@@ -101,8 +99,6 @@ const GESTURES_VERSION: u32 = 1;
 const CURSOR_SHAPE_VERSION: u32 = 1;
 /// The `wl_pointer` version from which events come in frames.
 const POINTER_FRAMES: u32 = 5;
-/// `wl_compositor` version 3: a cursor surface takes a buffer scale.
-const COMPOSITOR_VERSION: u32 = 3;
 /// The tablet tools a seat keeps: a pen, its eraser, an airbrush and a lens
 /// for each of a few tablets. A compositor announcing tools it never removes
 /// is refused past this rather than held forever.
@@ -270,25 +266,16 @@ struct Objects {
     tablet: Option<(u32, ZwpTabletManagerV2)>,
     gestures: Option<(u32, ZwpPointerGesturesV1)>,
     shapes: Option<(u32, WpCursorShapeManagerV1)>,
-    /// `wl_shm`, which theme cursors are drawn with.
-    shm: Option<(u32, WlShm)>,
-    /// `wl_compositor`, which makes the cursor surfaces.
-    compositor: Option<WlCompositor>,
-    /// The connection and queue the globals came on.
-    connection: Option<(Connection, QueueHandle<WaylandState>)>,
-    /// What theme cursors are drawn from, once all of it is bound.
-    cursor_source: Option<CursorSource>,
+    /// What theme cursors are drawn from: the loop's `wl_shm` and
+    /// `wl_compositor`, where the compositor has shared memory.
+    cursor_source: Option<CursorGlobals>,
 }
 
 impl Objects {
     /// Whether a global of `interface`, of which the input binds one, is
     /// bound already.
     fn holds(&self, interface: &str) -> bool {
-        if interface == WlShm::interface().name {
-            self.shm.is_some()
-        } else if interface == WlCompositor::interface().name {
-            self.compositor.is_some()
-        } else if interface == ZwpTabletManagerV2::interface().name {
+        if interface == ZwpTabletManagerV2::interface().name {
             self.tablet.is_some()
         } else if interface == ZwpPointerGesturesV1::interface().name {
             self.gestures.is_some()
@@ -297,19 +284,6 @@ impl Objects {
         } else {
             false
         }
-    }
-
-    /// Draw theme cursors once `wl_shm` and `wl_compositor` are both bound.
-    fn settle_cursor_source(&mut self) {
-        self.cursor_source = match (&self.shm, &self.compositor, &self.connection) {
-            (Some((_, shm)), Some(compositor), Some((connection, queue))) => Some(CursorSource {
-                connection: connection.clone(),
-                shm: shm.clone(),
-                compositor: compositor.clone(),
-                queue: queue.clone(),
-            }),
-            _ => None,
-        };
     }
 }
 
@@ -1022,13 +996,6 @@ impl WaylandInput for SeatInput {
         version: u32,
         queue: &QueueHandle<WaylandState>,
     ) {
-        self.shared.objects.with(|objects| {
-            if objects.connection.is_none()
-                && let Some(backend) = registry.backend().upgrade()
-            {
-                objects.connection = Some((Connection::from_backend(backend), queue.clone()));
-            }
-        });
         // One of each manager is bound: another announcement of one already
         // held would bind an object nothing destroys.
         if self
@@ -1043,24 +1010,7 @@ impl WaylandInput for SeatInput {
             );
             return;
         }
-        if interface == WlShm::interface().name {
-            let shm = registry.bind::<WlShm, CursorShm, WaylandState>(name, 1, queue, CursorShm);
-            self.shared.objects.with(|objects| {
-                objects.shm = Some((name, shm));
-                objects.settle_cursor_source();
-            });
-        } else if interface == WlCompositor::interface().name {
-            let compositor = registry.bind::<WlCompositor, (), WaylandState>(
-                name,
-                version.min(COMPOSITOR_VERSION),
-                queue,
-                (),
-            );
-            self.shared.objects.with(|objects| {
-                objects.compositor = Some(compositor);
-                objects.settle_cursor_source();
-            });
-        } else if interface == WlSeat::interface().name {
+        if interface == WlSeat::interface().name {
             self.bind_seat(registry, name, version, queue);
         } else if self.texts.speaks(interface) {
             if self.texts.holds_manager() {
@@ -1161,10 +1111,6 @@ impl WaylandInput for SeatInput {
                 {
                     objects.shapes = None;
                 }
-                if objects.shm.as_ref().is_some_and(|(held, _)| *held == name) {
-                    objects.shm = None;
-                    objects.settle_cursor_source();
-                }
                 let index = objects.seats.iter().position(|seat| seat.name == name)?;
                 Some(objects.seats.remove(index))
             })
@@ -1174,6 +1120,12 @@ impl WaylandInput for SeatInput {
             self.texts.seat_removed(&seat.seat);
             release_seat(seat, &self.shared, arrival(None));
         }
+    }
+
+    fn cursor_globals(&self, globals: CursorGlobals) {
+        self.shared
+            .objects
+            .with(|objects| objects.cursor_source = Some(globals));
     }
 
     fn deliver(&self) {
@@ -1372,24 +1324,8 @@ impl WaylandInput for SeatInput {
     }
 }
 
-/// `wl_shm` as the input binds it for theme cursors.
-pub(crate) struct CursorShm;
-
 /// A pointer's theme-cursor surface.
 pub(crate) struct CursorSurface;
-
-impl Dispatch<WlShm, CursorShm> for WaylandState {
-    fn event(
-        _: &mut Self,
-        _: &WlShm,
-        _: wl_shm::Event,
-        _: &CursorShm,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        // The formats it announces include the one cursor themes use.
-    }
-}
 
 impl Dispatch<WlSurface, CursorSurface> for WaylandState {
     fn event(
@@ -1448,7 +1384,7 @@ fn show_cursor(
 fn show_pointer_cursor(
     shared: &Shared,
     shapes: Option<u32>,
-    source: Option<&CursorSource>,
+    source: Option<&CursorGlobals>,
     pointer: &mut PointerObjects,
     serial: u32,
     cursor: CursorIcon,
@@ -1631,16 +1567,6 @@ fn frame_event(
     true
 }
 
-/// What a theme cursor is drawn from: the connection, `wl_shm` and
-/// `wl_compositor` the input bound, and the owner's queue.
-#[derive(Clone)]
-struct CursorSource {
-    connection: Connection,
-    shm: WlShm,
-    compositor: WlCompositor,
-    queue: QueueHandle<WaylandState>,
-}
-
 /// The cursor theme's name and its size at scale one: `XCURSOR_THEME` and
 /// `XCURSOR_SIZE`, else the default theme at [`cursor::THEME_SIZE`].
 fn theme_setting() -> (String, u32) {
@@ -1661,7 +1587,7 @@ fn theme_setting() -> (String, u32) {
 /// drawn, or `None` where the theme has no image of it.
 fn draw_theme_cursor(
     shared: &Shared,
-    source: &CursorSource,
+    source: &CursorGlobals,
     pointer: &mut PointerObjects,
     serial: u32,
     cursor: CursorIcon,

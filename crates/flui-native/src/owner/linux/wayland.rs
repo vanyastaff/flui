@@ -46,10 +46,10 @@ pub use event_loop::OutputName;
 pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    DragWindow, FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS,
-    OutputFacts, PresentationTime, SeatText, SeatWindow, SeatWindowText, TextEvent, TextRecorder,
-    TextWire, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost, WaylandInput,
-    WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    CursorGlobals, DragWindow, FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow,
+    MAX_OUTPUTS, OutputFacts, PresentationTime, SeatText, SeatWindow, SeatWindowText, TextEvent,
+    TextRecorder, TextWire, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost,
+    WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod activation {
@@ -529,7 +529,6 @@ mod event_loop {
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
     use rustix::io::Errno;
     use wayland_client::backend::{ObjectId, WaylandError};
-    use wayland_client::globals::{GlobalListContents, registry_queue_init};
     use wayland_client::protocol::wl_compositor::WlCompositor;
     use wayland_client::protocol::wl_output::{self, WlOutput};
     use wayland_client::protocol::wl_registry::{self, WlRegistry};
@@ -840,6 +839,21 @@ mod event_loop {
         pub(crate) scale: i32,
     }
 
+    /// The loop's globals a theme cursor is drawn with: the input draws it
+    /// from the loop's `wl_shm` on a surface of the loop's `wl_compositor`,
+    /// and binds neither a second time.
+    #[derive(Clone)]
+    pub(crate) struct CursorGlobals {
+        /// The connection the globals are on.
+        pub(crate) connection: Connection,
+        /// The owner's event queue.
+        pub(crate) queue: QueueHandle<WaylandState>,
+        /// `wl_compositor`, which makes the cursor's surface.
+        pub(crate) compositor: WlCompositor,
+        /// `wl_shm`, the shared memory the theme's images are in.
+        pub(crate) shm: WlShm,
+    }
+
     /// What the loop and its windows ask of the seats' input: the input
     /// feature's (`input::linux::wayland`), which the table registers.
     ///
@@ -860,6 +874,10 @@ mod event_loop {
 
         /// The compositor removed global `name`.
         fn global_removed(&self, name: u32);
+
+        /// The loop's globals a theme cursor is drawn with, handed over once
+        /// as the loop starts, where the compositor has shared memory.
+        fn cursor_globals(&self, globals: CursorGlobals);
 
         /// Deliver to the windows what the seats reported since the last
         /// turn, and a held key's repeat that came due.
@@ -1374,6 +1392,121 @@ mod event_loop {
         clipboard: Arc<dyn WaylandClipboard>,
         /// The seats' data devices, which the clipboard and drag share.
         devices: DataDevices,
+        /// The globals the loop binds for itself, while it starts: each is
+        /// bound as the compositor first announces it, and the loop takes
+        /// them once the registry was read. `None` from then on, when a
+        /// global of one of those kinds is bound no more.
+        starting: Option<LoopGlobals>,
+    }
+
+    /// The globals the loop binds for itself, each the first of its kind the
+    /// compositor announces.
+    #[derive(Default)]
+    struct LoopGlobals {
+        compositor: Option<WlCompositor>,
+        wm_base: Option<XdgWmBase>,
+        viewporter: Option<WpViewporter>,
+        subcompositor: Option<WlSubcompositor>,
+        shm: Option<WlShm>,
+        decoration: Option<ZxdgDecorationManagerV1>,
+        fractional_scale: Option<WpFractionalScaleManagerV1>,
+        exporter: Option<ZxdgExporterV2>,
+        presentation: Option<PresentationTime>,
+        activation: Option<XdgActivationV1>,
+    }
+
+    impl LoopGlobals {
+        /// Bind global `name` if it is of a kind the loop binds and the
+        /// first of it announced.
+        fn offer(
+            &mut self,
+            registry: &WlRegistry,
+            name: u32,
+            interface: &str,
+            version: u32,
+            queue: &QueueHandle<WaylandState>,
+        ) {
+            /// Bind `name` into `slot` at the version announced, no newer
+            /// than `newest`, unless one of its kind is bound.
+            fn first<I>(
+                slot: &mut Option<I>,
+                registry: &WlRegistry,
+                (name, version, newest): (u32, u32, u32),
+                queue: &QueueHandle<WaylandState>,
+            ) where
+                I: Proxy + 'static,
+                WaylandState: Dispatch<I, ()>,
+            {
+                if slot.is_none() {
+                    let bound =
+                        registry.bind::<I, (), WaylandState>(name, version.min(newest), queue, ());
+                    *slot = Some(bound);
+                }
+            }
+            // A global of version zero is none a client binds.
+            if version == 0 {
+                return;
+            }
+            let global = |newest: u32| (name, version, newest);
+            if interface == WlCompositor::interface().name {
+                first(
+                    &mut self.compositor,
+                    registry,
+                    global(COMPOSITOR_VERSION),
+                    queue,
+                );
+            } else if interface == XdgWmBase::interface().name {
+                first(&mut self.wm_base, registry, global(WM_BASE_VERSION), queue);
+            } else if interface == WpViewporter::interface().name {
+                first(
+                    &mut self.viewporter,
+                    registry,
+                    global(VIEWPORTER_VERSION),
+                    queue,
+                );
+            } else if interface == WlSubcompositor::interface().name {
+                first(&mut self.subcompositor, registry, global(1), queue);
+            } else if interface == WlShm::interface().name {
+                first(&mut self.shm, registry, global(1), queue);
+            } else if interface == ZxdgDecorationManagerV1::interface().name {
+                first(
+                    &mut self.decoration,
+                    registry,
+                    global(DECORATION_VERSION),
+                    queue,
+                );
+            } else if interface == WpFractionalScaleManagerV1::interface().name {
+                first(
+                    &mut self.fractional_scale,
+                    registry,
+                    global(FRACTIONAL_SCALE_VERSION),
+                    queue,
+                );
+            } else if interface == ZxdgExporterV2::interface().name {
+                first(
+                    &mut self.exporter,
+                    registry,
+                    global(EXPORTER_VERSION),
+                    queue,
+                );
+            } else if interface == XdgActivationV1::interface().name {
+                first(
+                    &mut self.activation,
+                    registry,
+                    global(ACTIVATION_VERSION),
+                    queue,
+                );
+            } else if interface == WpPresentation::interface().name && self.presentation.is_none() {
+                let clock = PresentationClock::default();
+                let manager = registry.bind::<WpPresentation, PresentationClock, WaylandState>(
+                    name,
+                    version.min(PRESENTATION_VERSION),
+                    queue,
+                    clock.clone(),
+                );
+                self.presentation = Some(PresentationTime { manager, clock });
+            }
+        }
     }
 
     impl WaylandState {
@@ -1432,12 +1565,16 @@ mod event_loop {
         }
     }
 
-    impl Dispatch<WlRegistry, GlobalListContents> for WaylandState {
+    /// The registry keeps no list of what the compositor announces: a global
+    /// is bound as it is announced, by the loop or by a feature, or not at
+    /// all, and a removal is told to those that bind. A compositor announcing
+    /// globals without end grows nothing here.
+    impl Dispatch<WlRegistry, ()> for WaylandState {
         fn event(
             state: &mut Self,
             registry: &WlRegistry,
             event: wl_registry::Event,
-            _: &GlobalListContents,
+            (): &(),
             _: &Connection,
             queue: &QueueHandle<Self>,
         ) {
@@ -1453,7 +1590,12 @@ mod event_loop {
                     name,
                     interface,
                     version,
-                } => state.offer_global(registry, name, &interface, version, queue),
+                } => {
+                    if let Some(starting) = &mut state.starting {
+                        starting.offer(registry, name, &interface, version, queue);
+                    }
+                    state.offer_global(registry, name, &interface, version, queue);
+                }
                 wl_registry::Event::GlobalRemove { name } => {
                     state.remove_output(name);
                     state.input.global_removed(name);
@@ -1794,44 +1936,8 @@ mod event_loop {
                 .map_err(|error| init(&format!("no compositor at {}", socket.display()), &error))?;
             let connection =
                 Connection::from_socket(stream).map_err(|error| init("the connection", &error))?;
-            let (globals, queue) = registry_queue_init::<WaylandState>(&connection)
-                .map_err(|error| init("the registry", &error))?;
+            let mut queue = connection.new_event_queue::<WaylandState>();
             let handle = queue.handle();
-            let compositor = globals
-                .bind::<WlCompositor, _, _>(&handle, 1..=COMPOSITOR_VERSION, ())
-                .map_err(|error| init("wl_compositor", &error))?;
-            let wm_base = globals
-                .bind::<XdgWmBase, _, _>(&handle, 1..=WM_BASE_VERSION, ())
-                .map_err(|error| {
-                    tracing::error!(%error, "Wayland: xdg_wm_base");
-                    crate::version::requirement::missing(crate::version::requirement::XDG_WM_BASE)
-                })?;
-            let viewporter = globals
-                .bind::<WpViewporter, _, _>(&handle, 1..=VIEWPORTER_VERSION, ())
-                .ok();
-            let decoration = globals
-                .bind::<ZxdgDecorationManagerV1, _, _>(&handle, 1..=DECORATION_VERSION, ())
-                .ok();
-            let fractional_scale = globals
-                .bind::<WpFractionalScaleManagerV1, _, _>(&handle, 1..=FRACTIONAL_SCALE_VERSION, ())
-                .ok();
-            let exporter = globals
-                .bind::<ZxdgExporterV2, _, _>(&handle, 1..=EXPORTER_VERSION, ())
-                .ok();
-            let presentation = {
-                let clock = PresentationClock::default();
-                globals
-                    .bind::<WpPresentation, _, _>(&handle, 1..=PRESENTATION_VERSION, clock.clone())
-                    .ok()
-                    .map(|manager| PresentationTime { manager, clock })
-            };
-            let activation = globals
-                .bind::<XdgActivationV1, _, _>(&handle, 1..=ACTIVATION_VERSION, ())
-                .ok();
-            let subcompositor = globals
-                .bind::<WlSubcompositor, _, _>(&handle, 1..=1, ())
-                .ok();
-            let shm = globals.bind::<WlShm, _, _>(&handle, 1..=1, ()).ok();
             let live = LiveOutputs::default();
             let last_input = LastInput::default();
             let input = H::input(last_input.clone());
@@ -1843,18 +1949,44 @@ mod event_loop {
                 input: Arc::clone(&input),
                 clipboard: Arc::clone(&clipboard),
                 devices: devices.clone(),
+                starting: Some(LoopGlobals::default()),
             };
-            let announced = globals.contents().with_list(|list| {
-                list.iter()
-                    .map(|global| (global.name, global.interface.clone(), global.version))
-                    .collect::<Vec<_>>()
-            });
-            for (name, interface, version) in announced {
-                if interface == WlOutput::interface().name {
-                    state.bind_output(globals.registry(), name, version, &handle);
-                } else {
-                    state.offer_global(globals.registry(), name, &interface, version, &handle);
-                }
+            // The compositor announces every global it has before it answers
+            // the round trip: the registry's dispatch binds each as it comes
+            // and keeps none.
+            let _registry = connection.display().get_registry(&handle, ());
+            queue
+                .roundtrip(&mut state)
+                .map_err(|error| init("the registry", &error))?;
+            let LoopGlobals {
+                compositor,
+                wm_base,
+                viewporter,
+                subcompositor,
+                shm,
+                decoration,
+                fractional_scale,
+                exporter,
+                presentation,
+                activation,
+            } = state
+                .starting
+                .take()
+                .expect("BUG: the loop's globals are taken once, here");
+            let compositor = compositor
+                .ok_or_else(|| init("wl_compositor", &"the compositor announces none"))?;
+            let wm_base = wm_base.ok_or_else(|| {
+                tracing::error!("Wayland: the compositor announces no xdg_wm_base");
+                crate::version::requirement::missing(crate::version::requirement::XDG_WM_BASE)
+            })?;
+            // A theme cursor is drawn with the loop's own globals.
+            if let Some(shm) = &shm {
+                input.cursor_globals(CursorGlobals {
+                    connection: connection.clone(),
+                    queue: handle.clone(),
+                    compositor: compositor.clone(),
+                    shm: shm.clone(),
+                });
             }
             // The seats bound so far get their data devices now: the first
             // window opens before the loop's first turn, and a seat's

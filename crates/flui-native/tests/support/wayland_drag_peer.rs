@@ -160,6 +160,10 @@ struct State {
     over: Option<WlDataOffer>,
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test's peer reads the whole registry of the compositor the harness started"
+)]
 fn run(role: &Role, stop: &AtomicBool, tell: &mpsc::Sender<Heard>, shown: &mpsc::Sender<()>) {
     let connection = Connection::connect_to_env().expect("the harness's compositor answers");
     let (globals, mut queue) =

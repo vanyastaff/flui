@@ -798,26 +798,22 @@ impl<S: Clone + PartialEq> FramePointers<S> {
     /// its own, or in an idle one's once [`MAX_POINTERS`] are followed.
     /// `None` when every one of those holds something of the window.
     fn of(&mut self, seat: &S) -> Option<&mut SeatPointer<S>> {
-        let index = match self.seats.iter().position(|held| held.seat == *seat) {
-            Some(index) => index,
-            None => {
-                let fresh = SeatPointer {
-                    seat: seat.clone(),
-                    on_frame: PointerOnFrame::default(),
-                    on_content: PointerOnContent::default(),
-                    armed: None,
-                };
-                if self.seats.len() < MAX_POINTERS {
-                    self.seats.push(fresh);
-                    self.seats.len() - 1
-                } else {
-                    let idle = self.seats.iter().position(SeatPointer::is_idle)?;
-                    self.seats[idle] = fresh;
-                    idle
-                }
-            }
+        if let Some(index) = self.seats.iter().position(|held| held.seat == *seat) {
+            return self.seats.get_mut(index);
+        }
+        let fresh = SeatPointer {
+            seat: seat.clone(),
+            on_frame: PointerOnFrame::default(),
+            on_content: PointerOnContent::default(),
+            armed: None,
         };
-        self.seats.get_mut(index)
+        if self.seats.len() < MAX_POINTERS {
+            self.seats.push(fresh);
+            return self.seats.last_mut();
+        }
+        let idle = self.seats.iter_mut().find(|held| held.is_idle())?;
+        *idle = fresh;
+        Some(idle)
     }
 
     /// `seat`'s pointer is at (`x`, `y`) on `piece` of `frame`; the cursor
