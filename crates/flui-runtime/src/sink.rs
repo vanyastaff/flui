@@ -59,8 +59,10 @@ pub enum SubmitVerdict {
     /// backend owed content it had nowhere to put on screen (an occluded
     /// surface, or one its owner had released). Also no vsync block, but
     /// unlike [`Self::NoPresent`] the work was CONSUMED and never reached
-    /// the screen — so the caller retains the frame rather than counting it
-    /// as done. The engine's raster executor draws the same
+    /// the screen — so the caller commits nothing (its tree and input regions
+    /// wait for a frame that is shown) and retries it, after the dropped-frame
+    /// backoff once a withdrawal outlasts its budget (ADR-0335). The engine's
+    /// raster executor draws the same
     /// distinction at the slot boundary with its `PresentDisposition`.
     NotShown,
     /// Rendering was temporarily deferred. Retry on the ordinary paced frame

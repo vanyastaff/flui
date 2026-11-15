@@ -1067,7 +1067,7 @@ impl UiRuntime {
                 // which may still show them.
                 let commits = matches!(
                     render_verdict,
-                    SubmitVerdict::Presented | SubmitVerdict::NoPresent | SubmitVerdict::NotShown
+                    SubmitVerdict::Presented | SubmitVerdict::NoPresent
                 );
                 let superseded = if commits {
                     std::mem::take(&mut *producer.pending_frames.borrow_mut())

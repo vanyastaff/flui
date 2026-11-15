@@ -699,12 +699,14 @@ or a lost device arms a retry and keeps the frame's input epochs. `Retry` does t
 same for transient rendering failure without a surface restamp or device rebuild:
 it marks full repaint as well as waking, so a static scene progresses without new
 input (ADR-0101). A frame that
-rendered but could not be shown is retained rather than counted as done, and a
-frame with nothing to present falls back to no-present pacing (ADR-0068). The
+rendered but could not be shown commits nothing, so its pointer input waits for the frame that
+shows the tree, and it is retried: at the display rate for `MAX_NOT_SHOWN_RETRIES` attempts, then
+after the dropped-frame backoff (ADR-0335). A frame with nothing to present falls back to
+no-present pacing (ADR-0068). The
 verdict is a crate contract. Pinned on the host side by `flui-engine`'s `window_slots`
 and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_submit_verdict`,
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
-`the_withheld_retry_is_bounded_and_then_parks`.
+`the_withheld_retry_is_bounded_and_then_waits_out_the_backoff`.
 
 A sink that cannot answer within the call (the threaded raster placement) answers `Queued`, or
 `QueuedReplacing` with the stamp of the unrendered frame the new one replaced in its inbox, whose

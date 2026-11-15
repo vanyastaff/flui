@@ -519,8 +519,8 @@ pub struct PresentationState {
     /// Frames dropped due to surface errors. See [`Self::frames_rendered`].
     frames_dropped: Cell<u64>,
     /// Consecutive frames this presentation produced and handed to the
-    /// backend that the backend could not put on screen, reset by any frame
-    /// that ends otherwise.
+    /// backend that the backend could not put on screen, reset by a frame
+    /// that presents or finds no damage.
     ///
     /// Bounds the retention of a withheld frame
     /// ([`Self::record_frame_withheld`]'s caller decides how long to keep
@@ -529,7 +529,8 @@ pub struct PresentationState {
     /// scene that was consumed producing it is gone and nothing else will
     /// redraw it. A *permanent* unavailability must not be, because the
     /// retry dirties this presentation on every attempt and would otherwise
-    /// spin at the fallback pace indefinitely.
+    /// spin at the fallback pace indefinitely: past the budget each attempt
+    /// waits out the dropped-frame backoff (ADR-0335 §2).
     not_shown_streak: Cell<u32>,
     /// Whether the performance overlay is drawn. Its numbers come from the
     /// clock's frame history, which is kept either way.
@@ -1728,10 +1729,10 @@ impl PresentationState {
 
     /// End a withheld streak: this frame was either shown or had nothing to
     /// show, so the surface is no longer *continuously* unavailable. Called
-    /// from every frame outcome other than a withheld one, which is what
-    /// makes "the next real event restarts the retry" true rather than
-    /// assumed — a later withheld frame opens a fresh streak and retains
-    /// again instead of inheriting an exhausted budget.
+    /// only for a frame that presents or finds no damage: until then the
+    /// streak stays above an exhausted budget, so each further withheld
+    /// attempt waits out the dropped-frame backoff instead of opening a new
+    /// burst (ADR-0335 §2).
     pub(crate) fn clear_not_shown_streak(&self) {
         self.not_shown_streak.set(0);
     }

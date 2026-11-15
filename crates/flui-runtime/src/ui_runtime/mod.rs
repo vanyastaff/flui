@@ -77,7 +77,8 @@ use super::presentation_forest::PresentationForest;
 const DEFAULT_COMMAND_CAPACITY: usize = 256;
 
 /// How many consecutive frames a presentation will re-arm after the backend
-/// produced content it could not put on screen, before giving up and parking.
+/// produced content it could not put on screen at the display rate; past it, each further attempt
+/// waits out the dropped-frame backoff (ADR-0335 §2).
 ///
 /// A frame lost this way cannot be recovered by waiting: the pipeline
 /// consumed the work that produced it, so the scene would never be redrawn —
@@ -99,11 +100,10 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 /// `streak` peaked at 3 — so it is a backstop against the pathological case,
 /// not a limit the ordinary transient touches.
 ///
-/// Exhausting the budget is not permanent. The streak is per-presentation and
-/// cleared by any frame that ends otherwise (see
-/// `PresentationState::clear_not_shown_streak`), and a real platform event
-/// still dirties the tree and produces an attempt of its own — so recovery
-/// after the bound does not depend on this counter ever being reset by hand.
+/// Exhausting the budget does not park the frame. The streak is per-presentation and stays above
+/// the budget until a frame presents or finds no damage, so the attempts past it wait out the
+/// backoff, which doubles to one second, instead of opening a new burst: a surface that returns
+/// shows the tree within a second, and one that never does costs a paint per second.
 const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
 mod agent;
