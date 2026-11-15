@@ -4895,8 +4895,8 @@ graph LR
   `cfg(native_journal)` (debug-сборка нативного хоста, `crates/flui-app/build.rs`). Запись без
   ребра к ядру читает и пишет `flui-cli` через `flui-protocol`; крейта `flui-driver` на `main`
   нет. Ветки Windows, macOS, iOS и Android в #2313 только типизированы, прогона на устройстве
-  нет. Остаётся: решение, сливать ли фичи, как в строке, или записать `cfg(native_journal)` как
-  форму (ADR-0215 §4, D28), и чтение записи крейтом `flui-driver`, когда он появится.
+  нет. Остаётся: решение владельца о фиче (расхождение записано в `docs/gaps.md`, ADR-0151 §10 и
+  §16) и чтение записи крейтом `flui-driver`, когда он появится.
 
 - [ ] **LY97** (не закрыта: четыре PR — потоки #1981, предпочтения #1989, дисплеи #1996 и
   состояние окна #2017; дальше строки `close_request`/`closed` после T8 и строка store-edit для
@@ -5368,11 +5368,15 @@ graph LR
   LY83 и LY91; остальные, которых нет в дереве, сведены в таблицу ниже. Находка неверна в одном
   месте: `native_host_suites_only_build_their_packages` существует
   (`tools/xtask/src/tasks.rs`). **Документы.** ADR-0254 (подтверждение, хосты в CI,
-  `reveal_after_first_frame`, `FrameOutcome::Failed`), ADR-0151 (позиция `PrimarySelection`,
-  `journal/`, без `HostPlatform<Winit>`), ADR-0256 (тест слота растра), `ARCHITECTURE.md` ядра,
+  `FrameOutcome::Failed`), ADR-0151 (позиция `PrimarySelection`, `journal/` на уровне крейта, без
+  `HostPlatform<Winit>`), ADR-0256 (тест слота растра), `ARCHITECTURE.md` ядра,
   `README.md`, `GLOSSARY.md`, `docs/gaps.md`, `crates/flui-native/platform-parity.toml` с
   пересказом в `docs/platform-parity.md`, `AGENTS.md`; комментарии в `hosts/linux.rs`,
   `text_store/owner_calls.rs`, `crates/flui-view/Cargo.toml`, `tools/xtask/src/api_closure.rs`.
+  Где код расходится с решением ADR, запись не правится, а расхождение стоит в `docs/gaps.md`
+  («Accepted ADR sections not built yet») до решения владельца: ADR-0254 §2
+  (`reveal_after_first_frame` остался методом) и ADR-0151 §10, §16 (журнал собирается под
+  `native-capture`, а не под `driver`).
   **Найдено попутно:** граф называет `LY44 & LY50 --> LY100`, а строка LY100 зависит ещё и от
   LY54 (ребро добавлено); `docs/gaps.md` говорил, что ни один виджет не берёт primary selection,
   хотя это сделал #2066 (исправлено); job `api-contracts` на `main` красный с `8f58b9d39`

@@ -539,7 +539,7 @@ crates/flui-native/
                             windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs headless.rs
     journal/                the native journal (ADR-0215 §4), a crate-level module: owner/ names no
                             feature, and the journal names the input model. Built under the
-                            native-capture feature; its schema is declared in flui-protocol
+                            driver feature; its schema is declared in flui-protocol
     window/                 mod.rs state.rs visibility.rs installation.rs config.rs (system chrome,
                             the Chrome position, is a facet of the window and lives here);
                             windows/{mod,proc,limits,backdrop}.rs;
@@ -714,11 +714,10 @@ secrets in diagnostics) are decided by the records the table cites.
   not only by reading one control through UI Automation or AX.
 - **Native recordings replay on the headless host** deterministically and cover IME, lifecycle,
   preferences and displays, not only the pointer. The native journal that produces them is a
-  module of the core host, not a test-only codec. As built it is the crate-level `journal/`, not
-  `owner/journal/` (`owner/` names no feature, and the journal names the input model), written at
-  run time under the `native-capture` feature, which `flui-app` compiles into a native host's
-  debug build; `flui-protocol` declares its schema, so a reader of a recording (`flui record`
-  today) does not link the core host.
+  module of the core host (the crate-level `journal/`: `owner/` names no feature, and the journal
+  names the input model), written at run time under the `driver` feature, not a test-only codec;
+  `flui-protocol` declares its schema so `flui-driver` reads a recording without linking the core
+  host.
 - **One way to drive an app.** A host's conformance rows that need the OS are `flui-driver`
   scenarios (ADR-0238): the same scenario runs on the headless host in CI, in process, and
   through the driver's `os` lane on a device (each device check is a scenario on the

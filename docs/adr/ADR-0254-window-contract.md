@@ -8,7 +8,7 @@
   no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
   crate's, which the contract cannot name without the edge ADR-0083 and the layers forbid; a
   handler that drives the platform captures what it needs; (2) `frame_requested` answers a
-  `FrameOutcome { Produced, Declined }` (ADR-0258 §4 later added `Failed`), because without it the host cannot tell a frame that was
+  `FrameOutcome { Produced, Declined }`, because without it the host cannot tell a frame that was
   served from one nothing ran, and a wake deadline delivered to a handler with nothing to draw
   with re-arms on every paint and spins the loop.
 - **Amended:** 2026-10-27 — decision 6, following the owner's decision of 2026-10-27 that adds
@@ -23,7 +23,7 @@
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: `AppHandler::exit_policy` answers
   an `ExitAnswer { End, KeepRunning, HostDecides }` instead of a `bool`. An application with no
   exit policy of its own had to answer `false`, which silently changed the hosts' behaviour (the
-  Win32, AppKit and, at the time, winit loops no longer ended with their last window); `HostDecides` keeps the
+  Win32, AppKit and winit loops no longer ended with their last window); `HostDecides` keeps the
   host's own default, as with no handler bound.
 - **Amended:** 2026-10-27 — decision 5, approved by the owner: (1) a thread that is not a window's
   owner asks it for a frame through `PlatformWindow::redraw_requester()`, a `Send + Sync`
@@ -256,12 +256,9 @@ variant beside `Show` and `Activate`, so one timing rule holds: an accepted comm
 and its outcome is read from the next snapshot and, for a close, from the handler's `closed`. The vetoed close path of ADR-0237 and ADR-0123 is kept as a handler
 obligation (decision 4): the veto lives in `close_requested`.
 
-The reveal policy is data in the window's options, `WindowOptions`' `WindowReveal`, and the host
-honours the policy the window was opened with. As built, `reveal_after_first_frame` stays a method
-of `PlatformWindow` and is not a command: under `WindowReveal::AfterFirstFrame` only the embedder
-knows when the first frame was presented, so it tells the window then, or at a bounded fallback
-after a frame that presented nothing (`flui-app`'s `runner/desktop.rs`). A host that reveals at
-open, and a window already shown, ignore the call.
+`reveal_after_first_frame` is not carried over as a method either. The reveal policy is data in the
+window's options, `WindowOptions`' `WindowReveal`, and the host honours the policy the window
+was opened with; there is nothing for the embedder to call.
 
 Admission is a type:
 
@@ -531,7 +528,7 @@ seam.
   `PendingWindow::wait`, `try_take` and the future resolve to the window's identity instead of an
   `Arc<dyn HostWindow>`.
 - Bad, because `WindowEvent`, `WindowBackgroundAppearance`, `WindowShowError`,
-  `WindowCommandError`, `Platform::on_window_event` and the deleted
+  `WindowCommandError`, `Platform::on_window_event`, `reveal_after_first_frame` and the deleted
   getters leave the public surface.
 - Neutral, because the crates are unpublished, so no external consumer is affected.
 - Neutral, because the code lands in separate changes after this record; their order is the
@@ -554,12 +551,13 @@ headless host and the native Linux hosts (X11 under Xvfb, Wayland under a headle
 in CI, and a Windows, macOS, iOS or Android row is ✅ in `docs/platform-parity.md` only after a run
 on that platform.
 
-- `capabilities_are_honest`, a check of `flui_testing::window_conformance` that every host's
-  conformance test runs (`the_headless_window_conforms_under_every_capability_set`,
-  `the_win32_window_conforms`, `the_x11_window_conforms`, `the_wayland_window_conforms`): each
-  command whose capability is not `Unavailable` takes effect or is clamped, as the next snapshot
-  shows, and each one whose capability is `Unavailable` is refused by `admit`. A capability change
-  publishes a new revision and one `state_changed`.
+- `capabilities_are_honest` and `accepted_commands_converge`, checks of
+  `flui_testing::window_conformance` that every host's conformance test runs
+  (`the_headless_window_conforms_under_every_capability_set`, `the_win32_window_conforms`,
+  `the_x11_window_conforms`, `the_wayland_window_conforms`): each command whose capability is
+  `Unavailable` is refused by `admit`, and each other one is admitted and takes effect or is
+  clamped, as the next snapshot shows. A capability change publishes a new revision and one
+  `state_changed` (the superseded-command test below).
 - `admitted_command_has_one_constructor` (compile-fail pair in the contract crate's
   `tests/compile_fail/`): building an `AdmittedCommand` outside `admit` does not compile, and
   neither does passing a bare `WindowCommand` to `apply`.
@@ -594,7 +592,8 @@ on that platform.
   version, as in ADR-0244's `floor_refusal_contract`) answering `Unsupported` with
   `NotOnThisDevice`.
 - `every_error_carries_its_reason` (the contract's `tests/unsupported.rs`): a reason produced by a
-  host arrives intact through admission, the verbs and `CursorError`.
+  host arrives intact through each error that wraps it, admission, submission and `CursorError`
+  among them; a verb answers the `Unsupported` itself.
 - `platform_and_host_window_are_sealed` (compile-fail): an outside `impl Platform` or `impl
   HostWindow` fails to compile, while the `PlatformWindow` doctest still builds a window with no
   host in scope.

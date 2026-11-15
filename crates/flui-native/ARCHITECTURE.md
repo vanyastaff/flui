@@ -2980,10 +2980,7 @@ moves, the application edits the composing text) the context is told to forget
 it (`InputContext::discard_marked_text`), or its next commit would insert the
 composed text a second time. A field that loses focus keeps what was composed
 in it (`a_field_losing_focus_keeps_what_was_composed_in_it`,
-`completing_a_composition_makes_appkit_forget_its_marked_text`). The earlier
-shape, which dropped the composition on `set_ime_allowed(false)` and reported
-an empty `ImeEvent::Preedit`, went when the view began to serve the field's
-store.
+`completing_a_composition_makes_appkit_forget_its_marked_text`).
 
 **Rejected.** Unconditional `interpretKeyEvents:` (the two-producer defect).
 Gating on `-[NSTextInputContext handleEvent:]`'s `BOOL` — the routing decision is
@@ -2996,8 +2993,7 @@ wrong per layout: on a U.S. layout a plain letter *does* reach `insertText:`.
 field's document and `{NSNotFound, 0}` when nothing composes; `selectedRange`
 answers the field's selection, and not-found when no field has focus or the
 store cannot grant a read now. `NSRange` is UTF-16 and so is the store's
-`Utf16Range`, so the view converts nothing; the byte-range conversion the
-document-less view needed is gone.
+`Utf16Range`, so the view converts nothing.
 
 **Trade-off, named rather than assumed.** The class-registration block cannot run
 under a bare `cargo test` (an unbundled `NSWindow` throws
@@ -3017,23 +3013,10 @@ would land on needs a real input method to ask, which is the same gap as for rea
 `an_edit_replaces_the_range_appkit_names`,
 `a_reconversion_reads_the_field_as_it_stands`,
 `the_candidate_window_follows_the_composition`,
-`an_edit_inside_a_frame_waits_for_it_instead_of_being_dropped`. The run below
-was made on the earlier shape, where the view kept its own composition and
-reported `ImeEvent`s; the store-served path is type-checked and has not run on
-a Mac (`docs/platform-parity.md`, "IME composition and candidate placement").
-That manual run drove the live path from a bundled
-`.app` on a real Mac and passed: the inverse pair
-(attached → one `Commit` and no key event; detached → one key event and no
-`ImeEvent`), the `Preedit` → `Commit` sequence with the byte cursor asserted, the
-empty-`Preedit` that ends a composition, a non-zero cursor rect whose
-`actualRange:` is answered rather than left not-found, and the `keyUp:` gate
-end-to-end — a release reported while a text input is attached with nothing
-composing, and the same call suppressed while a composition is open. The gate's
-arm is mutation-checked against the ungated `key_up`: removing the check leaks a
-`KeyboardEvent { state: Up, key: Character("a") }` into that arm and fails the
-run. A synthesized `NSEvent` proves the
-*routing* and is not a genuine input method, so real composition (press-and-hold
-or a CJK source) remains **not driven**.
+`an_edit_inside_a_frame_waits_for_it_instead_of_being_dropped`. They drive the
+client, not AppKit: what has run on a Mac, and that real composition
+(press-and-hold or a CJK source) has not, is the parity table's row "IME
+composition and candidate placement" (`docs/platform-parity.md`).
 
 ### iOS binds UIKit through `objc2`, and its loop-exit signal is `applicationWillTerminate:`
 
@@ -3075,9 +3058,8 @@ quit handler from it and the runner runs the teardown.
 
 **Trade-off.** Two `objc2` generations are in the tree: this backend uses
 0.6/0.3 (already there via `wgpu-hal`), while `accesskit_macos` 0.27 and
-`accesskit_ios` 0.2 still pull 0.5.2/0.2.2 (winit, which pulled it too, left
-with its host). The duplicate resolves when AccessKit's adapters move, not by
-anything here. A real device is not
+`accesskit_ios` 0.2 still pull 0.5.2/0.2.2. The duplicate resolves when
+AccessKit's adapters move, not by anything here. A real device is not
 covered — the simulator slice is, by a manual run — and no CI job boots a
 simulator; `cross-typecheck` gained an `aarch64-apple-ios` clippy line so a
 broken iOS build is at least loud.
