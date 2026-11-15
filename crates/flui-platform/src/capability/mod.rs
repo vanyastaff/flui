@@ -17,11 +17,18 @@
 //! A package or a capability crate registers its providers with a [`Plugin`]
 //! through a [`CapabilityRegistrar`]; the registry itself, its precedence and
 //! its conflicts live in the UI runtime.
+//!
+//! Under the `scripted` feature, [`scripted`] is the scenario primitive a
+//! capability's simulated provider is built from: typed, ordered answers,
+//! values and event streams on a virtual clock, every answer settling at an
+//! owner turn through a `Completion` (ADR-0154 §10).
 
 mod completion;
 mod owner;
 mod registrar;
 mod runtime_local;
+#[cfg(feature = "scripted")]
+pub mod scripted;
 mod window_ref;
 
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};

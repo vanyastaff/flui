@@ -74,6 +74,8 @@ mod recording_vocabulary;
 mod runtime_driver;
 #[path = "runtime_input_lifecycle.rs"]
 mod runtime_input_lifecycle;
+#[path = "scenario.rs"]
+mod scenario;
 #[path = "scripts.rs"]
 mod scripts;
 #[path = "self_rescheduling_local_post_frame.rs"]
@@ -289,6 +291,11 @@ fn capability_seam() {
             (
                 "capability_seam::a_failed_read_reaches_every_reader_that_joined_it",
                 capability_seam::a_failed_read_reaches_every_reader_that_joined_it as fn(),
+            ),
+            (
+                "capability_seam::scripted_reads_answer_in_order_before_the_clipboards_text",
+                capability_seam::scripted_reads_answer_in_order_before_the_clipboards_text
+                    as fn(),
             ),
             (
                 "capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again",

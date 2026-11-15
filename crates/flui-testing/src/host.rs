@@ -15,6 +15,12 @@
 //! the pump as the frame's timestamp. A test advances time only through
 //! [`HeadlessHost::pump`] or [`HeadlessHost::clock`].
 //!
+//! The same clock is the timeline of the host's [`Scenario`]: the scripted
+//! clipboard, primary selection and any plugin built on
+//! [`HeadlessHost::with_scenario`] answer on it, and each pump applies the
+//! scenario's changes due at its instant before the frame's turn, so a
+//! change scheduled at 3 s settles in the first pump at or after 3 s.
+//!
 //! # Failures
 //!
 //! A UI runtime contains a panic that escapes a frame segment, and a pipeline
@@ -38,6 +44,7 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
+use flui_platform::capability::scripted::Scenario;
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
@@ -767,9 +774,10 @@ pub use flui_view::__runtime::SESSION_END_BUDGET;
 
 /// The capabilities a headless host provides when it is given no registry:
 /// the clipboard, the primary selection and HTTP, each scripted by the test,
-/// so no test reaches the network.
-#[derive(Default)]
+/// so no test reaches the network. The clipboard and the primary selection
+/// are on the host's scenario.
 struct ScriptedBuiltIns {
+    scenario: Scenario,
     clipboard: crate::ScriptedClipboard,
     primary_selection: crate::ScriptedPrimarySelection,
     background: HeadlessBackground,
@@ -777,6 +785,17 @@ struct ScriptedBuiltIns {
 }
 
 impl ScriptedBuiltIns {
+    /// The built-ins on `scenario`, whose clock the host frames on.
+    fn on(scenario: &Scenario) -> Self {
+        Self {
+            scenario: scenario.clone(),
+            clipboard: crate::ScriptedClipboard::on(scenario),
+            primary_selection: crate::ScriptedPrimarySelection::on(scenario),
+            background: HeadlessBackground::default(),
+            http: crate::ScriptedHttp::default(),
+        }
+    }
+
     fn registrar(&self) -> flui_platform::capability::CapabilityRegistrar {
         let mut registrar = flui_platform::capability::CapabilityRegistrar::new();
         self.clipboard.register(&mut registrar);
@@ -936,7 +955,25 @@ impl HeadlessHost {
         window: HeadlessWindow,
         plugin: &dyn flui_platform::capability::Plugin,
     ) -> Self {
-        let scripted = ScriptedBuiltIns::default();
+        Self::with_scenario(window, &Scenario::new(), plugin)
+    }
+
+    /// [`Self::with_plugin`] on `scenario`: the host frames on the
+    /// scenario's clock and applies its due changes at each pump, and its
+    /// clipboard and primary selection are on it, so a plugin whose doubles
+    /// are on `scenario` answers on the same timeline as everything else
+    /// (ADR-0154 §10).
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::with_plugin`].
+    #[must_use]
+    pub fn with_scenario(
+        window: HeadlessWindow,
+        scenario: &Scenario,
+        plugin: &dyn flui_platform::capability::Plugin,
+    ) -> Self {
+        let scripted = ScriptedBuiltIns::on(scenario);
         let registry = flui_runtime::capability::CapabilityRegistry::builder()
             .built_ins(scripted.registrar())
             .plugin(plugin)
@@ -972,8 +1009,8 @@ impl HeadlessHost {
             .expect("BUG: a fresh mint issues the primary window's id");
         let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
-        let scripted = scripted.unwrap_or_default();
-        let clock = ManualClock::new();
+        let scripted = scripted.unwrap_or_else(|| ScriptedBuiltIns::on(&Scenario::new()));
+        let clock = scripted.scenario.clock().clone();
         // A collection of its own: the ui_runtime owns a `TextContext` over it
         // (ADR-0092 §3), exactly as a hosted ui_runtime does. Deliberately
         // bundled-only, unlike the app's host-fed one
@@ -1167,6 +1204,9 @@ impl HeadlessHost {
             panic!("{failure}");
         }
         self.clock.advance(dt);
+        // The scenario's changes due at the new instant apply before the
+        // turn, so their answers settle in this pump.
+        self.scripted.scenario.run_due();
         self.settle_lifecycle();
         // Background work runs before the frame, so an answer it posts
         // settles in this pump.
@@ -1453,6 +1493,13 @@ impl HeadlessHost {
     #[must_use]
     pub fn text_store_host(&self) -> Option<&Rc<RecordingTextStoreHost>> {
         self.text_store_host.as_ref()
+    }
+
+    /// The scenario whose clock the host frames on and whose due changes
+    /// each pump applies.
+    #[must_use]
+    pub fn scenario(&self) -> &Scenario {
+        &self.scripted.scenario
     }
 
     /// The clipboard the UI runtime hands its widgets.

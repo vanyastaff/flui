@@ -301,6 +301,46 @@ live apart from their implementations, so a crate that names a capability links 
 plugin can implement one without the backends. The contract of each
 capability is that of its own ADR.
 
+### A capability's double is built from one scenario primitive
+
+`capability::scripted`, under the `scripted` feature (which `testing` turns on), is what every
+simulated provider is made of (ADR-0154 §10), in the contract because a capability crate may
+not depend on `flui-testing`. A `Scenario` is one `ManualClock` and one ledger of failures; on
+it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the platform changes
+(a permission, a `ServiceState`), and `Events<E>` per event stream.
+
+- **A request is matched by its value.** A step is an `Expect<R>` (`any`, `exactly`, `when`)
+  and an `Answer` (`value`, `computed`, `hold`, `abandon`, each optionally `after` a delay); the
+  earliest step that accepts a request answers it and is used up. A request type fixes its
+  answer type, so an open dialog cannot be answered with a save result.
+- **No answer nobody wrote.** A request no step and no standing answer (`otherwise`) takes is
+  `ScenarioFailure::Unexpected` and its resolver is dropped, so the caller's completion ends
+  `ProviderDropped`; a held request never answered, a step never used, a change the clock never
+  reached and an event after its stream's end are the other failures `Scenario::verify` lists.
+  A double keeps a standing answer only where it models the service's state (the clipboard's
+  text), never as a default.
+- **Time is the scenario's clock.** A scheduled change applies at the first
+  `Scenario::run_due` on or after its instant; `HeadlessHost` frames on the scenario's clock and
+  calls `run_due` at the start of each pump, before the turn.
+- **Every answer is a `Completion`.** A script, a track's `changed` and a stream's `next`
+  answer through a `Resolver`, so an answer settles at an owner turn and never inside the call
+  that asked; no borrow is held while a matcher, a computed answer or a value's `Clone`,
+  `PartialEq`, `Debug` or `Drop` runs, so a caller that asks again from its answer finds the
+  script idle. A stream ends once, with a `StreamEnd`, and an ended stream answers its end to
+  every later `next`.
+
+The launcher, file dialog, clipboard and primary selection doubles are built on it.
+`testing::FakeHaptics` is not: it answers synchronously through a window's trait object, with
+no completion to settle. `testing::ScriptedHttp` is not either: its client is `Send + Sync`
+and its futures run off the owner thread (ADR-0280), where an owner-local scenario cannot
+reach, and a URL nobody scripted fails with `HttpError::Connect` naming it.
+**Tests:** `deny_then_allow_then_revoke_at_three_seconds`,
+`a_request_nothing_answers_ends_its_completion_and_fails_the_run`,
+`a_step_answers_the_request_it_matches_not_the_next_one_in_line`,
+`a_delayed_answer_settles_at_the_first_turn_at_or_after_its_instant`,
+`an_event_stream_delivers_on_virtual_time_and_ends_once`
+(`crates/flui-testing/tests/scenario.rs`).
+
 ### A TSF-shaped pull store carries text input
 
 Text-input authority is divided by contract rather than by one combined event count:

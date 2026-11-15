@@ -13,6 +13,7 @@ use flui_interaction::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim,
     PrimarySelectionCapability, PrimarySelectionHandle,
 };
+use flui_platform::capability::scripted::Answer;
 use flui_platform::capability::{
     Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, Plugin,
     ProviderContext, Resolver,
@@ -379,6 +380,38 @@ pub(crate) fn a_read_after_a_write_never_joins_the_read_before_it() {
     let _ = host.pump(Duration::ZERO);
     assert_eq!(*before.borrow(), Some(Ok(Ok(Some(answered("before"))))));
     assert_eq!(*after.borrow(), Some(Ok(Ok(Some(answered("after"))))));
+}
+
+pub(crate) fn scripted_reads_answer_in_order_before_the_clipboards_text() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("copied");
+    scripted
+        .reads()
+        .answer_next(Answer::value(Err(ClipboardError::Denied)));
+    scripted
+        .reads()
+        .answer_next(Answer::value(Ok(Some(answered("late")))).after(Duration::from_millis(100)));
+    let clipboard = acquire(&mut host).expect("provided");
+
+    let denied = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*denied.borrow(), Some(Ok(Err(ClipboardError::Denied))));
+
+    let late = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::from_millis(99));
+    assert_eq!(*late.borrow(), None, "the second step answers at 100 ms");
+    let _ = host.pump(Duration::from_millis(1));
+    assert_eq!(*late.borrow(), Some(Ok(Ok(Some(answered("late"))))));
+
+    let text = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        *text.borrow(),
+        Some(Ok(Ok(Some(answered("copied"))))),
+        "the steps used up, the clipboard's text answers"
+    );
+    host.scenario().verify().expect("every step was used");
 }
 
 pub(crate) fn a_failed_read_reaches_every_reader_that_joined_it() {
