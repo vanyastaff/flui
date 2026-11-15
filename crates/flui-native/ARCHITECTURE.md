@@ -3976,7 +3976,10 @@ Where the compositor draws no frame (Weston, GNOME) or leaves it to the
 client, a decorated native Wayland window draws its own
 (`window::linux::wayland::client_frame`): a title bar and four resize
 margins, each a `wl_subsurface` of the content surface, synchronized with it,
-drawn on the owner thread into `wl_shm` memory files. The title is shaped by
+drawn on the owner thread into `wl_shm` buffers it keeps and draws into again
+once the compositor releases them, three a surface at most. It is drawn at
+the window's scale up to 8 and with no more than `MAX_PIXELS`: a compositor
+names any scale, and the frame's cost is the host's to bound. The title is shaped by
 Parley and rasterized by swash through `flui-painting`, as the renderer's
 text is, over a font collection the host's windows share: the bundled faces
 at once, the host's once a background scan added them, which wakes the loop.
@@ -4006,7 +4009,9 @@ serial, which the window carries out as it settles; the frame goes in
 fullscreen, its margins on a maximized window and at each tiled edge. The
 seats' input reaches it through `owner::linux::wayland::FramePointer`: a
 pointer over one of its surfaces is the frame's, and none of its events
-reaches the window's input. Tests: `a_frame_lies_around_its_content`,
+reaches the window's input; the frame follows each seat's pointer on its own,
+so one leaving lets go of nothing another holds. Tests:
+`a_frame_lies_around_its_content`,
 `the_frame_goes_away_in_fullscreen_and_at_tiled_edges`,
 `the_pointer_on_a_frame_asks_for_what_it_pressed`,
 `a_window_has_the_frame_its_compositor_leaves_it` (Weston and sway), and
