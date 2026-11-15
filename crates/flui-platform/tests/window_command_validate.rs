@@ -3,12 +3,12 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, CapabilitiesOwner,
-    CapabilityAbsence, ControlsOffset, InvalidControlsOffset, InvalidGeometry, KeyboardInset,
-    SizeConstraints, SystemControls, Unsupported, UnsupportedReason, WindowAppearance,
-    WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
-    WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOptions,
-    WindowRevision, WindowRevisionExhausted, WindowState,
+    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, CapabilitiesOwner, CapabilityAbsence,
+    ControlsOffset, InvalidControlsOffset, InvalidGeometry, KeyboardInset, SizeConstraints,
+    SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
+    WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFrame,
+    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOptions, WindowRevision,
+    WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
