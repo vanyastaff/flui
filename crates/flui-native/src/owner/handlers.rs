@@ -108,10 +108,22 @@ pub(crate) fn rebased_at(
 /// callback thread (Metal's presented handler) or the owner (a compositor's event). The newest
 /// report wins; a report no later than one kept or already carried is a repeat or out of order,
 /// and is dropped, so the times a window's requests carry never run backwards. A report of a time
-/// still ahead when a request is delivered (a platform that names when a frame is due on screen)
-/// waits for a later request: a request never carries a presentation that has not happened.
+/// still ahead when a request is delivered (a rebase's error, a compositor that adds its
+/// display's latency) waits for a later request: a request never carries a presentation that has
+/// not happened. A report further ahead of the reading it arrives at than [`REPORT_LEAD`] is no
+/// presentation and is dropped: kept, it would outrank every report after it until the clock
+/// reached it, and a stamp at the timeline's end would silence the window for good.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PresentationReports(Arc<Mutex<Reported>>);
+
+/// How far ahead of the event clock's reading a report's time may lie.
+///
+/// A report is of a frame already shown, so only an error puts its time ahead: the two readings
+/// a rebase takes, or the latency a compositor adds to the flip it timed, both milliseconds. A
+/// second is far above either and far below any clock mix-up (a stamp left on the platform's own
+/// epoch, a saturated rebase), and it is the longest a wrong stamp that passes can hold back the
+/// reports after it.
+const REPORT_LEAD: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug, Default)]
 struct Reported {
@@ -124,6 +136,21 @@ struct Reported {
 impl PresentationReports {
     /// The platform showed a frame.
     pub(crate) fn report(&self, presented: FramePresented) {
+        self.report_read_at(presented, EventTime::now());
+    }
+
+    /// [`Self::report`], arriving when the event clock reads `now`.
+    fn report_read_at(&self, presented: FramePresented, now: EventTime) {
+        if presented.at.saturating_duration_since(now) > REPORT_LEAD {
+            // Outside the lock: a subscriber is user code.
+            tracing::debug!(
+                target: "flui.present",
+                at_ns = presented.at.as_nanos(),
+                now_ns = now.as_nanos(),
+                "a presentation stamped far ahead of the event clock is dropped"
+            );
+            return;
+        }
         let mut reported = self.0.lock();
         let newest = reported
             .pending
@@ -209,6 +236,38 @@ mod tests {
 
         reports.report(shown(45));
         assert_eq!(carried(&reports, 50), Some(45));
+    }
+
+    /// A report stamped more than the lead ahead of the reading it arrives at is dropped, so the
+    /// reports after it are carried; one within the lead waits for the clock to reach it.
+    #[test]
+    fn a_report_stamped_far_ahead_does_not_outrank_the_reports_after_it() {
+        const SECOND: u64 = 1_000_000_000;
+        let at = EventTime::from_nanos;
+        let shown = |nanos| FramePresented::new(at(nanos));
+        let carried = |reports: &PresentationReports, now| {
+            reports
+                .carried_by(FrameRequest::new(at(1)), at(now))
+                .presented
+                .map(|presented| presented.at.as_nanos())
+        };
+        let now = 5 * SECOND;
+
+        for (stamp, why) in [
+            (u64::MAX, "a rebase that saturated at the timeline's end"),
+            (now + 3600 * SECOND, "a stamp on another clock's epoch"),
+            (now + SECOND + 1, "just past the lead"),
+        ] {
+            let reports = PresentationReports::default();
+            reports.report_read_at(shown(stamp), at(now));
+            reports.report_read_at(shown(now - 1_000), at(now));
+            assert_eq!(carried(&reports, now), Some(now - 1_000), "{why}");
+        }
+
+        let reports = PresentationReports::default();
+        reports.report_read_at(shown(now + SECOND), at(now));
+        assert_eq!(carried(&reports, now), None, "within the lead: it waits");
+        assert_eq!(carried(&reports, now + SECOND), Some(now + SECOND));
     }
 
     /// A platform's frame stamp, given as an age, lands that long before the reading, and an age

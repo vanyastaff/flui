@@ -8,9 +8,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
 
-use flui_native::{HeadlessOwnerTurns, HeadlessPlatform, HostWindow, OwnerPlatform, Platform as _};
-use flui_platform::WindowOptions;
-use flui_testing::window_handler::RecordingWindowHandler;
+use flui_native::{
+    HeadlessHostWindow, HeadlessOwnerTurns, HeadlessPlatform, HostWindow, OwnerPlatform,
+    Platform as _,
+};
+use flui_platform::{EventTime, FramePresented, WindowOptions};
+use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 use parking_lot::Mutex;
 
 struct Session {
@@ -82,6 +85,42 @@ fn a_redraw_requested_on_the_owner_dispatches_at_once() {
     assert_eq!(*frames.lock(), [thread::current().id()]);
 }
 
+/// A window system that stamps one presentation an hour ahead (a stamp left
+/// on its own clock's epoch) costs the window that report alone: the frame
+/// shown after it is still reported by the window's next request.
+fn a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it() {
+    let platform =
+        HeadlessPlatform::new().with_window_capabilities(flui_platform::WindowCapabilities::ALL);
+    let opened = crate::Opened::on(&platform, WindowOptions::default()).expect("open");
+    let window = opened
+        .window
+        .as_any()
+        .downcast_ref::<HeadlessHostWindow>()
+        .expect("the headless platform opens headless windows");
+
+    let hour = std::time::Duration::from_secs(3600);
+    window.simulate_presented(FramePresented::new(EventTime::now() + hour));
+    let shown = FramePresented::new(EventTime::now());
+    window.simulate_presented(shown);
+    opened.handler.take_calls();
+    opened.window.request_redraw();
+
+    let carried: Vec<Option<FramePresented>> = opened
+        .handler
+        .take_calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            HandlerCall::FrameRequested(request) => Some(request.presented),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        carried,
+        [Some(shown)],
+        "the request carries the frame shown after the wrong stamp"
+    );
+}
+
 /// The application's owner-turn callback is owner code too: it keeps
 /// owner-local state (`Rc`, `Cell`) the turn a worker's wake posts reads,
 /// and the platform's quit drops it on the owner thread.
@@ -133,6 +172,10 @@ fn headless_redraw_contracts() {
             (
                 "a_redraw_requested_on_the_owner_dispatches_at_once",
                 a_redraw_requested_on_the_owner_dispatches_at_once,
+            ),
+            (
+                "a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it",
+                a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it,
             ),
             (
                 "an_owner_turn_callback_keeps_owner_local_state_until_the_quit",
