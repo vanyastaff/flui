@@ -894,7 +894,17 @@ trait depends on `flui-platform` instead.
   `contain_owner_callback` elsewhere): a TSF method that poisons its document
   keeps its services' entry depth as a guard, so a panic past the poisoning
   cannot leave host operations queued forever, and a view's `dealloc` still
-  runs the super `dealloc` after its context's teardown failed. A GCD work
+  runs the super `dealloc` after its context's teardown failed. The `dealloc`
+  objc2 generates for a `define_class!` class has no body in the crate: it
+  destroys the class's ivars in place on the last release, whoever makes it
+  (a UIKit view outlives its window in the view hierarchy and in the
+  autorelease pool each native callback pins it in, and owns its touches
+  alone). So every class declares its ivars as
+  `owner::panic_boundary::ContainedIvars<…>`, whose destructor is one call of
+  `os_entry`: what a view or a delegate owns is destroyed inside the
+  boundary, a destructor's panic is logged, and the super `dealloc` still
+  runs. The gate holds each class's `#[ivars = …]` to that type and a class's
+  own `Drop` to the entry rule. A GCD work
   item's body is a `move` closure, so its captures drop inside the boundary; a
   block's or delegate's captures live as long as the OS keeps it and are
   values whose destructor runs no user code. `cargo xtask panic-boundary`
@@ -908,7 +918,8 @@ trait depends on `flui-platform` instead.
   android-activity's procedures contain their own, and `flui-hot-reload`'s
   plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
   first failure is logged before the answer, with the entry's arguments, and a
-  contained step with its text; a panicking log stays inside),
+  contained step with its text; a panicking log stays inside;
+  `contained_ivars_keep_a_destructors_panic_inside_the_boundary`),
   `a_failing_subscriber_is_logged_and_a_session_end_still_granted`,
   `a_panicking_listener_stays_inside_its_handler` (AccessKit, Windows and
   Linux), the TSF row `a_tsf_call_failing_past_its_poisoning_leaves_no_depth`
@@ -969,7 +980,11 @@ trait depends on `flui-platform` instead.
     `dispatch_frame` empties into the next frame request
     (`FrameRequest::presented`): the newest report wins, a report no later
     than one kept or carried is dropped, and one still ahead of the request's
-    delivery waits. The headless window reports what a test injects
+    delivery waits. A report stamped more than a second ahead of the event
+    clock's reading when it arrives is dropped there, for every host
+    (`REPORT_LEAD`): kept, it would outrank each later report until the clock
+    reached it, and a rebase saturated at the timeline's end would silence
+    the window for good. The headless window reports what a test injects
     (`HeadlessHostWindow::simulate_presented`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
     an X11 present completes on the GPU driver's connection),

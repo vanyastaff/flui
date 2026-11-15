@@ -4871,6 +4871,68 @@ graph LR
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
   публичный путь keyboard layout.
+- [x] **LY109** — ветка `platform/presentation-colour-boundary` (PR_NUMBER). Семь находок проверки
+  готовых задач; шесть исправлены, одна (п. 7) проверена и оказалась покрытой.
+  (1) Отчёт о показе кадра со штампом далеко в будущем (насыщенный rebase, произвольный
+  `tv_sec_hi` Wayland, `presentedTime` Metal) вытеснял все следующие отчёты окна:
+  `PresentationReports::report`, через который идут отчёты всех хостов, отбрасывает отчёт, чей
+  штамп опережает показание событийных часов больше чем на секунду (`REPORT_LEAD`). Тесты:
+  `a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it` (`tests/`, headless) и
+  `a_report_stamped_far_ahead_does_not_outrank_the_reports_after_it`; без границы оба падают
+  (`left: [None]`, `left: None, right: Some(4999999000)`).
+  (2) Паника в шаге делегата `NSURLSession` оставляла запрос без конца, а потерянный кусок тела —
+  тело «целым». Общая часть делегата и потока запроса вынесена в `http::apple::transfer` (чистая,
+  собирается под `test` на любом хосте): каждый шаг идёт под `contain_os_entry`, паника завершает
+  передачу `HttpError::Host` и отменяет задачу. Тесты: `a_delegate_step_that_panics_ends_the_transfer`
+  (без containment: `left: None, right: Some(Cancel)`), `a_task_ends_as_its_delegate_read_it`,
+  `a_full_buffer_suspends_the_task_until_the_reader_drains_it`.
+  (3) `dealloc`, который objc2 генерирует для класса `define_class!`, уничтожает ivars вне
+  `os_entry`. Вид UIKit может быть последним владельцем своих ivars: `input` принадлежит только
+  ему, `pin_for_native_callback` держит вид в autorelease pool после закрытия окна, а поля
+  `IOSWindow` отпускают `delivery` раньше `facets`, где лежит `Retained<UIView>`. Каждый класс
+  крейта (девять с ivars) объявляет их как `ContainedIvars<T>`, чей `Drop` — один вызов `os_entry`;
+  у `FluiAppDelegate` ivars убраны (пустая структура). `xtask panic-boundary` читает заголовок
+  каждого `define_class!`: ivars другого типа и собственный `Drop` класса не через границу —
+  находки (вид «Objective-C destructor», 10 входов); самотест — 35 ожидаемых находок, до правки
+  классов gate выдал 10 находок на реальном крейте. Тест
+  `contained_ivars_keep_a_destructors_panic_inside_the_boundary` без `os_entry` падает паникой
+  деструктора.
+  (4) `DisplayColor`: поля закрыты, чтение через `color_space()` и `headroom()`;
+  `ColorParts::try_into_color` и `DisplayParts::try_into_info` отказывают стандартному диапазону с
+  headroom, отличным от `Headroom::SDR` (`InvalidDisplayColor`); кодек записи отказывает такой
+  строке при чтении. В записи `headless_platform_reads.jsonl` была именно такая строка (стандартный
+  диапазон без headroom), она исправлена на high-range. Тесты:
+  `colour_parts_validate_as_the_constructors_do`, `a_display_colour_that_contradicts_itself_is_refused`,
+  doctest `compile_fail` на запись в поле. `api/flui.txt` поправлен вручную: генератор вызывает
+  `rustup run nightly`, а `rustup` на этой машине запускать нельзя; сверяет job `public-api`.
+  (5) Нечисловой headroom поверхности wgpu отдаёт как `None`, и движок читал его как «дисплей
+  ничего не сообщает», то есть HDR: теперь это SDR (`surface_headroom`). Строки добавлены в
+  `hdr_on_a_display_without_headroom_falls_to_wide_gamut_then_srgb`; до правки — `NaN: left: Hdr,
+  right: WideGamut`.
+  (6) Срок idle-работы мог быть уже прошедшим: `FrameClock::next_presentation_after` возвращал сам
+  отчёт, если тот позже показания, а pump спрашивал о vsync кадра. Теперь называется refresh после
+  отчёта, а pump спрашивает о собственном показании. Тесты:
+  `the_idle_work_of_a_frame_reached_late_ends_at_a_refresh_still_ahead` (без правок: `left: 0,
+  right: 1`; только с правкой scheduler падает второй случай) и строка в
+  `the_next_refresh_lies_on_the_grid_the_report_starts`.
+  (7) `feature-matrix` собирает фасад с каждой фичей отдельно (`cargo hack clippy --workspace
+  --each-feature` включает корневой пакет; `--print-command-list` показывает `testing`,
+  `single-instance`, `unstable-input`, `unstable-windows`, `devtools`, `driver`), поэтому
+  `facade-combos` не менялся; в его комментарии записано, кто собирает одиночные фичи.
+  Проверки на Windows: clippy `--affected=origin/main --all-targets -D warnings` (все зависящие
+  пакеты) — чисто; `xtask checks`, `panic-boundary --self-test` — зелёные; doctests
+  `flui-platform` — 67; nextest `-p flui-platform -p flui-native -p flui-engine -p flui-scheduler
+  -p flui-runtime -p xtask -p flui-app -p flui-testing` — 1435 из 1441. Из шести упавших два
+  относились к этому PR и исправлены: `parity_document_matches_its_source` (правка внесена в
+  `platform-parity.toml`, документ перегенерирован) и `native_window_commands` (допуск штампа
+  кадра под загруженной машиной; отдельно проходит). Четыре не относятся:
+  `an_intent_opens_its_link_or_documents` (POSIX-путь из file-URL на Windows),
+  `the_driver_agent_contains_every_failure` (падает и на базе, см. LY55) и два trybuild-набора
+  (`flui-platform::compile_fail`, `flui-native::compiler_guards`): у 1.100.0 здесь нет `rust-src`,
+  и rustc не печатает фрагменты std. Не запускалось: код Apple
+  (`http/apple/session.rs`, девять классов с `ContainedIvars`) на этой машине не собирается — у
+  1.100.0 нет Apple-целей, а 1.99.0 не собирает `flui-foundation`; его типизирует job
+  `cross-typecheck`, а на устройстве он не запускался. Linux, wasm32 и Android — только CI.
 
 ## Отступление от порядка, решённое владельцем
 
