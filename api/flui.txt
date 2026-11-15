@@ -9556,6 +9556,13 @@ fn flui::native::HostWindow::accessibility(&self) -> Option<alloc::rcs::arc::Arc
 fn flui::native::HostWindow::as_any(&self) -> &dyn core::any::Any { .. }
 fn flui::native::HostWindow::capture_text_sizing(&self, owner: flui_native::host_window::sealed::OwnerThreadToken) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError>
 fn flui::native::HostWindow::text_store_host(&self, owner: flui_native::host_window::sealed::OwnerThreadToken) -> Option<alloc::rcs::rc::Rc<dyn flui::platform::TextStoreHost>>
+pub struct flui::native::NativeWindow { .. }
+impl Clone for flui::native::NativeWindow
+impl core::fmt::Debug for flui::native::NativeWindow
+pub fn flui::native::NativeWindow::with<R>(&self, f: impl FnOnce(&dyn flui::native::HostWindow) -> R) -> Option<R>
+pub enum flui::native::NativeWindowCapability
+impl core::fmt::Debug for flui::native::NativeWindowCapability
+impl flui::platform::capability::Capability for flui::native::NativeWindowCapability { type Handle = flui::native::NativeWindow; }
 pub fn flui::native::with_window<R>(address: flui::foundation::PresentationAddress, f: impl FnOnce(&dyn flui::native::HostWindow) -> R) -> Option<R>
 pub fn flui::open_secondary_window(config: flui::AppConfig, policy: flui::WindowPolicy) -> Result<(), flui::AppWindowError>
 pub fn flui::open_window<V>(config: flui::AppConfig, policy: flui::WindowPolicy, root: V) -> Result<flui::app::WindowRequest, flui::AppWindowError> where V: flui::prelude::View + Clone + 'static

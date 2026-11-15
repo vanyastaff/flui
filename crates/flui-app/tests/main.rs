@@ -63,6 +63,35 @@ mod runner_keyboard_traversal;
 #[path = "headless_storage.rs"]
 mod headless_storage;
 
+// The escape hatch from a widget, through the same headless kit. It exists
+// with the `native` feature, which CI's `test` job turns on through the
+// facade's `flui/native` (`TEST_FEATURES` in `tools/xtask/src/tasks.rs`).
+#[cfg(all(
+    feature = "native",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[path = "native_window.rs"]
+mod native_window;
+
+#[cfg(all(
+    feature = "native",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn native_window() {
+    run_table(
+        "native_window",
+        &[(
+            "native_window::a_widget_acquires_its_window_in_create_state",
+            native_window::a_widget_acquires_its_window_in_create_state as fn(),
+        )],
+    );
+}
+
 // The driver agent's threads are read from `/proc`; the property is the runner's, the same on
 // every desktop.
 #[cfg(target_os = "linux")]

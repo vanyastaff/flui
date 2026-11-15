@@ -204,10 +204,6 @@ pub enum MacOSBackdropError {
     /// ([`UnsupportedReason::NotOnThisDevice`]).
     #[error(transparent)]
     Unsupported(#[from] Unsupported),
-    /// The window is not on the AppKit main thread's owner lane, where its
-    /// views live.
-    #[error("the window is not on the AppKit main thread's owner lane")]
-    NotOnTheMainLane,
     /// AppKit did not create the view that draws the backdrop.
     #[error("AppKit did not create the backdrop's view")]
     NoBackdropView,
@@ -252,8 +248,8 @@ impl AppKitWindow<'_> {
     /// time, so an input left `None` is AppKit's default.
     ///
     /// # Errors
-    /// [`MacOSBackdropError`]: the window is closed or off the AppKit main
-    /// lane, Liquid Glass before macOS 26, a corner radius that is not finite
+    /// [`MacOSBackdropError`]: the window is closed,
+    /// Liquid Glass before macOS 26, a corner radius that is not finite
     /// and not negative, a content view something else put there, or a view
     /// AppKit did not create. The window is then as it was.
     pub fn set_backdrop(self, backdrop: MacOSBackdrop) -> Result<(), MacOSBackdropError> {
@@ -266,11 +262,8 @@ impl AppKitWindow<'_> {
             return Err(MacOSBackdropError::InvalidCornerRadius);
         }
         let window = self.0;
-        if !window.owner_is_main {
-            return Err(MacOSBackdropError::NotOnTheMainLane);
-        }
         let main = MainThreadMarker::new()
-            .expect("BUG: a main-lane window lives on the main thread, where it is used");
+            .expect("BUG: a window is neither Send nor Sync, so it is used where it was made");
         if window.closed.load(Ordering::Acquire) {
             return Err(MacOSBackdropError::CLOSED);
         }
@@ -281,15 +274,12 @@ impl AppKitWindow<'_> {
     /// A window without a backdrop is left as it is.
     ///
     /// # Errors
-    /// [`MacOSBackdropError`]: the window is closed or off the AppKit main
-    /// lane, or its content view is one something else put there.
+    /// [`MacOSBackdropError`]: the window is closed,
+    /// or its content view is one something else put there.
     pub fn clear_backdrop(self) -> Result<(), MacOSBackdropError> {
         let window = self.0;
-        if !window.owner_is_main {
-            return Err(MacOSBackdropError::NotOnTheMainLane);
-        }
         let main = MainThreadMarker::new()
-            .expect("BUG: a main-lane window lives on the main thread, where it is used");
+            .expect("BUG: a window is neither Send nor Sync, so it is used where it was made");
         if window.closed.load(Ordering::Acquire) {
             return Err(MacOSBackdropError::CLOSED);
         }

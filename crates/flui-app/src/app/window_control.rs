@@ -261,6 +261,20 @@ impl WindowCommandQueues {
         })
     }
 
+    /// The window `id` while a presentation is drawn in it and it is open.
+    #[cfg(feature = "native")]
+    pub(crate) fn window_with_id(
+        &self,
+        id: flui_platform::WindowId,
+    ) -> Option<Rc<dyn PlatformWindow>> {
+        self.queues.borrow().iter().find_map(|(queue, handle)| {
+            let window = queue.upgrade()?.window.upgrade()?;
+            // A closed window keeps its queue until it is dropped; it is not
+            // handed out.
+            (window.id() == id && handle.state().is_ok()).then_some(window)
+        })
+    }
+
     /// Queue the close of the window presented at `address` that its close
     /// guard has let through: carried out on the next turn without asking
     /// again. Nothing happens once the window is gone.

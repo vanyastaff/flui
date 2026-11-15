@@ -242,12 +242,15 @@ pub mod services {
 /// (ADR-0254 §8). Requires the `native` feature; Evolving, not Stable
 /// (ADR-0089 §5).
 ///
-/// [`with_window`](native::with_window) runs a closure on the window a
-/// presentation is drawn in, by the address a window request resolves to or a
-/// close request names; a widget that holds only its `WindowHandle` has no
-/// address to give it yet (that path comes with the window handler passed at
-/// open, ADR-0254 §4). Each system's module has an extension trait
-/// implemented for `dyn HostWindow`, the window as the core host hands it out.
+/// A widget reaches the window it is presented in as a capability: it acquires
+/// a [`NativeWindow`](native::NativeWindow) with
+/// `ctx.capability::<NativeWindowCapability>()` in `create_state`, keeps it in
+/// its state, and runs a closure on the window with
+/// [`NativeWindow::with`](native::NativeWindow::with) from a callback.
+/// [`with_window`](native::with_window) does the same by the address a window
+/// request resolves to or a close request names. Each system's module has an
+/// extension trait implemented for `dyn HostWindow`, the window as the core
+/// host hands it out.
 /// Its one method narrows the window to that system's view of it (`win32()`,
 /// `appkit()`) and answers `None` for a window of any other host (headless,
 /// another system), so nothing is asked of a window that cannot take it
@@ -264,7 +267,7 @@ pub mod native {
     pub use flui_app::native::macos;
     #[cfg(windows)]
     pub use flui_app::native::windows;
-    pub use flui_app::native::{HostWindow, with_window};
+    pub use flui_app::native::{HostWindow, NativeWindow, NativeWindowCapability, with_window};
 }
 /// The platform contracts and input vocabulary (`flui-platform`).
 ///

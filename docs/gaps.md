@@ -81,10 +81,11 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The panic boundary's Apple entries (AppKit and UIKit methods, blocks, GCD work items) are
   type-checked only: no panic has been seen contained on a Mac or an iPhone
   ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
-- The macOS extension `flui::native::macos` is type-checked only: neither the backdrop material
-  behind the content, nor Liquid Glass (`NSGlassEffectView`, macOS 26), nor the narrowing of an
-  AppKit window to its view has run on a Mac
-  ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
+- The macOS extension `flui::native::macos` is type-checked only beyond its backdrop: the
+  `AppKitWindow` commands (tabs, level, collection behavior, shadow), the application's alpha kept
+  through a deferred first reveal, their case
+  (`appkit_window_commands_do_what_they_say_or_answer_closed`) and `examples/native_window.rs`
+  on macOS have not run on a Mac ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
 - A macOS display whose current mode reports 0 Hz (some built-in panels) has no period and paces at the 60 Hz default, because the `CVDisplayLink` fallback is not written.
 
 ### Native Linux host (Wayland and X11)
@@ -274,7 +275,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - Backdrop materials, transparency, icon, capture exclusion.
 - The contract's window material (`WindowCommand::SetMaterial`: `Opaque`, `System`) is drawn on Windows (Mica, build 22621 and later; a Win32 window still opens on it) and on macOS (`NSVisualEffectView`'s window-background material, type-checked only); Linux, Web and mobile report it `Unavailable`. The backdrop material and Liquid Glass of `flui::native::macos` ran on macOS 27 (an M1, 2026-10-27, `an_appkit_backdrop_goes_behind_the_content_and_comes_away`); the contract's material on macOS waits for its Mac run; no window icon on Windows or Linux.
-- What the OS has and the host does not drive answers `NotYetOnThisHost`, not `NotOnThisPlatform`: the material on iOS (`UIVisualEffectView`), on Android from API 31 where the device blurs across windows, and on an AppKit window off the main lane; the macOS frame-rate hint from macOS 14 (`NSView.displayLink`); the pointer's shape on Android from API 24 (`PointerIcon`) and on an iPad from iOS 13.4 (`UIPointerStyle`). Below those versions, on an iPhone, or with the device's cross-window blur off, the answer is `NotOnThisDevice`. Only the rules' table tests ran (on Windows); none of the iOS, Android or macOS paths has run on a device.
+- What the OS has and the host does not drive answers `NotYetOnThisHost`, not `NotOnThisPlatform`: the material on iOS (`UIVisualEffectView`) and on Android from API 31 where the device blurs across windows; the macOS frame-rate hint from macOS 14 (`NSView.displayLink`); the pointer's shape on Android from API 24 (`PointerIcon`) and on an iPad from iOS 13.4 (`UIPointerStyle`). Below those versions, on an iPhone, or with the device's cross-window blur off, the answer is `NotOnThisDevice`. Only the rules' table tests ran (on Windows); none of the iOS, Android or macOS paths has run on a device.
 
 ### Unaudited rows
 

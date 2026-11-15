@@ -31,7 +31,9 @@ pub use backdrop::{
 };
 use delegate::{create_window_delegate, display_of_screen};
 pub use ext::{
-    AppKitWindow, MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
+    AppKitWindow, AppKitWindowError, InvalidWindowAlpha, MacOSCollectionBehavior,
+    MacOSMissionControl, MacOSSpaces, MacOSWindowAlpha, MacOSWindowCycle, MacOSWindowExt,
+    MacOSWindowLevel, TabJoinError,
 };
 
 use std::cell::OnceCell;
@@ -234,7 +236,7 @@ struct MacOSWindowState {
 
     /// The window was opened `visible: true` with
     /// [`WindowReveal::AfterFirstFrame`] and is ordered front, but at
-    /// `alphaValue` 0: the first reveal — alpha back to 1 — is deferred
+    /// `alphaValue` 0: the first reveal — alpha back to [`Self::alpha`] — is deferred
     /// until the embedder reports a presented frame
     /// ([`PlatformWindow::reveal_after_first_frame`]) or asks for the window
     /// explicitly (`show`/`set_visible(true)`/`activate`). Opt-in, because
@@ -251,6 +253,11 @@ struct MacOSWindowState {
     /// transparent window is composited normally, so the first frame
     /// presents into it, and nothing is on screen until it has.
     first_reveal_pending: bool,
+
+    /// The alpha the application gave the window (`AppKitWindow::set_alpha`),
+    /// opaque until then: what `alphaValue` is once the window is revealed.
+    /// While a first reveal is pending AppKit holds 0 and this waits for it.
+    alpha: MacOSWindowAlpha,
 
     /// The frame last asked for, at open or by `SetFrame`: AppKit's style mask
     /// tells a system title bar from none, and only this tells a title bar of
@@ -319,8 +326,18 @@ impl MacOSWindow {
     /// the one call that decides which caller performs the reveal. The state
     /// lock is released before the caller sends any AppKit message, so it is
     /// never held across one.
-    fn take_pending_first_reveal(&self) -> bool {
-        std::mem::replace(&mut self.state.lock().first_reveal_pending, false)
+    fn take_pending_first_reveal(&self) -> Option<MacOSWindowAlpha> {
+        let mut state = self.state.lock();
+        std::mem::replace(&mut state.first_reveal_pending, false).then_some(state.alpha)
+    }
+
+    /// Keep `alpha` as the application's, returning whether AppKit's
+    /// `alphaValue` takes it now: not while a first reveal is pending, which
+    /// reveals the window at it.
+    fn keep_alpha(&self, alpha: MacOSWindowAlpha) -> bool {
+        let mut state = self.state.lock();
+        state.alpha = alpha;
+        !state.first_reveal_pending
     }
 
     /// Create a new macOS window, on the main thread `mtm` proves this is.
@@ -448,10 +465,9 @@ impl MacOSWindow {
         // the window is made on.
         let owner = crate::owner::apple::macos::owner_queue();
         let owner_is_main = true;
-        options.frame = options.frame.at_open(&appkit_window_capabilities(
-            owner_is_main,
-            windows.presentation,
-        ));
+        options.frame = options
+            .frame
+            .at_open(&appkit_window_capabilities(windows.presentation));
         let style = FrameStyle::of(options.frame);
         // SAFETY: AppKit makes and configures an NSWindow only on the main
         // thread, which the `MainThreadMarker` this takes proves this is; all
@@ -617,7 +633,7 @@ impl MacOSWindow {
             // simply stay hidden either: an un-ordered window gets no Metal
             // drawable (see `MacOSWindowState::first_reveal_pending`). Alpha
             // 0 gives the surface a window to present into while the viewer
-            // sees nothing; `reveal_after_first_frame` restores alpha 1.
+            // sees nothing; `reveal_after_first_frame` restores the window's alpha.
             // The default `WindowReveal::AtOpen` leaves alpha alone — the
             // caller has no first frame to report — and `visible: false`
             // stays hidden until asked, as before.
@@ -670,6 +686,7 @@ impl MacOSWindow {
                     sequence: ModeSequence::default(),
                     occlusion_visible: true,
                     first_reveal_pending,
+                    alpha: MacOSWindowAlpha::OPAQUE,
                     frame: options.frame,
                     system_controls: None,
                 }),
@@ -1300,7 +1317,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
     fn capabilities(_: &MacOSLoop, windows: &MacOSWindows) -> WindowCapabilities {
         // Every window the platform opens routes through the AppKit main lane
         // (`MacOSWindow::try_new`).
-        appkit_window_capabilities(true, windows.presentation)
+        appkit_window_capabilities(windows.presentation)
     }
 
     fn frame_inset(owner: &MacOSLoop, _: &MacOSWindows, _scale_factor: f64) -> Size<f64> {
@@ -1513,16 +1530,19 @@ impl PlatformWindow for MacOSWindow {
     }
 
     fn reveal_after_first_frame(&self) {
-        // The flag is settled before the message, so a second call sees
-        // `false`: the window becomes opaque exactly once for its deferred
-        // reveal.
-        if !self.take_pending_first_reveal() || self.closed.load(Ordering::SeqCst) {
+        // The flag is settled before the message, so a second call finds no
+        // reveal pending: the window takes the application's alpha exactly
+        // once for its deferred reveal.
+        let Some(alpha) = self.take_pending_first_reveal() else {
+            return;
+        };
+        if self.closed.load(Ordering::SeqCst) {
             return;
         }
         // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
         // window is used on its owner thread only.
         unsafe {
-            let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+            let _: () = msg_send![self.ns_window, setAlphaValue: alpha.get()];
         }
         tracing::debug!("macOS: window revealed after its first presented frame");
     }
@@ -1641,17 +1661,18 @@ impl MacOSWindow {
     /// fullscreen mode is kept.
     fn show_window(&self) -> Result<(), ApplyError> {
         // An explicit show settles a deferred first reveal: the window is
-        // made opaque along with being ordered.
-        let settle_reveal = self.take_pending_first_reveal();
-        self.order_front(settle_reveal)?;
+        // given the application's alpha along with being ordered.
+        let reveal = self.take_pending_first_reveal();
+        self.order_front(reveal)?;
         self.enter_mode_when_shown();
         Ok(())
     }
 
     /// Deminiaturize the window and order it front as the key window, made
-    /// opaque first when `settle_reveal`. A window that closes meanwhile (a
+    /// given `reveal` first, the application's alpha a deferred first reveal
+    /// owes it. A window that closes meanwhile (a
     /// deminiaturize reaches the delegate) answers `Closed`.
-    fn order_front(&self, settle_reveal: bool) -> Result<(), ApplyError> {
+    fn order_front(&self, reveal: Option<MacOSWindowAlpha>) -> Result<(), ApplyError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(ApplyError::Closed);
         }
@@ -1659,8 +1680,8 @@ impl MacOSWindow {
         // owner thread only. Deminiaturizing and ordering do not toggle
         // zoom/fullscreen.
         unsafe {
-            if settle_reveal {
-                let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+            if let Some(alpha) = reveal {
+                let _: () = msg_send![self.ns_window, setAlphaValue: alpha.get()];
             }
             let minimized: bool = msg_send![self.ns_window, isMiniaturized];
             if minimized {
@@ -1679,12 +1700,12 @@ impl MacOSWindow {
     }
 
     fn activate_window(&self) {
-        let settle_reveal = self.take_pending_first_reveal();
+        let reveal = self.take_pending_first_reveal();
         // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
         // window is used on its owner thread only.
         unsafe {
-            if settle_reveal {
-                let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+            if let Some(alpha) = reveal {
+                let _: () = msg_send![self.ns_window, setAlphaValue: alpha.get()];
             }
             let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
         }
@@ -1845,7 +1866,7 @@ impl MacOSWindow {
             let capabilities = capabilities_of(
                 flags,
                 heading,
-                appkit_window_capabilities(self.owner_is_main, self.presentation),
+                appkit_window_capabilities(self.presentation),
             );
             Sample::read(geometry, |state| {
                 let state = state
