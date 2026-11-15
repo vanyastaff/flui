@@ -329,6 +329,13 @@ fn display_range(display: Option<DisplayColor>, hdr: &wgpu::DisplayHdrInfo) -> (
 /// as SDR white, `1.0`. wgpu answers most such figures with `None`, which
 /// would otherwise read as a display that says nothing and so as
 /// HDR-capable.
+///
+/// One figure that fails is enough, even beside a multiplier that passes
+/// (where wgpu would take the multiplier): a surface that reports a
+/// luminance no display has is not trusted with HDR, and SDR is the side a
+/// wrong answer costs least on. A finite multiplier of zero, below zero or
+/// subnormal passes this check and is returned as it is; it is no more than
+/// white, so the callers' `> 1.0` filters read it as SDR.
 fn surface_headroom(hdr: &wgpu::DisplayHdrInfo) -> Option<f32> {
     let multiplier = hdr.headroom.and_then(|headroom| headroom.current);
     let luminances = hdr
@@ -778,6 +785,10 @@ mod tests {
         for sdr_display in [
             hdr_display(1.0),
             hdr_display(0.5),
+            hdr_display(0.0),
+            hdr_display(-0.0),
+            hdr_display(-2.0),
+            hdr_display(1.0e-45),
             hdr_display(f32::NAN),
             hdr_display(f32::INFINITY),
             hdr_display(f32::NEG_INFINITY),
