@@ -622,7 +622,9 @@ is removed. Whether the display is in high range, and its headroom, come from th
 one does it read wgpu's `DisplayHdrInfo` (ADR-0256 §2,
 `the_platform_colour_decides_the_display_state_over_the_surface_report`). A high-range
 display whose headroom is no more than white is SDR, and one reported in sRGB gets no
-wide-gamut surface. The renderer keeps the newest report apart from the one its surface was
+wide-gamut surface. A headroom or luminance the surface reports that is no finite number
+is SDR white too, never a display that reports nothing
+(`hdr_on_a_display_without_headroom_falls_to_wide_gamut_then_srgb`). The renderer keeps the newest report apart from the one its surface was
 given (`set_display_color`): when they differ the held surface is configured again, and every
 recreation and recovery resolves the newest, never the report captured at construction
 (`a_recreation_after_the_display_changes_resolves_its_new_range`).

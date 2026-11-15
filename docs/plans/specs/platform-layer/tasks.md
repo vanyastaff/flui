@@ -318,7 +318,7 @@ graph LR
 | **LY106** | **Хост Wayland: ограниченные данные композитора и гигиена протокола.** Клиентская рамка ограничивает масштаб и площадь рисования и держит ограниченный набор буферов на часть; на устройство один представленный, ещё не назначенный offer, и он уничтожается; `damage_buffer` только с версии 4 `wl_surface`; ушедшие seat и указатель снимают свои grab и фокус клавиатуры (удержанные клавиши получают KeyUp); реестр не хранит глобалы, которых не привязывает; источник drag берёт разрешение на запись до вызова провайдера приложения; одновременные чтения clipboard делят один ответ; ввод пользуется глобалами цикла, состояние указателя рамки — на seat; случаи `wayland_window`, которым нужен протокол сверх xdg-shell или seat (`wayland_window::optional`), CI гоняет и под headless Weston, и под headless sway (`cargo xtask wayland-optional`, где недостающее — падение), остальной `wayland_window` — под Weston: sway 1.9 тайлит и предлагает `xdg_wm_base` 2, так что maximize не исполняет; пропустивший тест говорит это в выводе | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/wayland*`, `transfer/linux/*`, `drag/wayland/*`, `.github/workflows/*` | `module-dag`, `file-length`, `ci-verify` | враждебный масштаб не выделяет гигабайт; композитор, не отдающий буферы; поток `data_offer` без `selection` не растёт; seat, ушедший с удержанной кнопкой; каждый падает при откате; `wayland_window::optional` под sway | L; Dev: Linux (Wayland) |
 | **LY107** | **Ядро владельца: одна точка вызова, одно решение на отказ.** Обработчик раскладки клавиатуры — один `HandlerSlot` в `owner/` для каждого цикла, `OwnerTurnSlot` реализует `HandlerSlot`; исход паники `exit_policy` решает `AppDelivery::exit_policy` один раз (ADR-0258, ADR-0281), а не хост; `AppDelivery::question` сохраняет ответ обработчика, когда падает отчёт после него; правило «наступивший срок не крутит цикл» — одно, через `WakeDeadline::{take_due, arm}`; у `Services::page_origin` и запечатанного `Platform` нет тел по умолчанию; `bind` ставит `delivering`; `owner/handlers.rs` назван по содержимому, тесты `OwnerSignal` — рядом с `signal.rs`; лестница хостов в `lib.rs` написана один раз; маркеры и формулировки удержания после ADR-0281 убраны | LY105, LY106 | `crates/flui-native/src/owner/*`, `input/{linux,windows,headless}*`, `host.rs`, `platform.rs`, `lib.rs`, `tools/xtask/src/globals/fixture.rs` | `module-dag`, `globals`, `panic-boundary`, `markers`, `file-length` | повторная регистрация обработчика раскладки одинакова на каждом цикле; паника `exit_policy` — одна строка таблицы на все хосты; вето конца сессии переживает панику отчёта; trybuild: `impl Services` без `page_origin` не компилируется; каждый падает при откате | L + W + T; Dev: macOS (насос AppKit) |
 | **LY108** | **flui-app честно отвечает своим обработчикам.** Маршрут кадра — `FnMut(FrameRequest) -> FrameOutcome`, и каждый отказ runtime получает свой ответ; `WindowDelivery::run` возвращает результат только той доставки, которую поставил этот вызов; `Held.inputs` не ограничен числом (ограничение отбрасывало бы ввод): ввод ждёт маршрута не дольше одного хода владельца; размещение окна читается один раз, до открытия, без второго блокирующего `recall`; **открыто:** оно читается и пишется через хранилище хоста, мимо `StorageCapability` приложения ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); `display_handle` Android и Web отвечает `Unavailable` там же, где `window_handle`; маркеры задач убраны | — | `crates/flui-app/src/app/{window_routes.rs,desktop.rs,runner/*}`, `crates/flui-native/src/{owner/window_delivery.rs,window/android.rs,window/web.rs}` | `workspace`, `reach`, `markers`, `cross-typecheck` | таблица «отказ runtime → `FrameOutcome`»; ввод, поставленный с другого потока, не отдаёт свой ответ чужому вызову; размещение читается из хранилища один раз; каждый путь runner ставит маршрут ввода к концу хода, который устанавливает окно; каждый падает при откате | L + W + T; Dev: Android |
-| **LY109** | **Отчёты о показе, цвет и граница паники.** Отметка времени показа ограничена в одном месте, через которое проходит каждый хост; пойманная паника в делегате `URLSession` завершает передачу ошибкой; ivar'ы, владеющие пользовательским кодом, снимаются под containment при отсоединении, и гейт `panic-boundary` видит ivar'ы каждого `define_class!`; `DisplayColor` держит свой инвариант типом (закрытые поля, `try_new`); неконечный headroom поверхности читается как SDR; срок простоя не бывает уже прошедшим; `facade-combos` проверяет каждую фичу фасада поодиночке | — | `crates/flui-native/src/{owner/*,http/apple.rs,window/apple/ios.rs}`, `crates/flui-platform/src/display.rs`, `crates/flui-engine/src/surface_color.rs`, `crates/flui-scheduler/src/frame_clock.rs`, `tools/xtask/src/{panic_boundary/*,tasks/facade.rs}` | `panic-boundary` (+ `--self-test`), `facade-combos`, `feature-matrix`, гейт API-замыкания, `cross-typecheck` | отчёт с отметкой из будущего не останавливает обратную связь окна; самотест гейта с посаженным ivar; таблица `DisplayColor::try_new`; headroom NaN и ∞; каждый падает при откате | L + T; Dev: macOS, iOS |
+| **LY109** | **Отчёты о показе, цвет и граница паники.** Отметка времени показа ограничена в одном месте, через которое проходит каждый хост; пойманная паника в делегате `URLSession` завершает передачу ошибкой; ivar'ы, владеющие пользовательским кодом, снимаются под containment при отсоединении, и гейт `panic-boundary` видит ivar'ы каждого `define_class!`; `DisplayColor` держит свой инвариант типом (перечисление `Standard(gamut)` / `High(gamut, headroom)`, у стандартного диапазона headroom нет); headroom или яркость поверхности, которым нельзя верить, читаются как SDR; срок простоя не бывает уже прошедшим; каждую фичу фасада поодиночке собирает `feature-matrix` (`cargo hack clippy --workspace --each-feature`), `facade-combos` не меняется | — | `crates/flui-native/src/{owner/*,http/apple.rs,window/apple/ios.rs}`, `crates/flui-platform/src/display.rs`, `crates/flui-engine/src/surface_color.rs`, `crates/flui-scheduler/src/frame_clock.rs`, `tools/xtask/src/{panic_boundary/*,tasks/facade.rs}` | `panic-boundary` (+ `--self-test`), `facade-combos`, `feature-matrix`, гейт API-замыкания, `cross-typecheck` | отчёт с отметкой из будущего не останавливает обратную связь окна, поток отметок с опережением доходит до каждого запроса; самотест гейта с посаженным ivar; строка записи, противоречащая себе, — ошибка разбора; headroom NaN и ∞, белый уровень 0 и ниже; каждый падает при откате | L + T; Dev: macOS, iOS |
 | **LY110** | **Escape hatch делает то, что говорит, и имеет потребителя.** Команды `AppKitWindow` возвращают `Result<_, AppKitWindowError>`, проверяют закрытое окно и главную дорожку; прозрачность приложения хранится в состоянии окна и переживает отложенный первый показ, её тип не держит NaN; главное окно достижимо из того, что держит виджет, и это показывает один пример; у каждого метода `Win32Window` есть тест, либо метод удалён; `NotOnTheOwnerThread` удалён; `MacOSWindowLevel` и `MacOSCollectionBehavior` не публикуют сырые значения ОС | — | `crates/flui-native/src/window/{apple/macos/ext.rs,windows/*}`, `crates/flui-app/src/*`, `src/*` (фасад), `examples/*`, `docs/{gaps,extending}.md` | `workspace`, `reach`, `facade-combos`, `doc-strict`, гейт API-замыкания | команда на закрытом окне отвечает типизированной ошибкой; прозрачность после первого показа; пример собирается; тесты методов `Win32Window`; каждый падает при откате | L + W + T; Dev: macOS |
 | **LY111** | **Манифесты объявляют только то, что линкует сборка.** `flui build` берёт фичи каждого узла из `cargo tree -e normal,no-proc-macro`: фича dev-зависимости ничего не объявляет (Android; iOS и остальные манифесты проверяются на то же); строка LY56 и R5.12 переписаны под объём ADR-0307, остаток открыт в `docs/gaps.md` | — | `crates/flui-cli/src/{declarations.rs,build/*}`, `docs/plans/specs/platform-layer/{tasks,requirements}.md`, `docs/gaps.md` | `workspace`, `checks` | строка «фича dev-зависимости ничего не объявляет» падает при откате; `the_manifest_declares_what_the_linked_crates_need` проходит без ребра dev-зависимости | L |
 | **LY112** | **Одно правило написано один раз.** Порядок «полноэкранный важнее развёрнутого» у Wayland — через `mode_of`, и у `every_window_system_decides_the_mode_alike` есть столбец Wayland; `every_backend_steps_a_turn_alike` покрывает X11 и Wayland; перевод логического размера в размер устройства — один, с одним поведением вне диапазона; масштаб едет от контракта вниз как `DevicePixelRatio` (`DisplayInfo::scale_factor`), без ручных `is_finite() && > 0.0`; такты счётчика в наносекунды — одна функция; `drag/{wayland,x11}.rs` переезжают в `drag/linux/` | LY104, LY105, LY106 | `crates/flui-native/src/{window,input,drag}/*`, `crates/flui-platform/src/display.rs`, `crates/flui-foundation/src/*` | `module-dag`, `file-length`, `workspace`, гейт API-замыкания | табличные тесты с новыми столбцами; `rg` по ручной проверке масштаба пуст; перенос — тот же набор зелёный до и после | L + W + T |
@@ -4706,7 +4706,7 @@ graph LR
   исходном виде: Weston отбрасывает commit свёрнутого окна, Wayland не разворачивает),
   `WindowFixture::present_and_request_frame`; фикстуры Win32 (своя flip-model DXGI swap chain на
   D3D11), Wayland, headless. **Тесты** (откат проверен для каждого):
-  `a_presentation_report_rides_the_first_request_at_or_after_it`,
+  `a_presentation_report_rides_the_next_request`,
   `a_platform_stamp_is_rebased_by_its_distance_from_the_reading`,
   `a_shown_present_is_aged_and_two_reads_measure_the_period`,
   `statistics_that_name_no_shown_present_place_none`, таблица `presentation_feedback`
@@ -4935,7 +4935,7 @@ graph LR
   каждое чтение (`Captured::Displays`), строка `displays` несёт
   `DisplayRead::{Observed { revision, displays }, Failed(ReadFailure)}`. Дисплей в схеме — метка
   (`DisplayId::get` платформы, смысл только внутри записи) и поля через публичные
-  `flui_platform::{DisplayParts, ColorParts}` (`DisplayInfo::into_parts`, `DisplayParts::into_info`),
+  `flui_platform::DisplayParts` (`DisplayInfo::into_parts`, `DisplayParts::into_info`; `ColorParts` убран в LY109),
   не `non_exhaustive`. Replay выпускает свой id на каждую метку (`DisplayKey::Injected`), один на
   весь replay; ревизия снимка пишется как сведение и не воспроизводится. Headless получает
   `HeadlessDisplayControls::{replace, fail_next_read}`. Тесты: золотой
@@ -5440,6 +5440,96 @@ graph LR
   `xtask checks` зелёный; `xtask expectations`: изменение не трогает ни одного ожидания. Не
   запускалось: Linux, wasm32, Android и Apple; правки `window/android.rs` и `window/web.rs`
   впервые собирает CI.
+- [x] **LY109** — ветка `platform/presentation-colour-boundary` (#2644). Семь находок проверки
+  готовых задач; шесть исправлены, одна (п. 7) проверена и оказалась покрытой.
+  (1) Отчёт о показе кадра со штампом далеко в будущем (насыщенный rebase, произвольный
+  `tv_sec_hi` Wayland, `presentedTime` Metal) вытеснял все следующие отчёты окна:
+  `PresentationReports::report`, через который идут отчёты всех хостов, отбрасывает отчёт, чей
+  штамп опережает показание событийных часов больше чем на `REPORT_LEAD` (секунда), а отчёт с
+  меньшим опережением несёт следующий запрос с его собственным штампом. Правило решения 6
+  ADR-0257 «отчёт, ещё впереди, ждёт» заменено: хост, у которого каждый штамп опережает часы
+  (композитор добавляет задержку дисплея), не донёс бы ни одного отчёта, пока окно анимируется
+  (следующий отчёт вытесняет ждущий), а прижатие штампа к показанию сдвигало бы фазу сетки
+  refresh, по которой планирует часы кадра. Часы кадра называют refresh после отчёта, лежащего
+  после показания (`the_next_refresh_lies_on_the_grid_the_report_starts`). Замену правила ADR
+  утверждает владелец до слияния. Win32 больше не отбрасывает «будущий» штамп сам:
+  `ShownPresent` отдаёт штамп и показание счётчика как есть, правило одно — у шва. Тесты:
+  `a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it` (`tests/`, headless),
+  `a_presentation_report_rides_the_next_request`,
+  `a_report_stamped_far_ahead_does_not_outrank_the_reports_after_it`,
+  `a_stream_of_stamps_that_lead_the_clock_reaches_every_request` и
+  `a_window_whose_stamps_lead_the_clock_reports_on_every_request` (`tests/`, headless); с
+  прижатием к показанию падают все четыре последних (`left: Some(40), right: Some(45)`, штамп
+  вместо показания прихода, `frame 1`), с удержанием до часов — поток не доходит до запроса.
+  (2) Паника в шаге делегата `NSURLSession` оставляла запрос без конца, а потерянный кусок тела —
+  тело «целым». Общая часть делегата и потока запроса вынесена в `http::apple::transfer` (чистая,
+  собирается под `test` на любом хосте): каждый шаг идёт под `contain_os_entry`, паника завершает
+  передачу `HttpError::Host` и отменяет задачу. Тесты: `a_delegate_step_that_panics_ends_the_transfer`
+  (без containment: `left: None, right: Some(Cancel)`), `a_task_ends_as_its_delegate_read_it`,
+  `a_full_buffer_suspends_the_task_until_the_reader_drains_it`.
+  (3) `dealloc`, который objc2 генерирует для класса `define_class!`, уничтожает ivars вне
+  `os_entry`. Вид UIKit может быть последним владельцем своих ivars: `input` принадлежит только
+  ему, `pin_for_native_callback` держит вид в autorelease pool после закрытия окна, а поля
+  `IOSWindow` отпускают `delivery` раньше `facets`, где лежит `Retained<UIView>`. Каждый класс
+  крейта (девять с ivars) объявляет их как `ContainedIvars<T>`, чей `Drop` — один вызов `os_entry`;
+  у `FluiAppDelegate` ivars убраны (пустая структура). `xtask panic-boundary` читает заголовок
+  каждого `define_class!`: ivars другого типа и собственный `Drop` класса не через границу —
+  находки (вид «Objective-C destructor», 10 входов); самотест — 35 ожидаемых находок, до правки
+  классов gate выдал 10 находок на реальном крейте. Тест
+  `contained_ivars_keep_a_destructors_panic_inside_the_boundary` без `os_entry` падает паникой
+  деструктора; ответ входа `dealloc` после паники пишет в журнал тип ivars
+  (`std::any::type_name`) внутри границы (аргумент, вычисленный до вызова, gate не пропускает),
+  без этого тест падает (`left: ["logged: …"]`). ADR-0151 §16 переписан: правило входа и `ContainedIvars` в теле
+  раздела, строки «Amended» о §16 сняты.
+  (4) `DisplayColor` — перечисление `Standard(ColorGamut) | High(ColorGamut, Result<Headroom,
+  CapabilityAbsence>)` (`#[non_exhaustive]`): headroom есть только у высокого диапазона, так что
+  противоречивого значения нет; `color_space()` и `headroom()` читают его (`Headroom::SDR` для
+  стандартного). `ColorParts` и `DisplayColor::into_parts` убраны, `DisplayParts::color` держит сам
+  `DisplayColor`, `DisplayParts::into_info` снова безотказный. Строку записи со стандартным
+  диапазоном и headroom, отличным от SDR, отвергает разбор кодека в одном месте. В записи
+  `headless_platform_reads.jsonl` была именно такая строка (стандартный диапазон без headroom:
+  ни один конструктор хоста её не строил), она исправлена на high-range, а стандартный диапазон
+  покрыт вторым дисплеем той же строки (`srgb`, SDR white). Тесты:
+  `a_display_colour_that_contradicts_itself_is_refused` (без проверки в кодеке падает на первой
+  противоречивой строке), `platform_recordings_replay_on_the_headless_host` (стандартный
+  дисплей), doctest `compile_fail,E0061` (стандартному диапазону headroom не передать).
+  `api/flui.txt` поправлен вручную: генератор вызывает `rustup run nightly`, а `rustup` на этой
+  машине запускать нельзя; сверяет job `public-api`.
+  (5) Нечисловой headroom поверхности wgpu отдаёт как `None`, и движок читал его как «дисплей
+  ничего не сообщает», то есть HDR. Теперь `surface_headroom` проверяет каждую цифру поверхности:
+  множитель конечен, яркость (пик, белый уровень SDR) конечна и положительна; иначе — SDR.
+  Строки (NaN, ∞, белый уровень 0, −0, отрицательный, субнормальный, пик 0 и отрицательный)
+  добавлены в `hdr_on_a_display_without_headroom_falls_to_wide_gamut_then_srgb`; с проверкой одной
+  конечности падает строка белого уровня 0 (`left: Hdr, right: WideGamut`).
+  (6) Срок idle-работы мог быть уже прошедшим: `FrameClock::next_presentation_after` возвращал сам
+  отчёт, если тот позже показания, а pump спрашивал о vsync кадра. Теперь называется refresh после
+  отчёта, а pump спрашивает о собственном показании. Тесты:
+  `the_idle_work_of_a_frame_reached_late_ends_at_a_refresh_still_ahead` (без правок: `left: 0,
+  right: 1`; только с правкой scheduler падает второй случай) и строка в
+  `the_next_refresh_lies_on_the_grid_the_report_starts`.
+  (7) `feature-matrix` собирает фасад с каждой фичей отдельно (`cargo hack clippy --workspace
+  --each-feature` включает корневой пакет; `--print-command-list` показывает `testing`,
+  `single-instance`, `unstable-input`, `unstable-windows`, `devtools`, `driver`), поэтому
+  `facade-combos` не менялся; в его комментарии записано, кто собирает одиночные фичи. Строка
+  задачи в таблице говорит то же (job `feature-matrix` в `ci.yml` запускает
+  `cargo xtask feature-matrix --slice`, а `hack_passes` в `tools/xtask/src/tasks.rs` —
+  `cargo hack clippy --each-feature`). Правило отчёта о показе перенесено в тело ADR-0257
+  (решения 3 и 6–8 вместо датированного раздела «Amendment»), ADR-0256 §2 говорит, что недоверенные
+  цифры поверхности читает как SDR движок, а не wgpu.
+  Проверки на Windows (после исправлений по ревью, на слиянии с `main` `942184abe`): clippy
+  `--affected=origin/main --all-targets -D warnings` (все зависящие пакеты) — чисто; `xtask
+  checks`, `panic-boundary` (254 входа, 10 деструкторов, 0 находок) и `--self-test` (35) —
+  зелёные; doctests `flui-platform` — 67; nextest `-p flui-platform -p flui-native -p flui-engine
+  -p flui-app -p flui-testing -p flui-runtime -p flui-scheduler -p xtask` — 1441 из 1445. Четыре
+  упавших падают и на `main` на этом хосте: `an_intent_opens_its_link_or_documents` (POSIX-путь из
+  file-URL на Windows), `the_driver_agent_contains_every_failure` и два trybuild-набора
+  (`flui-platform::compile_fail`, `flui-native::compiler_guards`: rustc здесь не печатает
+  фрагменты std); ни один набор не касается цвета дисплея. `xtask expectations`: одно ожидание,
+  `api/flui.txt`. Не запускалось: код Apple (`http/apple/session.rs`, девять классов с
+  `ContainedIvars`, `tests/appkit_window.rs`) на этой машине не собирается — у 1.100.0 нет
+  Apple-целей, а 1.99.0 не собирает `flui-foundation`; его типизирует job `cross-typecheck`, на
+  устройстве он не запускался. Модели дисплея Linux, Android, web и Apple собраны и прогнаны под
+  `test` на Windows; `tests/wasm32/display.rs` не собирался. Linux, wasm32 и Android — только CI.
 - [x] **LY106** — ветка `platform/wayland-peer-bounds`. Девять находок аудита и двенадцать
   находок двух проверок подтверждены чтением кода до правки. (1) Масштаб: масштаб буфера окна —
   тип `BufferScale` (`window::linux::wayland::scale`), который ни один масштаб композитора

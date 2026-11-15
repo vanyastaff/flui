@@ -101,7 +101,7 @@ mod layer {
     use objc2_quartz_core::{CACurrentMediaTime, CALayer, CAMetalDrawable, CAMetalLayer};
 
     use crate::owner::handlers::PresentationReports;
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
+    use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 
     /// What a layer reports to: its window's reports, set once the window
     /// has them, and the refresh interval of the display the window is on, in
@@ -182,7 +182,8 @@ mod layer {
         // SAFETY:
         // - `CAMetalLayer` has no subclassing requirements beyond its
         //   superclasses'; Core Animation subclasses it the same way.
-        // - The class does not implement `Drop`; its ivars drop with it.
+        // - The class does not implement `Drop`; its ivars are destroyed
+        //   inside the panic boundary.
         // - Every instance has its ivars set before `CALayer`'s initializer
         //   runs: `init` sets fresh ones, and `initWithLayer:` shares the
         //   `Arc` of the layer Core Animation copies, so a presentation copy
@@ -191,7 +192,7 @@ mod layer {
         /// whose drawables report when they reached the screen.
         #[unsafe(super(CAMetalLayer, CALayer, NSObject))]
         #[name = "FLUIMetalLayer"]
-        #[ivars = Arc<Feedback>]
+        #[ivars = ContainedIvars<Arc<Feedback>>]
         pub(crate) struct FluiMetalLayer;
 
         // Every method runs its body in the panic boundary.
@@ -202,7 +203,7 @@ mod layer {
             #[unsafe(method_id(init))]
             fn init(this: Allocated<Self>) -> Option<Retained<Self>> {
                 os_entry("-[FLUIMetalLayer init]", (), AfterPanic::Abort, || {
-                    let this = this.set_ivars(Arc::default());
+                    let this = this.set_ivars(ContainedIvars::new(Arc::default()));
                     // SAFETY: `init` is `CALayer`'s designated initializer;
                     // the receiver has its ivars set above.
                     unsafe { msg_send![super(this), init] }
@@ -217,7 +218,7 @@ mod layer {
                     let feedback = layer
                         .downcast_ref::<FluiMetalLayer>()
                         .map_or_else(Arc::default, |layer| Arc::clone(layer.ivars()));
-                    let this = this.set_ivars(feedback);
+                    let this = this.set_ivars(ContainedIvars::new(feedback));
                     // SAFETY: `initWithLayer:` is `CALayer`'s initializer for
                     // a copy; `layer` is the live layer Core Animation copies.
                     unsafe { msg_send![super(this), initWithLayer: layer] }

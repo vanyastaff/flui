@@ -27,15 +27,14 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{
-    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts,
-    ControlsOffset, DisplayId, DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom,
-    HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale,
-    MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
-    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
-    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
-    WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMode, WindowState,
-    WindowStateParts,
+    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ControlsOffset,
+    DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts, Headroom, HourCycle,
+    ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
+    MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
+    NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
+    SessionEndPhase, SizeConstraints, SystemControls, SystemNotice, SystemPreferences,
+    TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance, WindowExecutionState,
+    WindowFrame, WindowGeometry, WindowInsets, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -2048,8 +2047,9 @@ fn absence_from_wire(absence: wire::Absence) -> DtoResult<CapabilityAbsence> {
     })
 }
 
-/// `display` in the schema, through [`DisplayParts`] and [`ColorParts`]: a
-/// field added there fails to compile here until it is mirrored.
+/// `display` in the schema, through [`DisplayParts`]: a field added there
+/// fails to compile here until it is mirrored, and a variant added to its
+/// colour is refused as unmirrored until it is.
 fn display_to_wire(display: &RecordedDisplay) -> DtoResult<wire::Display> {
     let DisplayParts {
         name,
@@ -2062,27 +2062,30 @@ fn display_to_wire(display: &RecordedDisplay) -> DtoResult<wire::Display> {
         color,
     } = display.parts.clone();
     let color = match color {
-        Ok(ColorParts {
-            gamut,
-            dynamic_range,
-            headroom,
-        }) => wire::DisplayColor::Known(wire::Color {
-            gamut: match gamut {
-                ColorGamut::Srgb => wire::Gamut::Srgb,
-                ColorGamut::DisplayP3 => wire::Gamut::DisplayP3,
-                ColorGamut::Rec2020 => wire::Gamut::Rec2020,
-                _ => return Err(DtoError::Unmirrored("ColorGamut")),
-            },
-            dynamic_range: match dynamic_range {
-                DynamicRange::Standard => wire::DynamicRange::Standard,
-                DynamicRange::High => wire::DynamicRange::High,
-                _ => return Err(DtoError::Unmirrored("DynamicRange")),
-            },
-            headroom: match headroom {
-                Ok(headroom) => wire::Headroom::Multiple(headroom.get()),
-                Err(absence) => wire::Headroom::Absent(absence_to_wire(absence)),
-            },
-        }),
+        Ok(color) => {
+            // The schema writes a standard range with the headroom it has by
+            // its variant, SDR white.
+            let (gamut, dynamic_range, headroom) = match color {
+                DisplayColor::Standard(gamut) => {
+                    (gamut, wire::DynamicRange::Standard, Ok(Headroom::SDR))
+                }
+                DisplayColor::High(gamut, headroom) => (gamut, wire::DynamicRange::High, headroom),
+                _ => return Err(DtoError::Unmirrored("DisplayColor")),
+            };
+            wire::DisplayColor::Known(wire::Color {
+                gamut: match gamut {
+                    ColorGamut::Srgb => wire::Gamut::Srgb,
+                    ColorGamut::DisplayP3 => wire::Gamut::DisplayP3,
+                    ColorGamut::Rec2020 => wire::Gamut::Rec2020,
+                    _ => return Err(DtoError::Unmirrored("ColorGamut")),
+                },
+                dynamic_range,
+                headroom: match headroom {
+                    Ok(headroom) => wire::Headroom::Multiple(headroom.get()),
+                    Err(absence) => wire::Headroom::Absent(absence_to_wire(absence)),
+                },
+            })
+        }
         Err(absence) => wire::DisplayColor::Absent(absence_to_wire(absence)),
     };
     Ok(wire::Display {
@@ -2118,25 +2121,34 @@ fn display_from_wire(wire: wire::Display) -> DtoResult<RecordedDisplay> {
             gamut,
             dynamic_range,
             headroom,
-        }) => Ok(ColorParts {
-            gamut: match gamut {
+        }) => {
+            let gamut = match gamut {
                 wire::Gamut::Srgb => ColorGamut::Srgb,
                 wire::Gamut::DisplayP3 => ColorGamut::DisplayP3,
                 wire::Gamut::Rec2020 => ColorGamut::Rec2020,
                 other => return Err(unread(other.name())),
-            },
-            dynamic_range: match dynamic_range {
-                wire::DynamicRange::Standard => DynamicRange::Standard,
-                wire::DynamicRange::High => DynamicRange::High,
-                other => return Err(unread(other.name())),
-            },
-            headroom: match headroom {
+            };
+            let headroom = match headroom {
                 wire::Headroom::Multiple(multiple) => Ok(Headroom::try_new(multiple)
                     .map_err(|error| invalid(format!("headroom {multiple}: {error}")))?),
                 wire::Headroom::Absent(absence) => Err(absence_from_wire(absence)?),
                 _ => return Err(unread("Headroom")),
-            },
-        }),
+            };
+            Ok(match dynamic_range {
+                // The one headroom a standard range has; any other, or none,
+                // is a row no display wrote.
+                wire::DynamicRange::Standard if headroom == Ok(Headroom::SDR) => {
+                    DisplayColor::Standard(gamut)
+                }
+                wire::DynamicRange::Standard => {
+                    return Err(invalid(
+                        "a standard-range display with a headroom other than SDR white",
+                    ));
+                }
+                wire::DynamicRange::High => DisplayColor::High(gamut, headroom),
+                other => return Err(unread(other.name())),
+            })
+        }
         wire::DisplayColor::Absent(absence) => Err(absence_from_wire(absence)?),
         _ => return Err(unread("DisplayColor")),
     };
