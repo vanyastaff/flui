@@ -70,7 +70,7 @@ fn a_display_round_trips_through_its_parts() {
     .with_primary(true)
     .with_refresh_period(Duration::from_micros(16_667))
     .with_persistent_key("studio")
-    .with_color(Ok(DisplayColor::high(
+    .with_color(Ok(DisplayColor::High(
         ColorGamut::DisplayP3,
         Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
     )));

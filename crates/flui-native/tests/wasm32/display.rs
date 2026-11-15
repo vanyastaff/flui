@@ -634,7 +634,7 @@ async fn web_colour_follows_the_media_queries() {
     let before = running.snapshot();
     assert_eq!(
         colour(&before),
-        Some(Ok(DisplayColor::standard(ColorGamut::Srgb)))
+        Some(Ok(DisplayColor::Standard(ColorGamut::Srgb)))
     );
     assert_eq!(colour_listeners(), 3, "each colour query is listened to");
 
@@ -645,7 +645,7 @@ async fn web_colour_follows_the_media_queries() {
     assert!(after.revision() > before.revision());
     assert_eq!(
         colour(&after),
-        Some(Ok(DisplayColor::high(
+        Some(Ok(DisplayColor::High(
             ColorGamut::DisplayP3,
             Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
         )))

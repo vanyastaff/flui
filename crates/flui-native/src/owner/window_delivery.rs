@@ -879,9 +879,7 @@ impl WindowDelivery {
     /// carrying the newest presentation the platform reported since the
     /// window's last request.
     pub(crate) fn dispatch_frame(&self, request: FrameRequest) {
-        let request = self
-            .presented
-            .carried_by(request, flui_platform::EventTime::now());
+        let request = self.presented.carried_by(request);
         self.drain(Delivery::Frame(request));
     }
 

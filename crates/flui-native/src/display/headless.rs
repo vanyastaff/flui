@@ -47,7 +47,7 @@ impl DisplaySpec {
             scale_factor: 1.0,
             refresh_period: None,
             persistent_key: None,
-            color: Ok(DisplayColor::standard(ColorGamut::Srgb)),
+            color: Ok(DisplayColor::Standard(ColorGamut::Srgb)),
         }
     }
 

@@ -10,6 +10,13 @@ use super::exec::{Cmd, Runner};
 /// is a cached no-op; it stays so that a default someone adds back is still
 /// built on its own.
 ///
+/// The list holds combinations and the catalogs, not every feature: each
+/// feature of the facade on its own (`testing`, `single-instance`,
+/// `unstable-input`, `unstable-windows`, `devtools`, `driver` and the rest) is
+/// built by `feature-matrix`, whose cargo-hack `--each-feature` passes cover
+/// the workspace and so the root package, on its libraries and then on its
+/// tests, benches and examples.
+///
 /// Each is its own clippy of the `flui` package alone: a `--workspace` build
 /// proves nothing here, since feature unification would enable `material`
 /// from a sibling and turn a broken combination green. `--all-targets` is

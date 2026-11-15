@@ -1930,8 +1930,10 @@ impl flui_platform::SurfaceTarget for Win32Surface {
         let Some(shown) = shown else {
             return;
         };
-        let mut presented =
-            flui_platform::FramePresented::new(crate::owner::handlers::aged(shown.age));
+        let mut presented = flui_platform::FramePresented::new(crate::owner::handlers::rebased(
+            shown.read_at,
+            shown.shown_at,
+        ));
         if let Some(refresh) = shown.refresh {
             presented = presented.with_refresh(refresh);
         }

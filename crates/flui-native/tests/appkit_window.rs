@@ -154,12 +154,12 @@ mod cases {
                 reason = "a screen's headroom is a small multiple of white"
             )]
             let expected = if potential > 1.0 {
-                DisplayColor::high(
+                DisplayColor::High(
                     gamut,
                     Ok(Headroom::try_new(potential as f32).expect("a finite headroom over white")),
                 )
             } else {
-                DisplayColor::standard(gamut)
+                DisplayColor::Standard(gamut)
             };
             assert_eq!(
                 display.color,

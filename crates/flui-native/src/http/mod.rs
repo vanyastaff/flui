@@ -11,7 +11,11 @@
 
 #[cfg(target_os = "android")]
 mod android;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    all(test, not(target_arch = "wasm32"))
+))]
 mod apple;
 #[cfg(any(
     target_os = "android",

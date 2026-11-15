@@ -209,7 +209,7 @@ fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
     );
     let id = panel.id;
 
-    let hdr = DisplayColor::high(
+    let hdr = DisplayColor::High(
         ColorGamut::Rec2020,
         Ok(Headroom::try_new(2.5).expect("headroom")),
     );
@@ -230,7 +230,7 @@ fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
     controls
         .simulate_display_change(
             id,
-            DisplayChange::Color(Ok(DisplayColor::standard(ColorGamut::Srgb))),
+            DisplayChange::Color(Ok(DisplayColor::Standard(ColorGamut::Srgb))),
         )
         .expect("HDR off");
     let off = platform.display_snapshot().expect("snapshot");
@@ -289,11 +289,11 @@ fn windows_displays_report_their_colour() {
     for display in snapshot.displays() {
         match display.color {
             Ok(color) => {
-                if let Ok(headroom) = color.headroom {
+                if let Ok(headroom) = color.headroom() {
                     assert!(headroom.get().is_finite() && headroom.get() >= 1.0);
                 }
-                if color.color_space.dynamic_range == DynamicRange::Standard {
-                    assert_eq!(color.headroom, Ok(flui_platform::Headroom::SDR));
+                if color.color_space().dynamic_range == DynamicRange::Standard {
+                    assert_eq!(color.headroom(), Ok(flui_platform::Headroom::SDR));
                 }
             }
             Err(absence) => assert_eq!(

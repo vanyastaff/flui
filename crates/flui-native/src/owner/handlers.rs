@@ -68,14 +68,6 @@ pub(crate) fn rebased(platform_now: std::time::Duration, stamp: std::time::Durat
     rebased_at(EventTime::now().as_nanos(), platform_now, stamp)
 }
 
-/// The event-clock time `age` before this reading of it, for a platform stamp whose distance from
-/// a reading of the platform's clock is known; the timeline's start for an age longer than it.
-#[cfg(windows)]
-#[must_use]
-pub(crate) fn aged(age: std::time::Duration) -> EventTime {
-    rebased(age, std::time::Duration::ZERO)
-}
-
 #[cfg(any(
     windows,
     wayland_host,
@@ -107,11 +99,27 @@ pub(crate) fn rebased_at(
 /// Any thread reports: the presenting thread (a swap chain's statistics), the platform's own
 /// callback thread (Metal's presented handler) or the owner (a compositor's event). The newest
 /// report wins; a report no later than one kept or already carried is a repeat or out of order,
-/// and is dropped, so the times a window's requests carry never run backwards. A report of a time
-/// still ahead when a request is delivered (a platform that names when a frame is due on screen)
-/// waits for a later request: a request never carries a presentation that has not happened.
+/// and is dropped, so the times a window's requests carry never run backwards.
+///
+/// A stamp ahead of the event clock's reading when the report arrives is measured with error,
+/// and how far decides what it is:
+///
+/// - within [`REPORT_LEAD`] it is the frame's time as the platform measured it (the two readings
+///   a rebase takes, a compositor that adds its display's latency), and the report is carried
+///   with that stamp: the stamp is the phase of the display's refresh grid, which the frame clock
+///   plans on, and a report held back until the clock reached it would be replaced by the next
+///   one, so a host whose every stamp leads would report nothing while it presents;
+/// - further ahead it is no time of this frame (a stamp left on the platform's own epoch, a
+///   rebase saturated at the timeline's end), and the report is dropped.
+///
+/// So the next request carries the newest report that arrived before it, with its own stamp.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PresentationReports(Arc<Mutex<Reported>>);
+
+/// How far ahead of the event clock's reading a report's stamp may lie and still be the time of
+/// a frame: milliseconds separate the two for a rebase's error or a display's latency, hours or
+/// more for a stamp on another clock. A second lies between the two.
+const REPORT_LEAD: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug, Default)]
 struct Reported {
@@ -124,6 +132,21 @@ struct Reported {
 impl PresentationReports {
     /// The platform showed a frame.
     pub(crate) fn report(&self, presented: FramePresented) {
+        self.report_read_at(presented, EventTime::now());
+    }
+
+    /// [`Self::report`], arriving when the event clock reads `now`.
+    fn report_read_at(&self, presented: FramePresented, now: EventTime) {
+        if presented.at.saturating_duration_since(now) > REPORT_LEAD {
+            // Outside the lock: a subscriber is user code.
+            tracing::debug!(
+                target: "flui.present",
+                at_ns = presented.at.as_nanos(),
+                now_ns = now.as_nanos(),
+                "a presentation stamped far ahead of the event clock is dropped"
+            );
+            return;
+        }
         let mut reported = self.0.lock();
         let newest = reported
             .pending
@@ -134,17 +157,15 @@ impl PresentationReports {
         }
     }
 
-    /// `request`, delivered when the event clock reads `now`, carrying the newest report no
-    /// request carried yet, if that report is not later than `now`.
-    pub(crate) fn carried_by(&self, request: FrameRequest, now: EventTime) -> FrameRequest {
+    /// `request`, carrying the newest report no request carried yet.
+    pub(crate) fn carried_by(&self, request: FrameRequest) -> FrameRequest {
         let mut reported = self.0.lock();
-        match reported.pending {
-            Some(presented) if presented.at <= now => {
-                reported.pending = None;
+        match reported.pending.take() {
+            Some(presented) => {
                 reported.carried = Some(presented.at);
                 request.presented(presented)
             }
-            Some(_) | None => request,
+            None => request,
         }
     }
 }
@@ -180,35 +201,86 @@ mod tests {
         );
     }
 
-    /// The newest report reaches the first request delivered at or after it, once; a repeat,
-    /// an older report and one still ahead of the delivery do not.
+    /// The request after a report carries its stamp.
+    fn carried(reports: &PresentationReports) -> Option<u64> {
+        reports
+            .carried_by(FrameRequest::new(EventTime::from_nanos(1)))
+            .presented
+            .map(|presented| presented.at.as_nanos())
+    }
+
+    /// The newest report reaches the next request, once, with its own stamp; a repeat and an
+    /// older report do not.
     #[test]
-    fn a_presentation_report_rides_the_first_request_at_or_after_it() {
+    fn a_presentation_report_rides_the_next_request() {
         let at = EventTime::from_nanos;
         let shown = |nanos| FramePresented::new(at(nanos));
-        let carried = |reports: &PresentationReports, now| {
-            reports
-                .carried_by(FrameRequest::new(at(1)), at(now))
-                .presented
-                .map(|presented| presented.at.as_nanos())
-        };
 
         let reports = PresentationReports::default();
-        assert_eq!(carried(&reports, 10), None, "nothing reported");
+        assert_eq!(carried(&reports), None, "nothing reported");
 
-        reports.report(shown(20));
-        reports.report(shown(30));
-        reports.report(shown(25));
-        assert_eq!(carried(&reports, 29), None, "the newest is still ahead");
-        assert_eq!(carried(&reports, 30), Some(30), "the newest report");
-        assert_eq!(carried(&reports, 40), None, "carried once");
+        reports.report_read_at(shown(20), at(30));
+        reports.report_read_at(shown(30), at(30));
+        reports.report_read_at(shown(25), at(30));
+        assert_eq!(carried(&reports), Some(30), "the newest report");
+        assert_eq!(carried(&reports), None, "carried once");
 
-        reports.report(shown(30));
-        reports.report(shown(28));
-        assert_eq!(carried(&reports, 50), None, "a repeat and an older report");
+        reports.report_read_at(shown(30), at(40));
+        reports.report_read_at(shown(28), at(40));
+        assert_eq!(carried(&reports), None, "a repeat and an older report");
 
-        reports.report(shown(45));
-        assert_eq!(carried(&reports, 50), Some(45));
+        reports.report_read_at(shown(45), at(40));
+        assert_eq!(
+            carried(&reports),
+            Some(45),
+            "a stamp ahead of the reading, carried as it is"
+        );
+    }
+
+    /// A report stamped more than the lead ahead of the reading it arrives at is dropped, so the
+    /// reports after it are carried; one at the lead is carried with its stamp.
+    #[test]
+    fn a_report_stamped_far_ahead_does_not_outrank_the_reports_after_it() {
+        const SECOND: u64 = 1_000_000_000;
+        let at = EventTime::from_nanos;
+        let shown = |nanos| FramePresented::new(at(nanos));
+        let now = 5 * SECOND;
+
+        for (stamp, why) in [
+            (u64::MAX, "a rebase that saturated at the timeline's end"),
+            (now + 3600 * SECOND, "a stamp on another clock's epoch"),
+            (now + SECOND + 1, "just past the lead"),
+        ] {
+            let reports = PresentationReports::default();
+            reports.report_read_at(shown(stamp), at(now));
+            reports.report_read_at(shown(now - 1_000), at(now));
+            assert_eq!(carried(&reports), Some(now - 1_000), "{why}");
+        }
+
+        let reports = PresentationReports::default();
+        reports.report_read_at(shown(now + SECOND), at(now));
+        assert_eq!(
+            carried(&reports),
+            Some(now + SECOND),
+            "at the lead: carried with its stamp"
+        );
+    }
+
+    /// A host whose every stamp leads the clock by two refreshes (a compositor that adds its
+    /// display's latency) still has each request carry a report, with the stamp the platform
+    /// gave: no report waits for the clock while the next one replaces it, and the refresh grid
+    /// the frame clock plans on keeps the display's phase.
+    #[test]
+    fn a_stream_of_stamps_that_lead_the_clock_reaches_every_request() {
+        const REFRESH: u64 = 16_666_667;
+        let at = EventTime::from_nanos;
+        let reports = PresentationReports::default();
+        for frame in 1..=5_u64 {
+            let arrives = 1_000_000_000 + frame * REFRESH;
+            let stamp = arrives + 2 * REFRESH;
+            reports.report_read_at(FramePresented::new(at(stamp)), at(arrives));
+            assert_eq!(carried(&reports), Some(stamp), "frame {frame}");
+        }
     }
 
     /// A platform's frame stamp, given as an age, lands that long before the reading, and an age

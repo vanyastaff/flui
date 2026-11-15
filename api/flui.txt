@@ -12028,17 +12028,6 @@ impl core::marker::StructuralPartialEq for flui::platform::ColorGamut
 variant flui::platform::ColorGamut::DisplayP3 // at 1
 variant flui::platform::ColorGamut::Rec2020 // at 2
 variant flui::platform::ColorGamut::Srgb // at 0
-pub struct flui::platform::ColorParts
-field flui::platform::ColorParts::dynamic_range: flui::platform::DynamicRange // at 1
-field flui::platform::ColorParts::gamut: flui::platform::ColorGamut // at 0
-field flui::platform::ColorParts::headroom: Result<flui::platform::Headroom, flui::platform::CapabilityAbsence> // at 2
-impl Clone for flui::platform::ColorParts
-impl Copy for flui::platform::ColorParts
-impl Eq for flui::platform::ColorParts
-impl PartialEq for flui::platform::ColorParts
-impl core::fmt::Debug for flui::platform::ColorParts
-impl core::marker::StructuralPartialEq for flui::platform::ColorParts
-pub const fn flui::platform::ColorParts::into_color(self) -> flui::platform::DisplayColor
 pub enum flui::platform::CommandRefusal
 impl Clone for flui::platform::CommandRefusal
 impl From<flui::platform::AdmissionError> for flui::platform::CommandRefusal
@@ -12115,18 +12104,17 @@ pub const flui::platform::DispatchEventResult::DEFERRED: Self = _
 pub const flui::platform::DispatchEventResult::DEFERRED_UNHANDLED: Self = _
 pub const fn flui::platform::DispatchEventResult::is_deferred(self) -> bool
 pub const fn flui::platform::DispatchEventResult::resolved(propagate: bool, default_prevented: bool) -> Self
-#[non_exhaustive] pub struct flui::platform::DisplayColor
-field flui::platform::DisplayColor::color_space: flui::platform::SurfaceColorSpace // at 0
-field flui::platform::DisplayColor::headroom: Result<flui::platform::Headroom, flui::platform::CapabilityAbsence> // at 1
+#[non_exhaustive] pub enum flui::platform::DisplayColor
 impl Clone for flui::platform::DisplayColor
 impl Copy for flui::platform::DisplayColor
 impl Eq for flui::platform::DisplayColor
 impl PartialEq for flui::platform::DisplayColor
 impl core::fmt::Debug for flui::platform::DisplayColor
 impl core::marker::StructuralPartialEq for flui::platform::DisplayColor
-pub const fn flui::platform::DisplayColor::high(gamut: flui::platform::ColorGamut, headroom: Result<flui::platform::Headroom, flui::platform::CapabilityAbsence>) -> Self
-pub const fn flui::platform::DisplayColor::into_parts(self) -> flui::platform::ColorParts
-pub const fn flui::platform::DisplayColor::standard(gamut: flui::platform::ColorGamut) -> Self
+pub const fn flui::platform::DisplayColor::color_space(self) -> flui::platform::SurfaceColorSpace
+pub const fn flui::platform::DisplayColor::headroom(self) -> Result<flui::platform::Headroom, flui::platform::CapabilityAbsence>
+variant flui::platform::DisplayColor::High(flui::platform::ColorGamut, Result<flui::platform::Headroom, flui::platform::CapabilityAbsence>) // at 1
+variant flui::platform::DisplayColor::Standard(flui::platform::ColorGamut) // at 0
 pub trait flui::platform::DisplayConnection: raw_window_handle::borrowed::HasDisplayHandle + Send + Sync + 'static
 pub struct flui::platform::DisplayId { .. }
 impl Clone for flui::platform::DisplayId
@@ -12188,7 +12176,7 @@ variant flui::platform::DisplayKey::WindowsTarget { adapter_luid: u64, target_id
 variant flui::platform::DisplayKey::X11Output(u32) // at 8
 pub struct flui::platform::DisplayParts
 field flui::platform::DisplayParts::bounds: flui::geometry::Bounds<i32> // at 1
-field flui::platform::DisplayParts::color: Result<flui::platform::ColorParts, flui::platform::CapabilityAbsence> // at 7
+field flui::platform::DisplayParts::color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence> // at 7
 field flui::platform::DisplayParts::is_primary: bool // at 5
 field flui::platform::DisplayParts::name: String // at 0
 field flui::platform::DisplayParts::persistent_key: Option<String> // at 6

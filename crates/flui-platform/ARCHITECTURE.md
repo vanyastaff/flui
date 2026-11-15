@@ -22,11 +22,13 @@ this one path (ADR-0151 §9).
   rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
   never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
 - **A headroom is finite and at least white; an absent colour says why.** A display's
-  colour profile is `DisplayInfo::color`: a `DisplayColor` (`SurfaceColorSpace` and
-  `Headroom`) or the `CapabilityAbsence` the platform gives, which `color_space()` and
-  `headroom()` answer as `Unsupported`. `Headroom` refuses a NaN, an infinity, a value
-  below 1 and a luminance ratio that overflows; `DisplayColor::standard` fixes the
-  headroom of a standard-range display at 1 (`display_colour_table`). A profile change
+  colour profile is `DisplayInfo::color`: a `DisplayColor` or the `CapabilityAbsence` the
+  platform gives, which `color_space()` and `headroom()` answer as `Unsupported`.
+  `DisplayColor` is `Standard(gamut)` or `High(gamut, headroom)`: only the high range
+  carries a headroom (or the absence of one), so a standard-range display that
+  contradicts its range cannot be built, and its `headroom()` is `Headroom::SDR`
+  (`display_colour_table`). `Headroom` refuses a NaN, an infinity, a value below 1 and a
+  luminance ratio that overflows. A profile change
   is a display change: a new revision of the same monotone snapshot, so an older sample
   never replaces a newer profile.
 - **Flat root.** Every public item is re-exported at the crate root; the

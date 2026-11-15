@@ -903,7 +903,17 @@ trait depends on `flui-platform` instead.
   `contain_owner_callback` elsewhere): a TSF method that poisons its document
   keeps its services' entry depth as a guard, so a panic past the poisoning
   cannot leave host operations queued forever, and a view's `dealloc` still
-  runs the super `dealloc` after its context's teardown failed. A GCD work
+  runs the super `dealloc` after its context's teardown failed. The `dealloc`
+  objc2 generates for a `define_class!` class has no body in the crate: it
+  destroys the class's ivars in place on the last release, whoever makes it
+  (a UIKit view outlives its window in the view hierarchy and in the
+  autorelease pool each native callback pins it in, and owns its touches
+  alone). So every class declares its ivars as
+  `owner::panic_boundary::ContainedIvars<…>`, whose destructor is one call of
+  `os_entry`: what a view or a delegate owns is destroyed inside the
+  boundary, a destructor's panic is logged, and the super `dealloc` still
+  runs. The gate holds each class's `#[ivars = …]` to that type and a class's
+  own `Drop` to the entry rule. A GCD work
   item's body is a `move` closure, so its captures drop inside the boundary; a
   block's or delegate's captures live as long as the OS keeps it and are
   values whose destructor runs no user code. `cargo xtask panic-boundary`
@@ -917,7 +927,8 @@ trait depends on `flui-platform` instead.
   android-activity's procedures contain their own, and `flui-hot-reload`'s
   plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
   first failure is logged before the answer, with the entry's arguments, and a
-  contained step with its text; a panicking log stays inside),
+  contained step with its text; a panicking log stays inside;
+  `contained_ivars_keep_a_destructors_panic_inside_the_boundary`),
   `a_failing_subscriber_is_logged_and_a_session_end_still_granted`,
   `a_panicking_listener_stays_inside_its_handler` (AccessKit, Windows and
   Linux), the TSF row `a_tsf_call_failing_past_its_poisoning_leaves_no_depth`
@@ -977,8 +988,17 @@ trait depends on `flui-platform` instead.
     `handlers::PresentationReports`, which the `WindowDelivery` keeps and
     `dispatch_frame` empties into the next frame request
     (`FrameRequest::presented`): the newest report wins, a report no later
-    than one kept or carried is dropped, and one still ahead of the request's
-    delivery waits. The headless window reports what a test injects
+    than one kept or carried is dropped. A stamp ahead of the event clock's
+    reading when the report arrives (a rebase's error, a compositor that
+    adds its display's latency) is carried with its stamp while it lies
+    within `REPORT_LEAD`: the stamp is the phase of the refresh grid the
+    frame clock plans on, and a report held back until the clock reached it
+    would be replaced by the next one, so a host whose every stamp leads
+    would report nothing while it presents. A stamp further ahead is no time
+    of a frame, and the report is dropped: kept, a rebase saturated at the
+    timeline's end would silence the window for good. Every host's reports
+    pass there, and no host judges a stamp's lead itself: the Win32 window
+    hands on the swap chain's stamp and its counter reading as they are. The headless window reports what a test injects
     (`HeadlessHostWindow::simulate_presented`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
     an X11 present completes on the GPU driver's connection),
@@ -4295,7 +4315,8 @@ numbered with the registries in creation order. The `preferences` row is the sch
 (`flui-protocol`'s `native_recording::Preferences`), and both mirrors convert
 through `flui_platform::PreferenceParts`, whose public fields make a new
 preference a compile error in each until it is mirrored; a display converts
-through `DisplayParts` and `ColorParts` the same way, and a snapshot through
+through `DisplayParts` the same way (a colour variant added to `DisplayColor` is
+refused as unmirrored until the codec writes it), and a snapshot through
 `WindowStateParts` and `CapabilityParts`. A display's id is issued
 by its platform's registry and means nothing outside it, so a recording writes
 its number as a label, a snapshot names its display by the same label, and a
