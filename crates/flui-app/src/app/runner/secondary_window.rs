@@ -85,12 +85,12 @@ use crate::app::{AppConfig, FrameFailureDetail};
 use flui_view::View;
 
 // ============================================================================
-// Multi-window embedder seam (issue #555's `WindowPolicy`)
+// Multi-window embedder seam (`WindowPolicy`)
 // ============================================================================
 
 /// Opens an additional top-level window while the platform loop
 /// `run_app` started is already running — the
-/// embedder-facing seam issue #555's [`WindowPolicy`] governs which
+/// embedder-facing seam whose [`WindowPolicy`] governs which
 /// ui_runtime/presentation topology the new window becomes. Must be called from
 /// the owner thread while a loop is live (mirrors `bootstrap_desktop`'s own
 /// `OwnerPlatform` access constraint: reachable only from inside, or after,
@@ -836,7 +836,7 @@ pub(super) fn open_secondary_window_impl(
     // Reveal at open (`From<&AppConfig>`'s default): a bare secondary
     // window has no renderer and no frame loop, so nothing here would
     // ever call `reveal_after_first_frame` — see
-    // `desktop::rendered_window_options` for the path that defers.
+    // `desktop::OpeningWindow::open` for the path that defers.
     let options: WindowOptions = (&config).into();
     let routes = super::window_routes::WindowRoutes::new();
     let open = with_owner_platform(|owner| owner.open_window(options, routes.clone()))
@@ -893,7 +893,6 @@ where
     V: View + Clone + 'static,
 {
     use flui_native::WindowOpen;
-    use flui_platform::WindowOptions;
     warn_window_storage_dir(&config);
 
     if policy == WindowPolicy::Shared {
@@ -912,15 +911,14 @@ where
     let reservation = reserve_window()?;
     // Deferred reveal: the content install below goes through
     // `install_desktop_window`, which performs the reveal.
-    let options: WindowOptions = super::desktop::rendered_window_options(&config);
-    let routes = super::window_routes::WindowRoutes::new();
-    let open = with_owner_platform(|owner| owner.open_window(options, routes.clone()))
+    let opening = super::desktop::OpeningWindow::new(&config);
+    let open = with_owner_platform(|owner| opening.open(&config, owner))
         .ok_or(AppWindowError::NoOwnerLoop)?
         .map_err(native_error)?;
 
     match open {
         WindowOpen::Ready(window) => {
-            routes.adopt(window.id());
+            opening.adopt(window.id());
             let (reply, request) = crate::app::WindowRequest::new();
             // Preparation consumes the captured root once. The completion then
             // retains the native window and liveness reservation until the
@@ -953,6 +951,7 @@ where
                             reload,
                             Rc::clone(&window),
                             host,
+                            opening,
                         )
                         .map(|rendered| rendered.installation)
                     })),
@@ -1124,7 +1123,7 @@ fn finish_open_secondary_window(
          renderer -- see this function's own doc for the two named, scoped-out gaps"
     );
 
-    // Wire this presentation into the close-request seam (issue #558)
+    // Wire this presentation into the close-request seam
     // through the same single implementation `run_desktop`'s primary window
     // uses. Unlike the frame-failure handler noted above, this one IS
     // threaded down from the caller's `AppConfig` -- a secondary window

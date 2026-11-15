@@ -14,9 +14,12 @@
 //!   off from its release;
 //! - a state change, a frame request and a surface change are kept, the
 //!   newest of each, and handed to their route when it is set: a state
-//!   change carries no payload, a frame request is answered by one frame, and
-//!   the newest surface change is the surface the window needs (a lost
-//!   `Rebuild` would leave it blank);
+//!   change carries no payload, a frame request is answered by one frame
+//!   (the platform was told `Declined` when it asked, since nothing ran
+//!   then), and the newest surface change is the surface the window needs (a
+//!   lost `Rebuild` would leave it blank);
+//! - a frame request that reaches its route is answered by the route, which
+//!   alone knows whether a frame ran for it;
 //! - a close request keeps the window open for now and is remembered: the
 //!   close route is asked once when it is set, and its `Close` closes the
 //!   window;
@@ -111,7 +114,23 @@ impl<A, R> Slot<A, R> {
 /// What arrived before its route was set, handed to the route when it is.
 #[derive(Default)]
 struct Held {
-    /// Every input, in order.
+    /// Every input, in order, with no bound on their number: a bound would
+    /// drop input, and a release that is dropped leaves its press held for
+    /// good. What bounds them is how long a window is without its input
+    /// route, which is one owner turn at most:
+    ///
+    /// - the window's capability snapshot is always held, since the platform
+    ///   delivers it inside the call that opens the window;
+    /// - the main window, a bare secondary window, and the Android, iOS, web
+    ///   and direct windows get their route in the call that opens them, or,
+    ///   opened from inside an owner turn, by the end of that turn;
+    /// - a secondary window with content, and a window whose open the
+    ///   platform deferred, get it in the owner's next turn, which the open
+    ///   wakes the owner for. What the window system delivers to the window
+    ///   between those two turns is what waits here.
+    ///
+    /// `every_runner_path_routes_input_by_the_end_of_its_installing_turn`
+    /// holds this for the paths the headless platform runs.
     inputs: VecDeque<PlatformInput>,
     /// A state change is owed.
     state_changed: bool,
@@ -127,7 +146,7 @@ struct Held {
 pub(crate) struct WindowRoutes {
     input: Slot<PlatformInput, DispatchEventResult>,
     state_changed: Slot<(), ()>,
-    frame_requested: Slot<FrameRequest, ()>,
+    frame_requested: Slot<FrameRequest, FrameOutcome>,
     close_requested: Slot<(), CloseDecision>,
     closed: RefCell<Option<Box<dyn FnOnce()>>>,
     /// `closed` arrived before its route.
@@ -197,9 +216,16 @@ impl WindowRoutes {
         }
     }
 
-    /// Route the window's frame requests; the newest one from before is
-    /// delivered.
-    pub(crate) fn route_frame_requested(&self, route: impl FnMut(FrameRequest) + 'static) {
+    /// Route the window's frame requests. The route answers each one with
+    /// what became of it: the platform asks again for work due at one instant
+    /// only after a frame that ran, so a route that ran none says
+    /// [`FrameOutcome::Declined`]. The newest request from before is
+    /// delivered; the platform was answered `Declined` when it asked, so that
+    /// frame's answer has nobody to hear it.
+    pub(crate) fn route_frame_requested(
+        &self,
+        route: impl FnMut(FrameRequest) -> FrameOutcome + 'static,
+    ) {
         self.frame_requested.set(Box::new(route));
         let held = self.held.borrow_mut().frame.take();
         if let Some(request) = held {
@@ -295,8 +321,8 @@ impl WindowHandler for WindowRoutes {
             reason = "ADR-0287: a frame's panic is contained: the platform counts it as run (ADR-0258)"
         )]
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if self.frame_requested.call(request).is_some() {
-                return FrameOutcome::Produced;
+            if let Some(outcome) = self.frame_requested.call(request) {
+                return outcome;
             }
             // Answered with one frame once the route is set; nothing ran now.
             self.held.borrow_mut().frame = Some(request);
@@ -371,7 +397,7 @@ impl RouteBook {
 pub(crate) struct Jammed<'a> {
     _input: std::cell::RefMut<'a, Option<Route<PlatformInput, DispatchEventResult>>>,
     _state_changed: std::cell::RefMut<'a, Option<Route<(), ()>>>,
-    _frame_requested: std::cell::RefMut<'a, Option<Route<FrameRequest, ()>>>,
+    _frame_requested: std::cell::RefMut<'a, Option<Route<FrameRequest, FrameOutcome>>>,
     _close_requested: std::cell::RefMut<'a, Option<Route<(), CloseDecision>>>,
     _closed: std::cell::RefMut<'a, Option<Box<dyn FnOnce()>>>,
     _surface_changed: std::cell::RefMut<'a, Option<Route<SurfaceChange, ()>>>,

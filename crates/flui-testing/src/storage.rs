@@ -70,6 +70,8 @@ struct State {
     values: HashMap<StorageName, Vec<u8>>,
     /// Request futures not yet dropped.
     live: usize,
+    /// Reads asked for so far, refused ones included.
+    reads: usize,
     next_write: u64,
     /// Mints the run of each [`MemoryStorage::for_run`] handle.
     runs: IdMint<NonZeroU64>,
@@ -192,6 +194,13 @@ impl MemoryStorage {
     #[must_use]
     pub fn contents(&self, name: &StorageName) -> Option<Vec<u8>> {
         self.state.lock().values.get(name).cloned()
+    }
+
+    /// How many reads were asked of this store, through any handle of it, a
+    /// refused read included.
+    #[must_use]
+    pub fn reads(&self) -> usize {
+        self.state.lock().reads
     }
 
     /// Accept writes but start none while the returned hold is alive; a
@@ -389,6 +398,7 @@ impl Storage for MemoryStorage {
     fn read(&self, name: &StorageName, limit: u64) -> StorageFuture<Stored> {
         let mut state = self.state.lock();
         state.live += 1;
+        state.reads += 1;
         let answer = match (&state.fail_reads, state.values.get(name)) {
             (Some(error), _) => Err(error.clone()),
             (None, None) => Ok(Stored {

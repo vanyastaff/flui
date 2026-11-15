@@ -38,8 +38,9 @@ use super::host::{
     with_owner_platform,
 };
 use super::owner_dispatch::{
-    RuntimeEvent, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
-    install_input_wiring, prepare_ui_runtime_alongside, teardown_platform_ui_runtime,
+    RuntimeEvent, RuntimeTask, close_this_window, dispatch_platform_frame,
+    dispatch_platform_ui_runtime, install_input_wiring, prepare_ui_runtime_alongside,
+    teardown_platform_ui_runtime,
 };
 use super::raster_host::RasterSlot;
 use crate::app::hot_reload::WorkerReload;
@@ -407,7 +408,7 @@ where
     let binding = frame.binding;
     let routes = super::window_routes::WindowRoutes::of(&*window);
     routes.route_frame_requested(move |request| {
-        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
+        dispatch_platform_frame(owner_dispatch, binding, request)
     });
 
     // 8. Lifecycle.

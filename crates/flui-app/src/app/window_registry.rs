@@ -135,7 +135,7 @@ impl WindowRegistry {
     /// Whether `address` names a window mapping currently held by this
     /// registry — the addressed-dispatch validity check
     /// `dispatch_platform_ui_runtime` (`runner/owner_dispatch.rs`) uses in place of comparing
-    /// against a single cached "current" address (issue #555's
+    /// against a single cached "current" address (the
     /// per-presentation generational `StalePresentation` extension): a
     /// UI runtime hosting more than one presentation has more than one live
     /// address at once, so membership in this one authority — not equality
