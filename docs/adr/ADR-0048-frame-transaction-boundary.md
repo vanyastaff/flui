@@ -281,14 +281,16 @@ the supplied secondary config does not override either for existing siblings.
   not on `Idle`. `FrameCommitState` becomes committed only when a `Painted`
   revision receives `Presented` or `NoPresent`; both verdicts acknowledge every
   revision through the current one. A deferred painted frame, `Errored`,
-  `SurfaceStale`, `DeviceLost`, `Failed` and `Refused` remain uncommitted. `Idle` neither
+  `SurfaceStale`, `DeviceLost`, `Failed`, `Refused` and `NotShown` (ADR-0335) remain uncommitted.
+  `Idle` neither
   advances nor acknowledges a revision.
 - Submit verdicts have distinct retry effects. `SurfaceStale` retains input telemetry, arms a
   wake and requests a full repaint of the actual producer. `DeviceLost` retains input telemetry,
   requests the full repaint and waits out the dropped-frame backoff (ADR-0267). `Failed` drains
   telemetry and paints the tree again after that backoff, unless a pending frame shows the tree
   or the device was given up; `Refused` drains telemetry and waits for the window's next change
-  (ADR-0334). `Presented` drains telemetry and commits; `NoPresent` commits without draining
+  (ADR-0334). `NotShown` repaints at the display rate for its budget and after that backoff past it
+  (ADR-0335). `Presented` drains telemetry and commits; `NoPresent` commits without draining
   pending input epochs because no backend present occurred. A segment failure waits out the
   dropped-frame backoff (a text failure that waits for input arms nothing) and repaints only by
   the exact Tail/Scene rule above.

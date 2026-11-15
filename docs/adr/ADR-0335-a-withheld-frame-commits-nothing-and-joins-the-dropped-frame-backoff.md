@@ -62,13 +62,17 @@ transient at the display rate.
   does not end the dropped-frame streak (ADR-0334 §2). An inline `NotShown` supersedes none of the
   frames still queued, which their settlements may still show.
 - **§2.** The first `MAX_NOT_SHOWN_RETRIES` consecutive withheld attempts are retried on the next
-  display period. Each attempt past them counts into the dropped-frame streak (`note_frame_failure`)
-  and waits out the dropped-frame backoff (`failure_retry_delay`, doubling from one display period up
-  to `FAILURE_RETRY_CAP`) before it repaints. The withheld streak stays above the budget until a frame
-  presents or finds no damage, so each attempt after the budget waits too, rather than opening a new
-  burst. A key or button press ends the wait early, as for any dropped frame.
-- **§3.** Past the budget, a settlement of an older tree, a frame still pending from this tree or a
-  later one, and a given-up device (ADR-0267) arm no wait: the current tree is owed by its own frame.
+  display period. Each attempt past them counts into the dropped-frame streak
+  (`note_frame_failure`) and waits out the dropped-frame backoff (`failure_retry_delay`, doubling
+  from one display period up to `FAILURE_RETRY_CAP`) before it repaints. The withheld streak stays
+  above the budget until a frame presents or finds no damage, so each attempt after the budget
+  waits too, rather than opening a new burst. A key or button press ends the wait early, as for
+  any dropped frame. A window shown again after it was hidden starts a new withdrawal: its withheld
+  streak clears, and a wait that frames withheld past the budget armed ends with the dropped-frame
+  streak they grew, so the shown window is tried at once and rides out its next withdrawal at the
+  display rate.
+- **§3.** Past the budget, a settlement of an older tree and a given-up device (ADR-0267) arm no
+  wait: the current tree is owed by its own frame, and a given-up device holds its frames.
 - **§4.** The retry repaints in full until ADR-0304 §7's retry from the held version is built; the
   wake and the repaint are armed before the trace, whose subscriber is user code.
 
@@ -95,10 +99,21 @@ Tests in `crates/flui-runtime/src/ui_runtime/frame_commit_state_tests.rs`:
 - `the_withheld_retry_is_bounded_and_then_waits_out_the_backoff` (§2): the budget's attempts follow
   each other, each attempt past it waits out a growing backoff, a press ends the wait, and the frame
   that presents replays the press and ends the streak;
-- `a_parked_withheld_settlement_leaves_the_failed_frames_retry` (§3): a withheld settlement of an older
-  tree past the budget leaves the wait a newer failed frame armed;
-- `a_subscriber_that_panics_on_the_trace_of_a_withheld_frame_keeps_the_retry` (§4): a subscriber's
-  panic on the withheld frame's trace keeps the retry.
+- `a_window_shown_again_rides_out_its_next_withdrawal_at_the_display_rate` (§2): hiding and showing
+  the window ends the wait and the streaks, and its next withheld frame is retried at once;
+- `a_withheld_settlement_of_an_older_tree_leaves_the_failed_frames_retry` (§3): a withheld
+  settlement of an older tree past the budget leaves the wait a newer failed frame armed, and its
+  streak;
+- `a_withheld_frame_past_its_budget_on_a_given_up_device_arms_no_wait` (§3);
+- `a_subscriber_that_panics_on_the_trace_of_a_withheld_frame_keeps_the_retry` and
+  `a_subscriber_that_panics_on_the_trace_of_a_withheld_frame_past_its_budget_keeps_the_wait` (§4):
+  a subscriber's panic on either trace keeps the retry or the wait.
+
+`failed_frame::a_withdrawn_surface_is_retried_after_the_backoff_and_then_takes_the_held_press` in
+`crates/flui-runtime/tests/contracts/failed_frame.rs` pins §1 and §2 through `UiRuntime::pump`: the
+budget's attempts run one per host turn, the attempt past it waits for the deadline `next_wake`
+reports, a press made while the surface withholds is not dispatched, and the frame that presents
+dispatches it.
 
 ## Pros and cons of the options
 

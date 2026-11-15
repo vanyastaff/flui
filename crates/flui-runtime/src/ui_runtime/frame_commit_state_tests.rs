@@ -1164,7 +1164,7 @@ fn a_subscriber_that_panics_on_a_lost_frames_cleanup_leaves_the_repaint_armed() 
 ///
 /// Fails when the settlement clears the failed frame's retry, or arms a wait of its own over it.
 #[test]
-fn a_parked_withheld_settlement_leaves_the_failed_frames_retry() {
+fn a_withheld_settlement_of_an_older_tree_leaves_the_failed_frames_retry() {
     let budget = super::MAX_NOT_SHOWN_RETRIES;
     let mut ui_runtime = mount_box();
     let mut sink = ScriptedSink::new(move |call, _| match call {
@@ -1279,4 +1279,134 @@ fn failure_retry_armed(ui_runtime: &UiRuntime) -> bool {
         .primary()
         .failure_retry_at()
         .is_some()
+}
+
+/// Withholds `MAX_NOT_SHOWN_RETRIES` frames in a row, so the next withheld frame is past the
+/// budget.
+fn spend_the_withheld_budget(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) {
+    for _ in 0..super::MAX_NOT_SHOWN_RETRIES {
+        assert!(!ui_runtime.render_frame(sink), "each attempt is withheld");
+    }
+    assert_eq!(
+        ui_runtime.presentations.primary().failure_retry_at(),
+        None,
+        "the budget's attempts arm no wait"
+    );
+}
+
+/// A window shown again after it was hidden starts a new withdrawal (ADR-0335 §2): the wait and
+/// the streaks that frames withheld past the budget left end, and the next withheld frame is
+/// retried at the display rate.
+///
+/// Fails when a hidden and shown window keeps the exhausted streak, so each of its next withheld
+/// frames waits a second.
+#[test]
+fn a_window_shown_again_rides_out_its_next_withdrawal_at_the_display_rate() {
+    let ui_runtime = mount_box();
+    let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
+    spend_the_withheld_budget(&ui_runtime, &mut withheld);
+    assert!(!ui_runtime.render_frame(&mut withheld));
+    let presentation = || ui_runtime.presentations.primary();
+    assert!(
+        presentation().failure_retry_at().is_some(),
+        "past the budget, the frame waits"
+    );
+
+    let id = ui_runtime.presentation_id();
+    ui_runtime.set_presentation_hidden(id, true);
+    ui_runtime.set_presentation_hidden(id, false);
+    assert_eq!(
+        presentation().failure_retry_at(),
+        None,
+        "the shown window is tried at once"
+    );
+    assert_eq!(presentation().frame_failure_streak(), 0);
+
+    let submits = withheld.submit_calls;
+    assert!(!ui_runtime.render_frame(&mut withheld));
+    assert_eq!(withheld.submit_calls, submits + 1);
+    assert_eq!(
+        presentation().failure_retry_at(),
+        None,
+        "the next withheld frame is in a new budget"
+    );
+    assert!(
+        ui_runtime.needs_redraw(),
+        "and is retried at the display rate"
+    );
+}
+
+/// Past the budget, a withheld frame of a presentation whose device rebuild was given up arms no
+/// wait (ADR-0335 §3): the given-up device holds its frames (ADR-0267).
+///
+/// Fails when the withheld frame arms the backoff against a given-up device.
+#[test]
+fn a_withheld_frame_past_its_budget_on_a_given_up_device_arms_no_wait() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|call, _| {
+        if call < super::MAX_NOT_SHOWN_RETRIES {
+            SubmitVerdict::NotShown
+        } else {
+            SubmitVerdict::Queued
+        }
+    });
+    spend_the_withheld_budget(&ui_runtime, &mut sink);
+    assert!(
+        !ui_runtime.render_frame(&mut sink),
+        "the next frame is queued"
+    );
+    let queued = *sink.epochs.last().expect("a frame was queued");
+    let abandoned = crate::frame_failure::DeviceRecovery::Abandoned { attempts: 10 };
+    ui_runtime.note_primary_device_recovery(Some(abandoned));
+    let streak = ui_runtime.presentations.primary().frame_failure_streak();
+
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+    assert_eq!(
+        ui_runtime.settle_frame(FrameSettlement::new(
+            address,
+            queued,
+            SubmitVerdict::NotShown,
+        )),
+        Settled::Applied
+    );
+    let presentation = ui_runtime.presentations.primary();
+    assert_eq!(presentation.failure_retry_at(), None, "no wait is armed");
+    assert_eq!(
+        presentation.frame_failure_streak(),
+        streak,
+        "nothing counts into the streak"
+    );
+}
+
+/// A subscriber that panics on the trace of a withheld frame past its budget leaves the wait armed:
+/// the panic resumes once the wait and the repaint are in place.
+///
+/// Fails when the trace runs before the wait is armed.
+#[test]
+fn a_subscriber_that_panics_on_the_trace_of_a_withheld_frame_past_its_budget_keeps_the_wait() {
+    let ui_runtime = mount_box();
+    let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
+    spend_the_withheld_budget(&ui_runtime, &mut withheld);
+
+    let panicked = render_under(
+        PanicsOnEvent {
+            needle: "retrying after the dropped-frame backoff",
+        },
+        || {
+            ui_runtime.render_frame(&mut withheld);
+        },
+    );
+
+    assert!(panicked, "the subscriber's panic continues");
+    assert!(
+        ui_runtime
+            .presentations
+            .primary()
+            .failure_retry_at()
+            .is_some(),
+        "the wait is armed"
+    );
 }

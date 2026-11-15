@@ -1737,6 +1737,16 @@ impl PresentationState {
         self.not_shown_streak.set(0);
     }
 
+    /// The window is shown again after it was hidden: a withdrawal of its surface from here on is
+    /// a new one, so the withheld streak clears and the next withheld frames are ridden out at the
+    /// display rate. A wait that withheld frames past their `budget` armed ends with them, with
+    /// the dropped-frame streak they grew, so the shown window is tried at once (ADR-0335 §2).
+    pub(crate) fn restart_withdrawal(&self, budget: u32) {
+        if self.not_shown_streak.replace(0) > budget {
+            self.reset_frame_failure_streak();
+        }
+    }
+
     // ========================================================================
     // Pump segment (ADR-0043 §3): per-presentation dirty predicate and wake bit
     // ========================================================================

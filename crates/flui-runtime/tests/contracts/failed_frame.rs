@@ -225,3 +225,80 @@ fn a_refused_frame_waits_for_its_windows_next_change() {
     );
     assert_eq!(sink.submits, 2);
 }
+
+/// A surface that withholds frames past the withheld-retry budget is tried again after the
+/// dropped-frame backoff, through the host's loop, and the press held while the surface was
+/// withdrawn is dispatched once a frame shows the tree (ADR-0335).
+///
+/// Fails when a withheld frame commits its tree (the press dispatches against a tree the screen
+/// did not show), or when the budget parks the frame (no wait is reported, and nothing shows the
+/// tree once the surface returns).
+#[test]
+fn a_withdrawn_surface_is_retried_after_the_backoff_and_then_takes_the_held_press() {
+    let mut runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
+    let downs = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let seen = std::rc::Rc::clone(&downs);
+    runtime
+        .attach_root_widget_with_size(
+            &flui_widgets::Listener::new()
+                .behavior(flui_rendering::hit_testing::HitTestBehavior::Opaque)
+                .on_pointer_down(move |_, _| seen.set(seen.get() + 1))
+                .child(flui_widgets::SizedBox::new(400.0, 400.0)),
+            400.0,
+            400.0,
+        )
+        .expect("mount the press's handler");
+    let mut sink = Failing::new(SubmitVerdict::NotShown, usize::MAX);
+
+    // The budget's attempts follow each other, one per host turn, until the wait is armed.
+    let mut turns = 0;
+    while runtime.failure_retry_deadline().is_none() {
+        assert!(turns < 1_000, "the withheld retry is bounded");
+        turns += 1;
+        assert!(!host_turn(&mut runtime, &mut sink), "the surface withholds");
+        assert_eq!(
+            sink.submits, turns,
+            "each withheld attempt is tried at once"
+        );
+    }
+    assert!(
+        turns > 1,
+        "a short withdrawal is ridden out at the display rate"
+    );
+
+    // Past the budget, each attempt waits out the backoff, and the surface still withholds.
+    let failed_at = web_time::Instant::now();
+    wait_out_the_backoff(&mut runtime, &mut sink, failed_at);
+    assert!(!host_turn(&mut runtime, &mut sink));
+    assert_eq!(sink.submits, turns + 1, "the attempt after the wait");
+    assert!(
+        runtime.failure_retry_deadline().is_some(),
+        "the next attempt waits out the backoff too"
+    );
+
+    // A press while the surface is withdrawn waits for a frame that shows the tree. The press
+    // ends the wait early, and the surface has returned.
+    let primary = runtime.presentation_id();
+    runtime.handle_input_addressed(
+        primary,
+        flui_platform::PlatformInput::Pointer(
+            flui_interaction::events::make_down_event(
+                flui_foundation::geometry::Offset::new(10.0, 10.0),
+                flui_interaction::events::PointerKind::Touch,
+            )
+            .expect("finite test position"),
+        ),
+    );
+    assert_eq!(downs.get(), 0, "the press waits for a shown tree");
+    sink.remaining = 0;
+    assert!(
+        host_turn(&mut runtime, &mut sink),
+        "the returned surface shows the tree"
+    );
+    assert_eq!(
+        downs.get(),
+        1,
+        "the shown frame's commit dispatches the press"
+    );
+    assert_eq!(runtime.failure_retry_deadline(), None);
+}

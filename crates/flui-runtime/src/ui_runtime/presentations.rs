@@ -667,7 +667,11 @@ impl UiRuntime {
             );
             return;
         };
+        let shown_again = presentation.clock().is_hidden() && !hidden;
         presentation.clock().set_hidden(hidden);
+        if shown_again {
+            presentation.restart_withdrawal(super::MAX_NOT_SHOWN_RETRIES);
+        }
         presentation.sync_haptics_visibility();
         if !hidden && !presentation.clock().demand_mask().is_empty() {
             self.wake_frame();
