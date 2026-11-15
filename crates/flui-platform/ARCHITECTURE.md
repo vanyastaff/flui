@@ -12,6 +12,13 @@ this one path (ADR-0151 §9).
   C forbids the OS crates and winit, and this crate's own `reach-forbid` adds
   `accesskit` and `tokio`. `flui-native`'s `allowed-dependents` keeps the
   crates above from reaching the backends through a side door.
+- **No logging.** A condition the contract meets is the caller's outcome, never a
+  log line the contract decides on (ADR-0151 §7): a refusal is an error the
+  function returns, a bound applied to untrusted input is a count the value
+  carries for the host to report (`Opened::overflow`), and an edit refused in a
+  text-store grant that runs after its request returned stays with the store
+  that refused it. `tracing` is in this crate's `reach-forbid`; the one path to
+  it, `flui-foundation`'s own instrumentation, is excused there.
 - **No `unsafe`.** `#![forbid(unsafe_code)]`: FFI belongs to the backends.
 - **A display id cannot be built from a number, and a period cannot be invalid.**
   `DisplayId` is an opaque `NonZeroU64` with no constructor outside a

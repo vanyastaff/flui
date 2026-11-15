@@ -2906,10 +2906,6 @@ mod toplevel {
             Self::open(owner, shared, &options, handler).map(|window| window as Rc<dyn HostWindow>)
         }
 
-        fn active(owner: &WaylandLoop, _: &WaylandWindows) -> Option<WindowId> {
-            owner.active_window()
-        }
-
         /// What a window has before its compositor said what it offers.
         fn capabilities(owner: &WaylandLoop, _: &WaylandWindows) -> WindowCapabilities {
             let decoration = Decoration {

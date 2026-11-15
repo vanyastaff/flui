@@ -1261,10 +1261,6 @@ impl host::Window<WebLoop> for WebWindow {
         Ok(window)
     }
 
-    fn active(owner: &WebLoop, _: &WindowPositions<CanvasRef>) -> Option<WindowId> {
-        owner.state.lock().window.as_ref().map(|(id, _)| *id)
-    }
-
     fn capabilities(_: &WebLoop, _: &WindowPositions<CanvasRef>) -> WindowCapabilities {
         window_capabilities()
     }

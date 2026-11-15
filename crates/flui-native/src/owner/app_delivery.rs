@@ -36,7 +36,10 @@ use std::rc::{Rc, Weak as RcWeak};
 use std::sync::Arc;
 
 use flui_foundation::panic::FirstPanic;
-use flui_platform::{Launch, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform::{
+    Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, Opened, OpenedOverflow, SessionEndAnswer,
+    SessionEndPhase, SystemNotice,
+};
 use parking_lot::Mutex;
 
 use super::call_point::{Called, Failure, HandlerSlot, call, retire};
@@ -424,12 +427,17 @@ impl AppDelivery {
     }
 
     /// The operating system opened URLs or files ([`AppHandler::opened`]).
-    /// An empty one reports nothing.
+    /// An empty one reports nothing. What bounding it dropped is logged
+    /// either way, once it is queued: the log runs a subscriber.
     pub(crate) fn opened(&self, opened: Opened) -> Called<()> {
-        if opened.is_empty() {
-            return Called::Vacant;
-        }
-        self.report(Report::Opened(opened))
+        let overflow = opened.overflow;
+        let called = if opened.is_empty() {
+            Called::Vacant
+        } else {
+            self.report(Report::Opened(opened))
+        };
+        report_overflow(overflow);
+        called
     }
 
     /// A system notice ([`AppHandler::host_notice`]). The lifecycle feature's
@@ -614,14 +622,20 @@ impl AppDelivery {
         opened: Opened,
         admitted: impl FnOnce(),
     ) -> Result<Called<()>, Opened> {
+        // What bounding it dropped is logged once it is taken and answered:
+        // one handed back is the caller's, with its count.
+        let overflow = opened.overflow;
         if opened.is_empty() {
             admitted();
+            report_overflow(overflow);
             return Ok(Called::Vacant);
         }
         match self.admit(Report::Opened(opened)) {
             Ok(next) => {
                 admitted();
-                Ok(self.proceed(next))
+                let called = self.proceed(next);
+                report_overflow(overflow);
+                Ok(called)
             }
             Err(Some(Report::Opened(opened))) => Err(opened),
             Err(_) => unreachable!("BUG: only a full queue refuses an opened report"),
@@ -814,9 +828,11 @@ impl AppDelivery {
 }
 
 /// Take what launched the application out of the reports queued before
-/// `ready`: every [`Launch::Cold`] report of what was opened for the first
-/// one's target, joined in order and bounded again ([`Opened::new`]). The
-/// reports for another target stay queued.
+/// `ready`: the [`Launch::Cold`] reports of what was opened for the first
+/// one's target, joined in order while the join holds at most
+/// [`MAX_OPENED_ITEMS`] items. The first that would not fit, the ones after it
+/// and the reports for another target stay queued, so the join drops nothing
+/// the host accepted.
 fn take_launch(pending: &mut VecDeque<Report>) -> Option<Opened> {
     let target = pending.iter().find_map(|report| match report {
         Report::Opened(opened) if opened.launch == Launch::Cold => Some(opened.target),
@@ -824,8 +840,18 @@ fn take_launch(pending: &mut VecDeque<Report>) -> Option<Opened> {
     })?;
     let mut urls = Vec::new();
     let mut files = Vec::new();
+    let mut joining = true;
     pending.retain(|report| match report {
-        Report::Opened(opened) if opened.launch == Launch::Cold && opened.target == target => {
+        Report::Opened(opened)
+            if joining && opened.launch == Launch::Cold && opened.target == target =>
+        {
+            // Each report holds at most `MAX_OPENED_ITEMS`, so the sum is far
+            // from overflowing.
+            let joined = urls.len() + files.len() + opened.urls.len() + opened.files.len();
+            if joined > MAX_OPENED_ITEMS {
+                joining = false;
+                return true;
+            }
             urls.extend(opened.urls.iter().cloned());
             files.extend(opened.files.iter().cloned());
             false
@@ -833,6 +859,20 @@ fn take_launch(pending: &mut VecDeque<Report>) -> Option<Opened> {
         _ => true,
     });
     Some(Opened::new(urls, files, target, Launch::Cold))
+}
+
+/// Log what bounding a report of what was opened dropped
+/// ([`Opened::overflow`]).
+fn report_overflow(overflow: OpenedOverflow) {
+    if !overflow.is_empty() {
+        tracing::warn!(
+            too_long = overflow.too_long,
+            past_limit = overflow.past_limit,
+            max_items = MAX_OPENED_ITEMS,
+            max_url_len = MAX_OPENED_URL_LEN,
+            "the operating system opened more than the application takes; the rest is dropped"
+        );
+    }
 }
 
 #[cfg(test)]

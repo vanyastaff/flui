@@ -152,7 +152,6 @@ pub trait Platform: sealed::Sealed + 'static {
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
-    fn active_window(&self) -> Option<WindowId>;
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
     // Input

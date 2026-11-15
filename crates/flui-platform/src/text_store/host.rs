@@ -2,7 +2,8 @@
 
 use std::rc::Rc;
 
-use super::lock::{LockGrant, LockOutcome, LockTiming, TextStoreError};
+use super::lock::{LockOutcome, TextStoreError};
+use super::projection::edit_async;
 use super::store::TextStore;
 use crate::Unsupported;
 
@@ -109,23 +110,20 @@ impl TextStoreHostError {
 /// means the commit is queued in the store: whoever accepted the completion
 /// owes it a later [`TextStore::run_deferred_grants`], whether or not its
 /// frame transaction was open when it asked, since the grant ahead of it may
-/// fail and leave it queued. A refusal is also logged with `tracing::warn!`.
+/// fail and leave it queued. A store that queued the commit and then refuses
+/// it keeps that refusal: no caller is left to hear it.
 ///
 /// # Errors
 ///
-/// The store's refusal of the lock ([`TextStore::request_lock`]); the
+/// The store's refusal of the lock ([`TextStore::request_lock`]), or of the
+/// edit that ends the composition when it ran before this returned; the
 /// composition is then left as it was.
 pub fn commit_composition_in_place(store: &dyn TextStore) -> Result<LockOutcome, TextStoreError> {
-    let grant = LockGrant::read_write(|session| {
-        if session.composition().is_some()
-            && let Err(error) = session.set_composition(None)
-        {
-            tracing::warn!(?error, "a composition could not be committed in place");
+    edit_async(store, |session| {
+        if session.composition().is_some() {
+            session.set_composition(None)
+        } else {
+            Ok(())
         }
-    });
-    store
-        .request_lock(grant, LockTiming::Async)
-        .inspect_err(|error| {
-            tracing::warn!(?error, "a composition could not be committed in place");
-        })
+    })
 }

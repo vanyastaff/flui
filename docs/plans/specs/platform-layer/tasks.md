@@ -5128,7 +5128,7 @@ graph LR
   `D:\flui`; `cargo fmt -p flui -p xtask -p flui-native -- --check` — зелёный. Заодно убрана
   недействительная rustdoc-ссылка на cfg-зависимый `TextInputV3`, не дававшая `doc-strict`
   завершиться на Windows.
-- [ ] **LY55**, часть `parking_lot` — #2327 (`91f693962`), ветка `platform/contract-std-mutex`.
+- [x] **LY55**, часть `parking_lot` — #2327 (`91f693962`), ветка `platform/contract-std-mutex`.
   Контракт и его
   зависимость `flui-foundation` больше не используют `parking_lot`: `DisplayRegistry`,
   `Completion`, `FakeHaptics`, `ScriptedHttp`, `ManualClock` и `ClaimSlot` переведены на
@@ -5144,7 +5144,7 @@ graph LR
   известного запуска `cargo fmt --all` во вложенном worktree; форматирование изменённых пакетов
   проверено отдельно. Остаются части LY55: `tracing` в text store и удаление `active_window`,
   `compositor_name`, публичного пути keyboard layout; они не входят в этот PR.
-- [ ] **LY55**, часть `compositor_name` — #2330 (`30375cab6`), ветка `platform/compositor-name`.
+- [x] **LY55**, часть `compositor_name` — #2330 (`30375cab6`), ветка `platform/compositor-name`.
   Метод удалён из
   `Platform`, `SharedPlatform` (сам тип ушёл в #2494), `host::Services` и всех восьми loop-реализаций; `Platform::name`
   остаётся. Продакшен-читателей метода не было. ADR-0039 обновлён, trybuild-снимки изменились
@@ -5155,12 +5155,35 @@ graph LR
   падают и на неизменённой базе, поэтому не относятся к этому PR. Clippy тех же крейтов с
   `-D warnings`, `wasm-check`, `workspace`, `reach` и остальные `xtask checks` зелёные, кроме
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
-  отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
-  публичный путь keyboard layout.
-  `opened.rs` (отброшенные сверх предела URL), `reach-forbid` контракта его не называет;
-  `Platform::active_window` и `OwnerPlatform::active_window` на месте, выше хоста их читают
-  только тесты (`tests/handler_reentry.rs`); `Platform::keyboard_layout` и
-  `on_keyboard_layout_change` остаются методами публичного запечатанного `Platform`.
+  отсутствующий `zig` и остаётся на CI. Остальное закрывает запись ниже.
+- [x] **LY55** — ветка `platform/contract-without-tracing`. Контракт больше не зависит от
+  `tracing`, и у каждого условия, которое он логировал, свой исход. Отказ store в правке,
+  которая выполнилась до возврата запроса, — ошибка вызывающего: `commit_composition_in_place`
+  теперь возвращает её так же, как `project_ime_event` (раньше отказ снять композицию
+  логировался, а вызов отвечал `Granted`); обе функции идут через один `edit_async`. Правка
+  отложенного grant, которую store отверг, остаётся у store: grant ничего не возвращает,
+  вызывающего уже нет, а каждая правка берёт смещения из своей сессии, так что store по правилам
+  `TextStoreEdit` отвергает её только собственным решением. Отброшенное `Opened::new` считается в
+  `Opened::overflow` (`OpenedOverflow`), и хост логирует его, когда принял отчёт
+  (`AppDelivery::opened`/`try_opened`, после постановки в очередь и ответа запустившему). Склейка
+  запуска в `take_launch` больше не отбрасывает принятое: она берёт cold-отчёты, пока их не больше
+  `MAX_OPENED_ITEMS`, остальные доходят до `AppHandler::opened` после `ready`. Манифест: `tracing`
+  удалён, добавлен в `reach-forbid`; единственный путь к нему — собственная инструментация
+  `flui-foundation`, исключённая там `reach-exceptions` (grant ADR-0151 §7). `Platform` и
+  `OwnerPlatform` без `active_window` (с позицией `host::Window::active` и её реализациями на
+  восьми хостах, полем `active` у headless и Wayland, `IOSLoop::active`) и без
+  `keyboard_layout`/`on_keyboard_layout_change`: раскладка остаётся позицией `host::Input` ядра,
+  тесты хостов читают её через `flui_native::testing::keyboard_layout` (ADR-0151 §9). ADR-0039
+  получил строку `Superseded-by`, `docs/gaps.md`, `docs/architecture.md` и `ARCHITECTURE.md`
+  контракта переписаны.
+  Тесты, в скобках результат без исправления: `a_refused_edit_reaches_the_caller_only_while_it_waits`
+  (`Ok(Granted)` вместо `Err(Protected)`); строка `a launch too large to join keeps the rest
+  queued` в `app_delivery_contracts` (хвост второго отчёта и третий отброшены);
+  `opened_items_and_urls_are_bounded_before_they_are_read` проверяет счёт `overflow`. Тесты,
+  читавшие удалённые методы, переведены: `touch` в `handler_reentry.rs` зовёт
+  `window_capabilities`, тесты раскладки (`handler_reentry.rs`, `x11_input.rs`,
+  `wayland_input.rs`) — `testing::keyboard_layout`; trybuild-снимок
+  `platform_and_host_window_are_sealed` изменился только в номерах строк.
 - [ ] **LY53** (не закрыта: запрета `build.rs`, запускающего `javac`, `swiftc` или `d8`, нет) —
   #2150 (`9450db8e1`), #2325 (`75872fc6e`). kind `capability` входит в закрытый список
   (`tools/xtask/src/workspace/tiers.rs`): крейт возможности живёт только в ярусе `pkg`

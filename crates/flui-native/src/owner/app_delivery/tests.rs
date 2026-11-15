@@ -377,6 +377,35 @@ fn ready_takes_what_launched_the_application() {
     // Outside `ready` there is no launch to take.
     assert_eq!(run.owner().take_launch_opened(), None);
 }
+
+/// The launch joins its cold reports only while the join stays within
+/// `MAX_OPENED_ITEMS`: the report that would not fit and the ones after it
+/// stay queued and reach the handler after `ready`, so the join drops none
+/// of what the host accepted.
+fn a_launch_too_large_to_join_keeps_the_rest_queued() {
+    let app = AppLog::new();
+    let delivery = Arc::new(AppDelivery::new());
+    let batch = |from: usize| {
+        Opened::new(
+            (from..from + 40).map(|n| format!("myapp:///note/{n}")),
+            [],
+            OpenTarget::Application,
+            Launch::Cold,
+        )
+    };
+    let reports = [batch(0), batch(40), batch(80)];
+    for opened in &reports {
+        assert!(matches!(delivery.opened(opened.clone()), Called::Vacant));
+    }
+    let run = bind(delivery, app.clone());
+    run.delivery.ready(run.owner()).expect("bootstrap");
+    assert_eq!(
+        app.opens(),
+        reports,
+        "the first is the launch, the others follow it whole"
+    );
+}
+
 /// A bootstrap that fails leaves what was reported queued, not dropped.
 fn a_failed_bootstrap_keeps_the_reports() {
     struct Failing(Rc<AppLog>);
@@ -722,6 +751,10 @@ fn app_delivery_contracts() {
             (
                 "ready takes what launched the application",
                 ready_takes_what_launched_the_application,
+            ),
+            (
+                "a launch too large to join keeps the rest queued",
+                a_launch_too_large_to_join_keeps_the_rest_queued,
             ),
             (
                 "a failed bootstrap keeps the reports",

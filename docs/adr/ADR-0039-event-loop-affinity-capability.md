@@ -13,7 +13,10 @@
   [ADR-0152](ADR-0152-capability-seam-revised.md) for §5 (the synchronous `Clipboard` trait is
   gone: each host's clipboard is an owner-local `NativeClipboard` that `OwnerPlatform` hands out,
   and widgets reach it through the clipboard capability); and
-  [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §2 only (`Platform` is owner-local; `data_transfer` moves to `OwnerPlatform`), and for §1's `shared()`, which ADR-0327 §2 removes.
+  [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §2 only (`Platform` is owner-local; `data_transfer` moves to `OwnerPlatform`), and for §1's `shared()`, which ADR-0327 §2 removes; and
+  [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §9 for §1's `active_window` and
+  `keyboard_layout` entries only (nothing above the host read them: `active_window` is gone, and
+  the keyboard layout stays inside the core host until the menu feature publishes it).
 
 ## Context
 

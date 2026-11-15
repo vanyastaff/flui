@@ -1,8 +1,14 @@
 //! What the operating system opens an application with is bounded once, for
 //! every host: the items past `MAX_OPENED_ITEMS` and a URL past
-//! `MAX_OPENED_URL_LEN` bytes are dropped before anything parses them.
+//! `MAX_OPENED_URL_LEN` bytes are dropped before anything parses them, and
+//! counted for the host to report.
 
 use flui_platform::{Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile};
+
+/// What bounding `opened` dropped: (too long, past the limit).
+fn dropped(opened: &Opened) -> (usize, usize) {
+    (opened.overflow.too_long, opened.overflow.past_limit)
+}
 
 fn url(n: usize) -> String {
     format!("myapp:///note/{n}")
@@ -19,6 +25,7 @@ fn opened_items_and_urls_are_bounded_before_they_are_read() {
     );
     assert_eq!(opened.urls.len(), MAX_OPENED_ITEMS - 1);
     assert_eq!(opened.files, [OpenedFile::new("/a.note")]);
+    assert_eq!(dropped(&opened), (0, 1), "one past the limit");
 
     let urls = (0..=MAX_OPENED_ITEMS).map(url).collect::<Vec<_>>();
     let opened = Opened::new(urls.clone(), [], OpenTarget::Application, Launch::Running);
@@ -40,8 +47,10 @@ fn opened_items_and_urls_are_bounded_before_they_are_read() {
         Launch::Running,
     );
     assert_eq!(opened.urls, [fits, url(1)]);
+    assert_eq!(dropped(&opened), (1, 0), "one too long");
 
-    assert!(Opened::new([], [], OpenTarget::Application, Launch::Running).is_empty());
+    let none = Opened::new([], [], OpenTarget::Application, Launch::Running);
+    assert!(none.is_empty() && none.overflow.is_empty());
 }
 
 /// A file is called by its file name; a held descriptor's file by the name

@@ -315,12 +315,6 @@ impl OwnerPlatform {
         self.hooks.open_owner_window(options, handler)
     }
 
-    /// The currently active (focused) window, if any.
-    #[must_use]
-    pub fn active_window(&self) -> Option<WindowId> {
-        self.platform.active_window()
-    }
-
     /// Read the host's system preferences without choosing a user window.
     ///
     /// # Errors
@@ -340,12 +334,6 @@ impl OwnerPlatform {
     /// Activate the application (bring to front).
     pub fn activate(&self, ignoring_other_apps: bool) {
         self.platform.activate(ignoring_other_apps);
-    }
-
-    /// The current keyboard layout identifier.
-    #[must_use]
-    pub fn keyboard_layout(&self) -> String {
-        self.platform.keyboard_layout()
     }
 
     /// Request the application to quit.

@@ -42,10 +42,6 @@ impl Platform for OutsidePlatform {
         Ok(Rc::new(OutsideWindow))
     }
 
-    fn active_window(&self) -> Option<WindowId> {
-        None
-    }
-
     fn preferences(&self) -> Result<SystemPreferences, PlatformError> {
         unreachable!("the impl never compiles")
     }
@@ -88,12 +84,6 @@ impl Platform for OutsidePlatform {
     ) -> Task<Result<Option<PathBuf>, PlatformError>> {
         unreachable!("the impl never compiles")
     }
-
-    fn keyboard_layout(&self) -> String {
-        String::new()
-    }
-
-    fn on_keyboard_layout_change(&self, _: Box<dyn FnMut()>) {}
 
     fn release_session_end(&self) {}
 
