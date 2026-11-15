@@ -117,12 +117,28 @@ mod cases {
             a_window_outlives_a_window_manager_that_was_killed,
         ),
         (
+            "a_handler_in_the_turn_a_window_manager_dies_acts_without_it",
+            a_handler_in_the_turn_a_window_manager_dies_acts_without_it,
+        ),
+        (
+            "a_check_window_that_is_no_window_managers_is_refused",
+            a_check_window_that_is_no_window_managers_is_refused,
+        ),
+        (
+            "a_window_manager_without_ewmh_is_followed",
+            a_window_manager_without_ewmh_is_followed,
+        ),
+        (
             "a_minimized_window_that_is_hidden_reads_hidden",
             a_minimized_window_that_is_hidden_reads_hidden,
         ),
         (
             "a_command_acts_on_the_window_as_it_is_now",
             a_command_acts_on_the_window_as_it_is_now,
+        ),
+        (
+            "a_window_minimized_as_it_hears_its_show_stays_minimized",
+            a_window_minimized_as_it_hears_its_show_stays_minimized,
         ),
         (
             "a_stream_of_events_leaves_the_frames_their_turns",
@@ -378,6 +394,36 @@ mod cases {
             let _ = window_manager.kill();
             let _ = window_manager.wait();
         }
+    }
+
+    /// Starts the harness's window manager again as it drops, whatever the
+    /// case that killed it found: the cases after it are managed too.
+    struct StartedAgain;
+
+    impl Drop for StartedAgain {
+        fn drop(&mut self) {
+            start_window_manager();
+        }
+    }
+
+    /// The window the root's `_NET_SUPPORTING_WM_CHECK` names.
+    fn check_window(server: &RustConnection) -> u32 {
+        let root = server.setup().roots[0].root;
+        server
+            .get_property(
+                false,
+                root,
+                atom(server, "_NET_SUPPORTING_WM_CHECK"),
+                AtomEnum::WINDOW,
+                0,
+                1,
+            )
+            .expect("request")
+            .reply()
+            .expect("the property")
+            .value32()
+            .and_then(|mut words| words.next())
+            .expect("the window manager names its window")
     }
 
     /// Wait, bounded at 10 s, until `done` holds.
@@ -1334,15 +1380,6 @@ mod cases {
         assert_eq!(managed.mode, WindowMode::Minimized);
         assert_eq!(managed.capabilities.minimizes, Availability::Native);
 
-        /// Starts the harness's window manager again as it drops, whatever
-        /// the case found: the cases after this one are managed too.
-        struct StartedAgain;
-        impl Drop for StartedAgain {
-            fn drop(&mut self) {
-                start_window_manager();
-            }
-        }
-
         kill_window_manager();
         let started_again = StartedAgain;
         fixture.settle();
@@ -1394,6 +1431,253 @@ mod cases {
             Availability::Native,
             "the window manager that started is followed"
         );
+    }
+
+    /// A handler that runs in the turn that hears the window manager die acts
+    /// without it. The turn hears the window manager's own window go, then a
+    /// close request whose handler reads the window and asks it for the
+    /// focus, before the turn's read of what the window manager supports:
+    /// the state it reads honours nothing only a window manager carries out,
+    /// and the focus is taken from the server, not asked of the window
+    /// manager that is gone.
+    fn a_handler_in_the_turn_a_window_manager_dies_acts_without_it() {
+        use flui_platform::Availability;
+        use x11rb::protocol::xproto::InputFocus;
+
+        let handler = RecordingWindowHandler::new();
+        let mut fixture = X11Fixture::open_with("bereaved", Rc::clone(&handler));
+        assert_eq!(
+            fixture.window.state().capabilities.minimizes,
+            Availability::Native
+        );
+        let read = Rc::new(std::cell::Cell::new(None));
+        let window = Rc::downgrade(&fixture.window);
+        handler.react_to_close_request({
+            let read = Rc::clone(&read);
+            move || {
+                if let Some(window) = window.upgrade() {
+                    let state = window.state();
+                    read.set(Some(state.capabilities.minimizes));
+                    let activate = WindowCommand::Activate
+                        .admit(&state.capabilities)
+                        .expect("a window takes the focus");
+                    window.apply(activate).expect("the window takes the focus");
+                }
+                CloseDecision::KeepOpen
+            }
+        });
+
+        let check = check_window(&fixture.server);
+        kill_window_manager();
+        let started_again = StartedAgain;
+        let server = &fixture.server;
+        until("the window manager's window to go", || {
+            server
+                .get_window_attributes(check)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .is_none()
+        });
+        // Nobody has the focus: a window that has it next took it.
+        server
+            .set_input_focus(InputFocus::NONE, x11rb::NONE, x11rb::CURRENT_TIME)
+            .expect("request");
+        send_close(server, fixture.xid);
+        // A round trip: the server has sent the window manager's end and the
+        // close request before the loop turns, so one turn hears both.
+        server
+            .get_input_focus()
+            .expect("request")
+            .reply()
+            .expect("the focus");
+
+        fixture.settle();
+        assert_eq!(handler.count(&HandlerCall::CloseRequested), 1);
+        assert_eq!(
+            read.get(),
+            Some(Availability::Unavailable),
+            "the handler read the window as nobody manages it"
+        );
+        let focus = fixture
+            .server
+            .get_input_focus()
+            .expect("request")
+            .reply()
+            .expect("the focus")
+            .focus;
+        assert_eq!(focus, fixture.xid, "the server focused the window");
+        drop(started_again);
+        fixture.settle();
+    }
+
+    /// The root's `_NET_SUPPORTING_WM_CHECK` is any client's to write. Naming
+    /// the root, or a window of the application's own that names itself in
+    /// turn, it names no window manager that speaks EWMH: the window honours
+    /// none of what `_NET_SUPPORTED` lists (the window manager still runs, as
+    /// the owner of `WM_S0`), and the platform still hears the root's property
+    /// changes (selecting the window's end on either would have replaced the
+    /// events the platform hears of it), so it follows the window manager's
+    /// list again once the property names it back.
+    fn a_check_window_that_is_no_window_managers_is_refused() {
+        use flui_platform::Availability;
+
+        let mut fixture = X11Fixture::open("checked");
+        let root = fixture.root();
+        let check = atom(&fixture.server, "_NET_SUPPORTING_WM_CHECK");
+        let window_manager = check_window(&fixture.server);
+        let name = |server: &RustConnection, on: u32, named: u32| {
+            server
+                .change_property32(PropMode::REPLACE, on, check, AtomEnum::WINDOW, &[named])
+                .expect("request");
+            server.flush().expect("flush");
+        };
+        // (case, the window the root names)
+        let table = [
+            ("the root", root),
+            ("a window of the application's own", fixture.xid),
+        ];
+        for (case, named) in table {
+            if named != root {
+                name(&fixture.server, named, named);
+            }
+            name(&fixture.server, root, named);
+            fixture.settle();
+            assert_eq!(
+                fixture.window.state().capabilities.enters_fullscreen,
+                Availability::Unavailable,
+                "{case}: no window manager that lists fullscreen is named"
+            );
+            name(&fixture.server, root, window_manager);
+            fixture.settle();
+            assert_eq!(
+                fixture.window.state().capabilities.enters_fullscreen,
+                Availability::Native,
+                "{case}: the root's property changes are still heard"
+            );
+            if named != root {
+                fixture
+                    .server
+                    .delete_property(named, check)
+                    .expect("request");
+            }
+        }
+    }
+
+    /// A window manager that speaks only ICCCM owns the screen's `WM_S0`
+    /// selection, announces itself with `MANAGER` and publishes no
+    /// `_NET_SUPPORTING_WM_CHECK` (twm, older and some tiling ones). It runs
+    /// all the same: a window it iconifies (unmapped, `WM_STATE` iconic,
+    /// ICCCM §4.1.4) reads minimized and shown, and `Show` maps it again. Once
+    /// it goes, its selection window with it, what it wrote says nothing.
+    fn a_window_manager_without_ewmh_is_followed() {
+        use flui_platform::Availability;
+
+        kill_window_manager();
+        let started_again = StartedAgain;
+        let mut fixture = X11Fixture::open("iconified without EWMH");
+        let root = fixture.root();
+        let selection = atom(&fixture.server, "WM_S0");
+        let wm_state = atom(&fixture.server, "WM_STATE");
+        let owner = |server: &RustConnection| {
+            server
+                .get_selection_owner(selection)
+                .expect("request")
+                .reply()
+                .expect("the owner")
+                .owner
+        };
+        until("the killed window manager's selection to go", || {
+            owner(&fixture.server) == x11rb::NONE
+        });
+        fixture.settle();
+        assert_eq!(
+            fixture.window.state().capabilities.minimizes,
+            Availability::Unavailable,
+            "nobody iconifies the window"
+        );
+
+        let stand_in = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let selection_window = stand_in.generate_id().expect("an id");
+        stand_in
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                selection_window,
+                root,
+                -1,
+                -1,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
+            )
+            .expect("request");
+        stand_in
+            .set_selection_owner(selection_window, selection, x11rb::CURRENT_TIME)
+            .expect("request");
+        stand_in
+            .send_event(
+                false,
+                root,
+                EventMask::STRUCTURE_NOTIFY,
+                ClientMessageEvent::new(
+                    32,
+                    root,
+                    atom(&stand_in, "MANAGER"),
+                    [x11rb::CURRENT_TIME, selection, selection_window, 0, 0],
+                ),
+            )
+            .expect("request");
+        stand_in.flush().expect("flush");
+        fixture.settle();
+        assert_eq!(
+            fixture.window.state().capabilities.minimizes,
+            Availability::Native,
+            "the window manager that took the selection iconifies the window"
+        );
+
+        stand_in
+            .change_property32(
+                PropMode::REPLACE,
+                fixture.xid,
+                wm_state,
+                wm_state,
+                &[3, x11rb::NONE],
+            )
+            .expect("request");
+        stand_in.unmap_window(fixture.xid).expect("request");
+        stand_in.flush().expect("flush");
+        fixture.settle();
+        let iconic = fixture.window.state();
+        assert_eq!(iconic.mode, WindowMode::Minimized, "WM_STATE stands");
+        assert!(iconic.visible, "an iconic window is shown");
+
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::Show)
+            .expect("a window shows");
+        fixture.settle();
+        let map_state = fixture
+            .server
+            .get_window_attributes(fixture.xid)
+            .expect("request")
+            .reply()
+            .expect("the window's attributes")
+            .map_state;
+        assert_eq!(map_state, MapState::VIEWABLE, "Show mapped the icon");
+
+        drop(stand_in);
+        fixture.settle();
+        assert_eq!(
+            fixture.window.state().mode,
+            WindowMode::Normal,
+            "what a window manager that went wrote says nothing"
+        );
+        drop(started_again);
+        fixture.settle();
     }
 
     /// Hiding withdraws a window, iconic or not: a minimized window the
@@ -1499,6 +1783,96 @@ mod cases {
             .expect("the window's attributes")
             .map_state;
         assert_eq!(map_state, MapState::VIEWABLE, "and the server maps it");
+    }
+
+    /// A command tells the window's handler what it read of the window only
+    /// once its own state is committed. In the turn that changed a minimized
+    /// window's frame, another window's handler shows it, so the show reads
+    /// the window anew; the window's own handler minimizes it again as it
+    /// hears the state change. The window manager hears the show's map, then
+    /// the handler's minimize, and the window ends minimized: a handler told
+    /// in the middle of the show would have its minimize undone by the map
+    /// that follows it.
+    fn a_window_minimized_as_it_hears_its_show_stays_minimized() {
+        let asker = RecordingWindowHandler::new();
+        let mut fixture = X11Fixture::open_with("asker", Rc::clone(&asker));
+        let handler = RecordingWindowHandler::new();
+        let shown = fixture
+            .platform
+            .open_window(
+                WindowOptions::default()
+                    .title("shown")
+                    .size(Size::new(300.0, 200.0)),
+                Rc::clone(&handler) as Rc<dyn WindowHandler>,
+            )
+            .expect("an X11 window opens");
+        let xid = xid_of(shown.as_ref());
+        shown
+            .admit_and_apply(WindowCommand::SetMode(WindowMode::Minimized))
+            .expect("a managed window minimizes");
+        fixture.settle();
+        let minimized = shown.state();
+        assert_eq!(minimized.mode, WindowMode::Minimized);
+
+        // Admitted against what was read before the turn: a read in the
+        // handler would tell the window's handler first.
+        let capabilities = minimized.capabilities;
+        let window = Rc::downgrade(&shown);
+        asker.react_to_close_request(move || {
+            if let Some(window) = window.upgrade() {
+                let show = WindowCommand::Show
+                    .admit(&capabilities)
+                    .expect("a window shows");
+                window.apply(show).expect("the window shows");
+            }
+            CloseDecision::KeepOpen
+        });
+        let armed = Rc::new(std::cell::Cell::new(true));
+        let window = Rc::downgrade(&shown);
+        handler.react_to_state_change({
+            let armed = Rc::clone(&armed);
+            move || {
+                if armed.replace(false)
+                    && let Some(window) = window.upgrade()
+                {
+                    let minimize = WindowCommand::SetMode(WindowMode::Minimized)
+                        .admit(&window.state().capabilities)
+                        .expect("a managed window minimizes");
+                    window.apply(minimize).expect("the window minimizes");
+                }
+            }
+        });
+
+        let server = &fixture.server;
+        // Any client may write the frame the window manager put around the
+        // window: the window reads a new outer size.
+        server
+            .change_property32(
+                PropMode::REPLACE,
+                xid,
+                atom(server, "_NET_FRAME_EXTENTS"),
+                AtomEnum::CARDINAL,
+                &[7, 7, 7, 7],
+            )
+            .expect("request");
+        send_close(server, fixture.xid);
+        // A round trip: one turn hears the frame's change and the request.
+        server
+            .get_input_focus()
+            .expect("request")
+            .reply()
+            .expect("the focus");
+
+        fixture.settle();
+        assert_eq!(asker.count(&HandlerCall::CloseRequested), 1);
+        assert!(!armed.get(), "the handler heard the state change");
+        assert_eq!(
+            shown.state().mode,
+            WindowMode::Minimized,
+            "the handler's minimize stands"
+        );
+        shown.close_for_cleanup();
+        fixture.settle();
     }
 
     /// A stream of events that never runs dry leaves the frames their turns:

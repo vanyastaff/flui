@@ -177,18 +177,21 @@ impl X11Connection {
         self.screen().root
     }
 
-    /// Whether this connection made the resource `id` names: the server
-    /// gives each client a range of ids, and every window, pixmap and cursor
-    /// the client makes is numbered in it.
+    /// Whether `window` is a peer's: another client's window, not the root.
+    /// A window a peer names (a window manager's check window or selection
+    /// owner, a transfer's requestor) is any id that peer chose to write, and
+    /// the platform selects its events, which only a peer's window may have
+    /// selected for it.
     ///
     /// The events a client selects on a window are one mask per client, and
-    /// selecting replaces it. So the platform's features select events only
-    /// on a window that is another client's and not the root: a window this
-    /// connection made hears what its own feature selected, and the root
-    /// hears what the windows selected (`X11Windows::new`).
-    pub(crate) fn made(&self, id: u32) -> bool {
+    /// selecting replaces it: a window this connection made hears what its
+    /// own feature selected, and the root what the windows selected
+    /// (`X11Windows::new`). The server gives each client a range of ids, and
+    /// every resource the client makes is numbered in it.
+    pub(crate) fn is_peers(&self, window: xproto::Window) -> bool {
         let setup = self.xcb.setup();
-        id & !setup.resource_id_mask == setup.resource_id_base
+        let made_here = window & !setup.resource_id_mask == setup.resource_id_base;
+        window != self.root() && !made_here
     }
 }
 

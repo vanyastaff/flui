@@ -2965,6 +2965,6 @@ fn a_session_selects_events_only_on_another_clients_window() {
         ("a window of the connection's own", target.xid, false),
     ];
     for (case, window, expected) in table {
-        assert_eq!(target.drag.foreign(window), expected, "{case}");
+        assert_eq!(target.connection.is_peers(window), expected, "{case}");
     }
 }

@@ -1125,17 +1125,6 @@ impl X11Drag {
                 .is_some_and(|over| over.target & !mask == requestor & !mask)
     }
 
-    /// Whether `window` is another client's, whose events the session may
-    /// select and stop hearing. One of this connection's own, a fetch window
-    /// of the transfer's target, hears its own events already, and its event
-    /// mask is the transfer's to keep. The root is not the session's either:
-    /// a requestor is any id its client names, and the root's mask is the
-    /// windows', which hear its property changes with it
-    /// (`X11Connection::made`).
-    pub(super) fn foreign(&self, window: xproto::Window) -> bool {
-        window != self.connection.root() && !self.connection.made(window)
-    }
-
     /// The most bytes one property of an answer holds: below the server's
     /// request limit, and at most [`MAX_CHUNK`].
     fn chunk(&self) -> usize {
@@ -1258,7 +1247,7 @@ impl X11Drag {
         let xcb = self.connection.xcb();
         // Heard before the announcement is written: the requestor's first
         // deletion may follow at once.
-        let heard = if self.foreign(requestor) {
+        let heard = if self.connection.is_peers(requestor) {
             xcb.change_window_attributes(
                 requestor,
                 &ChangeWindowAttributesAux::new()
@@ -1353,7 +1342,7 @@ impl X11Drag {
     /// Stop hearing `requestor`, another client's window, once no `INCR`
     /// answer is written to it.
     fn forget_requestor(&self, session: &Session, requestor: xproto::Window) {
-        if session.incr.writes_to(requestor) || !self.foreign(requestor) {
+        if session.incr.writes_to(requestor) || !self.connection.is_peers(requestor) {
             return;
         }
         if let Err(error) = self.connection.xcb().change_window_attributes(

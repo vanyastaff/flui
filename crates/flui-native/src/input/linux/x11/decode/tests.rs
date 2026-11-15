@@ -1020,8 +1020,8 @@ fn a_hierarchy_change_asks_only_for_what_it_names() {
 #[test]
 /// The motions of one device with nothing between them are one move at the
 /// last position, which carries the earlier ones as the positions it came
-/// through, in order, the latest hundred of them: a burst costs its window one
-/// move, however long it is.
+/// through, in order, the latest `PointerMove::COALESCED_HISTORY_LIMIT` of
+/// them: a burst costs its window one move, however long it is.
 /// A motion that scrolls, and a motion of another device, are delivered
 /// where they came, each between the moves around it; a scroll that leaves
 /// the cursor where it was moves nothing.
@@ -1039,6 +1039,9 @@ fn a_run_of_motions_is_one_move_through_them() {
         Scroll(f64),
     }
     let moved = |x: f64, through: &[f64]| Heard::Move(x, through.to_vec());
+    // The positions a long burst's move keeps: the latest before its own.
+    let kept = u32::try_from(flui_platform::pointer::PointerMove::COALESCED_HISTORY_LIMIT)
+        .expect("the limit fits");
     // (case, the run, what the window hears)
     let table: [(&str, Vec<XiEvent>, Vec<Heard>); 5] = [
         ("one motion", vec![at(1.0)], vec![moved(1.0, &[])]),
@@ -1076,7 +1079,7 @@ fn a_run_of_motions_is_one_move_through_them() {
             (0..10_000).map(|x| at(f64::from(x))).collect(),
             vec![moved(
                 9_999.0,
-                &(9_899..9_999).map(f64::from).collect::<Vec<_>>(),
+                &(9_999 - kept..9_999).map(f64::from).collect::<Vec<_>>(),
             )],
         ),
     ];

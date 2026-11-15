@@ -2043,19 +2043,32 @@ mod live {
         }
 
         /// The server's keymap changed: read it again, with its layouts'
-        /// names.
+        /// names. The keymap is compiled under the input's borrow; the names
+        /// are asked for, and a failure reported to the `tracing`
+        /// subscriber, with it released.
         fn keymap_changed(&self) {
-            let connection = &self.connection;
+            let reloaded = self.with_state(|state| {
+                let core = state.keyboard.as_mut()?;
+                let compiled = core.keyboard.reload(&core.source);
+                let device = core
+                    .source
+                    .x11_device()
+                    .and_then(|device| u16::try_from(device).ok());
+                Some((compiled, device))
+            });
+            let Some((compiled, device)) = reloaded else {
+                return;
+            };
+            if !compiled {
+                tracing::debug!("the X11 keyboard's new keymap cannot be read");
+            }
+            let Some(device) = device else {
+                return;
+            };
+            let layouts = group_names(&self.connection, device);
             self.with_state(|state| {
                 if let Some(core) = state.keyboard.as_mut() {
-                    if !core.keyboard.reload(&core.source) {
-                        tracing::debug!("the X11 keyboard's new keymap cannot be read");
-                    }
-                    if let Some(device) = core.source.x11_device()
-                        && let Ok(device) = u16::try_from(device)
-                    {
-                        core.layouts = group_names(connection, device);
-                    }
+                    core.layouts = layouts;
                 }
             });
         }
