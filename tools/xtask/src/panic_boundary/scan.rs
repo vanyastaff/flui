@@ -1,6 +1,6 @@
 //! One file's OS entries and how each reaches the boundary: the import scan,
-//! the entry collector, the body rule, the adapter rule and the identity
-//! rules.
+//! the entry collector, the body rule, the adapter rule, the ivars rule and
+//! the identity rules.
 //!
 //! The collector keeps owned copies of the bodies it judges, so the parsed
 //! tokens of a `define_class!` invocation can be read like the file around
@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use proc_macro2::{Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use syn::ext::IdentExt as _;
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
@@ -30,6 +30,11 @@ pub(super) const MODULE: &str = "panic_boundary";
 
 /// The boundary.
 pub(super) const BOUNDARY: &str = "os_entry";
+
+/// The boundary's ivars: the type a class keeps its Rust state in, whose
+/// destructor is the boundary's call, so that objc2's `dealloc` destroys the
+/// state inside it.
+pub(super) const IVARS: &str = "ContainedIvars";
 
 /// The path segments that may lead to the boundary's module: `crate`,
 /// `self`, `super` and the module that holds it.
@@ -111,6 +116,10 @@ pub(super) enum Kind {
     ExternFn,
     /// A `define_class!` method.
     ObjcMethod,
+    /// What objc2's generated `dealloc` runs for a `define_class!` class: the
+    /// class's own `Drop`, then the destructor of its ivars. The `Drop` of
+    /// the boundary's ivars is one too.
+    Destructor,
     /// A method of a windows-rs interface implementation.
     ComMethod,
     /// A method of an AccessKit handler.
@@ -121,9 +130,10 @@ pub(super) enum Kind {
 
 impl Kind {
     /// Every kind, in the order the summary counts them.
-    pub(super) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 6] = [
         Self::ExternFn,
         Self::ObjcMethod,
+        Self::Destructor,
         Self::ComMethod,
         Self::Handler,
         Self::Callback,
@@ -135,6 +145,7 @@ impl fmt::Display for Kind {
         f.write_str(match self {
             Self::ExternFn => "extern fn",
             Self::ObjcMethod => "Objective-C method",
+            Self::Destructor => "Objective-C destructor",
             Self::ComMethod => "COM method",
             Self::Handler => "AccessKit handler",
             Self::Callback => "OS callback",
@@ -153,6 +164,9 @@ enum Body {
     Closure { body: Expr, moves: bool },
     /// A callback constructor given no closure literal.
     Unseen,
+    /// The type a class declares its ivars as (`#[ivars = …]`), which objc2's
+    /// `dealloc` drops in place.
+    Ivars(Type),
 }
 
 /// One entry of a file.
@@ -193,6 +207,8 @@ struct Imports {
     os: BTreeSet<String>,
     /// Whether a `use` binds the bare boundary name to the boundary.
     boundary: bool,
+    /// Whether a `use` binds the bare name of the boundary's ivars to them.
+    ivars: bool,
 }
 
 /// What one file holds.
@@ -208,6 +224,13 @@ pub(super) struct FileScan {
     is_boundary: bool,
     /// Whether it defines the boundary at its top level.
     pub(super) defines_boundary: bool,
+    /// Where it defines the boundary's ivars at its top level.
+    defines_ivars: Option<usize>,
+    /// The classes its `define_class!` invocations declare, by name.
+    classes: BTreeSet<String>,
+    /// The `drop` of each `impl Drop for …` it holds: the type, the method's
+    /// line and its body.
+    drops: Vec<(String, usize, Block)>,
     pub(super) findings: Vec<Finding>,
 }
 
@@ -254,6 +277,16 @@ impl FileScan {
                      closure itself"
                         .to_owned(),
                 );
+            }
+            Body::Ivars(ty) => {
+                return if self.is_boundary_ivars(ty) {
+                    Verdict::Boundary
+                } else {
+                    Verdict::Unguarded(format!(
+                        "keeps ivars that objc2's `dealloc` destroys outside the boundary, \
+                         whoever releases the object last; declare them `{MODULE}::{IVARS}<…>`"
+                    ))
+                };
             }
         };
         if inert(expr) {
@@ -310,6 +343,19 @@ impl FileScan {
             || (path.len() == 1
                 && path[0] == BOUNDARY
                 && (self.imports.boundary || self.is_boundary))
+    }
+
+    /// Whether `ty` is the boundary's ivars: `…panic_boundary::ContainedIvars<…>`,
+    /// or the bare name where the file imports it from there.
+    fn is_boundary_ivars(&self, ty: &Type) -> bool {
+        let path = match ty {
+            Type::Path(path) if path.qself.is_none() => segments(&path.path),
+            Type::Group(group) => return self.is_boundary_ivars(&group.elem),
+            Type::Paren(paren) => return self.is_boundary_ivars(&paren.elem),
+            _ => return false,
+        };
+        is_boundary_item_path(&path, IVARS)
+            || (path.len() == 1 && path[0] == IVARS && (self.imports.ivars || self.is_boundary))
     }
 
     /// The adapter `callee` names, or why it names none: a free function of
@@ -392,10 +438,13 @@ fn segments(path: &Path) -> Vec<String> {
 
 /// `…panic_boundary::os_entry`, led only by [`LEADS`].
 pub(super) fn is_boundary_path(path: &[String]) -> bool {
+    is_boundary_item_path(path, BOUNDARY)
+}
+
+/// `…panic_boundary::<item>`, led only by [`LEADS`].
+fn is_boundary_item_path(path: &[String], item: &str) -> bool {
     match path {
-        [lead @ .., module, function] => {
-            module == MODULE && function == BOUNDARY && leads_in_crate(lead)
-        }
+        [lead @ .., module, name] => module == MODULE && name == item && leads_in_crate(lead),
         _ => false,
     }
 }
@@ -514,6 +563,7 @@ pub(super) fn scan_file(file: &Parsed, is_boundary: bool) -> FileScan {
         },
     };
     collector.visit_file(&file.ast);
+    collector.destructors();
     collector.out
 }
 
@@ -543,6 +593,11 @@ impl UseScan<'_> {
                 self.imports.boundary |= ok;
                 ok
             }
+            IVARS => {
+                let ok = is_boundary_item_path(&path, IVARS);
+                self.imports.ivars |= ok;
+                ok
+            }
             MODULE => is_boundary_module_path(&path),
             _ => return,
         };
@@ -554,10 +609,10 @@ impl UseScan<'_> {
                 kind: Problem::Identity,
                 detail: format!(
                     "binds `{bound_name}` to something other than `{}`",
-                    if bound_name == BOUNDARY {
-                        format!("{}::{BOUNDARY}", BOUNDARY_MODULE.join("::"))
-                    } else {
+                    if bound_name == MODULE {
                         BOUNDARY_MODULE.join("::")
+                    } else {
+                        format!("{}::{bound_name}", BOUNDARY_MODULE.join("::"))
                     }
                 ),
             });
@@ -576,6 +631,7 @@ impl UseScan<'_> {
             UseTree::Glob(_) => {
                 if is_boundary_module_path(prefix) {
                     self.imports.boundary = true;
+                    self.imports.ivars = true;
                 }
             }
             UseTree::Group(group) => {
@@ -663,9 +719,110 @@ impl Collector<'_> {
         }
     }
 
-    /// A `define_class!` body: read like the file, its marked methods entries.
+    /// An item under the name of the boundary's ivars: their definition, at
+    /// the boundary module's top level, or a second type of that name.
+    fn ivars_named(&mut self, ident: &syn::Ident, what: &str) {
+        if ident.unraw() != IVARS {
+            return;
+        }
+        if self.out.is_boundary && self.nesting == 0 && self.out.defines_ivars.is_none() {
+            self.out.defines_ivars = Some(line(ident.span()));
+        } else {
+            self.finding(
+                line(ident.span()),
+                format!("{what} {IVARS}"),
+                Problem::Identity,
+                format!(
+                    "only `{}::{IVARS}` may have this name",
+                    BOUNDARY_MODULE.join("::")
+                ),
+            );
+        }
+    }
+
+    /// Keep the `drop` of an `impl Drop for …`: whether it is an entry is
+    /// known once every class of the file is.
+    fn drop_of(&mut self, item: &syn::ItemImpl) {
+        let is_drop = item.trait_.as_ref().is_some_and(|(path, _)| {
+            path.segments
+                .last()
+                .is_some_and(|segment| segment.ident == "Drop")
+        });
+        let (true, Some(ty)) = (is_drop, type_name(&item.self_ty)) else {
+            return;
+        };
+        for member in &item.items {
+            if let ImplItem::Fn(function) = member
+                && function.sig.ident == "drop"
+                && built(&function.attrs)
+            {
+                self.out.drops.push((
+                    ty.clone(),
+                    line(function.sig.ident.span()),
+                    function.block.clone(),
+                ));
+            }
+        }
+    }
+
+    /// The `Drop` impls objc2's `dealloc` runs, as entries: a class's own,
+    /// and the one of the boundary's ivars, which every class's ivars are
+    /// destroyed through.
+    fn destructors(&mut self) {
+        let mut contained = false;
+        for (ty, at, body) in std::mem::take(&mut self.out.drops) {
+            let ivars = self.out.is_boundary && ty == IVARS;
+            contained |= ivars;
+            if ivars || self.out.classes.contains(&ty) {
+                self.out.entries.push(Entry {
+                    kind: Kind::Destructor,
+                    name: format!("{ty}::drop"),
+                    line: at,
+                    impl_type: Some(ty),
+                    body: Body::Block(body),
+                });
+            }
+        }
+        if let Some(at) = self.out.defines_ivars
+            && !contained
+        {
+            self.finding(
+                at,
+                format!("struct {IVARS}"),
+                Problem::Identity,
+                "the boundary's ivars implement no `Drop`, so nothing destroys what they hold \
+                 inside the boundary"
+                    .to_owned(),
+            );
+        }
+    }
+
+    /// A `define_class!` invocation: its body read like the file, its marked
+    /// methods entries, and the ivars it declares an entry of their own.
     fn define_class(&mut self, mac: &syn::Macro) {
-        match syn::parse2::<syn::File>(class_impls(mac.tokens.clone())) {
+        let class = ClassTokens::of(mac.tokens.clone());
+        if let Some(name) = &class.name {
+            self.out.classes.insert(name.clone());
+        }
+        if let Some((at, ivars)) = class.ivars {
+            let name = format!(
+                "{}::dealloc",
+                class.name.as_deref().unwrap_or("define_class!")
+            );
+            match syn::parse2::<Type>(ivars) {
+                Ok(ty) => self.entry(Kind::Destructor, name, at, Body::Ivars(ty)),
+                Err(error) => self.finding(
+                    at,
+                    name,
+                    Problem::Unread,
+                    format!(
+                        "its ivars do not parse as a type, so their destructor cannot be \
+                         judged: {error}"
+                    ),
+                ),
+            }
+        }
+        match syn::parse2::<syn::File>(class.impls) {
             Ok(body) => {
                 let outer = std::mem::replace(&mut self.in_define_class, true);
                 for item in &body.items {
@@ -789,23 +946,62 @@ impl Collector<'_> {
     }
 }
 
-/// The impls of a `define_class!` body: what follows its `struct Name;`. The
-/// class attributes before it (`#[ivars = Weak<T>]`) are not Rust attribute
-/// syntax and hold no code.
-fn class_impls(tokens: TokenStream) -> TokenStream {
-    let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
-    let declared = trees
-        .iter()
-        .position(|tree| matches!(tree, TokenTree::Ident(ident) if ident == "struct"))
-        .and_then(|at| {
-            trees[at..]
-                .iter()
-                .position(|tree| matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ';'))
-                .map(|semi| at + semi + 1)
+/// What a `define_class!` invocation holds. The class attributes before its
+/// `struct Name;` are not Rust attribute syntax (`#[ivars = Weak<T>]`), so
+/// they are read as tokens.
+struct ClassTokens {
+    /// The class the invocation declares.
+    name: Option<String>,
+    /// The line of its `#[ivars = …]` and the tokens of the type.
+    ivars: Option<(usize, TokenStream)>,
+    /// What follows the declaration: the class's impls.
+    impls: TokenStream,
+}
+
+impl ClassTokens {
+    fn of(tokens: TokenStream) -> Self {
+        let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
+        let Some(declared) = trees
+            .iter()
+            .position(|tree| matches!(tree, TokenTree::Ident(ident) if ident == "struct"))
+        else {
+            return Self {
+                name: None,
+                ivars: None,
+                impls: tokens,
+            };
+        };
+        let name = match trees.get(declared + 1) {
+            Some(TokenTree::Ident(name)) => Some(name.unraw().to_string()),
+            _ => None,
+        };
+        let ivars = trees[..declared].iter().find_map(|tree| {
+            let TokenTree::Group(attribute) = tree else {
+                return None;
+            };
+            if attribute.delimiter() != Delimiter::Bracket {
+                return None;
+            }
+            let mut inner = attribute.stream().into_iter();
+            match (inner.next(), inner.next()) {
+                (Some(TokenTree::Ident(key)), Some(TokenTree::Punct(equals)))
+                    if key == "ivars" && equals.as_char() == '=' =>
+                {
+                    Some((line(key.span()), inner.collect::<TokenStream>()))
+                }
+                _ => None,
+            }
         });
-    match declared {
-        Some(after) => trees[after..].iter().cloned().collect(),
-        None => tokens,
+        let impls = trees[declared..]
+            .iter()
+            .position(|tree| matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ';'))
+            .map_or(tokens, |semi| {
+                trees[declared + semi + 1..]
+                    .iter()
+                    .cloned()
+                    .collect::<TokenStream>()
+            });
+        Self { name, ivars, impls }
     }
 }
 
@@ -817,6 +1013,10 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         match item {
             Item::Const(item) => self.named(&item.ident, "const"),
             Item::Static(item) => self.named(&item.ident, "static"),
+            Item::Struct(item) => self.ivars_named(&item.ident, "struct"),
+            Item::Enum(item) => self.ivars_named(&item.ident, "enum"),
+            Item::Union(item) => self.ivars_named(&item.ident, "union"),
+            Item::Type(item) => self.ivars_named(&item.ident, "type"),
             Item::Mod(module) if module.ident.unraw() == MODULE && module.content.is_some() => {
                 self.finding(
                     line(module.ident.span()),
@@ -873,6 +1073,7 @@ impl<'ast> Visit<'ast> for Collector<'_> {
                 None
             }
         });
+        self.drop_of(item);
         let outer_kind = std::mem::replace(&mut self.impl_kind, kind);
         let outer_type = std::mem::replace(&mut self.impl_type, type_name(&item.self_ty));
         self.nesting += 1;

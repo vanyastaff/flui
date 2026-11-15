@@ -1531,6 +1531,54 @@ fn idle_tasks_after_a_presentation(
     (ran.get(), clock.asked)
 }
 
+/// How many of two idle tasks, each taking 20 ms of host time, run in a frame the owner reached
+/// `late` after its vsync, whose request carries a report of a frame shown 1 ms after that vsync
+/// at a 10 ms refresh.
+fn idle_tasks_in_a_frame_reached_late(late: Duration) -> usize {
+    let host = ManualClock::new();
+    host.advance(Duration::from_secs(1));
+    let mut runtime = manual_frame_runtime(&host);
+    let vsync = host.now();
+    host.advance(late);
+
+    let ran = Rc::new(Cell::new(0_usize));
+    for _ in 0..2 {
+        let (ran, host) = (Rc::clone(&ran), host.clone());
+        runtime
+            .scheduler()
+            .add_task(flui_scheduler::Priority::Idle, move || {
+                ran.set(ran.get() + 1);
+                host.advance(Duration::from_millis(20));
+            });
+    }
+    let shown = flui_platform::FramePresented::new(crate::event_at(
+        &host,
+        vsync + Duration::from_millis(1),
+    ))
+    .with_refresh(Duration::from_millis(10));
+    let request = flui_platform::FrameRequest::new(crate::event_at(&host, vsync)).presented(shown);
+    runtime.note_frame_request(runtime.presentation_id(), request);
+    let _ = runtime.pump(&mut SampledClock(host.now()), &mut Sink);
+    ran.get()
+}
+
+/// A frame's idle work ends at a refresh still ahead when the frame starts, never at one that
+/// has passed: neither the report itself, shown after the frame's vsync and before the owner
+/// reached the frame, nor a refresh the owner slept through.
+#[test]
+fn the_idle_work_of_a_frame_reached_late_ends_at_a_refresh_still_ahead() {
+    assert_eq!(
+        idle_tasks_in_a_frame_reached_late(Duration::from_millis(2)),
+        1,
+        "the report lies between the vsync and the frame: the refresh after it bounds the work"
+    );
+    assert_eq!(
+        idle_tasks_in_a_frame_reached_late(Duration::from_millis(25)),
+        1,
+        "two refreshes passed since the report: the third bounds the work"
+    );
+}
+
 #[test]
 fn a_presentation_report_bounds_the_idle_work_of_a_later_frame() {
     assert_eq!(

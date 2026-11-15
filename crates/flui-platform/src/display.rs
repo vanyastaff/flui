@@ -394,7 +394,7 @@ impl DisplayInfo {
     /// [`NotYetOnThisHost`](crate::UnsupportedReason::NotYetOnThisHost).
     pub fn color_space(&self) -> Result<SurfaceColorSpace, Unsupported> {
         self.color
-            .map(|color| color.color_space)
+            .map(DisplayColor::color_space)
             .map_err(Unsupported::from)
     }
 
@@ -405,7 +405,7 @@ impl DisplayInfo {
     /// this display, or gives one in a high-range mode without its headroom.
     pub fn headroom(&self) -> Result<Headroom, Unsupported> {
         self.color
-            .and_then(|color| color.headroom)
+            .and_then(DisplayColor::headroom)
             .map_err(Unsupported::from)
     }
 
@@ -548,38 +548,49 @@ impl Headroom {
 /// A [`Headroom`] holds no NaN, so its equality is total.
 impl Eq for Headroom {}
 
-/// A display's colour profile in the contract's terms: the colour space it
-/// shows surfaces in, and how far above SDR white it can go.
+/// A display's colour profile in the contract's terms: the gamut it shows
+/// surfaces in, its dynamic range, and how far above SDR white it can go.
 ///
-/// Built through [`standard`](Self::standard) and [`high`](Self::high), so a
-/// standard-range display always has [`Headroom::SDR`].
+/// The headroom belongs to the high range alone, so a standard-range display
+/// has none to carry: its headroom is [`Headroom::SDR`] by its variant, and a
+/// colour that says otherwise cannot be written.
+///
+/// ```compile_fail,E0061
+/// use flui_platform::{ColorGamut, DisplayColor, Headroom};
+///
+/// // A standard-range display takes no headroom.
+/// let _ = DisplayColor::Standard(ColorGamut::Srgb, Ok(Headroom::try_new(4.0).unwrap()));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct DisplayColor {
-    /// The colour space surfaces are shown in.
-    pub color_space: SurfaceColorSpace,
-    /// The headroom now, or why there is none to read: a high-range display
-    /// whose operating system does not report its peak.
-    pub headroom: Result<Headroom, CapabilityAbsence>,
+pub enum DisplayColor {
+    /// A standard-range display in this gamut: SDR white is its peak.
+    Standard(ColorGamut),
+    /// A high-range display in this gamut, with the headroom its operating
+    /// system reports now, or why it reports none.
+    High(ColorGamut, Result<Headroom, CapabilityAbsence>),
 }
 
 impl DisplayColor {
-    /// A standard-range display in `gamut`, with no headroom.
+    /// The colour space surfaces are shown in.
     #[must_use]
-    pub const fn standard(gamut: ColorGamut) -> Self {
-        Self {
-            color_space: SurfaceColorSpace::new(gamut, DynamicRange::Standard),
-            headroom: Ok(Headroom::SDR),
+    pub const fn color_space(self) -> SurfaceColorSpace {
+        match self {
+            Self::Standard(gamut) => SurfaceColorSpace::new(gamut, DynamicRange::Standard),
+            Self::High(gamut, _) => SurfaceColorSpace::new(gamut, DynamicRange::High),
         }
     }
 
-    /// A high-range display in `gamut`, with the headroom its operating system
-    /// reports, or why it reports none.
-    #[must_use]
-    pub const fn high(gamut: ColorGamut, headroom: Result<Headroom, CapabilityAbsence>) -> Self {
-        Self {
-            color_space: SurfaceColorSpace::new(gamut, DynamicRange::High),
-            headroom,
+    /// The headroom now: [`Headroom::SDR`] for a standard-range display, and
+    /// what a high-range one reports.
+    ///
+    /// # Errors
+    /// The [`CapabilityAbsence`] of a high-range display whose operating
+    /// system does not report its peak.
+    pub const fn headroom(self) -> Result<Headroom, CapabilityAbsence> {
+        match self {
+            Self::Standard(_) => Ok(Headroom::SDR),
+            Self::High(_, headroom) => headroom,
         }
     }
 }
@@ -836,20 +847,9 @@ pub struct DisplayParts {
     pub is_primary: bool,
     /// [`DisplayInfo::persistent_key`].
     pub persistent_key: Option<String>,
-    /// [`DisplayInfo::color`], taken apart.
-    pub color: Result<ColorParts, CapabilityAbsence>,
-}
-
-/// The fields of a [`DisplayColor`] and its [`SurfaceColorSpace`], public, for
-/// the same mirrors and for the same reason as [`DisplayParts`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ColorParts {
-    /// [`SurfaceColorSpace::gamut`].
-    pub gamut: ColorGamut,
-    /// [`SurfaceColorSpace::dynamic_range`].
-    pub dynamic_range: DynamicRange,
-    /// [`DisplayColor::headroom`].
-    pub headroom: Result<Headroom, CapabilityAbsence>,
+    /// [`DisplayInfo::color`]. A mirror matches the colour's variants, each
+    /// of which holds all it says.
+    pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
 impl DisplayInfo {
@@ -877,7 +877,7 @@ impl DisplayInfo {
                 refresh_period,
                 is_primary,
                 persistent_key,
-                color: color.map(DisplayColor::into_parts),
+                color,
             },
         )
     }
@@ -907,46 +907,7 @@ impl DisplayParts {
             refresh_period,
             is_primary,
             persistent_key,
-            color: color.map(ColorParts::into_color),
-        }
-    }
-}
-
-impl DisplayColor {
-    /// Take the colour apart into its fields.
-    #[must_use]
-    pub const fn into_parts(self) -> ColorParts {
-        let Self {
-            color_space:
-                SurfaceColorSpace {
-                    gamut,
-                    dynamic_range,
-                },
-            headroom,
-        } = self;
-        ColorParts {
-            gamut,
-            dynamic_range,
-            headroom,
-        }
-    }
-}
-
-impl ColorParts {
-    /// The colour these fields describe; every field is valid by its type.
-    #[must_use]
-    pub const fn into_color(self) -> DisplayColor {
-        let Self {
-            gamut,
-            dynamic_range,
-            headroom,
-        } = self;
-        DisplayColor {
-            color_space: SurfaceColorSpace {
-                gamut,
-                dynamic_range,
-            },
-            headroom,
+            color,
         }
     }
 }

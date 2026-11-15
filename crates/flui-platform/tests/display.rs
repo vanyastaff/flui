@@ -393,7 +393,7 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
         "a display whose host did not read its colour says so"
     );
 
-    let browser = unread.clone().with_color(Ok(DisplayColor::high(
+    let browser = unread.clone().with_color(Ok(DisplayColor::High(
         ColorGamut::DisplayP3,
         Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM),
     )));
@@ -412,7 +412,7 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
 
     let sdr = unread
         .clone()
-        .with_color(Ok(DisplayColor::standard(ColorGamut::Srgb)));
+        .with_color(Ok(DisplayColor::Standard(ColorGamut::Srgb)));
     assert_eq!(
         sdr.color_space(),
         Ok(SurfaceColorSpace::new(
@@ -432,12 +432,12 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
 fn a_profile_change_is_a_new_revision() {
     let registry = DisplayRegistry::new();
     let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-    let sdr = panel(id).with_color(Ok(DisplayColor::standard(ColorGamut::Srgb)));
+    let sdr = panel(id).with_color(Ok(DisplayColor::Standard(ColorGamut::Srgb)));
     let first = DisplaySnapshot::empty()
         .successor(vec![sdr.clone()])
         .expect("revision");
     let three = Headroom::try_new(3.0).expect("headroom");
-    let hdr = sdr.with_color(Ok(DisplayColor::high(ColorGamut::Rec2020, Ok(three))));
+    let hdr = sdr.with_color(Ok(DisplayColor::High(ColorGamut::Rec2020, Ok(three))));
     let second = first.successor(vec![hdr.clone()]).expect("revision");
     assert!(
         second.revision() > first.revision(),

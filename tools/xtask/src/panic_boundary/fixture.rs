@@ -8,7 +8,7 @@ pub(super) use crate::source_tree::Memory;
 pub(super) const ROOT: &str = "fixture/src/lib.rs";
 
 /// `(file, entry or item, kind)` of every planted finding.
-pub(super) const EXPECTED: [(&str, &str, Problem); 30] = [
+pub(super) const EXPECTED: [(&str, &str, Problem); 35] = [
     (WINDOWS, "planted", Unguarded),
     (WINDOWS, "first_then", Unguarded),
     (WINDOWS, "eager", Argument),
@@ -38,9 +38,14 @@ pub(super) const EXPECTED: [(&str, &str, Problem); 30] = [
     (APPLE, "RcBlock::new", Unread),
     (APPLE, ".exec_sync", Unread),
     (APPLE, "define_class!", Unread),
+    (APPLE, "Bare::dealloc", Unguarded),
+    (APPLE, "Lookalike::dealloc", Unguarded),
+    (APPLE, "Finalized::drop", Unguarded),
     (ANDROID, "Java_dev_flui_Planted_run", Unguarded),
     (IDENTITY_FILE, "fn os_entry", Identity),
     (IDENTITY_FILE, "use other::os_entry", Identity),
+    (IDENTITY_FILE, "struct ContainedIvars", Identity),
+    (IDENTITY_FILE, "use other::ContainedIvars", Identity),
     (IDENTITY_FILE, "mod panic_boundary", Identity),
     (SECOND_MODULE, "mod panic_boundary", Identity),
 ];
@@ -85,7 +90,7 @@ mod owner;
 mod tests;
 ";
 
-const BOUNDARY: &str = r"
+const BOUNDARY: &str = r#"
 pub(crate) enum AfterPanic<A, R> {
     Answer(fn(A) -> R),
     Abort,
@@ -105,7 +110,18 @@ pub(crate) fn os_entry<A: Copy, R>(
         },
     }
 }
-";
+
+pub(crate) struct ContainedIvars<T>(std::mem::ManuallyDrop<T>);
+
+// silent: the destructor every class's ivars go through is the boundary's call
+impl<T> Drop for ContainedIvars<T> {
+    fn drop(&mut self) {
+        os_entry("dealloc", (), AfterPanic::Answer(|()| ()), || unsafe {
+            std::mem::ManuallyDrop::drop(&mut self.0)
+        });
+    }
+}
+"#;
 
 const FEATURE: &str = r"
 mod android;
@@ -283,10 +299,11 @@ const APPLE_FILE: &str = r#"
 use crate::owner::panic_boundary;
 use crate::owner::panic_boundary::AfterPanic;
 
+// silent: ivars the boundary destroys
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "Delegate"]
-    #[ivars = Weak<Control>]
+    #[ivars = panic_boundary::ContainedIvars<Weak<Control>>]
     struct Delegate;
 
     unsafe impl NSApplicationDelegate for Delegate {
@@ -331,6 +348,53 @@ define_class!(
     struct Broken;
     impl Broken { fn }
 );
+
+// planted: ivars that objc2's `dealloc` destroys outside the boundary
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[ivars = Arc<Handler>]
+    struct Bare;
+);
+
+// planted: another type under the name of the boundary's ivars
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[ivars = other::ContainedIvars<Handler>]
+    struct Lookalike;
+);
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    struct Finalized;
+);
+
+// planted: a class's own destructor without a boundary
+impl Drop for Finalized {
+    fn drop(&mut self) {
+        release(self);
+    }
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    struct Released;
+);
+
+// silent: a class's own destructor through the boundary
+impl Drop for Released {
+    fn drop(&mut self) {
+        panic_boundary::os_entry("dealloc", (), AfterPanic::Answer(|()| ()), || release(self));
+    }
+}
+
+struct Plain;
+
+// silent: the destructor of a type that is no class
+impl Drop for Plain {
+    fn drop(&mut self) {
+        release(self);
+    }
+}
 
 // planted: a ClassBuilder method without a boundary
 extern "C-unwind" fn key_down(_this: &AnyObject, _sel: Sel) {
@@ -403,4 +467,10 @@ fn os_entry() {}
 
 // planted: a second module named `panic_boundary`
 mod panic_boundary {}
+
+// planted: an import of another `ContainedIvars`
+use other::ContainedIvars;
+
+// planted: a second `ContainedIvars`
+struct ContainedIvars;
 ";
