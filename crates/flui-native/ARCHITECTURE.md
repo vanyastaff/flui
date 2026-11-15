@@ -1268,8 +1268,8 @@ trait depends on `flui-platform` instead.
   (`a_seat_that_goes_leaves_no_input_behind`), whose held keys are released
   (`a_seat_that_goes_releases_the_keys_it_held`). A drag session watches the
   one grab it started under (`user_input::Inputs::watch`): a release over its
-  surface, its seat's removal in either order, or its pointer going while
-  the grab is held ends the session as cancelled, since the compositor says
+  surface, its seat's removal in either order, or its pointer going (after
+  a leave or not) ends the session as cancelled, since the compositor says
   nothing of a drag it ignored or one whose seat went
   (`a_watched_grab_ends_when_its_seat_goes`,
   `a_watched_grab_ends_when_its_pointer_goes`), and the window that started

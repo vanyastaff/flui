@@ -5549,7 +5549,7 @@ graph LR
   `damage_buffer` с версии 4 `wl_surface` (`damage_is_sent_with_the_request_the_surface_has`).
   (4) Ушедший seat (`user_input::Inputs::seat_gone`) снимает grab и последний ввод, отпускает
   удержанные клавиши; сессия drag следит за своим grab (`Inputs::watch`) и кончается как
-  `Cancelled`, когда отпускание дошло до поверхности, seat ушёл (в любом порядке) или указатель ушёл при удержанной кнопке; рамка
+  `Cancelled`, когда отпускание дошло до поверхности, seat ушёл (в любом порядке) или ушёл указатель seat (до или после leave), и кончается один раз; рамка
   окна при уходе seat снимает его move, resize и menu, а close, minimize и maximize оставляет.
   Тесты `a_seat_that_goes_leaves_no_input_behind`, `a_watched_grab_ends_when_its_seat_goes`,
   `a_grab_is_the_first_press_held_until_its_last_release`,

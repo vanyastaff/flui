@@ -506,23 +506,28 @@ fn a_hostile_scale_draws_no_gibibyte() {
     assert_eq!(widest.data.len(), 4 * 16_384 * 296);
 }
 
-/// Every window that publishes metrics has its title bar. A window 3 000
+/// Every window that publishes metrics has its whole frame. A window 3 000
 /// logical pixels wide at the largest scale would be 24 000 device pixels
-/// across, past the largest surface: it is drawn at the scale that fits,
-/// and its frame at the same one, which spans the content. So is one wider
-/// than the largest surface in logical pixels.
+/// across, past the largest surface: it is drawn at the scale that fits
+/// its content, and the title bar, which spans it, and all four margins
+/// (one pixel the viewport stretches) are drawn and take the pointer,
+/// wide or tall, at the cap or past it in logical pixels. Without a
+/// viewport, at scale one, a margin along a side at the cap is drawn within it.
 #[test]
-fn a_window_that_publishes_metrics_draws_its_title_bar() {
+fn a_window_that_publishes_metrics_draws_its_whole_frame() {
     use crate::window::linux::wayland::scale::metrics;
 
     let largest = BufferScale::try_new(BufferScale::MAX).expect("a scale");
-    for width in [
-        f64::from(MAX_EXTENT) / BufferScale::MAX,
-        3_000.0,
-        f64::from(MAX_EXTENT) * 2.0,
+    let cap = f64::from(MAX_EXTENT);
+    for (width, height) in [
+        (cap / BufferScale::MAX, 300.0),
+        (3_000.0, 300.0),
+        (cap * 2.0, 300.0),
+        (300.0, cap * 2.0),
+        (cap, cap),
     ] {
         let wide = Frame {
-            content: Size::new(width, 300.0),
+            content: Size::new(width, height),
             ..floating()
         };
         let scale = largest.fitted(wide.content);
@@ -531,9 +536,24 @@ fn a_window_that_publishes_metrics_draws_its_title_bar() {
         assert_eq!(
             i32::try_from(pixels.width).expect("within i32"),
             published.physical().width,
-            "{width} wide: the bar spans the content"
+            "{width} x {height}: the bar spans the content"
         );
-        assert!(pixels.width <= MAX_EXTENT, "{width} wide");
+        for piece in [Piece::Top, Piece::Bottom, Piece::Left, Piece::Right] {
+            let rect = wide
+                .rect(piece)
+                .expect("a floating window has every margin");
+            for viewported in [true, false] {
+                assert!(
+                    margin_size(rect, viewported).is_some(),
+                    "{width} x {height}: {piece:?} drawn, viewported {viewported}"
+                );
+            }
+            let (x, y) = (rect.width / 2.0, rect.height / 2.0);
+            assert!(
+                matches!(wide.part_at(piece, x, y), Some(Part::Edge(_))),
+                "{width} x {height}: {piece:?} takes the pointer"
+            );
+        }
     }
 }
 

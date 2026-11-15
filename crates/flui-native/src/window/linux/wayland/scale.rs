@@ -78,8 +78,20 @@ pub(crate) const MAX_CONTENT_EXTENT: i32 = 16_384;
 /// has no drawable area: an extent that is no size, or one past
 /// [`MAX_CONTENT_EXTENT`] in device pixels, which a window with no
 /// viewport cannot draw at a scale below one; nothing is published and
-/// nothing drawn until a configure gives a size a surface can have.
+/// nothing drawn until a configure gives a size a surface can have. A side
+/// that the scale would round below one device pixel (a window far longer
+/// than it is wide, lowered to fit) is drawn one pixel across, so the
+/// window still draws.
 pub(crate) fn metrics(content: Size<f64>, scale: BufferScale) -> Option<WindowMetrics> {
+    let least = 1.0 / scale.get();
+    let side = |logical: f64| {
+        if logical > 0.0 {
+            logical.max(least)
+        } else {
+            logical
+        }
+    };
+    let content = Size::new(side(content.width), side(content.height));
     let metrics = WindowMetrics::from_logical(content, scale.get()).ok()?;
     let physical = metrics.physical();
     (physical.width <= MAX_CONTENT_EXTENT && physical.height <= MAX_CONTENT_EXTENT)
@@ -103,9 +115,11 @@ fn over_120(numerator: u32) -> Option<f64> {
     (numerator > 0).then(|| f64::from(numerator) / 120.0)
 }
 
-/// The scale the buffer of a window whose content is `content` logical
-/// pixels is drawn at: the compositor's, fitted to the largest surface.
-pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, content: Size<f64>) -> BufferScale {
+/// The scale a window's buffers are drawn at: the compositor's, fitted so
+/// that `drawn`, the logical size of everything drawn at it (the content,
+/// and the frame around it where the window draws one), fits the largest
+/// surface.
+pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, drawn: Size<f64>) -> BufferScale {
     if !viewported {
         return BufferScale::ONE;
     }
@@ -115,7 +129,7 @@ pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, content: Size<f64>
         .or(told.output)
         .and_then(BufferScale::try_new)
         .unwrap_or(BufferScale::ONE)
-        .fitted(content)
+        .fitted(drawn)
 }
 
 #[cfg(test)]
@@ -303,6 +317,13 @@ mod tests {
                     MAX_CONTENT_EXTENT,
                     extent / f64::from(i32::MAX),
                 )),
+            ),
+            (
+                "a sliver far longer than the cap's ratio",
+                true,
+                120,
+                (1e6, 1.0),
+                Some((MAX_CONTENT_EXTENT, 1, extent / 1e6)),
             ),
             ("a size that is none", true, 120, (0.0, 300.0), None),
             (

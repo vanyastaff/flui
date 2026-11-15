@@ -1468,6 +1468,20 @@ fn square(centre: (f64, f64), half: f64) -> Vec<((f64, f64), (f64, f64))> {
     ]
 }
 
+/// The size of the image a margin at `rect` is drawn with. With a viewport
+/// it is one transparent pixel the viewport stretches over the margin. With
+/// none the buffer is the surface's size at scale one, held within
+/// [`MAX_EXTENT`]: a margin along a side of a content at the largest extent
+/// reaches past it by the other margins, and is drawn that much shorter
+/// rather than not at all. `None` for a margin that is no size.
+pub(crate) fn margin_size(rect: Rect, viewported: bool) -> Option<(u32, u32)> {
+    if viewported {
+        return Some((1, 1));
+    }
+    let within = |logical: f64| device_extent(logical.min(f64::from(MAX_EXTENT)), 1.0);
+    Some((within(rect.width)?, within(rect.height)?))
+}
+
 /// A margin's image: transparent, so the window shows no frame there while
 /// the margin still takes the pointer.
 pub(crate) fn paint_margin(width: u32, height: u32) -> Option<Pixels> {
@@ -1658,8 +1672,8 @@ pub(crate) mod surfaces {
     use super::title::TitleText;
     use super::{
         Action, BufferScale, BufferSet, Button, ContentAnswer, ContentChrome, ContentPress, Damage,
-        Frame, FramePointers, HeaderLook, Lent, Look, Piece, Pixels, Rect, TitleMask,
-        device_extent, paint_header, paint_margin, rounded,
+        Frame, FramePointers, HeaderLook, Lent, Look, Piece, Pixels, Rect, TitleMask, margin_size,
+        paint_header, paint_margin, rounded,
     };
     use crate::executor::NativeExecutor;
     use crate::owner::linux::wayland::{FramePointer, LoopWaker, WaylandState};
@@ -2140,14 +2154,9 @@ pub(crate) mod surfaces {
                         title: mask,
                     },
                 )?
-            } else if self.globals.viewporter.is_some() {
-                // A transparent pixel the viewport stretches over the margin.
-                paint_margin(1, 1)?
             } else {
-                paint_margin(
-                    device_extent(rect.width, 1.0)?,
-                    device_extent(rect.height, 1.0)?,
-                )?
+                let (width, height) = margin_size(rect, self.globals.viewporter.is_some())?;
+                paint_margin(width, height)?
             };
             let FrameGlobals { shm, queue, .. } = &self.globals;
             let part = &mut self.pieces[index];

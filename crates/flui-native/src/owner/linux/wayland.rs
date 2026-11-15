@@ -191,19 +191,16 @@ pub(crate) mod user_input {
         }
 
         /// `seat`'s pointer went while the seat stays: the grab it held ends,
-        /// and a watched grab it still held has ended, since no release can
-        /// come for it. A drag the compositor took had the pointer leave the
-        /// surface first, so a grab that left is no longer held and its
-        /// session goes on.
+        /// and so does a watched grab of the seat's, whether or not a leave
+        /// came first. Weston (`weston_seat_release_pointer`) and wlroots
+        /// (`wlr_seat_set_capabilities`) send the focused surface a leave
+        /// before the capabilities, so a grab's leave tells nothing here: a
+        /// drag the compositor ignored would never end, and one it took is
+        /// cancelled by the compositor with its pointer, which the session
+        /// hears and ends on at most once.
         pub(crate) fn pointer_gone(&mut self, seat: &Seat) {
-            let held = self
-                .grabs
-                .iter()
-                .find(|(grab, _)| grab.seat == *seat)
-                .map(|(grab, _)| grab.serial);
-            if let (Some(serial), Some(watched)) = (held, self.watched.as_mut())
+            if let Some(watched) = self.watched.as_mut()
                 && watched.seat == *seat
-                && watched.serial == serial
             {
                 watched.ended = true;
             }
@@ -339,10 +336,10 @@ pub(crate) mod user_input {
             );
         }
 
-        /// A seat that keeps its seat but loses its pointer while the
-        /// watched grab is held ends the grab: no release can come. A
-        /// pointer that left the surface first, as a drag the compositor
-        /// took has it, ends nothing; nor does another seat's pointer.
+        /// A seat that keeps its seat but loses its pointer ends the watched
+        /// grab, in the order a compositor sends it (a leave, then the
+        /// capabilities) and with no leave at all. A leave alone ends
+        /// nothing, nor does another seat's pointer going.
         #[test]
         fn a_watched_grab_ends_when_its_pointer_goes() {
             let mut held = Inputs::default();
@@ -354,7 +351,7 @@ pub(crate) mod user_input {
             held.pointer_gone(&1);
             assert!(
                 held.watched_ended(&1, 5),
-                "its pointer went, the button held"
+                "its pointer went, no leave first"
             );
             assert_eq!(held.grab_on(&3), None);
 
@@ -362,11 +359,9 @@ pub(crate) mod user_input {
             left.pressed(input(1, 5, 3));
             left.watch(1, 5);
             left.left(&1);
+            assert!(!left.watched_ended(&1, 5), "a leave alone ends nothing");
             left.pointer_gone(&1);
-            assert!(
-                !left.watched_ended(&1, 5),
-                "the drag took the pointer first"
-            );
+            assert!(left.watched_ended(&1, 5), "a leave, then its pointer went");
         }
     }
 }
@@ -2897,10 +2892,12 @@ mod event_loop {
             assert_eq!(table.register(third, Rc::new(Idle)).ok(), Some(None));
         }
 
-        /// A global announced at version zero reaches neither the loop's
-        /// registry dispatch nor the display watch's, which both read the
-        /// registry through `bindable`: no output, loop global or feature's
-        /// global is bound at it. Any other version, and a removal, pass.
+        /// `bindable` drops a global announced at version zero and passes
+        /// any other version and a removal. The test proves the function
+        /// alone: its two callers, the loop's registry dispatch
+        /// (`Dispatch<WlRegistry, ()> for WaylandState`) and the display
+        /// watch's (`display::linux::wayland`), need a compositor to run,
+        /// and dropping either call fails nothing here.
         #[test]
         fn a_global_of_version_zero_is_bound_by_none() {
             let global = |version| wl_registry::Event::Global {

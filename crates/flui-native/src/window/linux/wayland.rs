@@ -1519,6 +1519,9 @@ mod toplevel {
                     preferred: applied.told.preferred_scale,
                     output: output.map(|output| output.scale),
                 },
+                // The content is the one surface drawn at the scale: the
+                // frame's title bar spans its width, and its margins are a
+                // pixel the viewport stretches (`client_frame::margin_size`).
                 applied.sizing.content(),
             );
             (output, scale)

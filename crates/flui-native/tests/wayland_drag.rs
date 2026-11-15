@@ -122,6 +122,11 @@ mod cases {
                 "a_session_after_the_release_ends_cancelled",
                 a_session_after_the_release_ends_cancelled,
             ),
+            // Last: it moves sway's pointer device to another seat and back.
+            trial(
+                "a_session_whose_pointer_goes_ends_once",
+                a_session_whose_pointer_goes_ends_once,
+            ),
         ];
         libtest_mimic::run(&arguments, trials).exit();
     }
@@ -184,6 +189,35 @@ mod cases {
 
         fn release(&self) {
             self.cursor(&["release", "button1"]);
+        }
+
+        /// Attach sway's pointer device to seat `seat`, which takes the
+        /// pointer capability from the seat it leaves.
+        fn attach_to(&self, seat: &str) {
+            let inputs = Command::new("swaymsg")
+                .arg("-s")
+                .arg(&self.socket)
+                .args(["-r", "-t", "get_inputs"])
+                .output()
+                .expect("swaymsg runs");
+            let inputs = String::from_utf8_lossy(&inputs.stdout);
+            let device = inputs
+                .split("\"identifier\": \"")
+                .skip(1)
+                .find_map(|device| {
+                    let (identifier, rest) = device.split_once('"')?;
+                    let kind = rest.split("\"type\": \"").nth(1)?.split('"').next()?;
+                    (kind == "pointer").then(|| identifier.to_owned())
+                })
+                .expect("sway has a pointer device");
+            let status = Command::new("swaymsg")
+                .arg("-s")
+                .arg(&self.socket)
+                .args(["seat", seat, "attach", &device])
+                .stdout(Stdio::null())
+                .status()
+                .expect("swaymsg runs");
+            assert!(status.success(), "sway attaches {device} to {seat}");
         }
 
         /// Move to `to` from `from` in steps, the window turning between
@@ -604,6 +638,58 @@ mod cases {
             "dropped with the copy the client took"
         );
         assert_eq!(served.get(), 1, "the provider served the one read");
+        client.window.close_for_cleanup();
+    }
+
+    /// A session sway took, whose seat loses its pointer mid-drag (the
+    /// pointer device moves to another seat), ends cancelled exactly once:
+    /// the window hears a leave and then the seat's new capabilities, and
+    /// sway cancels the source too, which finds the session over.
+    fn a_session_whose_pointer_goes_ends_once(_: &Session) {
+        let client = Client::open("drag source");
+        let pointer = Pointer::new();
+        let peer = open_peer(
+            &client,
+            Role::Target(Wanted {
+                mime: Some(TEXT.to_owned()),
+                action: DndAction::Copy,
+                unread: 0,
+            }),
+        );
+        let drag = client
+            .window
+            .drag_source()
+            .expect("a Wayland window starts sessions");
+        let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
+        let ends = Rc::new(Cell::new(0_u32));
+        let counted = || {
+            let mut request = session(DRAGGED, &served, &ended);
+            let (ends, ended) = (Rc::clone(&ends), Rc::clone(&ended));
+            request.on_end = Box::new(move |end| {
+                ends.set(ends.get() + 1);
+                ended.set(Some(end));
+            });
+            request
+        };
+        pointer.to(ON_WINDOW);
+        client.turn();
+        pointer.press();
+        client.until("a session to start under the press", || {
+            drag.start(counted()).is_ok()
+        });
+        pointer.glide(&client, ON_WINDOW, ON_PEER);
+        until_peer(&client, &peer, "the session enter", |heard| {
+            matches!(heard, Heard::Entered(_))
+        });
+        pointer.attach_to("flui-elsewhere");
+        client.until("the session to end", || ended.get().is_some());
+        for _ in 0..10 {
+            client.turn();
+        }
+        pointer.attach_to("seat0");
+        assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+        assert_eq!(ends.get(), 1, "the session ends once");
+        assert_eq!(served.get(), 0, "nothing was read");
         client.window.close_for_cleanup();
     }
 
