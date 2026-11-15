@@ -192,18 +192,40 @@ fn keep_native_window(host: &Rc<dyn flui_native::HostWindow>) {
 
 /// The host's window presented at `address`, on the thread that runs the
 /// application: `None` on any other thread, when nothing is presented at
-/// `address` and once its window has closed. The window is found by the
-/// allocation the presentation's command queue holds, not by an id.
+/// `address` and once its window has closed.
 #[cfg(feature = "native")]
 pub(crate) fn native_window(
     address: flui_foundation::PresentationAddress,
+) -> Option<Rc<dyn flui_native::HostWindow>> {
+    presented_host_window(|commands| commands.window_for(address))
+}
+
+/// The host's window `id`, while a presentation is drawn in it, on the thread
+/// that runs the application: `None` on any other thread, when no
+/// presentation is drawn in a window of that id and once it has closed.
+#[cfg(feature = "native")]
+pub(crate) fn native_window_by_id(
+    id: flui_platform::WindowId,
+) -> Option<Rc<dyn flui_native::HostWindow>> {
+    presented_host_window(|commands| commands.window_with_id(id))
+}
+
+/// The host's window behind the presented window `find` picks from the
+/// runtime's command queues, on the thread that runs the application. The
+/// host's window is the allocation the presentation's command queue holds,
+/// seen as the host hands it out.
+#[cfg(feature = "native")]
+fn presented_host_window(
+    find: impl FnOnce(
+        &super::window_control::WindowCommandQueues,
+    ) -> Option<Rc<dyn flui_platform::PlatformWindow>>,
 ) -> Option<Rc<dyn flui_native::HostWindow>> {
     host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
         if state.owner_thread != Some(std::thread::current().id()) {
             return None;
         }
-        let presented = state.window_commands.window_for(address)?;
+        let presented = find(&state.window_commands)?;
         let presented = Rc::as_ptr(&presented).cast::<()>();
         state.native_windows.borrow().iter().find_map(|window| {
             (std::rc::Weak::as_ptr(window).cast::<()>() == presented)

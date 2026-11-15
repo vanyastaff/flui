@@ -981,6 +981,13 @@ name = "navigation"
 path = "examples/navigation.rs"
 required-features = ["material"]
 
+# The escape hatch from a widget: its window's Win32 or AppKit view
+# (ADR-0254 §8).
+[[example]]
+name = "native_window"
+path = "examples/native_window.rs"
+required-features = ["native"]
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles
 # ═══════════════════════════════════════════════════════════════════════════════

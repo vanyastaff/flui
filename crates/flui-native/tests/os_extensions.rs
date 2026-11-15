@@ -66,6 +66,11 @@ mod cases {
             "an_appkit_backdrop_goes_behind_the_content_and_comes_away",
             an_appkit_backdrop_goes_behind_the_content_and_comes_away,
         ),
+        #[cfg(target_os = "macos")]
+        (
+            "appkit_window_commands_do_what_they_say_or_answer_closed",
+            appkit_window_commands_do_what_they_say_or_answer_closed,
+        ),
     ];
 
     fn hidden() -> WindowOptions {
@@ -414,5 +419,82 @@ mod cases {
         assert!(tree.flui_view_is_first_responder());
         assert_eq!(appkit.clear_backdrop(), Ok(()), "nothing to take away");
         window.close_now();
+    }
+
+    /// Each `AppKitWindow` command reaches AppKit, read back from the
+    /// `NSWindow`, and answers that the window is closed once it is. An alpha
+    /// given while the window waits for its first frame is the alpha it is
+    /// revealed at, not 1, and a collection behavior keeps the full-screen
+    /// behavior the contract's mode needs.
+    #[cfg(target_os = "macos")]
+    fn appkit_window_commands_do_what_they_say_or_answer_closed() {
+        use flui_native::os::macos::{
+            AppKitWindowError, MacOSCollectionBehavior, MacOSSpaces, MacOSWindowAlpha,
+            MacOSWindowExt, MacOSWindowLevel,
+        };
+        use flui_platform::{PlatformWindow as _, Unsupported, UnsupportedReason, WindowReveal};
+        use objc2_app_kit::NSWindowCollectionBehavior;
+
+        let platform: Box<dyn Platform> =
+            Box::new(flui_native::MacOSPlatform::try_new().expect("the AppKit platform"));
+        let window = platform
+            .open_window(
+                WindowOptions::default()
+                    .title("os extensions")
+                    .reveal(WindowReveal::AfterFirstFrame),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
+            .expect("an AppKit window opens");
+        let appkit = window.appkit().expect("an AppKit window has its view");
+        let tree = AppKitTree::of(window.as_ref());
+
+        let half = MacOSWindowAlpha::try_new(0.5).expect("0.5 is an alpha");
+        assert_eq!(appkit.set_alpha(half), Ok(()));
+        assert!(
+            tree.window.alphaValue().abs() < f64::EPSILON,
+            "transparent until its first frame"
+        );
+        window.reveal_after_first_frame();
+        assert!(
+            (tree.window.alphaValue() - 0.5).abs() < f64::EPSILON,
+            "revealed at the application's alpha"
+        );
+        assert_eq!(appkit.alpha(), Ok(half));
+
+        assert_eq!(appkit.set_window_level(MacOSWindowLevel::Floating), Ok(()));
+        assert_eq!(appkit.window_level(), Ok(MacOSWindowLevel::Floating));
+        assert_eq!(
+            appkit.set_collection_behavior(
+                MacOSCollectionBehavior::default().spaces(MacOSSpaces::All)
+            ),
+            Ok(())
+        );
+        assert!(tree.window.collectionBehavior().contains(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenPrimary
+        ));
+        assert_eq!(appkit.set_has_shadow(false), Ok(()));
+        assert!(!tree.window.hasShadow());
+
+        window.close_now();
+        let closed = Err(AppKitWindowError::Unsupported(Unsupported::new(
+            UnsupportedReason::NoWindow,
+        )));
+        assert_eq!(appkit.set_has_shadow(true), closed);
+        assert_eq!(appkit.set_alpha(MacOSWindowAlpha::OPAQUE), closed);
+        assert_eq!(appkit.set_window_level(MacOSWindowLevel::Normal), closed);
+        assert_eq!(
+            appkit.window_level(),
+            closed.map(|()| MacOSWindowLevel::Normal)
+        );
+        assert_eq!(appkit.enable_tabbing(), closed);
+        assert_eq!(
+            appkit.set_collection_behavior(MacOSCollectionBehavior::default()),
+            closed
+        );
+        assert!(
+            !tree.window.hasShadow(),
+            "a closed window is left as it was"
+        );
     }
 }

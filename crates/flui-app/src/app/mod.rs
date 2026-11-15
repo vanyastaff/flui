@@ -26,6 +26,8 @@ mod launch;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod lifecycle;
 pub(crate) mod logging;
+#[cfg(feature = "native")]
+pub(crate) mod native_window;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),

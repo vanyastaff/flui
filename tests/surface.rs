@@ -19,15 +19,19 @@
 mod items {
     #[cfg(target_os = "macos")]
     use flui::native::macos::{
-        AppKitWindow as _, GlassStyle as _, GlassTint as _, LiquidGlass as _, MacOSBackdrop as _,
-        MacOSBackdropError as _, MacOSCollectionBehavior as _, MacOSMaterial as _,
-        MacOSWindowExt as _, MacOSWindowLevel as _, TabJoinError as _,
+        AppKitWindow as _, AppKitWindowError as _, GlassStyle as _, GlassTint as _,
+        InvalidWindowAlpha as _, LiquidGlass as _, MacOSBackdrop as _, MacOSBackdropError as _,
+        MacOSCollectionBehavior as _, MacOSMaterial as _, MacOSMissionControl as _,
+        MacOSSpaces as _, MacOSWindowAlpha as _, MacOSWindowCycle as _, MacOSWindowExt as _,
+        MacOSWindowLevel as _, TabJoinError as _,
     };
     #[cfg(windows)]
     use flui::native::windows::{
         Win32Window as _, Win32WindowError as _, WindowsBackdrop as _, WindowsWindowExt as _,
     };
-    use flui::native::{HostWindow as _, with_window as _};
+    use flui::native::{
+        HostWindow as _, NativeWindow as _, NativeWindowCapability as _, with_window as _,
+    };
     use flui::platform::os_options::{
         OsWindowOptions as _, Win32WindowOptions as _, WindowsCornerPreference as _,
         WindowsTheme as _,

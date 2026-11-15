@@ -142,8 +142,9 @@ trait depends on `flui-platform` instead.
   window (`Win32Window`, `AppKitWindow`) whose commands cannot meet another
   host's. The facade publishes the `os` modules, through `flui_app::native`,
   as `flui::native::<os>` behind its `native` feature (ADR-0254 §8), and
-  `flui_app::native::with_window` reaches the window a presentation is drawn
-  in. A view's method does what it says or reports that it cannot. A
+  a widget reaches the window it is drawn in through
+  `flui_app::native::NativeWindowCapability`, code that holds a presentation's
+  address through `flui_app::native::with_window`. A view's method does what it says or reports that it cannot. A
   `Win32Window` command or query first checks that its window still owns the
   handle (`Unsupported` with `NoWindow`); the view borrows a window that is
   neither `Send` nor `Sync`, so it is on the owner thread by its type, and a
@@ -173,8 +174,17 @@ trait depends on `flui-platform` instead.
   is an `NSVisualEffectView` material or Liquid Glass, an
   `NSGlassEffectView` looked up by name (macOS 26; `Unsupported` with `NotOnThisDevice` before),
   holding FLUI's view; it answers `MacOSBackdropError` for a closed window, a
-  window off the AppKit main lane, a content view something else put there, a
-  view AppKit did not create and a corner radius that is not finite. What a
+  content view something else put there, a view AppKit did not create and a
+  corner radius that is not finite. Every other `AppKitWindow` command (tabs,
+  level, collection behavior, shadow, alpha) answers `AppKitWindowError` for a
+  closed window; an AppKit window is made on the main thread and is neither
+  `Send` nor `Sync`, so its view needs no lane check. The values it takes are
+  FLUI's: a level and a collection behavior are named choices, converted to
+  AppKit's constants inside the crate, and a collection behavior always keeps
+  `FullScreenPrimary`, which the contract's full-screen mode needs. The
+  application's alpha (`MacOSWindowAlpha`, never NaN or outside `0..=1`) is
+  kept in the window's state: a deferred first reveal reveals the window at
+  it instead of at 1. What a
   window is created with on one OS is not an extension but that OS's field of
   the contract's `WindowOptions::os_options`, which only that OS's host reads:
   the Win32 window opens with its corners and title-bar theme
@@ -3372,8 +3382,8 @@ present lands — 2.81 s on a measured cold launch — so ordering an opaque win
 at open shows its bare background for that whole gap (the launch blank-window
 observation in [`docs/BETA.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/BETA.md)). The deferral is the caller's to ask for,
 through `WindowOptions::reveal`: with `WindowReveal::AfterFirstFrame`, macOS
-orders a `visible: true` window front at `alphaValue` 0 and restores alpha 1
-when the embedder reports the first presented frame through
+orders a `visible: true` window front at `alphaValue` 0 and gives it its alpha
+(opaque, or what `AppKitWindow::set_alpha` gave it meanwhile) when the embedder reports the first presented frame through
 `PlatformWindow::reveal_after_first_frame`, or when the window is shown
 explicitly (`show`, `set_visible(true)`, `activate`). The flag is settled under
 the window's state lock, never inside an owner route, so exactly one caller

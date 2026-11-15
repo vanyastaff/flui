@@ -9,6 +9,7 @@ or WASM targets with their own build step.
 | Example | Run |
 |---|---|
 | **counter** — the minimal FLUI app: one `Signal` and a `RawButton` whose press writes it (start here — this is the README's own "Hello World" code sample, and the exact shape `flui create`'s `counter` template generates) | `cargo run --example counter` |
+| **native_window** — the escape hatch from a widget: the view acquires its window as `flui::native::NativeWindowCapability` in `create_state`, and its buttons set the title bar colour and the backdrop through `win32()` on Windows, the level and the alpha through `appkit()` on macOS | `cargo run --example native_window --features native` |
 | **navigation** — one typed `Router` under `MaterialApp::router`: a push, a page popped with a result, and a confirmation dialog, each reached from `build` through `Router::of(ctx)` and `PageHandle::of(ctx)` | `cargo run --example navigation --features material` |
 
 ## Acceptance

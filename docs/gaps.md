@@ -81,10 +81,11 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The panic boundary's Apple entries (AppKit and UIKit methods, blocks, GCD work items) are
   type-checked only: no panic has been seen contained on a Mac or an iPhone
   ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
-- The macOS extension `flui::native::macos` is type-checked only: neither the backdrop material
-  behind the content, nor Liquid Glass (`NSGlassEffectView`, macOS 26), nor the narrowing of an
-  AppKit window to its view has run on a Mac
-  ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
+- The macOS extension `flui::native::macos` is type-checked only beyond its backdrop: the
+  `AppKitWindow` commands (tabs, level, collection behavior, shadow), the application's alpha kept
+  through a deferred first reveal, their case
+  (`appkit_window_commands_do_what_they_say_or_answer_closed`) and `examples/native_window.rs`
+  on macOS have not run on a Mac ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
 - A macOS display whose current mode reports 0 Hz (some built-in panels) has no period and paces at the 60 Hz default, because the `CVDisplayLink` fallback is not written.
 
 ### Native Linux host (Wayland and X11)

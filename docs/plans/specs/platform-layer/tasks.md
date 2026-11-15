@@ -5698,6 +5698,36 @@ graph LR
   Не запущено: сборки Android, iOS и macOS (нет SDK, устройства и Mac; `stage_macos_app` на этом
   хосте не компилируется); Linux и wasm32 — на CI.
 
+- [ ] **LY110** — ветка `platform/escape-hatch`, на ревью.
+  Построено: команды `AppKitWindow` (`enable_tabbing`, `disable_tabbing`, `set_window_level`,
+  `set_collection_behavior`, `set_has_shadow`, `set_alpha`) отвечают `Result<(), AppKitWindowError>`
+  (закрытое окно — `Unsupported` с `NoWindow`), `window_level` на уровень без имени —
+  `UnnamedLevel` вместо `Normal`. Прозрачность приложения — `MacOSWindowAlpha` (`try_new`, без NaN
+  и вне `0..=1`), хранится в состоянии окна; отложенный первый показ открывает окно с ней, а не с 1.
+  `MacOSWindowLevel` и `MacOSCollectionBehavior` — именованные значения, перевод в константы AppKit
+  внутри крейта; поведение — выборы из взаимоисключающих групп AppKit (`MacOSSpaces`,
+  `MacOSMissionControl`, `MacOSWindowCycle`) и всегда держит `FullScreenPrimary` (старые биты
+  называли не те флаги AppKit). Удалено то, что дублировало контракт или не делало сказанного:
+  `toggle_native_fullscreen`, пересчёт точек обоих видов, `set_snap_layouts`/`snap_layouts`
+  (снимали кнопку развёртывания, которой владеет рамка контракта), `set_blur_behind` (размытия нет
+  с Windows 8). `Win32WindowError::NotOnTheOwnerThread`, `TabJoinError::NotOnTheMainLane`,
+  `MacOSBackdropError::NotOnTheMainLane` удалены: окно не `Send` и не `Sync`, вид держит только
+  его поток; чужой поток у HWND — переиспользованный дескриптор, отказ как закрытому.
+  `set_title_bar_color` берёт `Option<Color>`. Окно достижимо из виджета:
+  `flui::native::NativeWindowCapability` (берётся в `create_state`, хэндл `NativeWindow`, поиск
+  окна по `WindowId` среди представленных); пример `examples/native_window.rs` на Windows и macOS.
+  Тесты, в скобках результат без исправления: `a_widget_reaches_its_host_window_through_the_native_window_capability`
+  (без провайдера — `NotRegistered`); `a_caption_colour_is_its_colorref`;
+  `a_win32_title_bar_takes_its_colour` и закрытое окно в `a_win32_view_refuses_a_closed_window`;
+  на macOS `appkit_window_commands_do_what_they_say_or_answer_closed`,
+  `a_window_alpha_is_a_number_from_zero_to_one`, `each_level_is_one_appkit_value_read_both_ways`,
+  `a_collection_behavior_is_one_appkit_accepts`. DWM не читает цвет заголовка обратно
+  (`E_INVALIDARG`), поэтому `COLORREF` проверен у перевода.
+  Проверки на Windows: clippy `-p flui-native -p flui-app -p flui --all-targets` с `native`,
+  nextest `-p flui-native -p flui-app` с `native`, `os_extensions`, пример собран и запущен.
+  Не запущено: macOS-код не компилировался здесь (только CI) и не запускался на Mac
+  (`docs/gaps.md`); кнопки примера не нажимались.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не
