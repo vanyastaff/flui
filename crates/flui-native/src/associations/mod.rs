@@ -14,13 +14,13 @@
 //!
 //! The host's launch arguments then open the link or the file.
 //!
-//! Each key it writes carries the application's id under [`MARKER`], and a
-//! ProgID the extension it opens under [`FILE_TYPE`]; the marker is the only
+//! Each key it writes carries the application's id under `MARKER`, and a
+//! ProgID the extension it opens under `FILE_TYPE`; the marker is the only
 //! claim registration trusts:
 //!
 //! - a key no one has, in the user's classes or the machine's, is written,
 //!   into a key the write itself creates: one another process created since
-//!   it was read is left to that process ([`Claim::New`]), and one whose
+//!   it was read is left to that process (`Claim::New`), and one whose
 //!   write fails is deleted again; the marker is the first value written, so
 //!   a rewrite that stops part way leaves a key the next run still knows as
 //!   this application's;
@@ -45,7 +45,7 @@
 //! A packaged application (MSIX) registers through its package manifest and
 //! never writes here ([`runs_packaged`]).
 //!
-//! The rules are here, over the [`Classes`] the registry gives on Windows
+//! The rules are here, over the `Classes` the registry gives on Windows
 //! and a map gives in the tests, so they run on every host.
 
 #[cfg(windows)]
