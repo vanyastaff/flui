@@ -67,7 +67,7 @@ writers, the one-instance check and `flui doctor`. A `Build` is a directory, a `
 the features the build turns on. The selection is what the build compiles: a named member, an
 example of one (which links its package's dev-dependencies), or cargo's default for the
 directory, which is the package there and at a workspace's root its default member, whether the
-root is virtual or a package itself (`a_run_reads_the_package_cargo_runs`). A build compiles one
+root is virtual or a package itself (`the_default_selection_is_what_cargo_builds_there`). A build compiles one
 application: the default selection at a root with several default members fails naming them,
 because one application's manifests do not join another's declarations, and the package built
 stays the application when a crate of its build depends on it
@@ -76,9 +76,13 @@ compiled (`BuildArtifacts::package`), not the member's siblings
 (`a_desktop_entry_registers_what_the_built_member_opens`,
 `an_ios_bundle_reads_the_declarations_of_the_built_member`). Android builds `cargo ndk build
 --lib` in the project's directory without naming a package, so it reads the default selection.
-`flui run` reads the package whose binary `cargo run` runs, selected as `flui build` selects a
-desktop binary, with the features the run builds with, which one function gives both the cargo
-command and the check (`a_desktop_run_checks_what_it_builds`).
+`flui run` selects the binary plain `cargo run` would run, as `flui build` selects a desktop
+binary (a root package's default members; among several default members, the one `default-run`
+when exactly one names one: `a_run_without_a_package_selects_the_binary_cargo_runs`), and names
+it to every cargo command of the run, so the check reads the build that runs: plain `cargo run`
+among several default members would turn on the features every member asks of a shared
+dependency. The features the run builds with come from one function that gives both the cargo
+commands and the check (`a_desktop_run_checks_what_it_builds`).
 
 A crate is its `PackageId` from end to end. Cargo is asked for the compiled package by id, so a
 dependency that carries the application's name is not mistaken for it
@@ -88,8 +92,9 @@ that crate depends on two packages of one name and version, by the source the pa
 (a git reference encoded as cargo prints it, a sparse index with its `sparse+`). The depth cargo
 prints ends at a `|` the format starts with, since a package name may start with a digit. A
 registry cargo lists by its configured name is read back to its index as cargo reads it
-(`CARGO_REGISTRIES_<NAME>_INDEX`, then the nearest `.cargo/config.toml`, or its twin without the
-extension, up to `$CARGO_HOME`'s); a name none of those configures stands for any registry's crate there
+(`CARGO_REGISTRIES_<NAME>_INDEX`, then the nearest cargo configuration file, the one without the
+extension beside a `.cargo/config.toml` when both are there, up to the one in `$CARGO_HOME`, a
+relative `CARGO_HOME` read against the directory cargo runs in); a name none of those configures stands for any registry's crate there
 (`registries_are_read_from_the_nearest_configuration`). A line that names no package, or a listing that leaves out the compiled package, fails the
 build instead of producing a smaller manifest (`a_listing_reads_back_as_each_crates_features`,
 `a_fork_on_an_encoded_branch_keeps_its_features`).

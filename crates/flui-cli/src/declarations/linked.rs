@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt::Display;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use cargo_metadata::{Metadata, Node, Package, PackageId};
 
@@ -389,8 +389,11 @@ impl Registries {
                 Some((name.to_owned(), value.into_string().ok()?))
             })
             .collect();
+        // As cargo's `home::cargo_home_with_cwd`: an empty variable is unset,
+        // and a relative one is read against the directory cargo runs in.
         let cargo_home = std::env::var_os("CARGO_HOME")
-            .map(PathBuf::from)
+            .filter(|home| !home.is_empty())
+            .map(|home| dir.join(home))
             .or_else(|| std::env::home_dir().map(|home| home.join(".cargo")));
         let mut files = BTreeMap::new();
         for cargo_dir in dir
@@ -817,11 +820,44 @@ mod tests {
         assert!(status.success(), "git {args:?}");
     }
 
+    /// Set in the process [`a_fork_on_an_encoded_branch_keeps_its_features`]
+    /// runs its fixture in.
+    const FORK_WORKER: &str = "FLUI_LINKED_FORK_WORKER";
+
     /// Cargo's own listing and graph of an application that depends on one
     /// name and version from a directory and from a git branch whose name
-    /// cargo encodes (`fix/a+b`) read back as each crate's features.
+    /// cargo encodes (`fix/a+b`) read back as each crate's features. The
+    /// fixture runs in a second process of this test binary whose
+    /// `CARGO_HOME` is a temporary directory, so the git database and
+    /// checkout cargo makes leave nothing behind.
     #[test]
     fn a_fork_on_an_encoded_branch_keeps_its_features() {
+        if std::env::var_os(FORK_WORKER).is_some() {
+            fork_fixture();
+            return;
+        }
+        let cargo_home = tempfile::tempdir().expect("a temporary CARGO_HOME");
+        let output = Command::new(std::env::current_exe().expect("the test binary"))
+            .args([
+                "--exact",
+                "declarations::linked::tests::a_fork_on_an_encoded_branch_keeps_its_features",
+                "--nocapture",
+            ])
+            .env(FORK_WORKER, "1")
+            .env("CARGO_HOME", cargo_home.path())
+            .env("CARGO_NET_OFFLINE", "false")
+            .output()
+            .expect("the fixture's process");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The fixture of [`a_fork_on_an_encoded_branch_keeps_its_features`].
+    fn fork_fixture() {
         let project = tempfile::tempdir().expect("a temporary directory");
         let write = |path: &str, contents: &str| {
             let path = project.path().join(path);

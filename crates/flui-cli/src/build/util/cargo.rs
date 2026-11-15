@@ -229,6 +229,19 @@ async fn select_target_for(
     if packages.is_empty() {
         return Err(invalid(format!("no package matches {unit:?}")));
     }
+    // `cargo run` without `--bin`: when exactly one selected package names a
+    // `default-run`, the binaries of that name; otherwise every binary of
+    // every selected package, each `default-run` ignored (cargo
+    // `src/bin/cargo/commands/run.rs`, `CompileFilter::single_bin`).
+    let default_run = match packages
+        .iter()
+        .filter_map(|package| package.default_run.as_deref())
+        .collect::<Vec<&str>>()
+        .as_slice()
+    {
+        [name] => Some((*name).to_owned()),
+        _ => None,
+    };
     let mut candidates = Vec::new();
     for package in packages {
         let kind = if staticlib {
@@ -253,10 +266,7 @@ async fn select_target_for(
                 staticlib
                     || match unit {
                         BuildUnit::Example(name) => target.name == *name,
-                        _ => package
-                            .default_run
-                            .as_ref()
-                            .is_none_or(|name| target.name == *name),
+                        _ => default_run.as_ref().is_none_or(|name| target.name == *name),
                     }
             })
             .collect();
@@ -434,4 +444,98 @@ async fn finish_child(child: &mut Child, target: &CargoTarget) -> BuildResult<Pa
         stop_child(child).await?;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::select_target;
+    use crate::build::platform::BuildUnit;
+
+    /// Write `files`, each `(path, contents)`, under `root`.
+    fn write(root: &Path, files: &[(&str, &str)]) {
+        for (path, contents) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent directory"))
+                .expect("the directories");
+            std::fs::write(path, contents).expect("a fixture file");
+        }
+    }
+
+    /// The `--package` and `--bin` of the binary selected without either at
+    /// `dir`, or the refusal.
+    fn selected(dir: &Path) -> Result<Vec<String>, String> {
+        tokio::runtime::Runtime::new()
+            .expect("a runtime")
+            .block_on(select_target(dir, &BuildUnit::DefaultBinary))
+            .map(|target| target.cargo_args())
+            .map_err(|error| error.to_string())
+    }
+
+    /// The binary `cargo run` runs without `--package` or `--bin`: at a
+    /// workspace root that is a package itself, of its default members, not
+    /// of the root package; among several default members, the one
+    /// `default-run` names when one of them names one, though another member
+    /// has a binary of its own; with no `default-run`, one binary or a
+    /// refusal naming them.
+    #[test]
+    fn a_run_without_a_package_selects_the_binary_cargo_runs() {
+        let fixture = tempfile::tempdir().expect("a temporary directory");
+        let package = |name: &str, rest: &str| {
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{rest}")
+        };
+        let root = fixture.path().join("root");
+        write(
+            &root,
+            &[
+                (
+                    "Cargo.toml",
+                    &package(
+                        "shell",
+                        "[workspace]\nmembers = [\"app\"]\ndefault-members = [\"app\"]\n",
+                    ),
+                ),
+                ("src/main.rs", "fn main() {}\n"),
+                ("app/Cargo.toml", &package("app", "")),
+                ("app/src/main.rs", "fn main() {}\n"),
+            ],
+        );
+        assert_eq!(
+            selected(&root),
+            Ok(["--package", "app", "--bin", "app"]
+                .map(str::to_owned)
+                .to_vec()),
+            "a root package's default member"
+        );
+
+        let members = fixture.path().join("members");
+        write(
+            &members,
+            &[
+                (
+                    "Cargo.toml",
+                    "[workspace]\nresolver = \"3\"\nmembers = [\"a\", \"c\"]\n",
+                ),
+                ("a/Cargo.toml", &package("a", "default-run = \"a\"\n")),
+                ("a/src/main.rs", "fn main() {}\n"),
+                ("a/src/bin/a2.rs", "fn main() {}\n"),
+                ("c/Cargo.toml", &package("c", "")),
+                ("c/src/main.rs", "fn main() {}\n"),
+            ],
+        );
+        assert_eq!(
+            selected(&members),
+            Ok(["--package", "a", "--bin", "a"].map(str::to_owned).to_vec()),
+            "the one `default-run` among the default members"
+        );
+        write(&members, &[("a/Cargo.toml", &package("a", ""))]);
+        let refused = selected(&members);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|error| error.contains("expected one executable")),
+            "{refused:?}"
+        );
+    }
 }

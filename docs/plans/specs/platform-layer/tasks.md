@@ -5470,7 +5470,7 @@ graph LR
   (фичи реестра, форка и каталога одного имени и версии слиты; листинг без собираемого пакета
   принят; ветка `fix%2Fa%2Bb` не найдена; близнецы двух реестров по имени — «several»; sparse
   по индексу — «none»); `a_fork_on_an_encoded_branch_keeps_its_features` (на настоящих cargo и
-  git: «names none of the 2»); `a_run_reads_the_package_cargo_runs` (в корне-пакете прочитан корень, а не
+  git: «names none of the 2»); `the_default_selection_is_what_cargo_builds_there` (в корне-пакете прочитан корень, а не
   default-member); `a_desktop_run_checks_what_it_builds` (в корне с двумя default-members отказ
   вместо проверки `app`; без фичи `flui/driver` отказ); `a_dependency_may_share_the_applications_name` («specification `notes` is
   ambiguous»); `a_desktop_entry_registers_what_the_built_member_opens` (в записи схема соседнего

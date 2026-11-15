@@ -1455,12 +1455,14 @@ mod tests {
             .expect("a member that opens nothing builds");
     }
 
-    /// `flui run` reads what plain `cargo run` builds where it runs: a member
-    /// that opens nothing runs beside a sibling that opens `notes:` links
-    /// without one instance, as does the root whose default member it is,
-    /// while the sibling itself is refused.
+    /// The default selection (`flui build android`, `flui doctor`) reads
+    /// what plain `cargo build` compiles where it runs: a member that opens
+    /// nothing passes the one-instance check beside a sibling that opens
+    /// `notes:` links without one instance, as does the root whose default
+    /// member it is, while the sibling itself is refused; at a root that is a
+    /// package itself, its default member, not the root package.
     #[test]
-    fn a_run_reads_the_package_cargo_runs() {
+    fn the_default_selection_is_what_cargo_builds_there() {
         let project = fixture(&[
             (
                 "notes",

@@ -310,7 +310,7 @@ a key arrives with its first consumer.
   by index, a listing without the compiled package refused) and
   `declarations::linked::tests::a_fork_on_an_encoded_branch_keeps_its_features` (cargo's own
   listing and graph of a git dependency on `fix/a+b`);
-  `declarations::tests::a_run_reads_the_package_cargo_runs` (the default member at a workspace's
+  `declarations::tests::the_default_selection_is_what_cargo_builds_there` (the default member at a workspace's
   root, virtual or a package itself, and the package of the directory inside a member);
   `declarations::tests::only_the_application_declares_the_links_it_opens` (the package built is
   the application when an example's dev-dependency depends on it; several default members are
