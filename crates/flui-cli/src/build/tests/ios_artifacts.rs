@@ -1,5 +1,7 @@
 //! Cargo artifact acceptance without Xcode app packaging. Host fixtures are portable.
-use crate::build::{BuildUnit, BuilderContextBuilder, IosBuilder, Platform, Profile};
+use crate::build::{
+    BuildArtifacts, BuildUnit, BuilderContextBuilder, BuiltPackage, IosBuilder, Platform, Profile,
+};
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -398,4 +400,71 @@ fn ios_cargo_artifact_fixtures() {
     ] {
         fixture(case, host);
     }
+}
+
+/// The iOS packager reads the declarations of the member the build
+/// compiled. Beside a sibling whose table no build accepts, packaging the
+/// sound member gets past its declarations to the Apple tools, which refuse
+/// this stand-in executable or are absent from the host; reading what cargo
+/// builds by default at the root would refuse the sibling's table first.
+#[test]
+fn an_ios_bundle_reads_the_declarations_of_the_built_member() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let root = fixture.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"notes\", \"sibling\"]\nresolver = \"3\"\n",
+    );
+    for (name, declares) in [
+        ("notes", "schema = 3\nurl-schemes = [\"notes\"]\n"),
+        ("sibling", "schema = 99\n"),
+    ] {
+        write(
+            root,
+            &format!("{name}/Cargo.toml"),
+            &format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+                 [package.metadata.flui.declares]\n{declares}"
+            ),
+        );
+        write(root, &format!("{name}/src/main.rs"), "fn main() {}\n");
+    }
+    let executable = root.join("built/notes");
+    write(root, "built/notes", "a stand-in for the linked executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+            .expect("an executable file");
+    }
+    let ctx = BuilderContextBuilder::new(root.to_path_buf())
+        .platform(Platform::Ios {
+            targets: vec!["aarch64-apple-ios".into()],
+        })
+        .profile(Profile::Debug)
+        .output_dir(root.join("staged"))
+        .build();
+    let artifacts = BuildArtifacts {
+        rust_libs: Vec::new(),
+        executable: Some(executable),
+        package: Some(BuiltPackage {
+            name: "notes".into(),
+            version: "0.1.0".into(),
+            links_dev_dependencies: false,
+        }),
+    };
+    let refused = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(IosBuilder::new().build_platform(&ctx, &artifacts))
+        .expect_err("a stand-in executable is no application")
+        .to_string();
+    assert!(
+        !refused.contains("sibling's"),
+        "the sibling's declarations are not the built member's: {refused}"
+    );
+    assert!(
+        root.join("staged").is_dir(),
+        "the packager went on to its output once the declarations were read: {refused}"
+    );
 }

@@ -8,6 +8,7 @@ use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts};
 use crate::build::util::cargo;
 #[cfg(target_os = "macos")]
 use crate::build::util::xml::xml_escape;
+use crate::declarations::{Build, Declarations, Selection};
 
 /// Builder for desktop platforms (Windows, macOS, Linux)
 #[derive(Debug, Default)]
@@ -94,10 +95,9 @@ impl DesktopBuilder {
         // the member the build compiles.
         let package = selected.built_package();
         if target.contains("-linux-") || target.contains("-windows-") {
-            crate::declarations::Declarations::collect_package(
-                &ctx.workspace_root,
+            Declarations::collect(
+                Build::at(&ctx.workspace_root).selecting(Selection::of_built(Some(&package))),
                 &[&target],
-                package.member(),
             )?
             .require_one_instance(&target)?;
         }
@@ -190,16 +190,17 @@ impl DesktopBuilder {
 }
 
 impl DesktopBuilder {
-    /// What the crates `artifacts` link for `triple` declare.
+    /// What the crates `artifacts` link for `triple` declare: those of the
+    /// member the build compiled, not of its siblings in the workspace.
     fn declarations(
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
         triple: &str,
-    ) -> BuildResult<crate::declarations::Declarations> {
-        crate::declarations::Declarations::collect_built(
-            &ctx.workspace_root,
+    ) -> BuildResult<Declarations> {
+        Declarations::collect(
+            Build::at(&ctx.workspace_root)
+                .selecting(Selection::of_built(artifacts.package.as_ref())),
             &[triple],
-            artifacts.package.as_ref(),
         )
     }
 

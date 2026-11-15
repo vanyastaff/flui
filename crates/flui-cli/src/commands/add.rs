@@ -380,10 +380,14 @@ fn enable_feature(manifest: &str, key: &str, feature: &str) -> Result<String, St
     Ok(document.to_string())
 }
 
-/// What the linked crate states: its plugin and its declarations, with the
-/// features the application's build now enables for it.
+/// What the linked crate states: its plugin and its declarations for every
+/// platform the application builds for, so the features a build for any
+/// target now enables for it count, whatever the host.
 fn describe(dir: &Path, target: &Target) -> CliResult<(PluginPath, Declarations)> {
     let metadata = metadata(dir)?;
+    let application = metadata.root_package().ok_or_else(|| {
+        CliError::Missing("cargo metadata names no package in the application's directory".into())
+    })?;
     let crate_name = target.crate_name();
     let package = metadata
         .packages
@@ -405,7 +409,7 @@ fn describe(dir: &Path, target: &Target) -> CliResult<(PluginPath, Declarations)
                     .into(),
             )
         })?;
-    let declarations = Declarations::of_linked_crate(dir, package)?;
+    let declarations = Declarations::of_linked_crate(dir, &metadata, application, package)?;
     Ok((plugin, declarations))
 }
 

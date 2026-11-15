@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::build::desktop::DesktopBuilder;
-use crate::build::{BuildUnit, BuilderContextBuilder, Platform, Profile};
+use crate::build::{
+    AppBundle, BuildArtifacts, BuildUnit, BuilderContextBuilder, BuiltPackage, Platform, Profile,
+};
 
 const FIXTURE_ROOT: &str = "FLUI_DESKTOP_FIXTURE_ROOT";
 const FIXTURE_CASE: &str = "FLUI_DESKTOP_FIXTURE_CASE";
@@ -250,4 +252,57 @@ fn desktop_uses_cargos_external_target_directory() {
 fn default_run_and_ambiguous_bins_are_distinguished() {
     fixture("default-run");
     fixture("ambiguous");
+}
+
+/// A Linux build stages the desktop entry of the member it compiled. In a
+/// workspace of two applications that cargo builds together at the root,
+/// the entry registers the built one's scheme and not its sibling's. (A
+/// macOS host stages a bundle from the same declarations instead.)
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_desktop_entry_registers_what_the_built_member_opens() {
+    let temp = tempfile::tempdir().expect("fixture");
+    let root = temp.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"notes\", \"sketch\"]\nresolver = \"3\"\n",
+    );
+    for name in ["notes", "sketch"] {
+        write(
+            root,
+            &format!("{name}/Cargo.toml"),
+            &format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+                 [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"{name}\"]\n"
+            ),
+        );
+        write(root, &format!("{name}/src/main.rs"), "fn main() {}\n");
+    }
+    write(root, "built/notes", "a stand-in for the linked executable");
+    let ctx = BuilderContextBuilder::new(root.to_path_buf())
+        .platform(Platform::Desktop {
+            target: Some("x86_64-unknown-linux-gnu".into()),
+        })
+        .profile(Profile::Debug)
+        .bundle(AppBundle::new("Notes", "com.example.notes".to_owned()))
+        .output_dir(root.join("staged"))
+        .build();
+    let artifacts = BuildArtifacts {
+        rust_libs: Vec::new(),
+        executable: Some(root.join("built/notes")),
+        package: Some(BuiltPackage {
+            name: "notes".into(),
+            version: "0.1.0".into(),
+            links_dev_dependencies: false,
+        }),
+    };
+    DesktopBuilder::build_platform(&ctx, &artifacts).expect("the build is staged");
+    let entry =
+        std::fs::read_to_string(root.join("staged/share/applications/com.example.notes.desktop"))
+            .expect("the desktop entry");
+    assert!(
+        entry.contains("MimeType=x-scheme-handler/notes;\n"),
+        "the built member's scheme alone: {entry}"
+    );
 }

@@ -19,7 +19,8 @@ fn manifest(name: &str, rest: &str) -> String {
 /// facade, whose `system` feature enables the capability crate `flui-sys`
 /// and `plain` a crate that is not one; `bare` on `flui-core` alone, from
 /// the checkout that also has the capability crate `flui-direct`. `app`'s
-/// tests turn on `flui-sys`'s `background` feature as a dev-dependency.
+/// tests turn on `flui-sys`'s `background` feature as a dev-dependency, and
+/// its Android build alone turns on the facade's `telephony`.
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let capability = "[package.metadata.flui.declares]\nschema = 1\n\
@@ -29,7 +30,9 @@ fn fixture() -> tempfile::TempDir {
                       category = \"NSPrivacyAccessedAPICategoryFileTimestamp\"\n\
                       reasons = [\"C617.1\"]\n\
                       [package.metadata.flui.declares.features.background.android]\n\
-                      permissions = [\"android.permission.FOREGROUND_SERVICE\"]\n";
+                      permissions = [\"android.permission.FOREGROUND_SERVICE\"]\n\
+                      [package.metadata.flui.declares.features.telephony.android]\n\
+                      permissions = [\"android.permission.READ_PHONE_STATE\"]\n";
     let files = [
         (
             "ws/Cargo.toml",
@@ -43,7 +46,8 @@ fn fixture() -> tempfile::TempDir {
                 "flui",
                 "[dependencies]\nflui-sys = { path = \"../sys\", optional = true }\n\
                  plain = { path = \"../plain\", optional = true }\n\
-                 [features]\nsystem = [\"dep:flui-sys\"]\nplain = [\"dep:plain\"]\n",
+                 [features]\nsystem = [\"dep:flui-sys\"]\nplain = [\"dep:plain\"]\n\
+                 telephony = [\"flui-sys?/telephony\"]\n",
             ),
         ),
         (
@@ -51,7 +55,7 @@ fn fixture() -> tempfile::TempDir {
             manifest(
                 "flui-sys",
                 &format!(
-                    "[features]\nbackground = []\n\
+                    "[features]\nbackground = []\ntelephony = []\n\
                      [package.metadata.flui.capability]\nplugin = \"SysPlugin\"\n{capability}"
                 ),
             ),
@@ -70,6 +74,8 @@ fn fixture() -> tempfile::TempDir {
             manifest(
                 "app",
                 "[workspace]\n[dependencies]\nflui = { path = \"../ws/flui\" }\n\
+                 [target.'cfg(target_os = \"android\")'.dependencies]\n\
+                 flui = { path = \"../ws/flui\", features = [\"telephony\"] }\n\
                  [dev-dependencies]\n\
                  flui-sys = { path = \"../ws/sys\", features = [\"background\"] }\n",
             ),
@@ -107,9 +113,10 @@ fn added(stdout: &[u8]) -> serde_json::Value {
 
 /// `flui add system` enables the facade feature that links the capability
 /// crate and prints the line that registers its plugin, with what the crate
-/// brings to the manifests of the application's build, which is not what a
-/// feature only its tests turn on declares; a second run changes nothing; a
-/// feature whose
+/// brings to the manifests of every platform the application builds for:
+/// what a feature only its Android build turns on declares, on any host,
+/// and not what a feature only its tests turn on does; a second run changes
+/// nothing; a feature whose
 /// crate states no plugin is refused and undone; an unknown name lists what
 /// the facade offers; without the facade, the crate is added from the
 /// checkout the application's FLUI dependencies come from.
@@ -135,7 +142,10 @@ fn add_links_a_capability_and_shows_its_registration() {
     );
     assert_eq!(
         event["android_permissions"],
-        serde_json::json!(["android.permission.INTERNET"])
+        serde_json::json!([
+            "android.permission.INTERNET",
+            "android.permission.READ_PHONE_STATE",
+        ])
     );
     assert_eq!(
         event["apple_accessed_apis"],

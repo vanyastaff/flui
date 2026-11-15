@@ -1,7 +1,7 @@
 //! Native library delivery without a consumer Xcode project.
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::{BuildArtifacts, BuilderContext, FinalArtifacts, Platform};
-use crate::declarations::Declarations;
+use crate::declarations::{Build, Declarations, Selection};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
@@ -516,8 +516,10 @@ pub(crate) async fn package_application(
         };
         // What the bundle's manifests state, from the crates the executable
         // links: those of the member the build compiled.
-        let declarations =
-            Declarations::collect_built(&app_dir, &[triple.as_str()], built.as_ref())?;
+        let declarations = Declarations::collect(
+            Build::at(&app_dir).selecting(Selection::of_built(built.as_ref())),
+            &[triple.as_str()],
+        )?;
         let filename = format!("{}.app", bundle.name);
         let destination = output.join(&filename);
         no_symlink_destination(&destination)?;
@@ -943,7 +945,7 @@ mod tests {
     /// (`C617.1`).
     fn framework_declarations() -> Declarations {
         let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        Declarations::collect(&workspace, &["aarch64-apple-ios"])
+        Declarations::collect(Build::at(&workspace), &["aarch64-apple-ios"])
             .expect("the facade's declarations")
     }
     fn privacy_manifest_declares_what_flui_calls() {

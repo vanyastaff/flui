@@ -180,7 +180,7 @@ mod tests {
     use std::path::Path;
 
     use super::{ACTIVITY, ManifestFacts, render, write};
-    use crate::declarations::Declarations;
+    use crate::declarations::{Build, Declarations};
 
     const FACTS: ManifestFacts<'static> = ManifestFacts {
         label: "R&D <Notes>",
@@ -192,8 +192,11 @@ mod tests {
     fn framework_declarations(features: &[&str]) -> Declarations {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let features: Vec<String> = features.iter().map(|&feature| feature.to_owned()).collect();
-        Declarations::collect_with_features(&workspace, &["aarch64-linux-android"], &features)
-            .expect("the facade's declarations")
+        Declarations::collect(
+            Build::at(&workspace).features(&features),
+            &["aarch64-linux-android"],
+        )
+        .expect("the facade's declarations")
     }
 
     /// The manifest declares each permission the framework's Android host

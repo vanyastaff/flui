@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use super::{Check, Fix, Status};
 use crate::config::FluiConfig;
-use crate::declarations::Declarations;
 use crate::declarations::verify::ManifestKind;
+use crate::declarations::{Build, Declarations};
 
 const SECTION: &str = "project";
 
@@ -82,7 +82,7 @@ pub(super) fn domain_checks(dir: &Path, fetch: &dyn Fetch) -> Vec<Check> {
         Err(error) => return failing(error.to_string()),
     };
     let domains = |kind: ManifestKind| {
-        Declarations::collect(dir, kind.targets()).map(|declarations| {
+        Declarations::collect(Build::at(dir), kind.targets()).map(|declarations| {
             declarations
                 .associated_domains()
                 .map(|(domain, _)| domain.to_string())

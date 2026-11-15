@@ -198,18 +198,6 @@ pub(crate) struct BuiltPackage {
     pub(crate) links_dev_dependencies: bool,
 }
 
-impl BuiltPackage {
-    /// The member, as a collection of declarations names the build it
-    /// reads.
-    #[must_use]
-    pub(crate) fn member(&self) -> crate::declarations::Member<'_> {
-        crate::declarations::Member {
-            name: &self.name,
-            dev: self.links_dev_dependencies,
-        }
-    }
-}
-
 /// Delivered file or bundle directory after a platform-specific build.
 #[derive(Debug)]
 pub(crate) struct FinalArtifacts {

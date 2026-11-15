@@ -164,7 +164,11 @@ fn run_session(
     if matches!(project, Project::Application { .. }) {
         let root = std::env::current_dir().context("failed to resolve application directory")?;
         let host = crate::build::DesktopBuilder::detect_host_target()?;
-        crate::declarations::Declarations::collect(&root, &[&host])?.require_one_instance(&host)?;
+        crate::declarations::Declarations::collect(
+            crate::declarations::Build::at(&root),
+            &[&host],
+        )?
+        .require_one_instance(&host)?;
     }
     if hot_reload {
         match project {
