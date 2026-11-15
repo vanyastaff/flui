@@ -315,7 +315,7 @@ graph LR
 |---|---|---|---|---|---|---|
 | **LY104** | **Снимок окна несёт только истинные конечные факты.** Win32 отказывает нулевому DPI в `change_dpi`, и снимок не может нести неконечную геометрию; `state()` окна headless читает, не сбрасывая сообщённый снимок; чтение снимка не доставляет `state_changed` под чужими заимствованиями (`WindowHandle::is_open()`); возможности X11 и Wayland строятся от `NONE`; у `WindowCapabilities` один enum на слот (`Native`, `Emulated`, `Absent(причина)`), правила цветового режима Android и unbuffered-dispatch уходят из `capabilities.rs`; `set_input_regions` закрытого окна отвечает одинаково на каждом хосте | — | `crates/flui-platform/src/window_state.rs`, `crates/flui-native/src/window/{capabilities.rs,windows/*,headless.rs,linux/*}`, `crates/flui-app/src/app/window_control.rs` | `workspace`, `reach`, гейт API-замыкания, `cross-typecheck` | строка conformance «геометрия снимка конечна» на каждом хосте; replay записи `window_state` проверяет то, что видит потребитель; `state_changed`, повторно входящий в очереди команд; строка conformance закрытого окна для `set_input_regions`; каждый падает при откате | L + W + T |
 | **LY105** | **Хост X11: устаревшее состояние и ограниченная работа.** Окно без оконного менеджера читает режим `Normal` и перечитывает поддержку по `DestroyNotify` окна `_NET_SUPPORTING_WM_CHECK`; удалённое устройство XInput2 распознаётся по флагу, а не по `type_`; цикл разбирает за ход то, что поставил один read, читает каждое устаревшее окно один раз и сливает движения; `XkbMapNotify` помечает keymap, а не компилирует её; списки RandR ограничены, смена рабочего стола читает только рабочую область; чтение выделения без `INCR` проверяет тип и формат; `pump_for` и `run_loop` делят один `turn()`; запрос устройства сверх `MAX_DEVICES` не делается; `tracing::warn!` — после мьютекса наблюдений | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/x11*`, `preferences/linux.rs`, `ARCHITECTURE.md` (обработчики с ограниченной работой на событие) | `module-dag`, `file-length`, `globals` | X-сервер без менеджера: режим `Normal`, `SetMode` исполняется; таблица `removed_devices`/`added_devices` по инфо в форме провода через функцию обработчика; счёт запросов на ход; выделение с чужим типом отвергается; каждый падает при откате | L; Dev: Linux (X11) |
-| **LY106** | **Хост Wayland: ограниченные данные композитора и гигиена протокола.** Клиентская рамка ограничивает масштаб и площадь рисования и держит ограниченный набор буферов на часть; на устройство один представленный, ещё не назначенный offer, и он уничтожается; `damage_buffer` только с версии 4 `wl_surface`; ушедшие seat и указатель снимают свои grab и фокус клавиатуры (удержанные клавиши получают KeyUp); реестр не хранит глобалы, которых не привязывает; источник drag берёт разрешение на запись до вызова провайдера приложения; одновременные чтения clipboard делят один ответ; ввод пользуется глобалами цикла, состояние указателя рамки — на seat; CI гоняет `wayland_window` под headless sway, пропустивший тест говорит это в выводе | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/wayland*`, `transfer/linux/*`, `drag/wayland/*`, `.github/workflows/*` | `module-dag`, `file-length`, `ci-verify` | враждебный масштаб не выделяет гигабайт; композитор, не отдающий буферы; поток `data_offer` без `selection` не растёт; seat, ушедший с удержанной кнопкой; каждый падает при откате; набор `wayland_window` под sway | L; Dev: Linux (Wayland) |
+| **LY106** | **Хост Wayland: ограниченные данные композитора и гигиена протокола.** Клиентская рамка ограничивает масштаб и площадь рисования и держит ограниченный набор буферов на часть; на устройство один представленный, ещё не назначенный offer, и он уничтожается; `damage_buffer` только с версии 4 `wl_surface`; ушедшие seat и указатель снимают свои grab и фокус клавиатуры (удержанные клавиши получают KeyUp); реестр не хранит глобалы, которых не привязывает; источник drag берёт разрешение на запись до вызова провайдера приложения; одновременные чтения clipboard делят один ответ; ввод пользуется глобалами цикла, состояние указателя рамки — на seat; случаи `wayland_window`, которым нужен протокол сверх xdg-shell или seat (`wayland_window::optional`), CI гоняет и под headless Weston, и под headless sway (`cargo xtask wayland-optional`, где недостающее — падение), остальной `wayland_window` — под Weston: sway 1.9 тайлит и предлагает `xdg_wm_base` 2, так что maximize не исполняет; пропустивший тест говорит это в выводе | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/wayland*`, `transfer/linux/*`, `drag/wayland/*`, `.github/workflows/*` | `module-dag`, `file-length`, `ci-verify` | враждебный масштаб не выделяет гигабайт; композитор, не отдающий буферы; поток `data_offer` без `selection` не растёт; seat, ушедший с удержанной кнопкой; каждый падает при откате; `wayland_window::optional` под sway | L; Dev: Linux (Wayland) |
 | **LY107** | **Ядро владельца: одна точка вызова, одно решение на отказ.** Обработчик раскладки клавиатуры — один `HandlerSlot` в `owner/` для каждого цикла, `OwnerTurnSlot` реализует `HandlerSlot`; исход паники `exit_policy` решает `AppDelivery::exit_policy` один раз (ADR-0258, ADR-0281), а не хост; `AppDelivery::question` сохраняет ответ обработчика, когда падает отчёт после него; правило «наступивший срок не крутит цикл» — одно, через `WakeDeadline::{take_due, arm}`; у `Services::page_origin` и запечатанного `Platform` нет тел по умолчанию; `bind` ставит `delivering`; `owner/handlers.rs` назван по содержимому, тесты `OwnerSignal` — рядом с `signal.rs`; лестница хостов в `lib.rs` написана один раз; маркеры и формулировки удержания после ADR-0281 убраны | LY105, LY106 | `crates/flui-native/src/owner/*`, `input/{linux,windows,headless}*`, `host.rs`, `platform.rs`, `lib.rs`, `tools/xtask/src/globals/fixture.rs` | `module-dag`, `globals`, `panic-boundary`, `markers`, `file-length` | повторная регистрация обработчика раскладки одинакова на каждом цикле; паника `exit_policy` — одна строка таблицы на все хосты; вето конца сессии переживает панику отчёта; trybuild: `impl Services` без `page_origin` не компилируется; каждый падает при откате | L + W + T; Dev: macOS (насос AppKit) |
 | **LY108** | **flui-app честно отвечает своим обработчикам.** Маршрут кадра — `FnMut(FrameRequest) -> FrameOutcome`, и каждый отказ runtime получает свой ответ; `WindowDelivery::run` возвращает результат только той доставки, которую поставил этот вызов; `Held.inputs` не ограничен числом (ограничение отбрасывало бы ввод): ввод ждёт маршрута не дольше одного хода владельца; размещение окна читается один раз, до открытия, без второго блокирующего `recall`; **открыто:** оно читается и пишется через хранилище хоста, мимо `StorageCapability` приложения ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); `display_handle` Android и Web отвечает `Unavailable` там же, где `window_handle`; маркеры задач убраны | — | `crates/flui-app/src/app/{window_routes.rs,desktop.rs,runner/*}`, `crates/flui-native/src/{owner/window_delivery.rs,window/android.rs,window/web.rs}` | `workspace`, `reach`, `markers`, `cross-typecheck` | таблица «отказ runtime → `FrameOutcome`»; ввод, поставленный с другого потока, не отдаёт свой ответ чужому вызову; размещение читается из хранилища один раз; каждый путь runner ставит маршрут ввода к концу хода, который устанавливает окно; каждый падает при откате | L + W + T; Dev: Android |
 | **LY109** | **Отчёты о показе, цвет и граница паники.** Отметка времени показа ограничена в одном месте, через которое проходит каждый хост; пойманная паника в делегате `URLSession` завершает передачу ошибкой; ivar'ы, владеющие пользовательским кодом, снимаются под containment при отсоединении, и гейт `panic-boundary` видит ivar'ы каждого `define_class!`; `DisplayColor` держит свой инвариант типом (закрытые поля, `try_new`); неконечный headroom поверхности читается как SDR; срок простоя не бывает уже прошедшим; `facade-combos` проверяет каждую фичу фасада поодиночке | — | `crates/flui-native/src/{owner/*,http/apple.rs,window/apple/ios.rs}`, `crates/flui-platform/src/display.rs`, `crates/flui-engine/src/surface_color.rs`, `crates/flui-scheduler/src/frame_clock.rs`, `tools/xtask/src/{panic_boundary/*,tasks/facade.rs}` | `panic-boundary` (+ `--self-test`), `facade-combos`, `feature-matrix`, гейт API-замыкания, `cross-typecheck` | отчёт с отметкой из будущего не останавливает обратную связь окна; самотест гейта с посаженным ivar; таблица `DisplayColor::try_new`; headroom NaN и ∞; каждый падает при откате | L + T; Dev: macOS, iOS |
@@ -5440,67 +5440,52 @@ graph LR
   `xtask checks` зелёный; `xtask expectations`: изменение не трогает ни одного ожидания. Не
   запускалось: Linux, wasm32, Android и Apple; правки `window/android.rs` и `window/web.rs`
   впервые собирает CI.
-- [x] **LY106** — ветка `platform/wayland-peer-bounds`. Девять находок проверки подтверждены
-  чтением кода до правки, ни одна не оказалась ложной. (1) Клиентская рамка: масштаб рисования —
-  тип `DrawScale` (масштаб окна, не больше 8), у `Pixels` предел площади `MAX_PIXELS` (18,5 МиБ),
-  у каждой части рамки `BufferSet` из трёх буферов: отданный композитором буфер рисуется заново,
-  при композиторе, не отдающем ничего, старший уничтожается, все — вместе с рамкой. Тесты:
-  `a_hostile_scale_draws_no_gibibyte` (окно шириной 37 при масштабе 442),
-  `a_compositor_that_releases_nothing_is_lent_a_bounded_set`,
-  `a_released_buffer_is_drawn_into_again`; на Weston `wayland_frame` перерисовывает заголовок
-  тридцать раз и читает его с экрана. Откат: без предела масштаба — `a window at 8.01`: 8.01
-  вместо 8.0; без предела площади тест рисует гигабайтный заголовок 4,9 с и падает на «each side
-  is within the largest extent, the area is not»; без предела набора — четвёртый буфер. (2)
-  `DeviceOffers` на устройство данных и на устройство primary selection: один представленный и
-  не названный offer, уничтожаемый следующим `data_offer` или уходом устройства; offer события
-  на отпущенном устройстве уничтожается сразу. Тест `a_device_holds_one_offer_no_event_named`
-  (10 000 `data_offer` без `selection`); откат — ни один offer не возвращён на уничтожение. (3)
-  `Damage::on`: `damage_buffer` с версии 4 `wl_surface`, ниже — `damage`; тест
-  `damage_is_sent_with_the_request_the_surface_has`, откат — `Buffer` вместо `Surface` на версии
-  1. (4) Ушедший seat: `Inputs::seat_gone` снимает grab, последний ввод и последний отпущенный
-  grab, рамки окон перестают следить за его указателем, `Delivering::seat_wire` отпускает
-  удержанные клавиши в окне, где они нажаты; ушедший указатель снимает grab. Тесты
-  `a_seat_that_goes_leaves_no_input_behind` (10 000 seat), `a_grab_lasts_while_a_button_is_held`,
-  `a_seat_that_goes_releases_the_keys_it_held`; откат — grab ушедшего seat остаётся, KeyUp нет.
-  (5) Реестр: цикл и наблюдатель дисплеев разбирают `wl_registry` сами (`LoopGlobals`), списка
-  глобалов нет; clippy запрещает `registry_queue_init` (правило в `clippy.toml`, откат — ошибка
-  clippy; поведенческого теста нет: враждебный реестр достижим только поддельным композитором,
-  которого в наборе нет). (6) Источник drag берёт место среди четырёх писателей до вызова
-  провайдера: `a_send_past_the_writers_asks_the_provider_nothing` под sway (цель просит данные
-  десять раз и не читает), откат — провайдер вызван 10 раз вместо 4. (7) Чтения выделения чужого
-  клиента делят одно чтение на offer (`clipboard::linux::wayland::reads`), ждут не больше
-  четырёх, пятое — `Unavailable` сразу; тесты `reads_of_one_offer_share_one_answer`,
-  `a_read_of_another_offer_starts_its_own` и десять чтений подряд в
-  `the_selection_crosses_between_clients` (Weston) и `the_primary_selection_is_asked_at_the_turn`
-  (sway): (4, 6), при откате (10, 0). (8) Ввод рисует курсоры темы глобалами цикла
-  (`CursorGlobals`), своих `wl_compositor` и `wl_shm` не привязывает (в трассе `WAYLAND_DEBUG`
-  под sway по одной привязке каждого); состояние указателя рамки — на seat (`FramePointers`),
-  тест `each_seats_pointer_is_followed_on_its_own`, откат — уход указателя второго seat снимает
-  кнопку первого. (9) Случаи `wayland_window`, которым нужен протокол сверх xdg-shell, seat или
-  второй выход, собраны в `wayland_window::optional`: на композиторе без нужного случай пишет в
-  вывод, что пропущено и что проверено взамен, а где `FLUI_REQUIRE_COMPOSITOR` называет
-  недостающее — падает (`FLUI_REQUIRE_TWO_OUTPUTS` влит в этот список). `cargo xtask
-  wayland-optional` гоняет модуль под композитором из `WAYLAND_DISPLAY` и требует то, что есть у
-  sway; задача `test` в CI поднимает headless sway (масштаб 1.5, плавающее окно для случая рамки)
-  и запускает её после `test --fast`; оба прогона Wayland показывают вывод каждого случая. На
-  Weston с тем же списком пять случаев падают, под sway 1.9 проходят все: дробный масштаб 1.5
-  (180/120), `xdg-foreign` импортирован и отозван, рамка плавающего окна принята, полная
-  активация с токеном, AT-SPI за активацией. Отступление от строки: под sway идёт не весь набор
-  `wayland_window`, а модуль `optional`: sway (`xdg_wm_base` v2, тайлинг) не исполняет
-  `SetMode(Maximized)`, поэтому `a_window_maximized_before_fullscreen_returns_to_normal` и
-  conformance-набор держатся только на Weston, а параллельные окна тайлинг переразмеривает
-  (прогон по одному случаю). Проверки в WSL (Ubuntu 24.04, Rust 1.100.0): clippy `-p flui-native
-  --all-features --all-targets -D warnings` и срезы `--no-default-features` (ничего, `x11`,
-  `wayland`, `testing`); набор под Xvfb (`FLUI_HEADLESS=1`, `FLUI_REQUIRE_WAYLAND=1`) 838 из
-  838, `wayland_window` под headless Weston 13 — 17 из 17, `wayland-optional` под headless sway
-  1.9 — 6 из 6 шагом CI, повторённым локально. На Windows: clippy `-p flui-native -p xtask
-  --all-targets -D warnings`, nextest тех же пакетов, `xtask checks`, `actionlint`, `zizmor`.
-  Не запускалось: шаг sway на раннере CI (там другая версия sway), wasm32, Android и Apple
-  (нет целей), рабочий стол с настоящим композитором. Вне пакета, найдено по пути: под sway
-  conformance-набор нарушает `presentation_is_reported_exactly_when_claimed` (sway шлёт
-  `presented` с `refresh` 0, отчёт до запроса кадра не доходит) — это область LY109; случай двух
-  выходов под sway не возвращается на первый выход (sway оставляет окно там, где оно стало
-  полноэкранным) и в CI не идёт ни под одним композитором.
+- [x] **LY106** — ветка `platform/wayland-peer-bounds`. Девять находок аудита и двенадцать
+  находок двух проверок подтверждены чтением кода до правки. (1) Масштаб: масштаб буфера окна —
+  тип `BufferScale` (`window::linux::wayland::scale`), который ни один масштаб композитора
+  (дробный, предпочтительный, выхода) не поднимает выше `BufferScale::MAX`; им рисуются и
+  содержимое окна, и его собственная рамка; метрики окна (`scale::metrics`) не публикуются за
+  `MAX_CONTENT_EXTENT` пикселей устройства. У `Pixels` предел площади `MAX_PIXELS`, у каждой части
+  рамки `BufferSet` из `MAX_BUFFERS` буферов: отданный композитором рисуется заново, при
+  композиторе, не отдающем ничего, старший уничтожается, все — вместе с рамкой; метка отдачи —
+  `Rc<Cell<bool>>` через `OwnerSlot`. Тесты: `a_buffer_is_drawn_at_the_scale_the_compositor_prefers`,
+  `a_window_publishes_what_a_surface_can_be`, `a_hostile_scale_draws_no_gibibyte`,
+  `a_compositor_that_releases_nothing_is_lent_a_bounded_set`, `a_released_buffer_is_drawn_into_again`;
+  на Weston `wayland_frame` перерисовывает заголовок тридцать раз и считает сделанные буферы
+  (`buffers_made`). Откат: без предела масштаба — 442 вместо 8; без отдачи — 30 буферов на тридцать
+  перерисовок; без предела площади — гигабайтный заголовок. (2) `DeviceOffers` на устройство
+  данных и primary selection: один представленный и не названный offer, уничтожаемый следующим
+  `data_offer` или уходом устройства (`a_device_holds_one_offer_no_event_named`). (3) `Damage::on`:
+  `damage_buffer` с версии 4 `wl_surface` (`damage_is_sent_with_the_request_the_surface_has`).
+  (4) Ушедший seat (`user_input::Inputs::seat_gone`) снимает grab и последний ввод, отпускает
+  удержанные клавиши; сессия drag следит за своим grab (`Inputs::watch`) и кончается как
+  `Cancelled`, когда отпускание дошло до поверхности или seat ушёл, в любом порядке; рамка
+  окна при уходе seat снимает его move, resize и menu, а close, minimize и maximize оставляет.
+  Тесты `a_seat_that_goes_leaves_no_input_behind`, `a_watched_grab_ends_when_its_seat_goes`,
+  `a_grab_is_the_first_press_held_until_its_last_release`,
+  `a_seat_that_goes_leaves_the_actions_that_name_no_seat`,
+  `a_seat_that_goes_releases_the_keys_it_held`; откат — `watched_ended` ложно после ухода seat,
+  Close теряется. (5) Реестр: цикл и наблюдатель дисплеев разбирают `wl_registry` сами, списка
+  глобалов нет, глобал версии 0 отбрасывается на входе; clippy запрещает `registry_queue_init`
+  (причина в `clippy.toml`; поведенческого теста нет: враждебный реестр требует поддельного
+  композитора). (6) Источник drag берёт место среди писателей до вызова провайдера
+  (`a_send_past_the_writers_asks_the_provider_nothing`, sway; откат — 10 вызовов вместо 4).
+  (7) Чтения выделения чужого клиента делят одно чтение на offer, ждут не больше
+  `clipboard::linux::MAX_READERS` (общий предел обоих хостов Linux), следующее — `Unavailable`
+  (`reads_of_one_offer_share_one_answer`). (8) Ввод рисует курсоры темы глобалами цикла; рамка
+  следит за указателями не больше `user_input::MAX_SEATS` seat
+  (`each_seats_pointer_is_followed_on_its_own`; у одной привязки `wl_compositor` и `wl_shm`
+  поведенческого теста нет, только трасса `WAYLAND_DEBUG`). (9) Случаи `wayland_window`, которым
+  нужен протокол сверх xdg-shell, seat или второй выход, — `wayland_window::optional`: без нужного
+  случай пишет, что пропущено, а где `FLUI_REQUIRE_COMPOSITOR` его называет — падает; имя не из
+  `Optional::ALL` — тоже падение. CI гоняет `optional` под Weston и под headless sway
+  (`cargo xtask wayland-optional`), остальной `wayland_window` — под Weston; чего не гоняет ни один
+  композитор CI, записано в `docs/gaps.md`, кто что гоняет — в `docs/testing.md`.
+  Проверки в WSL (Ubuntu 24.04, Rust 1.100.0): clippy `-p flui-native --all-features --all-targets
+  -D warnings`; `wayland_window` под headless Weston 13 — 18 из 18; `wayland_frame` — 4 из 4;
+  `wayland-optional` под headless sway 1.9 — 7 из 7; под sway с масштабом 20 окно рисуется при 8.
+  На Windows: `xtask checks`, `xtask expectations`. Не запускалось: шаг sway на раннере CI,
+  wasm32, Android и Apple, рабочий стол с настоящим композитором.
 
 ## Отступление от порядка, решённое владельцем
 

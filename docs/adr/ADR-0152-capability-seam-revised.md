@@ -461,9 +461,9 @@ The primary selection's handle and backend take the same types.
   it; the first reader starts the host read. When the host answers, every reader settles with a
   clone of the same `ClipboardRead`, so they all hold one allocation of the text, and ten fields
   pasting at once ask the host once. The next read after the answer starts afresh. The read lives
-  and ends with its runtime, so a runtime retiring never strands another's readers. The X11
-  thread still refuses reads past `MAX_READERS` waiting at once, as `Unavailable`, a backstop
-  for many runtimes reading together.
+  and ends with its runtime, so a runtime retiring never strands another's readers. Each Linux
+  host still refuses reads of a selection past `MAX_READERS` waiting at once, as `Unavailable`,
+  a backstop for many runtimes reading together.
 - **Per-runtime provider state.** A provider is registered once and asked by every UI runtime,
   so state it holds itself is shared across them. `ProviderContext::runtime_local::<T>()` is the
   one place a provider keeps state for one runtime, shared by every handle it hands out there:

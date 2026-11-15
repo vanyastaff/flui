@@ -1218,25 +1218,37 @@ trait depends on `flui-platform` instead.
   (in the shared `xkb::Keyboard`, which also refuses a key code outside its
   keymap), one queued keymap per seat, and the X11 devices and valuators a
   query lists. A pointer frame's axes are fixed fields and bounded by their
-  type. A Wayland window's own frame follows the pointers of at most 16 seats
-  (`client_frame::MAX_POINTERS`, each on its own, and a seat that goes is
-  followed no more) and keeps one action asked for, which a later press
-  replaces. It draws each of its five pieces at most once a turn, at the
-  window's scale up to 8 (`DrawScale::MAX`, whatever scale the compositor
-  names), none wider or taller than `client_frame::MAX_EXTENT` whatever size
-  a configure gives and none of more than `MAX_PIXELS` (18.5 MiB), into at
-  most three buffers a piece (`MAX_BUFFERS`): one the compositor released is
-  drawn into again, and where it releases none the oldest is destroyed for
-  the next (`a_hostile_scale_draws_no_gibibyte`,
+  type. A Wayland window's scale is a `BufferScale`
+  (`window::linux::wayland::scale`): whatever fractional, preferred or output
+  scale the compositor names, the window's content and its own frame are
+  drawn at no more than `BufferScale::MAX`, and a window publishes no metrics
+  past `MAX_CONTENT_EXTENT` device pixels whatever size a configure gives
+  (`a_window_publishes_what_a_surface_can_be`). A window's own frame follows
+  the pointers of at most `user_input::MAX_SEATS` seats, the seats the input
+  binds (each on its own, and a seat that goes is followed no more), and
+  keeps one action asked for, which a later press replaces. It draws each of
+  its five pieces at most once a turn, at the window's `BufferScale`, none
+  wider or taller than `client_frame::MAX_EXTENT` whatever size a configure
+  gives and none of more than `MAX_PIXELS`, into at most `MAX_BUFFERS`
+  buffers a piece: one the compositor released is drawn into again, and
+  where it releases none the oldest is destroyed for the next
+  (`a_hostile_scale_draws_no_gibibyte`,
   `a_compositor_that_releases_nothing_is_lent_a_bounded_set`,
   `each_seats_pointer_is_followed_on_its_own`). The registry keeps no list of
   the globals a compositor announces: a global is bound as it is announced,
   by the loop, the display watch or a feature, or not at all, and clippy
   refuses `wayland_client::globals::registry_queue_init`, which keeps them
-  all. A seat's pointer grab is one entry while a button is held, and it, the
-  last input and the grab last released go with a seat the compositor removes
+  all. A seat's pointer grab is one entry while a button is held, and it and
+  the last input go with a seat the compositor removes
   (`a_seat_that_goes_leaves_no_input_behind`), whose held keys are released
-  (`a_seat_that_goes_releases_the_keys_it_held`). The Wayland seats' queue of
+  (`a_seat_that_goes_releases_the_keys_it_held`). A drag session watches the
+  one grab it started under (`user_input::Inputs::watch`): a release over its
+  surface or its seat's removal, in either order, ends the session as
+  cancelled, since the compositor says nothing of a drag it ignored or one
+  whose seat went (`a_watched_grab_ends_when_its_seat_goes`); a seat that
+  goes takes the move, resize or menu its press asked of a window's frame
+  and leaves a close, minimize or maximize
+  (`a_seat_that_goes_leaves_the_actions_that_name_no_seat`). The Wayland seats' queue of
   recorded events holds what one read of the socket dispatched, since the
   loop delivers it before it reads again; a keymap is queued as the
   compositor's file, and a newer one replaces the queued one and closes its
@@ -1248,11 +1260,13 @@ trait depends on `flui-platform` instead.
 
   What the application asks of a peer is bounded the same way where the peer
   decides how long it takes. The reads of a selection another client owns
-  share one read and its answer per offer, and at most four wait at once, a
-  read past them refused as unavailable (`clipboard::linux::wayland::reads`,
-  `reads_of_one_offer_share_one_answer`; the X11 host has the same four). A
-  `send` to the application's selection or drag takes one of four writers
-  before the application is asked for anything, so a client asking faster
+  share one read and its answer per offer, and at most
+  `clipboard::linux::MAX_READERS` wait at once, a read past them refused as
+  unavailable (`clipboard::linux::wayland::reads`,
+  `reads_of_one_offer_share_one_answer`; the X11 host keeps the same
+  constant). A `send` to the application's selection or drag takes a place
+  among the transfer's writers before the application is asked for
+  anything, so a client asking faster
   than it reads costs it nothing
   (`a_send_past_the_writers_asks_the_provider_nothing`).
 
@@ -1277,7 +1291,7 @@ trait depends on `flui-platform` instead.
   (`a_device_holds_one_offer_no_event_named`). **Tied to a request of ours:**
   a seat's pointer, keyboard and touch, a pointer's pinch and cursor-shape
   device, a window's surfaces and frame callbacks, the buffers of its own
-  frame (three a piece, destroyed with the frame), an activation token
+  frame (`MAX_BUFFERS` a piece, destroyed with the frame), an activation token
   (destroyed at its `done`), a presentation feedback (ended by its own
   `presented` or `discarded`), and the display watch's colour objects: an
   output's `wp_color_management_output_v1`, and one image description with
@@ -1318,15 +1332,16 @@ trait depends on `flui-platform` instead.
   - an X11 event's valuator mask is read in the event's own length;
   - a pointer event over a Wayland window's own frame looks its surface up
     among the five pieces of each window's frame, finds its seat among the
-    pointers the frame follows (16) and hit-tests the five pieces; the
-    frame's title is shaped and rasterized again only when the title, the
+    pointers the frame follows (`MAX_SEATS`) and hit-tests the five pieces;
+    the frame's title is shaped and rasterized again only when the title, the
     room it has, the scale or the fonts changed, and a turn draws each piece
-    at most once, at no more than `DrawScale::MAX` and `MAX_PIXELS`, into a
+    at most once, at no more than `BufferScale::MAX` and `MAX_PIXELS`, into a
     buffer it keeps rather than a memory file made for the draw
     (`client_frame`);
   - a Wayland global announced or removed is compared with the interfaces
-    the loop and the features bind and looked up among the outputs (64) and
-    seats (16): no list of globals is kept, so none is scanned;
+    the loop and the features bind and looked up among the outputs
+    (`MAX_OUTPUTS`) and seats (`MAX_SEATS`): no list of globals is kept, so
+    none is scanned, and one of version zero is bound by none;
   - a Wayland `data_offer` replaces the one offer its device waits to have
     named, and a `selection`, `enter`, `leave` or `drop` looks at the three
     offers the device holds;
@@ -3981,9 +3996,10 @@ client, a decorated native Wayland window draws its own
 (`window::linux::wayland::client_frame`): a title bar and four resize
 margins, each a `wl_subsurface` of the content surface, synchronized with it,
 drawn on the owner thread into `wl_shm` buffers it keeps and draws into again
-once the compositor releases them, three a surface at most. It is drawn at
-the window's scale up to 8 and with no more than `MAX_PIXELS`: a compositor
-names any scale, and the frame's cost is the host's to bound. The title is shaped by
+once the compositor releases them, `MAX_BUFFERS` a surface at most. It is
+drawn at the window's `BufferScale`, which no compositor's scale takes past
+`BufferScale::MAX`, and with no more than `MAX_PIXELS`: a compositor names
+any scale, and the frame's cost is the host's to bound. The title is shaped by
 Parley and rasterized by swash through `flui-painting`, as the renderer's
 text is, over a font collection the host's windows share: the bundled faces
 at once, the host's once a background scan added them, which wakes the loop.
