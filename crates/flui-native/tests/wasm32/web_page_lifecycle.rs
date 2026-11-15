@@ -41,11 +41,32 @@ export function watchPage() {
     };
     const document = globalThis.document;
     const create = document.createElement;
+    made = [];
     document.createElement = (...args) => {
         const element = create.apply(document, args);
         if (args[0] === 'canvas') canvases.push(element);
+        made.push(element);
         return element;
     };
+}
+// Every element the platform made, and the last it made with `tag`.
+let made = [];
+function lastMade(tag) { return made.filter(element => element.tagName === tag.toUpperCase()).at(-1); }
+// The tags of the body's children, and of the last root's children with
+// whether that root is in the page.
+export function pageTree() {
+    const tags = element => element.children.map(child => child.tagName.toLowerCase());
+    const root = lastMade('flui-view');
+    return JSON.stringify({
+        body: tags(globalThis.document.body),
+        root: root ? tags(root) : null,
+        rootInPage: !!root?.parentNode,
+    });
+}
+// The viewport's unsafe bands, as `env(safe-area-inset-*)` computes them on the
+// window's text-input host.
+export function setSafeArea(top, right, bottom, left) {
+    lastMade('flui-text-input').safeArea = [top, right, bottom, left];
 }
 export function fireDocument(name) { globalThis.document.dispatchEvent(new Event(name)); }
 export function fireWindow(name, persisted) {
@@ -151,6 +172,10 @@ extern "C" {
     fn scroll_canvas_to(top: f64);
     #[wasm_bindgen(js_name = scaleCanvas)]
     fn scale_canvas(scale: f64);
+    #[wasm_bindgen(js_name = pageTree)]
+    fn page_tree() -> String;
+    #[wasm_bindgen(js_name = setSafeArea)]
+    fn set_safe_area(top: f64, right: f64, bottom: f64, left: f64);
 }
 
 /// The page's window and the handler it was opened with.
@@ -550,6 +575,82 @@ async fn web_window_has_the_virtual_keyboard_overlay_its_page() {
         !keyboard_overlays_content(),
         "the page's setting is restored"
     );
+    remove_keyboard();
+    running.quit();
+    settle().await;
+}
+
+/// With no canvas of its own on the page, the window puts one root in the
+/// body holding the canvas, the text-input host and the semantics host, in
+/// that order, and takes the root out when it closes; on the page's own
+/// canvas it puts the two hosts after the canvas and takes only them out.
+#[wasm_bindgen_test]
+async fn web_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out() {
+    let (probe, running, window) = page().await;
+    assert_eq!(
+        page_tree(),
+        r#"{"body":["flui-view"],"root":["canvas","flui-text-input","flui-semantics"],"rootInPage":true}"#
+    );
+    window
+        .admit_and_apply(flui_platform::WindowCommand::Close)
+        .expect("a page retires its canvas");
+    assert_eq!(
+        page_tree(),
+        r#"{"body":[],"root":["canvas","flui-text-input","flui-semantics"],"rootInPage":false}"#
+    );
+    running.quit();
+    settle().await;
+    drop(probe);
+
+    install_probe("none");
+    let _probe = Probe;
+    watch_page();
+    super::display::put_canvas_in_page(None, None, 0);
+    let running = Running::start();
+    settle().await;
+    let window = open(&running);
+    assert_eq!(
+        page_tree(),
+        r#"{"body":["canvas","flui-text-input","flui-semantics"],"root":null,"rootInPage":false}"#
+    );
+    window
+        .admit_and_apply(flui_platform::WindowCommand::Close)
+        .expect("a page retires its canvas");
+    assert_eq!(
+        page_tree(),
+        r#"{"body":["canvas"],"root":null,"rootInPage":false}"#
+    );
+    running.quit();
+    settle().await;
+}
+
+/// The safe area is the part of each band `env(safe-area-inset-*)` names
+/// unsafe that the canvas lies under, in the window's logical pixels.
+#[wasm_bindgen_test]
+async fn web_window_reads_the_safe_area_from_the_viewport() {
+    use flui_foundation::geometry::EdgeInsets;
+
+    // The keyboard page lays the viewport out the size of the canvas.
+    let (_probe, running, window) = keyboard_page(false).await;
+    let safe_area = || window.state().insets.safe_area();
+    assert_eq!(safe_area(), EdgeInsets::ZERO, "a page that covers no notch");
+    set_safe_area(47.0, 0.0, 34.0, 0.0);
+    scroll_canvas_to(0.0);
+    assert_eq!(safe_area(), EdgeInsets::new(47.0, 0.0, 34.0, 0.0));
+    // Scrolled 40 down, the canvas is under 7 of the top band and its last
+    // 40 pixels are below the viewport, which the bottom band adds to.
+    scroll_canvas_to(40.0);
+    assert_eq!(safe_area(), EdgeInsets::new(7.0, 0.0, 74.0, 0.0));
+    // Drawn at half its size from the top, the canvas is under 47 of its
+    // on-screen pixels of the top band, which are 94 of the window's, and
+    // clear of the bottom one.
+    scroll_canvas_to(0.0);
+    scale_canvas(0.5);
+    assert_eq!(safe_area(), EdgeInsets::new(94.0, 0.0, 0.0, 0.0));
+    scale_canvas(1.0);
+    set_safe_area(0.0, 0.0, 0.0, 0.0);
+    scroll_canvas_to(0.0);
+    assert_eq!(safe_area(), EdgeInsets::ZERO);
     remove_keyboard();
     running.quit();
     settle().await;

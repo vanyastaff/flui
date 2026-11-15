@@ -46,7 +46,31 @@ mod accessibility;
 
 #[wasm_bindgen(inline_js = r#"
 function canvas() { return document.getElementById('flui-canvas'); }
-export function freshCanvas() { canvas()?.remove(); }
+// A canvas the window makes is in a root of the window's own, which goes with
+// it; a test that failed left both.
+export function freshCanvas() { (canvas()?.closest('flui-view') ?? canvas())?.remove(); }
+// The tags of the canvas's parent's children, and whether that parent is a
+// root of the window's own; null with no canvas.
+export function canvasSiblings() {
+    const parent = canvas()?.parentElement;
+    if (!parent) return null;
+    const second = canvas().nextElementSibling;
+    const third = second?.nextElementSibling;
+    return JSON.stringify({
+        root: parent.tagName === 'FLUI-VIEW',
+        order: [canvas(), second, third].map(element => element?.tagName.toLowerCase() ?? null),
+        // A root holds the three alone, the semantics host last.
+        last: parent.tagName === 'FLUI-VIEW' ? parent.lastElementChild === third : null,
+    });
+}
+// Whether the page holds a root of a window's own, or any of its hosts.
+export function hostElementsInPage() {
+    return document.querySelectorAll('flui-view, flui-text-input, flui-semantics').length;
+}
+// The page canvas's `style` and `tabindex` attributes.
+export function canvasAttributes() {
+    return JSON.stringify([canvas().getAttribute('style'), canvas().getAttribute('tabindex')]);
+}
 // A canvas the page put in the document, styled as a page would.
 export function pageCanvas() {
     canvas()?.remove();
@@ -192,14 +216,29 @@ export function keyAtFocus(key, keyCode) {
     document.activeElement.dispatchEvent(event);
     return event.defaultPrevented;
 }
-function editor() { return canvas().nextElementSibling?.tagName === 'TEXTAREA' ? canvas().nextElementSibling : null; }
+// The hidden textarea, in the text-input host that follows the canvas.
+function editor() {
+    const host = canvas().nextElementSibling;
+    return host?.tagName === 'FLUI-TEXT-INPUT' ? host.querySelector('textarea') : null;
+}
 export function editorState() {
     const area = editor();
     return JSON.stringify(area ? {
         value: area.value, start: area.selectionStart, end: area.selectionEnd,
         focused: document.activeElement === area,
+        fontSize: parseFloat(getComputedStyle(area).fontSize),
     } : null);
 }
+// A touch lifting from the canvas, as a tap ends.
+export function touchUp() {
+    canvas().dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true, cancelable: true, pointerId: 3, pointerType: 'touch', isPrimary: true,
+        button: 0, buttons: 0, clientX: 10, clientY: 10,
+    }));
+}
+// Move the page's focus to the body, as a tap on a canvas a mobile browser
+// does not focus leaves it.
+export function blurAll() { document.activeElement?.blur(); }
 // The input method types into the textarea: its value becomes `value`.
 export function typeIntoEditor(value, caret, composing) {
     const area = editor();
@@ -281,6 +320,16 @@ extern "C" {
     fn type_into_editor(value: &str, caret: u32, composing: bool);
     #[wasm_bindgen(js_name = editorComposition)]
     fn editor_composition(kind: &str);
+    #[wasm_bindgen(js_name = canvasSiblings)]
+    fn canvas_siblings() -> Option<String>;
+    #[wasm_bindgen(js_name = hostElementsInPage)]
+    fn host_elements_in_page() -> u32;
+    #[wasm_bindgen(js_name = canvasAttributes)]
+    fn canvas_attributes() -> String;
+    #[wasm_bindgen(js_name = touchUp)]
+    fn touch_up();
+    #[wasm_bindgen(js_name = blurAll)]
+    fn blur_all();
 }
 
 /// What one dispatched drag event did.
@@ -1329,6 +1378,9 @@ struct EditorState {
     start: u32,
     end: u32,
     focused: bool,
+    /// Its computed `font-size` in CSS pixels.
+    #[serde(rename = "fontSize")]
+    font_size: f64,
 }
 
 fn editor() -> Option<EditorState> {
@@ -1350,8 +1402,13 @@ fn a_textarea_serves_the_field_without_edit_context() {
         let store = InMemoryTextStore::new("ab");
         let reported = canvas.active.lock().expect("focus log").len();
         canvas.host.focus_store(Some(as_store(&store)));
-        let state = editor().expect("a textarea beside the canvas");
+        let state = editor().expect("a textarea in the text-input host after the canvas");
         assert_eq!((state.value.as_str(), state.focused), ("ab", true));
+        assert!(
+            state.font_size >= 16.0,
+            "iOS Safari zooms into a focused field below 16 px: {}",
+            state.font_size
+        );
         assert!(
             canvas.active.lock().expect("focus log")[reported..].is_empty(),
             "focus moved within the canvas's area: no window focus change"
@@ -1403,6 +1460,72 @@ fn a_textarea_serves_the_field_without_edit_context() {
             "focus went back to the canvas"
         );
     }
+}
+
+/// A hidden editor that attached while the page's focus was on nothing (a
+/// mobile browser does not focus a canvas it is tapped on, and a field may
+/// attach after its tap ended) takes the page's focus when the next touch
+/// lifts from the canvas, the gesture in which a mobile browser shows its
+/// keyboard; a mouse lifting does not move it.
+#[wasm_bindgen_test]
+fn a_touch_on_the_canvas_focuses_an_editor_left_unfocused() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    blur_all();
+    let store = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&store)));
+    let state = editor().expect("a textarea in the text-input host");
+    assert!(
+        !state.focused,
+        "nothing asked for the focus outside a gesture"
+    );
+    press_mouse("pointerup", 10.0, 10.0);
+    assert!(!editor().expect("the textarea").focused, "a mouse lifting");
+    touch_up();
+    assert!(
+        editor().expect("the textarea").focused,
+        "a touch lifting from the canvas focuses the editor"
+    );
+    canvas.host.focus_store(None);
+}
+
+/// A window on a page with no canvas puts one root in the page holding the
+/// canvas, the text-input host and the semantics host, the semantics host
+/// last; on the page's own canvas the two hosts follow it. Closing the window
+/// takes out what it added and gives the page's canvas back its own `style`
+/// and `tabindex`.
+#[wasm_bindgen_test]
+fn the_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out() {
+    for (canvas, place, expected) in [
+        (
+            "made by the window",
+            fresh_canvas as fn(),
+            r#"{"root":true,"order":["canvas","flui-text-input","flui-semantics"],"last":true}"#,
+        ),
+        (
+            "the page's own",
+            page_canvas,
+            r#"{"root":false,"order":["canvas","flui-text-input","flui-semantics"],"last":null}"#,
+        ),
+    ] {
+        place();
+        let page = canvas_siblings().map(|_| canvas_attributes());
+        let platform = WebPlatform::try_new().expect("a browser platform");
+        let window = platform
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+            .expect("the canvas opens");
+        assert_eq!(canvas_siblings().as_deref(), Some(expected), "{canvas}");
+        window.close_now();
+        assert_eq!(
+            host_elements_in_page(),
+            0,
+            "{canvas}: what the window added"
+        );
+        if let Some(page) = page {
+            assert_eq!(canvas_attributes(), page, "{canvas}: the page's attributes");
+        }
+    }
+    fresh_canvas();
 }
 
 /// A frame request carries the browser's own frame time, not the moment the callback ran: a frame

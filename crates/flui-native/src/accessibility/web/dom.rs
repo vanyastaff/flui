@@ -1,8 +1,10 @@
 //! The semantics host in the page: the adapter a canvas window hands out.
 //!
-//! Before assistive technology asks, the page holds one element beside the
-//! canvas, a placeholder button only a screen reader finds; the browser
-//! tells a page nothing of a screen reader otherwise. Activating it puts the
+//! Everything here stands in the window's semantics slot (`flui-semantics`),
+//! the last of the elements its root keeps after the canvas
+//! (`window::web::root`). Before assistive technology asks, the slot holds a
+//! placeholder button only a screen reader finds; the browser tells a page
+//! nothing of a screen reader otherwise. Activating it puts the
 //! semantics host in its place, `position: fixed` over the canvas with
 //! `pointer-events: none` and `opacity: 0`, so the pointer still reaches the
 //! canvas, FLUI keeps hit-testing it and nothing paints over it, and tells
@@ -191,6 +193,9 @@ struct Page {
     this: Weak<Page>,
     shared: Arc<BridgeShared>,
     canvas: HtmlCanvasElement,
+    /// The root's last host (`flui-semantics`), which holds the placeholder
+    /// and then the semantics host.
+    slot: HtmlElement,
     document: Document,
     accepting: Accepting,
     keys: Rc<dyn CanvasKeys>,
@@ -227,6 +232,7 @@ impl Page {
             this: this.clone(),
             shared: Arc::clone(shared),
             canvas: window.canvas.clone(),
+            slot: window.slots.semantics.clone(),
             document,
             accepting: window.accepting.clone(),
             keys: Rc::clone(&window.keys),
@@ -317,7 +323,7 @@ impl Page {
                 this.submit(Work::Activate);
             }
         })?;
-        self.place_beside_canvas(&element)?;
+        self.slot.append_child(&element)?;
         Ok(Overlay {
             element,
             _listeners: vec![click, key],
@@ -416,7 +422,7 @@ impl Page {
             })
             .map_err(|error| JsValue::from_str(&error.to_string()))?,
         );
-        self.place_beside_canvas(&element)?;
+        self.slot.append_child(&element)?;
         Ok(Overlay {
             element,
             _listeners: listeners,
@@ -435,16 +441,6 @@ impl Page {
     ) -> Result<CanvasListener, JsValue> {
         CanvasListener::install(target, kind, &self.accepting, body)
             .map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-
-    /// Insert `element` as the canvas's next sibling.
-    fn place_beside_canvas(&self, element: &HtmlElement) -> Result<(), JsValue> {
-        let parent = self
-            .canvas
-            .parent_node()
-            .ok_or_else(|| JsValue::from_str("the canvas is not in a document"))?;
-        parent.insert_before(element, self.canvas.next_sibling().as_ref())?;
-        Ok(())
     }
 
     /// Queue `work` and run the queue, unless it is running already, in
@@ -934,8 +930,9 @@ impl Page {
     /// and put the host over the canvas's drawable box in the viewport, at
     /// the canvas's layout size, which the tree's CSS pixels are in.
     ///
-    /// The host is the canvas's sibling, so an ancestor that hides the canvas
-    /// hides it too; the canvas's own `display` and `visibility` are copied.
+    /// The host stands in a `display: contents` slot after the canvas, so an
+    /// ancestor that hides the canvas hides it too; the canvas's own
+    /// `display` and `visibility` are copied.
     /// The drawable box is the client box, inside the canvas's border, as the
     /// window's layout size reads it. A transformed ancestor of the canvas
     /// (the host's too) makes the host's `fixed` box relative to that
@@ -1388,6 +1385,12 @@ fn create(document: &Document, id: NodeId, spec: &ElementSpec) -> Result<HtmlEle
         ] {
             style.set_property(property, value)?;
         }
+    }
+    if spec.tag.is_field() {
+        // The field is focused for editing: below 16 CSS pixels iOS Safari
+        // zooms the page into it, and a field's own text is the platform's
+        // small control font.
+        style.set_property("font-size", crate::text::web::EDITOR_FONT_SIZE)?;
     }
     write(&element, None, spec, false)?;
     Ok(element)

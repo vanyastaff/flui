@@ -35,6 +35,8 @@ pub(crate) mod headless;
 pub(crate) mod keyboard;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod keyboard_motion;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod safe_area;
 #[cfg(any(linux_host, test))]
 pub(crate) mod linux {
     //! The Linux windows: the native Wayland host's (`wayland`) and the native

@@ -597,6 +597,9 @@ mod input {
     /// nameable only inside the crate.
     pub struct WebTextInput {
         canvas: web_sys::HtmlCanvasElement,
+        /// The text-input host after the canvas, which holds the hidden
+        /// editor while it serves a field.
+        text_host: web_sys::HtmlElement,
         /// The canvas's focus area, which the editor joins and the window
         /// follows.
         editor: Rc<dyn CanvasEditor>,
@@ -645,6 +648,7 @@ mod input {
         fn new(window: &CanvasRef) -> Rc<Self> {
             let input = Rc::new_cyclic(|this| Self {
                 canvas: window.canvas.clone(),
+                text_host: window.slots.text_input.clone(),
                 editor: Rc::clone(&window.editor),
                 accepting: window.accepting.clone(),
                 keys: Rc::clone(&window.keys),
@@ -884,6 +888,55 @@ mod input {
                 .is_some_and(|active| active.is_same_node(Some(element)))
         }
 
+        /// Whether the page's focus is on no element of its own: on the body,
+        /// or nowhere.
+        fn page_focus_is_unclaimed(&self) -> bool {
+            let Some(document) = self.canvas.owner_document() else {
+                return false;
+            };
+            match (document.active_element(), document.body()) {
+                (None, _) => true,
+                (Some(active), Some(body)) => active.is_same_node(Some(body.as_ref())),
+                (Some(_), None) => false,
+            }
+        }
+
+        /// A listener that gives the hidden `editor` the page's focus when a
+        /// touch or a pen lifts from the canvas while it is not focused.
+        ///
+        /// A mobile browser shows its keyboard for an element focused inside
+        /// a user gesture and ignores a focus outside one, and the field may
+        /// have attached after the tap that focused it ended (its focus
+        /// applied at the next frame): the next tap on the canvas, while the
+        /// field still holds the store, brings the keyboard up. The canvas's
+        /// input dispatches the lift first, as it registered first, so a tap
+        /// that moves the application's focus off the field detaches the
+        /// editor, and this listener with it, before it runs. A mouse needs
+        /// no keyboard, and its press already focused the canvas, which
+        /// forwards its focus to the editor.
+        fn focus_on_touch(&self, editor: &web_sys::HtmlElement) -> Result<CanvasListener, JsValue> {
+            let editor = editor.clone();
+            let document = self.canvas.owner_document();
+            CanvasListener::install(
+                self.canvas.as_ref(),
+                "pointerup",
+                &self.accepting,
+                move |event: web_sys::Event| {
+                    let touch = event
+                        .dyn_ref::<web_sys::PointerEvent>()
+                        .is_some_and(|pointer| pointer.pointer_type() != "mouse");
+                    let focused = document
+                        .as_ref()
+                        .and_then(web_sys::Document::active_element)
+                        .is_some_and(|active| active.is_same_node(Some(editor.as_ref())));
+                    if touch && !focused {
+                        let _ = editor.focus();
+                    }
+                },
+            )
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+        }
+
         /// Give `store` a fresh surface, holding its text and selection: the
         /// semantics host's field while it names one, else an `EditContext` on
         /// the canvas, else a hidden textarea beside it.
@@ -1044,6 +1097,10 @@ mod input {
                 ("position", "fixed"),
                 ("opacity", "0"),
                 ("pointer-events", "none"),
+                // iOS Safari zooms the page into a field it focuses whose
+                // text is smaller than 16 CSS pixels; a textarea's own is
+                // the platform's small control font.
+                ("font-size", EDITOR_FONT_SIZE),
                 ("width", "1px"),
                 ("height", "1em"),
                 ("padding", "0"),
@@ -1158,11 +1215,8 @@ mod input {
             }
             if hidden {
                 listeners.extend(self.viewport_listeners()?);
-                let parent = self
-                    .canvas
-                    .parent_node()
-                    .ok_or_else(|| JsValue::from_str("the canvas is not in a document"))?;
-                parent.insert_before(element.html(), self.canvas.next_sibling().as_ref())?;
+                listeners.push(self.focus_on_touch(element.html())?);
+                self.text_host.append_child(element.html())?;
                 self.editor.set(Some(element.html()));
             } else {
                 self.field.serve(Some(element.html()));
@@ -1170,8 +1224,13 @@ mod input {
             // The editor takes the canvas's focus (the hidden editor's, or
             // the canvas's while the store moved off it), never the focus of
             // another element of the semantics host (a slider the tree's
-            // focus moved to keeps its keys).
-            if self.page_focus_is(self.canvas.as_ref()) {
+            // focus moved to keeps its keys). A hidden editor attached
+            // inside a tap that left the page's focus on nothing (a mobile
+            // browser that does not focus a canvas it is tapped on) takes it
+            // too: the tap is the gesture in which the browser shows its
+            // keyboard for the element focused.
+            let unclaimed_tap = hidden && self.page_focus_is_unclaimed() && in_user_gesture();
+            if self.page_focus_is(self.canvas.as_ref()) || unclaimed_tap {
                 let _ = element.html().focus();
             }
             Ok(Attached {
@@ -1634,6 +1693,28 @@ mod input {
         }
     }
 
+    /// The font size of an element the host focuses for editing: the
+    /// smallest at which iOS Safari does not zoom the page into it.
+    pub(crate) const EDITOR_FONT_SIZE: &str = "16px";
+
+    /// Whether the page has transient user activation now
+    /// (`navigator.userActivation.isActive`): inside the handler of a tap, a
+    /// click or a key, and for a moment after it. A browser without the API
+    /// answers `false`, which leaves the editor to the canvas's own focus.
+    fn in_user_gesture() -> bool {
+        let Some(window) = web_sys::window() else {
+            return false;
+        };
+        js_sys::Reflect::get(&window.navigator(), &JsValue::from_str("userActivation"))
+            .ok()
+            .filter(JsValue::is_object)
+            .and_then(|activation| {
+                js_sys::Reflect::get(&activation, &JsValue::from_str("isActive")).ok()
+            })
+            .and_then(|active| active.as_bool())
+            .unwrap_or(false)
+    }
+
     /// The attributes an editor's hints are written to, which the semantics
     /// host's field loses once nothing is served through it.
     const EDITOR_HINTS: [&str; 3] = ["inputmode", "autocomplete", "enterkeyhint"];
@@ -1657,4 +1738,4 @@ mod input {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use input::WebTextInput;
+pub(crate) use input::{EDITOR_FONT_SIZE, WebTextInput};

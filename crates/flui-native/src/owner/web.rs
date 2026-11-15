@@ -216,14 +216,30 @@ pub(crate) trait CanvasEditor {
     fn sync(&self);
 }
 
+/// The two hosts a canvas window's root keeps after the canvas, in this
+/// order (`window::web::root`): what the window's text input and its
+/// accessibility put in the page goes into them, never beside the canvas, so
+/// the order holds whichever of them adds its element first.
+#[derive(Clone)]
+pub(crate) struct HostSlots {
+    /// `flui-text-input`: the hidden editor while one serves a field.
+    pub(crate) text_input: web_sys::HtmlElement,
+    /// `flui-semantics`, last: the accessibility placeholder, then the
+    /// semantics host in its place.
+    pub(crate) semantics: web_sys::HtmlElement,
+}
+
 /// One canvas window as its window-level positions are made for it
-/// (`host::Window::Ref`): the canvas, whether its registration accepts, the
-/// key route its input keeps and the focus area its text input's editor
-/// joins. Public where it is defined, as the host's table names it, and
-/// nameable only inside the crate.
+/// (`host::Window::Ref`): the canvas, the hosts after it, whether its
+/// registration accepts, the key route its input keeps and the focus area its
+/// text input's editor joins. Public where it is defined, as the host's table
+/// names it, and nameable only inside the crate.
 pub struct CanvasRef {
     /// The canvas.
     pub(crate) canvas: web_sys::HtmlCanvasElement,
+    /// The hosts after the canvas, which the text input's editor and the
+    /// accessibility placeholder or semantics host are put in.
+    pub(crate) slots: HostSlots,
     /// Whether the canvas's registration accepts.
     pub(crate) accepting: Accepting,
     /// The key route the canvas's input keeps, which a key the editor takes
