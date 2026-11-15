@@ -104,7 +104,7 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 /// the budget until a frame presents or finds no damage, so the attempts past it wait out the
 /// backoff, which doubles to one second, instead of opening a new burst: a surface that returns
 /// shows the tree within a second, and one that never does costs a paint per second. A window
-/// shown again after it was hidden starts a new budget (`PresentationState::restart_withdrawal`).
+/// shown again after it was hidden starts a new budget (`UiRuntime::set_presentation_hidden`).
 const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
 mod agent;

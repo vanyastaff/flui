@@ -68,10 +68,11 @@ transient at the display rate.
   above the budget until a frame presents or finds no damage, so each attempt after the budget
   waits too, rather than opening a new burst. A key or button press ends the wait early, as for
   any dropped frame. A window shown again after it was hidden starts a new withdrawal: its withheld
-  streak clears, and a wait that frames withheld past the budget armed ends with the dropped-frame
-  streak they grew, so the shown window is tried at once and rides out its next withdrawal at the
-  display rate.
-- **§3.** Past the budget, a settlement of an older tree and a given-up device (ADR-0267) arm no
+  streak clears, so once a wait already running ends, its next withheld frames are retried at the
+  display rate. The wait and the dropped-frame streak stand, since a failed or lost frame may have
+  armed them (ADR-0267, ADR-0334).
+- **§3.** Past the budget, a settlement of an older tree, a frame painted from this tree or a later
+  one still pending (as for a failed frame, ADR-0334 §1), and a given-up device (ADR-0267) arm no
   wait: the current tree is owed by its own frame, and a given-up device holds its frames.
 - **§4.** The retry repaints in full until ADR-0304 §7's retry from the held version is built; the
   wake and the repaint are armed before the trace, whose subscriber is user code.
@@ -100,7 +101,8 @@ Tests in `crates/flui-runtime/src/ui_runtime/frame_commit_state_tests.rs`:
   each other, each attempt past it waits out a growing backoff, a press ends the wait, and the frame
   that presents replays the press and ends the streak;
 - `a_window_shown_again_rides_out_its_next_withdrawal_at_the_display_rate` (§2): hiding and showing
-  the window ends the wait and the streaks, and its next withheld frame is retried at once;
+  the window clears the withheld streak and keeps the wait, and once the wait ends its next
+  withheld frame is retried at the display rate;
 - `a_withheld_settlement_of_an_older_tree_leaves_the_failed_frames_retry` (§3): a withheld
   settlement of an older tree past the budget leaves the wait a newer failed frame armed, and its
   streak;

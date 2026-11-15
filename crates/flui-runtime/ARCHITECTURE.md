@@ -701,7 +701,8 @@ it marks full repaint as well as waking, so a static scene progresses without ne
 input (ADR-0101). A frame that
 rendered but could not be shown commits nothing, so its pointer input waits for the frame that
 shows the tree, and it is retried: at the display rate for `MAX_NOT_SHOWN_RETRIES` attempts, then
-after the dropped-frame backoff (ADR-0335). A frame with nothing to present falls back to
+after the dropped-frame backoff (ADR-0335); a window shown again after it was hidden starts a new
+budget. A frame with nothing to present falls back to
 no-present pacing (ADR-0068). The
 verdict is a crate contract. Pinned on the host side by `flui-engine`'s `window_slots`
 and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_submit_verdict`,

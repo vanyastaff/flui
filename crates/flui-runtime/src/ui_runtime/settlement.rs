@@ -487,12 +487,19 @@ impl UiRuntime {
                         );
                     } else {
                         // The streak stays above the budget until a frame presents or finds no
-                        // damage, so the next attempt waits out the backoff too instead of
-                        // opening another burst. A settlement of an older tree and a given-up
-                        // device (ADR-0267) arm nothing: the current tree is owed by its own frame,
-                        // and a given-up device holds its frames.
+                        // damage, or the window is shown again after it was hidden (a new
+                        // withdrawal), so the next attempt waits out the backoff too instead of
+                        // opening another burst. A settlement of an older tree, a frame painted
+                        // from this tree or a later one still pending (as for a failed frame), and
+                        // a given-up device (ADR-0267) arm nothing: the current tree is owed by its
+                        // own frame, and a given-up device holds its frames.
+                        let shown_by_later = producer
+                            .pending_frames
+                            .borrow()
+                            .iter()
+                            .any(|pending| pending.tree_revision >= tree_revision);
                         let mut held = FirstPanic::new();
-                        if shows_current_tree && !producer.device_abandoned() {
+                        if shows_current_tree && !shown_by_later && !producer.device_abandoned() {
                             producer.note_frame_failure();
                             Self::arm_failure_retry(producer);
                             // The mark's platform wake is user code and can unwind: the wait is

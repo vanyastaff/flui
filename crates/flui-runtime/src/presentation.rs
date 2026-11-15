@@ -1729,22 +1729,13 @@ impl PresentationState {
 
     /// End a withheld streak: this frame was either shown or had nothing to
     /// show, so the surface is no longer *continuously* unavailable. Called
-    /// only for a frame that presents or finds no damage: until then the
+    /// for a frame that presents or finds no damage, and when the window is
+    /// shown again after it was hidden: until then the
     /// streak stays above an exhausted budget, so each further withheld
     /// attempt waits out the dropped-frame backoff instead of opening a new
     /// burst (ADR-0335 §2).
     pub(crate) fn clear_not_shown_streak(&self) {
         self.not_shown_streak.set(0);
-    }
-
-    /// The window is shown again after it was hidden: a withdrawal of its surface from here on is
-    /// a new one, so the withheld streak clears and the next withheld frames are ridden out at the
-    /// display rate. A wait that withheld frames past their `budget` armed ends with them, with
-    /// the dropped-frame streak they grew, so the shown window is tried at once (ADR-0335 §2).
-    pub(crate) fn restart_withdrawal(&self, budget: u32) {
-        if self.not_shown_streak.replace(0) > budget {
-            self.reset_frame_failure_streak();
-        }
     }
 
     // ========================================================================

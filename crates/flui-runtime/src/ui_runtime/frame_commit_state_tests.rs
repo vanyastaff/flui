@@ -1294,12 +1294,13 @@ fn spend_the_withheld_budget(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) {
     );
 }
 
-/// A window shown again after it was hidden starts a new withdrawal (ADR-0335 §2): the wait and
-/// the streaks that frames withheld past the budget left end, and the next withheld frame is
-/// retried at the display rate.
+/// A window shown again after it was hidden starts a new withdrawal (ADR-0335 §2): its withheld
+/// streak clears, so once the wait already running ends, its next withheld frame is retried at
+/// the display rate. The wait and the dropped-frame streak stand, since the window cannot tell
+/// which dropped frame armed them.
 ///
-/// Fails when a hidden and shown window keeps the exhausted streak, so each of its next withheld
-/// frames waits a second.
+/// Fails when a hidden and shown window keeps the exhausted withheld streak, so each of its next
+/// withheld frames waits out the backoff, or when showing it ends a wait it did not arm.
 #[test]
 fn a_window_shown_again_rides_out_its_next_withdrawal_at_the_display_rate() {
     let ui_runtime = mount_box();
@@ -1307,32 +1308,33 @@ fn a_window_shown_again_rides_out_its_next_withdrawal_at_the_display_rate() {
     spend_the_withheld_budget(&ui_runtime, &mut withheld);
     assert!(!ui_runtime.render_frame(&mut withheld));
     let presentation = || ui_runtime.presentations.primary();
-    assert!(
-        presentation().failure_retry_at().is_some(),
-        "past the budget, the frame waits"
-    );
+    let wait = || {
+        (
+            presentation().failure_retry_at(),
+            presentation().frame_failure_streak(),
+        )
+    };
+    let armed = wait();
+    assert!(armed.0.is_some(), "past the budget, the frame waits");
 
     let id = ui_runtime.presentation_id();
     ui_runtime.set_presentation_hidden(id, true);
     ui_runtime.set_presentation_hidden(id, false);
-    assert_eq!(
-        presentation().failure_retry_at(),
-        None,
-        "the shown window is tried at once"
-    );
-    assert_eq!(presentation().frame_failure_streak(), 0);
+    assert_eq!(wait(), armed, "the wait and the dropped-frame streak stand");
 
+    assert!(ui_runtime.wait_out_failure_retry_for_test());
+    let waited = wait();
     let submits = withheld.submit_calls;
     assert!(!ui_runtime.render_frame(&mut withheld));
-    assert_eq!(withheld.submit_calls, submits + 1);
+    assert_eq!(withheld.submit_calls, submits + 1, "the wait ran out");
     assert_eq!(
-        presentation().failure_retry_at(),
-        None,
-        "the next withheld frame is in a new budget"
+        wait(),
+        (None, waited.1),
+        "the next withheld frame is in a new budget and arms no wait"
     );
     assert!(
         ui_runtime.needs_redraw(),
-        "and is retried at the display rate"
+        "it is retried at the display rate"
     );
 }
 
