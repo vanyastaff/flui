@@ -1350,7 +1350,10 @@ trait depends on `flui-platform` instead.
   - the X11 display source, on its own thread and connection, hears at most
     `MAX_STEP_EVENTS` events a step (`display::linux::x11`), and a step that
     stopped at that cap comes back for the rest instead of waiting on the
-    socket; a RandR event reads the RandR state, up to the caps above, a
+    socket, and the display thread looks at its stop between steps, so a
+    peer that sends without end never holds it
+    (`a_session_that_never_waits_still_stops`); a RandR event reads the RandR
+    state, up to the caps above, a
     change of `RESOURCE_MANAGER` the scale alone, and a change of the desktop
     or of the work area the work area alone
     (`a_randr_reconfiguration_on_a_real_server_is_published`);
@@ -3793,9 +3796,18 @@ property change, and keeps a dead window manager's list), hears a window
 manager announce itself (`MANAGER`), and reads the support again
 (`a_window_manager_without_ewmh_is_followed`). Either window is any id a
 client wrote, so one that is the root or the connection's own names no window
-manager, and its events are never selected (`X11Connection::is_peers`, the
-rule an `INCR` requestor's events follow too;
-`a_check_window_that_is_no_window_managers_is_refused`). Without a window
+manager (`X11Connection::is_peers`, the rule an `INCR` requestor follows too;
+`a_check_window_that_is_no_window_managers_is_refused`). The events a client
+selects on a window are one mask, which each selection replaces: on a peer's
+window the connection selects the union of what each feature asked
+(`X11Connection::hear_peer`, `forget_peer`), so the window manager's watch and
+a transfer whose requestor is the same window keep each other's events
+(`features_that_hear_one_peer_window_keep_each_others_events`). A command is
+checked against what the window honours now, read first if the window is
+marked, so one admitted under a window manager that is gone is superseded;
+a read inside a command that publishes a revision rings the loop's doorbell,
+so its announcement waits for no other wake
+(`a_command_that_reads_its_window_anew_asks_for_a_turn`). Without a window
 manager, what one wrote on a window (`WM_STATE`, `_NET_WM_STATE`,
 `_NET_FRAME_EXTENTS`) is a dead one's and says nothing
 (`WindowManagerSupport::kept`): the server maps the windows it had iconified,

@@ -5510,6 +5510,15 @@ graph LR
   `a_window_manager_without_ewmh_is_followed` — `Unavailable` вместо `Native`;
   `a_window_minimized_as_it_hears_its_show_stays_minimized` — `Normal` вместо `Minimized`.
   `x11_window` 32, `--lib` 742 из 743 (нестабильный `file_store_interruption_matrix`).
+  Повторное чтение: команда сверяется с тем, что окно исполняет сейчас (`Superseded` для режима,
+  принятого при умершем менеджере); чтение внутри команды звонит в doorbell цикла; поток дисплеев
+  смотрит на stop между шагами; маска соединения на чужом окне — объединение того, что просили
+  функции (`X11Connection::hear_peer`). Тесты с откатом: тот же
+  `a_handler_in_the_turn_a_window_manager_dies_acts_without_it` — `Some(Ok(()))`;
+  `a_command_that_reads_its_window_anew_asks_for_a_turn` — звонка нет;
+  `a_session_that_never_waits_still_stops` — join ждал 10 с;
+  `features_that_hear_one_peer_window_keep_each_others_events` — маска 0 вместо
+  `STRUCTURE_NOTIFY`. `--lib` 745 из 745.
 - [x] **LY109** — ветка `platform/presentation-colour-boundary` (#2644). Семь находок проверки
   готовых задач; шесть исправлены, одна (п. 7) проверена и оказалась покрытой.
   (1) Отчёт о показе кадра со штампом далеко в будущем (насыщенный rebase, произвольный
