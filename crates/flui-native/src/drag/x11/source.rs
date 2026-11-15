@@ -66,7 +66,7 @@ use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 use super::model::{self, IncrWrite, IncrWrites, Reply};
 use super::{Atoms, X11Drag};
 use crate::drag::offers::{bytes_of, names_of};
-use crate::owner::linux::x11::{PeerInterest, WindowRef};
+use crate::owner::linux::x11::{PeerInterest, PeerSelect, WindowRef};
 use crate::owner::panic_boundary::contain_owner_callback;
 
 /// How long a target has to finish a drop before the session ends as
@@ -1249,14 +1249,22 @@ impl X11Drag {
         // deletion may follow at once.
         // Selected only on a peer's window, beside what the platform's other
         // features hear there (`X11Connection::hear_peer`).
-        let heard = self
-            .connection
-            .hear_peer(
-                requestor,
-                PeerInterest::Transfer,
-                EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY,
-            )
-            .map_or(Ok(()), |selected| selected.map(drop));
+        let heard = match self.connection.hear_peer(
+            requestor,
+            PeerInterest::Transfer,
+            EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY,
+        ) {
+            PeerSelect::Sent(selected) => selected.map(drop),
+            PeerSelect::Unchanged => Ok(()),
+            PeerSelect::OffOwnerThread => {
+                // An answer whose deletions nobody hears would stall.
+                session.incr.retire(requestor, property);
+                return Some(
+                    "a drag's INCR answer is refused: its requestor cannot be heard off the \
+                     owner thread",
+                );
+            }
+        };
         let announced = heard.and_then(|()| {
             xcb.change_property32(
                 PropMode::REPLACE,
@@ -1346,7 +1354,7 @@ impl X11Drag {
             return;
         }
         // What the platform's other features hear there stays selected.
-        if let Some(Err(error)) = self
+        if let PeerSelect::Sent(Err(error)) = self
             .connection
             .forget_peer(requestor, PeerInterest::Transfer)
         {

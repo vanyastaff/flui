@@ -123,7 +123,7 @@ use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::linux::x11::{
     Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, PeerInterest,
-    WindowRef, WindowScale, X11Connection, X11Loop,
+    PeerSelect, WindowRef, WindowScale, X11Connection, X11Loop,
 };
 use crate::owner::slot::OwnerWeak;
 use crate::owner::wake_deadline::FrameCount;
@@ -1987,14 +1987,16 @@ impl X11Windows {
         if self.window_manager.get() == Some(window) {
             return true;
         }
-        let heard = self
-            .connection
-            .hear_peer(
-                window,
-                PeerInterest::WindowManager,
-                EventMask::STRUCTURE_NOTIFY,
-            )
-            .is_some_and(|selected| selected.is_ok_and(|cookie| cookie.check().is_ok()));
+        // A window whose end goes unheard (a peer's no longer there, a call
+        // off the owner thread) names no window manager the platform follows.
+        let heard = match self.connection.hear_peer(
+            window,
+            PeerInterest::WindowManager,
+            EventMask::STRUCTURE_NOTIFY,
+        ) {
+            PeerSelect::Sent(selected) => selected.is_ok_and(|cookie| cookie.check().is_ok()),
+            PeerSelect::Unchanged | PeerSelect::OffOwnerThread => false,
+        };
         if heard && still(window) {
             return true;
         }
@@ -2005,11 +2007,11 @@ impl X11Windows {
     /// Stop hearing `window`, no longer the window manager's: what the
     /// platform's other features hear there stays selected.
     fn forget_window_manager(&self, window: xproto::Window) {
-        if let Some(cookie) = self
+        if let PeerSelect::Sent(sent) = self
             .connection
             .forget_peer(window, PeerInterest::WindowManager)
         {
-            let _: Result<(), _> = cookie.map(x11rb::cookie::VoidCookie::ignore_error);
+            let _: Result<(), _> = sent.map(x11rb::cookie::VoidCookie::ignore_error);
         }
     }
 

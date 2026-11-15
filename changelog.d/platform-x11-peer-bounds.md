@@ -22,6 +22,14 @@
 - X11: a change of the desktop or of the work area reads the work area only,
   not every output, and one behind a burst of other root-window events is no
   longer left unread until the next event.
+- X11: a window command admitted while a window manager ran and applied after
+  it died answers `ApplyError::Superseded`, where it answered `Ok(())` and
+  went to nobody.
+- X11: a window manager's watch and a drag's `INCR` requestor on the same
+  window no longer replace each other's events: the window manager's end and
+  the transfer's property deletions are both heard.
+- Linux: the display thread ends at its stop while a display server floods it
+  with events, where stopping waited for the flood to end.
 - Linux: a `tracing` subscriber that samples the system preferences as it
   hears the warning about a refused text scale no longer deadlocks.
 
