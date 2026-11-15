@@ -32,7 +32,7 @@ use super::sessions::{
     DragPhase, DragSessions, Entry, Incoming, OfferState, OsStart, PendingOsDrag, SessionRef,
     Shared, Surface, WeakShared, pointer_kind,
 };
-use super::tracker::{DropTracker, Dropped, single_action};
+use super::tracker::{DropTracker, Dropped, OwedWithdrawal, single_action};
 use super::view::{DragScope, DragView, InFlight, OwnerWake};
 use crate::close::ClosePanic;
 use crate::events::PointerKind;
@@ -493,10 +493,10 @@ impl DragOwner {
                 .invoke(|| parts.with_view(&self.source, |view| tracker.tick(view, now)))
                 .unwrap_or_default();
             // Owed whether or not a receiver failed in the tick, and kept until it is passed on.
-            if tracker.owes_withdrawal()
+            if let Some(owed) = tracker.owed_withdrawal()
                 && failure.invoke(|| self.accepting_gone(hovered)).is_some()
             {
-                tracker.withdrawal_passed_on();
+                tracker.withdrawal_passed_on(owed);
             }
             // Content scrolled under a pointer that rests: find what is under
             // it now, as a move there would.
@@ -723,22 +723,21 @@ impl DragOwner {
     /// hover [`hold`](Self::hold) keeps, when it is released or dropped. The runtime calls this
     /// after each frame's build, whether the frame ends or unwinds. Runs no receiver.
     pub fn withdraw_unregistered_answers(&self) {
-        let owed: Vec<(PresentationId, DataTransferId, DropTracker)> = {
+        let owed: Vec<(PresentationId, DataTransferId, DropTracker, OwedWithdrawal)> = {
             let state = self.shared.borrow();
             state
                 .incoming
                 .iter()
                 .filter(|incoming| !incoming.dropped)
-                .filter(|incoming| {
+                .filter_map(|incoming| {
                     incoming.tracker.forget_unregistered_acceptance();
-                    incoming.tracker.owes_withdrawal()
-                })
-                .map(|incoming| {
-                    (
+                    let owed = incoming.tracker.owed_withdrawal()?;
+                    Some((
                         incoming.presentation,
                         incoming.offer.id(),
                         incoming.tracker.clone(),
-                    )
+                        owed,
+                    ))
                 })
                 .collect()
         };
@@ -746,12 +745,12 @@ impl DragOwner {
         // and stays owed, so the next build or tick tells the OS again; the first failure
         // propagates after them.
         let mut failure = flui_foundation::panic::FirstPanic::new();
-        for (presentation, id, tracker) in owed {
+        for (presentation, id, tracker, owed) in owed {
             if failure
                 .contain(|| self.accepting_gone(Hovered::Offer(presentation, id)))
                 .is_some()
             {
-                tracker.withdrawal_passed_on();
+                tracker.withdrawal_passed_on(owed);
             }
         }
         failure.resume();
@@ -882,6 +881,8 @@ impl DragOwner {
             found
         };
         let (tracker, parts) = found;
+        // The debts this move's answer replaces: a receiver the move itself runs can owe a newer one.
+        let replaced = tracker.owed_withdrawal();
         let hits = hit(position, parts.pointer)
             .and_then(|path| receivers_on_path(&path, position).ok())
             .unwrap_or_default();
@@ -897,6 +898,10 @@ impl DragOwner {
             .flatten();
         self.source
             .update_drop_feedback(id, DropFeedback { accept: accepted });
+        // The OS holds this move's answer now, which replaces the withdrawals owed before it.
+        if let Some(replaced) = replaced {
+            tracker.withdrawal_passed_on(replaced);
+        }
         failure.finish();
     }
 
@@ -1572,6 +1577,8 @@ fn move_session(
             entry.last_position = Some(global);
         }
     }
+    // The debts this move's answer replaces: a receiver the move itself runs can owe a newer one.
+    let replaced = running.tracker.owed_withdrawal();
     let mut outcome = None;
     let mut hits = Vec::new();
     let over = locate(shared, &running, global);
@@ -1642,6 +1649,11 @@ fn move_session(
             _ => false,
         }
     };
+    // The session's phase holds this move's answer now, which replaces the withdrawals owed before
+    // it.
+    if let Some(replaced) = replaced {
+        running.tracker.withdrawal_passed_on(replaced);
+    }
     if in_window && let Some(cursor) = &running.cursor {
         cursor.show(drag_cursor(running.tracker.is_over_receiver(), accepted));
     }

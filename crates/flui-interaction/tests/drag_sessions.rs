@@ -2033,11 +2033,70 @@ fn a_withdrawal_that_fails_in_a_tick_is_told_again() {
         );
         assert_eq!(count(&f.log, "T:left"), 1, "{:?}", logged(&f.log));
         assert_eq!(withdrawals(), 1);
+        assert_eq!(
+            f.owner.next_deadline(),
+            Some(EventTime::from_nanos(0)),
+            "an owed withdrawal asks for the next turn at once"
+        );
         f.owner.tick(time_at(20));
         assert_eq!(withdrawals(), 2, "the failed withdrawal is told again");
         f.owner.tick(time_at(30));
         f.owner.withdraw_unregistered_answers();
         assert_eq!(withdrawals(), 2, "and only once it was heard");
+        assert_ne!(f.owner.next_deadline(), Some(EventTime::from_nanos(0)));
+    });
+}
+
+/// A withdrawal fails, then the move after it fails to reach the OS too: the withdrawal is still
+/// owed, and the next build tells the OS.
+fn a_move_the_os_never_heard_keeps_the_withdrawal_owed() {
+    in_lane(|f| {
+        let gone = f.unregistered("M", Some(COPY), None);
+        let ticket = f.register(&gone, 0.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        let fail_next = || {
+            f.source
+                .fail_feedback
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        };
+        let withdrawals = || {
+            f.source
+                .feedback
+                .lock()
+                .iter()
+                .filter(|(answered, feedback)| *answered == id && feedback.accept.is_none())
+                .count()
+        };
+        fail_next();
+        catch_unwind(AssertUnwindSafe(|| f.owner.withdraw_unregistered_answers()))
+            .expect_err("telling the OS fails");
+        fail_next();
+        catch_unwind(AssertUnwindSafe(|| {
+            f.deliver(
+                f.presentation,
+                DragDropEvent::Moved {
+                    id,
+                    allowed: COPY,
+                    position: Point::new(500.0, 500.0),
+                },
+            );
+        }))
+        .expect_err("the move's answer fails to reach the OS");
+        let before = withdrawals();
+        f.owner.withdraw_unregistered_answers();
+        assert_eq!(withdrawals(), before + 1, "the withdrawal is still owed");
     });
 }
 
@@ -3140,6 +3199,10 @@ fn drag_sessions() {
             (
                 "a_withdrawal_that_fails_in_a_tick_is_told_again",
                 a_withdrawal_that_fails_in_a_tick_is_told_again,
+            ),
+            (
+                "a_move_the_os_never_heard_keeps_the_withdrawal_owed",
+                a_move_the_os_never_heard_keeps_the_withdrawal_owed,
             ),
             (
                 "a_replaced_registration_is_a_new_receiver",
