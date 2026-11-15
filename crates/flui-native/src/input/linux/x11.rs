@@ -915,13 +915,13 @@ pub mod decode {
             decoded
         }
 
-        /// What `motions`, the motions of one device over the window
-        /// `surface` that the server sent with nothing between them, oldest
-        /// first, deliver there: one move at the last position, which carries
-        /// the earlier ones as the positions it passed through, so a burst
-        /// costs its window one move. A motion that carries scrolling is
-        /// delivered on its own, as [`event`](Self::event) delivers it,
-        /// between the moves before and after it.
+        /// What `motions`, one pointer's run over the window `surface`
+        /// (the loop's `PointerRun`: one device and source, nothing between
+        /// them, oldest first), deliver there: one move at the last position,
+        /// which carries the earlier ones as the positions it passed through,
+        /// so a burst costs its window one move. A motion that carries
+        /// scrolling is delivered on its own, as [`event`](Self::event)
+        /// delivers it, between the moves before and after it.
         pub fn motions(
             &mut self,
             surface: NativeSurface,
@@ -933,10 +933,7 @@ pub mod decode {
             for motion in motions.iter().filter(|motion| !motion.emulated) {
                 let only_moves =
                     matches!(motion.action, XiAction::Motion) && !self.carries_scrolling(motion);
-                let same_device = moves.last().is_none_or(|last| {
-                    (last.master, last.source) == (motion.master, motion.source)
-                });
-                if !(only_moves && same_device) {
+                if !only_moves {
                     self.moved_through(surface, scale, &std::mem::take(&mut moves), &mut out);
                 }
                 if only_moves {
@@ -1371,7 +1368,7 @@ mod live {
     use crate::input::event_timestamp_ns;
     use crate::input::linux::xkb::{Keyboard, KeymapSource};
     use crate::owner::linux::x11::{
-        InputTarget, LoopInput, LoopText, WindowRef, X11Connection, X11Key,
+        InputTarget, LoopInput, LoopText, PointerRun, WindowRef, X11Connection, X11Key,
     };
     use crate::owner::panic_boundary::contain_owner_callback;
 
@@ -1938,8 +1935,9 @@ mod live {
             })
         }
 
-        /// What a pointer's motion delivers: `last`, and the motions
-        /// `passed` it came through in the same turn, as one move.
+        /// What a pointer's motion over `window` delivers: `last`, and the
+        /// motions `passed` it came through in the same turn (the rest of
+        /// its [`PointerRun`]), as one move.
         fn pointer_motions(
             &self,
             window: xproto::Window,
@@ -1949,7 +1947,6 @@ mod live {
             let motions: Vec<XiEvent> = passed
                 .iter()
                 .filter_map(copied_event)
-                .filter(|(passed, _)| *passed == window)
                 .map(|(_, motion)| motion)
                 .chain(std::iter::once(last))
                 .collect();
@@ -2268,7 +2265,7 @@ mod live {
             deliver(deliveries);
         }
 
-        fn event(&self, event: &Event, passed: &[Event]) -> bool {
+        fn event(&self, event: &Event) -> bool {
             let deliveries = match event {
                 Event::XinputKeyPress(key) | Event::XinputKeyRelease(key) => {
                     let state = if matches!(event, Event::XinputKeyPress(_)) {
@@ -2343,14 +2340,23 @@ mod live {
                             // the press that may move its caret.
                             self.text.pointer_pressed(window);
                         }
-                        if passed.is_empty() {
-                            self.pointer_event(window, &xi)
-                        } else {
-                            self.pointer_motions(window, passed, xi)
-                        }
+                        self.pointer_event(window, &xi)
                     }
                     None => return false,
                 },
+            };
+            deliver(deliveries);
+            true
+        }
+
+        fn motions(&self, run: &PointerRun) -> bool {
+            let Some((window, last)) = copied_event(run.last()) else {
+                return false;
+            };
+            let deliveries = if run.passed().is_empty() {
+                self.pointer_event(window, &last)
+            } else {
+                self.pointer_motions(window, run.passed(), last)
             };
             deliver(deliveries);
             true

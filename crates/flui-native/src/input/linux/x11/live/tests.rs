@@ -154,9 +154,8 @@ fn a_button_press_reaches_the_text_input_first() {
     };
     input.event(
         &x11rb::protocol::Event::XinputButtonPress(press.clone()),
-        &[],
     );
-    input.event(&x11rb::protocol::Event::XinputButtonRelease(press), &[]);
+    input.event(&x11rb::protocol::Event::XinputButtonRelease(press));
     assert_eq!(
         *heard.windows.lock().expect("BUG: the list is not poisoned"),
         [xid],
@@ -203,7 +202,7 @@ fn a_burst_of_keymap_changes_reads_the_keymap_once() {
             Heard::Change => Event::XkbMapNotify(MapNotifyEvent::default()),
             Heard::Key => Event::XinputKeyPress(KeyPressEvent::default()),
         };
-        input.event(&event, &[]);
+        input.event(&event);
     };
 
     let before = requests_made();

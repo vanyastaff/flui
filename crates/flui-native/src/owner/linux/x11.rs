@@ -366,12 +366,14 @@ pub(crate) trait LoopInput {
     /// `window` closed: nothing is delivered to it any more.
     fn window_closed(&self, window: WindowRef);
 
-    /// An event the server sent; `true` when it was input's alone, `false`
-    /// when the windows hear it too (a focus change the input also follows).
-    /// `passed` are the motions a pointer's motion came through in the same
-    /// turn, with nothing between them, oldest first, which are delivered with
-    /// it as one move; empty for every other event.
-    fn event(&self, event: &Event, passed: &[Event]) -> bool;
+    /// An event the server sent, other than a pointer's motion; `true` when
+    /// it was input's alone, `false` when the windows hear it too (a focus
+    /// change the input also follows).
+    fn event(&self, event: &Event) -> bool;
+
+    /// A run of one pointer's motions over one window, delivered as one move
+    /// through them; `true` when it was input's alone.
+    fn motions(&self, run: &PointerRun) -> bool;
 
     /// The turn's events are heard: what they marked changed and left to be
     /// read once (the keymap) is read now.
@@ -912,16 +914,19 @@ impl X11Loop {
     /// on after the last.
     fn hear_all(&self, events: Vec<Event>) {
         let mut failure = FirstPanic::new();
-        for TurnEvent { passed, event } in fold_motions(events) {
-            failure.contain(|| self.hear(&event, &passed));
+        for heard in fold_motions(events) {
+            failure.contain(|| self.hear(&heard));
         }
         // What the events marked and left to be read once.
         failure.contain(|| self.input.settle());
         failure.resume();
     }
 
-    /// Hand one event to the features that hear it, in their order.
-    fn hear(&self, event: &Event, passed: &[Event]) {
+    /// Hand one event to the features that hear it, in their order: a run
+    /// of motions is its last to every feature but the input, which reads
+    /// the whole run.
+    fn hear(&self, heard: &TurnEvent) {
+        let event = heard.event();
         if let Event::Error(error) = event {
             // A request on a window the server no longer has (a property
             // read racing a close): the request's own reply says so too.
@@ -945,7 +950,11 @@ impl X11Loop {
         // they follow too; the first panic is raised again after.
         let mut failure = FirstPanic::new();
         failure.contain(|| self.text.event(event));
-        if failure.contain(|| self.input.event(event, passed)) != Some(true) {
+        let input = || match heard {
+            TurnEvent::Motions(run) => self.input.motions(run),
+            TurnEvent::Other(event) => self.input.event(event),
+        };
+        if failure.contain(input) != Some(true) {
             failure.contain(|| self.windows.event(event));
         }
         failure.resume();
@@ -1115,47 +1124,87 @@ fn turn_events<S: WaitSource>(
 
 /// One event of a turn as the features hear it.
 #[derive(Debug)]
-struct TurnEvent {
-    /// For a pointer's motion, the motions of that pointer over that window
-    /// the server sent just before it, oldest first: the positions the
-    /// pointer passed through on its way to `event`. Empty for any other
-    /// event.
-    passed: Vec<Event>,
-    event: Event,
+enum TurnEvent {
+    /// A run of one pointer's motions over one window: the input reads the
+    /// run, every other feature its last motion.
+    Motions(PointerRun),
+    /// Any other event.
+    Other(Event),
 }
 
-/// Whether `later` is the next motion of the pointer `earlier` moved over the
-/// same window: XInput 2 motions of one device, from one source, to one
-/// window.
-fn continues_motion(earlier: &Event, later: &Event) -> bool {
-    match (earlier, later) {
-        (Event::XinputMotion(earlier), Event::XinputMotion(later)) => {
-            (earlier.event, earlier.deviceid, earlier.sourceid)
-                == (later.event, later.deviceid, later.sourceid)
+impl TurnEvent {
+    /// What every feature but the input hears: for a run, where the pointer
+    /// is.
+    fn event(&self) -> &Event {
+        match self {
+            Self::Motions(run) => run.last(),
+            Self::Other(event) => event,
         }
-        _ => false,
     }
 }
 
-/// `events` with each run of one pointer's motions folded into its last, in
-/// order: every feature hears where the pointer is, once, and the input
-/// alone reads what it passed through. Any other event between two motions
-/// keeps them apart, so nothing is heard out of its order.
+/// The motions of one pointer over one window that the server sent in one
+/// turn with nothing between them, oldest first: XInput 2 motions of one
+/// device, from one source, to one window. Only `fold_motions` builds
+/// one, and [`continued_by`](Self::continued_by) is the one place that says
+/// which motions belong together.
+#[derive(Debug)]
+pub(crate) struct PointerRun {
+    /// The motions before the last: the positions the pointer passed
+    /// through on its way to it.
+    passed: Vec<Event>,
+    /// The last motion: where the pointer is.
+    last: Event,
+}
+
+impl PointerRun {
+    /// Whether `event` is the next motion of the run's pointer, from the
+    /// same source, over the same window.
+    fn continued_by(&self, event: &Event) -> bool {
+        match (&self.last, event) {
+            (Event::XinputMotion(earlier), Event::XinputMotion(later)) => {
+                (earlier.event, earlier.deviceid, earlier.sourceid)
+                    == (later.event, later.deviceid, later.sourceid)
+            }
+            _ => false,
+        }
+    }
+
+    /// The motions before the last, oldest first.
+    pub(crate) fn passed(&self) -> &[Event] {
+        &self.passed
+    }
+
+    /// The last motion: where the pointer is.
+    pub(crate) fn last(&self) -> &Event {
+        &self.last
+    }
+}
+
+/// `events` with each run of one pointer's motions folded into one
+/// [`PointerRun`], in order: every feature hears where the pointer is, once,
+/// and the input alone reads what it passed through. Any other event between
+/// two motions keeps them apart, so nothing is heard out of its order.
 fn fold_motions(events: Vec<Event>) -> Vec<TurnEvent> {
     let mut folded: Vec<TurnEvent> = Vec::with_capacity(events.len());
     for event in events {
-        match folded.last_mut() {
-            Some(last) if continues_motion(&last.event, &event) => {
-                last.passed.push(std::mem::replace(&mut last.event, event));
-            }
-            _ => folded.push(TurnEvent {
-                passed: Vec::new(),
-                event,
-            }),
+        if let Some(TurnEvent::Motions(run)) = folded.last_mut()
+            && run.continued_by(&event)
+        {
+            run.passed.push(std::mem::replace(&mut run.last, event));
+            continue;
         }
+        folded.push(match event {
+            Event::XinputMotion(_) => TurnEvent::Motions(PointerRun {
+                passed: Vec::new(),
+                last: event,
+            }),
+            other => TurnEvent::Other(other),
+        });
     }
     folded
 }
+
 
 /// The connection as the loop's last step before it sleeps sees it.
 trait WaitSource {
@@ -1466,7 +1515,8 @@ mod tests {
     use x11rb::protocol::xinput::ButtonPressEvent;
 
     use super::{
-        BeforeWait, MAX_TURN_EVENTS, WaitSource, before_wait, fold_motions, turn_events, wait_for,
+        BeforeWait, MAX_TURN_EVENTS, TurnEvent, WaitSource, before_wait, fold_motions, turn_events,
+        wait_for,
     };
 
     /// A window of `platform` and its X id. Hidden: the server is other
@@ -1696,7 +1746,7 @@ mod tests {
         // to the windows.
         let hear = |event: &Event| match event {
             Event::XinputEnter(_) | Event::XinputLeave(_) => {
-                owner.input.event(event, &[]);
+                owner.input.event(event);
             }
             _ => owner.windows.event(event),
         };
@@ -1879,10 +1929,11 @@ mod tests {
             fold_motions(events)
                 .iter()
                 .map(|folded| {
-                    (
-                        x(&folded.event),
-                        folded.passed.iter().filter_map(x).collect(),
-                    )
+                    let passed = match folded {
+                        TurnEvent::Motions(run) => run.passed().iter().filter_map(x).collect(),
+                        TurnEvent::Other(_) => Vec::new(),
+                    };
+                    (x(folded.event()), passed)
                 })
                 .collect()
         }

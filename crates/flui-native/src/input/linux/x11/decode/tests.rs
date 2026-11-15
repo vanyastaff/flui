@@ -1018,15 +1018,15 @@ fn a_hierarchy_change_asks_only_for_what_it_names() {
 }
 
 #[test]
-/// The motions of one device with nothing between them are one move at the
-/// last position, which carries the earlier ones as the positions it came
-/// through, in order, the latest `PointerMove::COALESCED_HISTORY_LIMIT` of
-/// them: a burst costs its window one move, however long it is.
-/// A motion that scrolls, and a motion of another device, are delivered
-/// where they came, each between the moves around it; a scroll that leaves
-/// the cursor where it was moves nothing.
+/// A pointer's run of motions (one device, nothing between them) is one
+/// move at the last position, which carries the earlier ones as the
+/// positions it came through, in order, the latest
+/// `PointerMove::COALESCED_HISTORY_LIMIT` of them: a burst costs its window
+/// one move, however long it is. A motion of the run that scrolls is
+/// delivered where it came, between the moves around it; a scroll that
+/// leaves the cursor where it was moves nothing.
 fn a_run_of_motions_is_one_move_through_them() {
-    let at = |x: f64| event(XiAction::Motion, XTEST, (x, 5.0));
+    let at = |x: f64| event(XiAction::Motion, TOUCHPAD, (x, 5.0));
     let scrolled = |x: f64, value: f64| XiEvent {
         valuators: vec![(3, value)],
         ..event(XiAction::Motion, TOUCHPAD, (x, 5.0))
