@@ -1,5 +1,5 @@
-//! The Title field under a push-model platform input method, as winit, the
-//! web and Android's `InputConnection` deliver one: the composition shows
+//! The Title field under a push-model platform input method, one that
+//! delivers `ImeEvent`s: the composition shows
 //! where the caret was, a commit replaces it with the conversion and changes
 //! the form's value once, a cancel leaves the committed text alone, and a tap
 //! elsewhere or a route change commits what the user sees.

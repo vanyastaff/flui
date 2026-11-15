@@ -51,7 +51,7 @@ trait depends on `flui-platform` instead.
   extensions, which are named in that OS's module of `os` (`os::windows`,
   `os::macos`), the modules the facade publishes as `flui::native::<os>`.
   `[package.metadata.flui.modules]` gives the roles `cargo xtask module-dag`
-  checks: the twelve features; `owner`, `version`, `storage`, `transfer` and
+  checks: the features listed above; `owner`, `version`, `storage`, `transfer` and
   `display_connection` as `base`, which
   names no feature; `hosts`, which nothing names; and the crate-level modules
   (`crate-level`: `host`, `platform`, `host_window`, `error`, `executor`,

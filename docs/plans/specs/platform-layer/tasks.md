@@ -8,8 +8,7 @@
   переименование крейтов или шов возможностей. LY8/LY9 завершены: все пункты «Приёмки LY8/LY9»
   отмечены, ход — «Доведение до приёмки». Запуск на Mac — vanyastaff/flui#1840. Суть LY89
   (уведомления вместо опроса на macOS и Android, ноль пробуждений после Home на устройстве)
-  сделана на текущей раскладке; за LY89 остаются headless-счётчик пробуждений в виртуальном
-  времени и перенос в `preferences/`.
+  сделана вместе с ними; что остаётся за LY89, говорит её запись в «Ходе исполнения».
 - **Дата:** 2026-10-20
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **База:** `main` @ `deb9faea2`
@@ -327,9 +326,11 @@ graph LR
 
 ## Ход исполнения
 
-Запись называет тесты, файлы и хосты так, как они звались при слиянии задачи. Имя, которого на
-`main` больше нет, либо исправлено в записи с номером PR, который его сменил, либо стоит в
-разделе «Имена из записей, которых нет на `main`» в конце файла.
+Запись называет тесты, файлы и типы так, как они звались при слиянии задачи. Имя теста, которого
+на `main` больше нет, исправлено в записи с номером PR, который его сменил, или стоит в разделе
+«Имена из записей, которых нет на `main`» в конце файла. В записях неотмеченных строк, с которых
+работа продолжается, так же названы ушедшие типы и пути. В записях отмеченных строк пути файлов
+остались путями на момент слияния: часть из них с тех пор переехала.
 
 - [x] **LY20** — ветка `platform/flui-native`. Команды: `git mv crates/flui-platform
   crates/flui-native`; затем по файлам, которые находит `rg -l --hidden` вне `target/`, `.git/`,
@@ -3392,12 +3393,12 @@ graph LR
   `onTopResumedActivityChanged`, `onUserLeaveHint` (у снимка окна нет поля, которое они бы
   наполняли; приходят вместе с ним). Прогон на устройстве: `am send-trim-memory` на переднем
   плане и в фоне, запись до `android_main`.
-  **Сверка с `main` 2026-11-15.** `onNewIntent` теперь пересылается: его потребитель, фича
-  активации, пришёл в #2610 (запись `Intent` очереди `FluiHost`, `PROTOCOL` = 3). Остаток LY62
-  прежний: `onActivityResult` (ждёт `launch_for_result`, LY64, которого на `main` нет),
-  `onMultiWindowModeChanged`, `onTopResumedActivityChanged`, `onUserLeaveHint`, тема запуска и
-  `<queries>`; прогон на устройстве (`am send-trim-memory`, запись до `android_main`, образ API
-  23–25) в `docs/platform-parity.md` не записан.
+  **Что остаётся за LY62.** `onNewIntent` пересылается: его потребитель, фича активации, пришёл
+  в #2610 (запись `Intent` очереди `FluiHost`, `PROTOCOL` = 3). Не пересылаются `onActivityResult`
+  (ждёт `launch_for_result`, LY64, которого на `main` нет), `onMultiWindowModeChanged`,
+  `onTopResumedActivityChanged` и `onUserLeaveHint`; темы запуска и `<queries>` в базе манифеста
+  нет; прогона на устройстве (`am send-trim-memory`, запись до `android_main`, образ API 23–25)
+  не было, и `docs/platform-parity.md` его не называет.
 - [ ] **LY63** (не закрыта: остаётся `windowSoftInputMode`, см. конец записи; `configChanges` —
   #1845, `targetSdk` — #2231, правила R8 и golden — #2287), часть `configChanges` — ветка
   `android/config-changes`. Шаблон `flui create`
@@ -3777,7 +3778,7 @@ graph LR
   ячеек. Ввод сидений достаёт фичу текста через шов владельца (`SeatText`, `SeatWindowText`),
   таблица отдаёт вводу `SeatTexts`; исключений `module-dag` нет. Композитор без
   `zwp_text_input_manager_v3` не даёт окнам store host и предупреждает один раз; запасного IBus
-  на Wayland нет. Тесты: `text::linux::text_input::tests` (28 на `main`),
+  на Wayland нет. Тесты: `text::linux::text_input::tests`,
   `a_seat_gone_in_a_dispatch_keeps_what_its_input_method_sent_first`
   (`text::linux::wayland::tests`) и `tests/wayland_text_input.rs` — sway 1.9 с методом ввода
   самого теста на `zwp_input_method_v2`, на своём соединении:
@@ -3786,7 +3787,7 @@ graph LR
   `the_input_method_hears_what_the_application_types` (прогон 2026-10-31).
   **Drag and drop** — приём #2208 (`e5c6c4a6d`), запуск #2242 (`b514637a3`), исправление паники
   при раскрутке #2286. Позиция `Drag` таблицы — `WaylandLoop`; `drag::wayland::SeatDrag` —
-  единственный `DataTransferSource` хоста, события перетаскивания ему отдают устройства данных
+  единственный `DragTransport` хоста (ADR-0312), события перетаскивания ему отдают устройства данных
   сидений (`DragListener`), подряд идущие движения одного хода сливаются. Приём: MIME-типы offer
   становятся представлениями через `drag::offers::Kind` (текст один раз, HTML, остальные типы);
   на движение отвечает `accept(serial, mime)` и на offer v3 `set_actions`, только когда ответ
@@ -3876,19 +3877,19 @@ graph LR
   `XIM_FORWARD_EVENT` и своим `XIM_SYNC`, ответы сверяются по очереди контекста; стиль preedit —
   on-the-spot, иначе Position, иначе Nothing; commit приходит как COMPOUND_TEXT через `xim-ctext`
   с защитой от переполнения; сообщение не больше 64 КиБ, очередь sync и preedit ограничены.
-  Тесты: `text::linux::input_context::tests` (10, чистые), `text::linux::x11::bus_tests` (30 на
-  `main`: окно X11 на Xvfb и стенд IBus на своём `dbus-daemon`, среди них
+  Тесты: `text::linux::input_context::tests` (чистые), `text::linux::x11::bus_tests`
+  (окно X11 на Xvfb и стенд IBus на своём `dbus-daemon`, среди них
   `a_commit_reaches_the_field_before_the_key_let_through_after_it`,
   `a_key_unanswered_in_time_goes_as_typed_and_keeps_its_place`,
   `keys_held_for_a_window_go_as_it_loses_the_focus`,
-  `a_panic_delivering_a_key_leaves_the_next_delivered`), `xim_tests` (10: стенд XIM-сервера на
+  `a_panic_delivering_a_key_leaves_the_next_delivered`), `xim_tests` (стенд XIM-сервера на
   Xvfb, среди них `a_commit_reaches_the_field_and_a_key_sent_back_is_typed_after_it`,
   `a_key_the_server_holds_goes_as_typed_at_the_deadline`,
-  `a_server_gone_or_misbehaving_leaves_keys_typed`), `xim::wire_tests` (8, с property-тестом
+  `a_server_gone_or_misbehaving_leaves_keys_typed`), `xim::wire_tests` (с property-тестом
   `every_message_reads_as_it_was_written`). Прогоны 2026-11-02.
   **XDND** — цель #2097 (`47ec6a9ea`), источник #2104 (`0993ed171`), запись большого payload
   кусками `INCR` #2371 (`b026a4a71`). Позиция `Drag` таблицы — `X11Loop`; цикл держит
-  `drag::x11::X11Drag` (единственный `DataTransferSource` платформы) через хук
+  `drag::x11::X11Drag` (единственный `DragTransport` платформы, ADR-0312) через хук
   `owner::linux::x11::LoopDrag`, который слышит каждое событие раньше ввода; окно при открытии
   помечает себя `XdndAware`. Цель (XDND 5): offer выпускается на первом `XdndPosition`,
   `XdndActionAsk` читает `XdndActionList`, больше трёх типов — из `XdndTypeList`; каждая позиция
@@ -3901,7 +3902,7 @@ graph LR
   сбрасывает на принявшую цель и покидает отказавшую, Escape отменяет, drop кончается на
   `XdndFinished` или отменой через 5 с; `input::availability::x11` объявляет `outgoing_drag:
   Native`. Ничего не доставляется и не завершается под замком передачи. Тесты
-  (`drag::x11::tests`, 39 на `main`, Xvfb, вторая сторона на своём соединении): цель —
+  (`drag::x11::tests`, Xvfb, вторая сторона на своём соединении): цель —
   `an_accepted_drop_is_fetched_and_finished`, `a_refused_drop_finishes_unaccepted_and_exits`,
   `a_drag_that_leaves_retires_its_offer`, `an_incr_answer_is_read_in_chunks_and_held_to_its_limit`;
   источник — `a_session_drops_on_a_target_that_accepts`,
@@ -4685,9 +4686,9 @@ graph LR
   ждёт), `dispatch_frame` кладёт его в запрос. **Источники.** Win32 — `flui-engine` читает
   `GetFrameStatistics`/`GetLastPresentCount` DX12 swap chain через `wgpu::hal` перед каждым present
   (единственный production `unsafe` движка, с `expect`), `Win32Surface` перебазирует `SyncQPCTime`
-  по счётчику и меряет период двумя чтениями (`frame_timing::shown_present`). Wayland — глобал
+  по счётчику и меряет период двумя чтениями (`frame_timing::shown_present`, на `main` — `frame_timing::PresentTracker::read`). Wayland — глобал
   `wp_presentation` (часы из `clock_id`, `rustix` `time`), feedback на каждый commit,
-  `presented` → `rebased`; без глобала — `NotOnThisDevice`. Headless — `MockWindow::simulate_presented`,
+  `presented` → `rebased`; без глобала — `NotOnThisDevice`. Headless — `HeadlessHostWindow::simulate_presented` (до #2378 — `MockWindow`),
   `HeadlessHost::report_presented`. Web, X11 — `NotOnThisPlatform`; winit — `NotYetOnThisHost`.
   **Решение для владельца:** AppKit, UIKit, Android — `NotYetOnThisHost`
   (`window::capabilities::PRESENTATION`): `addPresentedHandler` нужен drawable, который wgpu 30 держит
@@ -4857,7 +4858,7 @@ graph LR
   браузер не затронуты; `cross-typecheck` — в CI.
 
 - [ ] **LY98** (не закрыта: `record.start` со слоем `native` на `main`, но фича `native-capture`
-  с `driver` не слита, а крейта `flui-driver` нет; см. «Сверка с `main`» в конце записи) —
+  с `driver` не слита, а крейта `flui-driver` нет; см. конец записи) —
   #1973 (`0dc0c45c1`), ветка `claude/project-thread-jqc75j` от `main` @ `c313cc9f2`. **Схема** — `flui-protocol::native_recording`
   (за фичей `serde`): `Header` (поле версии `VERSION_KEY` = `flui_native_recording`,
   `FORMAT_VERSION` = 1), `Row` (по тегу `row`), `Reading`, `Frame`, `Wheel`, `Scroll` и словари
@@ -4873,14 +4874,11 @@ graph LR
   `native-capture` или `testing`, бэкенды сериализатор не линкуют. Golden-записи не менялись:
   `native_recordings_write_back_byte_for_byte` и новая строка
   `native_recordings_read_through_the_protocol_schema` (каждая запись читается схемой без ядра и
-  пишется байт в байт) таблицы `native_recording_contracts`. ADR-0215 §4 дополнен. **Остаётся на
-  FD6:** фича `native-capture` сливается с `driver`, `record.start{native}` драйвера пишет этим
-  кодеком (у `flui-native` пока нет фичи `driver`, крейта `flui-driver` нет). Проверки: clippy
+  пишется байт в байт) таблицы `native_recording_contracts`. ADR-0215 §4 дополнен. Проверки: clippy
   `flui-native` с `native-capture` и без, clippy и тесты `flui-protocol` со всеми фичами,
   `platform_it` (`native_recording`, `contract`, `backend_conformance`) с `native-capture` и без,
   lib-тесты с `native-capture`, гейты `workspace`, `reach`, `globals`, `testing`, `module-dag`.
-  **Сверка с `main` 2026-11-15.** Слой `native` записи драйвера сделан четырьмя PR по ADR-0288
-  §11: захват отдаёт каждый поток строками провода (#2307, `journal/lines.rs`); протокол 0.10 с
+  **Слой `native` записи драйвера** (ADR-0288 §11): захват отдаёт каждый поток строками провода (#2307, `journal/lines.rs`); протокол 0.10 с
   событием `record_native` и `flui_runtime::ui_runtime::NativeLines` (#2311); `flui-app` ставит
   захват на потоке цикла до старта платформы и снимает его, если агента никто не обслуживает
   (#2313); `flui record <file> --native <dir>` пишет файл на поток и `index.json` (#2315). Тесты:
@@ -4890,18 +4888,18 @@ graph LR
   `agent_service`), `a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it`,
   `the_hello_lists_the_native_layer_only_when_the_loop_journals` (`flui-app`),
   `a_native_recording_writes_each_stream_with_the_devices_its_rows_read` (`flui-cli`,
-  `cli_record`). Отличие от строки: фича `native-capture` с `driver` не слилась. У `flui-native`
-  фичи `driver` нет; `flui-app` включает `native-capture` всегда, а код журнала собирается под
-  `cfg(native_journal)` (debug-сборка нативного хоста, `crates/flui-app/build.rs`). Запись без
-  ребра к ядру читает и пишет `flui-cli` через `flui-protocol`; крейта `flui-driver` на `main`
-  нет. Ветки Windows, macOS, iOS и Android в #2313 только типизированы, прогона на устройстве
-  нет. Остаётся: решение владельца о фиче (расхождение записано в `docs/gaps.md`, ADR-0151 §10 и
-  §16) и чтение записи крейтом `flui-driver`, когда он появится.
+  `cli_record`). Захват ставят настольные хосты, Android и iOS, страница Web пишет только слой
+  `input`; ветки Windows, macOS, iOS и Android в #2313 только типизированы, прогона на устройстве
+  нет. Запись без ребра к ядру читает и пишет `flui-cli` через `flui-protocol`; крейта
+  `flui-driver` на `main` нет. **Остаётся:** фича `native-capture` с `driver` не слита (что
+  собирает журнал вместо неё и решение владельца — `docs/gaps.md`, ADR-0151 §10 и §16); чтение
+  записи крейтом `flui-driver`, когда он появится.
 
 - [ ] **LY97** (не закрыта: четыре PR — потоки #1981, предпочтения #1989, дисплеи #1996 и
   состояние окна #2017; дальше строки `close_request`/`closed` после T8 и строка store-edit для
-  IME без событий, на `main` их нет; `--record` на Windows, macOS, Android и Web пишет
-  `flui record --native` из LY98, прогонов на этих ОС нет) — ветка
+  IME без событий, на `main` их нет; `os`-lane драйвера, чей `--record` называет строка, нет:
+  эти потоки пишет `flui record --native` из LY98 на настольных ОС, Android и iOS, страница Web
+  пишет только слой `input`, прогонов на этих ОС нет) — ветка
   `claude/project-thread-jqc75j` после
   LY98. **Потоки журнала:** заголовок называет `Stream` — `registry` (по умолчанию, единственный с
   часами; `epoch_ns` и `uptime_ns` теперь необязательны и пишутся только у него), `app`
@@ -4922,7 +4920,7 @@ graph LR
   **Вторая часть — предпочтения.** Поток `platform`: `HostPlatform::preferences` пишет в журнал каждое
   чтение (`Captured::Preferences`) после ответа источника хоста; строка `preferences` несёт
   `PreferenceRead::{Observed, Failed(ReadFailure)}`, где сбой — вид ошибки `PlatformError` (`FailureKind`) и её сообщение. Схема предпочтений одна на две записи:
-  `flui-protocol::native_recording::Preferences`, а `PreferencesDto` в `flui-testing` — это
+  `flui-protocol::native_recording::Preferences`, а `PreferencesDto` в `flui-testing` (с #2295 — `input_recording::Preferences` во `flui-protocol`) — это
   `revision` плюс эта схема через `flatten` (JSON побайтно прежний:
   `preference_rows_keep_their_json_spelling`). Оба зеркала идут через публичные
   `flui_platform::{PreferenceParts, GestureParts, WheelParts}` (`into_parts`,
@@ -4988,10 +4986,10 @@ graph LR
   строк, которым нужен X11/Wayland-сервер; doctest'ы `flui-platform`, `flui-interaction`,
   `flui-testing`, `flui-sdk`; clippy `-p flui-native --target x86_64-pc-windows-msvc
   --all-targets`; `xtask checks`.
-- [ ] **LY50** (не закрыта: каждый пункт кода на `main` и достигается production-путём; остаются
-  прогоны «Dev: Android, Web (браузер)», которых не было) — #2033 (`5b4ece201`, ветка
-  `claude/project-thread-5akcty`, слит 2026-10-30 одним PR с LY51). Задача своей записи не
-  оставила; эта составлена сверкой строки с `main` 2026-11-15, пункт за пунктом. **Контракт**
+- [ ] **LY50** (не закрыта: шов и clipboard на нём слиты и достигаются production-путём;
+  `Platform::clipboard`, который строка просит удалить, остался с другим типом; прогонов clipboard
+  на Windows, Android и в браузере нет) — #2033 (`5b4ece201`, ветка
+  `claude/project-thread-5akcty`, слит 2026-10-30 одним PR с LY51). **Контракт**
   (`flui_platform::capability`): `Capability` (`Handle`, `NAME`), `CapabilityProvider<C>`
   (dyn-пин `const _: fn(&dyn CapabilityProvider<Gauge>)` в `tests/capability.rs`),
   `ProviderContext` (`owner()` — `OwnerPoster`, `window()` — `Option<WindowRef>`), `WindowRef` (id,
@@ -5004,9 +5002,13 @@ graph LR
   `flui-interaction` (`text_input/clipboard.rs`), `EditableText` копирует и вставляет через
   ручку; OS-объекты — в ядре (`clipboard/{windows,apple/macos,apple/ios,android,web,headless}.rs`
   и позже `linux/{wayland,x11}.rs`, позиция `Clipboard` таблицы хоста), провайдеры собирает
-  `flui-app` (`app/capability.rs`). `Clipboard`, `ClipboardItem`, `InMemoryClipboard`,
-  `Platform::{clipboard,write_to_clipboard,read_from_clipboard}`, `clipboard_handle` и
-  `test_clipboard()` удалены (`rg` по `crates/`, `src/` пуст). `docs/extending.md` получил строку
+  `flui-app` (`app/capability.rs`). Трейт контракта `flui_platform::Clipboard`, `ClipboardItem`,
+  `InMemoryClipboard`, `Platform::{write_to_clipboard,read_from_clipboard}`, `clipboard_handle` и
+  `test_clipboard()` удалены (`rg` по `crates/`, `src/`, `packages/` пуст). `Platform::clipboard`
+  не удалён, как просит строка: #2033 сменил его тип на `Rc<dyn NativeClipboard>`
+  (`crates/flui-native/src/platform.rs`, с ним `OwnerPlatform::clipboard` и позиция таблицы
+  `host::Clipboard<O>`), и через него `flui-app` строит встроенный провайдер
+  (`app/runner/host.rs`). `docs/extending.md` получил строку
   «Platform capability», ADR-0152 — раздел «As built», ADR-0039 §5 помечен заменённым.
   **Отличия от строки.** (1) Конфликт отвечает `LaunchError::CapabilityConflict`, а не
   `AppRunError`: тип переименован с единой точкой входа (#2056, #2483). (2) Сценарный провайдер —
@@ -5028,12 +5030,14 @@ graph LR
   `an_override_answers_in_place_of_the_built_in`; `flui-app` —
   `conflicting_registrations_fail_run_before_the_platform_starts`; контракт —
   `tests/capability.rs` (среди них `a_result_from_another_thread_reaches_the_owner_through_the_poster`).
-  **Не прогнано:** Android (`ClipboardManager` через JNI — «type-checked, no device run») и
-  браузер (`navigator.clipboard` — «unrun in a browser»), обе ячейки 🟡 в
-  `docs/platform-parity.md`, строка «Plain-text clipboard».
+  **Не прогнано:** Windows (в #2033 нативные изменения clipboard только типизированы), Android
+  (`ClipboardManager` через JNI — «type-checked, no device run») и браузер (`navigator.clipboard`
+  — «unrun in a browser»); все три ячейки 🟡 в `docs/platform-parity.md`, строка «Plain-text
+  clipboard». **Остаётся:** эти три прогона и решение о `Platform::clipboard` (удалить, как в
+  строке, или строка описывает то, что есть).
 - [ ] **LY51** (не закрыта: API и тесты на `main`; двух fixture-пакетов вне зависимостей
   фреймворка и проверки `reach` «fixture не видит хост» нет, их роль исполняют два теста внутри
-  крейтов) — #2033 (`5b4ece201`), вместе с LY50; запись составлена сверкой с `main` 2026-11-15.
+  крейтов) — #2033 (`5b4ece201`), вместе с LY50.
   `Plugin` и `CapabilityRegistrar` — в контракте (`capability/registrar.rs`);
   `Application::capability::<C>(provider)` и `Application::plugin(plugin)` — в
   `crates/flui-app/src/app/launch.rs`, обе в `api/flui.txt`; конфликт отвечает
@@ -5142,7 +5146,7 @@ graph LR
   `compositor_name`, публичного пути keyboard layout; они не входят в этот PR.
 - [ ] **LY55**, часть `compositor_name` — #2330 (`30375cab6`), ветка `platform/compositor-name`.
   Метод удалён из
-  `Platform`, `SharedPlatform`, `host::Services` и всех восьми loop-реализаций; `Platform::name`
+  `Platform`, `SharedPlatform` (сам тип ушёл в #2494), `host::Services` и всех восьми loop-реализаций; `Platform::name`
   остаётся. Продакшен-читателей метода не было. ADR-0039 обновлён, trybuild-снимки изменились
   только в номерах строк после удаления fixture-метода. Проверки на Windows: nextest
   `-p flui-native -p flui-app -p flui-testing` — 756 зелёных; три остальных теста
@@ -5153,17 +5157,12 @@ graph LR
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
   публичный путь keyboard layout.
-  **Сверка с `main` 2026-11-15.** Остаток тот же, с уточнениями: `tracing` остаётся зависимостью
+  **Что остаётся за LY55.** `tracing` остаётся зависимостью
   контракта и зовётся в `text_store/projection.rs`, `text_store/host.rs` и, с фичей активации, в
   `opened.rs` (отброшенные сверх предела URL), `reach-forbid` контракта его не называет;
   `Platform::active_window` и `OwnerPlatform::active_window` на месте, выше хоста их читают
   только тесты (`tests/handler_reentry.rs`); `Platform::keyboard_layout` и
   `on_keyboard_layout_change` остаются методами публичного запечатанного `Platform`.
-
-Записи ниже, до LY94, составлены сверкой строки с `main` 2026-11-15 (LY113): своей записи у этих
-задач не было, а работа на `main` есть. Каждая называет слитые PR, тесты, найденные в дереве, и
-то, чего строке не хватает; отмечена только строка, у которой на `main` есть каждый пункт.
-
 - [ ] **LY53** (не закрыта: запрета `build.rs`, запускающего `javac`, `swiftc` или `d8`, нет) —
   #2150 (`9450db8e1`), #2325 (`75872fc6e`). kind `capability` входит в закрытый список
   (`tools/xtask/src/workspace/tiers.rs`): крейт возможности живёт только в ярусе `pkg`
@@ -5176,6 +5175,15 @@ graph LR
   правило kind. Версию с поездом держит общее правило поезда (`links = "flui_train"`), своего у
   kind нет. Остаётся правило про `build.rs` с посаженным нарушением: `rg 'javac|swiftc|d8'
   tools/xtask/src/workspace` пуст.
+- [ ] **LY54** (не закрыта: на `main` только половина `flui-testing`; фичи `scripted` и сценарного
+  примитива нет) — #2033 (`5b4ece201`) дал `HeadlessHost::with_capabilities(window, registry)` и
+  `HeadlessHost::with_plugin(window, plugin)` (`crates/flui-testing/src/host.rs`): тест ставит
+  провайдер без ручной сборки runtime. Двойники остаются по одному на возможность, каждый со
+  своими переключателями: `ScriptedClipboard` и `ScriptedPrimarySelection` во `flui-testing`,
+  `ScriptedHttp`, `ScriptedLauncher` и `FakeHaptics` в `flui_platform::testing`, `ScriptedSystem`
+  во `flui-system`. Остаётся: фича `scripted` контракта и сам примитив (упорядоченный скрипт
+  ответов, отзывы разрешений, внедрённые ошибки, потоки событий в виртуальном времени), перевод
+  двойников на него, сценарий из колонки «Тесты».
 - [ ] **LY57** (не закрыта: крейт, плагин и две возможности на `main`; провайдеров Windows,
   остальных служб и общей conformance-таблицы нет) — #2150 (`9450db8e1`), портал Linux #2158,
   `Unsupported` в ошибках запуска и диалогов #2354, `flui add` #2273, фича фасада #2325. Крейт —
@@ -5316,20 +5324,29 @@ graph LR
 - [x] **LY86** — #1930 (`ace0a3b2e`) и #1931 (`c8401e35b`) добавили шаги CI, #2258 перевёл
   `flui-app` на нативные хосты, #2276 удалил winit. Job `test` (`.github/workflows/ci.yml`)
   ставит Xvfb, openbox, Weston и sway, поднимает headless Weston с `FLUI_REQUIRE_WAYLAND=1` и
-  гонит `cargo xtask test`: `platform_suite` на Linux — набор X11 под `xvfb-run`
+  гонит `cargo xtask test --fast`: `platform_suite` на Linux — набор X11 под `xvfb-run`
   (`platform_suite_linux_filtered`) и набор Wayland (`wayland_suite_linux`); ночной прогон —
-  `nightly-platforms.yml`. Job `test` зелёный на `main` @ `46786da8e` (2026-11-15). Что часть
-  тестов `wayland_window` под Weston выходит рано, потому что он не даёт `xdg-decoration`,
-  `wp_fractional_scale_v1` и `xdg-foreign`, — находка LY106.
-- [ ] **LY87** (не закрыта: код и зависимости удалены; остаётся пропуск в `deny.toml`) — #2276
-  (`053507d53`). Удалены файлы `winit` в фичах, `hosts/winit.rs`, фича `winit-backend`,
-  `WinitPlatform`, зависимости `winit`, `arboard`, `ui-events-winit` и прямой
-  `crossbeam-channel` (39 пакетов ушли из lock), профиль conformance и запись winit;
-  `deny.toml` запрещает крейт. `zbus` и `futures-util` остались: ими пользуются нативные хосты.
-  `rg winit` вне архива и ADR находит только prior art в комментариях, запрет в `deny.toml`,
-  списки `forbid` у `reach` и фикстуры xtask. Строки о запасном хосте winit в `README.md` и
-  `GLOSSARY.md` исправлены в LY113. Остаётся: `deny.toml` всё ещё игнорирует RUSTSEC-2026-0192
-  (`ttf-parser` через `sctk-adwaita ← winit`), а `ttf-parser` в `Cargo.lock` больше нет.
+  `nightly-platforms.yml`. Job `test` зелёный на `main` @ `46786da8e` (прогон 43701971256,
+  2026-11-15). Строка отмечена при открытой LY85, от которой зависит: CI гонит нативные хосты, а
+  полноту conformance-таблицы на них держит LY85. Что часть тестов `wayland_window` под Weston
+  выходит рано, потому что он не даёт `xdg-decoration`, `wp_fractional_scale_v1` и `xdg-foreign`,
+  — находка LY106.
+- [ ] **LY87** (не закрыта: код и зависимости удалены; остаются пропуск в `deny.toml` и тест
+  строки `rg winit`) — #2276 (`053507d53`). Удалены файлы `winit` в фичах, `hosts/winit.rs`, фича
+  `winit-backend`, `WinitPlatform`, зависимости `winit`, `arboard`, `ui-events-winit` и прямой
+  `crossbeam-channel`, профиль conformance и запись winit; `deny.toml` запрещает крейт. `zbus` и
+  `futures-util` остались: ими пользуются нативные хосты. Тексты, говорившие о winit как о части
+  графа или запасном хосте, исправлены в LY113: `README.md`, `GLOSSARY.md`,
+  `crates/flui-platform/Cargo.toml`, корневой `Cargo.toml` (заметка о
+  `wildcard_enum_match_arm`), `tests/fixtures/acceptance_app/ime.rs`. **Остаётся.** (1)
+  `deny.toml` игнорирует RUSTSEC-2026-0192 (`ttf-parser` через `sctk-adwaita ← winit`), а
+  `ttf-parser` в `Cargo.lock` больше нет. (2) Тест строки, пустой `rg winit` вне архивных корней
+  и ADR, не выполняется. Часть находок законна: запрет в `deny.toml`, списки `forbid` у `reach`
+  в корневом `Cargo.toml`, фикстуры и тесты xtask, prior art в комментариях и документах (ADR,
+  `ARCHITECTURE.md`, `crates/flui-platform/src/ime.rs`). О winit как об источнике событий всё ещё
+  говорят комментарии `crates/flui-widgets/src/text/editable_text.rs` (контракт подавления
+  `Key::Character`, два места) и `crates/flui-widgets/ARCHITECTURE.md` («Winit's `LineDelta`»).
+  Строке нужно либо их исправить, либо сузить тест до упоминаний winit как зависимости.
 - [ ] **LY89** (не закрыта: уведомления вместо опроса на `main`; счётчика пробуждений в
   виртуальном времени и прогона на Mac нет) — macOS #1843 (`7211538ea`), Android #1847
   (`9f03db7da`), переезд в `preferences/` #1863, региональные форматы #2129. macOS слушает
@@ -5341,6 +5358,10 @@ graph LR
   headless-тест «N секунд простоя — ноль пробуждений, смена — ровно одно», который падает при
   возврате таймера; прогон на Mac (vanyastaff/flui#1840); измерение пробуждений за минуту на
   Android.
+- [ ] **LY93** (не начата) — на `main` только место под неё: `flui_system::PickedFile`
+  (`crates/flui-system/src/dialog/request.rs`) сделан своим типом, а не путём, чтобы позже нести
+  доступ песочницы, и держит один `PathBuf`. Закладок, URI SAF, портала документов, путей
+  AppContainer и таблицы на симулируемой песочнице нет.
 - [ ] **LY94** (не закрыта: флаги ОС и скрытые записи clipboard на `main`; скрытое поле ими не
   пользуется, прогонов нет) — clipboard #2149 (`c7784191e`), macOS #2159, iOS #2162, TSF #1805.
   Защищённое поле: macOS держит `EnableSecureEventInput`, пока поле в фокусе в ключевом окне
@@ -5355,33 +5376,28 @@ graph LR
   что у `concealed()` production-вызова нет. Остаётся: решение, пишет ли скрытое поле скрытую
   запись или строка меняется под выключенное копирование; проверка флага Android; общая таблица
   «назначение поля → флаги ОС»; прогоны на macOS, iOS, Android и Windows.
-- [x] **LY113** — ветки `docs/platform-remediation-rows` (#2639, строки LY104–LY113, граф и счёт
-  в шапке) и `docs/platform-record`; только документы и комментарии, `cargo heli xtask checks`
-  зелёный. Сверка шла по `git log origin/main`, `gh pr view`, `rg` и дереву; ни один тест не
-  запускался. **Записи.** Написаны недостающие LY50 и LY51 и семнадцать записей выше (LY53,
-  LY57, LY59, LY61, LY65, LY66, LY69, LY71, LY72, LY74, LY75, LY76, LY85, LY86, LY87, LY89,
-  LY94); дополнены слитыми PR и остатком LY55, LY62, LY63, LY70, LY80, LY84, LY91, LY97, LY98;
-  LY68 получила абзац о #2167. Отмечена одна строка, LY86. У строк LY54, LY58, LY60, LY64, LY67,
-  LY73, LY93, LY96, LY99, LY100 и LY102 на `main` нет ничего своего, записи им не нужны (LY100:
-  `MockWindow` переименован в `HeadlessHostWindow` в #2378, фичи `scripted` нет). **Имена.**
-  Имена тестов из списка находок исправлены в записях LY26, LY38, LY41, LY45, LY68, LY78, LY80,
-  LY83 и LY91; остальные, которых нет в дереве, сведены в таблицу ниже. Находка неверна в одном
-  месте: `native_host_suites_only_build_their_packages` существует
-  (`tools/xtask/src/tasks.rs`). **Документы.** ADR-0254 (подтверждение, хосты в CI,
-  `FrameOutcome::Failed`), ADR-0151 (позиция `PrimarySelection`, `journal/` на уровне крейта, без
-  `HostPlatform<Winit>`), ADR-0256 (тест слота растра), `ARCHITECTURE.md` ядра,
-  `README.md`, `GLOSSARY.md`, `docs/gaps.md`, `crates/flui-native/platform-parity.toml` с
-  пересказом в `docs/platform-parity.md`, `AGENTS.md`; комментарии в `hosts/linux.rs`,
-  `text_store/owner_calls.rs`, `crates/flui-view/Cargo.toml`, `tools/xtask/src/api_closure.rs`.
-  Где код расходится с решением ADR, запись не правится, а расхождение стоит в `docs/gaps.md`
-  («Accepted ADR sections not built yet») до решения владельца: ADR-0254 §2
-  (`reveal_after_first_frame` остался методом) и ADR-0151 §10, §16 (журнал собирается под
-  `native-capture`, а не под `driver`).
-  **Найдено попутно:** граф называет `LY44 & LY50 --> LY100`, а строка LY100 зависит ещё и от
-  LY54 (ребро добавлено); `docs/gaps.md` говорил, что ни один виджет не берёт primary selection,
-  хотя это сделал #2066 (исправлено); job `api-contracts` на `main` красный с `8f58b9d39`
-  (#2629): rustdoc для цели Windows падает на ссылках публичной документации `associations` на
-  закрытые `Claim::New` и `Classes`. Гейт идёт только в lane `full`, поэтому PR его не видел.
+- [ ] **LY102** (не начата) — группировки по областям нет: `crates/flui-platform/src/lib.rs`
+  объявляет плоские модули. Из каталогов, которые называет строка, существуют `capability/`
+  (пришёл с LY50, #2033) и `haptics/` (был до серии, #1733); это не работа LY102. Каталогов
+  `window/`, `input/`, `text/`, `display/`, `transfer/` и `menu/` нет.
+- [ ] **LY113** (не закрыта: пути файлов в записях отмеченных строк не сверены) — #2639 (строки
+  LY104–LY113, граф, счёт в шапке) и #2642. **Что запись говорит.** У каждой строки LY20–LY103,
+  у которой на `main` есть работа, есть запись со слитыми PR, тестами и остатком; у LY58, LY60,
+  LY64, LY67, LY73, LY96, LY99 и LY100 записи нет, потому что на `main` их работы нет. Из строк,
+  получивших запись в LY113, отмечена одна, LY86. ADR-0254, ADR-0151 и ADR-0256 называют тесты и
+  хосты, которые есть; где код расходится с решением ADR, решение не тронуто, а расхождение
+  стоит в `docs/gaps.md` («Accepted ADR sections not built yet»: ADR-0254 §2, ADR-0151 §10 и
+  §16). **Как проверено.** Каждый пункт строки искался в дереве `main` (`rg`); PR — по `git log`
+  и `gh pr view`, по тому, что он трогал, а не по заголовку. Имена тестов из записей сверены со
+  списком функций дерева; идентификаторы новых записей и записей неотмеченных строк — со
+  словарём дерева (проверка по слову: метод, который есть у другого типа, она не ловит); пути
+  `.rs` в записях неотмеченных строк — со списком файлов. Запускались `cargo heli xtask checks`
+  и два теста `flui-native`, `parity_document_matches_its_source` и
+  `absent_positions_claim_no_support`. Тесты, которые записи называют, не запускались; прогонов
+  на устройствах нет. Одна находка проверки не подтвердилась:
+  `native_host_suites_only_build_their_packages` существует (`tools/xtask/src/tasks.rs`).
+  **Остаётся.** Пути файлов в записях отмеченных строк (больше всего в LY27–LY34) остались
+  путями на момент слияния, часть из них переехала.
 
 ## Отступление от порядка, решённое владельцем
 

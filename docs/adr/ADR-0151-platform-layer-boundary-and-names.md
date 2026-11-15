@@ -522,10 +522,9 @@ crates/flui-native/
     host.rs                 trait Host { type Loop; type Window; type Displays; type Input;
                             type Text; type Accessibility; type Clipboard; type PrimarySelection;
                             type Drag; type Haptics; type Preferences; type Lifecycle; type Chrome;
-                            type Storage }: the closed list of section 3 as a type, fourteen
-                            positions (the primary selection, where the platform has one, is a
-                            position beside the clipboard; the menu position joins with the menu
-                            feature);
+                            type Storage }: the closed list of section 3 as a type (the primary
+                            selection, where the platform has one, is a position beside the
+                            clipboard; the menu position joins with the menu feature);
                             Absent<F>, the one type for "not on this platform"
     error.rs                the core host's error types
     platform.rs             Platform (sealed), AppHandler; HostPlatform<H: Host>, the one
@@ -537,9 +536,9 @@ crates/flui-native/
                             PlatformProxy, the signal and slot, the panic boundary, the one
                             call point for user code;
                             windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs headless.rs
-    journal/                the native journal (ADR-0215 §4), a crate-level module: owner/ names no
-                            feature, and the journal names the input model. Built under the
-                            driver feature; its schema is declared in flui-protocol
+    journal/                the native journal, a crate-level module: owner/ names no feature, and
+                            the journal names the input model (ADR-0215 §4, built under the driver
+                            feature; its schema is declared in flui-protocol)
     window/                 mod.rs state.rs visibility.rs installation.rs config.rs (system chrome,
                             the Chrome position, is a facet of the window and lives here);
                             windows/{mod,proc,limits,backdrop}.rs;
