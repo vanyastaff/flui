@@ -131,6 +131,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - **Still missing:** `NSDraggingDestination`, and every other native drag source and target.
 - Planned in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0211; T28–T31, T35, T37 and the per-OS tickets).
 
+### An OS drop on a committed window can land on a receiver the OS did not ask
+
+> **Environments:** all · **Who it hurts:** Apps whose drop targets spring-load or autoscroll under a resting pointer · **Parity:** [Clipboard and drag and drop](platform-parity.md#clipboard-and-drag-and-drop)
+
+- The OS resolves a drop from the answer the window cached for the last move, and a committed window's drop then hovers the drop's position once more before it lands (ADR-0211 §16). When the tree under a resting pointer changes with no hover to see it (a spring-loaded folder opens, an OS drag's autoscroll moves content: only an in-window session hit-tests again after an autoscroll frame), that hover can leave the receiver that answered and enter another. The drop then lands on a receiver whose answer the OS never took, or on none while the source was told it was taken, and `DropTracker::finish` does not check the drop's action against the receiver's answer.
+- **Missing:** an OS drag's hover hit-tests again after a frame that changed the tree under it, and a drop lands on the receiver whose answer the OS took, with the action that receiver answered.
+
 ### Window control has run only on Windows, an X11 test server and the AppKit conformance kit
 
 > **Environments:** desktop · **Who it hurts:** Every desktop app · **Parity:** [Windows](platform-parity.md#windows)

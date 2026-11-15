@@ -141,7 +141,7 @@ pub(crate) struct Incoming {
     /// `Unknown` for another application's.
     pub(crate) pointer: PointerKind,
     /// Where the OS moved the drag while the window did not show the tree a hit test would
-    /// read, waiting for [`DragOwner::release_held`](super::DragOwner::release_held).
+    /// read, waiting for [`DragOwner::release_next_held`](super::DragOwner::release_next_held).
     pub(crate) held_position: Option<flui_foundation::geometry::Offset<f64>>,
 }
 

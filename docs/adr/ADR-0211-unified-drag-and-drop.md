@@ -181,16 +181,20 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
     that reaches it is held as its pointer input is: `DragOwner::hold` admits the offer and keeps
     the actions the source permits, and the hover's last position waits, one per hover, with its
     spring-loading and autoscroll paused. The commit of the frame that shows the tree moves each
-    held hover there (`DragOwner::release_held`), after the held pointer input, and an enter or a
-    move delivered once the window is committed moves the held hovers first, so receivers answer
-    from the tree the user sees; the OS keeps the answer it was last given meanwhile. A drop and a
-    leave are not held, because the OS has acted on them: the backend resolved the drop from the
-    cached answer, so while the window does not show its tree the drop lands at once, with no hit
-    test at its position, on the receiver that accepted the last delivered move, the one whose
-    answer the OS took. That answer stays true: after each frame's build the runtime withdraws
-    the answer of a receiver the build unmounted (`DragOwner::withdraw_unregistered_answers`), so
-    the OS refuses a drop rather than report an action no receiver takes. A committed window's
-    drop first runs its last hover at the drop's position, as delivered drops always have.
+    held hover there (`DragOwner::release_next_held`, one hover at a time so each hover's
+    failures keep their order), after the held pointer input, and an enter or a move delivered
+    once the window is committed moves the held hovers first, so receivers answer from the tree
+    the user sees; the OS keeps the answer it was last given meanwhile. A drop and a leave are
+    not held, because the OS has acted on them: the backend resolved the drop from the cached
+    answer, so while the window does not show its tree the drop lands at once, with no hit test
+    at its position, on the receiver that accepted the last delivered move, the one whose answer
+    the OS took, at the point of that move. After each frame's build, a failed one included, the
+    runtime withdraws the answer of a receiver the build unmounted
+    (`DragOwner::withdraw_unregistered_answers`), so the OS refuses a drop rather than report an
+    action no receiver takes. A committed window's drop first runs its last hover at the drop's
+    position, as delivered drops always have; a receiver change under a resting pointer that no
+    hover saw is an open gap
+    ([gaps](../gaps.md#an-os-drop-on-a-committed-window-can-land-on-a-receiver-the-os-did-not-ask)).
 
 ## Consequences and verification
 
@@ -230,10 +234,12 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   `a_hovered_window_that_closes_is_left_at_once` and
   `drags_from_both_windows_cross_independently` run two placed windows of one runtime. Its
   `a_drag_over_a_window_whose_frame_was_withheld_waits_for_the_frame_that_shows_the_tree`,
-  `a_drop_on_a_window_whose_frame_was_withheld_lands_where_the_os_was_told` and
-  `a_drag_that_leaves_a_window_whose_frame_was_withheld_leaves_its_receivers_at_once` pin item
-  16, and the last case of `a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop` pins its
-  withdrawal of an unmounted receiver's answer.
+  `a_drop_on_a_window_whose_frame_was_withheld_lands_where_the_os_was_told`,
+  `a_drag_that_leaves_a_window_whose_frame_was_withheld_leaves_its_receivers_at_once` and
+  `a_build_that_unmounts_the_accepting_receiver_withdraws_its_answer_from_the_os` pin item 16;
+  in the `drag_sessions` table `a_held_hover_spring_loads_only_once_released` pins the paused
+  hover, and the last case of `a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop` the
+  owner's withdrawal of an unmounted receiver's answer.
   Linux CI runs these headless.
 - The OLE loop's deferred start, reentrancy and second-window repaint rows, and
   `a_window_finds_the_window_of_this_process_under_a_point` (the Win32 `window_at` on two real

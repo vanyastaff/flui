@@ -955,10 +955,17 @@ impl UiRuntime {
             .root_pipeline_owner()
             .with(PipelineOwner::device_pixel_ratio);
         let constraints = BoxConstraints::tight(Size::new(width as f64 / dpr, height as f64 / dpr));
-        let (producer_id, outcome, any_retry_needed) = self.draw_frame_entered(constraints);
+        let mut drawing = FirstPanic::new();
+        let drawn = drawing.contain(|| self.draw_frame_entered(constraints));
         // A receiver this build unmounted no longer answers for the drag it accepted: the OS is
-        // told before it can resolve a drop from that answer (ADR-0211 §16).
+        // told before it can resolve a drop from that answer, after a build that failed as well
+        // (ADR-0211 §16).
         self.drag.withdraw_unregistered_answers();
+        if let Some(payload) = drawing.into_payload() {
+            resume_unwind(payload);
+        }
+        let (producer_id, outcome, any_retry_needed) =
+            drawn.expect("BUG: a frame that did not unwind produced its outcome");
         // The presentation whose segment produced `outcome` above is never
         // inferred as `primary()`: test scaffolding can attach content to a
         // secondary and exercises this attribution. Production secondary

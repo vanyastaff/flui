@@ -658,12 +658,12 @@ impl DragOwner {
     /// test would read: a frame of it was painted and is not on screen yet (ADR-0211 §16).
     ///
     /// An enter or a move is held: the offer is admitted and the actions the source permits are
-    /// kept, while the hover's last position waits for [`release_held`](Self::release_held), so
+    /// kept, while the hover's last position waits for [`release_next_held`](Self::release_next_held), so
     /// receivers answer from the tree the user sees, and the OS keeps the answer it was last given.
     /// A drop and a leave are not held, since the OS has already acted on them: the returned event
     /// is the caller's to [`deliver`](Self::deliver) now. A drop comes back without its position,
     /// so it lands on the receiver that accepted the last delivered move, whose answer the OS
-    /// resolved the drop from, and a held position goes with it.
+    /// resolved the drop from, at that move's point, and a held position goes with it.
     ///
     /// Runs no user code.
     #[must_use = "a drop or a leave comes back to be delivered at once"]
@@ -716,8 +716,9 @@ impl DragOwner {
     /// Withdraw from the OS each answer whose receiver went away: when a build unmounts the
     /// receiver that accepted an OS drag's last move, the OS is told at once that nothing accepts
     /// the drag, before it can resolve a drop from that answer, and the drop gets no recipient
-    /// (ADR-0211 §16). The receivers that went leave at the next [`tick`](Self::tick). The
-    /// runtime calls this after each frame's build. Runs no receiver.
+    /// (ADR-0211 §16). The receivers that went leave at the next [`tick`](Self::tick), or, for a
+    /// hover [`hold`](Self::hold) keeps, when it is released or dropped. The runtime calls this
+    /// after each frame's build, a failed one included. Runs no receiver.
     pub fn withdraw_unregistered_answers(&self) {
         let gone: Vec<(PresentationId, DataTransferId)> = {
             let state = self.shared.borrow();
@@ -736,7 +737,7 @@ impl DragOwner {
     }
 
     /// Whether [`hold`](Self::hold) kept a hover position for `presentation` that
-    /// [`release_held`](Self::release_held) has not delivered yet.
+    /// [`release_next_held`](Self::release_next_held) has not delivered yet.
     #[must_use]
     pub fn has_held(&self, presentation: PresentationId) -> bool {
         self.shared.borrow().incoming.iter().any(|incoming| {
@@ -744,35 +745,30 @@ impl DragOwner {
         })
     }
 
-    /// Deliver what [`hold`](Self::hold) kept for `presentation` now that its window shows the
-    /// tree `hit` reads: each held hover moves to its last position, in the order the hovers
-    /// entered. A receiver that fails keeps the other hovers' deliveries; the first failure
-    /// propagates after them.
-    pub fn release_held(
+    /// Deliver the first hover [`hold`](Self::hold) kept for `presentation`, in the order the
+    /// hovers entered, now that its window shows the tree `hit` reads: the hover moves to its
+    /// last position. Does nothing when none is held. The held position is taken before any
+    /// receiver runs, so a caller that repeats this while [`has_held`](Self::has_held) is true
+    /// ends, and can keep each hover's failures in the order they happened.
+    pub fn release_next_held(
         &self,
         presentation: PresentationId,
         hit: &mut dyn FnMut(Offset<f64>, PointerKind) -> Option<Vec<HitTestEntry>>,
     ) {
-        let held: Vec<(DataTransferId, Offset<f64>)> = {
+        let held = {
             let mut state = self.shared.borrow_mut();
             state
                 .incoming
                 .iter_mut()
                 .filter(|incoming| incoming.presentation == presentation)
-                .filter_map(|incoming| {
+                .find_map(|incoming| {
                     let position = incoming.held_position.take()?;
                     Some((incoming.offer.id(), position))
                 })
-                .collect()
         };
-        if held.is_empty() {
-            return;
+        if let Some((id, position)) = held {
+            self.update_incoming(presentation, id, position, hit);
         }
-        let mut failure = ClosePanic::new();
-        for (id, position) in held {
-            failure.invoke(|| self.update_incoming(presentation, id, position, hit));
-        }
-        failure.finish();
     }
 
     fn admit_offer(

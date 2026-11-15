@@ -709,21 +709,7 @@ impl UiRuntime {
                     // Each step's hit test ran before the receivers it found were told, and an
                     // earlier step's failure comes before a later one's.
                     if release_first {
-                        let mut hit_panic = FirstPanic::new();
-                        let mut released = FirstPanic::new();
-                        released.contain(|| {
-                            self.drag
-                                .release_held(presentation.id(), &mut |position, kind| {
-                                    Self::drag_hit_test(
-                                        presentation,
-                                        position,
-                                        kind,
-                                        &mut hit_panic,
-                                    )
-                                });
-                        });
-                        hit_panic.absorb(released);
-                        delivery.absorb(hit_panic);
+                        self.release_held_drags_contained(presentation, &mut delivery);
                     }
                     let mut hit_panic = FirstPanic::new();
                     let mut delivered = FirstPanic::new();
@@ -791,17 +777,32 @@ impl UiRuntime {
         }
         let clock = presentation.clock();
         clock.stamp_input_epoch(clock.now());
-        let mut hit_panic = FirstPanic::new();
         let mut release = FirstPanic::new();
-        release.contain(|| {
-            self.drag
-                .release_held(presentation.id(), &mut |position, kind| {
-                    Self::drag_hit_test(presentation, position, kind, &mut hit_panic)
-                });
-        });
-        // The hit test ran before the receivers it found were told.
-        hit_panic.absorb(release);
-        self.finish_addressed_input_dispatch(presentation, hit_panic);
+        self.release_held_drags_contained(presentation, &mut release);
+        self.finish_addressed_input_dispatch(presentation, release);
+    }
+
+    /// Move each OS drag hover `presentation` holds, one at a time, into `failures`: a hover's
+    /// hit test ran before the receivers it found were told, and each hover's failures come
+    /// before the next one's.
+    fn release_held_drags_contained(
+        &self,
+        presentation: &PresentationState,
+        failures: &mut FirstPanic,
+    ) {
+        // Each step takes its hover's position before a receiver runs, so this ends.
+        while self.drag.has_held(presentation.id()) {
+            let mut hit_panic = FirstPanic::new();
+            let mut released = FirstPanic::new();
+            released.contain(|| {
+                self.drag
+                    .release_next_held(presentation.id(), &mut |position, kind| {
+                        Self::drag_hit_test(presentation, position, kind, &mut hit_panic)
+                    });
+            });
+            hit_panic.absorb(released);
+            failures.absorb(hit_panic);
+        }
     }
 
     /// The already resolved presentation owns both the measured prefix and the

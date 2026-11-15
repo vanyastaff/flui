@@ -514,6 +514,22 @@ impl Fixture {
         };
         self.owner.deliver(presentation, event, &mut hit);
     }
+
+    /// Release the hovers held for `presentation`, one at a time, hit-testing as
+    /// [`Self::deliver`] does.
+    fn release(&self, presentation: PresentationId) {
+        let probe = Rc::clone(&self.probe);
+        let mut hit = move |position: Offset<f64>, kind: PointerKind| {
+            let mut result = HitTestResult::new();
+            probe
+                .probe(position, kind, &mut result)
+                .ok()
+                .map(|()| result.path().to_vec())
+        };
+        while self.owner.has_held(presentation) {
+            self.owner.release_next_held(presentation, &mut hit);
+        }
+    }
 }
 
 fn in_lane(body: impl FnOnce(&Fixture)) {
@@ -1741,6 +1757,50 @@ fn an_undated_hover_still_comes_due() {
     });
 }
 
+fn a_held_hover_spring_loads_only_once_released() {
+    in_lane(|f| {
+        let _spot = f.spring_spot("W", 0.0, 100.0, Some(COPY), Some(spring(100)));
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.owner.tick(time_at(0));
+        assert_eq!(f.owner.next_deadline(), Some(time_at(100)));
+        let returned = f.owner.hold(
+            f.presentation,
+            DragDropEvent::Moved {
+                id,
+                allowed: COPY,
+                position: Point::new(6.0, 6.0),
+            },
+        );
+        assert!(returned.is_none(), "a move is held");
+        assert_eq!(
+            f.owner.next_deadline(),
+            None,
+            "a held hover asks for no turn"
+        );
+        f.owner.tick(time_at(500));
+        assert_eq!(count(&f.log, "W:spring"), 0, "{:?}", logged(&f.log));
+        f.release(f.presentation);
+        assert!(!f.owner.has_held(f.presentation));
+        f.owner.tick(time_at(600));
+        f.owner.tick(time_at(1000));
+        assert_eq!(
+            count(&f.log, "W:spring"),
+            1,
+            "the released hover comes due again: {:?}",
+            logged(&f.log)
+        );
+    });
+}
+
 fn a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop() {
     in_lane(|f| {
         let gone = f.unregistered("G", Some(COPY), Some(spring(100)));
@@ -2952,6 +3012,10 @@ fn drag_sessions() {
             (
                 "an_undated_hover_still_comes_due",
                 an_undated_hover_still_comes_due,
+            ),
+            (
+                "a_held_hover_spring_loads_only_once_released",
+                a_held_hover_spring_loads_only_once_released,
             ),
             (
                 "a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop",

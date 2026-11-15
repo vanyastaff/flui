@@ -134,10 +134,53 @@ impl RenderView for ReceiverAnchor {
         flui_rendering::RenderUpdateImpact::NONE
     }
 
+    fn did_unmount_render_object(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
+        // As `DropTarget` does: an unmounted receiver no longer resolves. A closing presentation
+        // has withdrawn its targets already, so its error is not this test's concern.
+        if let Some(target) = render_object.metadata_as::<LocalPayloadTarget>().copied() {
+            let _already_withdrawn = ctx.unregister_local_payload(target);
+        }
+        render_object.clear_metadata();
+    }
+
     flui_view::single_child_view_children!();
 }
 
 impl_render_view!(ReceiverAnchor);
+
+/// A root that shows its receiver until `shown` is cleared and the handle it publishes in
+/// `rebuild` is scheduled, so a build unmounts the receiver.
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct Removable {
+    shown: Rc<Cell<bool>>,
+    rebuild: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+    receiver: ReceiverAnchor,
+}
+
+struct RemovableState;
+
+impl flui_view::StatefulView for Removable {
+    type State = RemovableState;
+
+    fn create_state(&self, ctx: &dyn flui_view::LifecycleContext) -> Self::State {
+        *self.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
+        RemovableState
+    }
+}
+
+impl flui_view::ViewState<Removable> for RemovableState {
+    fn build(&self, view: &Removable, _: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        if view.shown.get() {
+            Box::new(view.receiver.clone()) as Box<dyn flui_view::View>
+        } else {
+            Box::new(SizedBox::new(300.0, 200.0))
+        }
+    }
+}
 
 fn receiver(answer: Option<TransferActions>, fetch_text: bool) -> (Rc<Seen>, ReceiverAnchor) {
     let seen = Rc::new(Seen::default());
@@ -358,7 +401,11 @@ fn runtime_over(
 }
 
 /// Mount `root` in `presentation` and lay it out, so hit tests find its receiver.
-fn mount(runtime: &mut UiRuntime, presentation: PresentationId, root: &ReceiverAnchor) {
+fn mount<V: flui_view::View + Clone + 'static>(
+    runtime: &mut UiRuntime,
+    presentation: PresentationId,
+    root: &V,
+) {
     runtime
         .attach_root_widget_with_size_to(presentation, root, 400.0, 300.0)
         .expect("root");
@@ -425,7 +472,11 @@ struct World {
 }
 
 /// One runtime with two presentations over two headless windows, each holding a receiver.
-fn world(first: &ReceiverAnchor, second: &ReceiverAnchor, timing: OsDragStart) -> World {
+fn world<V: flui_view::View + Clone + 'static>(
+    first: &V,
+    second: &ReceiverAnchor,
+    timing: OsDragStart,
+) -> World {
     world_on(HeadlessPlatform::new().with_os_drag(timing), first, second)
 }
 
@@ -450,7 +501,11 @@ fn headless(window: &Rc<dyn HostWindow>) -> &HeadlessHostWindow {
         .expect("a headless window")
 }
 
-fn world_on(platform: HeadlessPlatform, first: &ReceiverAnchor, second: &ReceiverAnchor) -> World {
+fn world_on<V: flui_view::View + Clone + 'static>(
+    platform: HeadlessPlatform,
+    first: &V,
+    second: &ReceiverAnchor,
+) -> World {
     let dnd = platform.drag_and_drop();
     let (window_a, presentation_a) = open(&platform);
     let (window_b, presentation_b) = open(&platform);
@@ -762,6 +817,54 @@ fn a_drag_that_leaves_a_window_whose_frame_was_withheld_leaves_its_receivers_at_
     world.draw_first(SubmitVerdict::NotShown);
     world.dnd.leave();
     assert_eq!(events(&seen), ["enter", "left"]);
+}
+
+fn a_build_that_unmounts_the_accepting_receiver_withdraws_its_answer_from_the_os() {
+    let (seen, anchor) = receiver(Some(COPY), false);
+    let (_unused, second) = receiver(None, false);
+    let shown = Rc::new(Cell::new(true));
+    let rebuild = Rc::new(RefCell::new(None));
+    let first = Removable {
+        shown: Rc::clone(&shown),
+        rebuild: Rc::clone(&rebuild),
+        receiver: anchor,
+    };
+    let world = world(&first, &second, OsDragStart::OnLeavingWindow);
+    world.draw_first(SubmitVerdict::Presented);
+    start_foreign(&world);
+    world
+        .dnd
+        .hover(world.first.id(), Point::new(10.0, 10.0))
+        .expect("a session runs");
+    assert_eq!(events(&seen), ["enter"]);
+    assert_eq!(
+        world.dnd.cached_feedback(),
+        Some(DropFeedback { accept: Some(COPY) })
+    );
+    shown.set(false);
+    rebuild
+        .borrow()
+        .as_ref()
+        .expect("the root is mounted")
+        .schedule(flui_foundation::RebuildReason::StateChange);
+    world.draw_first(SubmitVerdict::Presented);
+    assert_eq!(
+        world.dnd.cached_feedback(),
+        Some(DropFeedback { accept: None }),
+        "the frame whose build unmounted the receiver tells the OS that nothing accepts"
+    );
+    assert_eq!(
+        world.dnd.drop_here().expect("a session runs"),
+        None,
+        "so the OS refuses the drop"
+    );
+    assert!(
+        !events(&seen)
+            .iter()
+            .any(|event| event.starts_with("dropped")),
+        "{:?}",
+        events(&seen)
+    );
 }
 
 fn a_drag_between_presentations_of_one_runtime_redeems_its_value() {
@@ -1272,6 +1375,10 @@ fn drag_and_drop_reaches_the_runtime() {
             (
                 "a_drag_that_leaves_a_window_whose_frame_was_withheld_leaves_its_receivers_at_once",
                 a_drag_that_leaves_a_window_whose_frame_was_withheld_leaves_its_receivers_at_once,
+            ),
+            (
+                "a_build_that_unmounts_the_accepting_receiver_withdraws_its_answer_from_the_os",
+                a_build_that_unmounts_the_accepting_receiver_withdraws_its_answer_from_the_os,
             ),
             (
                 "a_drag_between_presentations_of_one_runtime_redeems_its_value",
