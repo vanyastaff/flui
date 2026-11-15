@@ -1,6 +1,6 @@
 # activation: задачи
 
-- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9. AC10: Linux (D-Bus) и Windows (мьютекс и канал сессии; запуск на Windows — строка parity). AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`, регистрация схем Windows без пакета (запуск на Windows — строка parity), типы файлов в `OpenDeclarations` и `#[flui::main]`. В работе: —; следующие остаток AC11 (регистрация типов файлов Windows, entitlement после подписи iOS) и AC13 (R11, добавлена 2026-11-14 решением координатора); манифест MSIX — строка инвентаря.
+- **Статус:** утверждена 2026-11-13 (решение координатора по поручению владельца); исполнение. Сделано: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9, AC13. AC10: Linux (D-Bus) и Windows (мьютекс и канал сессии; запуск на Windows — строка parity). AC11 частично: ключи schema 3, AndroidManifest, `Info.plist`, `.desktop` Linux, проверки `flui doctor --manifest` и `--domains`, регистрация схем и типов файлов Windows без пакета (запуск на Windows — строка parity), типы файлов в `OpenDeclarations` и `#[flui::main]`. В работе: —; следующая AC12; entitlement доменов iOS ждёт подписи сборки, манифест MSIX — строки инвентаря.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md)
 - **База:** `main` @ `8886a05e3`
 
@@ -189,7 +189,7 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   `the_entry_carries_what_the_manifest_declares_it_opens`); соединение частей в
   `the_entry_functions_manifest_declares_what_a_run_opens`; строка «a declared file type» в
   `one_instance_follows_the_declarations_unless_the_application_says`.
-- **AC11 (регистрация схем Windows).** Модель `flui_native::link_registration` на Linux CI:
+- **AC11 (регистрация схем Windows).** Модель `flui_native::associations` на Linux CI:
   `an_absent_scheme_is_written_once` (ключ со ссылкой, меткой, именем и значком; повтор —
   `current`), `only_this_applications_keys_are_written` (свой ключ другого exe переписан; ключ
   пользователя без метки, ключ машины и ключ другого приложения не трогаются),
@@ -201,6 +201,24 @@ AC1, AC4 и AC11 не зависят друг от друга и идут пар
   другим процессом между чтением и записью, не тронут), `a_key_is_the_schemes_whatever_its_case`,
   `unregistering_deletes_only_this_applications_keys` (чужие ключи остаются; ключ, который реестр
   не удалил, возвращается ошибкой после удаления остальных); `a_release_build_registers_unless_the_application_says_otherwise`,
-  `the_unregister_argument_is_read_whole` (`flui-app`), строка `register_links_sets_the_application_variable`
+  `the_unregister_argument_is_read_whole` (`flui-app`), строка `register_associations_sets_the_application_variable`
   таблицы `run_contract` (`flui-cli`). Код реестра (`registry.rs`) проверен clippy для
   `x86_64-pc-windows-msvc`, на Windows не запускался.
+- **AC11 (регистрация типов файлов Windows).** Та же модель: `a_file_type_is_written_and_offered_once`
+  (ProgID `<id>.<расширение>` с меткой, расширением, именем и командой, значение в
+  `OpenWithProgids`, оповещение оболочки только при изменении, удалённое значение возвращается),
+  `a_file_type_that_cannot_be_registered_does_not_stop_the_next` (не-расширения, чужой ProgID,
+  ProgID, совпавший со схемой, отказ записи значения; следующий запуск делает отказанное),
+  `a_file_type_no_longer_declared_is_withdrawn_and_removed` (значение снимается до ключа; ключ
+  с неснятым значением остаётся до следующего запуска),
+  `unregistering_withdraws_the_file_types_offers` (значение другого приложения остаётся). Имя по
+  спецификации Windows: модуль `associations`, `Application::register_associations`,
+  `flui run --register-associations`, `--flui-unregister-associations`. На Windows не запускался.
+- **AC13.** Значения запуска агента читает только `served::Launch::read` под `cfg(driver_agent)`;
+  хосты отдают их лениво (`launch_value`), и в сборке без агента ни один вызов до них не
+  доходит: `a_build_without_the_agent_reads_no_launch_value` (`flui-app`, только в
+  `cargo test --release`; задание `release-agent` в `weekly.yml`; без исправления падает).
+  Android: `FluiHost.record` отдаёт Rust только действие, данные и `EXTRA_STREAM` отправки,
+  прочие extras не пересекают границу; запуск `MAIN` с данными ничего не открывает (строка в
+  `an_intent_opens_its_link_or_documents`); адрес открывается только через
+  `UiRuntime::open_url` по объявлениям (AC2).

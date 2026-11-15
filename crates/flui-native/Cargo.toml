@@ -115,7 +115,7 @@ windows = { workspace = true, features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     # Whether the process runs packaged (MSIX), whose manifest registers its
-    # URL schemes instead of the registry (`link_registration`).
+    # URL schemes and file types instead of the registry (`associations`).
     "Win32_Storage_Packaging_Appx",
     "Win32_UI_HiDpi",
     "Win32_System_Com",
@@ -962,7 +962,7 @@ crate-level = [
     "journal",
     "process",
     "page_export",
-    "link_registration",
+    "associations",
 ]
 # No platform file names another feature's: a window's text input,
 # accessibility, actuator and chrome come from the host table, a feature keeps

@@ -256,6 +256,11 @@ of its own.
   the baseline, the scenarios, their allocator, the task or the rule
   (`change_scope::perf_scope`). A pull request then runs the comparison; callgrind, a renamed
   counter and a rise from any other source are left to main.
+- **What a build without the agent compiles is read by its path.** The `test-without-agent` job
+  runs flui-app's agent tests with debug assertions off, the one build that leaves the driver
+  agent out. `plan` sets `without_agent_required` when a changed file sits under the agent's
+  module, is flui-app's build script, which names `cfg(driver_agent)`, or is the rule
+  (`change_scope::without_agent_scope`).
 - **The aggregator recomputes the run.** Each such job is a row of `ON_DEMAND`
   (`change_scope/aggregator.rs`), which names the job and the `plan` output that asks for it.
   `ci-verify` reads that output and fails a job that ran without being asked, or skipped when it

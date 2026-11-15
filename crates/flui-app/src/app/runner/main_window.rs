@@ -767,7 +767,7 @@ where
     // before a running instance could be handed the launch.
     #[cfg(windows)]
     if let Some(unregistered) =
-        super::link_registration::unregister_if_requested(&application.config.application_identity)
+        super::associations::unregister_if_requested(&application.config.application_identity)
     {
         return unregistered;
     }
@@ -778,7 +778,7 @@ where
     // takes drops it, so only the instance that runs registers.
     #[cfg(windows)]
     {
-        let pending = super::link_registration::PendingRegistration::of(
+        let pending = super::associations::PendingRegistration::of(
             &application.opening,
             &application.config.application_identity,
         );

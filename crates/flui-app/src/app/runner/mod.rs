@@ -11,6 +11,8 @@ use super::LaunchError;
 
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(any(windows, test))]
+mod associations;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -34,8 +36,6 @@ mod host;
 mod installed_host;
 #[cfg(target_os = "ios")]
 pub(super) mod ios;
-#[cfg(any(windows, test))]
-mod link_registration;
 mod native_bindings;
 #[cfg(native_journal)]
 pub(super) mod native_journal;
@@ -72,6 +72,8 @@ mod web;
 
 #[cfg(target_os = "android")]
 use android::run_android;
+#[cfg(windows)]
+pub(in crate::app) use associations::PendingRegistration;
 pub(in crate::app) use display_host::color_on as display_color_on;
 pub use fonts::{FontRegistrationError, register_font};
 pub(crate) use host::{
@@ -81,8 +83,6 @@ pub(crate) use host::{
 pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
 use ios::run_ios;
-#[cfg(windows)]
-pub(in crate::app) use link_registration::PendingRegistration;
 pub(crate) use opened::OpenSettings;
 #[cfg(all(
     not(target_os = "android"),

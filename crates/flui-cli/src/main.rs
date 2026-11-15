@@ -241,11 +241,12 @@ enum Commands {
         #[arg(long, requires = "agent")]
         headless: bool,
 
-        /// Register the application's URL schemes with Windows from this
-        /// development build, as a release build does by itself; an
-        /// uninstaller removes them with `<app>.exe --flui-unregister-links`
+        /// Register the application's URL schemes and file types with Windows
+        /// from this development build, as a release build does by itself; an
+        /// uninstaller removes them with
+        /// `<app>.exe --flui-unregister-associations`
         #[arg(long)]
-        register_links: bool,
+        register_associations: bool,
     },
 
     /// Serve a running app to an AI agent over MCP (stdio)
@@ -786,7 +787,7 @@ fn main() {
             no_open,
             headless,
             agent,
-            register_links,
+            register_associations,
         } => {
             if scene {
                 // clap enforces both via `requires`; the unwraps document that.
@@ -809,7 +810,7 @@ fn main() {
                             headless,
                         },
                         agent,
-                        register_links,
+                        register_associations,
                     },
                 )
             }

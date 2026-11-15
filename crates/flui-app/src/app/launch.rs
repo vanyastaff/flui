@@ -155,21 +155,23 @@ impl Application {
         self
     }
 
-    /// Whether the application registers the URL schemes it declares with
-    /// Windows as it runs, so a link launches the executable that runs. Each
-    /// scheme becomes a key of the user's classes marked with the
-    /// application id
-    /// ([`AppConfig::application_identity`](crate::AppConfig::application_identity)),
-    /// written after the first frame; a key another application owns is
-    /// never touched. Without this, a release build registers and a
-    /// development build registers only under `flui run --register-links`.
+    /// Whether the application registers the URL schemes and the file types
+    /// it declares with Windows as it runs, so a link or a file launches the
+    /// executable that runs. Each scheme becomes a key of the user's classes
+    /// and each file type a ProgID offered in its extension's "Open with"
+    /// list, marked with the application id
+    /// ([`AppConfig::application_identity`](crate::AppConfig::application_identity))
+    /// and written after the first frame; a key another application owns is
+    /// never touched, and the extension's default stays the user's choice.
+    /// Without this, a release build registers and a development build
+    /// registers only under `flui run --register-associations`.
     ///
     /// An uninstaller removes the keys by running the executable with
-    /// `--flui-unregister-links`. A packaged (MSIX) application registers
-    /// through its package manifest instead, and other systems register
-    /// through what `flui build` writes: there it does nothing.
-    pub fn register_links(mut self, register_links: bool) -> Self {
-        self.opening.register_links = Some(register_links);
+    /// `--flui-unregister-associations`. A packaged (MSIX) application
+    /// registers through its package manifest instead, and other systems
+    /// register through what `flui build` writes: there it does nothing.
+    pub fn register_associations(mut self, register_associations: bool) -> Self {
+        self.opening.register_associations = Some(register_associations);
         self
     }
 

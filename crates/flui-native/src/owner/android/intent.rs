@@ -239,6 +239,9 @@ mod tests {
         );
         for fields in [
             &["cold", "android.intent.action.MAIN"][..],
+            // A launcher's start carrying data, or anything a sender
+            // put beside it, opens nothing: only a `VIEW` or a share does.
+            &["cold", "android.intent.action.MAIN", "notes:///note/3"],
             &["cold", "", "notes:///note/3"],
         ] {
             let nothing = opening(fields);

@@ -26,7 +26,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use super::aggregator::WIDE_CONDITION;
-use super::{diagnostics, miri_scope, perf_scope, thread_positions};
+use super::{diagnostics, miri_scope, perf_scope, thread_positions, without_agent_scope};
 
 /// Documentation: a change made only of these compiles nothing.
 ///
@@ -630,6 +630,10 @@ pub(super) struct Scope {
     /// The changed file that can move a count the `perf-gates` job compares,
     /// if any ([`perf_scope::changed_input`]): a pull request then runs it.
     pub(super) perf_input: Option<String>,
+    /// The changed file the `test-without-agent` job compiles its tests from, if
+    /// any ([`without_agent_scope::changed_input`]): a pull request then runs
+    /// it.
+    pub(super) without_agent_input: Option<String>,
     pub(super) reason: String,
 }
 
@@ -646,6 +650,7 @@ impl Scope {
             send_positions_input: None,
             miri_input: None,
             perf_input: None,
+            without_agent_input: None,
             reason,
         }
     }
@@ -689,6 +694,7 @@ pub(super) fn classify_change(
         thread_positions::changed_position(repo, files, changed_lines)?.map(str::to_owned);
     scope.miri_input = miri_scope::changed_input(files).map(str::to_owned);
     scope.perf_input = perf_scope::changed_input(files).map(str::to_owned);
+    scope.without_agent_input = without_agent_scope::changed_input(files).map(str::to_owned);
     Ok(scope)
 }
 
@@ -808,6 +814,7 @@ fn classify_packages(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         send_positions_input: None,
         miri_input: None,
         perf_input: None,
+        without_agent_input: None,
         reason,
     })
 }

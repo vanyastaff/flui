@@ -1,33 +1,36 @@
-//! Registering the URL schemes an unpackaged Windows application opens
-//! (ADR-0307 §4, the activation spec's AC11): after the main window's first
-//! frame, the run writes each declared scheme's key under the user's classes
-//! on the IO pool (`flui_native::link_registration`), so a link launches the
+//! Registering the URL schemes and the file types an unpackaged Windows
+//! application opens (ADR-0307 §4, the activation spec's AC11): after the
+//! main window's first frame, the run writes each declared scheme's key and
+//! each file type's ProgID under the user's classes on the IO pool
+//! (`flui_native::associations`), so a link or a file launches the
 //! executable that runs, wherever it was installed or unpacked.
 //!
 //! A release build registers by itself; a development build registers when
-//! `flui run --register-links` asked for it, so `cargo run` of a checkout
-//! does not claim a scheme for a build directory. The application's own
-//! [`register_links`](crate::Application::register_links) overrides both. A
-//! packaged (MSIX) application registers through its package manifest and
-//! never here.
+//! `flui run --register-associations` asked for it, so `cargo run` of a
+//! checkout does not claim a scheme or a file type for a build directory.
+//! The application's own
+//! [`register_associations`](crate::Application::register_associations)
+//! overrides both. A packaged (MSIX) application registers through its
+//! package manifest and never here.
 //!
 //! An uninstaller removes what registration wrote by running the executable
-//! with `--flui-unregister-links`: the run deletes the keys marked with the
-//! application's id and returns before anything starts.
+//! with `--flui-unregister-associations`: the run deletes the keys and the
+//! offers marked with the application's id and returns before anything
+//! starts.
 
-/// The variable `flui run --register-links` sets in the application's
-/// environment, to `1`.
+/// The variable `flui run --register-associations` sets in the
+/// application's environment, to `1`.
 #[cfg(windows)]
-pub(in crate::app) const REGISTER_ENV: &str = "FLUI_REGISTER_LINKS";
+pub(in crate::app) const REGISTER_ENV: &str = "FLUI_REGISTER_ASSOCIATIONS";
 
 /// The argument an uninstaller runs the executable with to remove its
 /// registration.
 #[cfg(any(windows, test))]
-pub(in crate::app) const UNREGISTER_ARGUMENT: &str = "--flui-unregister-links";
+pub(in crate::app) const UNREGISTER_ARGUMENT: &str = "--flui-unregister-associations";
 
-/// Whether a run registers its schemes: the application's own choice, else
-/// a request from `flui run --register-links`, else whether the build is a
-/// release one.
+/// Whether a run registers what it opens: the application's own choice,
+/// else a request from `flui run --register-associations`, else whether the
+/// build is a release one.
 #[cfg(any(windows, test))]
 fn registers(chosen: Option<bool>, requested: bool, debug_build: bool) -> bool {
     chosen.unwrap_or(requested || !debug_build)
@@ -48,38 +51,49 @@ pub(in crate::app) struct PendingRegistration {
     app_id: String,
     display_name: String,
     url_schemes: &'static [&'static str],
+    file_types: &'static [flui_view::navigation::FileTypeDeclaration],
 }
 
 #[cfg(windows)]
 impl PendingRegistration {
     /// What a run with `settings` and `identity` registers: `None` when it
-    /// declares no scheme, registers nothing in this build, runs packaged,
-    /// or has no application id to mark its keys with (warned about).
+    /// declares no scheme and no file type, registers nothing in this build,
+    /// runs packaged, or has no application id to mark its keys with (warned
+    /// about).
     pub(in crate::app) fn of(
         settings: &super::opened::OpenSettings,
         identity: &flui_log::AppIdentity,
     ) -> Option<Self> {
-        let url_schemes = settings.declarations?.declared_url_schemes();
-        if url_schemes.is_empty() {
+        let declarations = settings.declarations?;
+        let url_schemes = declarations.declared_url_schemes();
+        let file_types = declarations.declared_file_types();
+        if url_schemes.is_empty() && file_types.is_empty() {
             return None;
         }
         let requested = std::env::var_os(REGISTER_ENV).is_some_and(|value| value == "1");
-        if !registers(settings.register_links, requested, cfg!(debug_assertions)) {
+        if !registers(
+            settings.register_associations,
+            requested,
+            cfg!(debug_assertions),
+        ) {
             tracing::debug!(
-                "a development build registers its URL schemes only for `flui run \
-                 --register-links` or `Application::register_links(true)`"
+                "a development build registers its URL schemes and file types only for \
+                 `flui run --register-associations` or \
+                 `Application::register_associations(true)`"
             );
             return None;
         }
-        if flui_native::link_registration::runs_packaged() {
-            tracing::debug!("the package manifest registers the application's URL schemes");
+        if flui_native::associations::runs_packaged() {
+            tracing::debug!(
+                "the package manifest registers the application's URL schemes and file types"
+            );
             return None;
         }
         let Some(app_id) = identity.app_id() else {
             tracing::warn!(
-                "registering URL schemes needs an application id \
+                "registering URL schemes and file types needs an application id \
                  (`AppConfig::application_identity`), which marks the keys as the \
-                 application's: none is registered"
+                 application's: nothing is registered"
             );
             return None;
         };
@@ -87,6 +101,7 @@ impl PendingRegistration {
             app_id: app_id.as_str().to_owned(),
             display_name: identity.display_name().to_owned(),
             url_schemes,
+            file_types,
         })
     }
 
@@ -94,21 +109,32 @@ impl PendingRegistration {
     /// (the run is ending) registers nothing, which the next run makes up.
     pub(in crate::app) fn start(self, io: &flui_runtime::execution::ExecutionServices) {
         let refused = io.spawn_io(Box::pin(async move {
-            let registered = flui_native::link_registration::register(
+            let file_types: Vec<flui_native::associations::FileType<'_>> = self
+                .file_types
+                .iter()
+                .map(|file_type| {
+                    flui_native::associations::FileType::new(
+                        file_type.extension(),
+                        file_type.name(),
+                    )
+                })
+                .collect();
+            let registered = flui_native::associations::register(
                 &self.app_id,
                 &self.display_name,
                 self.url_schemes,
+                &file_types,
             );
             tracing::info!(
                 written = registered.written,
                 current = registered.current,
                 refused = registered.refused,
                 removed = registered.removed,
-                "registered the application's URL schemes"
+                "registered the application's URL schemes and file types"
             );
         }));
         if let Err(error) = refused {
-            tracing::debug!(%error, "the URL schemes are not registered in this run");
+            tracing::debug!(%error, "the URL schemes and file types are not registered in this run");
         }
     }
 }
@@ -129,9 +155,9 @@ pub(in crate::app) fn start_pending() {
     }
 }
 
-/// When the process was started with `--flui-unregister-links`: delete the
-/// keys registration wrote for the application of `identity`, so the run
-/// ends there. `None` for any other start.
+/// When the process was started with `--flui-unregister-associations`:
+/// delete the keys and offers registration wrote for the application of
+/// `identity`, so the run ends there. `None` for any other start.
 #[cfg(windows)]
 pub(in crate::app) fn unregister_if_requested(
     identity: &flui_log::AppIdentity,
@@ -147,9 +173,12 @@ pub(in crate::app) fn unregister_if_requested(
         return Some(Ok(()));
     };
     Some(
-        match flui_native::link_registration::unregister(app_id.as_str()) {
+        match flui_native::associations::unregister(app_id.as_str()) {
             Ok(removed) => {
-                tracing::info!(removed, "removed the application's URL scheme registration");
+                tracing::info!(
+                    removed,
+                    "removed the application's URL scheme and file type registration"
+                );
                 Ok(())
             }
             Err(error) => Err(crate::app::LaunchError::Platform {
@@ -166,7 +195,7 @@ mod tests {
     use super::{UNREGISTER_ARGUMENT, registers, unregister_requested};
 
     /// The application's choice decides; without one, `flui run
-    /// --register-links` or a release build registers and a development
+    /// --register-associations` or a release build registers and a development
     /// build does not.
     #[test]
     fn a_release_build_registers_unless_the_application_says_otherwise() {
@@ -196,7 +225,7 @@ mod tests {
             UNREGISTER_ARGUMENT
         ])));
         assert!(!unregister_requested(arguments(&[
-            "--flui-unregister-links=1"
+            "--flui-unregister-associations=1"
         ])));
         assert!(!unregister_requested(arguments(&["notes://3"])));
     }

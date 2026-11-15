@@ -119,6 +119,9 @@ pub(super) struct LaneArgs {
     /// A changed file can move a count the `perf-gates` job compares: a pull
     /// request runs its baseline comparison.
     pub(super) perf_required: bool,
+    /// A changed file is one the `test-without-agent` job compiles its tests from:
+    /// a pull request runs it.
+    pub(super) without_agent_required: bool,
     pub(super) reason: String,
     pub(super) packages: String,
     pub(super) pkg_args: String,
@@ -144,7 +147,7 @@ impl LaneArgs {
     }
 
     /// `(key, value)` in output order; booleans as `true`/`false`.
-    pub(super) fn fields(&self) -> [(&'static str, String); 25] {
+    pub(super) fn fields(&self) -> [(&'static str, String); 26] {
         let b = |v: bool| if v { "true" } else { "false" }.to_owned();
         [
             ("lane", self.lane.as_str().to_owned()),
@@ -155,6 +158,7 @@ impl LaneArgs {
             ("send_positions_required", b(self.send_positions_required)),
             ("miri_required", b(self.miri_required)),
             ("perf_required", b(self.perf_required)),
+            ("without_agent_required", b(self.without_agent_required)),
             ("reason", self.reason.clone()),
             ("packages", self.packages.clone()),
             ("pkg_args", self.pkg_args.clone()),
@@ -337,6 +341,7 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
         send_positions_required: scope.send_positions_input.is_some(),
         miri_required: scope.miri_input.is_some(),
         perf_required: scope.perf_input.is_some(),
+        without_agent_required: scope.without_agent_input.is_some(),
         reason: scope.reason.clone(),
         packages: scope.packages.join(" "),
         pkg_args: if full {
@@ -472,6 +477,7 @@ mod tests {
             send_positions_input: None,
             miri_input: None,
             perf_input: None,
+            without_agent_input: None,
             reason: String::new(),
         };
         let a = lane_args(repo(), &only_platform, Event::PullRequest).expect("lane args");

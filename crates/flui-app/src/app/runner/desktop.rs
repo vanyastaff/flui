@@ -545,7 +545,7 @@ impl DesktopFrameDriver {
             // What the run registers with Windows waits for its first frame
             // shown, so it never competes with the start.
             #[cfg(windows)]
-            super::link_registration::start_pending();
+            super::associations::start_pending();
         }
         if presented {
             fallback.record_present(pace_now);
