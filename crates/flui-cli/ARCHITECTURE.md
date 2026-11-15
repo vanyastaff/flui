@@ -88,8 +88,8 @@ that crate depends on two packages of one name and version, by the source the pa
 (a git reference encoded as cargo prints it, a sparse index with its `sparse+`). The depth cargo
 prints ends at a `|` the format starts with, since a package name may start with a digit. A
 registry cargo lists by its configured name is read back to its index as cargo reads it
-(`CARGO_REGISTRIES_<NAME>_INDEX`, then the nearest `.cargo/config` or `.cargo/config.toml` up to
-`$CARGO_HOME`'s); a name none of those configures stands for any registry's crate there
+(`CARGO_REGISTRIES_<NAME>_INDEX`, then the nearest `.cargo/config.toml`, or its twin without the
+extension, up to `$CARGO_HOME`'s); a name none of those configures stands for any registry's crate there
 (`registries_are_read_from_the_nearest_configuration`). A line that names no package, or a listing that leaves out the compiled package, fails the
 build instead of producing a smaller manifest (`a_listing_reads_back_as_each_crates_features`,
 `a_fork_on_an_encoded_branch_keeps_its_features`).
@@ -98,8 +98,10 @@ build instead of producing a smaller manifest (`a_listing_reads_back_as_each_cra
 writes, from that platform's build on any host: the Android permissions of the Android build (a
 feature only it turns on included) and the Apple accessed APIs of the iOS build, never what a
 feature only another platform's build or the application's tests turn on. It finds the crate by
-the application's dependency edge, or the facade's, not by its name
-(`add_links_a_capability_and_shows_its_registration`).
+the application's dependency edge, or the facade's, under the key the application names it by,
+in each target's own graph, so a crate linked at one version for Android and another for iOS is
+read at each (`add_links_a_capability_and_shows_its_registration`,
+`add_reads_each_platforms_version_of_the_crate`).
 
 The table is strict: an unknown key, a schema newer than the CLI reads, a feature the crate lacks
 or a malformed value fails the build naming the crate

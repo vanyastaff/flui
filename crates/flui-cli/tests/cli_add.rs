@@ -252,3 +252,92 @@ fn add_links_a_capability_and_shows_its_registration() {
     );
     assert_eq!(read("renamed/Cargo.toml"), before);
 }
+
+/// An application that links one version of a capability crate for Android
+/// and another for iOS, under one key, from one registry (a directory that
+/// replaces crates.io, so the fixture stays offline): `flui add` reports it
+/// linked and prints each platform's declarations from the version that
+/// platform links.
+#[test]
+fn add_reads_each_platforms_version_of_the_crate() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let write = |path: &str, contents: &str| {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().expect("a parent directory"))
+            .expect("the directories");
+        std::fs::write(path, contents).expect("a fixture file");
+    };
+    for (version, declares) in [
+        (
+            "0.2.0",
+            "[package.metadata.flui.declares.android]\n\
+             permissions = [\"android.permission.VIBRATE\"]\n",
+        ),
+        (
+            "0.3.0",
+            "[package.metadata.flui.declares.android]\n\
+             permissions = [\"android.permission.CAMERA\"]\n\
+             [[package.metadata.flui.declares.apple.privacy.accessed-apis]]\n\
+             category = \"NSPrivacyAccessedAPICategoryFileTimestamp\"\n\
+             reasons = [\"C617.1\"]\n",
+        ),
+    ] {
+        let crate_dir = format!("vendor/flui-direct-{version}");
+        write(
+            &format!("{crate_dir}/Cargo.toml"),
+            &format!(
+                "[package]\nname = \"flui-direct\"\nversion = \"{version}\"\nedition = \"2024\"\n\
+                 [package.metadata.flui.capability]\nplugin = \"DirectPlugin\"\n\
+                 [package.metadata.flui.declares]\nschema = 1\n{declares}"
+            ),
+        );
+        write(&format!("{crate_dir}/src/lib.rs"), "");
+        write(
+            &format!("{crate_dir}/.cargo-checksum.json"),
+            "{\"files\":{},\"package\":null}",
+        );
+    }
+    write(
+        "app/.cargo/config.toml",
+        "[source.crates-io]\nreplace-with = \"vendored\"\n\
+         [source.vendored]\ndirectory = \"../vendor\"\n",
+    );
+    write("app/src/lib.rs", "");
+    write(
+        "app/Cargo.toml",
+        &manifest(
+            "app",
+            "[workspace]\n\
+             [target.'cfg(target_os = \"android\")'.dependencies]\n\
+             flui-direct = \"=0.2.0\"\n\
+             [target.'cfg(target_os = \"ios\")'.dependencies]\n\
+             flui-direct = \"=0.3.0\"\n",
+        ),
+    );
+
+    let output = flui()
+        .current_dir(dir.path().join("app"))
+        .args(["--json", "add", "flui-direct"])
+        .output()
+        .expect("flui add");
+    assert!(output.status.success(), "{output:?}");
+    let event = added(&output.stdout);
+    assert_eq!(event["changed"], false);
+    assert_eq!(
+        event["snippet"],
+        ".plugin(flui_direct::DirectPlugin::default())"
+    );
+    assert_eq!(
+        event["android_permissions"],
+        serde_json::json!(["android.permission.VIBRATE"]),
+        "the Android build's version"
+    );
+    assert_eq!(
+        event["apple_accessed_apis"],
+        serde_json::json!([{
+            "category": "NSPrivacyAccessedAPICategoryFileTimestamp",
+            "reason": "C617.1",
+        }]),
+        "the iOS build's version"
+    );
+}

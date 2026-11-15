@@ -866,7 +866,7 @@ impl Declarations {
         Ok(())
     }
 
-    fn join(&mut self, other: Self) {
+    pub(crate) fn join(&mut self, other: Self) {
         for (permission, crates) in other.android_permissions {
             self.android_permissions
                 .entry(permission)

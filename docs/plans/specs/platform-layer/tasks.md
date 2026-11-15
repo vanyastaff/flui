@@ -5477,7 +5477,10 @@ graph LR
   пакета); `an_ios_bundle_reads_the_declarations_of_the_built_member` (отказ по таблице соседнего
   пакета); `add_links_a_capability_and_shows_its_registration` (`FOREGROUND_SERVICE` от фичи
   тестов; без `READ_PHONE_STATE` от фичи Android-сборки; `CAMERA` от фичи iOS-сборки в
-  Android; старый `flui-sys` того же имени вместо крейта фасада).
+  Android; старый `flui-sys` того же имени вместо крейта фасада; переименованная зависимость не
+  найдена); `add_reads_each_platforms_version_of_the_crate` (две версии под одним ключом в
+  таблицах Android и iOS — «several packages»); `registries_are_read_from_the_nearest_configuration`
+  (имя реестра читается обратно в индекс; без этого близнецы двух реестров — «several»).
   Проверки на Windows: clippy `-p flui-cli --all-targets -D warnings`, `xtask checks`, nextest
   `-p flui-cli` — все, кроме трёх `agent::browser`, которые падают и на `main` («named pipes do not
   support I/O timeouts»).
