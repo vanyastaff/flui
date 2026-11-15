@@ -168,33 +168,61 @@ struct Taken {
 }
 
 impl<'a> Drain<'a> {
-    fn begin(state: &'a Mutex<DispatchState>, delivery: Delivery) -> Option<Self> {
-        let mut guard = state.lock();
-        let ahead = guard.pending.len();
-        guard.pending.push_back(delivery);
-        if guard.dispatching {
+    /// Take the FIFO for a drain, unless one runs: every drain starts here.
+    /// `ahead_of_own` is how many deliveries precede the drain's own, `None`
+    /// for a drain that has none.
+    fn claim(
+        state: &'a Mutex<DispatchState>,
+        queue: &mut DispatchState,
+        ahead_of_own: Option<usize>,
+    ) -> Option<Self> {
+        if queue.dispatching {
             return None;
         }
-        guard.dispatching = true;
+        queue.dispatching = true;
         Some(Self {
             state,
             active: true,
-            ahead_of_own: Some(ahead),
+            ahead_of_own,
         })
+    }
+
+    /// Queue `delivery` and begin its drain, unless one runs: that one
+    /// reaches it in order.
+    fn begin(state: &'a Mutex<DispatchState>, delivery: Delivery) -> Option<Self> {
+        let mut queue = state.lock();
+        let ahead = queue.pending.len();
+        queue.pending.push_back(delivery);
+        Self::claim(state, &mut queue, Some(ahead))
+    }
+
+    /// Queue `idle` and begin its drain when none runs, else queue `behind`
+    /// for the one that does. The delivery left unqueued is handed back, for
+    /// the caller to drop once the queue's lock is released.
+    fn begin_or_queue(
+        state: &'a Mutex<DispatchState>,
+        idle: Delivery,
+        behind: Delivery,
+    ) -> (Option<Self>, Delivery) {
+        let mut queue = state.lock();
+        let ahead = queue.pending.len();
+        let drain = Self::claim(state, &mut queue, Some(ahead));
+        let (queued, unqueued) = if drain.is_some() {
+            (idle, behind)
+        } else {
+            (behind, idle)
+        };
+        queue.pending.push_back(queued);
+        (drain, unqueued)
     }
 
     /// A drain of what is already queued, unless one runs or nothing is.
     fn resume(state: &'a Mutex<DispatchState>) -> Option<Self> {
-        let mut guard = state.lock();
-        if guard.dispatching || guard.pending.is_empty() {
+        let mut queue = state.lock();
+        if queue.pending.is_empty() {
             return None;
         }
-        guard.dispatching = true;
-        Some(Self {
-            state,
-            active: true,
-            ahead_of_own: None,
-        })
+        Self::claim(state, &mut queue, None)
     }
 
     fn next(&mut self) -> Option<Taken> {
@@ -837,23 +865,17 @@ impl WindowDelivery {
             self.queue_for_owner(Delivery::CloseRequest(Some(Box::new(close_later))));
             return CloseDecision::KeepOpen;
         }
-        let drain = {
-            let mut state = self.dispatch.lock();
-            if state.dispatching {
-                state
-                    .pending
-                    .push_back(Delivery::CloseRequest(Some(Box::new(close_later))));
-                return CloseDecision::KeepOpen;
-            }
-            state.dispatching = true;
-            state.pending.push_back(Delivery::CloseRequest(None));
-            Drain {
-                state: &self.dispatch,
-                active: true,
-                // The request's answer is left in `close_answer`.
-                ahead_of_own: None,
-            }
+        // With the FIFO idle the deferred close is not needed: it is dropped
+        // when this call returns, outside the queue's lock.
+        let (drain, _unqueued) = Drain::begin_or_queue(
+            &self.dispatch,
+            Delivery::CloseRequest(None),
+            Delivery::CloseRequest(Some(Box::new(close_later))),
+        );
+        let Some(drain) = drain else {
+            return CloseDecision::KeepOpen;
         };
+        // The request's answer is left in `close_answer`.
         let _ = self.run(drain);
         self.close_answer
             .lock()
