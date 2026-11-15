@@ -882,6 +882,11 @@ impl host::Loop for IOSLoop {
 }
 
 impl host::Services for IOSLoop {
+    /// Only a page has an origin.
+    fn page_origin(&self) -> Option<String> {
+        None
+    }
+
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
     }

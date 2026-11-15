@@ -994,6 +994,10 @@ fn image_decode_contract() {
                 image_decode::a_header_at_the_limit_asks_for_one_block_of_the_limit,
             ),
             (
+                "a_sixteen_bit_header_is_measured_at_its_own_depth",
+                image_decode::a_sixteen_bit_header_is_measured_at_its_own_depth,
+            ),
+            (
                 "arbitrary_bytes_decode_or_fail_typed",
                 image_decode::arbitrary_bytes_decode_or_fail_typed,
             ),

@@ -378,9 +378,14 @@ impl host::Loop for MacOSLoop {
         // The sources start listening once the application has bootstrapped;
         // a notice that arrived earlier waited for it.
         let notice_watch = self.notice_sources.listen();
-        ownership.run();
+        // AppKit returns through Rust cleanup: the exit policy's parked panic,
+        // the run's first failure, comes out of `run` ahead of any later one
+        // (`AppDelivery::resume_after_run`).
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        failure.contain(|| ownership.run());
         drop(notice_watch);
         drop(ownership);
+        self.app_delivery.resume_after_run(failure);
 
         Ok(())
     }
@@ -398,6 +403,11 @@ impl host::Loop for MacOSLoop {
 }
 
 impl host::Services for MacOSLoop {
+    /// Only a page has an origin.
+    fn page_origin(&self) -> Option<String> {
+        None
+    }
+
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
     }

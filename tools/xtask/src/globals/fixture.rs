@@ -171,8 +171,8 @@ pub(super) fn crates() -> (Memory, Vec<Krate>) {
         ("crates/flui-app/src/runner.rs", HOST_RUNNER),
         ("crates/flui-app/src/t.rs", HOST_TEST_MODULE),
         ("crates/flui-native/src/lib.rs", PLATFORM_LIB),
-        ("crates/flui-native/src/owner/mod.rs", "mod winit;"),
-        ("crates/flui-native/src/owner/winit.rs", PLATFORM_LOOP),
+        ("crates/flui-native/src/owner/mod.rs", "mod headless;"),
+        ("crates/flui-native/src/owner/headless.rs", PLATFORM_LOOP),
         ("crates/flui-native/src/display/mod.rs", PLATFORM_FEATURE),
         ("crates/flui-widgets/src/lib.rs", THIRD_LIB),
         ("packages/flui-package/src/lib.rs", PACKAGE_LIB),
@@ -216,10 +216,10 @@ pub(super) fn crates() -> (Memory, Vec<Krate>) {
             PLATFORM,
             json!({
                 "globals": [
-                    trampoline("owner::winit::ACTIVE"),
+                    trampoline("owner::headless::ACTIVE"),
                     trampoline("display::FEATURE_CELL"),
                 ],
-                "modules": { "features": ["display"], "platforms": ["winit"], "hosts": "hosts" },
+                "modules": { "features": ["display"], "platforms": ["headless"], "hosts": "hosts" },
             }),
         ),
         krate("flui-widgets", json!([trampoline("CLAIMED")])),

@@ -28,7 +28,7 @@ use flui_platform::{
 };
 
 use super::call_point::{Called, Failure, HandlerSlot, call, retire};
-use super::handlers::{PresentationReports, frame_request_now};
+use super::frame_timing::{PresentationReports, frame_request_now};
 use super::panic_boundary::contain_owner_callback;
 use super::signal::WindowWake;
 use super::slot::OwnerSlot;
@@ -65,7 +65,7 @@ impl Retirement {
 /// and runs no user code, so it happens here, whether the method returned or
 /// panicked. Only a clone that is the last one, because the window let go of
 /// its handler meanwhile, goes back to the call point, which drops it outside
-/// every lock, or retains it when the method failed.
+/// every lock under containment, after a failed method too (ADR-0281).
 struct ResidentHandler<'a>(&'a OwnerSlot<Rc<dyn WindowHandler>>);
 
 impl HandlerSlot for ResidentHandler<'_> {

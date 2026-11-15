@@ -88,16 +88,14 @@ use windows::{
 };
 
 use crate::owner::app_delivery::AppDelivery;
-use crate::owner::call_point::{Field, install};
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::{self, AfterPanic};
 pub(crate) use crate::owner::wake_deadline::FrameCount;
-use crate::owner::wake_deadline::ModalDelivery;
 use crate::owner::wake_deadline::WakeDeadline;
 use crate::{
-    error::PlatformError, host, owner::OwnerHooks, owner::OwnerPlatform,
-    owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
-    owner::window_delivery::WindowDelivery, platform::AppHandler, platform::Platform,
+    error::PlatformError, host, owner::OpenWindows, owner::OwnerHooks, owner::OwnerPlatform,
+    owner::hwnd_affinity::UserDataRefusal, owner::window_delivery::WindowDelivery,
+    platform::AppHandler, platform::Platform,
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
@@ -515,7 +513,7 @@ pub(crate) struct AppHooks {
     /// The loop's delivery to the application's handler.
     pub(crate) app: Arc<AppDelivery>,
     /// Called when the keyboard layout changes.
-    pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut()>>,
+    pub(crate) keyboard_layout_changed: Rc<crate::owner::layout_callback::LayoutCallback>,
 }
 
 impl AppHooks {
@@ -523,7 +521,7 @@ impl AppHooks {
     pub(crate) fn new(app: Arc<AppDelivery>) -> Self {
         Self {
             app,
-            keyboard_layout_changed: None,
+            keyboard_layout_changed: Rc::default(),
         }
     }
 }
@@ -1281,22 +1279,20 @@ impl WindowsLoop {
         app.wake_deadline().or_resume(None)
     }
 
-    /// Installs a platform-level callback into the owner-thread hooks.
+    /// Registers the keyboard layout callback in the owner-thread hooks.
     ///
     /// Off the owner thread, or once the platform has shut down, the
     /// registration is refused and `callback` is dropped here, on the
-    /// calling thread. A replaced callback is retired through the call point
+    /// calling thread. A replaced callback is dropped through the call point
     /// after the `RefCell` borrow ends, since its destructor may re-enter the
     /// platform, in a boundary of its own: a capture that panics in `Drop`
     /// must not unwind into the host.
-    pub(crate) fn register_handler<H>(
-        &self,
-        op: &'static str,
-        callback: H,
-        project: fn(&mut AppHooks) -> &mut Option<H>,
-    ) {
+    pub(crate) fn register_layout_callback(&self, op: &'static str, callback: Box<dyn FnMut()>) {
         match self.owner_control.shares(op) {
-            Ok(shares) => install(&Field::new(&*shares.app_hooks, project), callback),
+            Ok(shares) => {
+                let slot = Rc::clone(&shares.app_hooks.borrow().keyboard_layout_changed);
+                slot.register(callback);
+            }
             Err(UserDataRefusal::ForeignThread) => {
                 tracing::error!(
                     op,
@@ -1354,7 +1350,7 @@ impl host::Loop for WindowsLoop {
             Rc::clone(&platform),
             &self.owner_control,
         ));
-        let _guard = RunGuard(Rc::clone(&self));
+        let guard = RunGuard(Rc::clone(&self));
         self.app.bind(handler, &platform, &hooks);
         self.app.resume_through_signal(&self.owner_control.signal);
         self.app
@@ -1366,7 +1362,15 @@ impl host::Loop for WindowsLoop {
             .map_err(|error| PlatformError::EventLoop {
                 message: error.to_string(),
             })?;
-        self.run_message_loop()
+        // A panic of the loop (a wake deadline's) leaves it here, and the
+        // teardown runs; then the exit policy's parked panic, asked inside the
+        // window procedure where no unwind may go, comes out of `run` ahead of
+        // it as the run's first failure (`AppDelivery::resume_after_run`).
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        let ran = failure.contain(|| self.run_message_loop());
+        drop(guard);
+        self.app.resume_after_run(failure);
+        ran.expect("BUG: a loop that raised no panic returned its result")
     }
 
     fn quit(&self) {
@@ -1391,6 +1395,11 @@ impl host::Loop for WindowsLoop {
 }
 
 impl host::Services for WindowsLoop {
+    /// Only a page has an origin.
+    fn page_origin(&self) -> Option<String> {
+        None
+    }
+
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
     }

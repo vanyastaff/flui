@@ -99,6 +99,96 @@ fn the_exit_policy_is_asked_when_the_last_window_closes() {
     );
 }
 
+/// An exit policy that panics is terminal (ADR-0258 §2): the host's own
+/// default is carried out first (the headless platform keeps running), then
+/// the panic resumes into the caller, and the policy is not asked again.
+fn a_panicking_exit_policy_is_terminal_after_the_hosts_answer() {
+    let log = AppLog::new();
+    log.answer_exit_with(|| panic!("the exit policy"));
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &log);
+    let close = || {
+        owner
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+            .expect("a window")
+            .try_ready()
+            .expect("at once")
+            .close_now();
+    };
+    let closed = catch_unwind(AssertUnwindSafe(close)).expect_err("the panic was lost");
+    assert_eq!(closed.downcast_ref::<&str>(), Some(&"the exit policy"));
+    assert_eq!(log.calls(), [AppCall::Ready, AppCall::ExitPolicy]);
+    close();
+    assert_eq!(
+        log.calls(),
+        [AppCall::Ready, AppCall::ExitPolicy],
+        "a failed policy is not asked again, and the platform keeps running"
+    );
+}
+
+/// A report raised while the session end answers whose handler panics is no
+/// terminal failure: its panic reaches the caller, the headless platform's
+/// Rust frame, as the same report's does delivered alone, and the run goes
+/// on (its quit raises nothing).
+fn a_panicking_report_after_a_session_end_answer_is_no_terminal_failure() {
+    let platform = HeadlessPlatform::new();
+    let events = platform.host_events();
+    let log = AppLog::new();
+    log.answer_session_end(SessionEndAnswer::Block);
+    let inside = events.clone();
+    log.react(move |call, _| match call {
+        AppCall::SessionEnd(_) => inside.notice(SystemNotice::Sleep),
+        AppCall::Notice(SystemNotice::Sleep) => panic!("the report after the answer"),
+        _ => {}
+    });
+    let owner = run_keeping_owner(Box::new(platform), &log);
+    let asked = catch_unwind(AssertUnwindSafe(|| {
+        events.session_end(SessionEndPhase::Query)
+    }))
+    .expect_err("the report's panic was lost");
+    assert_eq!(
+        asked.downcast_ref::<&str>(),
+        Some(&"the report after the answer")
+    );
+    let alone = catch_unwind(AssertUnwindSafe(|| events.notice(SystemNotice::Sleep)))
+        .expect_err("delivered alone, the report's panic reaches the caller too");
+    assert_eq!(
+        alone.downcast_ref::<&str>(),
+        Some(&"the report after the answer")
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| owner.quit())).is_ok(),
+        "the report's panic was parked for the run's end"
+    );
+    assert_eq!(log.count(AppCall::Quit), 1);
+}
+
+/// An exit policy that panics, then a handler's panic in the same call: the
+/// exit policy's panic is the first failure and the one that comes out.
+fn a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one() {
+    let platform = HeadlessPlatform::new();
+    let inside = platform.host_events();
+    let log = AppLog::new();
+    log.react(move |call, _| match call {
+        AppCall::ExitPolicy => {
+            inside.notice(SystemNotice::Wake);
+            panic!("the exit policy");
+        }
+        AppCall::Notice(SystemNotice::Wake) => panic!("a later handler"),
+        _ => {}
+    });
+    let owner = run_keeping_owner(Box::new(platform), &log);
+    let closed = catch_unwind(AssertUnwindSafe(|| {
+        owner
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+            .expect("a window")
+            .try_ready()
+            .expect("at once")
+            .close_now();
+    }))
+    .expect_err("the panic was lost");
+    assert_eq!(closed.downcast_ref::<&str>(), Some(&"the exit policy"));
+}
+
 /// What the platform reports before `run` binds the handler, and while its
 /// bootstrap runs, waits and is heard after `ready`, once, in order.
 fn a_report_before_the_handler_is_heard_after_ready() {
@@ -213,6 +303,18 @@ fn app_handler_obligation_table() {
             (
                 "the exit policy is asked when the last window closes",
                 the_exit_policy_is_asked_when_the_last_window_closes,
+            ),
+            (
+                "a panicking exit policy is terminal after the host's answer",
+                a_panicking_exit_policy_is_terminal_after_the_hosts_answer,
+            ),
+            (
+                "a panicking report after a session end answer is no terminal failure",
+                a_panicking_report_after_a_session_end_answer_is_no_terminal_failure,
+            ),
+            (
+                "a parked exit policy panic comes out ahead of a later one",
+                a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one,
             ),
             (
                 "a report before the handler is heard after ready",

@@ -11,8 +11,8 @@ use std::sync::Arc;
 use flui_foundation::geometry::Size;
 use flui_native::storage::DataStore;
 use flui_native::{
-    AppHandler, HostWindow, NativeClipboard, OpenWindowError, PathPromptOptions, Platform,
-    PlatformError, Task,
+    AppHandler, HostWindow, NativeClipboard, NativePrimarySelection, OpenWindowError,
+    PathPromptOptions, Platform, PlatformError, Task,
 };
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
@@ -56,6 +56,10 @@ impl Platform for OutsidePlatform {
 
     fn clipboard(&self) -> Rc<dyn NativeClipboard> {
         unreachable!("the impl never compiles")
+    }
+
+    fn primary_selection(&self) -> Option<Rc<dyn NativePrimarySelection>> {
+        None
     }
 
     fn data_transfer(&self) -> Arc<dyn DragTransport> {
@@ -118,6 +122,10 @@ impl Platform for OutsidePlatform {
     }
 
     fn launch_value(&self, _: LaunchKey) -> Option<String> {
+        None
+    }
+
+    fn page_origin(&self) -> Option<String> {
         None
     }
 

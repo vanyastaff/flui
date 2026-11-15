@@ -514,3 +514,23 @@ fn a_window_takes_no_dpi_of_zero() {
     assert_eq!(scale.rescale(96), Some(1.5), "and takes the next real one");
     assert_eq!(scale.scale(), 1.0);
 }
+
+/// An exhausted identity mint refuses every retry and acquires nothing: a
+/// window's admission never creates its native window, and the platform's
+/// leaves the thread's COM apartment and message-only windows as they were.
+#[test]
+fn identity_exhaustion_acquires_nothing() {
+    crate::table_test::run_table(
+        "identity exhaustion",
+        &[
+            (
+                "window identity exhaustion",
+                WindowsLoop::window_identity_exhaustion_permanently_refuses_retries,
+            ),
+            (
+                "platform identity exhaustion",
+                WindowsLoop::platform_identity_exhaustion_acquires_nothing,
+            ),
+        ],
+    );
+}

@@ -35,6 +35,7 @@ use std::collections::VecDeque;
 use std::rc::{Rc, Weak as RcWeak};
 use std::sync::Arc;
 
+use flui_foundation::panic::FirstPanic;
 use flui_platform::{Launch, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
 use parking_lot::Mutex;
 
@@ -50,6 +51,59 @@ use crate::platform::{AppHandler, ExitAnswer, Platform};
 /// (a second instance forwarding in a loop, a flood of links before `ready`)
 /// can hold in the queue, and a later one is dropped with a warning.
 const MAX_PENDING_OPENED: usize = 16;
+
+/// How a question ended: the handler's answer, and the panic of a report
+/// delivered right after the answer.
+///
+/// The answer is kept; the report's panic is not the question's and takes
+/// the path a report's panic takes when it is delivered alone: resumed where
+/// a Rust frame waits ([`Self::or_resume`]), contained and logged where the
+/// operating system called (`or_contain`).
+#[must_use = "a report's panic after the answer is a failure: resume or contain it"]
+pub(crate) struct Asked<R> {
+    answer: Called<R>,
+    after: Option<Failure>,
+}
+
+impl<R> Asked<R> {
+    /// An answer no handler gave and no report followed.
+    fn answered(answer: R) -> Self {
+        Self {
+            answer: Called::Returned(answer),
+            after: None,
+        }
+    }
+
+    /// What the handler answered, or `vacant` when none ran. A panic, the
+    /// question's own or else a report's after it, resumes here, as a
+    /// report's does for a caller with a Rust frame to unwind into.
+    pub(crate) fn or_resume(self, vacant: R) -> R {
+        let Self { answer, after } = self;
+        if let Some(after) = after {
+            after.resume();
+        }
+        answer.or_resume(vacant)
+    }
+
+    /// What the handler answered, or `fallback` when none ran or it
+    /// panicked, for a caller with no frame to unwind into (an OS callback):
+    /// the question's panic and a report's after the answer are logged under
+    /// `handler` and their payloads discarded, and the answer stands.
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32",
+        test
+    ))]
+    pub(crate) fn or_contain(self, fallback: R, handler: &'static str) -> R {
+        let Self { answer, after } = self;
+        if let Some(after) = after {
+            after.contain(handler);
+        }
+        answer.or_contain(fallback, handler)
+    }
+}
 
 /// What follows an accepted report.
 enum Next {
@@ -122,8 +176,15 @@ struct State {
     /// Accepted, in order, and not yet heard.
     pending: VecDeque<Report>,
     /// A method runs on the owner thread (`ready`, or a report being
-    /// delivered): a report accepted now waits behind it.
+    /// delivered), or the run bound its handler and has yet to call `ready`:
+    /// a report accepted now waits behind it.
     delivering: bool,
+    /// The run bound its handler and has yet to call `ready`: `delivering`
+    /// holds the reports for it, and a release does not wait for it.
+    awaiting_ready: bool,
+    /// The exit policy panicked: the run's end is decided, and the policy is
+    /// not asked again.
+    policy_failed: bool,
     /// The quit was accepted: a later one is the same quit.
     quit_accepted: bool,
     /// The loop ended while a delivery ran: the handler is released once the
@@ -148,15 +209,31 @@ impl State {
 }
 
 /// What a loop delivers to the application's handler. See the module docs.
-#[derive(Default)]
 pub(crate) struct AppDelivery {
     state: Mutex<State>,
     /// Asks the owner for a turn that delivers what another thread reported
     /// ([`Self::resume_through`]).
     owner_turn: Mutex<Option<WindowWake>>,
+    /// The run's terminal failure (ADR-0258 §2): the exit policy's panic,
+    /// parked so the host can carry out its default answer first. The loop
+    /// resumes it once its run ended ([`Self::resume_after_run`]); a later
+    /// one is contained.
+    terminal: Mutex<Option<Failure>>,
     /// The native capture this delivery reports to, in builds that have one.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     journal: crate::journal::capture::Journal,
+}
+
+/// Only the hosts whose run returns to a Rust frame ask the exit policy, so
+/// only they park: UIKit, the web page and the Android Activity never ask it,
+/// and a question's panic there takes its own path at once (`Asked`).
+/// A run abandoned before its end (a bootstrap that failed) logs it here.
+impl Drop for AppDelivery {
+    fn drop(&mut self) {
+        if let Some(failure) = self.terminal.get_mut().take() {
+            failure.contain("the application handler, at the run's end");
+        }
+    }
 }
 
 /// The bound handler as a call-point slot: a call takes a clone, so the
@@ -220,14 +297,16 @@ impl AppDelivery {
             journal: crate::journal::capture::Journal::open_stream(
                 flui_protocol::native_recording::Stream::App,
             ),
-            ..Self::default()
+            state: Mutex::default(),
+            owner_turn: Mutex::default(),
+            terminal: Mutex::default(),
         }
     }
 
     /// Bind the run's `handler` on the calling thread, which becomes the one
     /// it is called on, over the run's `platform` and owner `hooks`. Reports
-    /// accepted before stay queued for it; they are delivered once
-    /// [`Self::ready`] returns.
+    /// accepted before, and from here until [`Self::ready`] is called, stay
+    /// queued for it; they are delivered once `ready` returns.
     pub(crate) fn bind(
         &self,
         handler: Rc<dyn AppHandler>,
@@ -245,9 +324,15 @@ impl AppDelivery {
         if refused.is_some() {
             tracing::error!("the application handler could not be kept: owner slots are exhausted");
         }
-        let previous = self.state.lock().binding.replace(Binding {
-            owned: Arc::new(slot),
-        });
+        let previous = {
+            let mut state = self.state.lock();
+            state.delivering = true;
+            state.awaiting_ready = true;
+            state.policy_failed = false;
+            state.binding.replace(Binding {
+                owned: Arc::new(slot),
+            })
+        };
         retire(previous);
         retire(refused);
     }
@@ -262,9 +347,13 @@ impl AppDelivery {
     pub(crate) fn release(&self) {
         let (binding, unheard) = {
             let mut state = self.state.lock();
-            if state.delivering && state.on_owner() {
+            if state.delivering && !state.awaiting_ready && state.on_owner() {
                 state.release_after_delivery = true;
                 return;
+            }
+            // A run that ends before it calls `ready` holds no delivery.
+            if std::mem::take(&mut state.awaiting_ready) {
+                state.delivering = false;
             }
             (state.binding.take(), std::mem::take(&mut state.pending))
         };
@@ -275,10 +364,9 @@ impl AppDelivery {
             );
         }
         if let Some(binding) = binding {
-            // The handler leaves its slot here: while an unwind is under way
-            // `retire` keeps it for good rather than leave it in the owner
-            // thread's table, which would drop it, and its captures, when the
-            // thread exits.
+            // The handler leaves its slot here and is dropped contained, never
+            // left in the owner thread's table, which would drop it, and its
+            // captures, when the thread exits.
             retire(binding.owned.take());
             drop(binding);
         }
@@ -295,6 +383,7 @@ impl AppDelivery {
         let launch = {
             let mut state = self.state.lock();
             state.delivering = true;
+            state.awaiting_ready = false;
             take_launch(&mut state.pending)
         };
         // `ready` may take what launched the application
@@ -354,22 +443,78 @@ impl AppDelivery {
 
     /// Ask the handler about a phase of the session ending
     /// ([`AppHandler::session_end`]); vacant with no handler to ask.
-    pub(crate) fn session_end(&self, phase: SessionEndPhase) -> Called<SessionEndAnswer> {
+    pub(crate) fn session_end(&self, phase: SessionEndPhase) -> Asked<SessionEndAnswer> {
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         self.journal
             .record(crate::journal::capture::Captured::SessionEnd(phase));
         self.question(|handler, owner| handler.session_end(owner, phase))
     }
 
-    /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]);
-    /// vacant with no handler to ask, and when the handler leaves the decision
-    /// to the host.
-    pub(crate) fn exit_policy(&self) -> Called<bool> {
-        match self.question(<dyn AppHandler>::exit_policy) {
-            Called::Returned(ExitAnswer::End) => Called::Returned(true),
-            Called::Returned(ExitAnswer::KeepRunning) => Called::Returned(false),
-            Called::Returned(ExitAnswer::HostDecides) | Called::Vacant => Called::Vacant,
-            Called::Panicked(failure) => Called::Panicked(failure),
+    /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]).
+    ///
+    /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]).
+    ///
+    /// [`ExitAnswer::HostDecides`] with no handler to ask, and when the
+    /// handler panics. The question is asked as the loop may be ending, so
+    /// the policy's own panic is the one terminal failure a question has
+    /// (ADR-0258 §2), decided here for every host: the host's default answer
+    /// ([`ExitAnswer::ends_loop`]) lets the teardown proceed, the panic is
+    /// parked as the run's first failure, which the loop resumes once its run
+    /// ended ([`Self::resume_after_run`]), and the policy is not asked again,
+    /// so one that panics on every call neither spins nor floods. Only the
+    /// hosts whose run returns to a Rust frame ask it (Win32, AppKit, X11,
+    /// Wayland, headless). A report delivered after the answer that panics
+    /// takes a report's own path ([`Asked`]).
+    pub(crate) fn exit_policy(&self) -> Asked<ExitAnswer> {
+        if self.state.lock().policy_failed {
+            return Asked::answered(ExitAnswer::HostDecides);
+        }
+        let Asked { answer, after } = self.question(<dyn AppHandler>::exit_policy);
+        let answer = match answer {
+            Called::Panicked(failure) => {
+                self.state.lock().policy_failed = true;
+                self.park(failure);
+                Called::Returned(ExitAnswer::HostDecides)
+            }
+            answer => answer,
+        };
+        Asked { answer, after }
+    }
+
+    /// End a run whose loop ran under `failure`: the exit policy's parked
+    /// panic is the run's first failure and comes out ahead of any panic the
+    /// loop or its teardown raised later (ADR-0258 §2: the first payload is
+    /// kept); with neither, nothing happens.
+    pub(crate) fn resume_after_run(&self, failure: FirstPanic) {
+        let mut ordered = FirstPanic::new();
+        let parked = self.terminal.lock().take();
+        if let Some(first) = parked {
+            ordered.record(first.into_payload());
+        }
+        ordered.absorb(failure);
+        ordered.resume();
+    }
+
+    /// Resume the exit policy's parked panic, if there is one: for the
+    /// headless platform, whose caller is the run's Rust frame.
+    pub(crate) fn resume_terminal(&self) {
+        self.resume_after_run(FirstPanic::new());
+    }
+
+    /// Park `failure` as the run's terminal failure; a later one is
+    /// contained and logged, the first kept.
+    fn park(&self, failure: Failure) {
+        let refused = {
+            let mut terminal = self.terminal.lock();
+            if terminal.is_some() {
+                Some(failure)
+            } else {
+                *terminal = Some(failure);
+                None
+            }
+        };
+        if let Some(later) = refused {
+            later.contain("the application handler");
         }
     }
 
@@ -386,7 +531,7 @@ impl AppDelivery {
         )),
         expect(dead_code, reason = "the web and headless hosts have no idle wait")
     )]
-    pub(crate) fn wake_deadline(&self) -> Called<Option<web_time::Instant>> {
+    pub(crate) fn wake_deadline(&self) -> Asked<Option<web_time::Instant>> {
         self.question(<dyn AppHandler>::wake_deadline)
     }
 
@@ -590,10 +735,12 @@ impl AppDelivery {
 
     /// Ask the handler with `body` at once. A report raised while it answers
     /// waits for the answer, as one raised inside any method does, and is
-    /// delivered right after it. When the answer came but a report delivered
-    /// after it panicked, that panic is the question's failure: the host
-    /// falls back as it does for a handler that panicked.
-    fn question<R>(&self, body: impl FnOnce(&dyn AppHandler, &OwnerPlatform) -> R) -> Called<R> {
+    /// delivered right after it. The answer is kept beside the panic of a
+    /// report delivered after it, which takes the path that report's panic
+    /// takes when it is delivered alone ([`Asked`]): the same whether or not
+    /// the question had an answer. When the question itself panicked, that
+    /// panic is the outcome and the report's is contained, the first kept.
+    fn question<R>(&self, body: impl FnOnce(&dyn AppHandler, &OwnerPlatform) -> R) -> Asked<R> {
         let begun = {
             let mut state = self.state.lock();
             let begun = state.on_owner() && !state.delivering;
@@ -605,18 +752,30 @@ impl AppDelivery {
         if !begun {
             // Off the owner, or nested in a method that delivers what this
             // one raises after it.
-            return self.ask(body);
+            return Asked {
+                answer: self.ask(body),
+                after: None,
+            };
         }
         let walk = Walk(self);
         let answer = self.ask(body);
         walk.disarm();
         match (answer, self.drain()) {
-            (Called::Panicked(first), Called::Panicked(later)) => {
+            (answer @ Called::Panicked(_), Called::Panicked(later)) => {
                 later.contain("the application handler");
-                Called::Panicked(first)
+                Asked {
+                    answer,
+                    after: None,
+                }
             }
-            (_, Called::Panicked(failure)) => Called::Panicked(failure),
-            (answer, _) => answer,
+            (answer, Called::Panicked(later)) => Asked {
+                answer,
+                after: Some(later),
+            },
+            (answer, _) => Asked {
+                answer,
+                after: None,
+            },
         }
     }
 

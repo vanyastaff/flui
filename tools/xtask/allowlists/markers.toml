@@ -45,11 +45,6 @@ class = "pr-label"
 count = 1
 
 [[allow]]
-path = "crates/flui-native/src/platform.rs"
-class = "spec-task"
-count = 3
-
-[[allow]]
 path = "crates/flui-rendering/src/protocol/sliver_protocol.rs"
 class = "tracker-h"
 count = 1

@@ -1842,7 +1842,7 @@ pub(crate) struct Win32Surface {
     retirement: crate::owner::window_delivery::Retirement,
     /// Where the presentations the renderer's swap chain reports go, for the
     /// window's next frame request.
-    presented: crate::owner::handlers::PresentationReports,
+    presented: crate::owner::frame_timing::PresentationReports,
     /// What the statistics last reported, so each read reports only a new
     /// present.
     tracker: Mutex<super::frame_timing::PresentTracker>,
@@ -1956,10 +1956,9 @@ impl flui_platform::SurfaceTarget for Win32Surface {
         let Some(shown) = shown else {
             return;
         };
-        let mut presented = flui_platform::FramePresented::new(crate::owner::handlers::rebased(
-            shown.read_at,
-            shown.shown_at,
-        ));
+        let mut presented = flui_platform::FramePresented::new(
+            crate::owner::frame_timing::rebased(shown.read_at, shown.shown_at),
+        );
         if let Some(refresh) = shown.refresh {
             presented = presented.with_refresh(refresh);
         }

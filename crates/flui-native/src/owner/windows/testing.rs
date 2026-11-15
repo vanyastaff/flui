@@ -28,8 +28,8 @@ use super::{
     WindowRef, WindowTexts, WindowsHost,
 };
 use crate::error::PlatformError;
+use crate::owner::OpenWindows;
 use crate::owner::app_delivery::AppDelivery;
-use crate::owner::handlers::OpenWindows;
 use crate::owner::notices::testing::NoNotices;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::sources::SystemPreferenceSource;

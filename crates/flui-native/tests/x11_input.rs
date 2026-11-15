@@ -67,7 +67,121 @@ pub(crate) const CASES: &[(&str, fn())] = &[
         "a_master_pointer_comes_and_goes_with_the_hierarchy",
         a_master_pointer_comes_and_goes_with_the_hierarchy,
     ),
+    (
+        "a_panicking_layout_callback_costs_no_key_of_its_turn",
+        a_panicking_layout_callback_costs_no_key_of_its_turn,
+    ),
+    (
+        "a_second_layout_callback_replaces_the_first",
+        a_second_layout_callback_replaces_the_first,
+    ),
 ];
+
+/// A key the server sends in the turn that also carries a keyboard layout
+/// change reaches the window even when the layout callback panics: the
+/// callback hears the change once the turn's events are delivered, and its
+/// panic leaves the loop after them.
+fn a_panicking_layout_callback_costs_no_key_of_its_turn() {
+    /// Puts the server's keymap back for the tests after this one.
+    struct RestoreLayout;
+    impl Drop for RestoreLayout {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("setxkbmap")
+                .args(["-layout", "us"])
+                .status();
+        }
+    }
+    let handler = RecordingWindowHandler::new();
+    let mut fixture = X11Fixture::open_with("layout panic", Rc::clone(&handler));
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::Activate)
+        .expect("the window activates");
+    fixture.settle();
+    assert!(fixture.window.state().focused, "the window has the focus");
+    fixture
+        .platform
+        .on_keyboard_layout_change(Box::new(|| panic!("the layout callback")));
+    handler.take_calls();
+    let _restore = RestoreLayout;
+    // The server switches the keymap; the loop does not turn before the key.
+    let switched = std::process::Command::new("setxkbmap")
+        .args(["-layout", "de"])
+        .status()
+        .expect("setxkbmap, which the X server's own xkbcomp comes with, runs");
+    assert!(switched.success(), "the keymap switches");
+    for kind in [KEY_PRESS_EVENT, KEY_RELEASE_EVENT] {
+        fixture
+            .server
+            .xtest_fake_input(kind, keycode::A, 0, fixture.root(), 0, 0, 0)
+            .expect("request");
+    }
+    // A round trip: once the server answered it, it has sent the keymap's
+    // notices and both keys to the platform's connection, so one turn reads
+    // them all.
+    fixture
+        .server
+        .get_input_focus()
+        .expect("request")
+        .reply()
+        .expect("the server answers");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut raised = 0;
+    let keys = || {
+        handler
+            .inputs()
+            .into_iter()
+            .filter_map(|input| match input {
+                PlatformInput::Keyboard(key) => Some(key.state()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    while keys().len() < 2 {
+        let turned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_for(&fixture.platform, Duration::from_millis(40))
+        }));
+        if turned.is_err() {
+            raised += 1;
+        }
+        assert!(std::time::Instant::now() < deadline, "no key came");
+    }
+    assert_eq!(fixture.platform.keyboard_layout(), "German");
+    assert_eq!(
+        keys(),
+        [KeyState::Down, KeyState::Up],
+        "a key of the layout change's turn was lost to the callback's panic"
+    );
+    assert_eq!(raised, 1, "the callback's panic left the loop once");
+    // The keymap goes back as the test ends: no callback panics at it.
+    fixture.platform.on_keyboard_layout_change(Box::new(|| {}));
+}
+
+/// A second keyboard layout callback replaces the first, as on every host:
+/// the first is dropped at the registration, so it never hears a change
+/// again.
+fn a_second_layout_callback_replaces_the_first() {
+    struct OnDrop(Rc<std::cell::Cell<bool>>);
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+    let fixture = X11Fixture::open_with("layout callbacks", RecordingWindowHandler::new());
+    let dropped = Rc::new(std::cell::Cell::new(false));
+    let guard = OnDrop(Rc::clone(&dropped));
+    fixture
+        .platform
+        .on_keyboard_layout_change(Box::new(move || {
+            let _ = &guard;
+        }));
+    assert!(!dropped.get(), "the first callback is kept until replaced");
+    fixture.platform.on_keyboard_layout_change(Box::new(|| {}));
+    assert!(
+        dropped.get(),
+        "the first callback was kept beside the second"
+    );
+}
 
 /// The motions the server sent before the loop turned reach the window as
 /// one move at the last position, which carries the earlier ones: a burst

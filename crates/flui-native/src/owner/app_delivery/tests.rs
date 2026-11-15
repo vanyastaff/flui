@@ -81,10 +81,12 @@ fn a_report_raised_inside_a_question_is_heard_after_the_answer() {
             seen.borrow_mut().push(("end", call));
         }
     });
-    assert!(matches!(
-        run.delivery.exit_policy(),
-        Called::Returned(false)
-    ));
+    assert_eq!(
+        run.delivery
+            .exit_policy()
+            .or_resume(ExitAnswer::HostDecides),
+        ExitAnswer::KeepRunning
+    );
     assert_eq!(
         *log.borrow(),
         [
@@ -122,6 +124,144 @@ fn a_report_before_ready_waits_for_it() {
     run.delivery.ready(run.owner()).expect("bootstrap");
     assert_eq!(app.calls(), [AppCall::Ready, COLD_LINK, SLEEP, WAKE]);
     assert_eq!(app.opens(), [cold], "the link arrives whole");
+}
+
+/// A report on the owner thread after the run binds its handler and before
+/// it calls `ready` waits for `ready`, as one before the bind does: the
+/// handler hears nothing before its bootstrap.
+fn a_report_between_bind_and_ready_waits_for_ready() {
+    let app = AppLog::new();
+    let run = bind(Arc::new(AppDelivery::new()), app.clone());
+    assert!(matches!(
+        run.delivery.host_notice(SystemNotice::Sleep),
+        Called::Vacant
+    ));
+    assert!(matches!(run.delivery.deliver_queued(), Called::Vacant));
+    assert_eq!(app.calls(), [], "heard before its bootstrap");
+    run.delivery.ready(run.owner()).expect("bootstrap");
+    assert_eq!(app.calls(), [AppCall::Ready, SLEEP]);
+
+    // A run that ends before it calls `ready` lets its handler go at once.
+    let run = bind(Arc::new(AppDelivery::new()), AppLog::new());
+    run.delivery.release();
+    assert!(matches!(
+        run.delivery.wake_deadline().answer,
+        Called::Vacant
+    ));
+}
+
+/// The text of the panic `run` raises.
+fn panic_text(run: impl FnOnce()) -> Option<&'static str> {
+    let payload = catch_unwind(AssertUnwindSafe(run)).err()?;
+    payload.downcast_ref::<&str>().copied()
+}
+
+/// A question's answer stands beside the panic of a report raised while it
+/// answered: a caller with no frame to unwind into keeps the answer and logs
+/// the report's panic, one with a frame gets the report's panic, as for the
+/// report delivered alone; nothing is parked.
+fn a_question_keeps_its_answer_when_a_report_after_it_panics() {
+    let app = AppLog::new();
+    let run = bound(app.clone());
+    app.answer_session_end(SessionEndAnswer::Block);
+    let delivery = Arc::clone(&run.delivery);
+    app.react(move |call, _| match call {
+        AppCall::SessionEnd(_) => {
+            let _ = delivery.host_notice(SystemNotice::Sleep);
+        }
+        SLEEP => std::panic::panic_any("the report"),
+        _ => {}
+    });
+    let asked = run.delivery.session_end(SessionEndPhase::Query);
+    assert!(matches!(
+        asked.answer,
+        Called::Returned(SessionEndAnswer::Block)
+    ));
+    assert!(asked.after.is_some(), "the report's panic was dropped");
+    assert_eq!(
+        asked.or_contain(SessionEndAnswer::Proceed, "test"),
+        SessionEndAnswer::Block,
+        "an OS caller keeps the answer"
+    );
+    let resumed = panic_text(|| {
+        let _ = run
+            .delivery
+            .session_end(SessionEndPhase::Query)
+            .or_resume(SessionEndAnswer::Proceed);
+    });
+    assert_eq!(
+        resumed,
+        Some("the report"),
+        "a Rust caller gets the report's panic"
+    );
+    assert_eq!(
+        panic_text(|| run.delivery.resume_terminal()),
+        None,
+        "nothing parked"
+    );
+}
+
+/// A report queued while the wake deadline answers whose handler panics takes
+/// the path it takes delivered alone: the loop's caller gets it, the answer
+/// is not lost to an OS caller, and nothing is parked for the run's end.
+fn a_report_after_the_wake_deadline_is_no_terminal_failure() {
+    let app = AppLog::new();
+    let run = bound(app.clone());
+    let deadline = web_time::Instant::now();
+    app.answer_deadline(Some(deadline));
+    let delivery = Arc::clone(&run.delivery);
+    app.react(move |call, _| match call {
+        AppCall::WakeDeadline => {
+            let _ = delivery.reopen();
+        }
+        AppCall::Reopen => std::panic::panic_any("the reopen"),
+        _ => {}
+    });
+    let resumed = panic_text(|| {
+        let _ = run.delivery.wake_deadline().or_resume(None);
+    });
+    assert_eq!(resumed, Some("the reopen"));
+    assert_eq!(
+        run.delivery.wake_deadline().or_contain(None, "test"),
+        Some(deadline)
+    );
+    assert_eq!(
+        panic_text(|| run.delivery.resume_terminal()),
+        None,
+        "nothing parked"
+    );
+    // Delivered alone, the same report's panic comes back to the caller too.
+    assert!(matches!(run.delivery.reopen(), Called::Panicked(_)));
+}
+
+/// An exit policy that panics is terminal: the host's default answers, the
+/// panic is parked as the run's first failure ahead of a later one, and the
+/// policy is not asked again, so one that panics on every call does not
+/// flood.
+fn a_panicking_exit_policy_is_terminal() {
+    let app = AppLog::new();
+    let run = bound(app.clone());
+    app.react(|call, _| {
+        if call == AppCall::ExitPolicy {
+            std::panic::panic_any("the policy");
+        }
+    });
+    let decide = || {
+        run.delivery
+            .exit_policy()
+            .or_resume(ExitAnswer::KeepRunning)
+    };
+    assert_eq!(decide(), ExitAnswer::HostDecides);
+    assert_eq!(decide(), ExitAnswer::HostDecides);
+    assert_eq!(app.count(AppCall::ExitPolicy), 1, "not asked again");
+    let mut later = flui_foundation::panic::FirstPanic::new();
+    later.contain(|| std::panic::panic_any("a later handler"));
+    assert_eq!(
+        panic_text(|| run.delivery.resume_after_run(later)),
+        Some("the policy"),
+        "the first failure comes out"
+    );
+    assert!(matches!(run.delivery.reopen(), Called::Returned(())));
 }
 
 /// Opened URLs that wait for the handler are bounded: past
@@ -331,7 +471,10 @@ fn a_report_from_another_thread_waits_for_an_owner_turn() {
             delivery.opened(link("myapp:///a", Launch::Running)),
             Called::Vacant
         ));
-        assert!(matches!(delivery.exit_policy(), Called::Vacant));
+        assert_eq!(
+            delivery.exit_policy().or_resume(ExitAnswer::HostDecides),
+            ExitAnswer::HostDecides
+        );
     })
     .join()
     .expect("the other thread reports");
@@ -373,7 +516,7 @@ fn a_question_is_asked_at_once_even_from_inside_a_method() {
         if call == SLEEP {
             seen.replace(Some((
                 delivery.wake_deadline().or_resume(None),
-                delivery.exit_policy().or_resume(true),
+                delivery.exit_policy().or_resume(ExitAnswer::HostDecides) == ExitAnswer::End,
                 delivery
                     .session_end(SessionEndPhase::Query)
                     .or_resume(SessionEndAnswer::Proceed),
@@ -401,12 +544,18 @@ fn a_question_is_asked_at_once_even_from_inside_a_method() {
 /// a question is the host's to answer.
 fn a_question_with_no_handler_is_vacant() {
     let delivery = Arc::new(AppDelivery::new());
-    assert!(matches!(delivery.exit_policy(), Called::Vacant));
+    assert_eq!(
+        delivery.exit_policy().or_resume(ExitAnswer::HostDecides),
+        ExitAnswer::HostDecides
+    );
 
     let app = AppLog::new();
     let run = bound(app);
     run.delivery.release();
-    assert!(matches!(run.delivery.wake_deadline(), Called::Vacant));
+    assert!(matches!(
+        run.delivery.wake_deadline().answer,
+        Called::Vacant
+    ));
 
     let gone = bound(AppLog::new());
     let Bound {
@@ -416,7 +565,7 @@ fn a_question_with_no_handler_is_vacant() {
     } = gone;
     drop((platform, hooks));
     assert!(matches!(
-        delivery.session_end(SessionEndPhase::Query),
+        delivery.session_end(SessionEndPhase::Query).answer,
         Called::Vacant
     ));
 }
@@ -480,7 +629,7 @@ fn a_quit_raised_as_the_loop_ends_inside_a_method_is_heard_once() {
     end_loop(&run.delivery);
     assert_eq!(app.count(AppCall::Quit), 1);
     assert!(
-        matches!(run.delivery.wake_deadline(), Called::Vacant),
+        matches!(run.delivery.wake_deadline().answer, Called::Vacant),
         "the handler was released once the delivery ended"
     );
 
@@ -495,7 +644,12 @@ fn a_quit_raised_as_the_loop_ends_inside_a_method_is_heard_once() {
     let run = bind(delivery, app.clone());
     run.delivery.ready(run.owner()).expect("bootstrap");
     assert_eq!(app.calls(), [AppCall::Ready, AppCall::Quit]);
-    assert!(matches!(run.delivery.exit_policy(), Called::Vacant));
+    assert_eq!(
+        run.delivery
+            .exit_policy()
+            .or_resume(ExitAnswer::HostDecides),
+        ExitAnswer::HostDecides
+    );
 }
 
 /// A handler that leaves the exit to the host is answered for as if no
@@ -504,14 +658,26 @@ fn an_exit_policy_left_to_the_host_is_the_hosts() {
     let app = AppLog::new();
     let run = bound(app.clone());
     app.answer_exit_policy(ExitAnswer::HostDecides);
-    assert!(matches!(run.delivery.exit_policy(), Called::Vacant));
+    assert_eq!(
+        run.delivery
+            .exit_policy()
+            .or_resume(ExitAnswer::HostDecides),
+        ExitAnswer::HostDecides
+    );
     app.answer_exit_policy(ExitAnswer::End);
-    assert!(matches!(run.delivery.exit_policy(), Called::Returned(true)));
+    assert_eq!(
+        run.delivery
+            .exit_policy()
+            .or_resume(ExitAnswer::HostDecides),
+        ExitAnswer::End
+    );
     app.answer_exit_policy(ExitAnswer::KeepRunning);
-    assert!(matches!(
-        run.delivery.exit_policy(),
-        Called::Returned(false)
-    ));
+    assert_eq!(
+        run.delivery
+            .exit_policy()
+            .or_resume(ExitAnswer::HostDecides),
+        ExitAnswer::KeepRunning
+    );
 }
 
 /// The delivery's contracts: order, waiting, containment, threads, the one
@@ -532,6 +698,22 @@ fn app_delivery_contracts() {
             (
                 "a report before ready waits for it",
                 a_report_before_ready_waits_for_it,
+            ),
+            (
+                "a report between bind and ready waits for ready",
+                a_report_between_bind_and_ready_waits_for_ready,
+            ),
+            (
+                "a question keeps its answer when a report after it panics",
+                a_question_keeps_its_answer_when_a_report_after_it_panics,
+            ),
+            (
+                "a report after the wake deadline is no terminal failure",
+                a_report_after_the_wake_deadline_is_no_terminal_failure,
+            ),
+            (
+                "a panicking exit policy is terminal",
+                a_panicking_exit_policy_is_terminal,
             ),
             (
                 "opened reports waiting for ready are bounded",

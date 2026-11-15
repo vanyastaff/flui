@@ -233,7 +233,7 @@ owner-proof types: the platform hooks (`on_quit`, `on_window_event`, …) onto
 host-side window subtrait of §3's second change.
 
 The headless backend is converted before Win32 drops the bound. `current_platform()` returns
-`HeadlessPlatform` on any target when `FLUI_HEADLESS` is set, so a Windows build runs both
+`HeadlessPlatform` on any target when `FLUI_HEADLESS` is set to anything but empty or `0`, so a Windows build runs both
 backends behind one signature, and a bound that depends on the target (wgpu's `WasmNotSend`
 pattern) cannot express "`!Send` on Windows" while headless still stores `Send` callbacks.
 

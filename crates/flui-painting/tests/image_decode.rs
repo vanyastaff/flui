@@ -10,9 +10,10 @@ use crate::foreign_image::decodes_within_the_limit_or_fails_typed;
 /// A 4x2 PNG.
 const TINY_PNG: &[u8] = include_bytes!("fixtures/tiny.png");
 
-/// [`TINY_PNG`] with its header declaring `width` by `height`, the header's
-/// checksum restated so the decoder reads past it.
-fn png_declaring(width: u32, height: u32) -> Vec<u8> {
+/// [`TINY_PNG`] with its header declaring `width` by `height` RGBA pixels of
+/// `bit_depth` bits a channel, the header's checksum restated so the decoder
+/// reads past it.
+fn png_declaring(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
     fn crc32(bytes: &[u8]) -> u32 {
         let mut crc = !0_u32;
         for &byte in bytes {
@@ -33,6 +34,7 @@ fn png_declaring(width: u32, height: u32) -> Vec<u8> {
     assert_eq!(&png[12..16], b"IHDR", "the fixture starts with its header");
     png[16..20].copy_from_slice(&width.to_be_bytes());
     png[20..24].copy_from_slice(&height.to_be_bytes());
+    png[24] = bit_depth;
     let crc = crc32(&png[12..29]);
     png[29..33].copy_from_slice(&crc.to_be_bytes());
     png
@@ -59,7 +61,7 @@ pub(crate) fn each_format_decodes_to_its_pixels() {
 /// allocates its pixels: a refusal from the decoder's own allocation limit
 /// cannot name it.
 pub(crate) fn a_header_past_the_limit_is_refused_before_decoding() {
-    let refused = Image::decode(&png_declaring(60_000, 60_000));
+    let refused = Image::decode(&png_declaring(60_000, 60_000, 8));
     assert_eq!(
         refused.expect_err("a 60000x60000 header is refused"),
         ImageDecodeError::TooLarge {
@@ -69,7 +71,7 @@ pub(crate) fn a_header_past_the_limit_is_refused_before_decoding() {
     );
     // The largest dimensions a header can write saturate rather than wrap.
     assert!(matches!(
-        Image::decode(&png_declaring(u32::MAX >> 1, u32::MAX >> 1)),
+        Image::decode(&png_declaring(u32::MAX >> 1, u32::MAX >> 1, 8)),
         Err(ImageDecodeError::TooLarge { .. } | ImageDecodeError::Malformed(_))
     ));
 }
@@ -86,11 +88,46 @@ pub(crate) fn a_header_at_the_limit_asks_for_one_block_of_the_limit() {
         u64::from(width) * u64::from(height) * 4,
         MAX_DECODED_IMAGE_BYTES
     );
-    let largest = decodes_within_the_limit_or_fails_typed(&png_declaring(width, height));
+    let largest = decodes_within_the_limit_or_fails_typed(&png_declaring(width, height, 8));
     assert_eq!(
         largest, MAX_DECODED_IMAGE_BYTES,
         "the header at the limit is decoded up to its pixel buffer"
     );
+}
+
+/// A 16-bit RGBA header is measured at its own depth, eight bytes a pixel,
+/// since the decoder fills a buffer of that size before the RGBA8 copy exists:
+/// one row under the limit and the row at it decode up to that buffer, and
+/// one or two rows over are refused with what the buffer would take. The
+/// fuzzer found the last row as `fixtures/rgba16-png-at-the-limit.png`, whose
+/// RGBA8 copy is half the limit and whose 16-bit buffer is 64 bytes past it.
+pub(crate) fn a_sixteen_bit_header_is_measured_at_its_own_depth() {
+    const WIDTH: u32 = 4;
+    const ROW: u64 = 8 * WIDTH as u64;
+    let rows_at_the_limit =
+        u32::try_from(MAX_DECODED_IMAGE_BYTES / ROW).expect("BUG: the limit's rows fit u32");
+
+    for rows in [rows_at_the_limit - 1, rows_at_the_limit] {
+        let largest = decodes_within_the_limit_or_fails_typed(&png_declaring(WIDTH, rows, 16));
+        assert_eq!(
+            largest,
+            u64::from(rows) * ROW,
+            "{rows} rows are decoded up to their 16-bit buffer"
+        );
+    }
+    for rows in [rows_at_the_limit + 1, rows_at_the_limit + 2] {
+        let png = png_declaring(WIDTH, rows, 16);
+        decodes_within_the_limit_or_fails_typed(&png);
+        assert_eq!(
+            Image::decode(&png),
+            Err(ImageDecodeError::TooLarge {
+                requested: u64::from(rows) * ROW,
+                limit: MAX_DECODED_IMAGE_BYTES,
+            }),
+            "{rows} rows"
+        );
+    }
+    decodes_within_the_limit_or_fails_typed(include_bytes!("fixtures/rgba16-png-at-the-limit.png"));
 }
 
 /// Arbitrary bytes, and the fixture with arbitrary bytes overwritten, decode

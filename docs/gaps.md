@@ -228,6 +228,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** various · **Who it hurts:** Pen, trackpad and iPad users · **Parity:** [Input](platform-parity.md#input)
 
 - **Missing:** no pen on macOS or Linux; no iPad hardware keyboard; the iPad pointer (trackpad scroll, pinch, rotation, hover and the secondary button) is type-checked only, never run on an iPad; no cursors on mobile; keyboard layout read on Windows, Wayland and X11 only (not on macOS, iOS, Android or the Web).
+- The keyboard layout has no reader above the host: Windows, X11 and Wayland report it (`Platform::keyboard_layout`) and its changes (`Platform::on_keyboard_layout_change`, one callback per platform), and the headless platform can switch it (`HeadlessInputDevices::set_keyboard_layout`), but nothing in `flui-app` or the widgets reads either yet, so a layout change reaches no application.
 - Windows: the precision-touchpad pan and pinch (DirectManipulation) have never run on a touchpad, and no injector reaches it, so its golden recording can only come from a `native-capture` run on one (injected touch, pen, mouse and wheel already record theirs through a manual Windows run).
 - Android: touchpad pinch and two-finger scroll and its pen hover and tilt ran only from `uinput` devices through a manual Android run, with no hardware touchpad or stylus. Its widgets ran with `uinput` touches, `input` stylus and mouse events and hardware key events through a manual Android run, with no physical keyboard, key repeat or dead key.
 - Android: a touch held while the app goes to the background makes the system report it not responding ten seconds later. The loop reads its input queue only while the Activity is resumed, so the cancel the system sends for the window it took away is never answered (seen on a Galaxy S21 by holding a touch and pressing Home).
@@ -491,6 +492,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - `Image::memory`, `Image::file` and any provider with a `DecodeJob` decode on the background lanes (ADR-0272), and `Image::asset` and `Image::network` load through their registry on them (ADR-0279). A host that does not provide `BackgroundCapability` gets the job run on the UI thread instead, so the image still shows but its decode costs that frame. `flui-app` and the headless host provide the capability; an embedder's own host may not.
 - Decoded images are not shared between widgets: two `Image::memory` widgets with equal bytes decode twice. A decoded-image cache owned by the UI runtime (never by the process) is the follow-up.
+- `Image::decode` bounds each block its decode asks for by `MAX_DECODED_IMAGE_BYTES`, except one inside `png` 0.18.1: `parse_iccp_raw` inflates a compressed colour profile (iCCP) with `fdeflate::decompress_to_vec_bounded`, whose `Vec::resize` grows the buffer by doubling, so a profile that inflates past half the limit can ask for one block over it. Reaching it needs an iCCP chunk of about 125 KiB, past the fuzz job's 4096-byte inputs. `png::Decoder::set_ignore_iccp_chunk` would skip the chunk, but `image`'s `PngDecoder` builds its `png::Decoder` inside `with_limits` and exposes no way to set it, so `Image::decode` cannot turn that path off. Read in the source, not reproduced.
 - The check is a host without the capability decoding a large image with the frame clock showing the cost, and a cache hit test once the runtime cache exists.
 
 ### The driver agent cannot reach a page in Safari
@@ -647,3 +649,11 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - `cargo xtask fuzz` runs two targets, `image_decode` and `agent_wire` ([testing.md](testing.md#fuzzing)). The parsers inside `flui-native` (the XIM codec, clipboard text, drag offer kinds, the Windows drag crossing, Wayland configure arrays) have property tests that draw their bytes at random and no coverage-guided run: they are `pub(crate)`, and a fuzz target is an example, which sees only its crate's public API.
 - The entry closes when each has a target, reached through an item the crate's `testing` feature exports.
+
+### The AppKit pump and the Android loop keep their own due-deadline rule
+
+> **Environments:** macOS, Android · **Who it hurts:** Applications whose wake deadline repeats an instant no frame serviced (a handler that declines its frames): those loops keep waking for it · **Parity:** none (owner core)
+
+- The Win32 loop and its modal loops, the X11, Wayland and UIKit loops arm and take the application's wake deadline through `WakeDeadline::{arm, take_due}` (`crates/flui-native/src/owner/wake_deadline.rs`): an instant delivered once is armed again only after a frame ran. The AppKit pump (`owner/apple/macos/wake_pump.rs`, `TickPlan`) asks for a frame at a due instant and looks again every `FOLLOW_UP` with no frame count, and the Android loop (`owner/android/poll.rs`, `DueDeadline`, with `owner/redraw_poll.rs`) offers a past instant once but keeps polling with no timeout while it stays due and the Activity is resumed.
+- Neither host counts its frames: their windows build their `WindowDelivery` without the loop's `FrameCount`, so moving them to the rule means wiring the count through the AppKit and Android windows, which this host cannot compile, and a run on a Mac and an Android device.
+- The entry closes when both loops drive their deadline through `WakeDeadline`, `TickPlan` and `DueDeadline` are gone, and a run on each device shows a declined frame does not keep the loop awake.

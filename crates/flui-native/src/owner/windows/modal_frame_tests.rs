@@ -3,7 +3,7 @@
 
 use super::modal_loop::ModalFrames;
 use super::*;
-use crate::owner::handlers::OpenWindows;
+use crate::owner::OpenWindows;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Windows that count the frames a delivered deadline asks of them.
@@ -53,11 +53,18 @@ fn a_due_deadline_gets_one_modal_frame_per_generation() {
         Rc::clone(&frames),
     );
 
-    let _ = modal.deliver();
+    assert_eq!(modal.deliver(), 1, "a due deadline asks again at once");
     assert_eq!(frames_asked(), 1, "the due deadline");
-    let _ = modal.deliver();
+    assert_eq!(
+        modal.deliver(),
+        crate::owner::modal_pace::MODAL_FRAME_PACE_MS,
+        "a delivered instant no frame serviced is not waited for: the timer keeps its pace"
+    );
     assert_eq!(frames_asked(), 1, "the same answer, with no frame since");
     frames.counter().fetch_add(1, Ordering::Relaxed);
     let _ = modal.deliver();
     assert_eq!(frames_asked(), 2, "the same answer after a frame");
+    modal.start();
+    let _ = modal.deliver();
+    assert_eq!(frames_asked(), 3, "a modal loop's first delivery");
 }

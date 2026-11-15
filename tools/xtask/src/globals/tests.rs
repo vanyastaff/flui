@@ -429,22 +429,31 @@ fn trampoline_limits() {
     let names = [
         "IOS",
         "MAC",
-        "WINIT",
+        "HEADLESS",
         "SLOT",
         "IOS_TWIN",
-        "WINIT_TWIN",
+        "HEADLESS_TWIN",
         "APPLE",
         "FEATURE",
     ];
-    let [ios, mac, winit, slot, ios_twin, winit_twin, apple, feature] = names.map(cell);
+    let [
+        ios,
+        mac,
+        headless,
+        slot,
+        ios_twin,
+        headless_twin,
+        apple,
+        feature,
+    ] = names.map(cell);
     let apple = format!("mod ios; mod macos; {apple}");
     let ios = format!("mod scene; {ios}");
-    let winit = format!("mod control; {winit}");
+    let headless = format!("mod control; {headless}");
     let files = [
         ("crates/flui-native/src/lib.rs", "mod owner; mod window;"),
         (
             "crates/flui-native/src/owner/mod.rs",
-            "mod apple; mod slot; mod winit;",
+            "mod apple; mod slot; mod headless;",
         ),
         ("crates/flui-native/src/owner/apple.rs", apple.as_str()),
         ("crates/flui-native/src/owner/apple/ios.rs", ios.as_str()),
@@ -453,14 +462,20 @@ fn trampoline_limits() {
             ios_twin.as_str(),
         ),
         ("crates/flui-native/src/owner/apple/macos.rs", mac.as_str()),
-        ("crates/flui-native/src/owner/winit.rs", winit.as_str()),
         (
-            "crates/flui-native/src/owner/winit/control.rs",
-            winit_twin.as_str(),
+            "crates/flui-native/src/owner/headless.rs",
+            headless.as_str(),
+        ),
+        (
+            "crates/flui-native/src/owner/headless/control.rs",
+            headless_twin.as_str(),
         ),
         ("crates/flui-native/src/owner/slot.rs", slot.as_str()),
-        ("crates/flui-native/src/window/mod.rs", "mod winit;"),
-        ("crates/flui-native/src/window/winit.rs", feature.as_str()),
+        ("crates/flui-native/src/window/mod.rs", "mod headless;"),
+        (
+            "crates/flui-native/src/window/headless.rs",
+            feature.as_str(),
+        ),
     ];
     let mut platform = krate(
         PLATFORM,
@@ -470,14 +485,14 @@ fn trampoline_limits() {
             trampoline("owner::apple::ios::scene::IOS_TWIN"),
             trampoline("owner::apple::macos::MAC"),
             trampoline("owner::slot::SLOT"),
-            trampoline("owner::winit::WINIT"),
-            trampoline("owner::winit::control::WINIT_TWIN"),
-            trampoline("window::winit::FEATURE"),
+            trampoline("owner::headless::HEADLESS"),
+            trampoline("owner::headless::control::HEADLESS_TWIN"),
+            trampoline("window::headless::FEATURE"),
         ]),
     );
     platform.flui["modules"] = json!({
         "features": ["window"],
-        "platforms": ["apple", "winit"],
+        "platforms": ["apple", "headless"],
         "groups": { "apple": ["macos", "ios"] },
         "hosts": "hosts",
     });
@@ -498,17 +513,17 @@ fn trampoline_limits() {
             ),
             (
                 PLATFORM.to_owned(),
+                "owner::headless::control::HEADLESS_TWIN".to_owned(),
+                SECOND_TRAMPOLINE
+            ),
+            (
+                PLATFORM.to_owned(),
                 "owner::slot::SLOT".to_owned(),
                 PLACEMENT
             ),
             (
                 PLATFORM.to_owned(),
-                "owner::winit::control::WINIT_TWIN".to_owned(),
-                SECOND_TRAMPOLINE
-            ),
-            (
-                PLATFORM.to_owned(),
-                "window::winit::FEATURE".to_owned(),
+                "window::headless::FEATURE".to_owned(),
                 PLACEMENT
             ),
         ]

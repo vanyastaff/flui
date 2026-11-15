@@ -120,7 +120,7 @@ use crate::input::regions::presses::{
     ChromePress, ChromePresses, PressButton, ResizeBand, device_point,
 };
 use crate::owner::OpenWindowError;
-use crate::owner::handlers::OpenWindows;
+use crate::owner::OpenWindows;
 use crate::owner::linux::x11::{
     Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, PeerInterest,
     PeerSelect, WindowRef, WindowScale, X11Connection, X11Loop,

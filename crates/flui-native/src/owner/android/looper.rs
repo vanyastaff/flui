@@ -1150,6 +1150,11 @@ impl host::Loop for AndroidLoop {
 }
 
 impl host::Services for AndroidLoop {
+    /// Only a page has an origin.
+    fn page_origin(&self) -> Option<String> {
+        None
+    }
+
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         super::launch::string_extra(&self.app, key)
     }

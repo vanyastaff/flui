@@ -13,8 +13,8 @@
 //! says a device executes these statements, and a conditional wrapper that
 //! keeps these lines while losing a route (an `if bootstrap_error.is_none()`
 //! around them) passes this scan. The runtime half of the same claim is
-//! pinned on the primitive both backends call, by the capture-release test
-//! in `owner/handlers.rs`.
+//! pinned on the primitive both backends call, by the window delivery's
+//! `closed_is_the_last_call_and_the_window_lets_go`.
 //!
 //! Every anchor below fails with an explicit "could not locate" message
 //! instead of scanning nothing, and the inversion refusals come before
