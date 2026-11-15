@@ -344,23 +344,26 @@ impl DropTracker {
         }
     }
 
-    /// Forget the receiver that accepted the last move once its ticket no longer holds it, so no
-    /// drop goes to it; whether it did. No receiver runs: the ones that went leave at the next
-    /// [`tick`](Self::tick).
-    pub(crate) fn forget_unregistered_acceptance(&self) -> bool {
-        let mut state = self.0.borrow_mut();
-        if state.ended {
-            return false;
-        }
-        let gone = state.accepting.as_ref().is_some_and(|accepting| {
-            !state.entered.iter().any(|entered| {
-                entered.is(accepting.key, &accepting.receiver) && entered.is_registered()
+    /// Whether the receiver that accepted the last move is no longer held by its ticket. No
+    /// drop goes to it either way; the caller withdraws its answer from the OS, then
+    /// [`forget_unregistered_acceptance`](Self::forget_unregistered_acceptance).
+    pub(crate) fn accepts_unregistered(&self) -> bool {
+        let state = self.0.borrow();
+        !state.ended
+            && state.accepting.as_ref().is_some_and(|accepting| {
+                !state.entered.iter().any(|entered| {
+                    entered.is(accepting.key, &accepting.receiver) && entered.is_registered()
+                })
             })
-        });
-        if gone {
-            state.accepting = None;
+    }
+
+    /// Forget the receiver that accepted the last move once its ticket no longer holds it and the
+    /// OS has heard that nothing accepts. No receiver runs: the ones that went leave at the next
+    /// [`tick`](Self::tick).
+    pub(crate) fn forget_unregistered_acceptance(&self) {
+        if self.accepts_unregistered() {
+            self.0.borrow_mut().accepting = None;
         }
-        gone
     }
 
     /// Leave every entered receiver whose ticket no longer holds it; whether

@@ -1968,14 +1968,30 @@ fn a_withdrawal_that_fails_still_withdraws_the_other_answers() {
             flui_foundation::panic::payload_text(failure.as_ref()),
             Some("feedback failure")
         );
-        let feedback = f.source.feedback.lock();
-        for id in ids {
+        let feedback = f.source.feedback.lock().clone();
+        for id in &ids {
             assert_eq!(
-                feedback.iter().rev().find(|(answered, _)| *answered == id),
-                Some(&(id, DropFeedback { accept: None })),
+                feedback.iter().rev().find(|(answered, _)| answered == id),
+                Some(&(*id, DropFeedback { accept: None })),
                 "every drag's answer is withdrawn"
             );
         }
+        // The drag whose withdrawal failed is told again after the next build; the other is not.
+        let withdrawals = |id: DataTransferId| {
+            f.source
+                .feedback
+                .lock()
+                .iter()
+                .filter(|(answered, feedback)| *answered == id && feedback.accept.is_none())
+                .count()
+        };
+        let before = (withdrawals(ids[0]), withdrawals(ids[1]));
+        f.owner.withdraw_unregistered_answers();
+        assert_eq!(
+            (withdrawals(ids[0]), withdrawals(ids[1])),
+            (before.0 + 1, before.1),
+            "only the failed withdrawal is repeated"
+        );
     });
 }
 

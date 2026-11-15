@@ -720,24 +720,34 @@ impl DragOwner {
     /// hover [`hold`](Self::hold) keeps, when it is released or dropped. The runtime calls this
     /// after each frame's build, whether the frame ends or unwinds. Runs no receiver.
     pub fn withdraw_unregistered_answers(&self) {
-        let gone: Vec<(PresentationId, DataTransferId)> = {
+        let gone: Vec<(PresentationId, DataTransferId, DropTracker)> = {
             let state = self.shared.borrow();
             state
                 .incoming
                 .iter()
-                .filter(|incoming| {
-                    !incoming.dropped && incoming.tracker.forget_unregistered_acceptance()
+                .filter(|incoming| !incoming.dropped && incoming.tracker.accepts_unregistered())
+                .map(|incoming| {
+                    (
+                        incoming.presentation,
+                        incoming.offer.id(),
+                        incoming.tracker.clone(),
+                    )
                 })
-                .map(|incoming| (incoming.presentation, incoming.offer.id()))
                 .collect()
         };
-        // Each withdrawal reaches the OS through the platform: one that fails keeps the others,
-        // whose acceptances are already forgotten, and the first failure propagates after them.
-        let mut failure = ClosePanic::new();
-        for (presentation, id) in gone {
-            failure.invoke(|| self.accepting_gone(Hovered::Offer(presentation, id)));
+        // Each withdrawal reaches the OS through the platform. One that fails keeps the others,
+        // and keeps its own acceptance, so the next build or tick withdraws it again; the first
+        // failure propagates after them.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        for (presentation, id, tracker) in gone {
+            if failure
+                .contain(|| self.accepting_gone(Hovered::Offer(presentation, id)))
+                .is_some()
+            {
+                tracker.forget_unregistered_acceptance();
+            }
         }
-        failure.finish();
+        failure.resume();
     }
 
     /// How many hovers [`hold`](Self::hold) kept positions for in `presentation` that

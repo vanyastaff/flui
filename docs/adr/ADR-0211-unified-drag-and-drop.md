@@ -190,8 +190,8 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
     at its position, on the receiver that accepted the last delivered move, the one whose answer
     the OS took, at the point of that move. After each frame's build, whether the frame ends or
     unwinds, the runtime withdraws the answer of a receiver the build unmounted
-    (`DragOwner::withdraw_unregistered_answers`), one drag at a time so a failing one keeps the
-    others, and the OS refuses a drop rather than report an action no receiver takes. A committed
+    (`DragOwner::withdraw_unregistered_answers`), one drag at a time, a failing one told again
+    later, and the OS refuses a drop rather than report an action no receiver takes. A committed
     window's drop first runs its last hover at the drop's position, as delivered drops always
     have; a receiver change under a resting pointer that no hover saw is an open gap
     ([gaps](../gaps.md#an-os-drop-on-a-committed-window-can-land-on-a-receiver-the-os-did-not-ask)).

@@ -41,10 +41,13 @@ impl UiRuntime {
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<flui_layer::Scene> {
         match self
             .enter(|ui_runtime| {
-                let drawn = ui_runtime.draw_frame_entered(constraints);
-                // As `render_frame` does after the build (ADR-0211 §16).
-                ui_runtime.drag.withdraw_unregistered_answers();
-                drawn
+                let mut first = FirstPanic::new();
+                let drawn = first.contain(|| ui_runtime.draw_frame_entered(constraints));
+                // As `render_frame` does after the build, whether the frame ends or unwinds
+                // (ADR-0211 §16).
+                first.contain(|| ui_runtime.drag.withdraw_unregistered_answers());
+                first.resume();
+                drawn.expect("BUG: a draw that produced no outcome holds its panic")
             })
             .1
         {
@@ -963,14 +966,16 @@ impl UiRuntime {
         let mut drawing = FirstPanic::new();
         let drawn = drawing.contain(|| self.draw_frame_entered(constraints));
         // A receiver this build unmounted no longer answers for the drag it accepted: the OS is
-        // told before it can resolve a drop from that answer, after a frame that unwound as well,
-        // and the frame's failure stays the first (ADR-0211 §16).
-        drawing.contain(|| self.drag.withdraw_unregistered_answers());
-        if let Some(payload) = drawing.into_payload() {
-            resume_unwind(payload);
-        }
-        let (producer_id, outcome, any_retry_needed) =
-            drawn.expect("BUG: a frame that did not unwind produced its outcome");
+        // told before it can resolve a drop from that answer, after a frame that unwound as well
+        // (ADR-0211 §16). A failure telling it waits for the frame's own work, so a painted scene
+        // is still submitted and its obligations kept, and resumes once the frame is done.
+        let mut withdrawal = FirstPanic::new();
+        withdrawal.contain(|| self.drag.withdraw_unregistered_answers());
+        let Some((producer_id, outcome, any_retry_needed)) = drawn else {
+            drawing.absorb(withdrawal);
+            drawing.resume();
+            unreachable!("BUG: a draw that produced no outcome holds its panic");
+        };
         // The presentation whose segment produced `outcome` above is never
         // inferred as `primary()`: test scaffolding can attach content to a
         // secondary and exercises this attribution. Production secondary
@@ -1062,7 +1067,13 @@ impl UiRuntime {
                     if let Some(later) = later.into_payload() {
                         flui_foundation::panic::discard_payload(later);
                     }
-                    resume_unwind(payload);
+                    // A failure telling the OS about a drag came before the sink's.
+                    withdrawal.record(payload);
+                    resume_unwind(
+                        withdrawal
+                            .into_payload()
+                            .expect("BUG: a payload was just recorded"),
+                    );
                 }
                 (None, Ok(())) => {
                     unreachable!("BUG: the submit closure returns only after the sink answered")
@@ -1274,7 +1285,9 @@ impl UiRuntime {
         let wake_panic = self.wake_pending_pointer_samples();
         self.wake_for_late_demand(retry_needed);
         delivery_panic.absorb(wake_panic);
-        if let Some(payload) = delivery_panic.into_payload() {
+        // A failure telling the OS about a drag came before the frame's delivery.
+        withdrawal.absorb(delivery_panic);
+        if let Some(payload) = withdrawal.into_payload() {
             resume_unwind(payload);
         }
         presented
