@@ -51,14 +51,27 @@ it is the package of the app's own Java or Kotlin code.
 
 A crate states what it needs from the application's manifests in
 `[package.metadata.flui.declares]` (ADR-0307): a `schema` version, then per-platform keys, and
-under `features.<feature>` what a feature adds while it is enabled. `declarations.rs` reads every
-package of the graph `cargo metadata --filter-platform` resolves for each target built, with the
-features that graph enables, and joins them. The table is strict: an unknown key, a schema newer
-than the CLI reads, a feature the crate lacks or a malformed value fails the build naming the crate
+under `features.<feature>` what a feature adds while it is enabled. `declarations.rs` joins the
+tables of the crates the built artifact links, each with the features the build enables for it.
+
+Invariant: a manifest declares nothing for code the artifact does not link. `cargo metadata`
+resolves one graph for everything a workspace can build, so its features count what a
+dev-dependency, a build script's dependency or a procedural macro's own copy of a crate turns on.
+Every collection therefore takes the crates and their features from `declarations/linked.rs`,
+which reads `cargo tree` over normal edges without procedural macros for the target, and takes
+only the tables and the edges from `cargo metadata --filter-platform`. The build read is the
+member a builder compiled (`BuildArtifacts::package`; an example links its package's
+dev-dependencies), or what cargo builds by default at the project; the Android, iOS, macOS and
+Linux writers, the one-instance check, `flui doctor` and `flui add` share it
+(`declarations_are_joined_over_the_graph_the_target_links`,
+`a_listing_reads_back_as_each_crates_features`).
+
+The table is strict: an unknown key, a schema newer than the CLI reads, a feature the crate lacks
+or a malformed value fails the build naming the crate
 (`a_malformed_declaration_is_refused_by_crate`). The CLI holds nobody's needs as literals:
-`flui-native` declares `VIBRATE` for its haptic patterns, `flui-app`'s `http` feature declares
-`INTERNET` for `HttpURLConnection` (`declarations_are_joined_over_the_graph_the_target_links`,
-`the_manifest_declares_what_the_linked_crates_need`).
+`flui-native` declares `VIBRATE` for its haptic patterns, and `flui-app`'s `http` feature declares
+`INTERNET` for `HttpURLConnection`, which an application gets only with the facade's `http` on
+(`the_manifest_declares_what_the_linked_crates_need`).
 
 Android's `AndroidManifest.xml` is generated whole on every build (ADR-0255 decision 6) at
 `<project>/platforms/android/app/src/main/AndroidManifest.xml`, where both packagers read it: FLUI's base

@@ -145,11 +145,19 @@ name = "Note"
 
 ### 3. The CLI joins the graph it builds
 
-For each target it builds, the CLI runs `cargo metadata --filter-platform <triple>` in the
-application's directory and takes every resolved package's table, plus the parts of the features
-the resolved graph enables for it. A dependency only another target links contributes nothing. The
-join is a set per key, in a fixed order, with the crates that asked for each entry (`flui build
--v` names them).
+For each target it builds, the CLI reads two things in the application's directory. `cargo tree
+--target <triple>` over normal edges, without procedural macros, lists the crates the artifact
+links and the features the build enables for each, resolved as `cargo build` resolves them, for
+the member the build compiles or for what cargo builds there by default. `cargo metadata
+--filter-platform <triple>` gives each crate's table and the edges between the crates. The CLI
+takes every linked crate's table, plus the parts of the features the build enables for it.
+
+What the artifact does not link contributes nothing: a dependency only another target links, a
+dev-dependency and a feature only one turns on, a build script's dependency, a procedural macro
+and the features its own copy of a crate has. `cargo metadata` alone unifies all of these into
+one graph, so its features are not read. An example links its package's dev-dependencies, and for
+its build they count. The join is a set per key, in a fixed order, with the crates that asked for
+each entry (`flui build -v` names them).
 
 ### 4. Where it lands
 
@@ -277,20 +285,25 @@ a key arrives with its first consumer.
   CLI.
 - Bad, because the manifest is no longer the application's to edit: what it adds (an icon, intent
   filters) has to come through `flui.toml` keys, which arrive with their first need.
-- Bad, because each Android build runs `cargo metadata` once per ABI.
+- Bad, because each Android build runs `cargo metadata` and `cargo tree` once per ABI.
 
 ### Confirmation
 
 - `declarations::tests::declarations_are_joined_over_the_graph_the_target_links` (a transitive
-  declaration, a feature on and one off, a dependency of another target).
+  declaration, a feature on and one off, a dependency of another target; a dev-dependency and the
+  feature it turns on, a build script's dependency, a procedural macro and the feature its copy of
+  a crate turns on, none of which declares anything; an example's build, for which its package's
+  dev-dependencies count). `declarations::linked::tests::a_listing_reads_back_as_each_crates_features`
+  (the listing of `cargo tree` as the crates and their features).
 - `declarations::tests::a_malformed_declaration_is_refused_by_crate` (an unknown key, a missing or
   newer schema, an unknown feature, a value that is not a permission).
-- `android_manifest::tests::the_manifest_declares_what_the_linked_crates_need` reads FLUI's own
-  workspace built for Android and finds `VIBRATE` and `INTERNET`, so removing either crate's
-  declaration fails it.
+- `android_manifest::tests::the_manifest_declares_what_the_linked_crates_need` reads the `flui`
+  facade built for Android and finds `VIBRATE`, and `INTERNET` only with the facade's `http` on,
+  so removing either crate's declaration fails it, as does counting the `http` that `flui-app`
+  turns on for its own tests.
 - `android_manifest::tests::the_manifest_is_rewritten_only_when_flui_wrote_it`.
 - `ios_package::tests::publication_contract` ("privacy manifest declares what flui calls", "privacy
-  manifest joins the application's own") reads FLUI's own workspace built for `aarch64-apple-ios`
+  manifest joins the application's own") reads the `flui` facade built for `aarch64-apple-ios`
   and finds `35F9.1` and `C617.1`, joined with an application's reasons.
 - `declarations::tests::a_privacy_reason_is_an_approved_reason_code`.
 - `cli_doctor::doctor_lists_what_a_manifest_lacks_of_the_crates_declarations` (the project's
@@ -327,7 +340,7 @@ a key arrives with its first consumer.
   `declarations::tests::what_the_application_opens_is_joined_over_the_graph` (case folded, a
   feature's file type only while it is on); `declarations::tests::only_the_application_declares_the_links_it_opens`
   (a dependency's domain under a feature refused, an application a test crate reaches as a
-  dev-dependency kept); the malformed cases include a version-3 key under
+  dev-dependency kept, the test crate's own build opening none of its links); the malformed cases include a version-3 key under
   `schema = 2`, a web scheme, a URL given as a domain and one extension with two MIME types;
   `android_manifest::tests::the_activity_filters_what_the_application_opens`;
   `apple_opening::tests::a_bundle_registers_what_the_application_opens` and
