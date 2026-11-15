@@ -1533,7 +1533,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     change_canvas_boxes(302, 150, 452, 225, 0.0, "content-box border-box");
     settle().await;
     assert_eq!(
-        window.state().content_size.width,
+        window.state().content_size.width(),
         302.0,
         "the window follows the reflow"
     );
@@ -1560,7 +1560,7 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     change_canvas_boxes(322, 170, 452, 225, 10.0, "border-box");
     settle().await;
     assert_eq!(
-        window.state().content_size.width,
+        window.state().content_size.width(),
         322.0,
         "the window follows the padding"
     );
@@ -1700,12 +1700,12 @@ async fn web_window_backing_store_leaves_a_page_canvas_box_where_it_was() {
             "{page}: the store at 2× did not move the box"
         );
         assert_eq!(
-            window.state().content_size.width,
+            window.state().content_size.width(),
             f64::from(width),
             "{page}"
         );
         assert_eq!(
-            window.state().content_size.height,
+            window.state().content_size.height(),
             f64::from(height),
             "{page}"
         );
@@ -1755,7 +1755,7 @@ async fn web_window_backing_store_is_estimated_where_the_browser_reports_css_pix
     change_canvas_boxes(321, 170, 0, 0, 10.0, "border-box");
     settle().await;
     assert_eq!(
-        window.state().content_size.width,
+        window.state().content_size.width(),
         321.0,
         "the window follows the padding"
     );

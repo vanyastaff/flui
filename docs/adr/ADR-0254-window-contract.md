@@ -41,6 +41,24 @@
   slot calls the target's `pre_present_notify` itself. The instance a surface is made from takes
   its display from the platform's `DisplayConnection`, never from a window's target, because wgpu
   reads the instance's display at every surface it makes. The target's obligations are unchanged.
+- **Amended:** 2026-11-15 — decisions 1, 4 and 6, recording what the code does under them; no
+  decision changed. (1) The snapshot's rectangles are valid by construction: `WindowGeometry`
+  holds a finite position and a `WindowExtent` (each side finite and not negative), the content
+  size is a `WindowExtent`, and so is each bound of `SizeConstraints`. Decision 1's "a report that
+  is not a drawable area is never published" holds for them as it held for the metrics: a host
+  builds them with `try_new`, and a read whose numbers describe no window (a rectangle over a
+  scale of zero) publishes nothing, decided once in the hosts' state cell. (2) A revision that a
+  read publishes (`PlatformWindow::state` finding the window system ahead of the snapshot) is
+  announced as decision 4 says every `state_changed` is, at the owner's turn and outside any
+  borrow: the read answers with the new snapshot and the call waits in the window's FIFO, where
+  it used to run from inside the read, under whatever the reader held. A change the window
+  system reports is still announced from the host's own callback. (3) A capability and the reason
+  it is missing are one value, `WindowCapability { Native, Emulated, Absent(CapabilityAbsence) }`,
+  in `WindowCapabilities` and in `CapabilityParts` alike. Decision 6's `Availability` is what
+  `WindowCapability::availability` answers, and the absence of the 2026-10-27 amendment is the one
+  `Absent` holds, so it cannot outlive or contradict the availability;
+  `WindowCapabilities::unavailable(command, absence)` stays, and the readers and setters that
+  repeated a field (`presentation_feedback`, `without_keyboard_inset` and the like) are the field.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves

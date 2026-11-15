@@ -253,7 +253,7 @@ pub(crate) mod material {
                     }
                     _ => false,
                 };
-                if capabilities.material != wanted || !answer_holds {
+                if capabilities.material.availability() != wanted || !answer_holds {
                     failures.push(format!(
                         "{build}: material {:?}, admission {admission:?}, wanted {wanted:?}",
                         capabilities.material

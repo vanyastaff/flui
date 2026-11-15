@@ -239,7 +239,8 @@ impl WindowCommandQueues {
             let queue = queue.upgrade()?;
             // A source that closed keeps its queue until it is dropped; its
             // handle answers closed, and a closed window has no handle to give.
-            (queue.address == address && handle.state().is_ok()).then(|| handle.clone())
+            // Asked without reading the window: the queues are borrowed here.
+            (queue.address == address && handle.is_open()).then(|| handle.clone())
         })
     }
 
@@ -252,8 +253,9 @@ impl WindowCommandQueues {
         self.queues.borrow().iter().find_map(|(queue, handle)| {
             let queue = queue.upgrade()?;
             // A closed window keeps its queue until it is dropped; it is not
-            // handed out.
-            (queue.address == address && handle.state().is_ok())
+            // handed out. Asked without reading the window: the queues are
+            // borrowed here.
+            (queue.address == address && handle.is_open())
                 .then(|| queue.window.upgrade())
                 .flatten()
         })

@@ -193,6 +193,38 @@ impl WindowOptions {
         self
     }
 
+    /// The content-size limits these options ask for, as a window holds
+    /// them: [`min_size`](Self::min_size) and [`max_size`](Self::max_size).
+    ///
+    /// The options are a request, so a limit that is no extent (a side NaN,
+    /// infinite or negative) is not a limit the window is given: it opens
+    /// without that limit, with a warning. Every host reads the limits
+    /// through here, so they all decide it alike.
+    #[must_use]
+    pub fn constraints(&self) -> crate::SizeConstraints {
+        let limit = |asked: Option<Size<f64>>, which: &str| {
+            asked.and_then(|size| {
+                crate::WindowExtent::try_new(size)
+                    .inspect_err(|refused| {
+                        tracing::warn!(%refused, "a window opens without the {which} size it was asked for");
+                    })
+                    .ok()
+            })
+        };
+        crate::SizeConstraints::new(
+            limit(self.min_size, "minimum"),
+            limit(self.max_size, "maximum"),
+        )
+    }
+
+    /// The content extent these options ask for ([`size`](Self::size)), as a
+    /// window's first snapshot holds it before the window system has
+    /// reported one: no extent for a size that is not one.
+    #[must_use]
+    pub fn content_extent(&self) -> crate::WindowExtent {
+        crate::WindowExtent::try_new(self.size).unwrap_or_default()
+    }
+
     /// Set the display the position is measured on.
     #[must_use]
     pub const fn display(mut self, display: Option<crate::DisplayId>) -> Self {
@@ -390,7 +422,7 @@ impl From<WindowAppearance> for crate::Brightness {
 /// The vocabulary every host shares: each material is one every window
 /// system that has materials at all can draw, so a host whose
 /// [`WindowCapabilities::material`](crate::WindowCapabilities::material) is
-/// not `Unavailable` draws each of them. A material only one operating system
+/// is available draws each of them. A material only one operating system
 /// has (Mica Alt and Acrylic on Windows, the `NSVisualEffectView` materials
 /// and Liquid Glass on macOS) is reached through that system's extension
 /// (`flui::native::windows`, `flui::native::macos`).

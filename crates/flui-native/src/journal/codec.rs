@@ -34,8 +34,8 @@ use flui_platform::{
     NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
     RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
     SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
-    WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMode, WindowState,
-    WindowStateParts,
+    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
+    WindowInsets, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -2168,31 +2168,27 @@ const fn size_to_wire(size: Size<f64>) -> [f64; 2] {
     [size.width, size.height]
 }
 
-/// The size `[width, height]` describes, refused when either is not finite.
-fn size_from_wire([width, height]: [f64; 2], what: &str) -> DtoResult<Size<f64>> {
-    if !(width.is_finite() && height.is_finite()) {
-        return Err(invalid(format!("{what} {width}x{height}")));
-    }
-    Ok(Size::new(width, height))
+/// The extent `[width, height]` describes, refused when it is not one a
+/// snapshot holds.
+fn extent_from_wire([width, height]: [f64; 2], what: &str) -> DtoResult<WindowExtent> {
+    WindowExtent::try_new(Size::new(width, height))
+        .map_err(|refused| invalid(format!("{what}: {refused}")))
 }
 
 fn geometry_to_wire(geometry: WindowGeometry) -> wire::WindowGeometry {
     wire::WindowGeometry {
-        position: geometry.position.map(|position| [position.x, position.y]),
-        size: size_to_wire(geometry.size),
+        position: geometry.position().map(|position| [position.x, position.y]),
+        size: size_to_wire(geometry.size()),
     }
 }
 
 fn geometry_from_wire(geometry: wire::WindowGeometry, what: &str) -> DtoResult<WindowGeometry> {
-    let position = match geometry.position {
-        Some([x, y]) if x.is_finite() && y.is_finite() => Some(Point::new(x, y)),
-        Some([x, y]) => return Err(invalid(format!("{what} position {x},{y}"))),
-        None => None,
-    };
-    Ok(WindowGeometry::new(
-        position,
-        size_from_wire(geometry.size, what)?,
-    ))
+    let [width, height] = geometry.size;
+    WindowGeometry::try_new(
+        geometry.position.map(|[x, y]| Point::new(x, y)),
+        Size::new(width, height),
+    )
+    .map_err(|refused| invalid(format!("{what}: {refused}")))
 }
 
 const fn availability_to_wire(availability: Availability) -> wire::Availability {
@@ -2212,26 +2208,23 @@ fn availability_from_wire(availability: wire::Availability) -> DtoResult<Availab
     })
 }
 
-const fn capability_to_wire(honoured: Result<Availability, CapabilityAbsence>) -> wire::Capability {
-    match honoured {
-        Ok(Availability::Native) => wire::Capability::Native,
-        Ok(Availability::Emulated) => wire::Capability::Emulated,
-        // `Unavailable` with no absence in force reads as the platform's
-        // (`CapabilityParts`), which is what a replay rebuilds.
-        Ok(Availability::Unavailable) => {
-            wire::Capability::Unavailable(wire::Absence::NotOnThisPlatform)
+const fn capability_to_wire(capability: WindowCapability) -> wire::Capability {
+    match capability {
+        WindowCapability::Native => wire::Capability::Native,
+        WindowCapability::Emulated => wire::Capability::Emulated,
+        WindowCapability::Absent(absence) => {
+            wire::Capability::Unavailable(absence_to_wire(absence))
         }
-        Err(absence) => wire::Capability::Unavailable(absence_to_wire(absence)),
     }
 }
 
-fn capability_from_wire(
-    capability: wire::Capability,
-) -> DtoResult<Result<Availability, CapabilityAbsence>> {
+fn capability_from_wire(capability: wire::Capability) -> DtoResult<WindowCapability> {
     Ok(match capability {
-        wire::Capability::Native => Ok(Availability::Native),
-        wire::Capability::Emulated => Ok(Availability::Emulated),
-        wire::Capability::Unavailable(absence) => Err(absence_from_wire(absence)?),
+        wire::Capability::Native => WindowCapability::Native,
+        wire::Capability::Emulated => WindowCapability::Emulated,
+        wire::Capability::Unavailable(absence) => {
+            WindowCapability::Absent(absence_from_wire(absence)?)
+        }
         _ => return Err(unread("Capability")),
     })
 }
@@ -2405,7 +2398,7 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
     Ok(wire::WindowState {
         revision: state.revision,
         outer: geometry_to_wire(outer),
-        content_size: size_to_wire(content_size),
+        content_size: size_to_wire(content_size.get()),
         mode: match mode {
             WindowMode::Normal => wire::WindowMode::Normal,
             WindowMode::Minimized => wire::WindowMode::Minimized,
@@ -2419,8 +2412,8 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         focused,
         title,
         constraints: wire::SizeConstraints {
-            min: min.map(size_to_wire),
-            max: max.map(size_to_wire),
+            min: min.map(|min| size_to_wire(min.get())),
+            max: max.map(|max| size_to_wire(max.get())),
         },
         resizable,
         frame: window_frame_to_wire(frame)?,
@@ -2562,7 +2555,7 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
     .map_err(|error| invalid(format!("insets {safe_area:?} {system_gestures:?}: {error}")))?;
     let parts = WindowStateParts {
         outer: geometry_from_wire(outer, "outer")?,
-        content_size: size_from_wire(content_size, "content size")?,
+        content_size: extent_from_wire(content_size, "content size")?,
         mode: match mode {
             wire::WindowMode::Normal => WindowMode::Normal,
             wire::WindowMode::Minimized => WindowMode::Minimized,
@@ -2580,11 +2573,11 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         constraints: SizeConstraints::new(
             constraints
                 .min
-                .map(|min| size_from_wire(min, "minimum size"))
+                .map(|min| extent_from_wire(min, "minimum size"))
                 .transpose()?,
             constraints
                 .max
-                .map(|max| size_from_wire(max, "maximum size"))
+                .map(|max| extent_from_wire(max, "maximum size"))
                 .transpose()?,
         ),
         resizable,

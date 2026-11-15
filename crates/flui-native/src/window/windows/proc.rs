@@ -21,7 +21,8 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    SizeConstraints, WindowAppearance, WindowGeometry, WindowId, WindowMode, WindowState,
+    InvalidGeometry, SizeConstraints, WindowAppearance, WindowExtent, WindowGeometry, WindowId,
+    WindowMode, WindowState,
 };
 use parking_lot::Mutex;
 use windows::Win32::{
@@ -346,26 +347,35 @@ impl WindowContext {
         }
     }
 
-    /// The window's published state, read from the OS again first when
-    /// something invalidated it; `WindowHandler::state_changed` is raised when that
-    /// produced a new revision.
+    /// The window's published state for a caller that reads it
+    /// (`PlatformWindow::state`), read from the OS again first when something
+    /// invalidated it. A revision the read publishes is announced in a turn
+    /// of the window's own message queue, never from the read.
     pub(crate) fn window_state(&self, hwnd: HWND) -> flui_platform::WindowState {
+        let published = self.read_stale_window_state(hwnd);
+        if published.changed {
+            self.delivery.state_changed_after_read();
+        }
+        published.state
+    }
+
+    /// The published snapshot, read from the OS again only when something
+    /// invalidated it; announcing nothing.
+    fn read_stale_window_state(&self, hwnd: HWND) -> crate::window::state::Published {
+        let unchanged = || crate::window::state::Published {
+            state: self.snapshot.published(),
+            changed: false,
+        };
         // While a change takes several steps the window is half-way between two
         // states; a read from inside a callback it raises sees the last whole one.
         if self.publish_hold.get() > 0 {
-            return self.snapshot.published();
+            return unchanged();
         }
         let Some(record) = self.window_state.upgrade() else {
-            return self.snapshot.published();
+            return unchanged();
         };
-        let published = self
-            .snapshot
-            .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)));
-        // `WindowHandler::state_changed` when the revision grew.
-        if published.changed {
-            self.delivery.dispatch_state_changed();
-        }
-        published.state
+        self.snapshot
+            .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)))
     }
 
     /// Read the window again for its state publisher, announcing nothing; a
@@ -405,13 +415,15 @@ impl WindowContext {
         }
     }
 
-    /// The window may differ from its published state: read it again.
+    /// The window system reported a change, or a command was just carried
+    /// out: read the window again, and raise `WindowHandler::state_changed`
+    /// when that produced a new revision.
     pub(crate) fn publish_window_state(&self, hwnd: HWND) {
         self.snapshot.invalidate();
         // A change that takes several steps publishes once, when it is done:
         // a subscriber never sees the window half-changed.
-        if self.publish_hold.get() == 0 {
-            let _ = self.window_state(hwnd);
+        if self.publish_hold.get() == 0 && self.read_stale_window_state(hwnd).changed {
+            self.delivery.dispatch_state_changed();
         }
     }
 
@@ -1535,11 +1547,15 @@ fn window_text(hwnd: HWND) -> Option<String> {
 /// the owner context keeps from `WM_SIZE`; everything else is read from `hwnd`.
 /// Win32 reports a minimized window at a parking position, so there the
 /// outer rectangle is the last known size with no position.
+///
+/// # Errors
+/// [`InvalidGeometry`] when the rectangles over the window's scale describe
+/// no window.
 pub(crate) fn sample_state(
     hwnd: HWND,
     record: &Mutex<WindowRecord>,
     tracking: OwnerTracking,
-) -> WindowState {
+) -> Result<WindowState, InvalidGeometry> {
     let OwnerTracking {
         mode,
         restore_style,
@@ -1587,8 +1603,9 @@ pub(crate) fn sample_state(
     } else {
         cached
     };
+    let content = WindowExtent::try_new(if mode.is_minimized() { cached } else { content })?;
     let outer = if have_window && !mode.is_minimized() {
-        WindowGeometry::new(
+        WindowGeometry::try_new(
             Some(Point::new(
                 f64::from(window.left) / scale,
                 f64::from(window.top) / scale,
@@ -1597,9 +1614,9 @@ pub(crate) fn sample_state(
                 f64::from(window.right - window.left) / scale,
                 f64::from(window.bottom - window.top) / scale,
             ),
-        )
+        )?
     } else {
-        WindowGeometry::new(None, if mode.is_minimized() { cached } else { content })
+        WindowGeometry::unplaced(content)
     };
     // The rectangle the window returns to: Win32's own for a maximized or
     // minimized window (`rcNormalPosition`), and for a fullscreen one the
@@ -1612,19 +1629,21 @@ pub(crate) fn sample_state(
         NativeMode::Maximized | NativeMode::Minimized { .. } => restore_rectangle(hwnd),
         NativeMode::Normal => None,
     };
-    let normal = restore.map(|bounds| {
-        WindowGeometry::new(
-            Some(Point::new(
-                f64::from(bounds.origin.x) / scale,
-                f64::from(bounds.origin.y) / scale,
-            )),
-            Size::new(
-                f64::from(bounds.size.width) / scale,
-                f64::from(bounds.size.height) / scale,
-            ),
-        )
-    });
-    let state = WindowState::new(outer, if mode.is_minimized() { cached } else { content })
+    let normal = restore
+        .map(|bounds| {
+            WindowGeometry::try_new(
+                Some(Point::new(
+                    f64::from(bounds.origin.x) / scale,
+                    f64::from(bounds.origin.y) / scale,
+                )),
+                Size::new(
+                    f64::from(bounds.size.width) / scale,
+                    f64::from(bounds.size.height) / scale,
+                ),
+            )
+        })
+        .transpose()?;
+    let state = WindowState::new(outer, content)
         .with_mode(mode_of(mode.flags()))
         .with_normal_geometry(normal)
         .with_visible(visible)
@@ -1634,7 +1653,7 @@ pub(crate) fn sample_state(
         .with_resizable(style & WS_THICKFRAME.0 != 0)
         .with_frame(reported_frame(style & WS_CAPTION.0 == WS_CAPTION.0, frame))
         .with_display(display);
-    ReportedFacts {
+    Ok(ReportedFacts {
         // The client area in device pixels at the window's scale; a minimized
         // window's empty client area is not drawable and keeps the last.
         metrics: have_client
@@ -1657,7 +1676,7 @@ pub(crate) fn sample_state(
         active,
         capabilities,
     }
-    .onto(state)
+    .onto(state))
 }
 
 impl WindowsWindow {
@@ -1913,10 +1932,17 @@ impl WindowContext {
 
     /// `WM_DPICHANGED`: the window is now at `dpi`, and the system suggests
     /// the rectangle `suggested` for it.
+    ///
+    /// The message is the sender's word: any process may send one, with any
+    /// number in it. A DPI of zero is no DPI, and the window keeps its scale
+    /// and its rectangle.
     pub(crate) fn change_dpi(&self, hwnd: HWND, dpi: u16, suggested: Option<RECT>) {
         use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
-        let old_scale = self.scale.rescale(u32::from(dpi));
+        let Some(old_scale) = self.scale.rescale(u32::from(dpi)) else {
+            tracing::warn!("a DPI change to zero is ignored: the window keeps its scale");
+            return;
+        };
         let new_scale = self.scale.scale();
         tracing::info!(dpi, new_scale, "DPI changed");
         // The display's scale changed, so its snapshot entry did.
@@ -2441,8 +2467,8 @@ impl WindowContext {
             super::set::outer_size(style, ex_style, dpi, (0, 0), self.draws_app_title_bar())
                 .unwrap_or((0, 0));
         Some(track_limits(
-            constraints.min,
-            constraints.max,
+            constraints.min.map(WindowExtent::get),
+            constraints.max.map(WindowExtent::get),
             dpi,
             PixelSize::new(frame_width, frame_height),
         ))

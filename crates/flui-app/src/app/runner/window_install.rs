@@ -48,7 +48,7 @@ impl SurfaceGeometry {
                 scale: metrics.scale().get(),
             };
         }
-        let logical = state.content_size;
+        let logical = state.content_size.get();
         #[expect(
             clippy::cast_possible_truncation,
             reason = "a window's content size in logical pixels is far below i32::MAX"

@@ -580,6 +580,28 @@ pub(crate) mod android {
         const SINCE: u64 = 29;
     }
 
+    /// `Window.setColorMode` (API 26): the colour mode a window asks its display
+    /// for. Below it the window keeps the display's default.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct WindowColorMode;
+
+    impl Gate for WindowColorMode {
+        type Version = AndroidApi;
+        const SINCE: u64 = 26;
+    }
+
+    /// `View.requestUnbufferedDispatch(int)` (API 30): the input sources a view
+    /// takes as soon as the system has them instead of once per frame. The request
+    /// rides up to the window's `ViewRootImpl`, which batches input ahead of the
+    /// native input queue, so a `NativeActivity` honours it too.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct UnbufferedDispatch;
+
+    impl Gate for UnbufferedDispatch {
+        type Version = AndroidApi;
+        const SINCE: u64 = 30;
+    }
+
     /// `VibrationEffect.Composition` with `PRIMITIVE_CLICK` and `PRIMITIVE_TICK`,
     /// `Vibrator.areAllPrimitivesSupported`, and the `CONFIRM`, `REJECT` and `GESTURE_END`
     /// feedback constants (API 30). Without them every haptic pattern falls back to the view's
@@ -709,7 +731,7 @@ mod tests {
         EnvelopeEffects, GestureExclusion, HapticComposition, InsetsByType, InsetsController,
         LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor, SegmentFeedback,
         StylusHandwriting, SystemContrast, SystemGestureInsets, TextWeight, TouchpadGestures,
-        VibrationTouchUsage,
+        UnbufferedDispatch, VibrationTouchUsage, WindowColorMode,
     };
     use super::testing::row;
 
@@ -825,6 +847,18 @@ mod tests {
             "EnvelopeEffects",
             api(35),
             api(36),
+            unknown,
+        ));
+        failures.extend(row::<WindowColorMode>(
+            "WindowColorMode",
+            api(25),
+            api(26),
+            unknown,
+        ));
+        failures.extend(row::<UnbufferedDispatch>(
+            "UnbufferedDispatch",
+            api(29),
+            api(30),
             unknown,
         ));
         assert!(failures.is_empty(), "{failures:#?}");

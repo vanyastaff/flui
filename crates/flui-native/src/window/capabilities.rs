@@ -28,7 +28,7 @@ pub(crate) const PRESENTATION: CapabilityAbsence = CapabilityAbsence::NOT_YET_ON
 
 #[cfg(any(target_os = "ios", target_os = "android", test))]
 use flui_platform::Availability;
-use flui_platform::{CapabilityAbsence, WindowCapabilities, WindowCommand, WindowMaterial};
+use flui_platform::{CapabilityAbsence, WindowCapabilities, WindowCapability};
 
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 use crate::version::gate::Gate;
@@ -41,9 +41,6 @@ use crate::version::gate::apple::AppleVersion;
 #[cfg(any(target_os = "macos", test))]
 use crate::version::gate::apple::MacOSVersion;
 
-/// The command that stands for the window material in the capabilities.
-const MATERIAL: WindowCommand = WindowCommand::SetMaterial(WindowMaterial::Opaque);
-
 // ---- UIKit -------------------------------------------------------------------
 
 /// What a scene's window honours: `UIWindow` has no title, frame, position or
@@ -55,11 +52,11 @@ const MATERIAL: WindowCommand = WindowCommand::SetMaterial(WindowMaterial::Opaqu
 /// insets, only edges an app may defer.
 #[cfg(any(target_os = "ios", test))]
 pub(crate) const fn scene_capabilities() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE
-        .unavailable(&MATERIAL, CapabilityAbsence::NOT_YET_ON_THIS_HOST)
-        .without_presentation_feedback(PRESENTATION);
-    capabilities.reports_keyboard_inset = Availability::Native;
-    capabilities.closes = Availability::Native;
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.material = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    capabilities.reports_presentation = WindowCapability::Absent(PRESENTATION);
+    capabilities.reports_keyboard_inset = WindowCapability::Native;
+    capabilities.closes = WindowCapability::Native;
     capabilities.frame_rate_hint = Availability::Native;
     capabilities
 }
@@ -103,12 +100,13 @@ pub(crate) const fn appkit_window_capabilities(
     owner_is_main: bool,
     presentation: Option<CapabilityAbsence>,
 ) -> WindowCapabilities {
-    use flui_platform::Availability::Native;
+    use WindowCapability::{Absent, Native};
+    use flui_platform::Availability;
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.reports_presentation = Native;
-    if let Some(absence) = presentation {
-        capabilities = capabilities.without_presentation_feedback(absence);
-    }
+    capabilities.reports_presentation = match presentation {
+        Some(absence) => Absent(absence),
+        None => Native,
+    };
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;
@@ -122,17 +120,17 @@ pub(crate) const fn appkit_window_capabilities(
     capabilities.shows = Native;
     capabilities.activates = Native;
     capabilities.closes = Native;
-    capabilities.observes_position = Native;
-    capabilities.observes_minimized = Native;
-    capabilities.places_at_open = Native;
+    capabilities.observes_position = Availability::Native;
+    capabilities.observes_minimized = Availability::Native;
+    capabilities.places_at_open = Availability::Native;
     // A title bar of the application's is drawn under the system's, made
     // transparent (`fullSizeContentView`), with the traffic lights over it.
     capabilities.app_title_bar = Native;
-    if owner_is_main {
-        capabilities.material = Native;
+    capabilities.material = if owner_is_main {
+        Native
     } else {
-        capabilities = capabilities.unavailable(&MATERIAL, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
-    }
+        Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+    };
     capabilities
 }
 
@@ -214,18 +212,15 @@ pub(crate) struct ActivityFacts {
 /// and the system gesture regions from API 29.
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE
-        .unavailable(
-            &MATERIAL,
-            material_absence(facts.api, facts.cross_window_blur),
-        )
-        .without_presentation_feedback(PRESENTATION);
-    capabilities.reports_keyboard_inset = Availability::Native;
-    if facts.api.since::<SystemGestureInsets>().is_some() {
-        capabilities.reports_system_gestures = Availability::Native;
-    } else {
-        capabilities = capabilities.without_system_gestures(CapabilityAbsence::NOT_ON_THIS_DEVICE);
-    }
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.material =
+        WindowCapability::Absent(material_absence(facts.api, facts.cross_window_blur));
+    capabilities.reports_presentation = WindowCapability::Absent(PRESENTATION);
+    capabilities.reports_keyboard_inset = WindowCapability::Native;
+    capabilities.reports_system_gestures = match facts.api.since::<SystemGestureInsets>() {
+        Some(_) => WindowCapability::Native,
+        None => WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE),
+    };
     capabilities.frame_rate_hint = facts.frame_rate_hint;
     capabilities
 }
@@ -254,123 +249,17 @@ pub(crate) fn pointer_icon_absence(api: AndroidApi) -> CapabilityAbsence {
     }
 }
 
-/// `Window.setColorMode` (API 26): the colour mode a window asks its display
-/// for. Below it the window keeps the display's default.
-#[cfg(any(target_os = "android", test))]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct WindowColorMode;
-
-#[cfg(any(target_os = "android", test))]
-impl crate::version::gate::Gate for WindowColorMode {
-    type Version = AndroidApi;
-    const SINCE: u64 = 26;
-}
-
-/// `View.requestUnbufferedDispatch(int)` (API 30): the input sources a view
-/// takes as soon as the system has them instead of once per frame. The request
-/// rides up to the window's `ViewRootImpl`, which batches input ahead of the
-/// native input queue, so a `NativeActivity` honours it too.
-#[cfg(any(target_os = "android", test))]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct UnbufferedDispatch;
-
-#[cfg(any(target_os = "android", test))]
-impl crate::version::gate::Gate for UnbufferedDispatch {
-    type Version = AndroidApi;
-    const SINCE: u64 = 30;
-}
-
-/// The `InputDevice.SOURCE_CLASS_*` mask an Activity's decor view asks for
-/// unbuffered dispatch to deliver `latency`: the pointer class for
-/// [`InputLatency::Low`](flui_platform::InputLatency::Low), none otherwise, so
-/// a window reopened on the same Activity drops an earlier request. `None`
-/// below API 30, where the system has no such request and batches every
-/// source.
-#[cfg(any(target_os = "android", test))]
-pub(crate) fn unbuffered_input_sources(
-    latency: flui_platform::InputLatency,
-    api: AndroidApi,
-) -> Option<i32> {
-    use flui_platform::InputLatency;
-
-    /// `InputDevice.SOURCE_CLASS_NONE`.
-    const SOURCE_CLASS_NONE: i32 = 0;
-    /// `InputDevice.SOURCE_CLASS_POINTER`: touch, stylus and mouse.
-    const SOURCE_CLASS_POINTER: i32 = 0x2;
-    api.since::<UnbufferedDispatch>()?;
-    Some(match latency {
-        InputLatency::Low => SOURCE_CLASS_POINTER,
-        // `Balanced`, and a latency the contract adds later, keep the
-        // system's per-frame batches.
-        _ => SOURCE_CLASS_NONE,
-    })
-}
-
-/// The `ActivityInfo.COLOR_MODE_*` value an Activity's window asks for to
-/// show `mode`; `None` for the default, which the window has without asking.
-#[cfg(any(target_os = "android", test))]
-pub(crate) fn activity_color_mode(
-    mode: flui_platform::os_options::AndroidColorMode,
-) -> Option<i32> {
-    use flui_platform::os_options::AndroidColorMode;
-
-    /// `ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT`.
-    const COLOR_MODE_WIDE_COLOR_GAMUT: i32 = 1;
-    /// `ActivityInfo.COLOR_MODE_HDR`.
-    const COLOR_MODE_HDR: i32 = 2;
-    match mode {
-        AndroidColorMode::WideColorGamut => Some(COLOR_MODE_WIDE_COLOR_GAMUT),
-        AndroidColorMode::Hdr => Some(COLOR_MODE_HDR),
-        // `Default`, and a mode the contract adds later, ask for nothing.
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use flui_platform::{Availability, CapabilityAbsence, WindowCapabilities};
+    use flui_platform::{Availability, CapabilityAbsence};
 
     use super::{
-        ActivityFacts, AppleVersion, MATERIAL, MacOSVersion, PointerInteraction,
-        UnbufferedDispatch, ViewDisplayLink, WindowColorMode, activity_capabilities,
-        activity_color_mode, appkit_presentation, appkit_window_capabilities, frame_rate_absence,
-        pointer_absence, pointer_icon_absence, scene_capabilities, unbuffered_input_sources,
+        ActivityFacts, AppleVersion, MacOSVersion, PointerInteraction, ViewDisplayLink,
+        activity_capabilities, appkit_presentation, appkit_window_capabilities, frame_rate_absence,
+        pointer_absence, pointer_icon_absence, scene_capabilities,
     };
     use crate::version::gate::android::AndroidApi;
     use crate::version::gate::testing::row;
-
-    /// How a window's capabilities refuse its material; `None` where it draws
-    /// one.
-    fn material(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
-        (capabilities.availability(&MATERIAL) == Availability::Unavailable)
-            .then(|| capabilities.refusal(&MATERIAL))
-    }
-
-    /// How a window's capabilities refuse a title bar of the application's;
-    /// `None` where it takes one.
-    fn app_title_bar(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
-        let command = flui_platform::WindowCommand::SetFrame(
-            flui_platform::WindowFrame::AppTitleBar(flui_platform::AppTitleBar::new()),
-        );
-        (capabilities.availability(&command) == Availability::Unavailable)
-            .then(|| capabilities.refusal(&command))
-    }
-
-    /// Why a window's capabilities report no presentation; `None` where they
-    /// report one.
-    fn presentation(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
-        report(capabilities.presentation_feedback())
-    }
-
-    /// The reason `answer` gives for a missing report, or `None` when it reports.
-    fn report(
-        answer: Result<flui_platform::Availability, flui_platform::Unsupported>,
-    ) -> Option<CapabilityAbsence> {
-        answer.err().map(|absent| {
-            CapabilityAbsence::try_from(absent.reason)
-                .expect("BUG: a missing report answers the lasting absence it records")
-        })
-    }
 
     fn activity(level: u32, cross_window_blur: bool) -> ActivityFacts {
         ActivityFacts {
@@ -392,7 +281,7 @@ mod tests {
         let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 25] = [
             (
                 "UIKit material",
-                material(&scene_capabilities()),
+                scene_capabilities().material.absence(),
                 Some(HOST),
             ),
             (
@@ -412,17 +301,19 @@ mod tests {
             ),
             (
                 "AppKit material on the main lane",
-                material(&appkit_window_capabilities(true, None)),
+                appkit_window_capabilities(true, None).material.absence(),
                 None,
             ),
             (
                 "AppKit material off the main lane",
-                material(&appkit_window_capabilities(false, None)),
+                appkit_window_capabilities(false, None).material.absence(),
                 Some(HOST),
             ),
             (
                 "AppKit title bar of the application's",
-                app_title_bar(&appkit_window_capabilities(true, None)),
+                appkit_window_capabilities(true, None)
+                    .app_title_bar
+                    .absence(),
                 None,
             ),
             (
@@ -442,68 +333,81 @@ mod tests {
             ),
             (
                 "Activity material, API 30",
-                material(&activity_capabilities(activity(30, true))),
+                activity_capabilities(activity(30, true)).material.absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity material, API 31 with cross-window blur",
-                material(&activity_capabilities(activity(31, true))),
+                activity_capabilities(activity(31, true)).material.absence(),
                 Some(HOST),
             ),
             (
                 "UIKit keyboard inset",
-                report(scene_capabilities().keyboard_inset()),
+                scene_capabilities().reports_keyboard_inset.absence(),
                 None,
             ),
             (
                 "UIKit presentation report",
-                presentation(&scene_capabilities()),
+                scene_capabilities().reports_presentation.absence(),
                 Some(HOST),
             ),
             (
                 "AppKit presentation report on a Mac",
-                presentation(&appkit_window_capabilities(
-                    true,
-                    appkit_presentation(false),
-                )),
+                appkit_window_capabilities(true, appkit_presentation(false))
+                    .reports_presentation
+                    .absence(),
                 None,
             ),
             (
                 "AppKit presentation report on a hypervisor's guest",
-                presentation(&appkit_window_capabilities(true, appkit_presentation(true))),
+                appkit_window_capabilities(true, appkit_presentation(true))
+                    .reports_presentation
+                    .absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity keyboard inset, API 23",
-                report(activity_capabilities(activity(23, false)).keyboard_inset()),
+                activity_capabilities(activity(23, false))
+                    .reports_keyboard_inset
+                    .absence(),
                 None,
             ),
             (
                 "Activity system gestures, API 28",
-                report(activity_capabilities(activity(28, false)).system_gestures()),
+                activity_capabilities(activity(28, false))
+                    .reports_system_gestures
+                    .absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity system gestures, API 29",
-                report(activity_capabilities(activity(29, false)).system_gestures()),
+                activity_capabilities(activity(29, false))
+                    .reports_system_gestures
+                    .absence(),
                 None,
             ),
             (
                 "Activity presentation report",
-                presentation(&activity_capabilities(activity(33, true))),
+                activity_capabilities(activity(33, true))
+                    .reports_presentation
+                    .absence(),
                 Some(HOST),
             ),
             (
                 "Activity material, API 31 with cross-window blur off",
-                material(&activity_capabilities(activity(31, false))),
+                activity_capabilities(activity(31, false))
+                    .material
+                    .absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity material, unknown API",
-                material(&activity_capabilities(ActivityFacts {
+                activity_capabilities(ActivityFacts {
                     api: AndroidApi::UNKNOWN,
                     ..activity(31, true)
-                })),
+                })
+                .material
+                .absence(),
                 Some(DEVICE),
             ),
             (
@@ -559,72 +463,6 @@ mod tests {
             MacOSVersion::new(14, 0, 0),
             MacOSVersion::UNKNOWN,
         ));
-        failures.extend(row::<WindowColorMode>(
-            "WindowColorMode",
-            AndroidApi::from_level(25),
-            AndroidApi::from_level(26),
-            AndroidApi::UNKNOWN,
-        ));
-        failures.extend(row::<UnbufferedDispatch>(
-            "UnbufferedDispatch",
-            AndroidApi::from_level(29),
-            AndroidApi::from_level(30),
-            AndroidApi::UNKNOWN,
-        ));
         assert!(failures.is_empty(), "{failures:#?}");
-    }
-
-    /// A window asks its decor view for unbuffered pointer input when the
-    /// application wants low latency, withdraws the request otherwise, and
-    /// asks nothing where the system has no such request.
-    #[test]
-    fn an_activity_asks_for_unbuffered_pointer_input() {
-        use flui_platform::InputLatency::{Balanced, Low};
-
-        let api = AndroidApi::from_level;
-        let rows = [
-            (
-                "low, API 30",
-                unbuffered_input_sources(Low, api(30)),
-                Some(0x2),
-            ),
-            (
-                "low, API 35",
-                unbuffered_input_sources(Low, api(35)),
-                Some(0x2),
-            ),
-            (
-                "balanced, API 30",
-                unbuffered_input_sources(Balanced, api(30)),
-                Some(0),
-            ),
-            ("low, API 29", unbuffered_input_sources(Low, api(29)), None),
-            (
-                "balanced, API 24",
-                unbuffered_input_sources(Balanced, api(24)),
-                None,
-            ),
-            (
-                "low, unknown API",
-                unbuffered_input_sources(Low, AndroidApi::UNKNOWN),
-                None,
-            ),
-        ];
-        let failures: Vec<_> = rows.iter().filter(|(_, got, want)| got != want).collect();
-        assert!(failures.is_empty(), "{failures:#?}");
-    }
-
-    /// The Activity window asks for the colour mode the application's surface
-    /// is requested in, and asks nothing for the default.
-    #[test]
-    fn an_activity_asks_for_the_colour_mode_of_its_surface() {
-        use flui_platform::os_options::AndroidColorMode;
-
-        assert_eq!(activity_color_mode(AndroidColorMode::Default), None);
-        assert_eq!(
-            activity_color_mode(AndroidColorMode::WideColorGamut),
-            Some(1)
-        );
-        assert_eq!(activity_color_mode(AndroidColorMode::Hdr), Some(2));
     }
 }

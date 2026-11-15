@@ -171,12 +171,12 @@ impl HeadlessWindow {
     /// system to refuse them.
     fn capabilities(&self) -> flui_platform::WindowCapabilities {
         let mut capabilities = flui_platform::WindowCapabilities::NONE;
-        capabilities.sets_frame = flui_platform::Availability::Native;
-        capabilities.app_title_bar = flui_platform::Availability::Native;
-        capabilities.minimizes = flui_platform::Availability::Native;
-        capabilities.maximizes = flui_platform::Availability::Native;
+        capabilities.sets_frame = flui_platform::WindowCapability::Native;
+        capabilities.app_title_bar = flui_platform::WindowCapability::Native;
+        capabilities.minimizes = flui_platform::WindowCapability::Native;
+        capabilities.maximizes = flui_platform::WindowCapability::Native;
         if self.reports_presentation {
-            capabilities.reports_presentation = flui_platform::Availability::Native;
+            capabilities.reports_presentation = flui_platform::WindowCapability::Native;
         }
         capabilities
     }
@@ -431,18 +431,19 @@ impl PlatformWindow for HeadlessWindow {
     /// manager to raise it, and it honours no other command.
     fn state(&self) -> flui_platform::WindowState {
         let size = self.size;
-        let mut state =
-            flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-                .with_focused(true)
-                .with_display(*self.display.lock())
-                .with_insets(*self.insets.lock())
-                .with_metrics(
-                    flui_foundation::geometry::WindowMetrics::from_logical(
-                        size,
-                        *self.scale_factor.lock(),
-                    )
-                    .ok(),
-                );
+        // A size that is no extent reports none, as it reports no metrics.
+        let extent = flui_platform::WindowExtent::try_new(size).unwrap_or_default();
+        let mut state = flui_platform::WindowState::new(
+            flui_platform::WindowGeometry::unplaced(extent),
+            extent,
+        )
+        .with_focused(true)
+        .with_display(*self.display.lock())
+        .with_insets(*self.insets.lock())
+        .with_metrics(
+            flui_foundation::geometry::WindowMetrics::from_logical(size, *self.scale_factor.lock())
+                .ok(),
+        );
         state = state.with_capabilities(self.capabilities());
         let chrome = self.chrome.lock();
         state.frame = chrome.frame;

@@ -493,6 +493,58 @@ fn a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn() {
     );
 }
 
+/// A revision a read of the window published is announced, and never from
+/// the read: the caller may hold a borrow the handler takes again. It waits
+/// in the FIFO for the owner turn the delivery asks for; where the loop gives
+/// the window none it goes ahead of the window's next delivery, so a frame
+/// never runs before the state change it follows; and raised from inside a
+/// method of the handler it follows that method.
+fn a_revision_a_read_published_is_announced_at_the_owners_turn() {
+    let (delivery, handler) = window();
+    delivery.deliver_capability_snapshot();
+
+    // No turn to ask for: the next delivery carries it first.
+    delivery.state_changed_after_read();
+    assert_eq!(handler.calls(), [snapshot()], "nothing ran from the read");
+    delivery.dispatch_request_frame();
+    let calls = handler.take_calls();
+    assert_eq!(calls[..2], [snapshot(), HandlerCall::StateChanged]);
+    assert!(
+        matches!(calls[2..], [HandlerCall::FrameRequested(_)]),
+        "the state change, then the frame: {calls:?}"
+    );
+
+    // A turn to ask for: it is asked, and the turn delivers.
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let asking = Arc::clone(&asked);
+    delivery.resume_through(Arc::new(move || {
+        asking.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    delivery.state_changed_after_read();
+    assert_eq!(handler.calls(), [], "nothing ran from the read");
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    delivery.deliver_queued();
+    assert_eq!(handler.take_calls(), [HandlerCall::StateChanged]);
+
+    // A handler that reads its window from inside a method: the revision
+    // that read published is announced after the method returns.
+    let reading = Arc::downgrade(&delivery);
+    let reads = Cell::new(0);
+    handler.react_to_state_change(move || {
+        if reads.replace(reads.get() + 1) == 0
+            && let Some(delivery) = reading.upgrade()
+        {
+            delivery.state_changed_after_read();
+        }
+    });
+    delivery.dispatch_state_changed();
+    assert_eq!(
+        handler.take_calls(),
+        [HandlerCall::StateChanged, HandlerCall::StateChanged],
+        "the running drain delivered the one the read owed"
+    );
+}
+
 /// The hook a loop asks for after each run of a window's FIFO is called once
 /// per run, after an input and after a frame, and after a frame that unwinds:
 /// the UIKit loop asks for its wake deadline there, and a run it misses
@@ -531,6 +583,10 @@ fn window_handler_obligation_table() {
         (
             "a delivery raised off the owner thread waits for an owner turn",
             a_delivery_raised_off_the_owner_thread_waits_for_an_owner_turn,
+        ),
+        (
+            "a revision a read published is announced at the owner's turn",
+            a_revision_a_read_published_is_announced_at_the_owners_turn,
         ),
         (
             "a failed frame counts and does not unwind",

@@ -303,7 +303,7 @@ mod cases {
             state.frame.has_system_title_bar(),
             "a decorated window on a compositor that draws no frame"
         );
-        assert_eq!(state.outer.size.height, CONTENT.1 + f64::from(HEADER));
+        assert_eq!(state.outer.size().height, CONTENT.1 + f64::from(HEADER));
         let report = client_frame_report(opened.window.as_ref()).expect("a Wayland window");
         assert!(report.has_header(), "{report:?}");
         assert_eq!(
@@ -373,7 +373,7 @@ mod cases {
             "the frame is gone"
         );
         assert!(!opened.window.state().frame.has_system_title_bar());
-        assert_eq!(opened.window.state().outer.size.height, CONTENT.1);
+        assert_eq!(opened.window.state().outer.size().height, CONTENT.1);
         opened
             .window
             .admit_and_apply(WindowCommand::SetFrame(WindowFrame::System))
@@ -441,7 +441,7 @@ mod cases {
         }
         mouse.release(1);
         opened.turn_until("the window at its new size", |opened| {
-            let size = opened.window.state().content_size;
+            let size = opened.window.state().content_size.get();
             (size.width - (CONTENT.0 + 60.0)).abs() <= 1.0
                 && (size.height - (CONTENT.1 + 40.0)).abs() <= 1.0
         });
@@ -492,7 +492,7 @@ mod cases {
             ["header"],
             "a maximized window keeps its title bar and loses its margins"
         );
-        let content = opened.window.state().content_size;
+        let content = opened.window.state().content_size.get();
         assert_eq!(
             content.width,
             f64::from(OUTPUT.0),
@@ -586,7 +586,8 @@ mod cases {
             state.frame
         );
         assert_eq!(
-            state.outer.size.height, CONTENT.1,
+            state.outer.size().height,
+            CONTENT.1,
             "no title bar of the host's"
         );
         let report = client_frame_report(opened.window.as_ref()).expect("a Wayland window");
@@ -650,7 +651,7 @@ mod cases {
         }
         mouse.release(1);
         opened.turn_until("the window at its new size", |opened| {
-            let size = opened.window.state().content_size;
+            let size = opened.window.state().content_size.get();
             (size.width - (CONTENT.0 + 60.0)).abs() <= 1.0
                 && (size.height - (CONTENT.1 + 40.0)).abs() <= 1.0
         });

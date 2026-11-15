@@ -28,7 +28,7 @@ use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 use crate::Opened;
 use flui_platform::{
     ApplyError, DispatchEventResult, PlatformFailure, PlatformWindow, SizeConstraints,
-    WindowCommand, WindowGeometry, WindowMode, WindowOptions, WindowReveal, WindowState,
+    WindowCommand, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use windows::Win32::{
@@ -129,7 +129,7 @@ fn near(actual: f64, wanted: f64) -> bool {
 }
 
 fn content_is(state: &WindowState, width: f64, height: f64) -> bool {
-    near(state.content_size.width, width) && near(state.content_size.height, height)
+    near(state.content_size.width(), width) && near(state.content_size.height(), height)
 }
 
 fn apply(window: &Rc<dyn HostWindow>, command: WindowCommand) {
@@ -201,7 +201,7 @@ fn activating_an_unshown_window_shows_it() {
 
 fn a_maximized_window_is_first_seen_maximized() {
     let platform = platform();
-    let normal = WindowGeometry::new(Some(Point::new(120.0, 100.0)), Size::new(700.0, 500.0));
+    let normal = geometry(Some(Point::new(120.0, 100.0)), Size::new(700.0, 500.0));
     let window = open(
         &platform,
         deferred()
@@ -215,8 +215,8 @@ fn a_maximized_window_is_first_seen_maximized() {
     assert_eq!(window.state().mode, WindowMode::Maximized);
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     let outer = window.state().outer;
-    assert!(near(outer.size.width, 700.0) && near(outer.size.height, 500.0));
-    let at = outer.position.expect("a position");
+    assert!(near(outer.size().width, 700.0) && near(outer.size().height, 500.0));
+    let at = outer.position().expect("a position");
     assert!(near(at.x, 120.0) && near(at.y, 100.0), "restored at {at:?}");
 }
 
@@ -314,7 +314,7 @@ fn a_position_set_on_a_normal_window_moves_it() {
         &window,
         WindowCommand::SetPosition(Point::new(220.0, 160.0)),
     );
-    let at = window.state().outer.position.expect("a position");
+    let at = window.state().outer.position().expect("a position");
     assert!(near(at.x, 220.0) && near(at.y, 160.0), "moved to {at:?}");
 }
 
@@ -332,7 +332,7 @@ fn a_position_set_while_maximized_is_where_it_is_restored() {
         "still maximized"
     );
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
-    let at = window.state().outer.position.expect("a position");
+    let at = window.state().outer.position().expect("a position");
     assert!(near(at.x, 300.0) && near(at.y, 250.0), "restored at {at:?}");
 }
 
@@ -346,7 +346,7 @@ fn a_position_set_while_fullscreen_is_where_it_returns_to() {
     );
     assert_eq!(window.state().mode, WindowMode::Fullscreen);
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
-    let at = window.state().outer.position.expect("a position");
+    let at = window.state().outer.position().expect("a position");
     assert!(near(at.x, 310.0) && near(at.y, 260.0), "returned to {at:?}");
 }
 
@@ -513,14 +513,14 @@ fn the_limits_hold_against_resizing() {
     );
     assert_eq!(
         window.state().constraints,
-        SizeConstraints::new(Some(Size::new(400.0, 300.0)), Some(Size::new(800.0, 600.0)))
+        limits(Some(Size::new(400.0, 300.0)), Some(Size::new(800.0, 600.0)))
     );
 }
 
 fn limits_set_later_apply_to_the_size_the_window_has() {
     let platform = platform();
     let window = open(&platform, hidden());
-    let maximum = SizeConstraints::new(None, Some(Size::new(500.0, 400.0)));
+    let maximum = limits(None, Some(Size::new(500.0, 400.0)));
     apply(&window, WindowCommand::SetConstraints(maximum));
     assert!(
         content_is(&window.state(), 500.0, 400.0),
@@ -582,11 +582,11 @@ fn a_size_set_under_limits_while_maximized_still_restores_within_them() {
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
     apply(
         &window,
-        WindowCommand::SetConstraints(SizeConstraints::new(None, Some(Size::new(400.0, 300.0)))),
+        WindowCommand::SetConstraints(limits(None, Some(Size::new(400.0, 300.0)))),
     );
     apply(&window, WindowCommand::SetSize(Size::new(900.0, 700.0)));
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
-    let content = window.state().content_size;
+    let content = window.state().content_size.get();
     assert!(
         content.width <= 402.0 && content.height <= 302.0,
         "restored to {content:?} past the maximum"
@@ -611,12 +611,12 @@ fn limits_set_while_maximized_hold_when_it_is_restored() {
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
     apply(
         &window,
-        WindowCommand::SetConstraints(SizeConstraints::new(None, Some(Size::new(400.0, 300.0)))),
+        WindowCommand::SetConstraints(limits(None, Some(Size::new(400.0, 300.0)))),
     );
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     let state = window.state();
     assert!(
-        state.content_size.width <= 402.0 && state.content_size.height <= 302.0,
+        state.content_size.width() <= 402.0 && state.content_size.height() <= 302.0,
         "restored to {:?} past the maximum",
         state.content_size
     );
@@ -628,12 +628,12 @@ fn limits_set_in_fullscreen_hold_when_it_ends() {
     apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
     apply(
         &window,
-        WindowCommand::SetConstraints(SizeConstraints::new(None, Some(Size::new(400.0, 300.0)))),
+        WindowCommand::SetConstraints(limits(None, Some(Size::new(400.0, 300.0)))),
     );
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     let state = window.state();
     assert!(
-        state.content_size.width <= 402.0 && state.content_size.height <= 302.0,
+        state.content_size.width() <= 402.0 && state.content_size.height() <= 302.0,
         "returned to {:?} past the maximum",
         state.content_size
     );
@@ -668,10 +668,10 @@ fn a_maximum_caps_maximizing() {
     let window = open(&platform, options());
     apply(
         &window,
-        WindowCommand::SetConstraints(SizeConstraints::new(None, Some(Size::new(500.0, 400.0)))),
+        WindowCommand::SetConstraints(limits(None, Some(Size::new(500.0, 400.0)))),
     );
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
-    let content = window.state().content_size;
+    let content = window.state().content_size.get();
     assert!(
         content.width <= 502.0 && content.height <= 402.0,
         "maximized to {content:?} past the maximum"
@@ -704,8 +704,8 @@ fn fullscreen_entered_from_maximized_returns_to_normal() {
     assert_eq!(state.mode, WindowMode::Normal);
     // SAFETY: a plain query of the live window.
     assert!(!unsafe { IsZoomed(hwnd) }.as_bool());
-    assert!(near(state.outer.size.width, normal.size.width));
-    assert!(near(state.outer.size.height, normal.size.height));
+    assert!(near(state.outer.size().width, normal.size().width));
+    assert!(near(state.outer.size().height, normal.size().height));
     assert!(shown(&window));
 }
 
@@ -739,9 +739,12 @@ fn a_minimized_fullscreen_window_answers_commands_as_fullscreen() {
     let state = window.state();
     assert_eq!(state.mode, WindowMode::Normal);
     assert!(state.frame.has_system_title_bar(), "the frame is back");
-    assert!(near(state.outer.size.width, normal.size.width), "{state:?}");
     assert!(
-        near(state.outer.size.height, normal.size.height),
+        near(state.outer.size().width, normal.size().width),
+        "{state:?}"
+    );
+    assert!(
+        near(state.outer.size().height, normal.size().height),
         "{state:?}"
     );
 }
@@ -782,7 +785,7 @@ fn a_window_without_a_sizing_border_holds_its_limits() {
             .max_size(Some(Size::new(500.0, 400.0))),
     );
     apply(&window, WindowCommand::SetSize(Size::new(900.0, 700.0)));
-    let content = window.state().content_size;
+    let content = window.state().content_size.get();
     assert!(
         content.width <= 502.0 && content.height <= 402.0,
         "grew to {content:?} past the maximum"
@@ -1620,6 +1623,15 @@ impl WindowFixture for Win32Fixture {
         settle();
     }
 
+    /// A `WM_DPICHANGED` that names a DPI of zero and no rectangle, as any
+    /// process may send one: over a scale of zero the window's rectangles are
+    /// no numbers.
+    fn report_no_window(&mut self) -> bool {
+        send(&self.window, WM_DPICHANGED, 0, 0);
+        settle();
+        true
+    }
+
     /// The Win32 input table: whatever its touchpad, a Win32 window hands the
     /// system no input region.
     fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
@@ -2132,4 +2144,20 @@ fn native_window_commands() {
         ),
     ];
     crate::run_table("native_window_commands", cases);
+}
+
+/// Limits with these bounds.
+fn limits(
+    min: Option<flui_foundation::geometry::Size<f64>>,
+    max: Option<flui_foundation::geometry::Size<f64>>,
+) -> flui_platform::SizeConstraints {
+    flui_platform::SizeConstraints::try_new(min, max).expect("finite limits")
+}
+
+/// A rectangle with this position and size.
+fn geometry(
+    position: Option<flui_foundation::geometry::Point<f64>>,
+    size: flui_foundation::geometry::Size<f64>,
+) -> flui_platform::WindowGeometry {
+    flui_platform::WindowGeometry::try_new(position, size).expect("a finite rectangle")
 }

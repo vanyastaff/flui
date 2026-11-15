@@ -1220,8 +1220,8 @@ impl IOSWindow {
             pointer,
             input_regions: parking_lot::Mutex::default(),
             snapshot: WindowStateCell::new(WindowState::new(
-                WindowGeometry::new(None, Size::new(0.0, 0.0)),
-                Size::new(0.0, 0.0),
+                WindowGeometry::EMPTY,
+                flui_platform::WindowExtent::ZERO,
             )),
             closed: Arc::new(AtomicBool::new(false)),
             lifecycle: Arc::new(parking_lot::Mutex::new(IOSLifecycle {
@@ -1425,15 +1425,17 @@ impl IOSWindow {
     }
 
     /// The scene's size, visibility, focus, metrics and lifecycle, read again.
-    /// A closed scene is hidden, unfocused and detached.
-    fn sample_state(&self) -> WindowState {
+    /// A closed scene is hidden, unfocused and detached. No sample for a view
+    /// whose bounds are no extent.
+    fn sample_state(&self) -> Result<WindowState, flui_platform::InvalidGeometry> {
         let metrics = *self.metrics.lock();
         let closed = self.closed.load(Ordering::SeqCst);
         let (focused, foreground) = {
             let lifecycle = self.lifecycle.lock();
             (lifecycle.focused && !closed, lifecycle.visible)
         };
-        let state = WindowState::new(WindowGeometry::new(None, metrics.size), metrics.size)
+        let extent = flui_platform::WindowExtent::try_new(metrics.size)?;
+        let state = WindowState::new(WindowGeometry::unplaced(extent), extent)
             // A scene cannot hide its window; in the background the system
             // keeps it from the screen, which is its occlusion.
             .with_visible(!closed)
@@ -1441,7 +1443,7 @@ impl IOSWindow {
             .with_resizable(false)
             .with_frame(flui_platform::WindowFrame::None)
             .with_display(self.screen.lock().id);
-        ReportedFacts {
+        Ok(ReportedFacts {
             metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                 metrics.size,
                 metrics.scale,
@@ -1466,7 +1468,7 @@ impl IOSWindow {
             active: focused,
             capabilities: scene_capabilities(),
         }
-        .onto(state)
+        .onto(state))
     }
 
     /// Read the scene again for its state publisher, announcing nothing.
@@ -1871,11 +1873,15 @@ impl PlatformWindow for IOSWindow {
     /// is raised where they change: when the view's size or scale does, and on
     /// each lifecycle step. `UIWindow` has no title, frame, position or
     /// commands, so a scene's window honours none and observes nothing.
+    ///
+    /// A revision this read publishes is announced at the owner's turn, never
+    /// from the read: the window's next delivery (the display link's frame)
+    /// carries it first.
     fn state(&self) -> WindowState {
         self.snapshot.invalidate();
         let published = self.snapshot.state_with(|| self.sample_state());
         if published.changed {
-            self.delivery.dispatch_state_changed();
+            self.delivery.state_changed_after_read();
         }
         published.state
     }

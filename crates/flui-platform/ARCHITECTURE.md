@@ -76,6 +76,25 @@ this one path (ADR-0151 §9).
   `Close`, the last admitted by `WindowCapabilities::closes`), with no method
   twin. A `compile_fail` doctest on the trait pins that a getter does not
   compile.
+- **A snapshot holds no number that is not a window's.** Its rectangles are
+  valid by construction, as its metrics and insets are: `WindowGeometry` is a
+  finite position and a `WindowExtent` (each side finite and not negative),
+  the content size is a `WindowExtent`, and so is each bound of
+  `SizeConstraints`. A window system's report can be numbers no window has (a
+  size over a scale of zero, a NaN a compositor sent); a host builds the
+  values with `try_new`, and the report it cannot build them from is no state
+  change. A NaN in a snapshot would also never equal itself, so every read
+  would publish a revision (`window_geometry` table,
+  `a_snapshot_is_equal_to_itself`). What a command asks of its numbers
+  (a positive size, a minimum not above the maximum) stays admission's
+  (`WindowCommand::validate`), and `WindowOptions::constraints` is the one
+  reading of the limits a window opens with.
+- **A read of the window runs no handler.** `PlatformWindow::state` may find
+  the window system ahead of the published snapshot and publish a revision;
+  the `state_changed` that revision is owed is delivered at the owner's turn,
+  never from inside the read, whose caller may hold a borrow the handler
+  takes again (ADR-0254 §4). `WindowHandle::is_open` asks whether a window is
+  open without reading it.
 - **Shown, minimized and occluded are three facts.** `visible` is the
   window's show state (`Show`, `Hide`, the opening option), which minimizing
   and covering leave `true`, as Win32's `WS_VISIBLE` and ICCCM's
@@ -144,19 +163,22 @@ this one path (ADR-0151 §9).
   must handle a new variant (`PlatformInput`; `WindowMaterial`, which every
   host maps).
 - **What a window cannot always honour answers in the same type.** A
-  capability is `Unavailable` exactly when admission refuses its command as
+  capability is `Absent` exactly when admission refuses its command as
   `Unsupported`; a command admitted and then refused by the operating system
   is `ApplyError::Platform`, a failure rather than a missing capability. A
-  command's capability carries where it is missing, a `CapabilityAbsence` (an
-  `UnsupportedReason` narrowed to the three lasting reasons below, one byte)
-  a host sets with `WindowCapabilities::unavailable(command, absence)`:
+  capability is one value, a `WindowCapability`: `Native`, `Emulated`, or
+  `Absent` with where it is missing, a `CapabilityAbsence` (an
+  `UnsupportedReason` narrowed to the three lasting reasons below, one byte):
   `NotOnThisDevice` where this device or its OS build lacks what its platform
   has (a version gate that refused), `NotYetOnThisHost` where the OS has it
   and the host does not implement it yet, `NotOnThisPlatform` otherwise. The
-  type holds no retryable reason, so the snapshot and the refusal agree; an
-  absence counts for equality only while its capability is unavailable, and
-  the slots come from one declaration that `WindowCapabilities::slot` matches
-  exhaustively. The window material
+  type holds no retryable reason, and nothing else records the reason, so the
+  snapshot and the refusal cannot disagree; `CapabilityParts`, the mirror a
+  recording goes through, holds the same values. A host starts from
+  `WindowCapabilities::NONE` and names what its window has, so a capability
+  the contract gains is absent there until the host carries it out. The
+  command-to-field mapping comes from one declaration that
+  `WindowCapabilities::slot` matches exhaustively. The window material
   is such a command (`WindowCommand::SetMaterial`, `WindowCapabilities::material`);
   its set is the vocabulary every host shares (`Opaque`, `System`), and a
   material one OS alone has is that OS's extension. The frame-rate hint and
@@ -201,9 +223,8 @@ this one path (ADR-0151 §9).
   like every input stamp, so input-to-photon time is a subtraction; never a
   prediction (a platform that names when a frame is due fills
   `target_present`). Whether a window reports at all is a capability,
-  `WindowCapabilities::reports_presentation`, and
-  `presentation_feedback()` answers why not as `Unsupported`; no verb answers
-  for it, so the capabilities keep its reason. Where the platform reports
+  `WindowCapabilities::reports_presentation`, `Absent` with why not; no verb
+  answers for it, so the capability holds its reason. Where the platform reports
   presentation only to whoever holds the swap chain (DXGI), the presenter
   hands the surface target what it read before each present
   (`pre_present_notify(SwapChainStatistics)`, `DxgiFrameStatistics` in the

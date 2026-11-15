@@ -525,12 +525,12 @@ pub(crate) fn open_spot(
     };
     let origin = options.position.map(place);
     let normal = options.normal_geometry.and_then(|geometry| {
-        let (left, top) = geometry.position.map(place).or(origin)?;
+        let (left, top) = geometry.position().map(place).or(origin)?;
         Some((
             left,
             top,
-            left.saturating_add(logical_to_device(geometry.size.width, scale)),
-            top.saturating_add(logical_to_device(geometry.size.height, scale)),
+            left.saturating_add(logical_to_device(geometry.size().width, scale)),
+            top.saturating_add(logical_to_device(geometry.size().height, scale)),
         ))
     });
     OpenSpot {
@@ -608,6 +608,10 @@ mod open_tests {
 
     const FRAME: (i32, i32) = (16, 39);
 
+    fn geometry(position: Option<Point<f64>>, size: Size<f64>) -> WindowGeometry {
+        WindowGeometry::try_new(position, size).expect("a finite rectangle")
+    }
+
     fn with_frame(_dpi: u32, content: (i32, i32)) -> (i32, i32) {
         (content.0 + FRAME.0, content.1 + FRAME.1)
     }
@@ -653,7 +657,7 @@ mod open_tests {
         let target = display(1.0, (0, 0));
         let options = WindowOptions::default()
             .mode(WindowMode::Maximized)
-            .normal_geometry(Some(WindowGeometry::new(
+            .normal_geometry(Some(geometry(
                 Some(Point::new(100.0, 80.0)),
                 Size::new(700.0, 500.0),
             )));
@@ -664,18 +668,18 @@ mod open_tests {
     fn a_normal_rectangle_without_a_position_follows_the_windows_own() {
         let options = WindowOptions::default()
             .position(Some(Point::new(30.0, 40.0)))
-            .normal_geometry(Some(WindowGeometry::new(None, Size::new(300.0, 200.0))));
+            .normal_geometry(Some(geometry(None, Size::new(300.0, 200.0))));
         let spot = open_spot(&options, None, 1.0, with_frame);
         assert_eq!(spot.normal, Some((30, 40, 330, 240)));
-        let unplaced = WindowOptions::default()
-            .normal_geometry(Some(WindowGeometry::new(None, Size::new(300.0, 200.0))));
+        let unplaced =
+            WindowOptions::default().normal_geometry(Some(geometry(None, Size::new(300.0, 200.0))));
         assert_eq!(open_spot(&unplaced, None, 1.0, with_frame).normal, None);
     }
 
     fn an_opening_rectangle_at_the_edge_of_the_range_saturates() {
         let options = WindowOptions::default()
             .mode(WindowMode::Maximized)
-            .normal_geometry(Some(WindowGeometry::new(
+            .normal_geometry(Some(geometry(
                 Some(Point::new(3.0e9, 3.0e9)),
                 Size::new(700.0, 500.0),
             )));
@@ -738,13 +742,13 @@ mod open_tests {
             .expect("window");
         let state = window.state();
         assert!(
-            near(state.content_size.width, 640.0) && near(state.content_size.height, 480.0),
+            near(state.content_size.width(), 640.0) && near(state.content_size.height(), 480.0),
             "content {:?}",
             state.content_size
         );
         assert!(
-            state.outer.size.width > state.content_size.width
-                && state.outer.size.height > state.content_size.height,
+            state.outer.size().width > state.content_size.width()
+                && state.outer.size().height > state.content_size.height(),
             "the outer window carries a frame"
         );
     }
@@ -775,7 +779,7 @@ mod open_tests {
             .expect("restore");
         let state = window.state();
         assert!(
-            near(state.content_size.width, 500.0) && near(state.content_size.height, 400.0),
+            near(state.content_size.width(), 500.0) && near(state.content_size.height(), 400.0),
             "restored to {:?}",
             state.content_size
         );
@@ -788,7 +792,7 @@ mod open_tests {
             .open_window(
                 WindowOptions::default()
                     .mode(WindowMode::Maximized)
-                    .normal_geometry(Some(WindowGeometry::new(
+                    .normal_geometry(Some(geometry(
                         Some(Point::new(120.0, 100.0)),
                         Size::new(700.0, 500.0),
                     ))),
@@ -801,10 +805,12 @@ mod open_tests {
             .expect("restore");
         let outer = window.state().outer;
         assert!(
-            near(outer.size.width, 700.0) && near(outer.size.height, 500.0),
+            near(outer.size().width, 700.0) && near(outer.size().height, 500.0),
             "returned to {outer:?}"
         );
-        let at = outer.position.expect("a Win32 window reports its position");
+        let at = outer
+            .position()
+            .expect("a Win32 window reports its position");
         assert!(near(at.x, 120.0) && near(at.y, 100.0), "at {at:?}");
     }
 
@@ -829,13 +835,13 @@ mod open_tests {
                 .normal_geometry
                 .unwrap_or_else(|| panic!("{what} reports the rectangle it returns to"));
             assert!(
-                near(reported.size.width, normal.size.width)
-                    && near(reported.size.height, normal.size.height),
+                near(reported.size().width, normal.size().width)
+                    && near(reported.size().height, normal.size().height),
                 "{what}: {reported:?} is not {normal:?}"
             );
             let (at, was) = (
-                reported.position.expect("a position"),
-                normal.position.expect("a position"),
+                reported.position().expect("a position"),
+                normal.position().expect("a position"),
             );
             assert!(
                 near(at.x, was.x) && near(at.y, was.y),

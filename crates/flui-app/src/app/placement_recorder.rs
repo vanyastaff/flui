@@ -105,16 +105,20 @@ pub(crate) fn restore_into(
     options.position = resolved.offset_in_display;
     options.mode = resolved.mode;
     // A window that opens away from normal returns to the bounds it was
-    // remembered at: outer, so the content size plus the frame.
-    options.normal_geometry = (resolved.mode != WindowMode::Normal).then(|| {
-        WindowGeometry::new(
-            resolved.offset_in_display,
-            Size::new(
-                resolved.size.width + frame.width,
-                resolved.size.height + frame.height,
-            ),
-        )
-    });
+    // remembered at: outer, so the content size plus the frame. A frame
+    // measured as no extent leaves the window without bounds to return to.
+    options.normal_geometry = (resolved.mode != WindowMode::Normal)
+        .then(|| {
+            WindowGeometry::try_new(
+                resolved.offset_in_display,
+                Size::new(
+                    resolved.size.width + frame.width,
+                    resolved.size.height + frame.height,
+                ),
+            )
+            .ok()
+        })
+        .flatten();
 }
 
 /// Follows one window's published state and writes its placement to storage.

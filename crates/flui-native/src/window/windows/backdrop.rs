@@ -711,11 +711,11 @@ mod material_tests {
             .expect("platform");
         let (window, hwnd) = open(&platform);
         assert_eq!(
-            platform.window_capabilities().material,
+            platform.window_capabilities().material.availability(),
             Availability::Unavailable
         );
         assert_eq!(
-            window.state().capabilities.material,
+            window.state().capabilities.material.availability(),
             Availability::Unavailable
         );
         let before = held(hwnd);
@@ -745,7 +745,10 @@ mod material_tests {
             return;
         }
         let (window, hwnd) = open(&platform);
-        assert_eq!(window.state().capabilities.material, Availability::Native);
+        assert_eq!(
+            window.state().capabilities.material,
+            flui_platform::WindowCapability::Native
+        );
         assert_eq!(
             held(hwnd),
             DWMSBT_MAINWINDOW.0,

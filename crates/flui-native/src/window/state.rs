@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::geometry::WindowMetrics;
 use flui_platform::{
-    WindowAppearance, WindowCapabilities, WindowExecutionState, WindowInsets, WindowState,
+    InvalidGeometry, WindowAppearance, WindowCapabilities, WindowExecutionState, WindowInsets,
+    WindowState,
 };
 use parking_lot::Mutex;
 
@@ -56,8 +57,30 @@ impl ReportedFacts {
     }
 }
 
+/// The snapshot a window opens with, from the first read of its window
+/// system: that read, or, when its numbers describe no window, an empty
+/// window with the `capabilities` it opens with, so commands are admitted
+/// against what the window honours while its geometry waits for the first
+/// read that describes one.
+pub(crate) fn opening_state(
+    first_read: Result<WindowState, InvalidGeometry>,
+    capabilities: WindowCapabilities,
+) -> WindowState {
+    first_read.unwrap_or_else(|refused| {
+        tracing::warn!(
+            %refused,
+            "a window opens with a report that describes no window; its geometry is empty until one does"
+        );
+        WindowState::new(
+            flui_platform::WindowGeometry::EMPTY,
+            flui_platform::WindowExtent::ZERO,
+        )
+        .with_capabilities(capabilities)
+    })
+}
+
 /// The answer to a command a host has no way to carry out. `admit` refuses it
-/// first, through a capability the host names `Unavailable`, so a window
+/// first, through a capability the host names absent, so a window
 /// reaches this only for a command the contract gained before the host learnt
 /// it: the window system cannot do it, and the caller hears so.
 #[cfg(any(windows, target_os = "macos", target_arch = "wasm32", linux_host))]
@@ -106,12 +129,12 @@ pub(crate) fn held_to(
 ) -> flui_foundation::geometry::Size<f64> {
     let mut size = size;
     if let Some(min) = constraints.min {
-        size.width = size.width.max(min.width);
-        size.height = size.height.max(min.height);
+        size.width = size.width.max(min.width());
+        size.height = size.height.max(min.height());
     }
     if let Some(max) = constraints.max {
-        size.width = size.width.min(max.width);
-        size.height = size.height.min(max.height);
+        size.width = size.width.min(max.width());
+        size.height = size.height.min(max.height());
     }
     size
 }
@@ -177,6 +200,10 @@ struct Slot {
     read_after: u64,
     /// The revision space was used up: nothing is published any more.
     frozen: bool,
+    /// The last read was refused: what the window system reported describes
+    /// no window. Kept so a window system that goes on reporting it is
+    /// diagnosed once, not on every read.
+    refusing: bool,
 }
 
 /// One window's last published [`WindowState`] and its staleness.
@@ -186,6 +213,12 @@ struct Slot {
 /// command it just issued). The next [`state_with`](Self::state_with) reads the
 /// OS again, with no lock held across the read, and publishes the sample; a
 /// sample equal to the published one keeps its revision.
+///
+/// A read whose numbers describe no window (a size over a scale of zero, a
+/// NaN the window system sent) builds no sample
+/// ([`InvalidGeometry`]): the published snapshot stands, and the next
+/// invalidation reads again. This is the one place that decides it, for
+/// every host.
 ///
 /// Threads may read at once. A sample begun before an invalidation that
 /// another read has already published past is discarded, so once the read
@@ -256,6 +289,7 @@ impl WindowStateCell {
                 state: initial,
                 read_after: 0,
                 frozen: false,
+                refusing: false,
             }),
             invalidations: AtomicU64::new(1),
             #[cfg(all(debug_assertions, feature = "native-capture"))]
@@ -286,10 +320,15 @@ impl WindowStateCell {
     }
 
     /// The snapshot: the last published one while nothing has invalidated the
-    /// cell, otherwise the result of `sample` published.
+    /// cell, otherwise the result of `sample` published, or the last
+    /// published one again when `sample` read numbers that describe no
+    /// window.
     ///
     /// `sample` runs with no lock held, so it may call the OS.
-    pub(crate) fn state_with(&self, sample: impl FnOnce() -> WindowState) -> Published {
+    pub(crate) fn state_with(
+        &self,
+        sample: impl FnOnce() -> Result<WindowState, InvalidGeometry>,
+    ) -> Published {
         let invalidations = self.invalidations.load(Ordering::Acquire);
         {
             let slot = self.last.lock();
@@ -304,10 +343,15 @@ impl WindowStateCell {
     }
 
     /// Publish a sample read after `invalidations`: the previous snapshot when
-    /// nothing differs or a read begun later has published already, otherwise
-    /// the next revision. At the last revision the cell freezes on its final
-    /// snapshot, with one diagnostic, and publishes nothing again.
-    fn publish(&self, sample: WindowState, invalidations: u64) -> Published {
+    /// nothing differs, the read described no window or a read begun later
+    /// has published already, otherwise the next revision. At the last
+    /// revision the cell freezes on its final snapshot, with one diagnostic,
+    /// and publishes nothing again.
+    fn publish(
+        &self,
+        sample: Result<WindowState, InvalidGeometry>,
+        invalidations: u64,
+    ) -> Published {
         let mut slot = self.last.lock();
         if slot.read_after > invalidations {
             return Published {
@@ -322,6 +366,27 @@ impl WindowStateCell {
                 changed: false,
             };
         }
+        let sample = match sample {
+            Ok(sample) => {
+                slot.refusing = false;
+                sample
+            }
+            Err(refused) => {
+                let first = !std::mem::replace(&mut slot.refusing, true);
+                let state = slot.state.clone();
+                drop(slot);
+                if first {
+                    tracing::warn!(
+                        %refused,
+                        "a window system's report describes no window; its published state stands"
+                    );
+                }
+                return Published {
+                    state,
+                    changed: false,
+                };
+            }
+        };
         match slot.state.successor(sample) {
             Ok(next) => {
                 let changed = next.revision != slot.state.revision;
@@ -343,9 +408,11 @@ impl WindowStateCell {
             }
             Err(error) => {
                 slot.frozen = true;
+                let state = slot.state.clone();
+                drop(slot);
                 tracing::warn!(%error, "a window stops publishing state changes");
                 Published {
-                    state: slot.state.clone(),
+                    state,
                     changed: false,
                 }
             }
@@ -358,7 +425,9 @@ mod tests {
     use std::cell::Cell;
 
     use flui_foundation::geometry::Size;
-    use flui_platform::{WindowGeometry, WindowRevision, WindowState};
+    use flui_platform::{
+        InvalidGeometry, WindowExtent, WindowGeometry, WindowRevision, WindowState,
+    };
 
     use super::{WindowStateCell, held_to};
 
@@ -370,7 +439,8 @@ mod tests {
         use flui_platform::SizeConstraints;
 
         let size = Size::new;
-        let both = SizeConstraints::new(Some(size(400.0, 300.0)), Some(size(900.0, 700.0)));
+        let limits = |min, max| SizeConstraints::try_new(min, max).expect("finite limits");
+        let both = limits(Some(size(400.0, 300.0)), Some(size(900.0, 700.0)));
         let rows = [
             ("inside", both, size(640.0, 480.0), size(640.0, 480.0)),
             ("below", both, size(200.0, 100.0), size(400.0, 300.0)),
@@ -389,19 +459,19 @@ mod tests {
             ),
             (
                 "a minimum only",
-                SizeConstraints::new(Some(size(400.0, 300.0)), None),
+                limits(Some(size(400.0, 300.0)), None),
                 size(200.0, 5000.0),
                 size(400.0, 5000.0),
             ),
             (
                 "a maximum only",
-                SizeConstraints::new(None, Some(size(900.0, 700.0))),
+                limits(None, Some(size(900.0, 700.0))),
                 size(200.0, 5000.0),
                 size(200.0, 700.0),
             ),
             (
                 "a maximum below the minimum",
-                SizeConstraints::new(Some(size(500.0, 500.0)), Some(size(300.0, 300.0))),
+                limits(Some(size(500.0, 500.0)), Some(size(300.0, 300.0))),
                 size(400.0, 400.0),
                 size(300.0, 300.0),
             ),
@@ -411,16 +481,47 @@ mod tests {
         }
     }
 
-    fn state(width: f64) -> WindowState {
-        WindowState::new(
-            WindowGeometry::new(None, Size::new(width, 100.0)),
-            Size::new(width, 100.0),
-        )
+    /// A read of a window `width` wide, as a host's sample answers it: no
+    /// sample for a width no window has.
+    fn state(width: f64) -> Result<WindowState, InvalidGeometry> {
+        let extent = WindowExtent::try_new(Size::new(width, 100.0))?;
+        Ok(WindowState::new(WindowGeometry::unplaced(extent), extent))
+    }
+
+    fn window(width: f64) -> WindowState {
+        state(width).expect("a finite width")
+    }
+
+    /// A read whose numbers describe no window publishes nothing and is not
+    /// repeated until the window is invalidated again; the next read that
+    /// describes a window publishes it.
+    #[test]
+    fn a_read_that_describes_no_window_publishes_nothing() {
+        let cell = WindowStateCell::new(window(1.0));
+        let first = cell.state_with(|| state(2.0));
+        assert!(first.changed);
+        for width in [f64::INFINITY, f64::NAN, -1.0] {
+            cell.invalidate();
+            let refused = cell.state_with(|| state(width));
+            assert!(!refused.changed, "{width}");
+            assert_eq!(refused.state, first.state, "{width}");
+            let kept = cell.state_with(|| panic!("a refused read is not repeated"));
+            assert_eq!(kept.state, first.state, "{width}");
+        }
+        cell.invalidate();
+        let recovered = cell.state_with(|| state(3.0));
+        assert!(recovered.changed);
+        assert_eq!(
+            recovered.state.revision.get(),
+            first.state.revision.get() + 1,
+            "the refused reads took no revision"
+        );
+        assert_eq!(recovered.state.content_size, Size::new(3.0, 100.0));
     }
 
     #[test]
     fn invalidation_during_a_sample_stays_stale() {
-        let cell = WindowStateCell::new(state(1.0));
+        let cell = WindowStateCell::new(window(1.0));
         let samples = Cell::new(0);
         let _ = cell.state_with(|| {
             samples.set(samples.get() + 1);
@@ -444,7 +545,7 @@ mod tests {
     /// the window changed and the other read published the change.
     #[test]
     fn a_read_overtaken_by_a_later_one_publishes_nothing() {
-        let cell = WindowStateCell::new(state(1.0));
+        let cell = WindowStateCell::new(window(1.0));
         let _ = cell.state_with(|| state(1.0));
         cell.invalidate();
         let overtaken = cell.state_with(|| {
@@ -463,7 +564,7 @@ mod tests {
 
     #[test]
     fn an_exhausted_revision_freezes_the_cell() {
-        let mut last = state(1.0);
+        let mut last = window(1.0);
         last.revision = WindowRevision::LAST;
         let cell = WindowStateCell::new(last.clone());
         for attempt in 0..3 {

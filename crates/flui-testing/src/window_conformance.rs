@@ -24,6 +24,11 @@
 //! - **Bad numbers never reach the window system.** A size that is not finite
 //!   and positive is refused at admission as
 //!   [`InvalidGeometry`](AdmissionError::InvalidGeometry), so no window sees it.
+//! - **Nor does a bad report reach the snapshot.** A report whose numbers
+//!   describe no window (a size that is not finite, a scale of zero)
+//!   publishes nothing, and reading the window again keeps its revision
+//!   (ADR-0254 §1). A fixture with no way to make its window system report
+//!   one ([`WindowFixture::report_no_window`]) skips it.
 //! - **Verbs answer to their capability.** The frame-rate hint and the input
 //!   regions, which a window takes outside the command queue because they are
 //!   sent every frame, answer `Unsupported` exactly when their capability is
@@ -32,9 +37,8 @@
 //!   capabilities say it reports when its frames reached the screen carries
 //!   the report on its first frame request after frames were shown, stamped
 //!   between the first present and the request's arrival; one that says it
-//!   does not names a lasting reason and carries none. A fixture that cannot
-//!   present ([`WindowFixture::present_and_request_frame`]) checks the reason
-//!   only.
+//!   does not carries none. A fixture that cannot present
+//!   ([`WindowFixture::present_and_request_frame`]) skips it.
 //! - **Frame requests are on the event timeline.** A frame request's vsync
 //!   lies within a second before its arrival, never after it, and the
 //!   platform's target present time, where it names one, within a second
@@ -42,7 +46,10 @@
 //!   event epoch lands far from both.
 //! - **A closed window refuses.** Every admitted command after the window
 //!   closed — through [`WindowCommand::Close`] where the window takes it, else
-//!   the way the window system closes it — is [`Closed`](ApplyError::Closed).
+//!   the way the window system closes it — is [`Closed`](ApplyError::Closed),
+//!   and the input regions, which a window takes outside the command queue,
+//!   are refused: a window that took them while it was open answers
+//!   [`NoWindow`](UnsupportedReason::NoWindow).
 //! - **The snapshot agrees with the window system.** Once the window system
 //!   has settled, each fact the fixture reads back by its own means (the
 //!   drawable metrics and scale, focus, visibility, occlusion where it can be
@@ -63,8 +70,8 @@ use flui_foundation::geometry::{Point, Rect, Size, WindowMetrics};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
     AdmissionError, AppTitleBar, ApplyError, Availability, EventTime, FrameRateHint, FrameRequest,
-    PlatformWindow, SizeConstraints, Unsupported, WindowCommand, WindowFrame, WindowMaterial,
-    WindowMode, WindowState,
+    PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowCapability,
+    WindowCommand, WindowFrame, WindowMaterial, WindowMode, WindowState,
 };
 
 use crate::window_commands::AdmitAndApply;
@@ -120,6 +127,14 @@ pub trait WindowFixture {
     /// title command honoured, and settle; `false` where the window system
     /// gives a test no such lever, which skips the check that needs one.
     fn revise_capabilities(&mut self) -> bool {
+        false
+    }
+
+    /// Make the window system report, for the window, numbers that describe
+    /// no window (a size that is not finite, a scale of zero), and settle;
+    /// `false` where the window system gives a test no such lever, which
+    /// skips the check that needs one.
+    fn report_no_window(&mut self) -> bool {
         false
     }
 
@@ -212,6 +227,10 @@ const CHECKS: &[(&str, Check)] = &[
     ("revisions_mean_change", revisions_mean_change),
     ("bad_numbers_are_refused", bad_numbers_are_refused),
     (
+        "a_report_that_describes_no_window_publishes_nothing",
+        a_report_that_describes_no_window_publishes_nothing,
+    ),
+    (
         "the_snapshot_agrees_with_the_window_system",
         the_snapshot_agrees_with_the_window_system,
     ),
@@ -249,10 +268,13 @@ fn sample_commands(state: &WindowState) -> Vec<WindowCommand> {
         WindowCommand::SetTitle("window conformance".to_owned()),
         WindowCommand::SetPosition(Point::new(120.0, 90.0)),
         WindowCommand::SetSize(Size::new(640.0, 480.0)),
-        WindowCommand::SetConstraints(SizeConstraints::new(
-            Some(Size::new(200.0, 150.0)),
-            Some(Size::new(2000.0, 1500.0)),
-        )),
+        WindowCommand::SetConstraints(
+            SizeConstraints::try_new(
+                Some(Size::new(200.0, 150.0)),
+                Some(Size::new(2000.0, 1500.0)),
+            )
+            .expect("BUG: the sample limits are finite"),
+        ),
         // The frame first: a window system that resizes a window only through
         // its frame (Win32) takes resizing back only on a framed window.
         WindowCommand::SetFrame(WindowFrame::AppTitleBar(AppTitleBar::new())),
@@ -279,7 +301,7 @@ fn capabilities_are_honest(fixture: &mut dyn WindowFixture) -> Result<(), String
     let mut broken = Vec::new();
     for command in sample_commands(&window.state()) {
         let capabilities = window.state().capabilities;
-        let capable = capabilities.availability(&command).is_available();
+        let capable = capabilities.permits(&command);
         match (capable, command.clone().admit(&capabilities)) {
             (false, Err(AdmissionError::Unsupported(refused))) if refused.is_retryable() => {
                 broken.push(format!(
@@ -323,7 +345,7 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
                 .ok_or_else(|| format!("the title is {:?}, not {title:?}", state.title)),
             WindowCommand::SetPosition(at) => {
                 if capabilities.observes_position.is_available() {
-                    let there = state.outer.position;
+                    let there = state.outer.position();
                     there
                         .is_some_and(|there| near(there.x, at.x) && near(there.y, at.y))
                         .then_some(())
@@ -332,8 +354,8 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
                     Ok(())
                 }
             }
-            WindowCommand::SetSize(size) => (near(state.content_size.width, size.width)
-                && near(state.content_size.height, size.height))
+            WindowCommand::SetSize(size) => (near(state.content_size.width(), size.width)
+                && near(state.content_size.height(), size.height))
             .then_some(())
             .ok_or_else(|| format!("the content size is {:?}, not {size:?}", state.content_size)),
             WindowCommand::SetConstraints(constraints) => (state.constraints == *constraints)
@@ -430,6 +452,52 @@ fn bad_numbers_are_refused(fixture: &mut dyn WindowFixture) -> Result<(), String
         match command.clone().admit(&window.state().capabilities) {
             Err(AdmissionError::InvalidGeometry) => {}
             other => broken.push(format!("{command:?} was admitted as {other:?}")),
+        }
+    }
+    finish(broken)
+}
+
+/// `a_report_that_describes_no_window_publishes_nothing` (ADR-0254 §1): a
+/// report whose numbers no window has (a size that is not finite, a scale of
+/// zero) is no state change. The snapshot stays the one published, at its
+/// revision, however often it is read: a snapshot that held such a number
+/// would differ from itself and publish a revision with every read. The
+/// window then follows its window system again: the next size it takes is
+/// published.
+fn a_report_that_describes_no_window_publishes_nothing(
+    fixture: &mut dyn WindowFixture,
+) -> Result<(), String> {
+    let window = fixture.window();
+    fixture.settle();
+    let before = window.state();
+    if !fixture.report_no_window() {
+        return Ok(());
+    }
+    let mut broken = Vec::new();
+    let after = window.state();
+    if after != before {
+        broken.push(format!(
+            "a report that describes no window published {after:?} over {before:?}"
+        ));
+    }
+    let again = window.state();
+    if again.revision != after.revision {
+        broken.push(format!(
+            "reading again moved the revision from {:?} to {:?}",
+            after.revision, again.revision
+        ));
+    }
+    let size = Size::new(600.0, 400.0);
+    if window.admit_and_apply(WindowCommand::SetSize(size)).is_ok() {
+        fixture.settle();
+        let recovered = window.state();
+        if !(near(recovered.content_size.width(), size.width)
+            && near(recovered.content_size.height(), size.height))
+        {
+            broken.push(format!(
+                "after the report, a resize to {size:?} left the content at {:?}",
+                recovered.content_size
+            ));
         }
     }
     finish(broken)
@@ -579,39 +647,34 @@ fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
 fn presentation_is_reported_exactly_when_claimed(
     fixture: &mut dyn WindowFixture,
 ) -> Result<(), String> {
-    let claimed = fixture
-        .window()
-        .state()
-        .capabilities
-        .presentation_feedback();
+    // An absent capability names a lasting reason by its type
+    // (`CapabilityAbsence`): there is no answer that asks to be tried again.
+    let claimed = fixture.window().state().capabilities.reports_presentation;
     let mut broken = Vec::new();
-    if let Err(absent) = claimed
-        && absent.is_retryable()
-    {
-        broken.push(format!(
-            "presentation feedback is absent as {absent}, which asks to be tried again"
-        ));
-    }
     let before = EventTime::now();
     let Some(request) = fixture.present_and_request_frame() else {
-        return finish(broken);
+        return Ok(());
     };
     let after = EventTime::now();
     match (claimed, request.presented) {
-        (Ok(_), Some(presented)) if presented.at < before || presented.at > after => {
+        (WindowCapability::Native | WindowCapability::Emulated, Some(presented))
+            if presented.at < before || presented.at > after =>
+        {
             broken.push(format!(
                 "a frame shown after {before:?} was reported at {:?}, outside the time up to its \
                  request's arrival at {after:?}",
                 presented.at
             ));
         }
-        (Ok(_), Some(_)) | (Err(_), None) => {}
-        (Ok(availability), None) => broken.push(format!(
-            "presentation feedback is {availability:?}, but the request after shown frames \
-             carried no report"
+        (WindowCapability::Native | WindowCapability::Emulated, Some(_))
+        | (WindowCapability::Absent(_), None) => {}
+        (WindowCapability::Native | WindowCapability::Emulated, None) => broken.push(format!(
+            "presentation feedback is {claimed:?}, but the request after shown frames carried no \
+             report"
         )),
-        (Err(absent), Some(presented)) => broken.push(format!(
-            "presentation feedback is absent as {absent}, but a request carried a report at {:?}",
+        (WindowCapability::Absent(absence), Some(presented)) => broken.push(format!(
+            "presentation feedback is absent as {absence:?}, but a request carried a report at \
+             {:?}",
             presented.at
         )),
     }
@@ -730,6 +793,7 @@ fn a_surface_target_is_send_sync_and_unavailable_after_close(
 
 fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String> {
     let window = fixture.window();
+    let honoured_input_regions = fixture.input_capabilities().honours_input_regions();
     let mut broken = Vec::new();
     close_window(fixture, &mut broken);
     for command in sample_commands(&window.state()) {
@@ -742,6 +806,20 @@ fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String
             Err(ApplyError::Closed) => {}
             other => broken.push(format!("{command:?} after close answered {other:?}")),
         }
+    }
+    // The verb a window takes outside the command queue has no `Closed` to
+    // answer: a window that took input regions while it was open says its
+    // window is not there, and never that it kept them.
+    let region = InputRegion::new(
+        InputRegionKind::SystemGestureExclusion,
+        Rect::from_ltrb(0.0, 0.0, 40.0, 30.0),
+    );
+    match window.set_input_regions(&[region]) {
+        Err(refused)
+            if !honoured_input_regions || refused.reason == UnsupportedReason::NoWindow => {}
+        answer => broken.push(format!(
+            "set_input_regions after close answered {answer:?}, not that the window is not there"
+        )),
     }
     finish(broken)
 }

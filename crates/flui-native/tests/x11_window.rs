@@ -658,11 +658,11 @@ mod cases {
         );
         let state = fixture.window.state();
         assert_eq!(
-            state.outer.position,
+            state.outer.position(),
             Some(flui_foundation::geometry::Point::new(120.0, 90.0))
         );
         assert_eq!(
-            state.outer.size,
+            state.outer.size(),
             Size::new(400.0 + as_f64(left + right), 300.0 + as_f64(top + bottom)),
             "the outer size is the content's grown by the frame"
         );

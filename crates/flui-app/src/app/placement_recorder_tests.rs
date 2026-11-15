@@ -38,8 +38,9 @@ fn displays() -> DisplaySnapshot {
 
 fn at(x: f64, y: f64) -> WindowState {
     WindowState::new(
-        WindowGeometry::new(Some(Point::new(x, y)), Size::new(816.0, 639.0)),
-        Size::new(800.0, 600.0),
+        WindowGeometry::try_new(Some(Point::new(x, y)), Size::new(816.0, 639.0))
+            .expect("a finite rectangle"),
+        flui_platform::WindowExtent::try_new(Size::new(800.0, 600.0)).expect("a finite size"),
     )
 }
 
@@ -150,10 +151,7 @@ fn restore_fits_the_outer_size_and_hands_a_maximized_window_its_normal_bounds() 
     assert_eq!(options.mode, WindowMode::Maximized);
     assert_eq!(
         options.normal_geometry,
-        Some(WindowGeometry::new(
-            options.position,
-            Size::new(1920.0, 639.0)
-        )),
+        WindowGeometry::try_new(options.position, Size::new(1920.0, 639.0)).ok(),
         "the window returns to its outer bounds"
     );
 }
@@ -191,8 +189,10 @@ fn restore_fits_the_frame_the_window_opens_with() {
         WindowMode::Normal,
         1.0,
     );
-    let no_app_title_bar = WindowCapabilities::ALL
-        .without_app_title_bar(flui_platform::CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    let mut no_app_title_bar = WindowCapabilities::ALL;
+    no_app_title_bar.app_title_bar = flui_platform::WindowCapability::Absent(
+        flui_platform::CapabilityAbsence::NOT_YET_ON_THIS_HOST,
+    );
     // (case, frame asked for, content width)
     let table = [
         (

@@ -246,8 +246,9 @@ impl PlatformWindow for TestWindow {
     /// What the builder set, honouring no command; a size or scale that is
     /// not a drawable area reports no metrics.
     fn state(&self) -> flui_platform::WindowState {
-        let size = self.logical_size;
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
+        // A size that is no extent reports none, as it reports no metrics.
+        let extent = flui_platform::WindowExtent::try_new(self.logical_size).unwrap_or_default();
+        flui_platform::WindowState::new(flui_platform::WindowGeometry::unplaced(extent), extent)
             .with_visible(self.visible)
             .with_focused(self.focused)
             .with_metrics(

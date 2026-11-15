@@ -153,11 +153,12 @@ pub(crate) const fn window_capabilities(
     gate: &Result<Since<SystemBackdrop>, Unsupported>,
     presentation: Option<CapabilityAbsence>,
 ) -> WindowCapabilities {
-    use flui_platform::Availability::{Emulated, Native};
+    use flui_platform::Availability;
+    use flui_platform::WindowCapability::{Absent, Emulated, Native};
+    let mut capabilities = WindowCapabilities::NONE;
     // A tablet shows a touch keyboard (`InputPane`), whose occlusion this host
     // does not read yet.
-    let mut capabilities =
-        WindowCapabilities::NONE.without_keyboard_inset(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    capabilities.reports_keyboard_inset = Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;
@@ -174,16 +175,16 @@ pub(crate) const fn window_capabilities(
     capabilities.hides = Native;
     capabilities.activates = Native;
     capabilities.closes = Native;
-    capabilities.observes_position = Native;
-    capabilities.observes_minimized = Native;
-    capabilities.places_at_open = Native;
+    capabilities.observes_position = Availability::Native;
+    capabilities.observes_minimized = Availability::Native;
+    capabilities.places_at_open = Availability::Native;
     capabilities.material = Native;
     // From the frame statistics of the swap chain the renderer presents
     // through, which it hands the surface target before each present.
-    capabilities.reports_presentation = Native;
-    if let Some(absence) = presentation {
-        capabilities = capabilities.without_presentation_feedback(absence);
-    }
+    capabilities.reports_presentation = match presentation {
+        Some(absence) => Absent(absence),
+        None => Native,
+    };
     super::material::below_the_gate(capabilities, gate)
 }
 
@@ -425,22 +426,26 @@ impl WindowsWindow {
                 focused: false,
             }));
 
-            let constraints = SizeConstraints::new(options.min_size, options.max_size);
-            let snapshot = Arc::new(WindowStateCell::new(sample_state(
-                hwnd,
-                &state,
-                OwnerTracking {
-                    mode: NativeMode::Normal,
-                    restore_style: 0,
-                    constraints,
-                    display: displays.display_of_window(hwnd),
-                    appearance,
-                    active: false,
-                    hovered: false,
-                    occluded: false,
-                    capabilities: windows.capabilities(),
-                    frame: options.frame,
-                },
+            let constraints = options.constraints();
+            let capabilities = windows.capabilities();
+            let snapshot = Arc::new(WindowStateCell::new(crate::window::state::opening_state(
+                sample_state(
+                    hwnd,
+                    &state,
+                    OwnerTracking {
+                        mode: NativeMode::Normal,
+                        restore_style: 0,
+                        constraints,
+                        display: displays.display_of_window(hwnd),
+                        appearance,
+                        active: false,
+                        hovered: false,
+                        occluded: false,
+                        capabilities,
+                        frame: options.frame,
+                    },
+                ),
+                capabilities,
             )));
 
             // A wake marks the published state stale, so the first read after
@@ -1536,12 +1541,17 @@ impl PlatformWindow for WindowsWindow {
     /// `WM_NCHITTEST`, which answers from them without running framework code
     /// (ADR-0286). Windows starts its edge swipes whatever a window says, so a
     /// `SystemGestureExclusion` region is not honoured and the input
-    /// capabilities say so. A window that is gone, or a call off the owner
-    /// thread, keeps nothing.
+    /// capabilities say so. A window that is gone keeps nothing and answers
+    /// `NoWindow`, as a command to it answers `Closed`: the handle may name
+    /// another window by then.
     fn set_input_regions(
         &self,
         regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), Unsupported> {
+        let gone = Unsupported::new(UnsupportedReason::NoWindow);
+        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
+            return Err(gone);
+        }
         let scale = self.state.lock().scale_factor;
         super::proc::with_window_context(self.hwnd, "set_input_regions", |ctx| {
             // `WM_NCHITTEST` borrows them only while it reads a slice and runs
@@ -1551,8 +1561,8 @@ impl PlatformWindow for WindowsWindow {
             let mut projected = std::mem::take(&mut *ctx.input_regions.borrow_mut());
             let _changed = projected.update(regions, scale, None);
             *ctx.input_regions.borrow_mut() = projected;
-        });
-        Ok(())
+        })
+        .ok_or(gone)
     }
 }
 

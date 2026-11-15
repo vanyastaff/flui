@@ -37,12 +37,12 @@ impl PlacementDisplay {
             f64::from(self.origin.x) / scale,
             f64::from(self.origin.y) / scale,
         );
-        WindowGeometry::new(
-            geometry
-                .position
-                .map(|at| Point::new(at.x + origin.x, at.y + origin.y)),
-            geometry.size,
-        )
+        // A sum that leaves the finite numbers moves nothing.
+        geometry
+            .at(geometry
+                .position()
+                .map(|at| Point::new(at.x + origin.x, at.y + origin.y)))
+            .unwrap_or(geometry)
     }
 
     /// The display options measure their position on: the one `wanted` names
@@ -154,10 +154,10 @@ impl OpenPlan {
         };
         let (at, content_size) = match returns_to {
             Some(geometry) => (
-                geometry.position,
+                geometry.position(),
                 Size::new(
-                    (geometry.size.width - inset.width).max(1.0),
-                    (geometry.size.height - inset.height).max(1.0),
+                    (geometry.size().width - inset.width).max(1.0),
+                    (geometry.size().height - inset.height).max(1.0),
                 ),
             ),
             None => (options.position, options.size),
@@ -257,6 +257,10 @@ mod tests {
         WindowOptions::default()
             .size(Size::new(800.0, 600.0))
             .position(Some(Point::new(100.0, 50.0)))
+    }
+
+    fn geometry(position: Option<Point<f64>>, size: Size<f64>) -> WindowGeometry {
+        WindowGeometry::try_new(position, size).expect("a finite rectangle")
     }
 
     fn plan(options: &WindowOptions) -> OpenPlan {
@@ -456,8 +460,7 @@ mod tests {
 
     #[test]
     fn open_plan_opens_a_maximized_window_at_the_rectangle_it_returns_to() {
-        let returns_to =
-            WindowGeometry::new(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
+        let returns_to = geometry(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
         let frame = Size::new(2.0, 30.0);
         let maximized = options()
             .mode(WindowMode::Maximized)
@@ -474,7 +477,7 @@ mod tests {
         // measured theirs from.
         assert_eq!(
             planned.normal_geometry,
-            Some(WindowGeometry::new(
+            Some(geometry(
                 Some(Point::new(2220.0, 200.0)),
                 Size::new(1000.0, 700.0)
             ))
@@ -485,7 +488,7 @@ mod tests {
             origin: Point::new(1920, 56),
             scale_factor: 2.0,
         };
-        let relative = WindowGeometry::new(Some(Point::new(100.0, 50.0)), Size::new(1000.0, 700.0));
+        let relative = geometry(Some(Point::new(100.0, 50.0)), Size::new(1000.0, 700.0));
         let on_scaled = options()
             .mode(WindowMode::Maximized)
             .normal_geometry(Some(relative));
@@ -493,7 +496,7 @@ mod tests {
         assert_eq!(
             planned
                 .normal_geometry
-                .and_then(|geometry| geometry.position),
+                .and_then(|geometry| geometry.position()),
             Some(Point::new(1060.0, 78.0))
         );
 
@@ -505,7 +508,7 @@ mod tests {
         assert_eq!(planned.normal_geometry, None);
 
         // A rectangle smaller than the frame still has a content area.
-        let tiny = WindowGeometry::new(None, Size::new(1.0, 1.0));
+        let tiny = geometry(None, Size::new(1.0, 1.0));
         let tiny = options()
             .mode(WindowMode::Fullscreen)
             .normal_geometry(Some(tiny));
@@ -519,8 +522,7 @@ mod tests {
 
     #[test]
     fn open_plan_takes_no_frame_from_a_window_without_the_systems() {
-        let returns_to =
-            WindowGeometry::new(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
+        let returns_to = geometry(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
         let frame = Size::new(2.0, 30.0);
         // (case, frame asked for, content size)
         let table = [

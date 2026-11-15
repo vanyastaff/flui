@@ -14,7 +14,7 @@ use flui_platform::{
     WindowMode, WindowState,
 };
 use flui_platform::{
-    Availability, CapabilityAbsence, EventTime, FramePresented, FrameRequest, WindowCapabilities,
+    Availability, EventTime, FramePresented, FrameRequest, WindowCapabilities, WindowCapability,
     WindowOptions,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -60,12 +60,10 @@ impl PlatformWindow for Faulty {
             Fault::ClaimsWhatItCannot => state.capabilities = WindowCapabilities::ALL,
             Fault::HidesWhenMinimized => state.visible &= state.mode != WindowMode::Minimized,
             Fault::ClaimsPresentation => {
-                state.capabilities.reports_presentation = Availability::Native;
+                state.capabilities.reports_presentation = WindowCapability::Native;
             }
             Fault::DisclaimsPresentation => {
-                state.capabilities = state
-                    .capabilities
-                    .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+                state.capabilities.reports_presentation = WindowCapability::NOT_ON_THIS_PLATFORM;
             }
             _ => {}
         }
@@ -103,9 +101,16 @@ impl PlatformWindow for Faulty {
         &self,
         regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
-        match self.1 {
-            Fault::VerbsIgnoreTheirCapabilities => Ok(()),
-            _ => self.0.set_input_regions(regions),
+        match (self.1, self.0.set_input_regions(regions)) {
+            (Fault::VerbsIgnoreTheirCapabilities, _) => Ok(()),
+            // A window that keeps the regions of a window that is gone and
+            // says it took them.
+            (Fault::TakesInputRegionsAfterClose, Err(gone))
+                if gone.reason == flui_platform::UnsupportedReason::NoWindow =>
+            {
+                Ok(())
+            }
+            (_, answer) => answer,
         }
     }
 
@@ -209,6 +214,12 @@ enum Fault {
     /// The window opened after the one under test closed reports the closed
     /// one's id, as a host that took a recycled handle for an id would.
     ReissuesAClosedId,
+    /// The window publishes what its window system reported though the
+    /// numbers describe no window: the fixture's report is one the snapshot
+    /// can hold, so the window takes it as a host with no refusal would.
+    PublishesAReportOfNoWindow,
+    /// The window answers `Ok` to the input regions of a window that closed.
+    TakesInputRegionsAfterClose,
 }
 
 impl Fixture {
@@ -238,6 +249,7 @@ impl Fixture {
                 | Fault::IgnoresClose
                 | Fault::IgnoresTheToken
                 | Fault::VerbsIgnoreTheirCapabilities
+                | Fault::TakesInputRegionsAfterClose
                 | Fault::PresentNotifyBlocks
                 | Fault::ClaimsPresentation
                 | Fault::DisclaimsPresentation
@@ -333,6 +345,19 @@ impl WindowFixture for Fixture {
         true
     }
 
+    /// The simulated window system reports a size that is no extent, which
+    /// the headless window refuses as a host refuses a rectangle over a
+    /// scale of zero.
+    fn report_no_window(&mut self) -> bool {
+        match self.fault {
+            Some(Fault::PublishesAReportOfNoWindow) => {
+                self.mock().simulate_resize(1234.0, 777.0);
+            }
+            _ => self.mock().simulate_resize(f64::NAN, f64::INFINITY),
+        }
+        true
+    }
+
     fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
         self.mock().window_system().input_capabilities
     }
@@ -378,16 +403,16 @@ impl WindowFixture for Fixture {
 
 fn only_the_move_and_size_commands() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_position = flui_platform::Availability::Native;
-    capabilities.sets_size = flui_platform::Availability::Native;
+    capabilities.sets_position = flui_platform::WindowCapability::Native;
+    capabilities.sets_size = flui_platform::WindowCapability::Native;
     capabilities.observes_position = flui_platform::Availability::Native;
     capabilities
 }
 
 fn no_fullscreen_or_minimize() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::ALL;
-    capabilities.enters_fullscreen = flui_platform::Availability::Unavailable;
-    capabilities.minimizes = flui_platform::Availability::Unavailable;
+    capabilities.enters_fullscreen = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
+    capabilities.minimizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
     capabilities.observes_minimized = flui_platform::Availability::Unavailable;
     capabilities
 }
@@ -424,9 +449,14 @@ fn a_window_whose_verbs_ignore_their_capabilities_is_caught() {
         .into_iter()
         .map(|violation| violation.check)
         .collect();
+        // A window that takes every verb takes the input regions of a closed
+        // window too.
         assert_eq!(
             checks,
-            ["per_frame_verbs_report_unsupported_exactly_when_unavailable"]
+            [
+                "per_frame_verbs_report_unsupported_exactly_when_unavailable",
+                "a_closed_window_refuses"
+            ]
         );
     }
 }
@@ -472,6 +502,20 @@ fn a_host_that_reissues_a_closed_windows_id_is_caught() {
     assert_eq!(
         caught(Fault::ReissuesAClosedId),
         ["a_window_opened_after_a_close_has_an_id_of_its_own"]
+    );
+}
+
+fn a_window_that_publishes_a_report_of_no_window_is_caught() {
+    assert_eq!(
+        caught(Fault::PublishesAReportOfNoWindow),
+        ["a_report_that_describes_no_window_publishes_nothing"]
+    );
+}
+
+fn a_closed_window_that_takes_input_regions_is_caught() {
+    assert_eq!(
+        caught(Fault::TakesInputRegionsAfterClose),
+        ["a_closed_window_refuses"]
     );
 }
 
@@ -582,6 +626,14 @@ fn window_conformance_checks() {
             (
                 "a_window_that_ignores_the_token_is_caught",
                 a_window_that_ignores_the_token_is_caught as fn(),
+            ),
+            (
+                "a_window_that_publishes_a_report_of_no_window_is_caught",
+                a_window_that_publishes_a_report_of_no_window_is_caught as fn(),
+            ),
+            (
+                "a_closed_window_that_takes_input_regions_is_caught",
+                a_closed_window_that_takes_input_regions_is_caught as fn(),
             ),
             (
                 "a_surface_target_that_blocks_or_withholds_is_caught",

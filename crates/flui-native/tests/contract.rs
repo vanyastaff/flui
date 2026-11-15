@@ -76,7 +76,7 @@ fn test_window_lifecycle_contract() {
             tracing::info!("✓ Platform supports window creation");
 
             // Contract 4: Window must report valid sizes
-            let logical_size = window.state().content_size;
+            let logical_size = window.state().content_size.get();
             let physical_size = physical_of(&*window);
             let scale_factor = scale_of(&*window);
 
@@ -171,7 +171,7 @@ fn test_window_lifecycle_contract() {
                 Ok(window2) => {
                     tracing::info!("✓ Platform supports multiple concurrent windows");
 
-                    let size2 = window2.state().content_size;
+                    let size2 = window2.state().content_size.get();
                     assert!(
                         size2.width > 0.0 && size2.height > 0.0,
                         "Second window must have valid size"
@@ -2564,7 +2564,7 @@ mod native_windows {
             callback_observations
                 .lock()
                 .expect("move observations")
-                .push((actual, window.state().outer.position));
+                .push((actual, window.state().outer.position()));
         });
         for (x, y) in [(40_000, 100), (200, 150)] {
             observations.lock().expect("move observations").clear();
@@ -2590,7 +2590,7 @@ mod native_windows {
                 "callback saw truncated or stale origin"
             );
             assert_eq!(
-                window.state().outer.position,
+                window.state().outer.position(),
                 Some(actual),
                 "getter changed after native move"
             );

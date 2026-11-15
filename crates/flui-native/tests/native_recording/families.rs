@@ -208,10 +208,13 @@ impl ReplayTarget for PlatformTarget<'_> {
 
 /// Replays a `window_state` stream into a headless window: each snapshot is
 /// published as the window system's report, on the display the replay
-/// issued for its label, and what the window published is kept.
+/// issued for its label, and what a reader of the window then sees is kept.
 pub(super) struct WindowStateTarget<'a> {
     window: HeadlessHostWindow,
     labels: &'a Labels,
+    /// The window's state as a consumer reads it after each replayed
+    /// snapshot (`PlatformWindow::state`), which is what the application's
+    /// `state_changed` route reads.
     pub(super) published: Vec<WindowState>,
 }
 
@@ -229,7 +232,15 @@ impl ReplayTarget for WindowStateTarget<'_> {
     fn window_state(&mut self, state: &RecordedWindowState) -> Result<(), Unsupported> {
         let display = state.display().map(|label| self.labels.id(label));
         let sample = state.clone().into_parts(display).into_state();
-        self.published.push(self.window.simulate_state(sample));
+        let reported = self.window.simulate_state(sample);
+        // A consumer is told of the change and reads the window: the read
+        // answers the snapshot the replay reported, and replaces nothing.
+        let read = flui_platform::PlatformWindow::state(&self.window);
+        assert_eq!(
+            read, reported,
+            "a read of the window answers the snapshot its window system reported"
+        );
+        self.published.push(read);
         Ok(())
     }
 }
@@ -495,12 +506,13 @@ fn window_state_recordings_replay_on_the_headless_host() {
     let last = target.published.last().expect("snapshots were replayed");
     assert_eq!(last.title, None);
     assert_eq!(
-        last.normal_geometry.and_then(|geometry| geometry.position),
+        last.normal_geometry
+            .and_then(flui_platform::WindowGeometry::position),
         Some(flui_foundation::geometry::Point::new(10.0, 20.0))
     );
     assert_eq!(
         last.capabilities.into_parts().maximizes,
-        Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
+        flui_platform::WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         "an absence survives the replay"
     );
     assert_eq!(
@@ -514,13 +526,13 @@ fn app_title_bar_snapshots_keep_their_wire_values_and_replay() {
     use flui_native::Platform as _;
     use flui_native::journal::codec::{Backend, Header, Stream};
     use flui_platform::{
-        AppTitleBar, Availability, ControlsOffset, SystemControls, WindowCapabilities,
-        WindowCommand, WindowFrame,
+        AppTitleBar, ControlsOffset, SystemControls, WindowCapabilities, WindowCommand, WindowFrame,
     };
     use flui_testing::window_commands::AdmitAndApply as _;
 
     let mut capabilities = WindowCapabilities::ALL.into_parts();
-    capabilities.sets_frame = Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    capabilities.sets_frame =
+        flui_platform::WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     let platform =
         HeadlessPlatform::new().with_window_capabilities(capabilities.into_capabilities());
     let window = platform
@@ -584,9 +596,12 @@ fn app_title_bar_snapshots_keep_their_wire_values_and_replay() {
         let capabilities = state.capabilities.into_parts();
         assert_eq!(
             capabilities.sets_frame,
-            Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+            flui_platform::WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
         );
-        assert_eq!(capabilities.app_title_bar, Ok(Availability::Native));
+        assert_eq!(
+            capabilities.app_title_bar,
+            flui_platform::WindowCapability::Native
+        );
     }
     let valid_offset = r#""offset":[17.0,9.0]"#;
     assert!(written.contains(valid_offset));

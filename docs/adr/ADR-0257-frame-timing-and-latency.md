@@ -150,7 +150,7 @@ it where it plans the frame, and the recording carries it with the frame that de
    and one still ahead of the request's delivery waits, so a window's reports never run backwards.
    `HostInput::Frame` carries it, and so does a recording.
 2. **Whether a window reports is a capability,** `WindowCapabilities::reports_presentation`, with
-   its reason kept beside it (`presentation_feedback() -> Result<Availability, Unsupported>`): no
+   its reason kept in it (a `WindowCapability`, `Absent` with the `CapabilityAbsence`): no
    verb answers for it, as a verb answers for the frame-rate hint.
 3. **Where only the presenter can read it, the presenter hands it to the surface target**
    (`SurfaceTarget::pre_present_notify(SwapChainStatistics)`): DXGI's frame statistics belong to

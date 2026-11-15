@@ -449,7 +449,11 @@ impl X11Window {
     /// focus, and ask for a frame when the content changed size.
     fn refresh_state(&self) {
         self.cell.invalidate();
-        let state = PlatformWindow::state(self);
+        let published = self.cell.state_with(|| self.sample());
+        if published.changed {
+            self.delivery.dispatch_state_changed();
+        }
+        let state = published.state;
         let (focus_changed, resized) = {
             let mut record = self.record.borrow_mut();
             let focus_changed =
@@ -472,8 +476,9 @@ impl X11Window {
         }
     }
 
-    /// The window as the server and the window manager hold it now.
-    fn sample(&self) -> WindowState {
+    /// The window as the server and the window manager hold it now; no sample
+    /// for a rectangle that describes no window.
+    fn sample(&self) -> Result<WindowState, flui_platform::InvalidGeometry> {
         let read = self.read_server();
         let support = self.support();
         let capabilities = capabilities(support);
@@ -486,7 +491,7 @@ impl X11Window {
             state.visible = false;
             state.focused = false;
             state.active = false;
-            return state;
+            return Ok(state);
         };
         let outer = outer_bounds(read.origin, read.content, read.frame);
         let display = snapshot
@@ -507,11 +512,11 @@ impl X11Window {
         // Mapped under an unmapped ancestor (a window manager's frame on
         // another workspace) or fully covered.
         let occluded = read.map_state == MapState::UNVIEWABLE || record.obscured;
-        let geometry = logical_geometry(outer, scale);
-        let content_size = Size::new(
+        let geometry = logical_geometry(outer, scale)?;
+        let content_size = flui_platform::WindowExtent::try_new(Size::new(
             f64::from(read.content.width) / scale,
             f64::from(read.content.height) / scale,
-        );
+        ))?;
         let normal_geometry = match mode {
             WindowMode::Normal => {
                 record.normal_geometry = Some(geometry);
@@ -536,7 +541,7 @@ impl X11Window {
             .with_resizable(record.resizable)
             .with_frame(record.frame)
             .with_display(display.map(|display| display.id));
-        ReportedFacts {
+        Ok(ReportedFacts {
             metrics,
             appearance: self.appearance(),
             insets: flui_platform::WindowInsets::ZERO,
@@ -550,7 +555,7 @@ impl X11Window {
             },
             capabilities,
         }
-        .onto(state)
+        .onto(state))
     }
 
     /// Ask the server for what the snapshot reads, every request first, then
@@ -1515,10 +1520,12 @@ impl PlatformWindow for X11Window {
         })
     }
 
+    /// A revision this read publishes is announced at the owner's turn, never
+    /// from the read.
     fn state(&self) -> WindowState {
         let published = self.cell.state_with(|| self.sample());
         if published.changed {
-            self.delivery.dispatch_state_changed();
+            self.delivery.state_changed_after_read();
         }
         published.state
     }
@@ -1602,6 +1609,9 @@ impl PlatformWindow for X11Window {
         &self,
         regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), Unsupported> {
+        if self.closed.get() {
+            return Err(Unsupported::new(UnsupportedReason::NoWindow));
+        }
         let scale = self.record.borrow().scale;
         // Projected with nothing borrowed: a dropped region is reported
         // through `tracing`, whose subscriber is the application's code.
@@ -1897,9 +1907,12 @@ impl X11Windows {
         let window_ref = WindowRef { xid, id };
         let facets = self.positions.for_window(&window_ref);
         let capabilities = capabilities(support);
+        // Until the first read of the server: what was asked for, or an empty
+        // window where that describes none.
         let initial = WindowState::new(
-            WindowGeometry::new(options.position, plan.content_size),
-            plan.content_size,
+            WindowGeometry::try_new(options.position, plan.content_size)
+                .unwrap_or(WindowGeometry::EMPTY),
+            flui_platform::WindowExtent::try_new(plan.content_size).unwrap_or_default(),
         )
         .with_capabilities(capabilities);
         let opens_in = match plan.mode {
@@ -1932,7 +1945,7 @@ impl X11Windows {
             input_scale: WindowScale::new(scale),
             record: RefCell::new(Record {
                 title: options.title.clone(),
-                constraints: SizeConstraints::new(options.min_size, options.max_size),
+                constraints: options.constraints(),
                 resizable: options.resizable,
                 // No title bar of the application's here yet: one asked for
                 // opens with the system's frame.
@@ -1943,7 +1956,7 @@ impl X11Windows {
                 outer_to_fit: plan
                     .normal_geometry
                     .filter(|_| plan.unmapped_until_shown())
-                    .map(|geometry| geometry.size),
+                    .map(WindowGeometry::size),
                 obscured: false,
                 normal_geometry: plan.normal_geometry,
                 content: None,

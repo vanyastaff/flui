@@ -6,7 +6,8 @@
 //!   target and public, hidden from the documentation, for the backend
 //!   conformance table in `tests/`;
 //! - `motion`: `MotionEvent`s as plain facts, decoded into owned pointer
-//!   input; `scroll`: the scroll factors' failure policy. Both are pure, built
+//!   input; `scroll`: the scroll factors' failure policy; `latency`: which
+//!   sources a window takes unbuffered. All three are pure, built
 //!   for Android and for tests on every host;
 //! - the rest needs the NDK or the JVM: reading the event's fields,
 //!   discovering its device's motion ranges and reading the scroll factors
@@ -1221,6 +1222,82 @@ pub(crate) mod scroll {
             let tiny = DevicePixelRatio::try_new(f64::from_bits(1)).expect("finite density");
             assert!(PixelFactors::from_physical(1.0, 1.0, tiny).is_none());
             assert!(cache.policy().delta(f32::NAN, 0.0).is_none());
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod latency {
+    //! Which input sources an Activity's window takes unbuffered for the
+    //! latency the application asked for.
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::InputLatency;
+
+    use crate::version::gate::android::{AndroidApi, UnbufferedDispatch};
+
+    /// The `InputDevice.SOURCE_CLASS_*` mask an Activity's decor view asks for
+    /// unbuffered dispatch to deliver `latency`: the pointer class for
+    /// [`InputLatency::Low`], none otherwise, so a window reopened on the same
+    /// Activity drops an earlier request. `None` below API 30, where the
+    /// system has no such request and batches every source.
+    pub(crate) fn unbuffered_input_sources(latency: InputLatency, api: AndroidApi) -> Option<i32> {
+        /// `InputDevice.SOURCE_CLASS_NONE`.
+        const SOURCE_CLASS_NONE: i32 = 0;
+        /// `InputDevice.SOURCE_CLASS_POINTER`: touch, stylus and mouse.
+        const SOURCE_CLASS_POINTER: i32 = 0x2;
+        api.since::<UnbufferedDispatch>()?;
+        Some(match latency {
+            InputLatency::Low => SOURCE_CLASS_POINTER,
+            // `Balanced`, and a latency the contract adds later, keep the
+            // system's per-frame batches.
+            _ => SOURCE_CLASS_NONE,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use flui_platform::InputLatency::{Balanced, Low};
+
+        use super::{AndroidApi, unbuffered_input_sources};
+
+        /// A window asks its decor view for unbuffered pointer input when the
+        /// application wants low latency, withdraws the request otherwise, and
+        /// asks nothing where the system has no such request.
+        #[test]
+        fn an_activity_asks_for_unbuffered_pointer_input() {
+            let api = AndroidApi::from_level;
+            let rows = [
+                (
+                    "low, API 30",
+                    unbuffered_input_sources(Low, api(30)),
+                    Some(0x2),
+                ),
+                (
+                    "low, API 35",
+                    unbuffered_input_sources(Low, api(35)),
+                    Some(0x2),
+                ),
+                (
+                    "balanced, API 30",
+                    unbuffered_input_sources(Balanced, api(30)),
+                    Some(0),
+                ),
+                ("low, API 29", unbuffered_input_sources(Low, api(29)), None),
+                (
+                    "balanced, API 24",
+                    unbuffered_input_sources(Balanced, api(24)),
+                    None,
+                ),
+                (
+                    "low, unknown API",
+                    unbuffered_input_sources(Low, AndroidApi::UNKNOWN),
+                    None,
+                ),
+            ];
+            let failures: Vec<_> = rows.iter().filter(|(_, got, want)| got != want).collect();
+            assert!(failures.is_empty(), "{failures:#?}");
         }
     }
 }

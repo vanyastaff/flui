@@ -24,16 +24,15 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
+use crate::display::android::sample::activity_color_mode;
 use crate::host::{self, WindowFacets, WindowPositions};
+use crate::input::android::latency::unbuffered_input_sources;
 use crate::input::regions::ProjectedInputRegions;
 use crate::owner::android::java_view::{ActivityDragSource, JavaView, KeyboardReport};
 use crate::owner::android::{
     ActivityFlags, ActivityPreferences, ActivityRef, ActivityWindow, ActivityWindowId, AndroidLoop,
 };
-use crate::window::capabilities::{
-    ActivityFacts, WindowColorMode, activity_capabilities, activity_color_mode,
-    pointer_icon_absence, unbuffered_input_sources,
-};
+use crate::window::capabilities::{ActivityFacts, activity_capabilities, pointer_icon_absence};
 use crate::window::keyboard_motion::KeyboardMotion;
 
 use crate::text::WindowTextInput;
@@ -45,6 +44,7 @@ use crate::{
     version::gate::android::DragSource,
     version::gate::android::GestureExclusion,
     version::gate::android::TouchpadGestures,
+    version::gate::android::WindowColorMode,
     window::state::{ReportedFacts, WindowStateCell},
 };
 use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId, WindowInsets};
@@ -134,17 +134,20 @@ impl AndroidWindow {
             delivery.resume_through_signal(&signal);
         }
         let appearance = night_mode(&app, preferences.as_ref());
-        let snapshot = Arc::new(WindowStateCell::new(sample_state(
-            &app,
-            preferences.as_ref(),
-            displays.as_ref(),
-            api,
-            &activity,
-            &Kept {
-                appearance,
-                insets: WindowInsets::ZERO,
-                hovered: false,
-            },
+        let snapshot = Arc::new(WindowStateCell::new(crate::window::state::opening_state(
+            sample_state(
+                &app,
+                preferences.as_ref(),
+                displays.as_ref(),
+                api,
+                &activity,
+                &Kept {
+                    appearance,
+                    insets: WindowInsets::ZERO,
+                    hovered: false,
+                },
+            ),
+            activity_capabilities(activity_facts(api, displays.as_ref())),
         )));
         Self {
             id,
@@ -244,18 +247,19 @@ impl AndroidWindow {
         native_extent(&self.app)
     }
 
-    /// The window's published state, read again first when something
-    /// invalidated it; `WindowHandler::state_changed` is raised when that produced a new
-    /// revision.
+    /// The window's published state for a caller that reads it
+    /// (`PlatformWindow::state`), read again first when something invalidated
+    /// it. A revision the read publishes is announced at the owner's turn,
+    /// never from the read.
     fn current_state(&self) -> WindowState {
         let published = self.snapshot.state_with(|| self.sample());
         if published.changed {
-            self.delivery.dispatch_state_changed();
+            self.delivery.state_changed_after_read();
         }
         published.state
     }
 
-    fn sample(&self) -> WindowState {
+    fn sample(&self) -> Result<WindowState, flui_platform::InvalidGeometry> {
         sample_state(
             &self.app,
             self.preferences.as_ref(),
@@ -283,10 +287,12 @@ impl ActivityWindow for AndroidWindow {
         self.id
     }
 
-    /// The activity surface may differ from its published state: read it again.
+    /// The Activity reported a change: read its surface again, and raise
+    /// `WindowHandler::state_changed` when that produced a new revision.
     fn publish_state(&self) {
-        self.snapshot.invalidate();
-        let _ = self.current_state();
+        if self.read_state() == crate::owner::window_delivery::Publication::Changed {
+            self.delivery.dispatch_state_changed();
+        }
     }
 
     fn scale(&self) -> f64 {
@@ -483,7 +489,7 @@ fn sample_state(
     api: AndroidApi,
     activity: &ActivityFlags,
     kept: &Kept,
-) -> WindowState {
+) -> Result<WindowState, flui_platform::InvalidGeometry> {
     let (width, height) = native_extent(app);
     let scale = native_scale(app, preferences);
     let size = if scale > 0.0 {
@@ -492,7 +498,8 @@ fn sample_state(
         Size::new(f64::from(width), f64::from(height))
     };
     let focused = activity.focused.load(Ordering::SeqCst);
-    let state = WindowState::new(WindowGeometry::new(None, size), size)
+    let extent = flui_platform::WindowExtent::try_new(size)?;
+    let state = WindowState::new(WindowGeometry::unplaced(extent), extent)
         // An Activity cannot hide its window; between `onStop` and `onStart`
         // the system keeps it from the screen, which is its occlusion.
         .with_visible(true)
@@ -500,7 +507,7 @@ fn sample_state(
         .with_resizable(false)
         .with_frame(flui_platform::WindowFrame::None)
         .with_display(displays.activity_display());
-    ReportedFacts {
+    Ok(ReportedFacts {
         // No native window (terminated, or not yet made) is no drawable area.
         metrics: flui_foundation::geometry::WindowMetrics::try_new(Size::new(width, height), scale)
             .ok(),
@@ -513,7 +520,7 @@ fn sample_state(
         active: focused,
         capabilities: activity_capabilities(activity_facts(api, displays)),
     }
-    .onto(state)
+    .onto(state))
 }
 
 /// What the system said at `api` and at the displays' last sample that an

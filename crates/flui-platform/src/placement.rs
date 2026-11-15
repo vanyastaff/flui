@@ -156,14 +156,14 @@ impl WindowPlacement {
         } else {
             state.normal_geometry.unwrap_or(state.outer)
         };
-        let frame_width = (state.outer.size.width - state.content_size.width).max(0.0);
-        let frame_height = (state.outer.size.height - state.content_size.height).max(0.0);
+        let frame_width = (state.outer.size().width - state.content_size.width()).max(0.0);
+        let frame_height = (state.outer.size().height - state.content_size.height()).max(0.0);
         let size = if state.mode == WindowMode::Normal {
-            state.content_size
+            state.content_size.get()
         } else {
             Size::new(
-                (normal.size.width - frame_width).max(1.0),
-                (normal.size.height - frame_height).max(1.0),
+                (normal.size().width - frame_width).max(1.0),
+                (normal.size().height - frame_height).max(1.0),
             )
         };
         if !positive_finite(size.width) || !positive_finite(size.height) {
@@ -179,10 +179,10 @@ impl WindowPlacement {
                 display.persistent_key.clone(),
                 display.scale_factor,
                 normal
-                    .position
+                    .position()
                     .map(|at| Point::new(at.x - usable.origin.x, at.y - usable.origin.y)),
             ),
-            None => (None, 1.0, normal.position),
+            None => (None, 1.0, normal.position()),
         };
         if offset.is_some_and(|at| !at.x.is_finite() || !at.y.is_finite()) {
             return None;

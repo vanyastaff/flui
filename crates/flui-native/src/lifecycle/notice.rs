@@ -141,8 +141,7 @@ mod tests {
     /// the operating system.
     #[test]
     fn a_wake_leaves_a_real_display_source_and_window_state_cell_stale() {
-        use flui_foundation::geometry::Size;
-        use flui_platform::{WindowGeometry, WindowState};
+        use flui_platform::{WindowExtent, WindowGeometry, WindowState};
 
         use crate::display::source::DisplaySource;
         use crate::window::state::WindowStateCell;
@@ -151,16 +150,9 @@ mod tests {
         displays
             .snapshot_with(|| Ok(Vec::new()))
             .expect("an empty sample publishes");
-        let window = Arc::new(WindowStateCell::new(WindowState::new(
-            WindowGeometry::new(None, Size::new(10.0, 10.0)),
-            Size::new(10.0, 10.0),
-        )));
-        let _ = window.state_with(|| {
-            WindowState::new(
-                WindowGeometry::new(None, Size::new(10.0, 10.0)),
-                Size::new(10.0, 10.0),
-            )
-        });
+        let read = || WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO);
+        let window = Arc::new(WindowStateCell::new(read()));
+        let _ = window.state_with(|| Ok(read()));
         assert!(
             !displays.is_stale() && !window.is_stale(),
             "fresh to begin with"

@@ -20,8 +20,8 @@ use flui_native::{
     Platform as _,
 };
 use flui_platform::{
-    AdmissionError, ApplyError, SizeConstraints, WindowCapabilities, WindowCommand, WindowMode,
-    WindowOptions, WindowState,
+    AdmissionError, ApplyError, WindowCapabilities, WindowCommand, WindowMode, WindowOptions,
+    WindowState,
 };
 
 /// What a window answers for a command its capabilities leave out.
@@ -70,23 +70,26 @@ fn commands() -> Vec<(&'static str, WindowCommand, Change)> {
         (
             "set_position",
             WindowCommand::SetPosition(Point::new(120.0, 80.0)),
-            |state| state.outer.position == Some(Point::new(120.0, 80.0)),
+            |state| state.outer.position() == Some(Point::new(120.0, 80.0)),
         ),
         (
             "set_size",
             WindowCommand::SetSize(Size::new(640.0, 480.0)),
             |state| {
                 state.content_size == Size::new(640.0, 480.0)
-                    && state.outer.size == Size::new(640.0, 480.0)
+                    && state.outer.size() == Size::new(640.0, 480.0)
             },
         ),
         (
             "set_constraints",
-            WindowCommand::SetConstraints(SizeConstraints::new(
+            WindowCommand::SetConstraints(limits(
                 Some(Size::new(300.0, 200.0)),
                 Some(Size::new(1200.0, 900.0)),
             )),
-            |state| state.constraints.min == Some(Size::new(300.0, 200.0)),
+            |state| {
+                state.constraints.min.map(flui_platform::WindowExtent::get)
+                    == Some(Size::new(300.0, 200.0))
+            },
         ),
         (
             "set_resizable",
@@ -152,7 +155,7 @@ fn restoring_returns_to_the_rectangle_before() {
     let (_, maximized) = applied(&window, WindowCommand::SetMode(WindowMode::Maximized));
     assert_eq!(maximized.mode, WindowMode::Maximized);
     assert_eq!(
-        maximized.outer.size,
+        maximized.outer.size(),
         Size::new(1920.0, 1080.0),
         "maximized fills the display"
     );
@@ -175,7 +178,7 @@ fn fullscreen_is_borderless_on_the_whole_display() {
     let (_, fullscreen) = applied(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
     assert_eq!(fullscreen.mode, WindowMode::Fullscreen);
     assert_eq!(
-        fullscreen.outer.size,
+        fullscreen.outer.size(),
         Size::new(1280.0, 720.0),
         "the display's size in its own logical pixels"
     );
@@ -283,7 +286,7 @@ fn a_false_capability_is_unsupported_and_changes_nothing() {
 
 fn a_true_capability_is_honoured() {
     let mut only_title = WindowCapabilities::NONE;
-    only_title.sets_title = flui_platform::Availability::Native;
+    only_title.sets_title = flui_platform::WindowCapability::Native;
     let platform = HeadlessPlatform::new().with_window_capabilities(only_title);
     let window = open(&platform);
     assert_eq!(window.state().capabilities, only_title);
@@ -315,7 +318,7 @@ fn invalid_geometry_is_refused_before_the_host() {
         WindowCommand::SetSize(Size::new(f64::NAN, 100.0)),
         WindowCommand::SetSize(Size::new(0.0, 100.0)),
         WindowCommand::SetPosition(Point::new(f64::INFINITY, 0.0)),
-        WindowCommand::SetConstraints(SizeConstraints::new(
+        WindowCommand::SetConstraints(limits(
             Some(Size::new(500.0, 500.0)),
             Some(Size::new(100.0, 100.0)),
         )),
@@ -372,7 +375,7 @@ fn a_command_admitted_before_a_capability_change_is_superseded() {
     );
 
     let mut revised = WindowCapabilities::ALL;
-    revised.maximizes = flui_platform::Availability::Unavailable;
+    revised.maximizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
     mock(&window).simulate_capabilities(revised);
     let after = window.state();
     assert_eq!(after.revision.get(), unfocused.revision.get() + 1);
@@ -461,7 +464,7 @@ fn the_user_resizing_and_moving_publish_too() {
 
     mock(&window).simulate_move(Point::new(30.0, 40.0));
     let moved = window.state();
-    assert_eq!(moved.outer.position, Some(Point::new(30.0, 40.0)));
+    assert_eq!(moved.outer.position(), Some(Point::new(30.0, 40.0)));
     assert_eq!(moved.revision.get(), resized.revision.get() + 1);
     assert_eq!(changes.load(Ordering::SeqCst), 2);
 
@@ -478,13 +481,12 @@ fn a_window_without_position_reports_none() {
     caps.observes_position = flui_platform::Availability::Unavailable;
     let platform = HeadlessPlatform::new().with_window_capabilities(caps);
     let window = open(&platform);
-    assert_eq!(window.state().outer.position, None);
+    assert_eq!(window.state().outer.position(), None);
 }
 
 fn opening_options_are_reflected_in_the_first_snapshot() {
     let platform = HeadlessPlatform::new();
-    let normal =
-        flui_platform::WindowGeometry::new(Some(Point::new(50.0, 60.0)), Size::new(700.0, 500.0));
+    let normal = geometry(Some(Point::new(50.0, 60.0)), Size::new(700.0, 500.0));
     let options = WindowOptions::default()
         .position(Some(Point::new(50.0, 60.0)))
         .mode(WindowMode::Maximized)
@@ -718,4 +720,20 @@ fn window_state_contract() {
             ),
         ],
     );
+}
+
+/// Limits with these bounds.
+fn limits(
+    min: Option<flui_foundation::geometry::Size<f64>>,
+    max: Option<flui_foundation::geometry::Size<f64>>,
+) -> flui_platform::SizeConstraints {
+    flui_platform::SizeConstraints::try_new(min, max).expect("finite limits")
+}
+
+/// A rectangle with this position and size.
+fn geometry(
+    position: Option<flui_foundation::geometry::Point<f64>>,
+    size: flui_foundation::geometry::Size<f64>,
+) -> flui_platform::WindowGeometry {
+    flui_platform::WindowGeometry::try_new(position, size).expect("a finite rectangle")
 }

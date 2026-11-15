@@ -6,8 +6,8 @@ use std::sync::LazyLock;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
     Availability, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot,
-    PlacementError, ResolvedPlacement, WindowCapabilities, WindowGeometry, WindowMode,
-    WindowPlacement, WindowState,
+    PlacementError, ResolvedPlacement, WindowCapabilities, WindowCapability, WindowExtent,
+    WindowGeometry, WindowMode, WindowPlacement, WindowState,
 };
 
 fn bounds(x: i32, y: i32, width: i32, height: i32) -> Bounds<i32> {
@@ -199,7 +199,7 @@ fn a_mode_the_window_cannot_enter_becomes_normal() {
     );
     assert_eq!(resolved(&full).mode, WindowMode::Fullscreen);
     let mut capabilities = WindowCapabilities::ALL;
-    capabilities.enters_fullscreen = Availability::Unavailable;
+    capabilities.enters_fullscreen = WindowCapability::NOT_ON_THIS_PLATFORM;
     let result = full
         .resolve(&DESK.displays, &capabilities, NO_FRAME)
         .expect("resolves");
@@ -456,9 +456,23 @@ fn a_field_given_twice_is_refused() {
     }
 }
 
+/// A rectangle with this position and size.
+fn geometry(position: Option<Point<f64>>, size: Size<f64>) -> WindowGeometry {
+    WindowGeometry::try_new(position, size).expect("a finite rectangle")
+}
+
+/// A window with this outer rectangle and content size.
+fn window(position: Option<Point<f64>>, outer: Size<f64>, content: Size<f64>) -> WindowState {
+    WindowState::new(
+        geometry(position, outer),
+        WindowExtent::try_new(content).expect("a finite extent"),
+    )
+}
+
 fn from_state_remembers_the_normal_bounds_relative_to_the_usable_area() {
-    let state = WindowState::new(
-        WindowGeometry::new(Some(Point::new(1060.0, 50.0)), Size::new(816.0, 639.0)),
+    let state = window(
+        Some(Point::new(1060.0, 50.0)),
+        Size::new(816.0, 639.0),
         Size::new(800.0, 600.0),
     )
     .with_display(Some(DESK.right));
@@ -468,12 +482,13 @@ fn from_state_remembers_the_normal_bounds_relative_to_the_usable_area() {
     assert_eq!(captured.size, Size::new(800.0, 600.0));
     assert_eq!(captured.scale, 2.0);
 
-    let maximized = WindowState::new(
-        WindowGeometry::new(Some(Point::new(0.0, 0.0)), Size::new(1920.0, 1040.0)),
+    let maximized = window(
+        Some(Point::new(0.0, 0.0)),
+        Size::new(1920.0, 1040.0),
         Size::new(1904.0, 1001.0),
     )
     .with_mode(WindowMode::Maximized)
-    .with_normal_geometry(Some(WindowGeometry::new(
+    .with_normal_geometry(Some(geometry(
         Some(Point::new(200.0, 100.0)),
         Size::new(816.0, 639.0),
     )))
@@ -485,31 +500,17 @@ fn from_state_remembers_the_normal_bounds_relative_to_the_usable_area() {
 }
 
 fn from_state_keeps_no_position_the_system_did_not_report() {
-    let unplaced = WindowState::new(
-        WindowGeometry::new(None, Size::new(816.0, 639.0)),
-        Size::new(800.0, 600.0),
-    );
+    let unplaced = window(None, Size::new(816.0, 639.0), Size::new(800.0, 600.0));
     let captured = WindowPlacement::from_state(&unplaced, &DESK.displays, false).expect("usable");
     assert_eq!(captured.offset, None);
 }
 
-fn from_state_refuses_numbers_that_could_not_be_restored() {
-    let off = |x: f64| {
-        WindowState::new(
-            WindowGeometry::new(Some(Point::new(x, 0.0)), Size::new(816.0, 639.0)),
-            Size::new(800.0, 600.0),
-        )
-    };
-    assert_eq!(
-        WindowPlacement::from_state(&off(f64::NAN), &DESK.displays, false),
-        None
-    );
+/// A snapshot holds no number that is not finite, so what is left to refuse
+/// is a window with no area.
+fn from_state_refuses_a_window_with_no_area() {
     assert_eq!(
         WindowPlacement::from_state(
-            &WindowState::new(
-                WindowGeometry::new(None, Size::new(0.0, 0.0)),
-                Size::new(0.0, 0.0)
-            ),
+            &WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO),
             &DESK.displays,
             false
         ),
@@ -548,8 +549,8 @@ fn placement_codec() {
                 from_state_keeps_no_position_the_system_did_not_report,
             ),
             (
-                "from_state_refuses_numbers_that_could_not_be_restored",
-                from_state_refuses_numbers_that_could_not_be_restored,
+                "from_state_refuses_a_window_with_no_area",
+                from_state_refuses_a_window_with_no_area,
             ),
         ],
     );

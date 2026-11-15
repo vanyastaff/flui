@@ -438,10 +438,10 @@ async fn web_window_reports_what_a_page_can_do() {
     let mut expected = WindowCapabilities::NONE;
     // An estimate from the visual viewport: the page has no
     // `navigator.virtualKeyboard`.
-    expected.reports_keyboard_inset = flui_platform::Availability::Emulated;
-    expected.sets_title = flui_platform::Availability::Native;
-    expected.enters_fullscreen = flui_platform::Availability::Native;
-    expected.closes = flui_platform::Availability::Emulated;
+    expected.reports_keyboard_inset = flui_platform::WindowCapability::Emulated;
+    expected.sets_title = flui_platform::WindowCapability::Native;
+    expected.enters_fullscreen = flui_platform::WindowCapability::Native;
+    expected.closes = flui_platform::WindowCapability::Emulated;
     assert_eq!(window.state().capabilities, expected);
     assert_eq!(
         running

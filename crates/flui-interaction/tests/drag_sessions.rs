@@ -156,8 +156,8 @@ impl PlatformWindow for DragWindow {
     }
     fn state(&self) -> flui_platform::WindowState {
         flui_platform::WindowState::new(
-            flui_platform::WindowGeometry::new(None, self.size),
-            self.size,
+            flui_platform::WindowGeometry::try_new(None, self.size).expect("a finite size"),
+            flui_platform::WindowExtent::try_new(self.size).expect("a finite size"),
         )
     }
     fn apply(

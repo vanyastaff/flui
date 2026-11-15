@@ -79,8 +79,9 @@ pub(crate) struct StatePublisher {
 }
 
 impl StatePublisher {
-    /// The page's report of the window now.
-    fn sample(&self) -> WindowState {
+    /// The page's report of the window now; no sample for a box that is no
+    /// extent.
+    fn sample(&self) -> Result<WindowState, flui_platform::InvalidGeometry> {
         sample_state(
             &self.canvas,
             &self.state,
@@ -89,21 +90,25 @@ impl StatePublisher {
         )
     }
 
-    /// The published state, read from the page again first when something
-    /// invalidated it; `WindowHandler::state_changed` is raised when that produced a new
-    /// revision.
+    /// The published state for a caller that reads the window
+    /// (`PlatformWindow::state`), read from the page again first when
+    /// something invalidated it. A revision the read publishes is announced
+    /// at the owner's turn, never from the read.
     fn current(&self) -> WindowState {
         let published = self.cell.state_with(|| self.sample());
         if published.changed {
-            self.delivery.dispatch_state_changed();
+            self.delivery.state_changed_after_read();
         }
         published.state
     }
 
-    /// The window may differ from its published state: read it again.
+    /// The page reported a change: read the window again, and raise
+    /// `WindowHandler::state_changed` when that produced a new revision.
     pub(crate) fn publish(&self) {
         self.cell.invalidate();
-        let _ = self.current();
+        if self.cell.state_with(|| self.sample()).changed {
+            self.delivery.dispatch_state_changed();
+        }
     }
 
     /// Read the page again for the window's state publisher, announcing
@@ -121,7 +126,7 @@ fn sample_state(
     state: &Mutex<WebWindowState>,
     display: Option<flui_platform::DisplayId>,
     hovered: bool,
-) -> WindowState {
+) -> Result<WindowState, flui_platform::InvalidGeometry> {
     let (title, size, focused, hidden, execution, metrics) = {
         let state = state.lock();
         (
@@ -149,7 +154,8 @@ fn sample_state(
             .fullscreen_element()
             .is_some_and(|element| element.contains(Some(canvas)))
     });
-    let state = WindowState::new(WindowGeometry::new(None, size), size)
+    let extent = flui_platform::WindowExtent::try_new(size)?;
+    let state = WindowState::new(WindowGeometry::unplaced(extent), extent)
         .with_mode(if fullscreen {
             WindowMode::Fullscreen
         } else {
@@ -162,7 +168,7 @@ fn sample_state(
         .with_resizable(false)
         .with_frame(flui_platform::WindowFrame::None)
         .with_display(display);
-    ReportedFacts {
+    Ok(ReportedFacts {
         metrics,
         appearance: page_appearance(),
         // The page owns the viewport; the canvas has no safe area of its own.
@@ -174,7 +180,7 @@ fn sample_state(
         active: focused,
         capabilities: page_capabilities(),
     }
-    .onto(state)
+    .onto(state))
 }
 
 /// The soft keyboard over `canvas`, at rest where it is: the browser names
@@ -517,7 +523,10 @@ impl WebWindow {
         };
 
         let state = Arc::new(Mutex::new(state));
-        let initial = sample_state(&canvas, &state, displays.current_display(), false);
+        let initial = crate::window::state::opening_state(
+            sample_state(&canvas, &state, displays.current_display(), false),
+            page_capabilities(),
+        );
         Ok(Self {
             id,
             registration: RefCell::new(Some(Registration::new(&canvas, claim))),
@@ -1152,19 +1161,18 @@ impl crate::host_window::HostWindow for WebWindow {
 /// (`Platform::window_capabilities`).
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = flui_platform::Availability::Native;
-    capabilities.enters_fullscreen = flui_platform::Availability::Native;
+    capabilities.sets_title = flui_platform::WindowCapability::Native;
+    capabilities.enters_fullscreen = flui_platform::WindowCapability::Native;
     // The page keeps its tab: the canvas is retired and its embedder told.
-    capabilities.closes = flui_platform::Availability::Emulated;
+    capabilities.closes = flui_platform::WindowCapability::Emulated;
     // A browser names when an animation frame starts (the
     // `requestAnimationFrame` timestamp), never when the frame it painted
-    // reached the screen.
-    // A page has no system gesture edges. Every browser can tell the keyboard
-    // from its visual viewport (`keyboard_over`), which is an estimate;
-    // `page_capabilities` says where it names the keyboard itself.
-    capabilities.reports_keyboard_inset = flui_platform::Availability::Emulated;
+    // reached the screen: the presentation report stays the platform's
+    // absence, as a page's system gesture edges do. Every browser can tell
+    // the keyboard from its visual viewport (`keyboard_over`), which is an
+    // estimate; `page_capabilities` says where it names the keyboard itself.
+    capabilities.reports_keyboard_inset = flui_platform::WindowCapability::Emulated;
     capabilities
-        .without_presentation_feedback(flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM)
 }
 
 /// What this page's window honours: [`window_capabilities`], with the
@@ -1175,7 +1183,7 @@ fn page_capabilities() -> WindowCapabilities {
         .and_then(|window| virtual_keyboard(&window))
         .is_some()
     {
-        capabilities.reports_keyboard_inset = flui_platform::Availability::Native;
+        capabilities.reports_keyboard_inset = flui_platform::WindowCapability::Native;
     }
     capabilities
 }

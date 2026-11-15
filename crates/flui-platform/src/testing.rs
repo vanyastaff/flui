@@ -70,7 +70,6 @@ impl crate::SurfaceTarget for NoNativeSurface {
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use flui_foundation::geometry::Size;
 /// # use flui_platform::*;
 /// struct Double(WindowId);
 ///
@@ -81,7 +80,7 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// #   fn surface_target(&self) -> Arc<dyn SurfaceTarget> { Arc::new(testing::NoNativeSurface) }
 /// #   fn redraw_requester(&self) -> Arc<dyn RedrawRequester> { Arc::new(|| {}) }
 /// #   fn state(&self) -> WindowState {
-/// #       WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+/// #       WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
 /// #   }
 /// #   fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
 /// #       command.against(&WindowCapabilities::NONE)?;

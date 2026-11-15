@@ -996,11 +996,15 @@ trait depends on `flui-platform` instead.
   is one window trait. `PlatformWindow::state` returns an immutable
   `WindowState` with a revision, and `apply` takes an `AdmittedCommand`
   (ADR-0254 §2); the snapshot's `capabilities` say which commands the window
-  honours, each as an `Availability`: `WindowCommand::admit` refuses with
-  `Unsupported` exactly when the matching capability is `Unavailable`,
-  `Emulated` marks what the host builds itself (the Win32 borderless
-  fullscreen, the Web's close, which retires the canvas), and the capabilities
-  of each backend are what its `apply` carries out today. Every host's `apply`
+  honours, each as a `WindowCapability`: `WindowCommand::admit` refuses with
+  `Unsupported` exactly when the matching capability is `Absent`, for the
+  reason it holds, `Emulated` marks what the host builds itself (the Win32
+  borderless fullscreen, the Web's close, which retires the canvas), and the
+  capabilities of each backend are what its `apply` carries out today: every
+  host starts from `WindowCapabilities::NONE` and names what its window has,
+  so a capability the contract gains is absent on a host until that host
+  carries it out (`an_x11_window_has_the_capabilities_it_names` writes one
+  host's whole set out). Every host's `apply`
   opens the token against the capabilities of its last published snapshot
   (`WindowStateCell::published_capabilities`), never a constant of its own, so
   a capability change the snapshot published (the headless `simulate_capabilities`) answers
@@ -1070,8 +1074,28 @@ trait depends on `flui-platform` instead.
   Every backend keeps its last snapshot in a `window::state::WindowStateCell`
   (built like `DisplaySource`): an OS event marks the cell stale, the next read
   samples the OS with no lock held, and a sample equal to the published one
-  keeps the revision. the handler's `state_changed` is raised after the publish, outside
-  the cell, only when the revision grew. Win32 and AppKit refresh from their
+  keeps the revision. A read whose numbers describe no window (a rectangle
+  over a scale of zero, a NaN the window system sent) builds no sample, since
+  the snapshot's geometry types hold no such number: the cell keeps the
+  published snapshot, says so once, and reads again at the next invalidation
+  (`a_read_that_describes_no_window_publishes_nothing`; the conformance check
+  `a_report_that_describes_no_window_publishes_nothing` where a fixture can
+  make its window system report one). The Win32 window keeps a DPI that is
+  never zero (`WindowScale`), and a `WM_DPICHANGED` naming zero changes
+  nothing. The handler's `state_changed` is raised after the publish, outside
+  the cell, only when the revision grew, and by one of two routes. A change
+  the window system reported is announced from the host's own callback
+  (`publish_state`, `dispatch_state_changed`). A revision that a read
+  published (`PlatformWindow::state` finding the cell stale: after a system
+  wake, or on UIKit, which rereads on every call) is queued with
+  `WindowDelivery::state_changed_after_read` and delivered at the owner's
+  next turn, or ahead of the window's next delivery where the loop gives the
+  window no turn of its own (UIKit, the page): the reader may hold a borrow
+  the handler takes again, and the handler never runs from inside a read
+  (`a_revision_a_read_published_is_announced_at_the_owners_turn`). The
+  headless window's read changes nothing either: a snapshot its simulated
+  window system reported (`simulate_state`) stays the one read until a
+  simulation or a command changes the model. Win32 and AppKit refresh from their
   window messages and delegate callbacks, the
   Web from the layout, focus and visibility observers and on each owner
   wake, which is how a screen change reaches it; the headless window

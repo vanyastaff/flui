@@ -390,7 +390,7 @@ impl UiRuntime {
             .with_window(|window| {
                 let state = window.state();
                 state.metrics.map_or(
-                    state.content_size,
+                    state.content_size.get(),
                     flui_foundation::geometry::WindowMetrics::logical,
                 )
             })

@@ -463,9 +463,12 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
     }
     fn state(&self) -> flui_platform::WindowState {
         let size = flui_foundation::geometry::Size::new(80.0, 80.0);
-        flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
-            .with_focused(true)
-            .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
+        flui_platform::WindowState::new(
+            flui_platform::WindowGeometry::try_new(None, size).expect("a finite size"),
+            flui_platform::WindowExtent::try_new(size).expect("a finite size"),
+        )
+        .with_focused(true)
+        .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
     }
 
     fn apply(
