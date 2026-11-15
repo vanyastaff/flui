@@ -311,12 +311,10 @@ impl Session {
         self.driver_feature.as_deref()
     }
 
-    /// Gives `cmd` (the cargo that builds and runs the app) the driver
-    /// feature when the profile needs it, and the endpoint and token.
+    /// Gives `cmd` (the cargo that builds and runs the app) the endpoint and
+    /// token. The driver feature is the build's: `flui run` adds it with
+    /// the other features the run builds with.
     pub(crate) fn apply(&self, cmd: &mut Command) {
-        if let Some(feature) = &self.driver_feature {
-            cmd.args(["--features", feature]);
-        }
         cmd.env(ENDPOINT_ENV, &self.app_endpoint)
             .env(TOKEN_ENV, &self.credentials.token);
     }

@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use super::{Check, Fix, Status};
 use crate::build::android_manifest;
-use crate::declarations::Declarations;
 use crate::declarations::verify::{Manifest, ManifestKind, Missing};
+use crate::declarations::{Build, Declarations};
 
 const SECTION: &str = "project";
 
@@ -72,7 +72,7 @@ fn declarations_check(dir: &Path, domains_fetched: bool) -> Check {
         .flat_map(ManifestKind::targets)
         .copied()
         .collect();
-    match Declarations::collect(dir, &targets) {
+    match Declarations::collect(Build::at(dir), &targets) {
         Ok(declarations) => {
             let permissions = declarations.android_permissions().count();
             let reasons: usize = declarations
@@ -130,7 +130,7 @@ fn one_instance_check(dir: &Path) -> Check {
     const TITLE: &str = "One desktop instance";
     let mut refused = Vec::new();
     for target in ONE_INSTANCE_TARGETS {
-        let declarations = match Declarations::collect(dir, &[target]) {
+        let declarations = match Declarations::collect(Build::at(dir), &[target]) {
             Ok(declarations) => declarations,
             Err(error) => {
                 return Check::failing(ID, SECTION, TITLE, Status::Error, error.to_string(), None);
@@ -196,8 +196,9 @@ fn android_manifest_check(dir: &Path) -> Check {
     }
     let lacks = Manifest::parse(text.as_bytes())
         .and_then(|manifest| {
-            let declarations = Declarations::collect(dir, ManifestKind::Android.targets())
-                .map_err(|error| error.to_string())?;
+            let declarations =
+                Declarations::collect(Build::at(dir), ManifestKind::Android.targets())
+                    .map_err(|error| error.to_string())?;
             Ok(manifest.missing(&declarations))
         })
         .map_or_else(
@@ -232,7 +233,7 @@ fn manifest_check(dir: &Path, path: &Path) -> Check {
         Ok(manifest) => manifest,
         Err(reason) => return failing(format!("the file {reason}"), None),
     };
-    let declarations = match Declarations::collect(dir, manifest.kind().targets()) {
+    let declarations = match Declarations::collect(Build::at(dir), manifest.kind().targets()) {
         Ok(declarations) => declarations,
         Err(error) => return failing(error.to_string(), None),
     };

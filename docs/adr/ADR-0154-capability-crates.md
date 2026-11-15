@@ -10,9 +10,11 @@
   gain `capability`) and §2 in part (the reach table gains its row);
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) in part (official packages keep their
   rules; capability crates are a second kind of package with rules of their own).
-- **Superseded-by:** [ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) for §7
-  (declarations: a versioned `[package.metadata.flui.declares]` in any crate) and for §8's step
-  of `flui add` that writes declarations (the crate states its plugin instead)
+- **Superseded-by:** [ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) for §6
+  (the linked set and its features: the crates the built artifact links, with the features its
+  build enables, from `cargo tree`), for §7 (declarations: a versioned
+  `[package.metadata.flui.declares]` in any crate) and for §8's step of `flui add` that writes
+  declarations (the crate states its plugin instead)
 - **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam this record builds on),
   [ADR-0153](ADR-0153-release-train-and-capability-crates.md) (capability crates ship in lockstep
   with the train until the contract has its own version),
@@ -229,39 +231,22 @@ object (ADR-0152) exports none and needs neither `links` nor a `build.rs`.
 
 ### 7. Declarations are strict, feature-gated Cargo metadata
 
-A capability crate declares what it needs from the application's manifests in
-`[package.metadata.flui.capability]`: strict, like the existing `[package.metadata.flui]` keys,
-so an unknown key is an error. A Cargo feature of the crate carries both its code and its extra
-declarations, so a disabled feature removes both; a build that lacks a declaration the capability
-needs makes the provider answer `NotDeclared { what }` (ADR-0152) rather than letting the OS refuse
-or end the process. The schema below is illustrative; its keys are fixed with the first crate that
-needs a declaration.
+A crate declares what it needs from the application's manifests in a strict Cargo metadata table,
+so an unknown key is an error. Where the table lives and which keys it has is
+[ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) §1 and §2: a versioned
+`[package.metadata.flui.declares]` in any crate the application links. A Cargo feature of the
+crate carries both its code and its extra declarations, so a disabled feature removes both; a
+build that lacks a declaration the capability needs makes the provider answer
+`NotDeclared { what }` (ADR-0152) rather than letting the OS refuse or end the process. A key
+arrives with the first crate that needs it: usage strings, entitlements and background modes
+among them.
 
-```toml
-# Illustrative, not a schema decision.
-[package.metadata.flui.capability]
-name = "location"                                    # equals Capability::NAME
-
-[package.metadata.flui.capability.android]
-permissions = ["android.permission.ACCESS_COARSE_LOCATION"]
-
-[package.metadata.flui.capability.apple.info-plist]
-NSLocationWhenInUseUsageDescription = { default = "Allow $(PRODUCT_NAME) to use your location" }
-
-[package.metadata.flui.capability.features.background.android]
-permissions = ["android.permission.ACCESS_BACKGROUND_LOCATION"]
-[package.metadata.flui.capability.features.background.apple]
-background-modes = ["location"]
-```
-
-- **`flui-cli` applies them.** It walks `cargo metadata` including enabled features and writes
-  the Android manifest entries (or leaves them to Gradle's merger for tier 3 of decision 5), the
-  `Info.plist` usage strings, the entitlements, the privacy manifest and, for a packaged app, the
-  MSIX capabilities. It writes them into regions it owns, delimited by markers (ADR-0255), so a
-  file the application also edits keeps the application's own lines. Static linking means Apple's
-  per-SDK privacy bundle does not exist, so the application carries the union; that aggregation
-  rule is read from the references, not from Apple's text, and is checked when the generator
-  lands.
+- **`flui-cli` applies them.** It joins the declarations of the crates the built artifact links
+  (ADR-0307 §3) and writes the Android manifest entries (or leaves them to Gradle's merger for
+  tier 3 of decision 5), the `Info.plist` usage strings, the entitlements, the privacy manifest
+  and, for a packaged app, the MSIX capabilities. How each file is written is ADR-0307 §4. Static
+  linking means Apple's per-SDK privacy bundle does not exist, so the application carries the
+  union, by the rule ADR-0307 §4 took from the references.
 - **A verify mode** (a `flui doctor` check) reads the same data for a project the CLI does not own
   and lists the keys it lacks.
 - **The application overrides.** An application-side table replaces a usage string or turns a
@@ -386,14 +371,14 @@ first capability crate that needs them.
 - The Java sources and the checked-in dex of a tier 2 crate are held by a record file of digests
   and a byte-for-byte gate (decision 5).
 - A declaration the capability needs and the build lacks makes the provider answer
-  `NotDeclared { what }`; an unknown key in `[package.metadata.flui.capability]` is an error; the
+  `NotDeclared { what }`; an unknown key in a crate's declarations is an error (ADR-0307 §2); the
   verify mode (a `flui doctor` check) lists the keys a project lacks (decision 7).
 - One conformance table per crate, run against the simulated provider in CI and against each real
   platform where a device or an OS runner exists; the platform table lists a platform as supported
   only when its conformance table has run on that platform in CI or in a recorded local run,
   otherwise "type-checked" (decision 10).
-- Checked when the generator lands: the aggregation rule for Apple's per-SDK privacy bundle, which
-  is read from the references and not from Apple's text (decision 7).
+- The aggregation rule for Apple's per-SDK privacy bundle, which is read from the references and
+  not from Apple's text, is the one ADR-0307 §4 settled (decision 7).
 - `cargo xtask android-dex` extends to every `build.rs` of the workspace: a build script that names
   `javac`, `d8` or `swiftc` fails it (decision 5); the `capability` kind rule of `cargo xtask
   workspace` refuses a declaration that claims a menu or incoming activation (decision 4). A crate
@@ -414,8 +399,8 @@ first capability crate that needs them.
 - Good, because Rust first, then a checked-in dex, then a Gradle or SPM module, and never a
   toolchain run from `build.rs`, keep a JDK or Xcode off consumers' machines (decision 5).
 - Good, because declarations are strict, feature-gated Cargo metadata that `flui-cli` reads from
-  `cargo metadata` and applies, so a missing usage string is detectable before the OS refuses or
-  ends the process (decisions 6 and 7).
+  the crates a build links (ADR-0307 §3) and applies, so a missing usage string is detectable
+  before the OS refuses or ends the process (decisions 6 and 7).
 - Good, because the host bridge hands out the `JavaVM`, the Activity and window handles through
   `ProviderContext`, never a `static` (decision 9).
 - Good, because every crate ships a simulated provider and a conformance table, and claimed support

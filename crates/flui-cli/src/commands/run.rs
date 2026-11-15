@@ -161,12 +161,17 @@ fn run_session(
     }
     // The application runs on this desktop: refused before it is built when
     // it opens links or files a later launch could not hand to it.
-    if matches!(project, Project::Application { .. }) {
+    // An application's run names the binary it builds, selected once: a
+    // hot-reload session keeps it. A worker project's host is built by its
+    // own strategy.
+    let selection = if let Project::Application { selected, .. } = &project {
         let root = std::env::current_dir().context("failed to resolve application directory")?;
         let host = crate::build::DesktopBuilder::detect_host_target()?;
-        crate::declarations::Declarations::collect_run(&root, &[&host])?
-            .require_one_instance(&host)?;
-    }
+        require_one_instance(&root, &host, &selected.built_package(), agent.as_ref())?;
+        selected.cargo_args()
+    } else {
+        Vec::new()
+    };
     if hot_reload {
         match project {
             Project::Worker(project) => {
@@ -189,6 +194,7 @@ fn run_session(
             Project::Application { .. } => {
                 ui::success("Hot reload enabled (process restart)")?;
                 let mut strategy = ProcessRestart {
+                    selection,
                     profile,
                     verbose,
                     agent,
@@ -199,6 +205,7 @@ fn run_session(
         }
     } else {
         run_once(
+            &selection,
             release,
             profile,
             verbose,
@@ -249,7 +256,7 @@ fn start_agent_session(
                 reason: "run the application project instead".into(),
             });
         }
-        Project::Application { host } => host,
+        Project::Application { host, .. } => host,
     };
     // Cargo's `dev` profile is the one known to keep debug assertions; any
     // other may drop them, and the feature costs nothing where they stay.
@@ -310,11 +317,73 @@ fn start_agent_session(
     Ok(session)
 }
 
-/// Adds the agent's feature and credentials to a `cargo` command.
-fn with_agent(cmd: &mut Command, agent: Option<&Session>) {
+/// The features a desktop run builds the application with beyond its
+/// defaults: the agent's driver feature, when the profile needs one. The
+/// cargo commands that build and run the application and the check of what
+/// it declares read this one list, so the check reads what is built.
+fn desktop_features(agent: Option<&Session>) -> Vec<String> {
+    agent
+        .and_then(Session::driver_feature)
+        .map(str::to_owned)
+        .into_iter()
+        .collect()
+}
+
+/// Adds what the run builds to a `cargo` command: `selection`, the
+/// `--package` and `--bin` of the application's binary ([`run_selection`]),
+/// the run's features and the agent's credentials.
+fn with_build(cmd: &mut Command, selection: &[String], agent: Option<&Session>) {
+    cmd.args(selection);
+    for feature in desktop_features(agent) {
+        cmd.args(["--features", &feature]);
+    }
     if let Some(session) = agent {
         session.apply(cmd);
     }
+}
+
+/// The binary a desktop run of the application at `root` builds and runs:
+/// the one plain `cargo run` would choose, as `flui build` selects it. The
+/// run names it to cargo (`--package`, `--bin`), so the build the
+/// one-instance check reads and the build that runs are one selection:
+/// plain `cargo run` among several default members would turn on the
+/// features every member asks of a shared dependency.
+fn run_selection(
+    root: &Path,
+) -> crate::build::error::BuildResult<crate::build::util::cargo::CargoTarget> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            crate::build::error::BuildError::Other(format!(
+                "could not start the target selection runtime: {error}"
+            ))
+        })?
+        .block_on(crate::build::util::cargo::select_target(
+            root,
+            &crate::build::BuildUnit::DefaultBinary,
+        ))
+}
+
+/// Refuse a desktop run for `host` of `package`, the application at `root`
+/// the run builds ([`run_selection`]), that opens links or files without the
+/// code that keeps one instance of it, read with the run's features
+/// ([`desktop_features`]).
+fn require_one_instance(
+    root: &Path,
+    host: &str,
+    package: &crate::build::BuiltPackage,
+    agent: Option<&Session>,
+) -> CliResult<()> {
+    let features = desktop_features(agent);
+    crate::declarations::Declarations::collect(
+        crate::declarations::Build::at(root)
+            .selecting(crate::declarations::Selection::of_built(Some(package)))
+            .features(&features),
+        &[host],
+    )?
+    .require_one_instance(host)?;
+    Ok(())
 }
 
 /// Ask the application `cmd` starts to register its URL schemes with
@@ -514,7 +583,9 @@ fn match_target(device: &super::devices::Device) -> CliResult<Target> {
 ///
 /// Goes through the same child policy as the dev loop, so `--json` gets the
 /// `run.app.*` events and Ctrl-C stops the app before the CLI returns.
+/// `selection` names the binary to run (empty: cargo's own choice).
 fn run_once(
+    selection: &[String],
     release: bool,
     profile: Option<String>,
     verbose: bool,
@@ -533,7 +604,7 @@ fn run_once(
     if verbose {
         cmd.arg("--verbose");
     }
-    with_agent(&mut cmd, agent);
+    with_build(&mut cmd, selection, agent);
     with_registration(&mut cmd, register_associations);
 
     ui::step("Building and running...")?;
@@ -1197,6 +1268,8 @@ fn log_changed_paths(paths: &[PathBuf]) {
 
 /// Rebuild the binary and restart the process on every change.
 struct ProcessRestart {
+    /// The `--package` and `--bin` of the binary each build and run names.
+    selection: Vec<String>,
     profile: Option<String>,
     verbose: bool,
     /// `--agent`: the app is built (with the `driver` feature for a profile
@@ -1218,7 +1291,12 @@ impl ReloadStrategy for ProcessRestart {
 
     fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
         if !timed_build(|| {
-            run_cargo_build(self.profile.as_deref(), self.verbose, self.agent.as_ref())
+            run_cargo_build(
+                &self.selection,
+                self.profile.as_deref(),
+                self.verbose,
+                self.agent.as_ref(),
+            )
         }) {
             return Ok(());
         }
@@ -1226,6 +1304,7 @@ impl ReloadStrategy for ProcessRestart {
             session.clear_endpoint();
         }
         let spawned = spawn_app(
+            &self.selection,
             self.profile.as_deref(),
             self.verbose,
             self.agent.as_ref(),
@@ -1847,7 +1926,12 @@ impl ReloadStrategy for AndroidSession {
 }
 
 /// Run `cargo build` and return whether it succeeded.
-fn run_cargo_build(profile: Option<&str>, verbose: bool, agent: Option<&Session>) -> bool {
+fn run_cargo_build(
+    selection: &[String],
+    profile: Option<&str>,
+    verbose: bool,
+    agent: Option<&Session>,
+) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
 
@@ -1868,7 +1952,7 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool, agent: Option<&Session>
         cmd.envs(floors.host_cargo_env());
     }
     // The same features as the run that follows, or cargo builds twice.
-    with_agent(&mut cmd, agent);
+    with_build(&mut cmd, selection, agent);
 
     match cmd.status() {
         Ok(status) => status.success(),
@@ -1881,6 +1965,7 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool, agent: Option<&Session>
 
 /// Spawn the application as a child process.
 fn spawn_app(
+    selection: &[String],
     profile: Option<&str>,
     verbose: bool,
     agent: Option<&Session>,
@@ -1899,7 +1984,7 @@ fn spawn_app(
         cmd.arg("--verbose");
     }
 
-    with_agent(&mut cmd, agent);
+    with_build(&mut cmd, selection, agent);
     with_registration(&mut cmd, register_associations);
 
     cmd.env(env::HOT_RELOAD, "1");
@@ -2419,15 +2504,10 @@ struct ProjectMetadata {
 
 #[derive(serde::Deserialize)]
 struct ProjectPackage {
+    /// The package id, as `cargo metadata` prints it.
+    id: String,
     manifest_path: PathBuf,
     dependencies: Vec<ProjectDependency>,
-    #[serde(default)]
-    targets: Vec<ProjectTarget>,
-}
-
-#[derive(serde::Deserialize)]
-struct ProjectTarget {
-    kind: Vec<String>,
 }
 
 /// What `flui run` found in the working directory.
@@ -2435,8 +2515,11 @@ enum Project {
     /// A single application package (`cargo run` is the entry point).
     Application {
         /// The crate whose `driver` feature keeps the agent in an optimized
-        /// build.
+        /// build, by the key the selected package names it under.
         host: AgentHost,
+        /// The binary `cargo run` would run, which every cargo command of
+        /// the run names.
+        selected: crate::build::util::cargo::CargoTarget,
     },
     /// A host/worker workspace declared by `flui.toml`'s `[hot_reload]`.
     Worker(WorkerHotReloadProject),
@@ -2502,42 +2585,51 @@ fn agent_host(dependencies: &[ProjectDependency]) -> AgentHost {
         .map_or(AgentHost::Neither, AgentHost::Named)
 }
 
-/// `Some(host)` for the application at `manifest` (the crate whose `driver`
-/// feature it builds an optimized agent with), `None` when the package is
-/// not a FLUI app.
-fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<Option<AgentHost>> {
+/// `Some(host)` for the application `selected` names (a package id), the
+/// binary the run builds (the crate whose `driver` feature it builds an
+/// optimized agent with), `None` when that package is not a FLUI app.
+/// `manifest`, the directory's, has to be a package: a virtual workspace
+/// root is refused.
+fn metadata_identifies_project(
+    bytes: &[u8],
+    manifest: &Path,
+    selected: &str,
+) -> CliResult<Option<AgentHost>> {
     let metadata: ProjectMetadata = serde_json::from_slice(bytes)
         .context("could not decode Cargo metadata; expected --format-version 1 JSON")?;
     let manifest = manifest
         .canonicalize()
         .context("could not resolve project Cargo.toml")?;
-    for package in metadata.packages {
+    let mut has_package = false;
+    for package in &metadata.packages {
         let package_manifest = package
             .manifest_path
             .canonicalize()
             .context("could not resolve a package manifest reported by Cargo")?;
-        if package_manifest == manifest {
-            if !has_flui_dependency(&package.dependencies) {
-                return Ok(None);
-            }
-            let has_bin = package
-                .targets
-                .iter()
-                .any(|target| target.kind.iter().any(|kind| kind == "bin"));
-            if !package.targets.is_empty() && !has_bin {
-                return Err(CliError::NotFluiProject {
-                    reason: "this package is a library (no binary target); `flui run` needs an application — run its tests with `flui test`, or use it from an app crate".into(),
-                });
-            }
-            return Ok(Some(agent_host(&package.dependencies)));
-        }
+        has_package |= package_manifest == manifest;
     }
-    Err(CliError::NotFluiProject {
-        reason: "Cargo metadata contains no package for this Cargo.toml; run from an application package directory, not a virtual workspace root".into(),
-    })
+    if !has_package {
+        return Err(CliError::NotFluiProject {
+            reason: "Cargo metadata contains no package for this Cargo.toml; run from an application package directory, not a virtual workspace root".into(),
+        });
+    }
+    let package = metadata
+        .packages
+        .iter()
+        .find(|package| package.id == selected)
+        .ok_or_else(|| CliError::NotFluiProject {
+            reason: format!(
+                "Cargo metadata contains no package `{selected}`, the one `cargo run` builds here"
+            ),
+        })?;
+    Ok(has_flui_dependency(&package.dependencies).then(|| agent_host(&package.dependencies)))
 }
 
-/// Ensure we're in a FLUI project directory and say which kind.
+/// Ensure we're in a FLUI project directory and say which kind. An
+/// application is read from the binary `cargo run` builds there
+/// ([`run_selection`]), which at a workspace root that is a package itself
+/// is a default member's: its dependencies say whether it is a FLUI app and
+/// which crate carries the `driver` feature.
 fn ensure_flui_project() -> CliResult<Project> {
     if let Some(project) = find_worker_hot_reload_project()? {
         return Ok(Project::Worker(project));
@@ -2570,13 +2662,22 @@ fn ensure_flui_project() -> CliResult<Project> {
             ),
         });
     }
-    let Some(host) = metadata_identifies_project(&output.stdout, cargo_toml)? else {
+    let root = std::env::current_dir().context("failed to resolve application directory")?;
+    let selected = run_selection(&root).map_err(|error| CliError::NotFluiProject {
+        reason: format!(
+            "`flui run` needs the one binary `cargo run` would run here; a library is run \
+             with `flui test` or from an app crate: {error}"
+        ),
+    })?;
+    let Some(host) =
+        metadata_identifies_project(&output.stdout, cargo_toml, &selected.package_id().repr)?
+    else {
         return Err(CliError::NotFluiProject {
-            reason: "normal dependency on flui (or legacy flui-app/flui-widgets) not found in this package".into(),
+            reason: "normal dependency on flui (or legacy flui-app/flui-widgets) not found in the package `cargo run` builds here".into(),
         });
     };
 
-    Ok(Project::Application { host })
+    Ok(Project::Application { host, selected })
 }
 
 /// Execute scene-only hot-reload mode for Android.
@@ -3110,5 +3211,167 @@ mod tests {
                 device_selection_prefers_exact_id_then_name_then_unique_prefix,
             ),
         ]);
+    }
+
+    /// A desktop run builds the binary plain `cargo run` would choose, and
+    /// names it to every cargo command, so the one-instance check reads the
+    /// build that runs: at a workspace root, the default member with the
+    /// binary, as the application even where another default member depends
+    /// on it, without the features that member alone asks of a shared
+    /// dependency (plain `cargo run` there would turn them on); and the
+    /// features the run turns on: an optimized `--agent` run's driver feature
+    /// reaches the cargo command and the check alike, so an application whose
+    /// `driver` brings the one-instance code runs.
+    #[test]
+    fn a_desktop_run_checks_what_it_builds() {
+        let project = tempfile::tempdir().expect("a temporary directory");
+        let write = |path: &str, contents: &str| {
+            let path = project.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent directory"))
+                .expect("the directories");
+            std::fs::write(path, contents).expect("a fixture file");
+        };
+        let manifest = |name: &str, rest: &str| {
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{rest}")
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nresolver = \"3\"\nmembers = [\"app\", \"bench\"]\n",
+        );
+        write(
+            "app/Cargo.toml",
+            &manifest(
+                "app",
+                "[dependencies]\nflui = { path = \"../flui\" }\n\
+                 [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n",
+            ),
+        );
+        write("app/src/main.rs", "fn main() {}\n");
+        write(
+            "bench/Cargo.toml",
+            &manifest(
+                "bench",
+                "[dependencies]\napp = { path = \"../app\" }\n\
+                 flui = { path = \"../flui\", features = [\"driver\"] }\n",
+            ),
+        );
+        write("bench/src/lib.rs", "");
+        write(
+            "flui/Cargo.toml",
+            &manifest(
+                "flui",
+                "[features]\ndriver = [\"flui-native/single-instance\"]\n\
+                 [dependencies]\nflui-native = { path = \"../flui-native\" }\n",
+            ),
+        );
+        write("flui/src/lib.rs", "");
+        write(
+            "flui-native/Cargo.toml",
+            &manifest("flui-native", "[features]\nsingle-instance = []\n"),
+        );
+        write("flui-native/src/lib.rs", "");
+
+        let host = "x86_64-unknown-linux-gnu";
+        let args = |selection: &[String], agent: Option<&crate::agent::Session>| {
+            let mut cargo = std::process::Command::new("cargo");
+            super::with_build(&mut cargo, selection, agent);
+            cargo
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<String>>()
+        };
+        let selected = super::run_selection(project.path()).expect("the binary cargo runs");
+        let app_id = selected.package_id().repr.clone();
+        assert_eq!(
+            args(&selected.cargo_args(), None),
+            ["--package", app_id.as_str(), "--bin", "app"],
+            "the run names the binary the check reads"
+        );
+        let plain =
+            super::require_one_instance(project.path(), host, &selected.built_package(), None)
+                .expect_err("a run without the one-instance code");
+        assert!(
+            format!("{plain:?}").contains("single-instance"),
+            "the application that runs is refused for its links: {plain:?}"
+        );
+
+        let app = project.path().join("app");
+        let session = crate::agent::Session::create(&app, None, None)
+            .expect("an agent session")
+            .with_driver_feature("flui/driver".to_owned());
+        let selected = super::run_selection(&app).expect("the binary cargo runs");
+        assert_eq!(
+            args(&selected.cargo_args(), Some(&session)),
+            [
+                "--package",
+                app_id.as_str(),
+                "--bin",
+                "app",
+                "--features",
+                "flui/driver"
+            ],
+            "the run builds with the driver feature"
+        );
+        super::require_one_instance(&app, host, &selected.built_package(), Some(&session))
+            .expect("the driver feature brings the one-instance code");
+    }
+
+    /// The crate whose `driver` feature an optimized `--agent` run turns on
+    /// is named by the package the run builds: at a root package that names
+    /// `flui` itself and builds its default member `app`, which reaches
+    /// `flui-app` under the key `ui`, the feature is `ui/driver`, a key of
+    /// `app`'s.
+    #[test]
+    fn the_agent_host_is_named_by_the_package_the_run_builds() {
+        let project = tempfile::tempdir().expect("a temporary directory");
+        let write = |path: &str, contents: &str| {
+            let path = project.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent directory"))
+                .expect("the directories");
+            std::fs::write(path, contents).expect("a fixture file");
+        };
+        let manifest = |name: &str, rest: &str| {
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{rest}")
+        };
+        write(
+            "Cargo.toml",
+            &manifest(
+                "shell",
+                "[workspace]\nmembers = [\"app\"]\ndefault-members = [\"app\"]\n\
+                 [dependencies]\nflui = { path = \"flui\" }\n",
+            ),
+        );
+        write("src/main.rs", "fn main() {}\n");
+        write(
+            "app/Cargo.toml",
+            &manifest(
+                "app",
+                "[dependencies]\nui = { package = \"flui-app\", path = \"../flui-app\" }\n",
+            ),
+        );
+        write("app/src/main.rs", "fn main() {}\n");
+        for name in ["flui", "flui-app"] {
+            write(
+                &format!("{name}/Cargo.toml"),
+                &manifest(name, "[features]\ndriver = []\n"),
+            );
+            write(&format!("{name}/src/lib.rs"), "");
+        }
+        let metadata =
+            std::process::Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+                .current_dir(project.path())
+                .args(["metadata", "--no-deps", "--format-version", "1"])
+                .output()
+                .expect("cargo metadata");
+        assert!(metadata.status.success(), "{metadata:?}");
+        let selected = super::run_selection(project.path()).expect("the binary cargo runs");
+        let host = super::metadata_identifies_project(
+            &metadata.stdout,
+            &project.path().join("Cargo.toml"),
+            &selected.package_id().repr,
+        )
+        .expect("the project")
+        .expect("a FLUI application");
+        assert_eq!(host.driver_feature().as_deref(), Some("ui/driver"));
     }
 }

@@ -18,7 +18,11 @@ fn manifest(name: &str, rest: &str) -> String {
 /// A FLUI checkout in miniature, beside two applications: `app` on the
 /// facade, whose `system` feature enables the capability crate `flui-sys`
 /// and `plain` a crate that is not one; `bare` on `flui-core` alone, from
-/// the checkout that also has the capability crate `flui-direct`.
+/// the checkout that also has the capability crate `flui-direct`. `app`'s
+/// tests turn on `flui-sys`'s `background` feature as a dev-dependency and
+/// link an older `flui-sys` without a plugin, whose directory cargo lists
+/// first; its Android build alone turns on the facade's `telephony`, and its
+/// iOS build alone the facade's `camera`.
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let capability = "[package.metadata.flui.declares]\nschema = 1\n\
@@ -26,7 +30,16 @@ fn fixture() -> tempfile::TempDir {
                       permissions = [\"android.permission.INTERNET\"]\n\
                       [[package.metadata.flui.declares.apple.privacy.accessed-apis]]\n\
                       category = \"NSPrivacyAccessedAPICategoryFileTimestamp\"\n\
-                      reasons = [\"C617.1\"]\n";
+                      reasons = [\"C617.1\"]\n\
+                      [package.metadata.flui.declares.features.background.android]\n\
+                      permissions = [\"android.permission.FOREGROUND_SERVICE\"]\n\
+                      [package.metadata.flui.declares.features.telephony.android]\n\
+                      permissions = [\"android.permission.READ_PHONE_STATE\"]\n\
+                      [[package.metadata.flui.declares.features.telephony.apple.privacy.accessed-apis]]\n\
+                      category = \"NSPrivacyAccessedAPICategorySystemBootTime\"\n\
+                      reasons = [\"35F9.1\"]\n\
+                      [package.metadata.flui.declares.features.camera.android]\n\
+                      permissions = [\"android.permission.CAMERA\"]\n";
     let files = [
         (
             "ws/Cargo.toml",
@@ -40,7 +53,8 @@ fn fixture() -> tempfile::TempDir {
                 "flui",
                 "[dependencies]\nflui-sys = { path = \"../sys\", optional = true }\n\
                  plain = { path = \"../plain\", optional = true }\n\
-                 [features]\nsystem = [\"dep:flui-sys\"]\nplain = [\"dep:plain\"]\n",
+                 [features]\nsystem = [\"dep:flui-sys\"]\nplain = [\"dep:plain\"]\n\
+                 telephony = [\"flui-sys?/telephony\"]\ncamera = [\"flui-sys?/camera\"]\n",
             ),
         ),
         (
@@ -48,9 +62,14 @@ fn fixture() -> tempfile::TempDir {
             manifest(
                 "flui-sys",
                 &format!(
-                    "[package.metadata.flui.capability]\nplugin = \"SysPlugin\"\n{capability}"
+                    "[features]\nbackground = []\ntelephony = []\ncamera = []\n\
+                     [package.metadata.flui.capability]\nplugin = \"SysPlugin\"\n{capability}"
                 ),
             ),
+        ),
+        (
+            "a-old/sys/Cargo.toml",
+            "[package]\nname = \"flui-sys\"\nversion = \"0.0.1\"\nedition = \"2024\"\n".to_owned(),
         ),
         ("ws/plain/Cargo.toml", manifest("plain", "")),
         ("ws/core/Cargo.toml", manifest("flui-core", "")),
@@ -65,7 +84,14 @@ fn fixture() -> tempfile::TempDir {
             "app/Cargo.toml",
             manifest(
                 "app",
-                "[workspace]\n[dependencies]\nflui = { path = \"../ws/flui\" }\n",
+                "[workspace]\n[dependencies]\nflui = { path = \"../ws/flui\" }\n\
+                 [target.'cfg(target_os = \"android\")'.dependencies]\n\
+                 flui = { path = \"../ws/flui\", features = [\"telephony\"] }\n\
+                 [target.'cfg(target_os = \"ios\")'.dependencies]\n\
+                 flui = { path = \"../ws/flui\", features = [\"camera\"] }\n\
+                 [dev-dependencies]\n\
+                 flui-sys = { path = \"../ws/sys\", features = [\"background\"] }\n\
+                 old-sys = { package = \"flui-sys\", path = \"../a-old/sys\" }\n",
             ),
         ),
         (
@@ -73,6 +99,14 @@ fn fixture() -> tempfile::TempDir {
             manifest(
                 "bare",
                 "[workspace]\n[dependencies]\nflui-core = { path = \"../ws/core\" }\n",
+            ),
+        ),
+        (
+            "renamed/Cargo.toml",
+            manifest(
+                "renamed",
+                "[workspace]\n[dependencies]\n\
+                 direct = { package = \"flui-direct\", path = \"../ws/direct\" }\n",
             ),
         ),
     ];
@@ -100,11 +134,18 @@ fn added(stdout: &[u8]) -> serde_json::Value {
 }
 
 /// `flui add system` enables the facade feature that links the capability
-/// crate and prints the line that registers its plugin, with what the crate
-/// brings to the manifests; a second run changes nothing; a feature whose
-/// crate states no plugin is refused and undone; an unknown name lists what
-/// the facade offers; without the facade, the crate is added from the
-/// checkout the application's FLUI dependencies come from.
+/// crate (the facade's dependency, not another crate of its name the tests
+/// link) and prints the line that registers its plugin, with what the crate
+/// brings to each platform's manifests from that platform's build, on any
+/// host: the Android permissions of the Android build, a feature only it
+/// turns on included, and not those of a feature only the iOS build turns
+/// on; the Apple accessed APIs of the iOS build and not those of the
+/// Android-only feature; nothing a feature only its tests turn on declares.
+/// A second run changes nothing; a feature whose crate states no plugin is
+/// refused and undone; an unknown name lists what the facade offers;
+/// without the facade, the crate is added from the checkout the
+/// application's FLUI dependencies come from, and one the application
+/// links under a rename is reported linked, registered by that rename.
 #[test]
 fn add_links_a_capability_and_shows_its_registration() {
     let dir = fixture();
@@ -127,7 +168,10 @@ fn add_links_a_capability_and_shows_its_registration() {
     );
     assert_eq!(
         event["android_permissions"],
-        serde_json::json!(["android.permission.INTERNET"])
+        serde_json::json!([
+            "android.permission.INTERNET",
+            "android.permission.READ_PHONE_STATE",
+        ])
     );
     assert_eq!(
         event["apple_accessed_apis"],
@@ -191,5 +235,109 @@ fn add_links_a_capability_and_shows_its_registration() {
     assert!(
         manifest.contains("flui-direct") && manifest.contains("ws/direct"),
         "{manifest}"
+    );
+
+    let before = read("renamed/Cargo.toml");
+    let renamed = flui()
+        .current_dir(dir.path().join("renamed"))
+        .args(["--json", "add", "flui-direct"])
+        .output()
+        .expect("flui add");
+    assert!(renamed.status.success(), "{renamed:?}");
+    let event = added(&renamed.stdout);
+    assert_eq!(event["changed"], false, "a renamed dependency is linked");
+    assert_eq!(
+        event["snippet"], ".plugin(direct::services::DirectPlugin::default())",
+        "the registration names the crate by the application's key"
+    );
+    assert_eq!(read("renamed/Cargo.toml"), before);
+}
+
+/// An application that links one version of a capability crate for Android
+/// and another for iOS, under one key, from one registry (a directory that
+/// replaces crates.io, so the fixture stays offline): `flui add` reports it
+/// linked and prints each platform's declarations from the version that
+/// platform links.
+#[test]
+fn add_reads_each_platforms_version_of_the_crate() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let write = |path: &str, contents: &str| {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().expect("a parent directory"))
+            .expect("the directories");
+        std::fs::write(path, contents).expect("a fixture file");
+    };
+    for (version, declares) in [
+        (
+            "0.2.0",
+            "[package.metadata.flui.declares.android]\n\
+             permissions = [\"android.permission.VIBRATE\"]\n",
+        ),
+        (
+            "0.3.0",
+            "[package.metadata.flui.declares.android]\n\
+             permissions = [\"android.permission.CAMERA\"]\n\
+             [[package.metadata.flui.declares.apple.privacy.accessed-apis]]\n\
+             category = \"NSPrivacyAccessedAPICategoryFileTimestamp\"\n\
+             reasons = [\"C617.1\"]\n",
+        ),
+    ] {
+        let crate_dir = format!("vendor/flui-direct-{version}");
+        write(
+            &format!("{crate_dir}/Cargo.toml"),
+            &format!(
+                "[package]\nname = \"flui-direct\"\nversion = \"{version}\"\nedition = \"2024\"\n\
+                 [package.metadata.flui.capability]\nplugin = \"DirectPlugin\"\n\
+                 [package.metadata.flui.declares]\nschema = 1\n{declares}"
+            ),
+        );
+        write(&format!("{crate_dir}/src/lib.rs"), "");
+        write(
+            &format!("{crate_dir}/.cargo-checksum.json"),
+            "{\"files\":{},\"package\":null}",
+        );
+    }
+    write(
+        "app/.cargo/config.toml",
+        "[source.crates-io]\nreplace-with = \"vendored\"\n\
+         [source.vendored]\ndirectory = \"../vendor\"\n",
+    );
+    write("app/src/lib.rs", "");
+    write(
+        "app/Cargo.toml",
+        &manifest(
+            "app",
+            "[workspace]\n\
+             [target.'cfg(target_os = \"android\")'.dependencies]\n\
+             flui-direct = \"=0.2.0\"\n\
+             [target.'cfg(target_os = \"ios\")'.dependencies]\n\
+             flui-direct = \"=0.3.0\"\n",
+        ),
+    );
+
+    let output = flui()
+        .current_dir(dir.path().join("app"))
+        .args(["--json", "add", "flui-direct"])
+        .output()
+        .expect("flui add");
+    assert!(output.status.success(), "{output:?}");
+    let event = added(&output.stdout);
+    assert_eq!(event["changed"], false);
+    assert_eq!(
+        event["snippet"],
+        ".plugin(flui_direct::DirectPlugin::default())"
+    );
+    assert_eq!(
+        event["android_permissions"],
+        serde_json::json!(["android.permission.VIBRATE"]),
+        "the Android build's version"
+    );
+    assert_eq!(
+        event["apple_accessed_apis"],
+        serde_json::json!([{
+            "category": "NSPrivacyAccessedAPICategoryFileTimestamp",
+            "reason": "C617.1",
+        }]),
+        "the iOS build's version"
     );
 }
