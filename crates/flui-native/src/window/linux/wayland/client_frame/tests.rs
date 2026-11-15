@@ -573,6 +573,7 @@ fn a_released_buffer_is_drawn_into_again() {
         assert_eq!(buffers.lend(bar, make, destroy).copied(), Some(2));
     }
     assert_eq!(marks.borrow().len(), 2, "two buffers serve every draw");
+    assert_eq!(buffers.made(), 2, "the set counts what it made");
     assert!(destroyed.borrow().is_empty());
 
     // The window is resized: buffer 1, released, fits nothing any more.
@@ -840,4 +841,21 @@ fn a_press_on_the_applications_bar_is_the_windows() {
     );
     assert_eq!(pointers.content_moved(&1, &chrome, 230.0, 30.0), Some(5));
     assert_eq!(pointers.content_moved(&1, &chrome, 260.0, 30.0), None);
+}
+
+/// A move, a resize and the window menu are carried out under the press's
+/// seat and serial; a close, minimize, maximize or restore names no seat.
+#[test]
+fn only_a_grab_request_names_its_seat() {
+    for (action, names) in [
+        (Action::Move, true),
+        (Action::Resize(Edge::Left), true),
+        (Action::Menu { x: 1, y: 2 }, true),
+        (Action::Close, false),
+        (Action::Minimize, false),
+        (Action::Maximize, false),
+        (Action::Restore, false),
+    ] {
+        assert_eq!(action.names_seat(), names, "{action:?}");
+    }
 }
