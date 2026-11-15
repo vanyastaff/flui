@@ -2,11 +2,15 @@
 
 - **Status:** Implemented (2026-11-03)
 - **Date:** 2026-11-03
-- **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 (where declarations live and
+- **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §6 (the linked set and its features:
+  the crates the built artifact links, with the features its build enables, in place of every
+  package `cargo metadata` resolves with its unified features), §7 (where declarations live and
   their keys: a versioned `declares` table in any crate, in place of the illustrative schema) and,
-  in §8, the step of `flui add` that writes declarations; the rest of ADR-0154 stands
-- **Related:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) decision 6 (the generated Android
-  manifest); [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
+  in §8, the step of `flui add` that writes declarations; ADR-0154's other decisions and the rest
+  of §8 stand. [ADR-0255](ADR-0255-mobile-and-web-hosts.md) decision 6 only (the manifest lines
+  capability crates contribute through `[package.metadata.flui.capability]` declarations in
+  marker-delimited blocks: the CLI writes the manifest whole, §4); its other manifest lines stand
+- **Related:** [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
   stack needs the network permission); [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
   (facade features)
 

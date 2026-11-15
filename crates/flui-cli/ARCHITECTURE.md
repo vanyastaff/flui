@@ -115,7 +115,7 @@ or a malformed value fails the build naming the crate
 `INTERNET` for `HttpURLConnection`, which an application gets only with the facade's `http` on
 (`the_manifest_declares_what_the_linked_crates_need`).
 
-Android's `AndroidManifest.xml` is generated whole on every build (ADR-0255 decision 6) at
+Android's `AndroidManifest.xml` is generated whole on every build (ADR-0307 §4) at
 `<project>/platforms/android/app/src/main/AndroidManifest.xml`, where both packagers read it: FLUI's base
 (`templates/android/AndroidManifest.xml`), the joined permissions, the label from `flui.toml` and
 the application's `cdylib`. It is written only when it changed. A file there without the

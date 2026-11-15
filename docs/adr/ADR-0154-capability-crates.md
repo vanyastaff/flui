@@ -10,9 +10,11 @@
   gain `capability`) and §2 in part (the reach table gains its row);
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) in part (official packages keep their
   rules; capability crates are a second kind of package with rules of their own).
-- **Superseded-by:** [ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) for §7
-  (declarations: a versioned `[package.metadata.flui.declares]` in any crate) and for §8's step
-  of `flui add` that writes declarations (the crate states its plugin instead)
+- **Superseded-by:** [ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) for §6
+  (the linked set and its features: the crates the built artifact links, with the features its
+  build enables, from `cargo tree`), for §7 (declarations: a versioned
+  `[package.metadata.flui.declares]` in any crate) and for §8's step of `flui add` that writes
+  declarations (the crate states its plugin instead)
 - **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam this record builds on),
   [ADR-0153](ADR-0153-release-train-and-capability-crates.md) (capability crates ship in lockstep
   with the train until the contract has its own version),
@@ -225,9 +227,7 @@ lists every resolved package with its `[package.metadata]` and its enabled featu
 dependencies included. It does not use `DEP_*` build-script variables, which reach only a direct
 dependent, and no capability crate patches a manifest from a build script. `links` is for a crate
 that exports a global native symbol; a capability crate that carries its state in the native
-object (ADR-0152) exports none and needs neither `links` nor a `build.rs`. The crates of the
-linked set and their features are read as
-[ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) §3 states.
+object (ADR-0152) exports none and needs neither `links` nor a `build.rs`.
 
 ### 7. Declarations are strict, feature-gated Cargo metadata
 

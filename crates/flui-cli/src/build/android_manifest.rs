@@ -1,5 +1,5 @@
-//! The application's `AndroidManifest.xml`, generated whole (ADR-0255
-//! decision 6, ADR-0307).
+//! The application's `AndroidManifest.xml`, generated whole (ADR-0307 §4;
+//! the Activity and its attributes are ADR-0255 decision 6).
 //!
 //! FLUI owns the base (`templates/android/AndroidManifest.xml`: `FluiActivity`,
 //! its launch mode and `configChanges`, the native library); the crates the
