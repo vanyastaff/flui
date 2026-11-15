@@ -318,7 +318,7 @@ impl AndroidBuilder {
         Ok(BuildArtifacts {
             rust_libs,
             executable: None,
-            metadata: serde_json::json!({}),
+            package: None,
         })
     }
 
@@ -432,7 +432,9 @@ impl AndroidBuilder {
 /// SDK's build-tools, see `android_package.rs`.
 impl AndroidBuilder {
     /// What the crates linked for the ABIs built, with the features the build
-    /// turns on, declare (ADR-0307).
+    /// turns on, declare (ADR-0307). `cargo ndk build --lib` runs in the
+    /// project's directory and names no package, so the build is cargo's
+    /// default selection there.
     fn declarations(&self, ctx: &BuilderContext) -> BuildResult<crate::declarations::Declarations> {
         let crate::build::platform::Platform::Android { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
@@ -440,10 +442,9 @@ impl AndroidBuilder {
             });
         };
         let triples: Vec<&str> = targets.iter().map(|abi| rust_target(abi)).collect();
-        crate::declarations::Declarations::collect_with_features(
-            &self.workspace_root,
+        crate::declarations::Declarations::collect(
+            crate::declarations::Build::at(&self.workspace_root).features(&ctx.features),
             &triples,
-            &ctx.features,
         )
     }
 

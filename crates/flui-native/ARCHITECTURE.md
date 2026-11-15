@@ -4673,7 +4673,8 @@ table's outcome. A JNI failure is logged; it, or a posted call dropped unrun, is
 counted as answered, one call's event that changes nothing after it.
 
 Android pattern vibrations go to the `Vibrator`, which needs the install-time
-`VIBRATE` permission (the CLI's manifest template declares it). Without it the
+`VIBRATE` permission (this crate declares it and `flui build` writes it into
+the manifest, ADR-0307). Without it the
 backend reads the vibrator as offering nothing, so its patterns report
 `FallsBack` and play their fallback through `performHapticFeedback`, which needs
 no permission, rather than claiming what the vibrator would refuse. Every
