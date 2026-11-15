@@ -14,17 +14,18 @@
 //! package's dev-dependencies as well, so their edges count for it.
 //!
 //! The listing names a crate as cargo shows it to a person: by name, version
-//! and source, a registry by the name cargo's configuration gives it. Each
-//! line is resolved to the [`PackageId`] of one package of `cargo
-//! metadata`'s graph: the dependency of the crate on the line above it that
-//! has the line's name and version, and where that crate depends on two of
-//! them, the one whose id names the line's source. Two crates of one name
-//! and version (a registry's and a fork's) keep their own features.
+//! and source, a registry by the name cargo's configuration gives it, which
+//! [`Registries`] reads back to its index. Each line is resolved to the
+//! [`PackageId`] of one package of `cargo metadata`'s graph: the dependency
+//! of the crate on the line above it that has the line's name and version,
+//! and where that crate depends on two of them, the one whose id names the
+//! line's source. Two crates of one name and version (a registry's and a
+//! fork's) keep their own features.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt::Display;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cargo_metadata::{Metadata, Node, Package, PackageId};
 
@@ -97,8 +98,11 @@ impl LinkedCrates {
             "depth",
             "--color",
             "never",
+            // The depth cargo prints first ends at the `|`, which no
+            // package name holds; the features start after the last `|`,
+            // which no feature name holds, whatever a source's path holds.
             "--format",
-            "{p}|{f}",
+            "|{p}|{f}",
             "--package",
             &build.root.id.repr,
         ]);
@@ -114,13 +118,15 @@ impl LinkedCrates {
             &metadata.packages,
             nodes,
             build.root,
+            &Registries::configured_at(build.dir),
         )
         .map_err(|reason| failed(&reason))
     }
 
     /// The packages of the graph that `listing` names, each with the
     /// features its lines give it. `packages` and `nodes` are the graph,
-    /// `root` the package the listing starts from.
+    /// `root` the package the listing starts from, `registries` the indexes
+    /// of the registries the listing names.
     ///
     /// # Errors
     ///
@@ -134,6 +140,7 @@ impl LinkedCrates {
         packages: &[Package],
         nodes: &[Node],
         root: &Package,
+        registries: &Registries,
     ) -> Result<Self, String> {
         let packages: BTreeMap<&PackageId, &Package> = packages
             .iter()
@@ -149,7 +156,7 @@ impl LinkedCrates {
             let (depth, listed) = Listed::parse(line).ok_or_else(|| {
                 format!(
                     "the line `{line}` is not \
-                     `<depth><name> v<version>[ (proc-macro)][ (<source>)]|<features>`"
+                     `<depth>|<name> v<version>[ (proc-macro)][ (<source>)]|<features>`"
                 )
             })?;
             if depth > ancestors.len() {
@@ -159,7 +166,11 @@ impl LinkedCrates {
             }
             ancestors.truncate(depth);
             let package = match ancestors.last() {
-                None => listed.one_of(std::iter::once(root), "the package the build compiles")?,
+                None => listed.one_of(
+                    std::iter::once(root),
+                    "the package the build compiles",
+                    registries,
+                )?,
                 Some(parent) => listed.one_of(
                     nodes
                         .get(&parent.id)
@@ -167,6 +178,7 @@ impl LinkedCrates {
                         .flat_map(|node| &node.deps)
                         .filter_map(|dependency| packages.get(&dependency.pkg).copied()),
                     &format!("the dependencies of `{} v{}`", parent.name, parent.version),
+                    registries,
                 )?,
             };
             ancestors.push(package);
@@ -201,7 +213,7 @@ impl LinkedCrates {
     }
 }
 
-/// One line of the listing after its depth:
+/// One line of the listing after its depth and its `|`:
 /// `<name> v<version>[ (proc-macro)][ (<source>)]|<feature>,…`, which
 /// `cargo tree` ends in ` (*)` when it repeats a crate.
 #[derive(Debug, Clone, Copy)]
@@ -217,13 +229,14 @@ struct Listed<'a> {
 impl<'a> Listed<'a> {
     /// The line's depth in the tree and what it lists.
     fn parse(line: &'a str) -> Option<(usize, Self)> {
-        let shown_at = line.find(|c: char| !c.is_ascii_digit())?;
-        let depth = line[..shown_at].parse().ok()?;
-        // No feature name holds a `|`, so the last one ends the crate,
-        // whatever its source's path holds.
-        let (shown, features) = line[shown_at..]
+        // No package name holds a `|`, though one may start with a digit,
+        // so the first `|` ends the depth; no feature name holds one either,
+        // so the last starts the features, whatever a source's path holds.
+        let (depth, listed) = line.split_once('|')?;
+        let depth = depth.parse().ok()?;
+        let (shown, features) = listed
             .strip_suffix(" (*)")
-            .unwrap_or(&line[shown_at..])
+            .unwrap_or(listed)
             .rsplit_once('|')?;
         let (name, rest) = shown.split_once(' ')?;
         let rest = rest.strip_prefix('v')?;
@@ -253,6 +266,7 @@ impl<'a> Listed<'a> {
         self,
         candidates: impl Iterator<Item = &'p Package>,
         what: &str,
+        registries: &Registries,
     ) -> Result<&'p Package, String> {
         let same_version: Vec<&Package> = candidates
             .filter(|package| {
@@ -264,7 +278,7 @@ impl<'a> Listed<'a> {
             _ => same_version
                 .iter()
                 .copied()
-                .filter(|package| self.is_from_source_of(package))
+                .filter(|package| self.is_from_source_of(package, registries))
                 .collect(),
         };
         match named.as_slice() {
@@ -288,7 +302,7 @@ impl<'a> Listed<'a> {
     /// cargo writes a git reference into the id encoded as it writes it into
     /// the listing (`branch=fix%2Fa`), and into the metadata's `source`
     /// without that encoding.
-    fn is_from_source_of(self, package: &Package) -> bool {
+    fn is_from_source_of(self, package: &Package, registries: &Registries) -> bool {
         let Some((source, _)) = package.id.repr.rsplit_once('#') else {
             return false;
         };
@@ -299,16 +313,27 @@ impl<'a> Listed<'a> {
                 .as_ref()
                 .is_some_and(cargo_metadata::Source::is_crates_io);
         };
-        // A registry is listed by the name cargo's configuration gives it,
-        // or without one by its index, which a sparse registry's id holds
-        // with its `sparse+`. Only that configuration maps a name to its
-        // index, so a name stands for any registry's crate and the crate it
-        // is listed under tells such twins apart.
+        // A registry is listed by the name the dependency gives it
+        // (`registry = "<name>"`), or without one by its index, which a
+        // sparse registry's id holds with its `sparse+`: cargo prints
+        // ``registry `<SourceId::display_registry_name>` ``, the key of
+        // `[registries.<name>]` when the source has one, else the index
+        // (cargo `src/workspace/source_id.rs`, `display_registry_name` and
+        // `impl Display for SourceId`). `cargo tree --format` has no key for
+        // the package id, so a name is read back to its index through
+        // cargo's configuration; a name no file or variable this reads
+        // configures (a `--config` of the user's) stands for any registry's
+        // crate.
+        let same_index =
+            |shown: &str, index: &str| shown.trim_end_matches('/') == index.trim_end_matches('/');
         let registry = |index: &str| {
             shown
                 .strip_prefix("registry `")
                 .and_then(|label| label.strip_suffix('`'))
-                .is_some_and(|label| label == index || !label.contains("://"))
+                .is_some_and(|label| match registries.index_of(label) {
+                    Some(configured) => same_index(configured, index),
+                    None => same_index(label, index) || !label.contains("://"),
+                })
         };
         match source.split_once('+') {
             // The listing has the directory.
@@ -335,15 +360,86 @@ impl<'a> Listed<'a> {
     }
 }
 
+/// The indexes of the registries cargo's configuration names, as cargo reads
+/// them for a command run in one directory: the variable
+/// `CARGO_REGISTRIES_<NAME>_INDEX` first, then `[registries.<name>] index`
+/// of `.cargo/config.toml` (or `.cargo/config`, which cargo prefers when
+/// both are there) in that directory and in each above it, the nearest
+/// first, then of the one in `$CARGO_HOME`.
+#[derive(Debug, Default)]
+struct Registries {
+    /// Each variable's index, by the name part of the variable
+    /// (`COMPANY_A`).
+    variables: BTreeMap<String, String>,
+    /// Each file's index, by registry name, the nearest file's.
+    files: BTreeMap<String, String>,
+}
+
+impl Registries {
+    /// The registries cargo configures for a command run in `dir`. A file
+    /// that is not TOML is skipped: cargo refused it before it listed
+    /// anything.
+    fn configured_at(dir: &Path) -> Self {
+        let variables = std::env::vars_os()
+            .filter_map(|(key, value)| {
+                let key = key.into_string().ok()?;
+                let name = key
+                    .strip_prefix("CARGO_REGISTRIES_")?
+                    .strip_suffix("_INDEX")?;
+                Some((name.to_owned(), value.into_string().ok()?))
+            })
+            .collect();
+        let cargo_home = std::env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::home_dir().map(|home| home.join(".cargo")));
+        let mut files = BTreeMap::new();
+        for cargo_dir in dir
+            .ancestors()
+            .map(|dir| dir.join(".cargo"))
+            .chain(cargo_home)
+        {
+            let Some(table) = ["config", "config.toml"].iter().find_map(|file| {
+                std::fs::read_to_string(cargo_dir.join(file))
+                    .ok()?
+                    .parse::<toml::Table>()
+                    .ok()
+            }) else {
+                continue;
+            };
+            let configured = table
+                .get("registries")
+                .and_then(toml::Value::as_table)
+                .into_iter()
+                .flatten();
+            for (name, registry) in configured {
+                if let Some(index) = registry.get("index").and_then(toml::Value::as_str) {
+                    files
+                        .entry(name.clone())
+                        .or_insert_with(|| index.to_owned());
+                }
+            }
+        }
+        Self { variables, files }
+    }
+
+    /// The index of the registry configured as `name`.
+    fn index_of(&self, name: &str) -> Option<&str> {
+        self.variables
+            .get(&name.to_uppercase().replace('-', "_"))
+            .or_else(|| self.files.get(name))
+            .map(String::as_str)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
     use std::process::Command;
 
     use cargo_metadata::{Node, Package};
 
-    use super::{Edges, LinkedBuild, LinkedCrates};
+    use super::{Edges, LinkedBuild, LinkedCrates, Registries};
 
     const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
@@ -378,12 +474,12 @@ mod tests {
 
     /// An application depending on a library, on one name and version from
     /// crates.io, a fork on a branch whose name cargo encodes and a
-    /// directory, on two versions of one crate, and on crates of other
-    /// registries; the application and the library each depend on a twin of
-    /// one name and version from two registries cargo lists by their names,
-    /// and the application on twins of another version from a sparse and a
-    /// git registry cargo lists by their indexes. The graph also holds the
-    /// crates.io copy of the forked crate, which nothing here links.
+    /// directory, on two versions of one crate, on a crate whose name starts
+    /// with a digit, and on crates of other registries: twins of one name
+    /// and version from two registries cargo lists by their names, the
+    /// library on one of them, and twins of another version from a sparse
+    /// and a git registry cargo lists by their indexes. The graph also holds
+    /// the crates.io copy of the forked crate, which nothing here links.
     fn graph() -> (Vec<Package>, Vec<Node>) {
         let fork = "git+https://example.com/fork/util?branch=fix/a+b#e7d82e99cb09a39e1e53927bd992af259874bb9d";
         let packages = vec![
@@ -471,11 +567,18 @@ mod tests {
                 Some("registry+https://d.example.com/index"),
                 "/registry/d/twin",
             ),
+            package(
+                &format!("{CRATES_IO}#7z-rust@0.1.0"),
+                "7z-rust",
+                "0.1.0",
+                Some(CRATES_IO),
+                "/registry/7z-rust-0.1.0",
+            ),
         ];
         let nodes = vec![
             node(
                 &packages[0].id.repr,
-                &[1, 2, 4, 6, 7, 8, 10, 11].map(|index| packages[index].id.repr.as_str()),
+                &[1, 2, 4, 6, 7, 8, 9, 10, 11, 12].map(|index| packages[index].id.repr.as_str()),
             ),
             node(
                 &packages[1].id.repr,
@@ -498,36 +601,67 @@ mod tests {
             .collect()
     }
 
+    /// Two registries configured by name: `company-a`'s index in a file,
+    /// `company-b`'s in a variable, which a file's value for it does not
+    /// override.
+    fn registries() -> Registries {
+        Registries {
+            variables: BTreeMap::from([(
+                "COMPANY_B".to_owned(),
+                "sparse+https://b.example.com/index/".to_owned(),
+            )]),
+            files: BTreeMap::from([
+                (
+                    "company-a".to_owned(),
+                    "https://a.example.com/index/".to_owned(),
+                ),
+                (
+                    "company-b".to_owned(),
+                    "https://elsewhere.example.com/index".to_owned(),
+                ),
+                (
+                    "company-c".to_owned(),
+                    "https://c.example.com/other-index".to_owned(),
+                ),
+            ]),
+        }
+    }
+
     /// A listing as `cargo tree` prints it reads back as the features of
     /// each package it names: a path with a space and a `|`, a crate of
-    /// crates.io without a source, a repeated line, one crate at two
-    /// versions, crates of other registries named by their configuration's
-    /// names or by their indexes, a sparse one with its `sparse+`. One name
-    /// and version from crates.io, from a fork on an encoded branch and from
-    /// a directory are three packages, and a feature of one is not the
-    /// others'; twins two registries' names list are told apart by the crate
-    /// they are listed under. A line that is no crate, that skips a depth,
-    /// or that names none or several of the dependencies of the crate above
-    /// it is refused, and so is a listing that leaves out the package the
-    /// build compiles.
+    /// crates.io without a source, a name that starts with a digit, a
+    /// repeated line, one crate at two versions, crates of other registries
+    /// named by their configuration's names or by their indexes, a sparse
+    /// one with its `sparse+`. One name and version from crates.io, from a
+    /// fork on an encoded branch and from a directory are three packages,
+    /// and a feature of one is not the others'; twins of two registries
+    /// cargo lists by name are told apart by the index each name configures.
+    /// A line that is no crate, that skips a depth, or that names none or
+    /// several of the dependencies of the crate above it is refused, and so
+    /// is a listing that leaves out the package the build compiles.
     #[test]
     fn a_listing_reads_back_as_each_crates_features() {
         let (packages, nodes) = graph();
         let app = &packages[0];
-        let listing = "0app v0.1.0 (/work/my app|x/app)|\n\
-                       1lib v0.1.0 (/work/lib)|http,tls\n\
-                       2yoke v0.7.0|alloc\n\
-                       2twin v1.0.0 (registry `b`)|std\n\
-                       1yoke v0.8.3|alloc,derive\n\
-                       1quiet v1.2.3-beta.1+build (registry `example`)|\n\
-                       1twin v1.0.0 (registry `a`)|\n\
-                       1twin v2.0.0 (registry `sparse+https://c.example.com/index/`)|c\n\
-                       1twin v2.0.0 (registry `https://d.example.com/index`)|d\n\
-                       1util v0.1.0 (https://example.com/fork/util?branch=fix%2Fa%2Bb#e7d82e99)|http\n\
-                       1util v0.1.0 (/work/vendor/util)|camera\n\
-                       1lib v0.1.0 (/work/lib)|http,tls (*)\n\
+        let registries = registries();
+        let resolve =
+            |listing: &str| LinkedCrates::resolve(listing, &packages, &nodes, app, &registries);
+        let listing = "0|app v0.1.0 (/work/my app|x/app)|\n\
+                       1|lib v0.1.0 (/work/lib)|http,tls\n\
+                       2|yoke v0.7.0|alloc\n\
+                       2|twin v1.0.0 (registry `company-b`)|std\n\
+                       1|yoke v0.8.3|alloc,derive\n\
+                       1|7z-rust v0.1.0|\n\
+                       1|quiet v1.2.3-beta.1+build (registry `example`)|\n\
+                       1|twin v1.0.0 (registry `company-a`)|\n\
+                       1|twin v1.0.0 (registry `company-b`)|std\n\
+                       1|twin v2.0.0 (registry `sparse+https://c.example.com/index/`)|c\n\
+                       1|twin v2.0.0 (registry `https://d.example.com/index`)|d\n\
+                       1|util v0.1.0 (https://example.com/fork/util?branch=fix%2Fa%2Bb#e7d82e99)|http\n\
+                       1|util v0.1.0 (/work/vendor/util)|camera\n\
+                       1|lib v0.1.0 (/work/lib)|http,tls (*)\n\
                        \n";
-        let linked = LinkedCrates::resolve(listing, &packages, &nodes, app).expect("a listing");
+        let linked = resolve(listing).expect("a listing");
         assert_eq!(
             read(&linked, &packages),
             [
@@ -542,62 +676,109 @@ mod tests {
                 (9, vec!["std"]),
                 (10, vec!["c"]),
                 (11, vec!["d"]),
+                (12, vec![]),
             ],
             "the crates.io `util` the line without a source names is not linked: \
              the application depends on the fork and the directory"
         );
-        let unlisted = LinkedCrates::resolve("", &packages, &nodes, app)
-            .expect_err("a listing without the package the build compiles");
+        let unlisted = resolve("").expect_err("a listing without the package the build compiles");
         assert!(
             unlisted.contains("does not name `app v0.1.0`, which the build compiles"),
             "{unlisted}"
         );
-        let shape = "is not `<depth><name> v<version>";
+        let shape = "is not `<depth>|<name> v<version>";
+        let app_line = "0|app v0.1.0 (/work/my app|x/app)|\n";
         for (refused, reason) in [
-            ("0app|http", shape),
-            ("0app 0.1.0|http", shape),
-            ("0app v0.1.0", shape),
-            ("0 v0.1.0|http", shape),
-            ("0app v0.1.0 /work/app|http", shape),
-            ("app v0.1.0 (/work/my app|x/app)|", shape),
+            ("0|app|http".to_owned(), shape),
+            ("0|app 0.1.0|http".to_owned(), shape),
+            ("0|app v0.1.0".to_owned(), shape),
+            ("0| v0.1.0|http".to_owned(), shape),
+            ("0|app v0.1.0 /work/app|http".to_owned(), shape),
+            ("app v0.1.0 (/work/my app|x/app)|".to_owned(), shape),
+            ("0app v0.1.0 (/work/my app|x/app)|".to_owned(), shape),
             (
-                "0app v0.1.0 (/work/my app|x/app)|\n2yoke v0.8.3|",
+                format!("{app_line}2|yoke v0.8.3|"),
                 "is deeper than the line before it allows",
             ),
             (
-                "0lib v0.1.0 (/work/lib)|",
+                "0|lib v0.1.0 (/work/lib)|".to_owned(),
                 "names none of the 0 such package(s) among the package the build compiles",
             ),
             (
-                "0app v0.1.0 (/work/my app|x/app)|\n1yoke v0.7.0|",
+                format!("{app_line}1|yoke v0.7.0|"),
                 "names none of the 0 such package(s) among the dependencies of `app v0.1.0`",
             ),
             (
-                "0app v0.1.0 (/work/my app|x/app)|\n1util v0.1.0|",
+                format!("{app_line}1|util v0.1.0|"),
                 "names none of the 2 such package(s)",
             ),
             (
-                "0app v0.1.0 (/work/my app|x/app)|\n\
-                 1util v0.1.0 (https://example.com/other/util?branch=fix%2Fa%2Bb#e7d82e99)|",
+                format!(
+                    "{app_line}1|util v0.1.0 \
+                     (https://example.com/other/util?branch=fix%2Fa%2Bb#e7d82e99)|"
+                ),
                 "names none of the 2 such package(s)",
             ),
             (
-                "0app v0.1.0 (/work/my app|x/app)|\n\
-                 1util v0.1.0 (https://example.com/fork/util?branch=fix/a+b#e7d82e99)|",
+                format!(
+                    "{app_line}1|util v0.1.0 \
+                     (https://example.com/fork/util?branch=fix/a+b#e7d82e99)|"
+                ),
                 "names none of the 2 such package(s)",
             ),
             (
-                "0app v0.1.0 (/work/my app|x/app)|\n1util v0.1.0 (/work/elsewhere/util)|",
+                format!("{app_line}1|util v0.1.0 (/work/elsewhere/util)|"),
                 "names none of the 2",
             ),
             (
-                "0app v0.1.0 (/work/my app|x/app)|\n1twin v2.0.0 (registry `mirror`)|",
+                format!("{app_line}1|twin v1.0.0 (registry `company-c`)|"),
+                "names none of the 2 such package(s)",
+            ),
+            (
+                format!("{app_line}1|twin v2.0.0 (registry `mirror`)|"),
                 "names several of the 2 such package(s)",
             ),
         ] {
-            let error = LinkedCrates::resolve(refused, &packages, &nodes, app).expect_err(refused);
+            let error = resolve(&refused).expect_err(&refused);
             assert!(error.contains(reason), "{refused:?}: {error}");
         }
+    }
+
+    /// The registries a command run in a directory reads: the nearest
+    /// `.cargo/config` above `.cargo/config.toml` beside it, a nearer
+    /// directory's above a farther one's.
+    #[test]
+    fn registries_are_read_from_the_nearest_configuration() {
+        let project = tempfile::tempdir().expect("a temporary directory");
+        let write = |path: &str, contents: &str| {
+            let path = project.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent directory"))
+                .expect("the directories");
+            std::fs::write(path, contents).expect("a configuration file");
+        };
+        write(
+            ".cargo/config.toml",
+            "[registries.flui-outer]\nindex = \"https://outer.example.com/index\"\n\
+             [registries.flui-near]\nindex = \"https://far.example.com/index\"\n",
+        );
+        write(
+            "app/.cargo/config",
+            "[registries.flui-near]\nindex = \"sparse+https://near.example.com/index/\"\n",
+        );
+        write(
+            "app/.cargo/config.toml",
+            "[registries.flui-near]\nindex = \"https://unread.example.com/index\"\n",
+        );
+        let registries = Registries::configured_at(&project.path().join("app/src"));
+        assert_eq!(
+            registries.index_of("flui-near"),
+            Some("sparse+https://near.example.com/index/")
+        );
+        assert_eq!(
+            registries.index_of("flui-outer"),
+            Some("https://outer.example.com/index")
+        );
+        assert_eq!(registries.index_of("flui-unconfigured"), None);
     }
 
     /// A procedural macro the build compiles is listed with its kind before
@@ -612,10 +793,11 @@ mod tests {
             "/git/checkouts/macros/0badc0d",
         );
         let linked = LinkedCrates::resolve(
-            "0macros v0.2.0 (proc-macro) (https://example.com/macros#0badc0de)|extra\n",
+            "0|macros v0.2.0 (proc-macro) (https://example.com/macros#0badc0de)|extra\n",
             std::slice::from_ref(&macros),
             &[],
             &macros,
+            &Registries::default(),
         )
         .expect("a procedural macro's listing");
         assert_eq!(

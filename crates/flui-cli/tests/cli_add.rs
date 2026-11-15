@@ -101,6 +101,14 @@ fn fixture() -> tempfile::TempDir {
                 "[workspace]\n[dependencies]\nflui-core = { path = \"../ws/core\" }\n",
             ),
         ),
+        (
+            "renamed/Cargo.toml",
+            manifest(
+                "renamed",
+                "[workspace]\n[dependencies]\n\
+                 direct = { package = \"flui-direct\", path = \"../ws/direct\" }\n",
+            ),
+        ),
     ];
     for (path, contents) in files {
         let path = dir.path().join(path);
@@ -136,7 +144,8 @@ fn added(stdout: &[u8]) -> serde_json::Value {
 /// A second run changes nothing; a feature whose crate states no plugin is
 /// refused and undone; an unknown name lists what the facade offers;
 /// without the facade, the crate is added from the checkout the
-/// application's FLUI dependencies come from.
+/// application's FLUI dependencies come from, and one the application
+/// links under a rename is reported linked, registered by that rename.
 #[test]
 fn add_links_a_capability_and_shows_its_registration() {
     let dir = fixture();
@@ -227,4 +236,19 @@ fn add_links_a_capability_and_shows_its_registration() {
         manifest.contains("flui-direct") && manifest.contains("ws/direct"),
         "{manifest}"
     );
+
+    let before = read("renamed/Cargo.toml");
+    let renamed = flui()
+        .current_dir(dir.path().join("renamed"))
+        .args(["--json", "add", "flui-direct"])
+        .output()
+        .expect("flui add");
+    assert!(renamed.status.success(), "{renamed:?}");
+    let event = added(&renamed.stdout);
+    assert_eq!(event["changed"], false, "a renamed dependency is linked");
+    assert_eq!(
+        event["snippet"], ".plugin(direct::services::DirectPlugin::default())",
+        "the registration names the crate by the application's key"
+    );
+    assert_eq!(read("renamed/Cargo.toml"), before);
 }

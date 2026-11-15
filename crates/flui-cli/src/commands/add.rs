@@ -43,6 +43,10 @@ enum Target {
     },
     /// A crate added directly.
     Crate {
+        /// The crate's key in the application's `[dependencies]`: its
+        /// rename when the application already links it under one, else its
+        /// name, which `cargo add` gives it.
+        key: String,
         crate_name: String,
         present: bool,
         /// The crate's directory in the application's FLUI checkout.
@@ -70,7 +74,7 @@ impl Target {
             Self::Feature { key, feature, .. } => {
                 format!("{}::services::{feature}", key.replace('-', "_"))
             }
-            Self::Crate { crate_name, .. } => crate_name.replace('-', "_"),
+            Self::Crate { key, .. } => key.replace('-', "_"),
         }
     }
 }
@@ -170,10 +174,12 @@ fn metadata(dir: &Path) -> CliResult<Metadata> {
 
 /// What `name` means for the application `root` of `metadata`.
 fn resolve(metadata: &Metadata, root: &Package, name: &str) -> CliResult<Target> {
+    // The application's normal dependency on the package `crate_name`, by
+    // whatever key it names it.
     let direct = |crate_name: &str| {
-        root.dependencies
-            .iter()
-            .any(|dependency| dependency.name == crate_name)
+        root.dependencies.iter().find(|dependency| {
+            dependency.name == crate_name && dependency.kind == DependencyKind::Normal
+        })
     };
     let facade = root.dependencies.iter().find(|dependency| {
         dependency.name == FACADE
@@ -181,9 +187,11 @@ fn resolve(metadata: &Metadata, root: &Package, name: &str) -> CliResult<Target>
             && dependency.target.is_none()
     });
     let Some(facade) = facade else {
+        let linked = direct(name);
         return Ok(Target::Crate {
+            key: linked.map_or(name, key_of).to_owned(),
             crate_name: name.to_owned(),
-            present: direct(name),
+            present: linked.is_some(),
             path: checkout_crate(root, name),
         });
     };
@@ -203,8 +211,9 @@ fn resolve(metadata: &Metadata, root: &Package, name: &str) -> CliResult<Target>
                         .is_some_and(|default| default.iter().any(|feature| feature == name))),
         });
     }
-    if direct(name) {
+    if let Some(linked) = direct(name) {
         return Ok(Target::Crate {
+            key: key_of(linked).to_owned(),
             crate_name: name.to_owned(),
             present: true,
             path: None,
@@ -465,7 +474,7 @@ fn describe(dir: &Path, target: &Target) -> CliResult<Described> {
             dependency_package(&metadata, application, key)?,
             crate_key,
         )?,
-        Target::Crate { crate_name, .. } => dependency_package(&metadata, application, crate_name)?,
+        Target::Crate { key, .. } => dependency_package(&metadata, application, key)?,
     };
     let refused = |reason: String| CliError::InvalidConfig {
         file: format!("{crate_name}'s Cargo.toml"),
