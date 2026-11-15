@@ -40,8 +40,9 @@ flui-objects = { workspace = true }
 flui-scheduler = { workspace = true }
 # The `Stream` trait `StreamBuilder` polls. Trait-only.
 futures-core = { workspace = true }
-# The byte-storage capability `LifecycleContext::storage` hands out and the
-# `persist` documents write through. Contracts only, no backend (ADR-0082).
+# The capability seam `LifecycleContextExt::capability` acquires handles
+# through, and the byte storage `StorageCapability` hands the `persist`
+# documents. Contracts only, no backend (ADR-0082).
 flui-platform = { workspace = true }
 
 # The agent-protocol schema the development-agent seam speaks

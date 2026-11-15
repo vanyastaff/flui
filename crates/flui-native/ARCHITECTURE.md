@@ -25,11 +25,18 @@ trait depends on `flui-platform` instead.
   picks a host), the table (`host.rs`), `Platform` and its one implementation
   (`platform.rs`), `HostWindow` (`host_window.rs`), the error vocabulary
   (`error.rs`), the table-test runner (`table_test.rs`), `executor.rs` (the
-  runtime the Linux and Windows hosts marshal their own I/O on, not part of `Platform`) and `task.rs`. Its directories are the
+  runtime the Linux and Windows hosts marshal their own I/O on, not part of `Platform`),
+  `task.rs`, one OS's window extensions (`os.rs`), the process-wide calls
+  (`process.rs`), the page's endpoint for a development agent
+  (`page_export.rs`), the display connections of hosts whose window system
+  has no connection object (`display_connection.rs`) and the test support
+  (`testing.rs`). Its directories are the
   tables (`hosts/`), the owner thread and each platform's loop (`owner/`), the
   OS versions (`version/`), the storage position's vocabulary (`storage/`), the
   OS objects two kinds of transfer share (`transfer/`: the Wayland seats' data
-  devices, which the clipboard and drag both reach) and
+  devices, which the clipboard and drag both reach), the native journal
+  (`journal/`, ADR-0215 §4), an unpackaged Windows application's registration
+  of what it opens (`associations/`) and
   one directory per feature of the closed list: `window`, `input`, `text`,
   `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `fonts`, `http`, `preferences`,
   `lifecycle`. Beside `transfer` there is no directory of code shared across
@@ -44,11 +51,12 @@ trait depends on `flui-platform` instead.
   extensions, which are named in that OS's module of `os` (`os::windows`,
   `os::macos`), the modules the facade publishes as `flui::native::<os>`.
   `[package.metadata.flui.modules]` gives the roles `cargo xtask module-dag`
-  checks: the ten features; `owner`, `version`, `storage` and `transfer` as
-  `base`, which
-  names no feature; `hosts`, which nothing names; and the crate-level files
+  checks: the features listed above; `owner`, `version`, `storage`, `transfer` and
+  `display_connection` as `base`, which
+  names no feature; `hosts`, which nothing names; and the crate-level modules
   (`crate-level`: `host`, `platform`, `host_window`, `error`, `executor`,
-  `task`, `os`). A top-level module with none of these roles is a finding, so a
+  `task`, `os`, `testing`, `journal`, `process`, `page_export`,
+  `associations`). A top-level module with none of these roles is a finding, so a
   directory the layout does not name cannot come back unchecked
   (`table_test`, built for tests only, needs none). A platform file names its
   model, a base and other features' models; every other edge is a
@@ -75,8 +83,9 @@ trait depends on `flui-platform` instead.
   `a_window_opened_after_a_close_has_an_id_of_its_own` holds a host to it.
 - **A host is a table, and `Platform` has one implementation (ADR-0151 §10).**
   `host::Host` names one type for each position of the closed list (loop,
-  window, displays, input, text, accessibility, clipboard, drag, haptics,
-  preferences, lifecycle, chrome, storage), each bounded by its position's
+  window, displays, input, text, accessibility, clipboard, primary selection,
+  drag, haptics, preferences, lifecycle, chrome, storage), each bounded by its
+  position's
   trait; `hosts/<os>.rs` holds the table and its constructor and nothing else,
   and a table that leaves a position out does not compile
   (`tests/ui/host_table_names_every_position.rs`). A position a platform does
@@ -1294,7 +1303,7 @@ visible bars (`getInsets`), so hidden bars reserve no space; below it the stable
 insets are the only reading without keyboard occlusion. One query may be
 outstanding; a request while it is out asks once more after its reply settles,
 since that reply may predate the change. Accepted changes dispatch callbacks after
-cache guards are released. `android_safe_area_native_metrics` pins density
+cache guards are released. `android_insets_native_metrics` pins density
 conversion, stale orientation rejection and invalid conversion inputs; native
 rotation and resume additionally require a device run.
 
@@ -2351,7 +2360,7 @@ steps.
 
 Tests (pull-request CI only type-checks Win32; the nightly `windows-latest` run executes them): the owner-affinity refusal order is pinned
 by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
-(run by `the_owner_thread_machinery_honours_its_contracts` in `owner/handlers.rs`), and the callback panic and re-entrancy rules by
+(`owner/hwnd_affinity.rs`), and the callback panic and re-entrancy rules by
 `tests/window_callback_unwind.rs` and `tests/handler_reentry.rs`.
 
 ### Each Win32 window owns its text services, activated at creation and deactivated by `WM_DESTROY`
@@ -2459,7 +2468,8 @@ session end is answered differently (see the section after this one).
 Explicit quit bypasses the last-window veto. `stop(None)` plus an application
 NSEvent wakes the native wait; quit during bootstrap skips `run()` entirely.
 This follows [Apple's stop contract](https://developer.apple.com/documentation/appkit/nsapplication/stop(_:))
-and the installed winit 0.30.13 `stop_app_immediately` implementation. This is the
+and winit 0.30.13's `stop_app_immediately` implementation, read as prior art
+(winit is not in the workspace). This is the
 standalone main loop contract; nested modal loops and foreign-loop embedding are
 not supported by this owner. Physical keyboard/menu wiring is a separate input
 concern, not proved by sending `terminate:` in a probe.
@@ -2924,25 +2934,26 @@ locally only — CI has no macOS test job and `cross-typecheck` is lint-only.
 
 **Decision.** `FLUIContentView` (the owner's `content_view`) conforms to
 `NSTextInputClient` (all 11 methods plus `add_protocol`), and `keyDown:` becomes
-a gate rather than a direct conversion: while the view's text input does not
-compose (`ViewText::takes_key_presses`, `TextInputState.ime_allowed` **false**)
-it hands the event to the view's input exactly as before; while it does it
+a gate rather than a direct conversion: while no field has focus
+(`ViewText::takes_key_presses`, answered by `TextClient::takes_key_presses`)
+it hands the event to the view's input exactly as before; while one does it
 hands the event to `interpretKeyEvents:` and emits nothing itself, with
 `doCommandBySelector:` handing the events the input method declines back to
 the input. The methods turn AppKit's arguments into Rust values and call the
-view's `TextView`, which keeps the composition. `PlatformTextInput` is
-implemented by `MacOSTextInput`, whose two setters route through the owner
-lane to the same `TextView`.
+view's `TextView` (`text::apple::macos`), which answers them from the focused
+field's store through `text::apple::client::TextClient`, the window's
+`TextStoreHost` (ADR-0090): a query runs under a synchronous read lock and an
+edit under an asynchronous read-write lock. The table's text position is
+`MacOSTextInput`, which binds a view's `TextView` and hands out its store host.
 
 **Why.** AppKit's composition pipeline is entered only by `interpretKeyEvents:`,
 which calls *back* into the same view (`setMarkedText:` while composing,
 `insertText:` on commit). Calling it alongside the existing conversion would make
 one physical press reach the application twice — a `Key::Character` **and** an
-`ImeEvent::Commit`. That is ADR-0044 §3's double-producer defect class, and
-ADR-0069 states the contract it violates. The gate makes attachment the *only*
+edit of the field's store. That is ADR-0044 §3's double-producer defect class, and
+ADR-0069 states the contract it violates. The gate makes the focused field the *only*
 variable: the pre-existing path is byte-identical at the default, so the
-conformance adds no regression surface to a window that never attaches a text
-input.
+conformance adds no regression surface to a window with no focused field.
 
 **Market lineage.** winit 0.30.13 documents the same rule in the same terms
 (`Window::set_ime_allowed`): with IME allowed the window receives `Ime` events
@@ -2955,22 +2966,21 @@ and on a different variable — `key_up` queues a `KeyboardInput` only from its
 `Ground` and `Disabled` states, so an open preedit suppresses the release while a
 committed character's release still arrives (`ImeState::Committed` is reset to
 `Ground` inside `keyDown:`). `key_up` here gates on the same condition expressed
-in this backend's own state (`TextInputState::reports_key_release`), so a release
+in this backend's own state (`TextClient::reports_key_release`, false exactly
+while AppKit's context holds marked text), so a release
 inside an open composition is suppressed for the same reason the press was: the
 application never saw that key go down.
 
-**Teardown drops the composition.** `set_ime_allowed(false)` **drops**
-the composition (ADR-0069) and `unmarkText` emits
-`ImeEvent::Preedit { text: String::new(), cursor: None }` rather than nothing.
-It is grounded in the client-side bug class
-`flui-platform/src/ime.rs` records — a client left holding composition state it was
-never told ended suppresses `Key::Character` for the rest of the focus session
-and keeps the cancelled slice in its buffer — and in winit's own macOS
-implementation, which drops the marked text on `set_ime_allowed(false)`, so
-ADR-0069 cites that implementation for the drop-vs-commit half. AppKit's header does not say whether an empty
-`setMarkedText:` always precedes `unmarkText`, so both paths are covered; the
-event is inert when nothing is composing, which is why the callback carries no
-`hasMarkedText` check.
+**A composition that ends keeps its text, and AppKit is told.** `unmarkText`
+ends the field's composition and keeps what was composed; an empty
+`setMarkedText:` ends it and leaves nothing in its place. AppKit's input
+context keeps marked text of its own, so when the field's composition ends
+without the input method (the presentation completes it for a press, focus
+moves, the application edits the composing text) the context is told to forget
+it (`InputContext::discard_marked_text`), or its next commit would insert the
+composed text a second time. A field that loses focus keeps what was composed
+in it (`a_field_losing_focus_keeps_what_was_composed_in_it`,
+`completing_a_composition_makes_appkit_forget_its_marked_text`).
 
 **Rejected.** Unconditional `interpretKeyEvents:` (the two-producer defect).
 Gating on `-[NSTextInputContext handleEvent:]`'s `BOOL` — the routing decision is
@@ -2979,11 +2989,11 @@ keyboard path in exactly the states where both producers are live. A pre-call
 predicate on the key, which is undecidable before the input method runs, and
 wrong per layout: on a U.S. layout a plain letter *does* reach `insertText:`.
 
-**Marked-range convention, a choice a document-less view cannot do better than.**
-`markedRange` answers `(0, utf16_len)` while composing and `{NSNotFound, 0}`
-otherwise; `selectedRange` echoes what `setMarkedText:` delivered. `NSRange` is
-UTF-16 and `ImeEvent::Preedit.cursor` is a **byte** range, so the conversion is
-`utf16_range_to_byte_range` — AppKit-free and tested.
+**Ranges are the field's.** `markedRange` answers the composition's span in the
+field's document and `{NSNotFound, 0}` when nothing composes; `selectedRange`
+answers the field's selection, and not-found when no field has focus or the
+store cannot grant a read now. `NSRange` is UTF-16 and so is the store's
+`Utf16Range`, so the view converts nothing.
 
 **Trade-off, named rather than assumed.** The class-registration block cannot run
 under a bare `cargo test` (an unbundled `NSWindow` throws
@@ -2996,26 +3006,17 @@ still designed rather than measured, because a flip of the wrong sign produces a
 non-zero screen rect too. Measuring which side of the caret the candidate window
 would land on needs a real input method to ask, which is the same gap as for real composition below.
 
-**Replacement coverage.** The conversion carries seven always-run tests
-(ASCII identity, multi-byte divergence from UTF-16 offsets, CJK unit-vs-byte, a
-range splitting a surrogate pair, past-the-end, empty text, and AppKit's real
-`NSNotFound` location), and an eighth pins the `keyUp:` gate across all four
-states it distinguishes — unattached, attached-but-idle, composing, and a
-composition that has just ended. It is mutation-checked against the gate a
-reader would first reach for (`!ime_allowed` alone fails it on the
-attached-but-idle case). A manual run drove the live path from a bundled
-`.app` on a real Mac and passed: the inverse pair
-(attached → one `Commit` and no key event; detached → one key event and no
-`ImeEvent`), the `Preedit` → `Commit` sequence with the byte cursor asserted, the
-empty-`Preedit` that ends a composition, a non-zero cursor rect whose
-`actualRange:` is answered rather than left not-found, and the `keyUp:` gate
-end-to-end — a release reported while a text input is attached with nothing
-composing, and the same call suppressed while a composition is open. The gate's
-arm is mutation-checked against the ungated `key_up`: removing the check leaks a
-`KeyboardEvent { state: Up, key: Character("a") }` into that arm and fails the
-run. A synthesized `NSEvent` proves the
-*routing* and is not a genuine input method, so real composition (press-and-hold
-or a CJK source) remains **not driven**.
+**Replacement coverage.** The client's rules are pure Rust over the
+`InputContext` seam and run on every host (`text::apple::client::tests`):
+`kana_composed_then_converted_is_committed_in_the_field` (which also pins the
+`keyUp:` gate while marked text is held and after it ends),
+`an_edit_replaces_the_range_appkit_names`,
+`a_reconversion_reads_the_field_as_it_stands`,
+`the_candidate_window_follows_the_composition`,
+`an_edit_inside_a_frame_waits_for_it_instead_of_being_dropped`. They drive the
+client, not AppKit: what has run on a Mac, and that real composition
+(press-and-hold or a CJK source) has not, is the parity table's row "IME
+composition and candidate placement" (`docs/platform-parity.md`).
 
 ### iOS binds UIKit through `objc2`, and its loop-exit signal is `applicationWillTerminate:`
 
@@ -3056,9 +3057,9 @@ quit handler from it and the runner runs the teardown.
   classes. The backend names the classes it messages, as `winit-uikit` does.
 
 **Trade-off.** Two `objc2` generations are in the tree: this backend uses
-0.6.4/0.3.2 (already there via `wgpu-hal`), while `winit` 0.30 and
-`accesskit_macos` 0.27 still pull 0.5.2/0.2.2. The duplicate resolves when
-those move (H10 / winit 0.31), not by anything here. A real device is not
+0.6/0.3 (already there via `wgpu-hal`), while `accesskit_macos` 0.27 and
+`accesskit_ios` 0.2 still pull 0.5.2/0.2.2. The duplicate resolves when
+AccessKit's adapters move, not by anything here. A real device is not
 covered — the simulator slice is, by a manual run — and no CI job boots a
 simulator; `cross-typecheck` gained an `aarch64-apple-ios` clippy line so a
 broken iOS build is at least loud.
@@ -3104,8 +3105,8 @@ also made the cursor-icon match's explicit `arrowCursor` arm list
 The newer macro is a stricter oracle; that is part of the migration's value.
 
 **Trade-off.** A second `objc2` generation is still in the lock via
-`accesskit_macos` 0.27 and winit 0.30 (both on 0.5); resolved when those move
-(H10), not by anything here.
+`accesskit_macos` 0.27 and `accesskit_ios` 0.2 (both on 0.5); resolved when
+those move, not by anything here.
 
 **Replacement coverage.** The four bundled macOS probes are unchanged in what
 they assert and all PASS on `objc2`, driving the migrated `msg_send!` sites
@@ -3218,7 +3219,7 @@ Opt-in rather than the backend's default, because the reveal report is a
 promise only a frame-loop owner can keep, and the promise is selected at the
 one place that keeps it: `flui-app`'s desktop runner asks for
 `AfterFirstFrame` at its two open sites (the main window and a content-bearing
-secondary window, through `runner::desktop::rendered_window_options`), whose
+secondary window, through `runner::desktop::OpeningWindow::open`), whose
 frame closure performs the reveal. Its shared `From<&AppConfig> for
 WindowOptions` conversion stays at `AtOpen` on purpose — `run_direct` and the
 bare `open_secondary_window` use it and have no frame loop that would reveal.
@@ -3569,8 +3570,8 @@ a retired context or a recycled HWND.
 
 The bounded Windows subprocess rows `unhandled_system_key_closes_window`,
 `allowed_system_key_closes_window`, `prevented_system_key_preserves_window`,
-`system_key_close_honours_veto`, `system_key_callback_can_close_window`, and
-`deferred_system_key_preserves_window` send the system-key message through an actual
+`system_key_close_honours_veto` and `system_key_callback_can_close_window`
+(`tests/contract.rs`) send the system-key message through an actual
 owned HWND and dispatch the resulting native system command. These are native
 message-protocol checks, not physical keyboard input or rendered application checks.
 
@@ -3710,8 +3711,11 @@ portal of `preferences::linux` and the logind and pressure sources of
 (`owner::linux::{LinuxPreferences, LinuxNotices}`); every window hands out the
 AT-SPI bridge of `accessibility::linux`. `current_host` picks the host for
 an X11 session (`choose_linux_host`).
-Text input is `Absent` in the table until the host's later parts fill it; the
-clipboard is the clipboard feature's, on a connection and thread of its own.
+The text position is `X11Text`: the focused field is served to IBus or Fcitx5
+over D-Bus, and to an XIM server where neither answers (`text::linux::x11`);
+the drag position is the loop's, XDND as target and as source (`drag::x11`);
+the clipboard is the clipboard feature's, on a connection and thread of its
+own.
 
 The input position is the loop's (`type Input = X11Loop`): the table makes
 the input feature's `input::linux::x11::X11Input` (`X11Host::input`) and the

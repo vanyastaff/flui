@@ -54,7 +54,8 @@ fn the_input_route_hears_everything_before_it_in_order() {
 
 /// A state change, a frame request and a surface change that arrive before
 /// their route are kept, the newest of each, and handed over when it is set;
-/// the frame request was declined when it arrived.
+/// the frame request was declined when it arrived, and one that arrives
+/// after the route is answered by the route.
 fn state_frame_and_surface_wait_for_their_routes() {
     let routes = WindowRoutes::new();
     routes.state_changed();
@@ -74,16 +75,31 @@ fn state_frame_and_surface_wait_for_their_routes() {
 
     let frames = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&frames);
-    routes.route_frame_requested(move |request| log.borrow_mut().push(request.vsync));
+    let answer = Rc::new(Cell::new(FrameOutcome::Produced));
+    let answering = Rc::clone(&answer);
+    routes.route_frame_requested(move |request| {
+        log.borrow_mut().push(request.vsync);
+        answering.get()
+    });
     assert_eq!(
         *frames.borrow(),
         [EventTime::from_nanos(2)],
         "the newest request"
     );
-    assert_eq!(
-        routes.frame_requested(FrameRequest::new(EventTime::from_nanos(3))),
-        FrameOutcome::Produced
-    );
+    // A routed request is answered by its route: a route that ran no frame
+    // says so, and the window does not answer `Produced` in its place.
+    for outcome in [
+        FrameOutcome::Produced,
+        FrameOutcome::Declined,
+        FrameOutcome::Failed,
+    ] {
+        answer.set(outcome);
+        assert_eq!(
+            routes.frame_requested(FrameRequest::new(EventTime::from_nanos(3))),
+            outcome,
+            "the route's answer is the window's"
+        );
+    }
 
     let surfaces = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&surfaces);
@@ -233,4 +249,126 @@ fn window_routes_contract() {
         .map(|(name, _)| *name)
         .collect();
     assert!(failed.is_empty(), "{failed:?}");
+}
+
+/// The runner paths that open a window, each in an application run on the
+/// headless platform. Input waits for its route only between a window's open
+/// and the end of the owner turn that installs it: once that turn is over
+/// the route is set and has heard everything, so the held queue never
+/// outlives it.
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod runner_paths {
+    use flui_platform::PlatformWindow;
+    use flui_widgets::SizedBox;
+
+    use super::WindowRoutes;
+    use crate::app::runner::owner_dispatch::{RuntimeTask, dispatch_platform_ui_runtime};
+    use crate::app::runner::secondary_window::{
+        open_secondary_window_impl, open_window_with_content_impl,
+    };
+    use crate::app::runtime::WindowPolicy;
+    use crate::app::{AppConfig, Application};
+    use crate::testing::{HeadlessRun, HeadlessRunHandle};
+
+    fn started() -> HeadlessRunHandle {
+        HeadlessRun::start(Application::new(), SizedBox::shrink())
+    }
+
+    /// How many inputs wait for the window's input route; `None` once the
+    /// route is set and has heard them all, so input reaches the
+    /// presentation as it arrives.
+    fn waiting(window: &(impl PlatformWindow + ?Sized)) -> Option<usize> {
+        let routes = WindowRoutes::of(window);
+        let waiting = routes.held.borrow().inputs.len();
+        (waiting > 0 || !routes.input.is_set()).then_some(waiting)
+    }
+
+    fn the_main_window() {
+        let run = started();
+        let windows = run.open_windows();
+        assert_eq!(windows.len(), 1, "the main window opens as the run starts");
+        assert_eq!(
+            waiting(&windows[0]),
+            None,
+            "the main window is installed by the call that opens it"
+        );
+        run.join().expect("the run ends");
+    }
+
+    fn a_bare_secondary_window() {
+        let run = started();
+        let (dispatcher, window) =
+            open_secondary_window_impl(AppConfig::new(), WindowPolicy::Isolated)
+                .expect("the open is admitted")
+                .expect("outside an owner turn the window opens at once");
+        assert_eq!(
+            waiting(&*window),
+            None,
+            "a bare secondary window is installed by the call that opens it"
+        );
+
+        // Asked for from inside an owner turn, the window is published when
+        // that turn ends.
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::TestCallback(Box::new(|_| {
+                let opened = open_secondary_window_impl(AppConfig::new(), WindowPolicy::Isolated)
+                    .expect("the open is admitted");
+                assert!(opened.is_none(), "a turn is running: the window waits");
+            })),
+        )
+        .expect("the turn that asks for the window");
+        let windows = run.open_windows();
+        assert_eq!(windows.len(), 3, "main, and both secondary windows");
+        assert_eq!(
+            waiting(&windows[2]),
+            None,
+            "a window asked for inside an owner turn is installed by the end of it"
+        );
+        run.join().expect("the run ends");
+    }
+
+    fn a_secondary_window_with_content() {
+        let run = started();
+        let _installed = open_window_with_content_impl(
+            AppConfig::new(),
+            WindowPolicy::Isolated,
+            SizedBox::shrink(),
+        )
+        .expect("the open is admitted");
+        let windows = run.open_windows();
+        assert_eq!(windows.len(), 2, "the window is open before its content");
+        assert_eq!(
+            waiting(&windows[1]),
+            Some(1),
+            "until the owner's next turn the window holds its capability snapshot"
+        );
+        run.run_owner_turn();
+        assert_eq!(
+            waiting(&windows[1]),
+            None,
+            "the owner's next turn installs the content and the input route"
+        );
+        run.join().expect("the run ends");
+    }
+
+    #[test]
+    fn every_runner_path_routes_input_by_the_end_of_its_installing_turn() {
+        crate::table_test::run_table(
+            "every_runner_path_routes_input_by_the_end_of_its_installing_turn",
+            &[
+                ("the main window", the_main_window as fn()),
+                ("a bare secondary window", a_bare_secondary_window as fn()),
+                (
+                    "a secondary window with content",
+                    a_secondary_window_with_content as fn(),
+                ),
+            ],
+        );
+    }
 }

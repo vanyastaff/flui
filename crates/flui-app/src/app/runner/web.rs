@@ -109,7 +109,7 @@ where
         ui_runtime.set_performance_overlay(config.show_performance_overlay);
         ui_runtime.set_motion_override(config.motion_override);
 
-        // Typed frame-failure route (issue #561) — same wiring as the
+        // Typed frame-failure route — same wiring as the
         // desktop bootstrap.
         config.install_frame_failure_handler(&ui_runtime);
         ui_runtime.set_frame_failure_detail(config.frame_failure_detail);

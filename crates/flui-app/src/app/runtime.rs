@@ -137,13 +137,12 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 }
 
 // ============================================================================
-// Multi-ui_runtime hosting (issue #555)
+// Multi-ui_runtime hosting
 // ============================================================================
 
 /// Governs when the platform loop should exit once every hosted UI runtime's
 /// window has closed — the embedder-facing policy knob for the "new
-/// independent desktop window ⇒ new UI runtime" production policy (ADR-0027,
-/// issue #555).
+/// independent desktop window ⇒ new UI runtime" production policy (ADR-0027).
 ///
 /// Consulted through `AppRuntime::should_exit`, which drains any deferred
 /// UI runtime-map mutation FIRST (the drain-before-decide rule): a
@@ -159,7 +158,7 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 /// caller that already matches exhaustively — the same precedent
 /// `AttachError` set (`binding.rs`).
 ///
-/// **Live-wired** (issue #555's native-lifecycle follow-up): `AppConfig::
+/// **Live-wired**: `AppConfig::
 /// exit_policy` carries this to `run_desktop`'s bootstrap, which routes the
 /// application handler's exit policy to it (`install_exit_policy_hook` in
 /// `runner/host.rs`). The native hosts' close handling and the
@@ -428,7 +427,7 @@ pub(crate) struct AppRuntime {
     /// How many preference reads have started, so a locale from a read that
     /// a later, re-entrant one overtook is not sent after the newer one.
     preference_reads: Cell<u64>,
-    /// The loop-scoped background execution services (issue #557): both
+    /// The loop-scoped background execution services: both
     /// background work-class lanes, their bounded admission, and the
     /// shutdown protocol. Built at UI runtime install
     /// ([`Self::ensure_execution`]) from either the host-injected
@@ -440,12 +439,12 @@ pub(crate) struct AppRuntime {
     /// ([`Self::shutdown_execution`]), so a later second loop on this same
     /// thread re-resolves fresh services instead of inheriting a dead
     /// instance.
-    /// `Arc`ed (issue #558) so the lifecycle layer can hold the services
+    /// `Arc`ed so the lifecycle layer can hold the services
     /// weakly: a `TaskSpawner` that outlives this loop refuses with
     /// `SpawnError::ShuttingDown` when its upgrade fails, instead of
     /// keeping dead pools alive or reaching ambient state.
     execution: OnceCell<Arc<ExecutionServices>>,
-    /// The running application services (issue #558): the named owner of
+    /// The running application services: the named owner of
     /// every application-lifetime unit of background work. Loop-scoped for
     /// the same hot-restart reason as `execution` above; consulted by
     /// [`Self::should_exit`] (a running keep-alive service vetoes exit)
@@ -860,7 +859,7 @@ impl AppRuntime {
         services
     }
 
-    /// Start an application service (issue #558): resolve the loop's
+    /// Start an application service: resolve the loop's
     /// execution services if needed, hand the service its context, and
     /// register it with this runtime's [`ServiceRegistry`] — the named
     /// owner that will cancel and join it at loop-exit teardown, and whose
@@ -918,7 +917,7 @@ impl AppRuntime {
     }
 
     /// Install the notifier fired when a `KeepsAppAlive` service reports
-    /// its exit (issue #558) — the runner wires this to the platform's
+    /// its exit — the runner wires this to the platform's
     /// coalesced exit-policy re-evaluation request, closing the loop that
     /// [`Self::should_exit`]'s service veto opens: without it, a veto
     /// taken at the last window's close would never be re-decided once
@@ -959,7 +958,7 @@ impl AppRuntime {
         self.service_registry.reopen();
     }
 
-    /// The staged service shutdown (issue #558): stop admission, cancel
+    /// The staged service shutdown: stop admission, cancel
     /// every running service, then join each until `join_by` — run at
     /// full loop-exit teardown BEFORE [`Self::shutdown_execution`], so
     /// services get their cooperative flush window before the pools
@@ -1045,7 +1044,7 @@ impl AppRuntime {
     }
 
     /// The earliest wall-clock instant this loop's platform event loop
-    /// should wake at instead of blocking forever (issue #556's wall-clock
+    /// should wake at instead of blocking forever (the wall-clock
     /// wake) — the min over every hosted UI runtime's own
     /// [`super::ui_runtime::UiRuntime::next_wake`] (which itself is the min over
     /// that UI runtime's own presentations' armed gesture-arena deadlines).
@@ -1162,7 +1161,7 @@ impl AppRuntime {
         match policy {
             ExitPolicy::ExplicitQuit => false,
             // A running service that declared `ServiceLifetime::KeepsAppAlive`
-            // (issue #558) vetoes exit the same way a queued install does:
+            // vetoes exit the same way a queued install does:
             // messenger-like applications survive their last window closing
             // and end when the service completes or the embedder calls
             // `Platform::quit` explicitly. Not compiled on wasm32 — the
@@ -1312,7 +1311,7 @@ impl AppRuntime {
     /// Remove the installed redraw-poke window if (and only if) it is the
     /// window identified by `id` — the window-close release path.
     ///
-    /// Teardown-order invariant (issue #713): every `Arc` of a platform
+    /// Teardown-order invariant: every `Arc` of a platform
     /// window must unwind while the platform event loop is still alive —
     /// this slot was the one reference that survived `Platform::run` and
     /// forced the window's native teardown to run after the loop (and, on

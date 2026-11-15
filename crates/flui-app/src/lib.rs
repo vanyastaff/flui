@@ -29,7 +29,7 @@
 //! `MediaQueryData::platform_brightness`, and the resolved theme is published
 //! by an in-tree inherited widget, separately in each window. See
 //! [ADR-0042](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0042-theming-ownership.md);
-//! the app-shell widgets that implement it are tracked in issue #573.
+//! the app-shell widgets that implement it are tracked separately.
 //!
 //! Applications enter through [`run_app`], or an [`Application`] that names
 //! the configuration and capabilities, from a function marked [`main`]; the
@@ -120,7 +120,7 @@ pub use app::{FontRegistrationError, register_font};
 // `run_direct` needs the non-iOS owner-platform host — see `app::direct`'s gate.
 #[cfg(not(target_os = "ios"))]
 pub use app::run_direct;
-// Host-injected execution seam (issue #557): an embedded host provides its
+// Host-injected execution seam: an embedded host provides its
 // own worker pools via `AppConfig::executors`, and the runtime's
 // default pools are then never constructed. `DeterministicExecutors` is the
 // single-threaded reference implementation for tests and reproducible hosts.
@@ -128,7 +128,7 @@ pub use app::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
     SpawnError,
 };
-// Task/worker/service lifecycles over those lanes (issue #558, ADR-0049):
+// Task/worker/service lifecycles over those lanes (ADR-0049):
 // owned, cancel-on-drop task and worker handles; application services with
 // declared lifetimes and a staged, deadline-bounded graceful shutdown; and
 // pull-only typed service events. Native-only — the web runner has no
@@ -140,7 +140,7 @@ pub use app::{
     TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle,
     service_events,
 };
-// Typed frame-failure route (issue #561): the embedder-visible half of the
+// Typed frame-failure route: the embedder-visible half of the
 // presentation-frame transaction boundary (ADR-0048). Terminal failures drop
 // only their presentation's frame; narrower lifecycle failures can be
 // contained while the frame continues. These types report both outcomes.
@@ -149,14 +149,14 @@ pub use app::{
     FrameFailureHandlerFactory, FrameFailureKind, FrameFailureReport, LifecycleHook, PanicText,
     RecoveredAt, SamplingFailure, SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
-// Multi-window policy knobs (issue #555's embedder-facing seam) — not
+// Multi-window policy knobs — not
 // available on iOS, where `AppRuntime`/`UiRuntime`'s ui_runtime-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).
 #[cfg(not(target_os = "ios"))]
 pub use app::ExitPolicy;
 #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
 pub use app::WindowPolicy;
-// Per-window close-request veto (issue #558): the application's answer to
+// Per-window close-request veto: the application's answer to
 // "may this window close?", asked per presentation before anything is torn
 // down. Same iOS gate as the policy knobs above, and for the same reason.
 #[cfg(not(target_os = "ios"))]

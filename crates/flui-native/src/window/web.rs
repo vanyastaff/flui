@@ -1449,6 +1449,10 @@ impl raw_window_handle::HasDisplayHandle for WebSurface {
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         use raw_window_handle::{DisplayHandle, RawDisplayHandle, WebDisplayHandle};
 
+        // As `window_handle`: a retired window has no surface to make.
+        if self.retirement.is_retired() {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
         let raw = RawDisplayHandle::Web(WebDisplayHandle::new());
         // SAFETY: a web display handle carries no fields: there is nothing
         // for `borrow_raw` to keep valid.

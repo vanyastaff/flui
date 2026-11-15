@@ -61,8 +61,9 @@ _Avoid_: Frame wake, frame execution
 
 **Native host**:
 A host written against one operating environment's own APIs (Windows, macOS,
-iOS, Android, the Web, Linux). winit on Linux is a fallback host, not a native
-one.
+iOS, Android, the Web, Linux). Linux has two, Wayland and X11, chosen by the
+session. Every operating environment FLUI runs on has a native host; the
+headless host is the one host that is not native.
 _Avoid_: Backend, port, platform, shell
 
 **Headless host**:

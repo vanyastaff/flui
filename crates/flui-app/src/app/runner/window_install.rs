@@ -336,17 +336,16 @@ impl WindowInstall {
         all(test, not(target_os = "android"), not(target_os = "ios"))
     ))]
     pub(super) fn submit_web(mut self, driver: FrameDriver) -> anyhow::Result<()> {
-        use super::owner_dispatch::{install_input_wiring, with_owner_callback};
+        use super::owner_dispatch::{
+            dispatch_platform_frame, install_input_wiring, with_owner_callback,
+        };
 
         let window = Rc::clone(self.window.native());
         let dispatcher = self.dispatcher();
         install_input_wiring(dispatcher, window.as_ref());
         let binding = self.frame_driver(driver)?.binding;
         WindowRoutes::of(&*window).route_frame_requested(move |request| {
-            with_owner_callback(|_| {
-                let _ =
-                    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding, request));
-            });
+            with_owner_callback(|_| dispatch_platform_frame(dispatcher, binding, request))
         });
         self.terminal_callbacks();
         // The subscription precedes the seed. Keep redraw ownership published
