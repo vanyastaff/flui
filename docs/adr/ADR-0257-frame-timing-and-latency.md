@@ -101,14 +101,16 @@ and `Mailbox` needs a pacer FLUI does not have.
    (`PresentationReports`), which holds the stamp's rules:
    - a report no later than one already kept or carried is a repeat or out of order, and is
      dropped, so a window's reports never run backwards;
-   - a report is of a frame already shown, so its stamp is no later than the event clock's reading
-     when it arrives. A stamp ahead of that reading by at most `REPORT_LEAD` is the frame's time
-     measured with error (the two readings a rebase takes, a compositor that adds its display's
-     latency) and is kept at the arrival reading, so a host whose every stamp leads still reports
-     on every request; a stamp further ahead is no time of a frame (a prediction, a stamp left on
-     another clock, a saturated rebase) and the report is dropped, so one wrong stamp never holds
-     back the reports after it;
-   - a request carries the newest report that arrived before its own reading.
+   - a stamp ahead of the event clock's reading when the report arrives by at most `REPORT_LEAD`
+     is the frame's time as the platform measured it (the two readings a rebase takes, a
+     compositor that adds its display's latency), and the report is carried with that stamp: the
+     stamp is the phase of the refresh grid the frame clock plans on (decision 3), and the clock
+     names the refresh after a report that lies after its reading;
+   - a stamp further ahead is no time of a frame (a prediction, a stamp left on another clock, a
+     saturated rebase), and the report is dropped, so one wrong stamp never holds back the reports
+     after it;
+   - the next request carries the newest report that arrived before it, whatever its stamp, so a
+     host whose every stamp leads the clock still reports on every request.
 
    A host rebases its stamp against its reading of the platform's clock and hands it on; no host
    judges how far ahead a stamp may lie. `HostInput::Frame` carries the report, and so does a
@@ -147,8 +149,10 @@ and `Mailbox` needs a pacer FLUI does not have.
   recording's round trip.
 - `a_presentation_report_bounds_the_idle_work_of_a_later_frame` (flui-runtime) pins the bound by
   the report's grid and the stale report; `the_idle_work_of_a_frame_reached_late_ends_at_a_refresh_still_ahead`
-  pins that the next refresh is one after the frame's start, never the report itself.
-- `a_presentation_report_rides_the_first_request_at_or_after_it`,
+  pins that the next refresh is one after the frame's start, never the report itself;
+  `the_next_refresh_lies_on_the_grid_the_report_starts` (flui-scheduler) pins the grid of a
+  report that lies after the reading.
+- `a_presentation_report_rides_the_next_request`,
   `a_report_stamped_far_ahead_does_not_outrank_the_reports_after_it` and
   `a_stream_of_stamps_that_lead_the_clock_reaches_every_request` (flui-native, the seam) pin the
   stamp's rules; `a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it` and

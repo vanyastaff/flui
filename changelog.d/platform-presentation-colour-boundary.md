@@ -16,9 +16,9 @@
 - **`flui-native`**: one presentation report stamped far ahead of the event clock (a rebase that
   saturated, a stamp left on the compositor's own epoch) no longer keeps every later report of the
   window from its frame requests. A report more than a second ahead of the clock when it arrives is
-  dropped, on every host, and one ahead by less is held at the clock's reading, so a window whose
-  every stamp leads the clock (a compositor that adds its display's latency) still reports on each
-  frame request.
+  dropped, on every host, and one ahead by less is carried by the next frame request with its own
+  stamp instead of waiting for the clock to reach it, so a window whose every stamp leads the clock
+  (a compositor that adds its display's latency) reports on each frame request again.
 - **`flui-native`** (macOS, iOS): an `NSURLSession` request whose delegate panics while it handles
   the task's response, data or end now fails with `HttpError::Host` instead of waiting until its
   deadline, and a body that lost bytes that way ends in that error instead of reading as complete.

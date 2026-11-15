@@ -961,11 +961,11 @@ impl HeadlessHostWindow {
     /// ([`FrameRequest::presented`](flui_platform::FrameRequest::presented)).
     /// A headless window has no screen, so this is the only report it makes,
     /// and it is treated as a real host's: a report no later than one
-    /// already made is dropped; a time ahead of the event clock is held at
-    /// the clock's reading now, since the frame it reports is shown already;
-    /// and a time more than a second ahead is no time of a frame, and the
-    /// report is dropped. A closed window ignores it, as does one whose capabilities say
-    /// its window system reports no presentation
+    /// already made is dropped; a time ahead of the event clock is carried
+    /// with its stamp while it lies within the host's report lead
+    /// (`REPORT_LEAD`); and a time further ahead is no time of a frame, and
+    /// the report is dropped. A closed window ignores it, as does one whose
+    /// capabilities say its window system reports no presentation
     /// ([`WindowCapabilities::reports_presentation`]).
     pub fn simulate_presented(&self, presented: flui_platform::FramePresented) {
         {

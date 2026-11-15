@@ -988,18 +988,17 @@ trait depends on `flui-platform` instead.
     `handlers::PresentationReports`, which the `WindowDelivery` keeps and
     `dispatch_frame` empties into the next frame request
     (`FrameRequest::presented`): the newest report wins, a report no later
-    than one kept or carried is dropped. A report is of a frame already
-    shown, so a stamp ahead of the event clock's reading when the report
-    arrives is held at that reading while it lies within `REPORT_LEAD` (a
-    rebase's error, a compositor that adds its display's latency): kept at
-    its stamp, it would wait for the clock while the next report replaced
-    it, and a host whose every stamp leads would report nothing while it
-    presents. A stamp further ahead is no time of a frame, and the report is
-    dropped: kept, a rebase saturated at the timeline's end would silence the
-    window for good. Every host's reports pass there, and no host judges a
-    stamp's lead itself: the Win32 window hands on the swap chain's stamp
-    and its counter reading as they are. A request still holds back a report
-    whose arrival reading is later than its own. The headless window reports what a test injects
+    than one kept or carried is dropped. A stamp ahead of the event clock's
+    reading when the report arrives (a rebase's error, a compositor that
+    adds its display's latency) is carried with its stamp while it lies
+    within `REPORT_LEAD`: the stamp is the phase of the refresh grid the
+    frame clock plans on, and a report held back until the clock reached it
+    would be replaced by the next one, so a host whose every stamp leads
+    would report nothing while it presents. A stamp further ahead is no time
+    of a frame, and the report is dropped: kept, a rebase saturated at the
+    timeline's end would silence the window for good. Every host's reports
+    pass there, and no host judges a stamp's lead itself: the Win32 window
+    hands on the swap chain's stamp and its counter reading as they are. The headless window reports what a test injects
     (`HeadlessHostWindow::simulate_presented`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
     an X11 present completes on the GPU driver's connection),

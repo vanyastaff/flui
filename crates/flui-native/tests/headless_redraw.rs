@@ -123,8 +123,7 @@ fn a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it() {
 
 /// A window system whose every stamp leads the event clock by two refreshes
 /// (a compositor that adds its display's latency) still has each frame
-/// request carry a report, stamped no later than the request's arrival and
-/// later than the one before.
+/// request carry a report, with the stamp the window system gave.
 fn a_window_whose_stamps_lead_the_clock_reports_on_every_request() {
     let platform =
         HeadlessPlatform::new().with_window_capabilities(flui_platform::WindowCapabilities::ALL);
@@ -136,12 +135,11 @@ fn a_window_whose_stamps_lead_the_clock_reports_on_every_request() {
         .expect("the headless platform opens headless windows");
     let lead = std::time::Duration::from_millis(33);
 
-    let mut last = EventTime::now();
     for frame in 1..=4 {
-        window.simulate_presented(FramePresented::new(EventTime::now() + lead));
+        let stamp = EventTime::now() + lead;
+        window.simulate_presented(FramePresented::new(stamp));
         opened.handler.take_calls();
         opened.window.request_redraw();
-        let arrived = EventTime::now();
         let carried: Vec<Option<EventTime>> = opened
             .handler
             .take_calls()
@@ -153,14 +151,7 @@ fn a_window_whose_stamps_lead_the_clock_reports_on_every_request() {
                 _ => None,
             })
             .collect();
-        let [Some(at)] = carried[..] else {
-            panic!("frame {frame}: the request carries no report: {carried:?}");
-        };
-        assert!(
-            last < at && at <= arrived,
-            "frame {frame}: reported at {at:?}, after {last:?} and by {arrived:?}"
-        );
-        last = at;
+        assert_eq!(carried, [Some(stamp)], "frame {frame}");
     }
 }
 

@@ -4706,7 +4706,7 @@ graph LR
   исходном виде: Weston отбрасывает commit свёрнутого окна, Wayland не разворачивает),
   `WindowFixture::present_and_request_frame`; фикстуры Win32 (своя flip-model DXGI swap chain на
   D3D11), Wayland, headless. **Тесты** (откат проверен для каждого):
-  `a_presentation_report_rides_the_first_request_at_or_after_it`,
+  `a_presentation_report_rides_the_next_request`,
   `a_platform_stamp_is_rebased_by_its_distance_from_the_reading`,
   `a_shown_present_is_aged_and_two_reads_measure_the_period`,
   `statistics_that_name_no_shown_present_place_none`, таблица `presentation_feedback`
@@ -5447,18 +5447,22 @@ graph LR
   (1) Отчёт о показе кадра со штампом далеко в будущем (насыщенный rebase, произвольный
   `tv_sec_hi` Wayland, `presentedTime` Metal) вытеснял все следующие отчёты окна:
   `PresentationReports::report`, через который идут отчёты всех хостов, отбрасывает отчёт, чей
-  штамп опережает показание событийных часов больше чем на `REPORT_LEAD` (секунда), а штамп с
-  меньшим опережением ставит на показание в момент прихода: показанный кадр показан не позже.
-  Иначе хост, у которого каждый штамп опережает часы (композитор добавляет задержку дисплея),
-  не донёс бы ни одного отчёта, пока окно анимируется: следующий отчёт вытесняет ждущий. Win32
-  больше не отбрасывает «будущий» штамп сам: `ShownPresent` отдаёт штамп и показание счётчика
-  как есть, правило одно — у шва. Тесты:
+  штамп опережает показание событийных часов больше чем на `REPORT_LEAD` (секунда), а отчёт с
+  меньшим опережением несёт следующий запрос с его собственным штампом. Правило решения 6
+  ADR-0257 «отчёт, ещё впереди, ждёт» заменено: хост, у которого каждый штамп опережает часы
+  (композитор добавляет задержку дисплея), не донёс бы ни одного отчёта, пока окно анимируется
+  (следующий отчёт вытесняет ждущий), а прижатие штампа к показанию сдвигало бы фазу сетки
+  refresh, по которой планирует часы кадра. Часы кадра называют refresh после отчёта, лежащего
+  после показания (`the_next_refresh_lies_on_the_grid_the_report_starts`). Замену правила ADR
+  утверждает владелец до слияния. Win32 больше не отбрасывает «будущий» штамп сам:
+  `ShownPresent` отдаёт штамп и показание счётчика как есть, правило одно — у шва. Тесты:
   `a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it` (`tests/`, headless),
+  `a_presentation_report_rides_the_next_request`,
   `a_report_stamped_far_ahead_does_not_outrank_the_reports_after_it`,
   `a_stream_of_stamps_that_lead_the_clock_reaches_every_request` и
-  `a_window_whose_stamps_lead_the_clock_reports_on_every_request` (`tests/`, headless); без
-  прижатия к показанию падают три последних (`left: None, right: Some(5000000000)`,
-  `frame 1: left: None, right: Some(1016666667)`, `frame 1: the request carries no report`).
+  `a_window_whose_stamps_lead_the_clock_reports_on_every_request` (`tests/`, headless); с
+  прижатием к показанию падают все четыре последних (`left: Some(40), right: Some(45)`, штамп
+  вместо показания прихода, `frame 1`), с удержанием до часов — поток не доходит до запроса.
   (2) Паника в шаге делегата `NSURLSession` оставляла запрос без конца, а потерянный кусок тела —
   тело «целым». Общая часть делегата и потока запроса вынесена в `http::apple::transfer` (чистая,
   собирается под `test` на любом хосте): каждый шаг идёт под `contain_os_entry`, паника завершает
