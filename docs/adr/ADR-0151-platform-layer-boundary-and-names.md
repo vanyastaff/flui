@@ -517,12 +517,14 @@ crates/flui-native/
   android/                  Java sources, committed classes.dex and its hash record (outside src/)
   src/
     lib.rs                  current_platform(): picks HostPlatform<Windows> | HostPlatform<Apple> | HostPlatform<Android> |
-                            HostPlatform<Web> | HostPlatform<Wayland> | HostPlatform<X11> | HostPlatform<Winit> | HostPlatform<Headless> by cfg,
+                            HostPlatform<Web> | HostPlatform<Wayland> | HostPlatform<X11> | HostPlatform<Headless> by cfg,
                             and on Linux and for headless at run time; returns Box<dyn Platform>
     host.rs                 trait Host { type Loop; type Window; type Displays; type Input;
-                            type Text; type Accessibility; type Clipboard; type Drag; type Haptics;
-                            type Preferences; type Lifecycle; type Chrome; type Storage }: the closed
-                            list of section 3 as a type (the menu position joins with the menu feature);
+                            type Text; type Accessibility; type Clipboard; type PrimarySelection;
+                            type Drag; type Haptics; type Preferences; type Lifecycle; type Chrome;
+                            type Storage }: the closed list of section 3 as a type (the primary
+                            selection, where the platform has one, is a position beside the
+                            clipboard; the menu position joins with the menu feature);
                             Absent<F>, the one type for "not on this platform"
     error.rs                the core host's error types
     platform.rs             Platform (sealed), AppHandler; HostPlatform<H: Host>, the one
@@ -532,9 +534,11 @@ crates/flui-native/
                             windows.rs apple.rs android.rs web.rs linux.rs (Wayland and X11) headless.rs
     owner/                  the owner thread and each platform's loop (std's sys/pal): OwnerPlatform,
                             PlatformProxy, the signal and slot, the panic boundary, the one
-                            call point for user code, journal/ (ADR-0215 §4, built under the driver feature;
-                            its schema is declared in flui-protocol);
+                            call point for user code;
                             windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs headless.rs
+    journal/                the native journal, a crate-level module: owner/ names no feature, and
+                            the journal names the input model (ADR-0215 §4, built under the driver
+                            feature; its schema is declared in flui-protocol)
     window/                 mod.rs state.rs visibility.rs installation.rs config.rs (system chrome,
                             the Chrome position, is a facet of the window and lives here);
                             windows/{mod,proc,limits,backdrop}.rs;
@@ -709,9 +713,10 @@ secrets in diagnostics) are decided by the records the table cites.
   not only by reading one control through UI Automation or AX.
 - **Native recordings replay on the headless host** deterministically and cover IME, lifecycle,
   preferences and displays, not only the pointer. The native journal that produces them is a
-  module of the core host (`owner/journal/`), written at run time under the `driver` feature, not
-  a test-only codec; `flui-protocol` declares its schema so `flui-driver` reads a recording
-  without linking the core host.
+  module of the core host (the crate-level `journal/`: `owner/` names no feature, and the journal
+  names the input model), written at run time under the `driver` feature, not a test-only codec;
+  `flui-protocol` declares its schema so `flui-driver` reads a recording without linking the core
+  host.
 - **One way to drive an app.** A host's conformance rows that need the OS are `flui-driver`
   scenarios (ADR-0238): the same scenario runs on the headless host in CI, in process, and
   through the driver's `os` lane on a device (each device check is a scenario on the

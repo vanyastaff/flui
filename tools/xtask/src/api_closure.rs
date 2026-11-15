@@ -16,8 +16,10 @@
 //!   brings) is a finding; the core host uses it to keep every OS binding,
 //!   AccessKit and tokio out of its paths (ADR-0151 §8).
 //!
-//! The table's other keys, each a list that only shrinks: an entry no build
-//! needs is a finding.
+//! The table's other keys. Each list holds only what a build needs: an entry
+//! no build needs is a finding. A list grows only with the decision that
+//! needs the entry (`entries` gained `NativeExecutor::from_tokio` with
+//! ADR-0327 §3).
 //!
 //! - `exceptions = [{ crate = "…", exit = "ADR-NNNN" }]` lets a Stable package
 //!   name one more upstream crate until the change in the ADR `exit` names

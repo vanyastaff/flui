@@ -652,7 +652,7 @@ unnecessary_unwrap = "warn"
 # measured count is 729 sites (Windows all-targets/all-features 701, of which
 # 407 in lib/bin code; macOS, Android and wasm32 add 28), mostly over our own
 # enums (`PointerEvent` 114, `DrawOp` 45, `Layer` 40), with a few over syn,
-# winit, serde_json and lyon. Too many for one change, so it is on per crate
+# serde_json and lyon. Too many for one change, so it is on per crate
 # instead (`#![warn(clippy::wildcard_enum_match_arm)]` in flui-platform and
 # flui-app, 21 sites fixed), widened crate by crate. The lint inspects only an
 # arm whose whole pattern is `_` or a binding: a `_` inside an or-pattern
