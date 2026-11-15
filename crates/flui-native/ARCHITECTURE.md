@@ -2765,8 +2765,12 @@ not whether an application survives one.
 
 Tests: `a_panicking_method_keeps_the_first_panic` (headless,
 `tests/app_handler.rs`), `window_handler_obligation_table`, the row "a layout
-callback registered twice is replaced" (headless), the X11 turn's rows in
-`tests/x11_input.rs` and Wayland's in `tests/wayland_input.rs`.
+callback registered twice is replaced" (headless),
+`a_window_follows_its_focus_when_a_handler_panics_at_its_loss` (X11,
+`tests/x11_input.rs`) and `a_handlers_panic_leaves_the_rest_of_the_turn_delivered`
+(Wayland on Weston, `tests/wayland_input.rs`); a second layout callback
+replaces the first on X11 and Wayland too
+(`a_second_layout_callback_replaces_the_first` in both files).
 
 ### The surface-availability signal is a handler method, not a polled query
 

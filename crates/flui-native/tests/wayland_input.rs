@@ -94,6 +94,14 @@ mod cases {
                 "a_drag_the_compositor_ignores_ends_cancelled",
                 a_drag_the_compositor_ignores_ends_cancelled,
             ),
+            trial(
+                "a_handlers_panic_leaves_the_rest_of_the_turn_delivered",
+                a_handlers_panic_leaves_the_rest_of_the_turn_delivered,
+            ),
+            trial(
+                "a_second_layout_callback_replaces_the_first",
+                a_second_layout_callback_replaces_the_first,
+            ),
         ];
         libtest_mimic::run(&arguments, trials).exit();
     }
@@ -312,6 +320,100 @@ mod cases {
 
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         hold_recording(recorder, &pointer);
+        window.close_for_cleanup();
+        run_for(&platform, Duration::from_millis(50)).expect("the loop turns");
+    }
+
+    /// A second keyboard layout callback replaces the first, as on every
+    /// host: the first is dropped at the registration.
+    fn a_second_layout_callback_replaces_the_first(_: &Session) {
+        struct OnDrop(Rc<Cell<bool>>);
+        impl Drop for OnDrop {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let platform = WaylandPlatform::try_new().expect("the harness's Weston answers");
+        let dropped = Rc::new(Cell::new(false));
+        let guard = OnDrop(Rc::clone(&dropped));
+        platform.on_keyboard_layout_change(Box::new(move || {
+            let _ = &guard;
+        }));
+        assert!(!dropped.get(), "the first callback is kept until replaced");
+        platform.on_keyboard_layout_change(Box::new(|| {}));
+        assert!(
+            dropped.get(),
+            "the first callback was kept beside the second"
+        );
+    }
+
+    /// A key pressed and released in one batch reaches the loop in one turn.
+    /// The window's handler panics at the press: the release, which the
+    /// same turn took off the queue, is still delivered, and the press's
+    /// panic leaves `run` after it, as on X11.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test catches the panic the loop raises after the turn"
+    )]
+    fn a_handlers_panic_leaves_the_rest_of_the_turn_delivered(session: &Session) {
+        let platform = WaylandPlatform::try_new().expect("the harness's Weston answers");
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(
+                WindowOptions::default().title("panic"),
+                Rc::clone(&handler) as _,
+            )
+            .expect("a Wayland window opens");
+        turn_until(
+            &platform,
+            &window,
+            &handler,
+            "the window on the output",
+            |_| window.state().visible && window.state().focused,
+        );
+        handler.react_to_input(|input| {
+            if let PlatformInput::Keyboard(key) = &input {
+                assert!(
+                    key.state() != KeyState::Down,
+                    "the handler fails at the press"
+                );
+            }
+            flui_platform::DispatchEventResult::default()
+        });
+        let screen = session.screen();
+        let x = &screen.connection;
+        for kind in [KEY_PRESS_EVENT, KEY_RELEASE_EVENT] {
+            x.xtest_fake_input(kind, X_KEY_A, x11rb::CURRENT_TIME, screen.root, 0, 0, 0)
+                .expect("request");
+        }
+        x.flush().expect("flush");
+        let keys = || {
+            handler
+                .inputs()
+                .into_iter()
+                .filter_map(|input| match input {
+                    PlatformInput::Keyboard(key) => Some(key.state()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut raised = 0;
+        while !keys().contains(&KeyState::Down) {
+            let turned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_for(&platform, Duration::from_millis(20))
+            }));
+            if turned.is_err() {
+                raised += 1;
+            }
+            assert!(Instant::now() < deadline, "the press never came");
+        }
+        assert_eq!(raised, 1, "the press's panic left the loop once");
+        assert_eq!(
+            keys(),
+            [KeyState::Down, KeyState::Up],
+            "the release the turn took was dropped with the press's panic"
+        );
         window.close_for_cleanup();
         run_for(&platform, Duration::from_millis(50)).expect("the loop turns");
     }

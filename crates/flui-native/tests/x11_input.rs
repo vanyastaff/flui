@@ -67,7 +67,37 @@ pub(crate) const CASES: &[(&str, fn())] = &[
         "a_master_pointer_comes_and_goes_with_the_hierarchy",
         a_master_pointer_comes_and_goes_with_the_hierarchy,
     ),
+    (
+        "a_second_layout_callback_replaces_the_first",
+        a_second_layout_callback_replaces_the_first,
+    ),
 ];
+
+/// A second keyboard layout callback replaces the first, as on every host:
+/// the first is dropped at the registration, so it never hears a change
+/// again.
+fn a_second_layout_callback_replaces_the_first() {
+    struct OnDrop(Rc<std::cell::Cell<bool>>);
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+    let fixture = X11Fixture::open_with("layout callbacks", RecordingWindowHandler::new());
+    let dropped = Rc::new(std::cell::Cell::new(false));
+    let guard = OnDrop(Rc::clone(&dropped));
+    fixture
+        .platform
+        .on_keyboard_layout_change(Box::new(move || {
+            let _ = &guard;
+        }));
+    assert!(!dropped.get(), "the first callback is kept until replaced");
+    fixture.platform.on_keyboard_layout_change(Box::new(|| {}));
+    assert!(
+        dropped.get(),
+        "the first callback was kept beside the second"
+    );
+}
 
 /// The motions the server sent before the loop turned reach the window as
 /// one move at the last position, which carries the earlier ones: a burst
