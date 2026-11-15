@@ -172,7 +172,7 @@ jobs:
   # release-agent — the tests of a build without the driver agent, which only
   # the release profile compiles (`cfg(driver_agent)` is a debug build or the
   # `driver` feature): such a build reads no agent launch value, from the
-  # environment or an Android intent (activation spec R11). PR CI never
+  # environment or an Android intent (ADR-0288 §7). PR CI never
   # compiles them.
   release-agent:
     name: release-profile agent tests

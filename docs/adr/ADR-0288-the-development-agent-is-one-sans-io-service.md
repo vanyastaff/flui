@@ -175,7 +175,11 @@ traced, with no value in the message. One key names every spelling, so a runner 
 the same way on every host. The token keeps other origins and other tabs out; a script of the
 page's own origin that runs before the module can read it, as a process of the same user can read
 a desktop app's environment. Under `EXIT_ON_DISCONNECT` a page's loop quits, which ends its
-agents; a page cannot close its tab, so the driver closes it.
+agents; a page cannot close its tab, so the driver closes it. Only a build that compiles the agent
+reads the launch: a release build without the `driver` feature reads no launch value, from an
+intent's extras, the environment or a page, and a value there is no way into it (Flutter 3.50
+refuses the same for an intent's `route` and entry point). `a_build_without_the_agent_reads_no_launch_value`,
+which only `cargo test --release` compiles, shows it, run weekly by `weekly.yml`'s `release-agent`.
 
 §8. **A role in the hello.** The hello names what its client may do: `Hello.role`, a
 `ClientRole` of `driver` (the default, which a hello may leave out) or `observer`, in protocol
