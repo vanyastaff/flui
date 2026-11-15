@@ -447,7 +447,8 @@ pub(crate) mod support {
 
         /// The window manager speaks EWMH: it is asked for the focus with
         /// `_NET_ACTIVE_WINDOW`, says which window is active there, and
-        /// answers `_NET_REQUEST_FRAME_EXTENTS`.
+        /// answers `_NET_REQUEST_FRAME_EXTENTS`. The host's window alone asks.
+        #[cfg(x11_host)]
         pub(crate) fn extended(self) -> bool {
             self.manager == WindowManager::Extended
         }
