@@ -7,10 +7,11 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DeviceSize, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AppTitleBar, Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, DisplayColor,
-    DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
-    MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
-    SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
+    AppTitleBar, Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, ColorParts,
+    DisplayColor, DisplayInfo, DisplayKey, DisplayRegistry, DynamicRange, GesturePreferences,
+    Headroom, HourCycle, InvalidDisplayColor, KeyboardInset, Locale, MeasurementSystem,
+    MotionPreference, NumberingSystem, RegionOverride, RegionalFormats, SizeConstraints,
+    SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
     WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowFrame,
     WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowState,
 };
@@ -75,7 +76,40 @@ fn a_display_round_trips_through_its_parts() {
     )));
     let (taken, parts) = display.clone().into_parts();
     assert_eq!(taken, id);
-    assert_eq!(parts.into_info(id), display);
+    assert_eq!(parts.try_into_info(id), Ok(display));
+}
+
+/// A standard-range display has [`Headroom::SDR`] and nothing else: parts
+/// that give it another headroom, or none, are no colour, and a display made
+/// of them is refused; a high-range display takes any headroom or its absence.
+fn colour_parts_validate_as_the_constructors_do() {
+    let brighter = Headroom::try_new(4.0).expect("finite, at least 1");
+    let absent = CapabilityAbsence::NOT_ON_THIS_DEVICE;
+    let parts = |dynamic_range, headroom| ColorParts {
+        gamut: ColorGamut::DisplayP3,
+        dynamic_range,
+        headroom,
+    };
+    for headroom in [Ok(brighter), Err(absent)] {
+        assert_eq!(
+            parts(DynamicRange::Standard, headroom).try_into_color(),
+            Err(InvalidDisplayColor),
+            "standard range with {headroom:?}"
+        );
+        assert_eq!(
+            parts(DynamicRange::High, headroom).try_into_color(),
+            Ok(DisplayColor::high(ColorGamut::DisplayP3, headroom))
+        );
+    }
+    let standard = DisplayColor::standard(ColorGamut::DisplayP3);
+    assert_eq!(standard.headroom(), Ok(Headroom::SDR));
+    assert_eq!(standard.into_parts().try_into_color(), Ok(standard));
+
+    let registry = DisplayRegistry::new();
+    let id = registry.mint(&DisplayKey::Injected(3)).expect("id");
+    let (_, mut display) = DisplayInfo::new(id, "d", Bounds::default(), 1.0).into_parts();
+    display.color = Ok(parts(DynamicRange::Standard, Ok(brighter)));
+    assert_eq!(display.try_into_info(id), Err(InvalidDisplayColor));
 }
 
 fn a_window_state_round_trips_through_its_parts() {
@@ -173,6 +207,10 @@ fn parts_table() {
             (
                 "a_display_round_trips_through_its_parts",
                 a_display_round_trips_through_its_parts as fn(),
+            ),
+            (
+                "colour_parts_validate_as_the_constructors_do",
+                colour_parts_validate_as_the_constructors_do,
             ),
             (
                 "a_window_state_round_trips_through_its_parts",

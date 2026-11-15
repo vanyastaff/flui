@@ -1007,7 +1007,7 @@ mod tests {
         assert_eq!(
             only(&outputs)
                 .color
-                .map(|color| color.color_space.dynamic_range),
+                .map(|color| color.color_space().dynamic_range),
             Ok(flui_platform::DynamicRange::High)
         );
         outputs.describe(GLOBAL, 4);

@@ -79,7 +79,8 @@ is chosen. For `Hdr`, in order: `Rgba16Float` with `ExtendedDisplayP3`, `Extende
 `ExtendedSrgb`, then `Rgb10a2Unorm` with `Bt2100Pq`. `WideGamut` takes an 8-bit format with
 `DisplayP3`. `Srgb8` takes `Bgra8Unorm`, `Rgba8Unorm` or `Rgb10a2Unorm` and paints into it; a surface that lists only `Bgra8UnormSrgb` or `Rgba8UnormSrgb` is painted through an `Rgba8Unorm` working target and the blit writes the decoded values for the format to encode again. Three conditions skip the wider pairs and fall back:
 the adapter cannot render to and blend `Rgba16Float`; the display reports no headroom over SDR white
-(`DisplayHdrInfo::tone_map_headroom() <= 1.0`, which wgpu derives from a definitively-SDR display);
+(`DisplayHdrInfo::tone_map_headroom() <= 1.0`, which wgpu derives from a definitively-SDR display,
+or a headroom or luminance the surface reports that is no finite number);
 the surface lists no such pair. A surface with none of those sRGB pairs is refused with
 `EngineError::UnsupportedSurfaceColorConfiguration` whatever was requested, as before. A colour
 space is never chosen by `Auto`: an FP16 surface would otherwise brighten encoded values.

@@ -338,7 +338,7 @@ pub enum DisplayRead {
 ///
 /// The label is the number the recording platform's registry issued; it names
 /// the display within the recording only, so a replay issues an id of its own
-/// for each label ([`DisplayParts::into_info`]).
+/// for each label ([`DisplayParts::try_into_info`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedDisplay {
     /// The display within this recording.
@@ -2140,6 +2140,11 @@ fn display_from_wire(wire: wire::Display) -> DtoResult<RecordedDisplay> {
         wire::DisplayColor::Absent(absence) => Err(absence_from_wire(absence)?),
         _ => return Err(unread("DisplayColor")),
     };
+    if let Ok(parts) = color {
+        parts
+            .try_into_color()
+            .map_err(|error| invalid(format!("display colour: {error}")))?;
+    }
     let refresh_period = refresh_period_ns
         .map(|nanos| {
             RefreshPeriod::try_from(Duration::from_nanos(nanos))

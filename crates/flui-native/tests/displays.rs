@@ -289,11 +289,11 @@ fn windows_displays_report_their_colour() {
     for display in snapshot.displays() {
         match display.color {
             Ok(color) => {
-                if let Ok(headroom) = color.headroom {
+                if let Ok(headroom) = color.headroom() {
                     assert!(headroom.get().is_finite() && headroom.get() >= 1.0);
                 }
-                if color.color_space.dynamic_range == DynamicRange::Standard {
-                    assert_eq!(color.headroom, Ok(flui_platform::Headroom::SDR));
+                if color.color_space().dynamic_range == DynamicRange::Standard {
+                    assert_eq!(color.headroom(), Ok(flui_platform::Headroom::SDR));
                 }
             }
             Err(absence) => assert_eq!(

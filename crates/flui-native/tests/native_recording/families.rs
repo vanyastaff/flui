@@ -180,7 +180,13 @@ impl ReplayTarget for PlatformTarget<'_> {
                 let mut infos = Vec::with_capacity(displays.len());
                 for display in displays {
                     let id = self.labels.id(display.label);
-                    infos.push(display.parts.clone().into_info(id));
+                    infos.push(
+                        display
+                            .parts
+                            .clone()
+                            .try_into_info(id)
+                            .expect("a display the recording read is valid"),
+                    );
                 }
                 self.sources
                     .displays
@@ -465,8 +471,52 @@ fn platform_recordings_replay_on_the_headless_host() {
         matches!(&target.reads[4], Read::Displays(Err(failure)) if failure.kind == FailureKind::Displays),
         "the failed display read fails as a display source does"
     );
+    let Read::Displays(Ok(displays)) = &target.reads[5] else {
+        panic!("the last display read observed the displays");
+    };
+    assert_eq!(
+        displays[0]
+            .1
+            .color
+            .map(|color| (color.dynamic_range, color.headroom)),
+        Ok((
+            flui_platform::DynamicRange::High,
+            Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
+        )),
+        "a high-range display whose peak the system does not report"
+    );
 
     assert_eq!(labels.len(), 2, "one id for each label, kept across reads");
+}
+
+/// A standard-range display has no headroom to lack or to exceed: a row that
+/// says otherwise is refused at its line, where it is read, so no replay
+/// hands an application a colour its type cannot hold.
+fn a_display_colour_that_contradicts_itself_is_refused() {
+    let (_, text) = FAMILY_RECORDINGS
+        .iter()
+        .find(|(name, _)| *name == "headless_platform_reads")
+        .expect("a checked-in family recording");
+    let high_range = r#""dynamic_range":"high","headroom":{"absent":"not_on_this_device"}"#;
+    assert!(text.contains(high_range));
+    for contradiction in [
+        r#""dynamic_range":"standard","headroom":{"absent":"not_on_this_device"}"#,
+        r#""dynamic_range":"standard","headroom":{"multiple":4.0}"#,
+    ] {
+        let malformed = text.replace(high_range, contradiction);
+        assert!(
+            matches!(
+                NativeRecording::read(malformed.as_bytes()),
+                Err(CodecError::Invalid { line: 7, .. })
+            ),
+            "{contradiction}"
+        );
+    }
+    let sdr_white = r#""dynamic_range":"standard","headroom":{"multiple":1.0}"#;
+    assert!(
+        NativeRecording::read(text.replace(high_range, sdr_white).as_bytes()).is_ok(),
+        "SDR white is the headroom of a standard range"
+    );
 }
 
 /// A window state stream replays on a headless window: each snapshot is
@@ -717,7 +767,7 @@ fn a_header_out_of_its_stream_is_refused() {
 }
 
 /// The cases of the streams beside a registry's.
-pub(super) const CASES: [(&str, fn()); 7] = [
+pub(super) const CASES: [(&str, fn()); 8] = [
     (
         "app_title_bar_snapshots_keep_their_wire_values_and_replay",
         app_title_bar_snapshots_keep_their_wire_values_and_replay,
@@ -737,6 +787,10 @@ pub(super) const CASES: [(&str, fn()); 7] = [
     (
         "window_state_recordings_replay_on_the_headless_host",
         window_state_recordings_replay_on_the_headless_host,
+    ),
+    (
+        "a_display_colour_that_contradicts_itself_is_refused",
+        a_display_colour_that_contradicts_itself_is_refused,
     ),
     (
         "a_row_the_replay_does_not_reproduce_is_a_typed_error",

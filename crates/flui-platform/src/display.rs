@@ -551,19 +551,46 @@ impl Eq for Headroom {}
 /// A display's colour profile in the contract's terms: the colour space it
 /// shows surfaces in, and how far above SDR white it can go.
 ///
-/// Built through [`standard`](Self::standard) and [`high`](Self::high), so a
-/// standard-range display always has [`Headroom::SDR`].
+/// A standard-range display always has [`Headroom::SDR`]: the fields are
+/// private, [`standard`](Self::standard) and [`high`](Self::high) build
+/// nothing else, and [`ColorParts::try_into_color`] refuses parts that say
+/// otherwise.
+///
+/// ```compile_fail,E0616
+/// use flui_platform::{ColorGamut, DisplayColor, Headroom};
+///
+/// let mut color = DisplayColor::standard(ColorGamut::Srgb);
+/// // A standard-range display cannot be given a headroom afterwards.
+/// color.headroom = Ok(Headroom::try_new(4.0).unwrap());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct DisplayColor {
-    /// The colour space surfaces are shown in.
-    pub color_space: SurfaceColorSpace,
-    /// The headroom now, or why there is none to read: a high-range display
-    /// whose operating system does not report its peak.
-    pub headroom: Result<Headroom, CapabilityAbsence>,
+    color_space: SurfaceColorSpace,
+    headroom: Result<Headroom, CapabilityAbsence>,
 }
 
+/// Display colour parts that contradict each other: a standard dynamic range
+/// with a headroom other than [`Headroom::SDR`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("a standard-range display has no headroom over SDR white")]
+pub struct InvalidDisplayColor;
+
 impl DisplayColor {
+    /// The colour space surfaces are shown in.
+    #[must_use]
+    pub const fn color_space(self) -> SurfaceColorSpace {
+        self.color_space
+    }
+
+    /// The headroom now, or why there is none to read: a high-range display
+    /// whose operating system does not report its peak.
+    ///
+    /// # Errors
+    /// The [`CapabilityAbsence`] the platform gave for the missing peak.
+    pub const fn headroom(self) -> Result<Headroom, CapabilityAbsence> {
+        self.headroom
+    }
+
     /// A standard-range display in `gamut`, with no headroom.
     #[must_use]
     pub const fn standard(gamut: ColorGamut) -> Self {
@@ -819,7 +846,7 @@ mod tests {
 /// instead of dropping it from a recording. The id stays apart because it is
 /// issued by a [`DisplayRegistry`] and means nothing outside it: a mirror
 /// writes a label for it and the reader mints its own
-/// ([`DisplayInfo::into_parts`], [`Self::into_info`]).
+/// ([`DisplayInfo::into_parts`], [`Self::try_into_info`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayParts {
     /// [`DisplayInfo::name`].
@@ -884,10 +911,13 @@ impl DisplayInfo {
 }
 
 impl DisplayParts {
-    /// The display these fields describe, under `id`; every field is valid by
-    /// its type.
-    #[must_use]
-    pub fn into_info(self, id: DisplayId) -> DisplayInfo {
+    /// The display these fields describe, under `id`.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayColor`] when the colour's parts contradict each other
+    /// ([`ColorParts::try_into_color`]); every other field is valid by its
+    /// type.
+    pub fn try_into_info(self, id: DisplayId) -> Result<DisplayInfo, InvalidDisplayColor> {
         let Self {
             name,
             bounds,
@@ -898,7 +928,11 @@ impl DisplayParts {
             persistent_key,
             color,
         } = self;
-        DisplayInfo {
+        let color = match color {
+            Ok(parts) => Ok(parts.try_into_color()?),
+            Err(absence) => Err(absence),
+        };
+        Ok(DisplayInfo {
             id,
             name,
             bounds,
@@ -907,8 +941,8 @@ impl DisplayParts {
             refresh_period,
             is_primary,
             persistent_key,
-            color: color.map(ColorParts::into_color),
-        }
+            color,
+        })
     }
 }
 
@@ -933,20 +967,27 @@ impl DisplayColor {
 }
 
 impl ColorParts {
-    /// The colour these fields describe; every field is valid by its type.
-    #[must_use]
-    pub const fn into_color(self) -> DisplayColor {
+    /// The colour these fields describe.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayColor`] for a standard dynamic range with a headroom
+    /// other than [`Headroom::SDR`], which no display has: what
+    /// [`DisplayColor::standard`] and [`DisplayColor::high`] cannot build.
+    pub fn try_into_color(self) -> Result<DisplayColor, InvalidDisplayColor> {
         let Self {
             gamut,
             dynamic_range,
             headroom,
         } = self;
-        DisplayColor {
-            color_space: SurfaceColorSpace {
-                gamut,
-                dynamic_range,
-            },
-            headroom,
+        match dynamic_range {
+            DynamicRange::Standard if headroom != Ok(Headroom::SDR) => Err(InvalidDisplayColor),
+            DynamicRange::Standard | DynamicRange::High => Ok(DisplayColor {
+                color_space: SurfaceColorSpace {
+                    gamut,
+                    dynamic_range,
+                },
+                headroom,
+            }),
         }
     }
 }
