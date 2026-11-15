@@ -27,25 +27,15 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{
-    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts,
-    ControlsOffset, DisplayId, DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom,
-    HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale,
-    MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
-    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
-    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
-    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
-    WindowInsets, WindowMode, WindowState, WindowStateParts,
-};
-use flui_platform::{
     AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ControlsOffset,
     DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts, Headroom, HourCycle,
     ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
     MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
     NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
     SessionEndPhase, SizeConstraints, SystemControls, SystemNotice, SystemPreferences,
-    TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance, WindowExecutionState,
-    WindowFrame, WindowGeometry, WindowInsets, WindowMode, WindowState, WindowStateParts,
+    TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance, WindowCapability,
+    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets, WindowMode,
+    WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
