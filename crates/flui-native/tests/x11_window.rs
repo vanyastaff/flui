@@ -121,6 +121,10 @@ mod cases {
             a_minimized_window_that_is_hidden_reads_hidden,
         ),
         (
+            "a_command_acts_on_the_window_as_it_is_now",
+            a_command_acts_on_the_window_as_it_is_now,
+        ),
+        (
             "a_stream_of_events_leaves_the_frames_their_turns",
             a_stream_of_events_leaves_the_frames_their_turns,
         ),
@@ -1423,6 +1427,78 @@ mod cases {
             .expect("a window shows");
         fixture.settle();
         assert!(fixture.window.state().visible, "shown again");
+    }
+
+    /// A command acts on the window as it is, not as its last snapshot had
+    /// it. Another client has the window manager iconify the window and then
+    /// asks the window to close, before the loop turns: the handler hears the
+    /// close request in the turn that hears the window went iconic, before
+    /// the window read itself again, and the command it answers with, which
+    /// it was admitted before, still takes the window out of its icon.
+    fn a_command_acts_on_the_window_as_it_is_now() {
+        let handler = RecordingWindowHandler::new();
+        // The pointer is nowhere near: a window it left as it went iconic
+        // would read itself for the hover it lost.
+        crate::x11_input::park_pointer();
+        let mut fixture = X11Fixture::open_with("restored", Rc::clone(&handler));
+        let capabilities = fixture.window.state().capabilities;
+        let window = Rc::downgrade(&fixture.window);
+        handler.react_to_close_request(move || {
+            if let Some(window) = window.upgrade() {
+                let restore = WindowCommand::SetMode(WindowMode::Normal)
+                    .admit(&capabilities)
+                    .expect("a managed window takes its mode");
+                window.apply(restore).expect("the window leaves its icon");
+            }
+            CloseDecision::KeepOpen
+        });
+
+        let server = &fixture.server;
+        let change_state = atom(server, "WM_CHANGE_STATE");
+        let wm_state = atom(server, "WM_STATE");
+        // ICCCM 4.1.4: a client message to the root window asks the window
+        // manager for the iconic state (3).
+        server
+            .send_event(
+                false,
+                fixture.root(),
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                ClientMessageEvent::new(32, fixture.xid, change_state, [3, 0, 0, 0, 0]),
+            )
+            .expect("request");
+        server.flush().expect("flush");
+        until("the window manager to iconify the window", || {
+            server
+                .get_property(false, fixture.xid, wm_state, wm_state, 0, 1)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .and_then(|reply| reply.value32()?.next())
+                == Some(3)
+        });
+        send_close(server, fixture.xid);
+        // A round trip: the server has sent the window the request before
+        // the loop turns.
+        server
+            .get_input_focus()
+            .expect("request")
+            .reply()
+            .expect("the focus");
+
+        fixture.settle();
+        assert_eq!(handler.count(&HandlerCall::CloseRequested), 1);
+        assert_eq!(
+            fixture.window.state().mode,
+            WindowMode::Normal,
+            "the command took the window out of its icon"
+        );
+        let map_state = fixture
+            .server
+            .get_window_attributes(fixture.xid)
+            .expect("request")
+            .reply()
+            .expect("the window's attributes")
+            .map_state;
+        assert_eq!(map_state, MapState::VIEWABLE, "and the server maps it");
     }
 
     /// A stream of events that never runs dry leaves the frames their turns:

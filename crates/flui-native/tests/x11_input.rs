@@ -505,7 +505,7 @@ impl<'a> Xtest<'a> {
 
 /// Put the pointer in the screen's far corner, where no window opens, before
 /// a window opens.
-fn park_pointer() {
+pub(crate) fn park_pointer() {
     let (server, screen) =
         x11rb::rust_connection::RustConnection::connect(None).expect("the X server answers");
     let root = server.setup().roots[screen].root;

@@ -1450,6 +1450,7 @@ mod tests {
         use flui_platform::WindowOptions;
         use flui_testing::window_handler::RecordingWindowHandler;
         use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        use x11rb::protocol::xinput::{self, ConnectionExt as _, DeviceType, EnterEvent};
         use x11rb::protocol::xproto::{
             self, ConfigureNotifyEvent, ConnectionExt as _, FocusInEvent, PropertyNotifyEvent,
         };
@@ -1463,9 +1464,14 @@ mod tests {
         let owner = platform.owner();
         let xcb = owner.connection.xcb();
         let root = owner.connection.root();
+        // Hidden: the server is other cases' too, and a window mapped on it
+        // would lie under their pointer.
         let open = || {
             let window = platform
-                .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+                .open_window(
+                    WindowOptions::default().visible(false),
+                    RecordingWindowHandler::new(),
+                )
                 .expect("an X11 window opens");
             let target = window.surface_target();
             let handle = target.window_handle().expect("an open window has a handle");
@@ -1506,6 +1512,46 @@ mod tests {
                 ..FocusInEvent::default()
             })
         };
+        // The pointer crossing a window's edge: a master pointer's crossing,
+        // from a device attached to it. The input reports the hover, which
+        // is part of the window's snapshot.
+        let devices = xcb
+            .xinput_xi_query_device(xinput::Device::ALL)
+            .expect("request")
+            .reply()
+            .expect("the devices")
+            .infos;
+        let master = devices
+            .iter()
+            .find(|device| device.type_ == DeviceType::MASTER_POINTER)
+            .expect("a master pointer")
+            .deviceid;
+        let attached = devices
+            .iter()
+            .find(|device| device.type_ == DeviceType::SLAVE_POINTER && device.attachment == master)
+            .expect("a device attached to the master pointer")
+            .deviceid;
+        let crossed = |window: xproto::Window, entered: bool| {
+            let crossing = EnterEvent {
+                event: window,
+                deviceid: master,
+                sourceid: attached,
+                ..EnterEvent::default()
+            };
+            if entered {
+                Event::XinputEnter(crossing)
+            } else {
+                Event::XinputLeave(crossing)
+            }
+        };
+        // Each event goes to who hears it: a crossing to the input, the rest
+        // to the windows.
+        let hear = |event: &Event| match event {
+            Event::XinputEnter(_) | Event::XinputLeave(_) => {
+                owner.input.event(event, &[]);
+            }
+            _ => owner.windows.event(event),
+        };
         let probes = Cell::new(0);
         // The requests made so far, these probes aside.
         let requests_made = || {
@@ -1533,8 +1579,18 @@ mod tests {
 
         // (case, the events of a turn, the windows read, whether the support
         //  is read)
-        let table: [(&str, Vec<Event>, u64, u64); 5] = [
+        let table: [(&str, Vec<Event>, u64, u64); 6] = [
             ("nothing", vec![], 0, 0),
+            (
+                "the pointer crossing a window's edge a thousand times",
+                [crossed(first, true), crossed(first, false)]
+                    .into_iter()
+                    .cycle()
+                    .take(1_000)
+                    .collect(),
+                1,
+                0,
+            ),
             (
                 "a burst of one window's events",
                 [
@@ -1574,9 +1630,7 @@ mod tests {
         ];
         for (case, events, windows, support_reads) in table {
             let before = requests_made();
-            for event in &events {
-                owner.windows.event(event);
-            }
+            events.iter().for_each(hear);
             assert_eq!(requests_made(), before, "{case}: an event reads nothing");
             owner.windows.read_stale();
             assert_eq!(

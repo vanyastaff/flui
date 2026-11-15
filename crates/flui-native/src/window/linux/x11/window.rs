@@ -455,11 +455,21 @@ impl X11Window {
         self.displays.snapshot().ok()
     }
 
-    /// Read the window again for its state publisher, announcing nothing:
-    /// `WindowDelivery::dispatch_state_changed` calls `state_changed`.
-    fn read_state(&self) -> Publication {
-        self.cell.invalidate();
-        self.cell.state_with(|| self.sample()).outcome()
+    /// What the window's state publisher does (a hover the input reports):
+    /// the window is marked like for any event of the server's, and the
+    /// loop's read this turn publishes and announces the revision. A pointer
+    /// crossing the window's edge costs no read of its own.
+    fn publish_at_the_turns_read(&self) -> Publication {
+        self.mark_stale();
+        Publication::Held
+    }
+
+    /// The mode a command acts on: the window's now, read from the server if
+    /// an event marked the window since its last snapshot. A command that
+    /// went by the last snapshot would act on what the window was a turn
+    /// ago (leave an iconic window unmapped, say).
+    fn mode_now(&self) -> WindowMode {
+        PlatformWindow::state(self).mode
     }
 
     /// An event of the server's says the window may differ from its last
@@ -806,7 +816,7 @@ impl X11Window {
                 self.move_resize(direction, press);
             }
             ChromePress::ToggleMaximize => {
-                let mode = match self.cell.published().mode {
+                let mode = match self.mode_now() {
                     WindowMode::Maximized => WindowMode::Normal,
                     _ => WindowMode::Maximized,
                 };
@@ -941,7 +951,7 @@ impl X11Window {
             return Ok(());
         }
         let states = self.atoms.states;
-        let minimized = self.cell.published().mode == WindowMode::Minimized;
+        let minimized = self.mode_now() == WindowMode::Minimized;
         match mode {
             WindowMode::Minimized => self.send_to_root(ClientMessageEvent::new(
                 32,
@@ -1100,7 +1110,7 @@ impl X11Window {
             was_unmapped
         };
         let brought_forward =
-            (was_unmapped || self.cell.published().mode == WindowMode::Minimized) && self.map();
+            (was_unmapped || self.mode_now() == WindowMode::Minimized) && self.map();
         if !brought_forward {
             self.activate();
         }
@@ -1207,7 +1217,7 @@ impl X11Window {
                 "{size:?} is not a size an X11 window takes"
             )));
         };
-        let mode = self.cell.published().mode;
+        let mode = self.mode_now();
         if !self.unmapped() && matches!(mode, WindowMode::Maximized | WindowMode::Fullscreen) {
             let states = self.atoms.states;
             self.send_state(StateAction::Remove, states.fullscreen, 0);
@@ -2032,7 +2042,7 @@ impl X11Windows {
         owner.notices().mark_stale_on_wake(&window.cell);
         window
             .delivery
-            .publish_through_owner(&window, X11Window::read_state);
+            .publish_through_owner(&window, X11Window::publish_at_the_turns_read);
 
         window.write_properties(position);
         if opens_in != WindowMode::Normal {
