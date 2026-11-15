@@ -1108,7 +1108,7 @@ mod event_loop {
     }
 
     /// What the loop and its windows ask of drag and drop: the drag
-    /// feature's (`drag::wayland`), which the table registers, and the
+    /// feature's (`drag::linux::wayland`), which the table registers, and the
     /// platform's one [`DragTransport`].
     ///
     /// Its windows' drags reach it through the seats' data devices, which

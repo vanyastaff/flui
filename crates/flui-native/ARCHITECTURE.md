@@ -1413,7 +1413,7 @@ trait depends on `flui-platform` instead.
     `a_run_of_motions_is_one_move_through_them`,
     `a_burst_of_motion_is_one_move_through_it`), and a drag session finds the
     window under the pointer once for the run, in at most `MAX_DEPTH` round
-    trips (`drag::x11::source`);
+    trips (`drag::linux::x11::source`);
   - an X11 hierarchy change is read from the flags the server sends, since a
     removed device comes with no use
     (`a_hierarchy_change_is_read_from_its_flags`,
@@ -3942,7 +3942,7 @@ AT-SPI bridge of `accessibility::linux`. `current_host` picks the host for
 an X11 session (`choose_linux_host`).
 The text position is `X11Text`: the focused field is served to IBus or Fcitx5
 over D-Bus, and to an XIM server where neither answers (`text::linux::x11`);
-the drag position is the loop's, XDND as target and as source (`drag::x11`);
+the drag position is the loop's, XDND as target and as source (`drag::linux::x11`);
 the clipboard is the clipboard feature's, on a connection and thread of its
 own.
 
@@ -4032,7 +4032,7 @@ modules' tables
 `a_wake_deadline_no_frame_serviced_is_delivered_once`.
 
 The drag position is the loop's too (`type Drag = X11Loop`): the table makes
-the drag feature's `drag::x11::X11Drag` (`X11Host::drag`), the platform's one
+the drag feature's `drag::linux::x11::X11Drag` (`X11Host::drag`), the platform's one
 `DragTransport`, and the loop holds it by the hook
 `owner::linux::x11::LoopDrag`, hands it every event before the input, and
 wakes for the deadline of the fetch it waits on. A window opening tells it
@@ -4044,7 +4044,7 @@ action (an `XdndActionAsk` reads the source's `XdndActionList`); each
 position is answered `XdndStatus` from the feedback the target cached while
 hearing it, asking for every movement; a drop resolves the action from that
 feedback, and a refusal answers `XdndFinished` at once while the window hears
-`Exited`. Types map to representations in the pure `drag::x11::model`: text
+`Exited`. Types map to representations in the pure `drag::linux::x11::model`: text
 once, in the reader's preferred form, HTML (UTF-8, or UTF-16 behind its mark),
 every other media type as named. A request converts `XdndSelection` at the
 drag's last time into a window made for that fetch and destroyed as it ends,
@@ -4062,7 +4062,7 @@ last one's exit fails learns its types before that failure goes on, and a
 diagnostic found under the lock is emitted once it is let go.
 
 A window is a source too: its `drag_source` starts the runtime's OS session
-(`drag::x11::source`) when the drag leaves it with a button held, so the
+(`drag::linux::x11::source`) when the drag leaves it with a button held, so the
 press's implicit grab keeps the pointer's XInput 2 events coming to the window
 wherever it goes, and the session takes them before the input does. The
 press is the session's from then on: at the loop's next turn the window's
@@ -4117,7 +4117,7 @@ The session lives in an owner-thread cell; its provider and end hook run
 outside it, and the provider is dropped contained, so the hook hears the end
 though a capture fails (ADR-0281 §3).
 
-Tests of the drag: `drag::x11::tests` holds the model's tables
+Tests of the drag: `drag::linux::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
 `bytes_make_their_payload`, `an_incr_write_numbers_its_chunks`,
 `incr_writes_are_bounded_and_let_go`,
