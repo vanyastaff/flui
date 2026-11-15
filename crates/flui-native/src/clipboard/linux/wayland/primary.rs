@@ -44,7 +44,7 @@ use super::{MAX_WRITERS, Shared, TRANSFER_TIMEOUT};
 use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::clipboard::text::TextForm;
 use crate::owner::linux::wayland::WaylandState;
-use crate::transfer::linux::wayland::{OfferData, pipe};
+use crate::transfer::linux::wayland::{DeviceOffers, OfferData, pipe};
 
 /// The primary selection's part of the clipboard's state, reached on the
 /// owner thread.
@@ -67,13 +67,14 @@ pub(super) struct Primary {
 struct PrimaryDevice {
     seat: WlSeat,
     device: ZwpPrimarySelectionDeviceV1,
-    /// The offer of the seat's primary selection.
-    selection: Option<ZwpPrimarySelectionOfferV1>,
+    /// The offer of the seat's primary selection, and the one the device
+    /// introduced last that no `selection` named yet.
+    offers: DeviceOffers<ZwpPrimarySelectionOfferV1>,
 }
 
 impl PrimaryDevice {
     fn release(self) {
-        if let Some(offer) = self.selection {
+        for offer in self.offers.into_held() {
             offer.destroy();
         }
         self.device.destroy();
@@ -181,7 +182,7 @@ impl Primary {
                 self.devices.push(PrimaryDevice {
                     seat: seat.clone(),
                     device,
-                    selection: None,
+                    offers: DeviceOffers::default(),
                 });
             }
         }
@@ -294,7 +295,7 @@ impl super::SeatClipboard {
                         primary
                             .devices
                             .iter()
-                            .find(|device| device.selection.is_some())
+                            .find(|device| device.offers.selection().is_some())
                     });
                 if let Some(owned) = &primary.owned
                     && owned.holds(device.map(|device| &device.seat))
@@ -302,7 +303,7 @@ impl super::SeatClipboard {
                     return Read::Ask(Rc::clone(&owned.text));
                 }
                 let Some((offer, (form, mime))) = device
-                    .and_then(|device| device.selection.as_ref())
+                    .and_then(|device| device.offers.selection())
                     .and_then(|offer| Some((offer, super::preferred(offer.data::<OfferData>()?)?)))
                 else {
                     return Read::Now(Ok(None));
@@ -444,22 +445,34 @@ impl Dispatch<ZwpPrimarySelectionDeviceV1, DeviceData> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let zwp_primary_selection_device_v1::Event::Selection { id } = event else {
-            return;
-        };
         let Some(shared) = data.shared.upgrade() else {
             return;
         };
-        let foreign = id.is_some();
-        let replaced = shared
+        let unheld = shared
             .primary
             .with(|primary| {
-                let held = primary
+                use zwp_primary_selection_device_v1::Event;
+
+                let Some(held) = primary
                     .devices
                     .iter_mut()
-                    .find(|held| held.device == *device)?;
-                let replaced = std::mem::replace(&mut held.selection, id)
-                    .filter(|offer| Some(offer) != held.selection.as_ref());
+                    .find(|held| held.device == *device)
+                else {
+                    // A device let go of holds nothing: the offer its event
+                    // brings goes as it comes.
+                    return match event {
+                        Event::DataOffer { offer } => Some(offer),
+                        Event::Selection { id } => id,
+                        _ => None,
+                    };
+                };
+                let id = match event {
+                    Event::DataOffer { offer } => return held.offers.introduce(offer),
+                    Event::Selection { id } => id,
+                    _ => return None,
+                };
+                let foreign = id.is_some();
+                let replaced = held.offers.select(id);
                 // A selection held in this process with no source is the
                 // selection until another client's arrives; its closure is
                 // dropped at the next turn, outside the dispatch.
@@ -475,7 +488,7 @@ impl Dispatch<ZwpPrimarySelectionDeviceV1, DeviceData> for WaylandState {
                 replaced
             })
             .flatten();
-        if let Some(offer) = replaced {
+        if let Some(offer) = unheld {
             offer.destroy();
         }
     }
