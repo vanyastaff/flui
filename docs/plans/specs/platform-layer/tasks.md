@@ -4900,7 +4900,7 @@ graph LR
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
   публичный путь keyboard layout.
-- [x] **LY104** — ветка `platform/snapshot-integrity` от `main` @ `3f4aea639`: снимок окна
+- [x] **LY104** — PR #2647, ветка `platform/snapshot-integrity` от `main` @ `3f4aea639`: снимок окна
   держит только верные и конечные факты. Шесть находок проверки сделанных задач, все
   подтверждены по коду.
   (1) *Не-конечная геометрия.* Win32 передавал DPI из `WM_DPICHANGED` в `change_dpi` без
