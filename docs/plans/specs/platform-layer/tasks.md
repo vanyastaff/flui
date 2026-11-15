@@ -4871,6 +4871,48 @@ graph LR
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
   публичный путь keyboard layout.
+- [ ] **LY108** — ветка `app/handler-answers`, шесть находок аудита.
+  1. Исправлено. Маршрут кадра теперь `FnMut(FrameRequest) -> FrameOutcome`, и у каждого runner
+     это `dispatch_platform_frame`: принятый владельцем кадр — `Produced` (выполнен в вызове или
+     встал в идущий ход, который его выполнит), отказ (`StaleRuntime`, `StalePresentation`,
+     `PresentationClosing`, `RuntimeUnavailable`) — `Declined`. Прежде окно отвечало `Produced`
+     на любой запрос. Вращение Win32-цикла по чтению: `WakeDeadline::arm` взводит тот же момент
+     после каждого посчитанного кадра, а `AppRuntime::next_wake` включает сроки, которые
+     обслуживает только ход владельца (запись расположения окна, text sizing); при отказе хода
+     нет, срок остаётся, счётчик растёт. В продакшене отказ при открытом окне найден только
+     переходный (закрытие презентации завершается в хвосте того же callback), поэтому
+     постоянного вращения нет; ответ всё равно был неверным. Правило записано в
+     `crates/flui-app/ARCHITECTURE.md`.
+  2. Исправлено. `WindowDelivery::run` возвращает ответ той доставки, которая начала drain
+     (`Drain::ahead_of_own`), а не первого input в очереди. Ни один хост не подаёт input вне
+     потока владельца (все источники — OS callback этого потока), так что в продакшене ошибка
+     не проявлялась; тип её допускал.
+  3. Не воспроизводится, записано в коде. Каждый runner ставит маршрут input в том же ходе
+     владельца, который открыл окно (для отложенного открытия — в ходе его завершения), а окно
+     с содержимым, чья установка занимает несколько ходов, показывается первым кадром.
+     Ограничение по числу отбрасывало бы input (отпускание без нажатия), поэтому его нет; чем
+     ограничена очередь, сказано у `Held::inputs`.
+  4. Частично. `restore` возвращает `RememberedPlacement`, которое доходит до `keep` вместе с
+     открываемым окном: хранилище определяется и читается один раз, второго блокирующего
+     `recall` нет; предупреждение называет `AppConfig::storage_dir`. Обход провайдера
+     `StorageCapability` не исправлен: запрос capability требует `ProviderContext` UI runtime,
+     а расположение читается до первого окна. Нужен запрос от имени хоста, которого ADR-0152
+     не называет; варианты и рекомендация — в PR.
+  5. Исправлено, не скомпилировано здесь (нет Android target): `display_handle` отвечает
+     `Unavailable` там же, где `window_handle`; `SAFETY:` называет инвариант.
+  6. Исправлено: две ссылки на трекер в `runner/host.rs`.
+
+  Тесты и откат: `window_routes_contract` (строка «state, frame and surface wait for their
+  routes»), `installed_frame_driver_contract`
+  (`a_frame_request_is_answered_by_what_became_of_it`), `window_handler_obligation_table`
+  («an input is answered with its own result») — с откатом каждого исправления падают все три
+  (`left: Produced, right: Declined`; ответ чужого input), с исправлением проходят. Проверки
+  на Windows: clippy `-p flui-app -p flui-native --all-targets -D warnings`; nextest тех же
+  крейтов — 730 из 733, три падения вне этого PR
+  (`the_driver_agent_contains_every_failure`, известное;
+  `an_intent_opens_its_link_or_documents`; `trybuild_ui::ui_tests`, где расходятся только
+  строки исходника std); `xtask checks` зелёный. Не запускалось: Linux, wasm32, Android и
+  Apple (остаются на CI).
 
 ## Отступление от порядка, решённое владельцем
 
