@@ -58,7 +58,7 @@ const MAX_PENDING_OPENED: usize = 16;
 /// The answer is kept; the report's panic is not the question's and takes
 /// the path a report's panic takes when it is delivered alone: resumed where
 /// a Rust frame waits ([`Self::or_resume`]), contained and logged where the
-/// operating system called ([`Self::or_contain`]).
+/// operating system called (`or_contain`).
 #[must_use = "a report's panic after the answer is a failure: resume or contain it"]
 pub(crate) struct Asked<R> {
     answer: Called<R>,
@@ -93,9 +93,8 @@ impl<R> Asked<R> {
         target_os = "windows",
         target_os = "macos",
         target_os = "ios",
-        target_os = "android",
         target_arch = "wasm32",
-        all(test, not(target_arch = "wasm32"))
+        test
     ))]
     pub(crate) fn or_contain(self, fallback: R, handler: &'static str) -> R {
         let Self { answer, after } = self;
