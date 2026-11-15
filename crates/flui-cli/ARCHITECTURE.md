@@ -59,12 +59,32 @@ resolves one graph for everything a workspace can build, so its features count w
 dev-dependency, a build script's dependency or a procedural macro's own copy of a crate turns on.
 Every collection therefore takes the crates and their features from `declarations/linked.rs`,
 which reads `cargo tree` over normal edges without procedural macros for the target, and takes
-only the tables and the edges from `cargo metadata --filter-platform`. The build read is the
-member a builder compiled (`BuildArtifacts::package`; an example links its package's
-dev-dependencies), or what cargo builds by default at the project; the Android, iOS, macOS and
-Linux writers, the one-instance check, `flui doctor` and `flui add` share it
-(`declarations_are_joined_over_the_graph_the_target_links`,
-`a_listing_reads_back_as_each_crates_features`).
+only the tables and the edges from `cargo metadata --filter-platform`
+(`declarations_are_joined_over_the_graph_the_target_links`).
+
+One entry, `Declarations::collect(Build, targets)`, serves the Android, iOS, macOS and Linux
+writers, the one-instance check and `flui doctor`. A `Build` is a directory, a `Selection` and
+the features the build turns on. The selection is what the build compiles: a named member, an
+example of one (which links its package's dev-dependencies), or cargo's default for the
+directory, which is the package there and at a workspace's root its default members, whether the
+root is virtual or a package itself (`a_run_reads_the_package_cargo_runs`). A packager reads the
+member its build compiled (`BuildArtifacts::package`), not the member's siblings
+(`a_desktop_entry_registers_what_the_built_member_opens`,
+`an_ios_bundle_reads_the_declarations_of_the_built_member`). Android builds `cargo ndk build
+--lib` in the project's directory and `flui run` runs `cargo run` there, both without naming a
+package, so both read the default selection.
+
+A crate is its `PackageId` from end to end. Cargo is asked for the compiled packages by id, so a
+dependency that carries the application's name is not mistaken for it
+(`a_dependency_may_share_the_applications_name`). Each line of the listing resolves to the one
+package of the graph it names, by its source where two packages share a name and a version, and
+a listing that names no package for a line, or leaves out a compiled package, fails the build
+instead of producing a smaller manifest (`a_listing_reads_back_as_each_crates_features`).
+
+`flui add` prints what the added crate declares for every platform the application builds for:
+it reads the same listing for every target, so a feature only the Android build turns on counts
+on any host, and a feature only the application's tests turn on does not
+(`add_links_a_capability_and_shows_its_registration`).
 
 The table is strict: an unknown key, a schema newer than the CLI reads, a feature the crate lacks
 or a malformed value fails the build naming the crate

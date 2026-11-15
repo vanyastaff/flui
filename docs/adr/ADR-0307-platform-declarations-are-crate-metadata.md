@@ -148,9 +148,13 @@ name = "Note"
 For each target it builds, the CLI reads two things in the application's directory. `cargo tree
 --target <triple>` over normal edges, without procedural macros, lists the crates the artifact
 links and the features the build enables for each, resolved as `cargo build` resolves them, for
-the member the build compiles or for what cargo builds there by default. `cargo metadata
---filter-platform <triple>` gives each crate's table and the edges between the crates. The CLI
-takes every linked crate's table, plus the parts of the features the build enables for it.
+the member the build compiles or for what cargo builds there by default (the package of the
+directory, or at a workspace's root its default members). `cargo metadata --filter-platform
+<triple>` gives each crate's table and the edges between the crates. A crate is one package id
+throughout: cargo is asked for the packages the build compiles by their ids, and each line of
+the listing is matched to the one package it names, by its source where two packages share a
+name and a version. The CLI takes every linked crate's table, plus the parts of the features the
+build enables for it.
 
 What the artifact does not link contributes nothing: a dependency only another target links, a
 dev-dependency and a feature only one turns on, a build script's dependency, a procedural macro
@@ -294,7 +298,14 @@ a key arrives with its first consumer.
   feature it turns on, a build script's dependency, a procedural macro and the feature its copy of
   a crate turns on, none of which declares anything; an example's build, for which its package's
   dev-dependencies count). `declarations::linked::tests::a_listing_reads_back_as_each_crates_features`
-  (the listing of `cargo tree` as the crates and their features).
+  (the listing of `cargo tree` as the packages and their features: one name and version from a
+  registry, a fork and a directory kept apart, a listing without a compiled package refused);
+  `declarations::tests::a_run_reads_the_package_cargo_runs` (the default members at a workspace's
+  root, virtual or a package itself, and the package of the directory inside a member);
+  `declarations::tests::a_dependency_may_share_the_applications_name`;
+  `build::tests::desktop_artifacts::a_desktop_entry_registers_what_the_built_member_opens` and
+  `build::tests::ios_artifacts::an_ios_bundle_reads_the_declarations_of_the_built_member` (a
+  packager reads the member it built, not its siblings).
 - `declarations::tests::a_malformed_declaration_is_refused_by_crate` (an unknown key, a missing or
   newer schema, an unknown feature, a value that is not a permission).
 - `android_manifest::tests::the_manifest_declares_what_the_linked_crates_need` reads the `flui`

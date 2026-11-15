@@ -215,7 +215,7 @@ impl<'a> Listed<'a> {
                 package.name.as_str() == self.name && package.version.to_string() == self.version
             })
             .collect();
-        let named = match same_version.as_slice() {
+        let named: Vec<&Package> = match same_version.as_slice() {
             [package] => vec![*package],
             _ => same_version
                 .iter()

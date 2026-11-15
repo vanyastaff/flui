@@ -162,7 +162,7 @@
 | ID | Требование | Проверка |
 |---|---|---|
 | R5.1 | Платформенная возможность доходит до виджета через `cx.capability::<C>()` на `LifecycleContext`; на `BuildContext` — не компилируется | trybuild (E0599) |
-| R5.2 | Отсутствие — `Unsupported` с причиной (`NotRegistered`, `NoWindow`, `NotOnThisPlatform`, `NotDeclared`), никогда паника | тест на каждую причину |
+| R5.2 | Отсутствие — `Unsupported` с причиной (`NotRegistered`, `NoWindow`, `NotOnThisPlatform`, `NotDeclared`), никогда паника. `NotDeclared` — причина контракта; провайдера, который её отдаёт, нет: он приходит с первой возможностью, которая проверяет свою декларацию при работе (`docs/gaps.md`, «Accepted ADR sections not built yet», ADR-0154 §7) | тест на каждую причину в контракте (`crates/flui-platform/tests/unsupported.rs`); тест провайдера с `NotDeclared` — вместе с этим провайдером |
 | R5.3 | Провайдер получает `ProviderContext`: `owner()` — `Send`-poster на owner-поток, `window()` — `Option<WindowRef>` (id, raw-handles, масштаб; не `PlatformWindow`); возможность без окна работает до первого окна | тест; компиляция |
 | R5.4 | Каждый асинхронный вызов возвращает `Completion<T>`: owner-local (`!Send`), разрешается на границе хода владельца, потребляется колбэком, опросом или адаптером `Future`; колбэк ОС только постит на owner | trybuild (E0277 на `Send`); тест порядка разрешения |
 | R5.5 | Handle держит подписку ОС и завершает её, когда удалён последний клон; без процесс-глобального состояния: реестр — значение per-realm владельца, провайдеры без `static` | `cargo xtask globals`; тест `Drop` handle |
