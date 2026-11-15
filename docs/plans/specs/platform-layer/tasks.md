@@ -5466,7 +5466,7 @@ graph LR
   владельца, не внутри чтения; web-окно просит ход через сигнал владельца; голый
   `HeadlessPlatform` без петли и состояние-зависимые причины отсутствия записаны в `docs/gaps.md`.
   `WindowOptions::min_size`/`max_size` — `WindowExtent`, и каждый хост отказывает открытию с
-  размером или пределами, которые отказала бы команда (`OpenWindowError::InvalidGeometry`);
+  размером или пределами, которые отказала бы команда (`OpenWindowError::InvalidOption`, с именем опции);
   `AdmissionError::InvalidGeometry` несёт числа. Удалены `WindowGeometry::sized`,
   `WindowCapability::availability` и `absence` (без продакшен-вызовов). Android отказывает
   `set_input_regions` после выхода в отставку; Win32 сообщает серию DPI 0 один раз. ADR-0254

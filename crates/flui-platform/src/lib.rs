@@ -217,8 +217,9 @@ pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::{
-    CursorError, InputLatency, WindowAppearance, WindowExecutionState, WindowId, WindowIdMint,
-    WindowMaterial, WindowOptions, WindowReveal,
+    CursorError, InputLatency, InvalidWindowOption, OpeningGeometry, WindowAppearance,
+    WindowExecutionState, WindowId, WindowIdMint, WindowMaterial, WindowOption, WindowOptions,
+    WindowReveal,
 };
 pub use window_capabilities::{
     CapabilitiesOwner, CapabilityParts, WindowCapabilities, WindowCapability,

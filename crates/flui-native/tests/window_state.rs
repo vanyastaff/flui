@@ -377,11 +377,11 @@ fn a_bad_report_keeps_the_geometry_and_publishes_the_rest() {
         "the close's state change, then closed: {after:?}"
     );
 }
-
-/// An opening asks for its size and limits as the commands do: options a
-/// command would be refused for open no window, with the same error.
+/// An opening asks for its size, limits and position as the commands do:
+/// options a command would be refused for open no window, and the error names
+/// the option and its numbers.
 fn options_that_describe_no_window_open_none() {
-    use flui_platform::{InvalidGeometry, WindowExtent};
+    use flui_platform::{InvalidGeometry, WindowExtent, WindowOption};
 
     let platform = HeadlessPlatform::new();
     let extent =
@@ -391,6 +391,7 @@ fn options_that_describe_no_window_open_none() {
             WindowOptions::default()
                 .min_size(Some(extent(800.0, 600.0)))
                 .max_size(Some(extent(400.0, 300.0))),
+            WindowOption::Limits,
             InvalidGeometry::Limits {
                 min: extent(800.0, 600.0),
                 max: extent(400.0, 300.0),
@@ -398,6 +399,7 @@ fn options_that_describe_no_window_open_none() {
         ),
         (
             WindowOptions::default().min_size(Some(WindowExtent::ZERO)),
+            WindowOption::MinSize,
             InvalidGeometry::Empty {
                 width: 0.0,
                 height: 0.0,
@@ -405,16 +407,29 @@ fn options_that_describe_no_window_open_none() {
         ),
         (
             WindowOptions::default().size(Size::new(f64::NAN, 600.0)),
+            WindowOption::Size,
             InvalidGeometry::Extent {
                 width: f64::NAN,
                 height: 600.0,
             },
         ),
+        (
+            WindowOptions::default().position(Some(Point::new(f64::INFINITY, 0.0))),
+            WindowOption::Position,
+            InvalidGeometry::Position {
+                x: f64::INFINITY,
+                y: 0.0,
+            },
+        ),
     ];
-    for (options, refused) in rows {
+    for (options, option, refused) in rows {
         let opened = Opened::on(&platform, options);
         assert!(
-            matches!(opened, Err(flui_native::OpenWindowError::InvalidGeometry(error)) if error == refused),
+            matches!(
+                opened,
+                Err(flui_native::OpenWindowError::InvalidOption(error))
+                    if error.option == option && error.refused == refused
+            ),
             "{refused}: {:?}",
             opened.err()
         );

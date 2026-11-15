@@ -265,11 +265,13 @@ Admission is a type:
 - `WindowCommand::admit(&WindowCapabilities) -> Result<AdmittedCommand, AdmissionError>` is the
   only constructor of `AdmittedCommand`. It refuses invalid geometry before any OS call, reading
   the command's numbers through the snapshot's own geometry types, and refuses a command whose
-  capability is absent (decision 6). An opening is held to the same numbers: a `WindowOptions`
-  size or limit that a command would be refused for refuses the open with the same
-  `InvalidGeometry`. The token carries the capabilities revision
-  it was admitted against: the revision of the capabilities in the snapshot, which moves when what
-  the window honours changes and not with every state change.
+  capability is absent (decision 6). An opening is held to the same numbers, through the same
+  checks: a `WindowOptions` size, limit or position that the command setting it would refuse
+  refuses the open, before the host takes an id for the window, with
+  `OpenWindowError::InvalidOption`, whose `InvalidWindowOption` names the option and carries the
+  command's `InvalidGeometry` (`WindowOptions::geometry`). The token carries the capabilities
+  revision it was admitted against: the revision of the capabilities in the snapshot, which moves
+  when what the window honours changes and not with every state change.
 - `PlatformWindow::apply(AdmittedCommand) -> Result<(), ApplyError>`. A host can no longer
   receive an unvalidated command, and its `apply` has no admission arm to remember.
 - The errors are split by who can cause them. `AdmissionError` is `Unsupported(Unsupported)` or

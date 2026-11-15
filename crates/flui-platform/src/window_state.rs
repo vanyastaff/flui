@@ -493,10 +493,8 @@ impl WindowCommand {
     /// whose minimum exceeds their maximum in either dimension.
     pub fn validate(&self) -> Result<(), AdmissionError> {
         match self {
-            Self::SetPosition(at) => WindowGeometry::EMPTY.at(Some(*at)).map(drop),
-            Self::SetSize(size) => WindowExtent::try_new(*size)
-                .and_then(WindowExtent::area)
-                .map(drop),
+            Self::SetPosition(at) => crate::window_geometry::finite_position(*at).map(drop),
+            Self::SetSize(size) => asked_size(*size).map(drop),
             Self::SetConstraints(constraints) => constraints.asked().map(drop),
             Self::SetTitle(_)
             | Self::SetResizable(_)
@@ -566,6 +564,17 @@ impl WindowCommand {
             outcome => Ok(outcome?),
         }
     }
+}
+
+/// `size` as a content size a window can be asked for, by a command
+/// ([`WindowCommand::SetSize`]) or an opening ([`WindowOptions::geometry`](crate::WindowOptions::geometry)):
+/// finite, not negative, enclosing an area.
+///
+/// # Errors
+/// [`InvalidGeometry::Extent`] for a side that is NaN, infinite or negative,
+/// [`InvalidGeometry::Empty`] for a zero side.
+pub(crate) fn asked_size(size: Size<f64>) -> Result<WindowExtent, InvalidGeometry> {
+    WindowExtent::try_new(size).and_then(WindowExtent::area)
 }
 
 /// A [`WindowCommand`] that [`WindowCommand::admit`] checked: its numbers

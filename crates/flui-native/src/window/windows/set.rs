@@ -336,8 +336,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         tracing::info!("Opening window: {:?}", options.title);
 
         // Refused before an id is taken, for what a command is refused for.
-        options.content_extent()?;
-        options.constraints()?;
+        options.geometry()?;
         let window_id = windows.ids.borrow_mut().next()?;
         let window = WindowsWindow::try_new(
             window_id,

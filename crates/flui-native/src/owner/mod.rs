@@ -482,11 +482,12 @@ pub enum OpenWindowError {
     /// This host opens no windows: its table's window position is absent.
     #[error("this host opens no windows: {0}")]
     Unsupported(#[from] flui_platform::Unsupported),
-    /// The options ask for a size or limits no window can be asked for, the
-    /// numbers a command would be refused for
-    /// ([`WindowOptions::constraints`], [`WindowOptions::content_extent`]).
-    #[error("the window's options describe no window: {0}")]
-    InvalidGeometry(#[from] flui_platform::InvalidGeometry),
+    /// An option asks for numbers a command setting them would be refused
+    /// for: a size or position that is not finite, a size or limit that
+    /// encloses no area, a minimum above the maximum
+    /// ([`WindowOptions::geometry`]). The error names the option.
+    #[error("{0}")]
+    InvalidOption(#[from] flui_platform::InvalidWindowOption),
     /// This host issued every [`WindowId`] it can:
     /// it opens no window again, rather than give one an id another window
     /// had.

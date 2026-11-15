@@ -427,8 +427,11 @@ impl MacOSWindow {
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
     ) -> Result<Rc<Self>, OpenWindowError> {
-        let content = options.content_extent()?;
-        let constraints = options.constraints()?;
+        let flui_platform::OpeningGeometry {
+            content,
+            constraints,
+            ..
+        } = options.geometry()?;
         // A window's owner lane is the AppKit main queue — the one lane all
         // other process AppKit traffic already serializes on (see
         // `owner::apple::macos::owner_lane`) — which runs on the main thread
@@ -1230,6 +1233,8 @@ impl host::Window<MacOSLoop> for MacOSWindow {
                 message: "a macOS window opens on the main thread only".to_owned(),
             });
         };
+        // Refused before an id is taken, for what a command is refused for.
+        options.geometry()?;
         let Some(id) = windows.ids.with(|ids| ids.next()) else {
             return Err(OpenWindowError::Backend {
                 message: "a macOS window opens on the main thread that built its platform"

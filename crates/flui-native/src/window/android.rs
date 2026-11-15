@@ -613,8 +613,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
     ) -> Result<Rc<dyn crate::host_window::HostWindow>, OpenWindowError> {
         // Refused for what a command is refused for, though an activity
         // takes neither its size nor limits from the options.
-        options.content_extent()?;
-        options.constraints()?;
+        options.geometry()?;
         match unbuffered_input_sources(options.input_latency, owner.api) {
             Some(sources) => {
                 let app = owner.app.clone();

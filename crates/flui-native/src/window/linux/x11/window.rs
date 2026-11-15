@@ -1845,8 +1845,7 @@ impl X11Windows {
             });
         }
         // Refused before an id is taken, for what a command is refused for.
-        options.content_extent()?;
-        let constraints = options.constraints()?;
+        let constraints = options.geometry()?.constraints;
         let id = self.mint_id()?;
         let support = self.support.get();
         // A title bar of the application's opens with the window manager's frame

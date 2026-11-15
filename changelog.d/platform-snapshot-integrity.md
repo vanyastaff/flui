@@ -8,7 +8,10 @@
 - `flui-platform`: `WindowCapability { Native, Emulated, Absent(CapabilityAbsence) }`, how a
   window has one capability or why it does not, with `is_available` and `NOT_ON_THIS_PLATFORM`;
   `WindowCapabilities::capability(&command)`; `CapabilityParts` is `Hash`.
-- `flui-native`: `OpenWindowError::InvalidGeometry`, an open refused for options a command would
+- `flui-platform`: `WindowOptions::geometry`, the numbers a window opens at
+  (`OpeningGeometry`), each checked as the command that sets it is, and `InvalidWindowOption`
+  with `WindowOption`, which names the option refused and its numbers.
+- `flui-native`: `OpenWindowError::InvalidOption`, an open refused for options a command would
   be refused for.
 - `flui-view`: `WindowHandle::is_open`, whether the window is still open, asked without reading
   its state.
@@ -24,12 +27,14 @@
   has private fields, is built with `try_new` and read with `position()` and `size()`;
   `WindowState::content_size` and the bounds of `SizeConstraints` are `WindowExtent`s;
   `WindowState::new` takes a `WindowExtent`. `WindowGeometry::new` is gone.
-- `flui-platform`: `WindowOptions::min_size` and `max_size` are `Option<WindowExtent>`, and
-  `WindowOptions::constraints` and `content_extent` answer a `Result`: every host refuses an open
-  whose size or limits a command would be refused for (a size or limit that encloses no area, a
-  minimum above the maximum) with `OpenWindowError::InvalidGeometry`, where a bad limit used to be
-  dropped with a warning and a minimum above the maximum reached the window system.
-  `AppConfig::min_size` and `max_size` hold `WindowExtent`s too.
+- An invalid window size, size limit or position in the window options now refuses the open; it
+  was ignored with a warning (a minimum above the maximum reached the window system). Every host
+  refuses, before it takes an id, the numbers the command setting them would refuse (a size or
+  position that is not finite, a size or limit that encloses no area, a minimum above the
+  maximum) with `OpenWindowError::InvalidOption`, whose message names the option and its numbers;
+  an application whose `AppConfig` asks for them does not start (`LaunchError::InitialWindow`).
+  `WindowOptions::min_size` and `max_size` are `Option<WindowExtent>`, and so are `AppConfig`'s;
+  `WindowOptions::constraints` and `content_extent` are replaced by `WindowOptions::geometry`.
 - `flui-platform`: `AdmissionError::InvalidGeometry` carries the `InvalidGeometry` that refused
   the command.
 - `flui-platform`: the fields of `WindowCapabilities` and of `CapabilityParts` that a command is

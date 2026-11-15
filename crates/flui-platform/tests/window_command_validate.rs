@@ -7,8 +7,8 @@ use flui_platform::{
     ControlsOffset, InvalidControlsOffset, InvalidGeometry, KeyboardInset, SizeConstraints,
     SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
     WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFrame,
-    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOptions, WindowRevision,
-    WindowRevisionExhausted, WindowState,
+    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOption, WindowOptions,
+    WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -132,26 +132,47 @@ fn minimum_above_maximum_in_either_dimension_is_refused() {
     ));
 }
 
-/// An opening asks for its size and limits as the commands do, and is refused
-/// for the same numbers with the same error: nothing a command could not ask
-/// for reaches a host at open.
+/// An opening asks for its size, limits and position as the commands do, and
+/// is refused for the same numbers, the error naming the option: nothing a
+/// command could not ask for reaches a host at open.
 fn an_opening_is_refused_for_what_a_command_is_refused_for() {
+    let refusal = |command: WindowCommand| match command.validate() {
+        Ok(()) => None,
+        Err(AdmissionError::InvalidGeometry(refused)) => Some(refused),
+        Err(other) => panic!("{other:?} is no geometry refusal"),
+    };
+    let named = |options: &WindowOptions| {
+        options
+            .geometry()
+            .err()
+            .map(|refused| (refused.option, refused.refused))
+    };
     let limits = [
-        (Some(extent(800.0, 600.0)), Some(extent(400.0, 300.0))),
-        (Some(extent(800.0, 600.0)), Some(extent(900.0, 300.0))),
-        (Some(WindowExtent::ZERO), None),
-        (None, Some(extent(0.0, 300.0))),
-        (Some(extent(400.0, 300.0)), Some(extent(800.0, 600.0))),
-        (None, None),
+        (
+            Some(extent(800.0, 600.0)),
+            Some(extent(400.0, 300.0)),
+            WindowOption::Limits,
+        ),
+        (
+            Some(extent(800.0, 600.0)),
+            Some(extent(900.0, 300.0)),
+            WindowOption::Limits,
+        ),
+        (Some(WindowExtent::ZERO), None, WindowOption::MinSize),
+        (None, Some(extent(0.0, 300.0)), WindowOption::MaxSize),
+        (
+            Some(extent(400.0, 300.0)),
+            Some(extent(800.0, 600.0)),
+            WindowOption::Limits,
+        ),
+        (None, None, WindowOption::Limits),
     ];
-    for (min, max) in limits {
+    for (min, max, option) in limits {
         let options = WindowOptions::default().min_size(min).max_size(max);
         let command = WindowCommand::SetConstraints(SizeConstraints::new(min, max));
         assert_eq!(
-            options
-                .constraints()
-                .map_err(AdmissionError::InvalidGeometry),
-            command.validate().map(|()| SizeConstraints::new(min, max)),
+            named(&options),
+            refusal(command).map(|refused| (option, refused)),
             "{min:?} {max:?}"
         );
     }
@@ -163,13 +184,22 @@ fn an_opening_is_refused_for_what_a_command_is_refused_for() {
     ] {
         let options = WindowOptions::default().size(asked);
         assert_eq!(
-            options
-                .content_extent()
-                .map_err(AdmissionError::InvalidGeometry),
-            WindowCommand::SetSize(asked)
-                .validate()
-                .map(|()| extent(asked.width, asked.height)),
+            named(&options),
+            refusal(WindowCommand::SetSize(asked)).map(|refused| (WindowOption::Size, refused)),
             "{asked:?}"
+        );
+    }
+    for at in [
+        Point::new(f64::NAN, 0.0),
+        Point::new(0.0, f64::INFINITY),
+        Point::new(-1920.0, 40.0),
+    ] {
+        let options = WindowOptions::default().position(Some(at));
+        assert_eq!(
+            named(&options),
+            refusal(WindowCommand::SetPosition(at))
+                .map(|refused| (WindowOption::Position, refused)),
+            "{at:?}"
         );
     }
 }

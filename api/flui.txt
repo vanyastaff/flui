@@ -12609,6 +12609,17 @@ impl core::fmt::Display for flui::platform::InvalidRegionalFormat
 impl core::marker::StructuralPartialEq for flui::platform::InvalidRegionalFormat
 variant flui::platform::InvalidRegionalFormat::NumberingSystem // at 0
 variant flui::platform::InvalidRegionalFormat::Region // at 1
+#[non_exhaustive] pub struct flui::platform::InvalidWindowOption
+field flui::platform::InvalidWindowOption::option: flui::platform::WindowOption // at 0
+field flui::platform::InvalidWindowOption::refused: flui::platform::InvalidGeometry // at 1
+impl Clone for flui::platform::InvalidWindowOption
+impl Copy for flui::platform::InvalidWindowOption
+impl Eq for flui::platform::InvalidWindowOption
+impl PartialEq for flui::platform::InvalidWindowOption
+impl core::error::Error for flui::platform::InvalidWindowOption
+impl core::fmt::Debug for flui::platform::InvalidWindowOption
+impl core::fmt::Display for flui::platform::InvalidWindowOption
+impl core::marker::StructuralPartialEq for flui::platform::InvalidWindowOption
 reexport flui::platform::Key => flui::interaction::Key
 reexport flui::platform::KeyEvent => flui::interaction::KeyEvent
 reexport flui::platform::KeyState => flui::interaction::KeyState
@@ -12787,6 +12798,15 @@ impl core::fmt::Debug for flui::platform::OpenedFile
 pub fn flui::platform::OpenedFile::name(&self) -> Option<&str>
 pub fn flui::platform::OpenedFile::new(path: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::platform::OpenedFile::try_from_descriptor(descriptor: std::os::fd::owned::OwnedFd, name: Option<String>) -> Result<Self>
+#[non_exhaustive] pub struct flui::platform::OpeningGeometry
+field flui::platform::OpeningGeometry::constraints: flui::platform::SizeConstraints // at 1
+field flui::platform::OpeningGeometry::content: flui::platform::WindowExtent // at 0
+field flui::platform::OpeningGeometry::position: Option<flui::geometry::Point<f64>> // at 2
+impl Clone for flui::platform::OpeningGeometry
+impl Copy for flui::platform::OpeningGeometry
+impl PartialEq for flui::platform::OpeningGeometry
+impl core::fmt::Debug for flui::platform::OpeningGeometry
+impl core::marker::StructuralPartialEq for flui::platform::OpeningGeometry
 pub struct flui::platform::OsRelease(_)
 impl Clone for flui::platform::OsRelease
 impl Eq for flui::platform::OsRelease
@@ -13666,6 +13686,20 @@ variant flui::platform::WindowMode::Fullscreen // at 3
 variant flui::platform::WindowMode::Maximized // at 2
 variant flui::platform::WindowMode::Minimized // at 1
 variant flui::platform::WindowMode::Normal // at 0
+#[non_exhaustive] pub enum flui::platform::WindowOption
+impl Clone for flui::platform::WindowOption
+impl Copy for flui::platform::WindowOption
+impl Eq for flui::platform::WindowOption
+impl PartialEq for flui::platform::WindowOption
+impl core::fmt::Debug for flui::platform::WindowOption
+impl core::fmt::Display for flui::platform::WindowOption
+impl core::hash::Hash for flui::platform::WindowOption
+impl core::marker::StructuralPartialEq for flui::platform::WindowOption
+variant flui::platform::WindowOption::Limits // at 3
+variant flui::platform::WindowOption::MaxSize // at 2
+variant flui::platform::WindowOption::MinSize // at 1
+variant flui::platform::WindowOption::Position // at 4
+variant flui::platform::WindowOption::Size // at 0
 #[non_exhaustive] pub struct flui::platform::WindowOptions
 field flui::platform::WindowOptions::display: Option<flui::platform::DisplayId> // at 8
 field flui::platform::WindowOptions::frame: flui::platform::WindowFrame // at 5
@@ -13696,8 +13730,7 @@ pub const fn flui::platform::WindowOptions::resizable(self, resizable: bool) -> 
 pub const fn flui::platform::WindowOptions::reveal(self, reveal: flui::platform::WindowReveal) -> Self
 pub const fn flui::platform::WindowOptions::size(self, size: flui::geometry::Size<f64>) -> Self
 pub const fn flui::platform::WindowOptions::visible(self, visible: bool) -> Self
-pub fn flui::platform::WindowOptions::constraints(&self) -> Result<flui::platform::SizeConstraints, flui::platform::InvalidGeometry>
-pub fn flui::platform::WindowOptions::content_extent(&self) -> Result<flui::platform::WindowExtent, flui::platform::InvalidGeometry>
+pub fn flui::platform::WindowOptions::geometry(&self) -> Result<flui::platform::OpeningGeometry, flui::platform::InvalidWindowOption>
 pub fn flui::platform::WindowOptions::os_options(self, os_options: flui::platform::os_options::OsWindowOptions) -> Self
 pub fn flui::platform::WindowOptions::title(self, title: impl Into<String>) -> Self
 #[non_exhaustive] pub struct flui::platform::WindowPlacement

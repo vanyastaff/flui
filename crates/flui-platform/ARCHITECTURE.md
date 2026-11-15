@@ -87,10 +87,10 @@ this one path (ADR-0151 §9).
   values with `try_new`, and the report it cannot build them from is no state
   change. A NaN in a snapshot would also never equal itself, so every read
   would publish a revision (`window_geometry` table,
-  `a_snapshot_is_equal_to_itself`). What a command asks of its numbers
+  `a_refusal_equals_itself`). What a command asks of its numbers
   (a positive size, a minimum not above the maximum) stays admission's
-  (`WindowCommand::validate`), and `WindowOptions::constraints` is the one
-  reading of the limits a window opens with.
+  (`WindowCommand::validate`), and `WindowOptions::geometry` holds an opening
+  to the same checks, naming the option it refuses (`InvalidWindowOption`).
 - **A read of the window runs no handler.** `PlatformWindow::state` may find
   the window system ahead of the published snapshot and publish a revision;
   the `state_changed` that revision is owed is delivered at the owner's turn,

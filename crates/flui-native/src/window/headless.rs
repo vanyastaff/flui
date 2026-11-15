@@ -176,8 +176,11 @@ impl TrackedWindows for HeadlessWindows {
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         // Refused before an id is taken, for what a command is refused for.
-        let content = options.content_extent()?;
-        let constraints = options.constraints()?;
+        let flui_platform::OpeningGeometry {
+            content,
+            constraints,
+            ..
+        } = options.geometry()?;
         let display = state.window_display();
         let window_id = HEADLESS_WINDOW_IDS.lock().next()?;
         let (capabilities, limits) = {

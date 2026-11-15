@@ -1206,8 +1206,7 @@ impl host::Window<WebLoop> for WebWindow {
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
         // Refused for what a command is refused for; a canvas takes no limits.
-        let content = options.content_extent()?;
-        options.constraints()?;
+        let content = options.geometry()?.content;
 
         let id = owner.with_state(|state| state.window_ids.next())?;
         let window = Self::try_new(

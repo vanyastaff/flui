@@ -1737,8 +1737,11 @@ mod toplevel {
             handler: Rc<dyn WindowHandler>,
         ) -> Result<Rc<Self>, OpenWindowError> {
             // Refused before an id is taken, for what a command is refused for.
-            let content = options.content_extent()?;
-            let constraints = options.constraints()?;
+            let flui_platform::OpeningGeometry {
+                content,
+                constraints,
+                ..
+            } = options.geometry()?;
             let WindowSeed {
                 id,
                 protocol,

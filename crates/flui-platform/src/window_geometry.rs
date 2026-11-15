@@ -217,6 +217,20 @@ pub struct WindowGeometry {
     extent: WindowExtent,
 }
 
+/// `at`, when both coordinates are finite: the one check of a window position,
+/// whether a window system reported it, a command asks for it or an opening
+/// does.
+///
+/// # Errors
+/// [`InvalidGeometry::Position`] when a coordinate is NaN or infinite.
+pub(crate) fn finite_position(at: Point<f64>) -> Result<Point<f64>, InvalidGeometry> {
+    if at.x.is_finite() && at.y.is_finite() {
+        Ok(at)
+    } else {
+        Err(InvalidGeometry::Position { x: at.x, y: at.y })
+    }
+}
+
 // The position and the extent are finite, never NaN, so equality is total.
 impl Eq for WindowGeometry {}
 
@@ -250,13 +264,8 @@ impl WindowGeometry {
     /// # Errors
     /// [`InvalidGeometry::Position`] when a coordinate is NaN or infinite.
     pub fn at(self, position: Option<Point<f64>>) -> Result<Self, InvalidGeometry> {
-        if let Some(at) = position
-            && !(at.x.is_finite() && at.y.is_finite())
-        {
-            return Err(InvalidGeometry::Position { x: at.x, y: at.y });
-        }
         Ok(Self {
-            position,
+            position: position.map(finite_position).transpose()?,
             extent: self.extent,
         })
     }

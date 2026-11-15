@@ -426,7 +426,7 @@ impl WindowsWindow {
                 focused: false,
             }));
 
-            let constraints = options.constraints()?;
+            let constraints = options.geometry()?.constraints;
             let capabilities = windows.capabilities();
             let snapshot = Arc::new(WindowStateCell::open(sample_state(
                 hwnd,

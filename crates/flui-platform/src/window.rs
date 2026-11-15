@@ -195,36 +195,50 @@ impl WindowOptions {
         self
     }
 
-    /// The content-size limits these options ask for, as a window holds
-    /// them: [`min_size`](Self::min_size) and [`max_size`](Self::max_size).
+    /// The numbers these options open a window at, each checked by the same
+    /// check as the command that sets it later: [`size`](Self::size) as
+    /// [`WindowCommand::SetSize`](crate::WindowCommand::SetSize),
+    /// [`min_size`](Self::min_size) and [`max_size`](Self::max_size) as
+    /// [`WindowCommand::SetConstraints`](crate::WindowCommand::SetConstraints),
+    /// [`position`](Self::position) as
+    /// [`WindowCommand::SetPosition`](crate::WindowCommand::SetPosition).
+    /// ([`normal_geometry`](Self::normal_geometry) is a
+    /// [`WindowGeometry`], valid by its type.)
     ///
-    /// Every host opens a window through here and refuses the open for the
-    /// limits a [`WindowCommand::SetConstraints`](crate::WindowCommand::SetConstraints)
-    /// is refused for, with the same error.
-    ///
-    /// # Errors
-    /// [`InvalidGeometry::Empty`](crate::InvalidGeometry::Empty) for a limit
-    /// with a zero side, [`InvalidGeometry::Limits`](crate::InvalidGeometry::Limits)
-    /// for a minimum above the maximum.
-    pub fn constraints(&self) -> Result<crate::SizeConstraints, crate::InvalidGeometry> {
-        crate::SizeConstraints::new(self.min_size, self.max_size).asked()
-    }
-
-    /// The content extent these options ask for ([`size`](Self::size)), as a
-    /// window's first snapshot holds it before the window system has
-    /// reported one.
-    ///
-    /// Every host opens a window through here and refuses the open for the
-    /// size a [`WindowCommand::SetSize`](crate::WindowCommand::SetSize) is
-    /// refused for, with the same error.
+    /// Every host opens a window through here, before it takes an id for it,
+    /// and refuses the open for numbers a command would be refused for.
     ///
     /// # Errors
-    /// [`InvalidGeometry::Extent`](crate::InvalidGeometry::Extent) for a side
-    /// that is NaN, infinite or negative,
-    /// [`InvalidGeometry::Empty`](crate::InvalidGeometry::Empty) for a zero
-    /// side.
-    pub fn content_extent(&self) -> Result<crate::WindowExtent, crate::InvalidGeometry> {
-        crate::WindowExtent::try_new(self.size).and_then(crate::WindowExtent::area)
+    /// [`InvalidWindowOption`], naming the option and the numbers: a size or
+    /// position that is not finite, a size or limit that encloses no area, a
+    /// minimum above the maximum.
+    pub fn geometry(&self) -> Result<OpeningGeometry, InvalidWindowOption> {
+        let refused = |option| move |refused| InvalidWindowOption { option, refused };
+        let content =
+            crate::window_state::asked_size(self.size).map_err(refused(WindowOption::Size))?;
+        let min = self
+            .min_size
+            .map(crate::WindowExtent::area)
+            .transpose()
+            .map_err(refused(WindowOption::MinSize))?;
+        let max = self
+            .max_size
+            .map(crate::WindowExtent::area)
+            .transpose()
+            .map_err(refused(WindowOption::MaxSize))?;
+        let constraints = crate::SizeConstraints::new(min, max)
+            .asked()
+            .map_err(refused(WindowOption::Limits))?;
+        let position = self
+            .position
+            .map(crate::window_geometry::finite_position)
+            .transpose()
+            .map_err(refused(WindowOption::Position))?;
+        Ok(OpeningGeometry {
+            content,
+            constraints,
+            position,
+        })
     }
 
     /// Set the display the position is measured on.
@@ -290,6 +304,77 @@ impl Default for WindowOptions {
             os_options: OsWindowOptions::default(),
         }
     }
+}
+
+/// The numbers a window opens at, each checked as the command that sets it
+/// is ([`WindowOptions::geometry`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct OpeningGeometry {
+    /// The content extent asked for ([`WindowOptions::size`]): finite and
+    /// enclosing an area.
+    pub content: crate::WindowExtent,
+    /// The limits asked for ([`WindowOptions::min_size`],
+    /// [`WindowOptions::max_size`]): each enclosing an area, the minimum not
+    /// above the maximum.
+    pub constraints: crate::SizeConstraints,
+    /// The position asked for ([`WindowOptions::position`]), finite.
+    pub position: Option<Point<f64>>,
+}
+
+/// A [`WindowOptions`] field whose numbers no window can be asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum WindowOption {
+    /// [`WindowOptions::size`].
+    Size,
+    /// [`WindowOptions::min_size`].
+    MinSize,
+    /// [`WindowOptions::max_size`].
+    MaxSize,
+    /// The two limits together: the minimum is above the maximum.
+    Limits,
+    /// [`WindowOptions::position`].
+    Position,
+}
+
+impl std::fmt::Display for WindowOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Size => "size",
+            Self::MinSize => "min_size",
+            Self::MaxSize => "max_size",
+            Self::Limits => "min_size and max_size",
+            Self::Position => "position",
+        })
+    }
+}
+
+/// Why a window was not opened: an option asks for numbers that a command
+/// setting them would be refused for. It names the option and the numbers,
+/// so an application author knows what to change.
+///
+/// ```
+/// use flui_foundation::geometry::Size;
+/// use flui_platform::{WindowExtent, WindowOptions};
+///
+/// let options = WindowOptions::default()
+///     .min_size(Some(WindowExtent::try_new(Size::new(0.0, 600.0))?));
+/// let refused = options.geometry().expect_err("a minimum with no area");
+/// assert_eq!(
+///     refused.to_string(),
+///     "the window option `min_size` describes no window: window size 0x600 encloses no area"
+/// );
+/// # Ok::<(), flui_platform::InvalidGeometry>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the window option `{option}` describes no window: {refused}")]
+#[non_exhaustive]
+pub struct InvalidWindowOption {
+    /// The option refused.
+    pub option: WindowOption,
+    /// Its numbers, as the command would have refused them.
+    pub refused: crate::InvalidGeometry,
 }
 
 // ==================== Identity and mode ====================
