@@ -68,7 +68,7 @@ pub(crate) struct Member<'a> {
 /// carries the crate's lists into the run, which opens only those, so a
 /// dependency that declared a scheme would register a link the run refuses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CrateRole {
+enum CrateRole {
     /// Nothing in the build depends on the crate.
     Application,
     /// Another crate of the build depends on it.
@@ -596,39 +596,52 @@ impl Declarations {
             .collect();
         let mut joined = Self::default();
         for (id, (package, features)) in &built {
-            let features: Vec<&str> = features.iter().map(String::as_str).collect();
             let role = if dependencies.contains(id) {
                 CrateRole::Dependency
             } else {
                 CrateRole::Application
             };
-            joined.add(package, &features, role)?;
-            if package.name.as_str() == ONE_INSTANCE.0 && features.contains(&ONE_INSTANCE.1) {
+            joined.add(package, features, role)?;
+            if package.name.as_str() == ONE_INSTANCE.0 && features.contains(ONE_INSTANCE.1) {
                 joined.one_instance = true;
             }
         }
         Ok(joined)
     }
 
-    /// What `package` alone declares, with `features` enabled, as a crate of
-    /// `role`.
+    /// What `package`, a dependency of the application at `app_dir`,
+    /// declares alone, with the features plain `cargo build` there enables
+    /// for it on any target.
     ///
     /// # Errors
     ///
-    /// As [`Declarations::collect`], for this one crate's table.
-    pub(crate) fn of_package(
-        package: &Package,
-        features: &[&str],
-        role: CrateRole,
-    ) -> BuildResult<Self> {
+    /// As [`Declarations::collect`], for this one crate's table, and
+    /// [`BuildError::InvalidConfig`] when the application does not link
+    /// `package`.
+    pub(crate) fn of_linked_crate(app_dir: &Path, package: &Package) -> BuildResult<Self> {
+        let linked = LinkedCrates::read(app_dir, "all", &[], &[], false)?;
+        let features = linked.features_of(package).ok_or_else(|| {
+            BuildError::invalid_config(
+                "Cargo.toml",
+                format!(
+                    "the application does not link `{}`: no normal dependency reaches it",
+                    package.name
+                ),
+            )
+        })?;
         let mut declarations = Self::default();
-        declarations.add(package, features, role)?;
+        declarations.add(package, features, CrateRole::Dependency)?;
         Ok(declarations)
     }
 
     /// Add what `package`, a crate of `role`, declares, with `features`
     /// enabled.
-    fn add(&mut self, package: &Package, features: &[&str], role: CrateRole) -> BuildResult<()> {
+    fn add(
+        &mut self,
+        package: &Package,
+        features: &BTreeSet<String>,
+        role: CrateRole,
+    ) -> BuildResult<()> {
         let Some(table) = package.metadata.get("flui").and_then(|flui| flui.get(KEY)) else {
             return Ok(());
         };
@@ -668,7 +681,7 @@ impl Declarations {
         self.add_apple(name, &declares.apple)?;
         self.add_opening(name, declares.schema, Opening::of_declares(&declares))?;
         for (feature, part) in &declares.features {
-            if features.contains(&feature.as_str()) {
+            if features.contains(feature) {
                 self.add_android(package, declares.schema, &part.android)?;
                 self.add_apple(name, &part.apple)?;
                 self.add_opening(name, declares.schema, Opening::of_part(part))?;

@@ -19,8 +19,8 @@ use std::process::Command;
 use cargo_metadata::{DependencyKind, Metadata, MetadataCommand, Package};
 use serde::Serialize;
 
+use crate::declarations::Declarations;
 use crate::declarations::capability::{PluginPath, plugin_of, plugin_of_manifest};
-use crate::declarations::{CrateRole, Declarations};
 use crate::error::{CliError, CliResult, ResultExt};
 use crate::ui;
 
@@ -381,24 +381,14 @@ fn enable_feature(manifest: &str, key: &str, feature: &str) -> Result<String, St
 }
 
 /// What the linked crate states: its plugin and its declarations, with the
-/// features the graph now enables for it.
+/// features the application's build now enables for it.
 fn describe(dir: &Path, target: &Target) -> CliResult<(PluginPath, Declarations)> {
     let metadata = metadata(dir)?;
     let crate_name = target.crate_name();
-    let resolve = metadata
-        .resolve
-        .as_ref()
-        .ok_or_else(|| CliError::Missing("cargo metadata resolved no graph".into()))?;
-    let (package, node) = resolve
-        .nodes
+    let package = metadata
+        .packages
         .iter()
-        .find_map(|node| {
-            let package = metadata
-                .packages
-                .iter()
-                .find(|package| package.id == node.id)?;
-            (package.name.as_str() == crate_name).then_some((package, node))
-        })
+        .find(|package| package.name.as_str() == crate_name)
         .ok_or_else(|| {
             CliError::Missing(format!("`{crate_name}` is not in the application's graph"))
         })?;
@@ -415,13 +405,7 @@ fn describe(dir: &Path, target: &Target) -> CliResult<(PluginPath, Declarations)
                     .into(),
             )
         })?;
-    let features: Vec<&str> = node
-        .features
-        .iter()
-        .map(|feature| feature.as_str())
-        .collect();
-    let declarations = Declarations::of_package(package, &features, CrateRole::Dependency)
-        .map_err(|error| refused(error.to_string()))?;
+    let declarations = Declarations::of_linked_crate(dir, package)?;
     Ok((plugin, declarations))
 }
 
