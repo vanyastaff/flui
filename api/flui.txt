@@ -159,11 +159,12 @@ impl core::error::Error for flui::LaunchError
 impl core::fmt::Debug for flui::LaunchError
 impl core::fmt::Display for flui::LaunchError
 variant flui::LaunchError::CapabilityConflict(flui_runtime::capability::CapabilityConflict) // at 0
-variant flui::LaunchError::InitialWindow(flui::AppWindowError) // at 3
-variant flui::LaunchError::NoAndroidEntry // at 6
-variant flui::LaunchError::OnReadyPanicked // at 4
-variant flui::LaunchError::Platform { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 2
-variant flui::LaunchError::Service { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 5
+variant flui::LaunchError::InitialWindow(flui::AppWindowError) // at 4
+variant flui::LaunchError::InvalidWindowOption(flui::platform::InvalidWindowOption) // at 2
+variant flui::LaunchError::NoAndroidEntry // at 7
+variant flui::LaunchError::OnReadyPanicked // at 5
+variant flui::LaunchError::Platform { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 3
+variant flui::LaunchError::Service { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 6
 variant flui::LaunchError::UnsupportedSystem(flui::UnsupportedSystem) // at 1
 #[non_exhaustive] pub enum flui::UnsupportedSystem
 #[non_exhaustive] variant flui::UnsupportedSystem::MissingRequirement { environment: flui::platform::Environment, requirement: &'static str } // at 1
