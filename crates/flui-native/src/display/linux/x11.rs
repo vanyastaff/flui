@@ -35,9 +35,13 @@ use super::x11_model::{
 };
 
 const PROTOCOL: &str = "X11";
-/// The events one step hears before it reads what they said changed: a
-/// server that sends without end is still read.
-const MAX_STEP_EVENTS: usize = 256;
+/// The events one step hears before it reads what they said changed. A
+/// reconfiguration sends a handful (screen, CRTC and output notifications),
+/// and a session changes a property of the root window now and then, so a
+/// step that heard this many is being sent a stream: it reads what they said
+/// so far, or comes straight back for the rest, and a server that sends
+/// without end is still read.
+const MAX_STEP_EVENTS: usize = 64;
 /// `RESOURCE_MANAGER` is read this far (in 4-byte units): 256 KiB.
 const RESOURCES_LENGTH: u32 = 1 << 16;
 /// An output's EDID is read this far (in 4-byte units): the 128-byte base block.
@@ -226,7 +230,9 @@ impl Session for X11Session {
 
     fn step(&mut self, stop: BorrowedFd<'_>) -> Result<Step, DisplayError> {
         // Events already read from the socket come first: the wait below only
-        // sees data the connection has not read yet.
+        // sees data the connection has not read yet. The flush comes before
+        // them, since sending may read what the server sent meanwhile.
+        self.connection.flush().map_err(error)?;
         let mut stale = Stale::default();
         let mut heard = 0;
         while heard < MAX_STEP_EVENTS
@@ -252,7 +258,12 @@ impl Session for X11Session {
             // watches. Turn again to drain them first.
             return Ok(Step::Idle);
         }
-        self.connection.flush().map_err(error)?;
+        if heard == MAX_STEP_EVENTS {
+            // The step stopped hearing at its cap, not at an empty queue: the
+            // events after it are in the connection's queue, where the wait
+            // below would sleep on them. The next step hears them.
+            return Ok(Step::Idle);
+        }
         let ready = wait_readable(self.connection.stream().as_fd(), stop).map_err(error)?;
         Ok(if ready.stop {
             Step::Stopped
