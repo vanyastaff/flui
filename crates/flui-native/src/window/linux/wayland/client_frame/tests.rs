@@ -374,7 +374,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
         held: None,
         title: None,
     };
-    let pixels = paint_header(&frame, DrawScale::ONE, plain).expect("drawn");
+    let pixels = paint_header(&frame, BufferScale::ONE, plain).expect("drawn");
     assert_eq!((pixels.width, pixels.height), (400, 37));
     let background = LIGHT.background();
     assert_eq!(
@@ -391,7 +391,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
         ..frame
     };
     assert_eq!(
-        paint_header(&maximized, DrawScale::ONE, plain)
+        paint_header(&maximized, BufferScale::ONE, plain)
             .expect("drawn")
             .rgba(0, 0)[3],
         255,
@@ -407,7 +407,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
     let idle = pixels.rgba(x, y);
     let hovered = paint_header(
         &frame,
-        DrawScale::ONE,
+        BufferScale::ONE,
         HeaderLook {
             hovered: Some(Button::Close),
             ..plain
@@ -433,7 +433,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
     let mask = title_mask(40, 10);
     let titled = paint_header(
         &frame,
-        DrawScale::ONE,
+        BufferScale::ONE,
         HeaderLook {
             title: Some(&mask),
             ..plain
@@ -450,7 +450,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
 
     let dark = paint_header(
         &frame,
-        DrawScale::of(2.0),
+        BufferScale::try_new(2.0).expect("a scale"),
         HeaderLook {
             look: Look {
                 dark: true,
@@ -471,51 +471,36 @@ const PLAIN: HeaderLook<'static> = HeaderLook {
     title: None,
 };
 
-/// A compositor names any scale it likes. A frame is drawn at the window's
-/// scale up to the largest, and at one where the scale is no positive finite
-/// number: at 442 the 37-pixel title bar of a 37-pixel window would be
-/// 16 354 pixels a side, each within the largest extent and a gibibyte in
-/// all, drawn again at every hover. The area has a cap of its own, which
-/// refuses that bar even at a scale no frame is handed.
+/// A compositor names any scale it likes. At 442 the 37-pixel title bar of
+/// a 37-pixel window would be 16 354 pixels a side, each within the largest
+/// extent and a gibibyte in all, drawn again at every hover. The frame is
+/// drawn at the scale the window's buffer is, which holds no scale past the
+/// largest, and no image of that area is made whatever asks for it.
 #[test]
 fn a_hostile_scale_draws_no_gibibyte() {
-    for (told, drawn) in [
-        (1.0, 1.0),
-        (1.5, 1.5),
-        (8.0, 8.0),
-        (8.01, 8.0),
-        (442.0, 8.0),
-        (1e300, 8.0),
-        (f64::INFINITY, 1.0),
-        (f64::NAN, 1.0),
-        (0.0, 1.0),
-        (-2.0, 1.0),
-    ] {
-        assert_eq!(DrawScale::of(told).get(), drawn, "a window at {told}");
-    }
     let narrow = Frame {
         content: Size::new(37.0, 300.0),
         ..floating()
     };
-    let pixels = paint_header(&narrow, DrawScale::of(442.0), PLAIN).expect("drawn");
+    let hostile = BufferScale::try_new(442.0).expect("a scale");
+    let pixels = paint_header(&narrow, hostile, PLAIN).expect("drawn");
     assert_eq!(
         (pixels.width, pixels.height),
         (296, 296),
         "at the largest scale"
     );
 
-    let unbounded = DrawScale(DevicePixelRatio::try_new(442.0).expect("a ratio"));
-    assert_eq!(device_extent(37.0, unbounded.get()), Some(16_354));
+    let side = device_extent(37.0, 442.0).expect("within the largest extent");
+    assert_eq!(side, 16_354);
     assert!(
-        paint_header(&narrow, unbounded, PLAIN).is_none(),
+        Pixels::try_new(side, side).is_none(),
         "each side is within the largest extent, the area is not"
     );
-    assert!(Pixels::try_new(16_354, 16_354).is_none());
     assert!(Pixels::try_new(MAX_EXTENT, 297).is_none());
     // The widest bar at the largest scale is the most a frame draws.
     assert_eq!(
         f64::from(MAX_PIXELS),
-        f64::from(MAX_EXTENT) * HEADER * DrawScale::MAX
+        f64::from(MAX_EXTENT) * HEADER * BufferScale::MAX
     );
     let widest = Pixels::try_new(MAX_EXTENT, 296).expect("within the area");
     assert_eq!(widest.data.len(), 4 * 16_384 * 296);
@@ -633,7 +618,7 @@ fn each_seats_pointer_is_followed_on_its_own() {
     for seat in 3..10_003 {
         pointers.moved(&seat, &frame, Piece::Header, 20.0, 18.0);
         pointers.left(&seat);
-        assert!(pointers.followed() <= MAX_POINTERS, "seat {seat}");
+        assert!(pointers.followed() <= MAX_SEATS, "seat {seat}");
     }
     assert_eq!(
         pointers.button(&1, &frame, BTN_LEFT, false, 1_200),
@@ -676,12 +661,12 @@ fn a_frame_past_the_largest_extent_is_not_drawn() {
         content: Size::new(1e7, 300.0),
         ..floating()
     };
-    assert!(paint_header(&wide, DrawScale::ONE, plain).is_none());
+    assert!(paint_header(&wide, BufferScale::ONE, plain).is_none());
     let fullscreen = framed(ToplevelStates {
         fullscreen: true,
         ..ToplevelStates::default()
     });
-    assert!(paint_header(&fullscreen, DrawScale::ONE, plain).is_none());
+    assert!(paint_header(&fullscreen, BufferScale::ONE, plain).is_none());
     assert_eq!(device_extent(f64::INFINITY, 1.0), None);
     assert_eq!(device_extent(0.2, 1.0), None);
     assert_eq!(device_extent(36.5, 1.0), Some(37));
@@ -698,7 +683,7 @@ fn a_title_is_shaped_and_rasterized() {
     let fonts = FontCollection::new();
     let mut text = TitleText::new(&fonts);
     let mask = text
-        .mask("Client frame", 300.0, DrawScale::ONE)
+        .mask("Client frame", 300.0, BufferScale::ONE)
         .expect("shaped");
     assert!(mask.width > 20 && mask.width <= 300, "{}", mask.width);
     assert!(mask.height >= 15, "{}", mask.height);
@@ -707,14 +692,18 @@ fn a_title_is_shaped_and_rasterized() {
         "the title has ink"
     );
     let double = text
-        .mask("Client frame", 300.0, DrawScale::of(2.0))
+        .mask(
+            "Client frame",
+            300.0,
+            BufferScale::try_new(2.0).expect("a scale"),
+        )
         .expect("shaped");
     assert!(double.width >= mask.width * 2 - 2 && double.width <= mask.width * 2 + 2);
     let long = "A title far longer than the room the title bar leaves it ".repeat(4);
-    let cut = text.mask(&long, 120.0, DrawScale::ONE).expect("shaped");
+    let cut = text.mask(&long, 120.0, BufferScale::ONE).expect("shaped");
     assert!(cut.width <= 120, "cut to the room: {}", cut.width);
-    assert!(text.mask("", 300.0, DrawScale::ONE).is_none());
-    assert!(text.mask("x", 0.0, DrawScale::ONE).is_none());
+    assert!(text.mask("", 300.0, BufferScale::ONE).is_none());
+    assert!(text.mask("x", 0.0, BufferScale::ONE).is_none());
     assert_eq!(text.generation(), fonts.generation());
 }
 

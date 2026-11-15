@@ -16,14 +16,11 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::{ClipboardError, ClipboardRead, capability::Resolver};
 use parking_lot::Mutex;
 
+use crate::clipboard::linux::MAX_READERS;
 use crate::clipboard::text::TextForm;
 
-/// The most reads of a selection waiting at once. A handle shares one read
-/// among all its readers, so each waiting read is another handle's; more are
-/// refused at once as [`ClipboardError::Unavailable`].
-pub(super) const MAX_READERS: usize = 4;
-
-/// The readers of one read under way; `None` once it was answered.
+/// The readers of one read under way; `None` once it was answered. Shared
+/// with the thread that waits for the answer, so a lock and not a cell.
 type Waiting<Reader> = Arc<Mutex<Option<Vec<Reader>>>>;
 
 /// The reads under way of one selection (the clipboard's, or the primary

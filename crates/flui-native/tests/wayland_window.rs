@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Size, WindowMetrics};
 use flui_native::testing::app::{self, AppCall};
 use flui_native::testing::wayland::{
-    ClientFrameReport, bridge_focus, client_frame_report, compositor_report, fullscreen_on,
-    offers_activation, outputs, portal_parent, present, run_for, suspend,
+    ClientFrameReport, MAX_BUFFER_SCALE, bridge_focus, client_frame_report, compositor_report,
+    fullscreen_on, offers_activation, outputs, portal_parent, present, run_for, suspend,
 };
 use flui_native::{ExitAnswer, HostWindow, Platform as _, WaylandPlatform};
 use flui_platform::WindowFrame;
@@ -101,11 +101,17 @@ impl WaylandFixture {
         }
     }
 
-    /// The scale the compositor asks the window's buffer to be drawn at: the
-    /// fractional one it prefers for the surface, else the whole one, else
-    /// that of the output the surface
-    /// entered, as the display source reads it on its own connection.
+    /// The scale the window's buffer is to be drawn at: the one the
+    /// compositor asks for, up to the largest a buffer is drawn at. The
+    /// compositor's is the fractional one it prefers for the surface, else
+    /// the whole one, else that of the output the surface entered, as the
+    /// display source reads it on its own connection.
     fn scale(&self) -> f64 {
+        self.asked_scale().min(MAX_BUFFER_SCALE)
+    }
+
+    /// The scale the compositor asks the window's buffer to be drawn at.
+    fn asked_scale(&self) -> f64 {
         let Some(report) = compositor_report(self.window.as_ref()) else {
             return 1.0;
         };
@@ -1071,8 +1077,10 @@ mod optional {
     /// A window draws its buffer at the fractional scale the compositor prefers
     /// for its surface (`wp_fractional_scale_v1`, a numerator over 120): the
     /// snapshot's scale is that fraction, and its drawable area the logical size
-    /// times it, rounded half away from zero as the protocol asks. Where the
-    /// compositor sends none (Weston), the scale is a whole one.
+    /// times it, rounded half away from zero as the protocol asks. A fraction
+    /// past the largest scale a buffer is drawn at is drawn at that one (a
+    /// sway output scaled 20 runs it). Where the compositor sends none
+    /// (Weston), the scale is a whole one.
     #[test]
     fn a_window_draws_at_the_compositors_fractional_scale() {
         let case = "a_window_draws_at_the_compositors_fractional_scale";
@@ -1088,8 +1096,13 @@ mod optional {
             Optional::FractionalScale.missing(case, "only the whole scale was checked");
             return;
         };
-        let scale = f64::from(numerator) / 120.0;
-        assert_eq!(metrics.scale().get(), scale, "the compositor's fraction");
+        let asked = f64::from(numerator) / 120.0;
+        let scale = asked.min(MAX_BUFFER_SCALE);
+        assert_eq!(
+            metrics.scale().get(),
+            scale,
+            "the compositor's fraction, {asked}, up to the largest"
+        );
         let physical = metrics.physical();
         let expected = |logical: f64| (logical * scale).round();
         assert_eq!(

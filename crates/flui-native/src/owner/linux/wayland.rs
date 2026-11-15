@@ -687,7 +687,7 @@ mod event_loop {
         /// The frame it draws itself where the compositor draws none, which
         /// the pointer over the frame's surfaces reaches instead of the
         /// window's input.
-        pub(crate) frame: Arc<dyn FramePointer>,
+        pub(crate) frame: Rc<dyn FramePointer>,
         /// Its text, which a seat's `zwp_text_input_v3` in the window drives;
         /// `None` where its text input is no Wayland one.
         pub(crate) text: Option<Arc<dyn SeatWindowText>>,
@@ -699,7 +699,7 @@ mod event_loop {
     /// records it seat by seat, and the window carries it out as it settles.
     /// Called by a dispatch on the owner thread, with no cell of the input
     /// borrowed; it runs no handler and calls back into nothing.
-    pub(crate) trait FramePointer: Send + Sync {
+    pub(crate) trait FramePointer {
         /// Whether `surface` is one of the frame's.
         fn holds(&self, surface: &WlSurface) -> bool;
 

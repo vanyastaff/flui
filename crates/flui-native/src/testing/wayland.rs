@@ -11,6 +11,11 @@ pub use crate::owner::linux::wayland::OutputName;
 use crate::owner::linux::wayland::WaylandLoop;
 use crate::platform::HostPlatform;
 use crate::window::linux::wayland::WaylandWindow;
+use crate::window::linux::wayland::scale::BufferScale;
+
+/// The largest scale a window's buffer is drawn at, whatever scale its
+/// compositor names.
+pub const MAX_BUFFER_SCALE: f64 = BufferScale::MAX;
 
 /// Run the loop of `platform`, a `WaylandPlatform`, for `span`: read what the
 /// compositor sends, let each window carry it out, and deliver what is due,

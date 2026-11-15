@@ -53,6 +53,13 @@
 //!   cursor moved by the update's translation. Swipes and holds are the
 //!   compositor's.
 
+/// The seats the input binds, and so the most pointers a window's own frame
+/// follows. A seat is a user at the machine, and a compositor with more than
+/// a few is unheard of; a compositor announcing seats without end is not
+/// bound past this.
+#[cfg(any(wayland_host, test))]
+pub(crate) const MAX_SEATS: usize = 16;
+
 pub mod wire;
 
 pub mod repeat {
@@ -419,7 +426,12 @@ pub mod cursor {
 
     /// The theme size a cursor is drawn at where `XCURSOR_SIZE` names none.
     pub const THEME_SIZE: u32 = 24;
-    /// The largest buffer scale a theme cursor is drawn at.
+    /// The largest buffer scale a theme cursor is drawn at: the theme is
+    /// loaded at its size times this, and themes ship their largest images
+    /// at a few times their nominal size. A fact of the cursor's own: the
+    /// window scale it is handed is already bounded by the window's buffer
+    /// scale (`window::linux::wayland::scale::BufferScale::MAX`), which
+    /// happens to be the same number, but this function takes any scale.
     const MAX_THEME_SCALE: i32 = 8;
 
     /// The integer buffer scale a theme cursor is drawn at on a window of

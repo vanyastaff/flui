@@ -34,7 +34,6 @@
 //! The dispatch records what the compositor said and runs no handler; a
 //! listener hears it with nothing of the devices held.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
 
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
@@ -482,28 +481,29 @@ pub(crate) struct DeviceData {
 /// A data offer's user data: the MIME types it offers, as its `offer`
 /// events name them, read on the owner thread alone.
 pub(crate) struct OfferData {
+    told: OwnerCell<OfferTold>,
+}
+
+/// What the compositor told of one offer.
+#[derive(Default)]
+struct OfferTold {
     /// Each type offered, once, in the order first offered: at most
     /// [`MAX_TYPES`], none longer than [`MAX_TYPE_LEN`], however often the
     /// owner repeats an `offer` event.
-    types: OwnerCell<Vec<String>>,
-    /// The actions a drag's source permits (`source_actions`, version 3),
-    /// [`UNTOLD`] before the compositor told them.
-    source_actions: AtomicU32,
-    /// The action the compositor chose for a drag (`action`, version 3),
-    /// [`UNTOLD`] before it chose one.
-    action: AtomicU32,
+    types: Vec<String>,
+    /// The actions a drag's source permits (`source_actions`, version 3);
+    /// `None` before the compositor told them.
+    source_actions: Option<DndAction>,
+    /// The action the compositor chose for a drag (`action`, version 3);
+    /// `None` before it chose one.
+    action: Option<DndAction>,
 }
-
-/// An action set the compositor has not told: no `DndAction` has every bit.
-const UNTOLD: u32 = u32::MAX;
 
 impl OfferData {
     /// An offer's data, made by the dispatch on the owner thread.
     pub(crate) fn new() -> Self {
         Self {
-            types: OwnerCell::new(),
-            source_actions: AtomicU32::new(UNTOLD),
-            action: AtomicU32::new(UNTOLD),
+            told: OwnerCell::new(),
         }
     }
 
@@ -513,9 +513,9 @@ impl OfferData {
         if mime_type.len() > MAX_TYPE_LEN {
             return;
         }
-        self.types.with(|types| {
-            if types.len() < MAX_TYPES && !types.contains(&mime_type) {
-                types.push(mime_type);
+        self.told.with(|told| {
+            if told.types.len() < MAX_TYPES && !told.types.contains(&mime_type) {
+                told.types.push(mime_type);
             }
         });
     }
@@ -523,26 +523,25 @@ impl OfferData {
     /// Run `f` with the types offered, in the order first offered; `None`
     /// off the owner thread.
     pub(crate) fn types<R>(&self, f: impl FnOnce(&[String]) -> R) -> Option<R> {
-        self.types.with(|types| f(types))
+        self.told.with(|told| f(&told.types))
     }
 
     /// The actions a drag's source permits; `None` before the compositor
     /// told them, as below version 3 it never does.
     pub(crate) fn source_actions(&self) -> Option<DndAction> {
-        told(self.source_actions.load(Ordering::Acquire))
+        self.told.with(|told| told.source_actions).flatten()
     }
 
     /// The action the compositor chose for a drag; `None` before it chose
     /// one, as below version 3 it never does.
     pub(crate) fn action(&self) -> Option<DndAction> {
-        told(self.action.load(Ordering::Acquire))
+        self.told.with(|told| told.action).flatten()
     }
 }
 
-/// The actions `bits` name, unless [`UNTOLD`]; bits no action has are
-/// dropped.
-fn told(bits: u32) -> Option<DndAction> {
-    (bits != UNTOLD).then(|| DndAction::from_bits_truncate(bits))
+/// The actions `bits` name; bits no action has are dropped.
+fn actions(bits: u32) -> DndAction {
+    DndAction::from_bits_truncate(bits)
 }
 
 impl Dispatch<WlDataDeviceManager, ()> for WaylandState {
@@ -694,11 +693,14 @@ impl Dispatch<WlDataOffer, OfferData> for WaylandState {
     ) {
         match event {
             wl_data_offer::Event::Offer { mime_type } => data.offer(mime_type),
-            wl_data_offer::Event::SourceActions { source_actions } => data
-                .source_actions
-                .store(u32::from(source_actions), Ordering::Release),
+            wl_data_offer::Event::SourceActions { source_actions } => {
+                data.told.with(|told| {
+                    told.source_actions = Some(actions(u32::from(source_actions)));
+                });
+            }
             wl_data_offer::Event::Action { dnd_action } => {
-                data.action.store(u32::from(dnd_action), Ordering::Release);
+                data.told
+                    .with(|told| told.action = Some(actions(u32::from(dnd_action))));
             }
             _ => {}
         }

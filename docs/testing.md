@@ -167,27 +167,8 @@ headless Weston (`weston --backend=headless --socket=…`) and sets
 `wayland_input` harness, the Wayland host's input from a real seat, starts an
 Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
 it skips itself without `Xvfb` or `weston`, and fails then under
-`FLUI_REQUIRE_WAYLAND`. The cases whose subject a compositor may not offer
-are `wayland_window::optional`: a protocol beside xdg-shell (`xdg-decoration`,
-`wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`), a seat, a second
-output. On a compositor that lacks one, a case says in its output what it
-skipped and what it checked instead, and the Wayland run shows each case's
-output at its end. Weston 13 lacks all of them, so on it
-`an_activation_asks_the_compositor_with_a_token` checks only the refusal, and
-`a_window_draws_at_the_compositors_fractional_scale` only a whole scale. CI
-therefore runs those cases a second time under a headless sway, through
-`cargo xtask wayland-optional`, which sets
-`FLUI_REQUIRE_COMPOSITOR=fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign`:
-a case that finds one of the listed subjects missing fails. Locally, start a
-sway with the two lines of the CI step's config (`output * scale 1.5`, and
-`for_window [title="a floating frame"] floating enable`) under
-`WLR_BACKENDS=headless WLR_RENDERER=pixman`, and run the task with
-`WAYLAND_DISPLAY` naming its socket. The second-output case
-(`a_window_moved_to_another_output_names_its_display`) runs in neither: it
-needs a Weston on its X11 backend with `--output-count=2`, and sway leaves a
-window on the output it went fullscreen on. Sway tiles its windows and
-carries out no maximize, so the rest of `wayland_window::` runs on Weston
-only. On Windows the Win32 window
+`FLUI_REQUIRE_WAYLAND`. Which compositor runs which Wayland case is in
+[its own section](#which-compositor-runs-which-wayland-case). On Windows the Win32 window
 tests and the contract's share the desktop's foreground, and on macOS the
 AppKit window cases share it and its Spaces: each set runs one at a time
 (test group `desktop-foreground`).
@@ -221,6 +202,40 @@ command (so a contributor can run it standalone) *and* a step in
 `ci` are not themselves invoked from CI). A check folded into `cargo xtask
 checks` gets both at once, since that job runs it. A command with no CI step
 only runs when someone remembers to run it by hand.
+
+### Which compositor runs which Wayland case
+
+The native Wayland host's window cases (`wayland_window::`) run against the
+compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
+
+| Cases | In CI | Why there |
+|-------|-------|-----------|
+| `wayland_window::` outside `optional` | headless Weston 13, in `cargo xtask test` | The conformance kit and `a_window_maximized_before_fullscreen_returns_to_normal` maximize a window. Sway tiles and, at 1.9, offers `xdg_wm_base` 2 with no `wm_capabilities`, so it carries out no maximize and the window cannot know. |
+| `wayland_window::optional::` | headless Weston 13, where each says what it skipped, then a headless sway, in `cargo xtask wayland-optional` | Their subjects are what a compositor may not offer: `xdg-decoration`, `wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`, a seat. Weston 13 lacks all five. |
+| `a_window_moved_to_another_output_names_its_display` | no compositor | It needs two outputs and a compositor that returns a window to the output it left: Weston on its X11 backend with `--output-count=2`. Sway leaves a window on the output it went fullscreen on. |
+
+A case of `optional` that meets a compositor without its subject says in its
+output what it skipped and what it checked instead, and both Wayland runs
+show each case's output at their end. `FLUI_REQUIRE_COMPOSITOR` is a
+comma-separated list of the subjects the compositor must offer
+(`fractional-scale`, `seat`, `two-outputs`, `xdg-activation`,
+`xdg-decoration`, `xdg-foreign`): a case that finds a listed one missing
+fails. `cargo xtask wayland-optional` lists the five a sway offers, and a
+Weston run with two outputs lists `two-outputs`.
+
+The `test` job starts the sway. To run the task locally, start one the same
+way: a configuration of two lines (`output * scale 1.5`, which makes a
+surface's preferred scale a fraction, and
+`for_window [title="a floating frame"] floating enable`, the window whose
+request for its own frame sway honours), under
+`WLR_BACKENDS=headless WLR_RENDERER=pixman`, with `WAYLAND_DISPLAY` naming
+its socket for the task. An output scaled past the largest scale a buffer is
+drawn at (`output * scale 20`) runs
+`a_window_draws_at_the_compositors_fractional_scale` on a hostile scale: the
+window draws at the largest.
+
+The step has run on sway 1.9 (WSL Ubuntu 24.04, 2026-11-15) and not yet on
+the CI runner's sway.
 
 ### What `cargo xtask test` runs
 

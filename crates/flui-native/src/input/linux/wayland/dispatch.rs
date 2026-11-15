@@ -17,7 +17,7 @@
 
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::FileExt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::rc::Rc;
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
@@ -67,12 +67,12 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::{
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_v2::{self, ZwpTabletV2};
 use web_time::Instant;
 
-use super::cursor;
 use super::keyboards::Keyboards;
 use super::wire::{
     Axis, AxisSource, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatKey, SeatWire,
     ToolWire, TouchWire, WireTime,
 };
+use super::{MAX_SEATS, cursor};
 use crate::input::assembly::{NativeClock, NativeDevice, NativeSurface};
 use crate::input::availability::{self, WaylandInputGlobals};
 use crate::input::event_timestamp_ns;
@@ -103,10 +103,6 @@ const POINTER_FRAMES: u32 = 5;
 /// for each of a few tablets. A compositor announcing tools it never removes
 /// is refused past this rather than held forever.
 const MAX_TOOLS: usize = 16;
-/// The seats the input binds. A seat is a user at the machine, and a
-/// compositor with more than a few is unheard of; a compositor announcing
-/// seats without end is not bound past this.
-const MAX_SEATS: usize = 16;
 
 /// `CLOCK_MONOTONIC`, the clock compositors stamp input on.
 fn monotonic() -> Duration {
@@ -203,7 +199,7 @@ struct Attached {
     cursor: CursorIcon,
     scale: WindowScale,
     /// The frame it draws itself, whose surfaces the pointer's events go to.
-    frame: Arc<dyn FramePointer>,
+    frame: Rc<dyn FramePointer>,
 }
 
 /// A pointer's objects.
@@ -227,7 +223,7 @@ struct PointerObjects {
 #[derive(Clone)]
 struct FrameFocus {
     /// The frame.
-    frame: Arc<dyn FramePointer>,
+    frame: Rc<dyn FramePointer>,
     /// The pointer's seat, which the frame follows it by.
     seat: WlSeat,
     /// The frame's surface the pointer entered.
@@ -317,9 +313,9 @@ struct Shared {
     delivering: OwnerCell<Option<Delivering>>,
     layout_callbacks: OwnerCell<Vec<Box<dyn FnMut()>>>,
     /// The last device label minted.
-    labels: AtomicU64,
+    labels: OwnerCell<u64>,
     /// The last seat key minted.
-    seat_keys: AtomicU64,
+    seat_keys: OwnerCell<u64>,
     /// The cursor theme loaded at each buffer scale a cursor was drawn at.
     themes: OwnerCell<Vec<(i32, CursorTheme)>>,
     /// The cursor last shown, for a test.
@@ -404,7 +400,7 @@ impl Shared {
 
     /// A seat key no seat had.
     fn seat_key(&self) -> SeatKey {
-        SeatKey(self.seat_keys.fetch_add(1, Ordering::Relaxed) + 1)
+        SeatKey(next_label(&self.seat_keys))
     }
 
     fn record(&self, wire: Wire) {
@@ -417,7 +413,7 @@ impl Shared {
 
     /// A device label no object had.
     fn label(&self) -> NativeDevice {
-        NativeDevice(self.labels.fetch_add(1, Ordering::Relaxed) + 1)
+        NativeDevice(next_label(&self.labels))
     }
 
     /// The frame `surface` is a surface of, with its window's own surface
@@ -425,7 +421,7 @@ impl Shared {
     fn frame_of(
         &self,
         surface: &WlSurface,
-    ) -> Option<(Arc<dyn FramePointer>, WlSurface, WindowScale)> {
+    ) -> Option<(Rc<dyn FramePointer>, WlSurface, WindowScale)> {
         self.windows
             .with(|windows| {
                 windows
@@ -433,7 +429,7 @@ impl Shared {
                     .find(|window| window.frame.holds(surface))
                     .map(|window| {
                         (
-                            Arc::clone(&window.frame),
+                            Rc::clone(&window.frame),
                             window.surface.clone(),
                             Arc::clone(&window.scale),
                         )
@@ -445,7 +441,7 @@ impl Shared {
     /// The frame of the window whose own surface `pointer` is over, with the
     /// pointer's seat: what a press on a title bar of the application's is
     /// answered by.
-    fn content_frame(&self, pointer: &WlPointer) -> Option<(Arc<dyn FramePointer>, WlSeat)> {
+    fn content_frame(&self, pointer: &WlPointer) -> Option<(Rc<dyn FramePointer>, WlSeat)> {
         let (key, seat) = self
             .objects
             .with(|objects| {
@@ -461,7 +457,7 @@ impl Shared {
                 windows
                     .iter()
                     .find(|window| surface_key(window.id) == key)
-                    .map(|window| Arc::clone(&window.frame))
+                    .map(|window| Rc::clone(&window.frame))
             })
             .flatten()
             .map(|frame| (frame, seat))
@@ -470,12 +466,12 @@ impl Shared {
     /// `seat` or its pointer went: no window's frame follows that pointer
     /// any more. Called by a dispatch with no cell of the input borrowed.
     fn unfollow(&self, seat: &WlSeat) {
-        let frames: Vec<Arc<dyn FramePointer>> = self
+        let frames: Vec<Rc<dyn FramePointer>> = self
             .windows
             .with(|windows| {
                 windows
                     .iter()
-                    .map(|window| Arc::clone(&window.frame))
+                    .map(|window| Rc::clone(&window.frame))
                     .collect()
             })
             .unwrap_or_default();
@@ -512,6 +508,17 @@ impl TextRecorder for Shared {
     }
 }
 
+/// The label after the last one minted in `last`: labels start at one and
+/// are minted by the dispatch, on the owner thread. Zero anywhere else,
+/// where no object is made to carry one.
+fn next_label(last: &OwnerCell<u64>) -> u64 {
+    last.with(|last| {
+        *last = last.saturating_add(1);
+        *last
+    })
+    .unwrap_or(0)
+}
+
 /// The surface key of window `id`.
 fn surface_key(id: WindowId) -> NativeSurface {
     NativeSurface::of_window(id)
@@ -540,8 +547,8 @@ impl SeatInput {
             windows: OwnerCell::new(),
             delivering: OwnerCell::new(),
             layout_callbacks: OwnerCell::new(),
-            labels: AtomicU64::new(0),
-            seat_keys: AtomicU64::new(0),
+            labels: OwnerCell::new(),
+            seat_keys: OwnerCell::new(),
             themes: OwnerCell::new(),
             #[cfg(any(test, feature = "testing"))]
             shown: OwnerCell::new(),
@@ -1211,7 +1218,7 @@ impl WaylandInput for SeatInput {
                     && pointer
                         .frame_focus
                         .as_ref()
-                        .is_some_and(|focus| Arc::ptr_eq(&focus.frame, &removed.frame))
+                        .is_some_and(|focus| Rc::ptr_eq(&focus.frame, &removed.frame))
                 {
                     pointer.frame_focus = None;
                 }

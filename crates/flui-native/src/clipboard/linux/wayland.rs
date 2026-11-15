@@ -139,7 +139,7 @@ fn read_offer(
             let _ = reader.resolve(Err(ClipboardError::Unavailable));
             tracing::debug!(
                 "a selection read past {} waiting was refused",
-                reads::MAX_READERS
+                crate::clipboard::linux::MAX_READERS
             );
         }
     }
