@@ -318,7 +318,7 @@ graph LR
 | **LY105** | **Хост X11: устаревшее состояние и ограниченная работа.** Окно без оконного менеджера читает режим `Normal` и перечитывает поддержку по `DestroyNotify` окна `_NET_SUPPORTING_WM_CHECK`; удалённое устройство XInput2 распознаётся по флагу, а не по `type_`; цикл разбирает за ход то, что поставил один read, читает каждое устаревшее окно один раз и сливает движения; `XkbMapNotify` помечает keymap, а не компилирует её; списки RandR ограничены, смена рабочего стола читает только рабочую область; чтение выделения без `INCR` проверяет тип и формат; `pump_for` и `run_loop` делят один `turn()`; запрос устройства сверх `MAX_DEVICES` не делается; `tracing::warn!` — после мьютекса наблюдений | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/x11*`, `preferences/linux.rs`, `ARCHITECTURE.md` (обработчики с ограниченной работой на событие) | `module-dag`, `file-length`, `globals` | X-сервер без менеджера: режим `Normal`, `SetMode` исполняется; таблица `removed_devices`/`added_devices` по инфо в форме провода через функцию обработчика; счёт запросов на ход; выделение с чужим типом отвергается; каждый падает при откате | L; Dev: Linux (X11) |
 | **LY106** | **Хост Wayland: ограниченные данные композитора и гигиена протокола.** Клиентская рамка ограничивает масштаб и площадь рисования и держит ограниченный набор буферов на часть; на устройство один представленный, ещё не назначенный offer, и он уничтожается; `damage_buffer` только с версии 4 `wl_surface`; ушедшие seat и указатель снимают свои grab и фокус клавиатуры (удержанные клавиши получают KeyUp); реестр не хранит глобалы, которых не привязывает; источник drag берёт разрешение на запись до вызова провайдера приложения; одновременные чтения clipboard делят один ответ; ввод пользуется глобалами цикла, состояние указателя рамки — на seat; CI гоняет `wayland_window` под headless sway, пропустивший тест говорит это в выводе | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/wayland*`, `transfer/linux/*`, `drag/wayland/*`, `.github/workflows/*` | `module-dag`, `file-length`, `ci-verify` | враждебный масштаб не выделяет гигабайт; композитор, не отдающий буферы; поток `data_offer` без `selection` не растёт; seat, ушедший с удержанной кнопкой; каждый падает при откате; набор `wayland_window` под sway | L; Dev: Linux (Wayland) |
 | **LY107** | **Ядро владельца: одна точка вызова, одно решение на отказ.** Обработчик раскладки клавиатуры — один `HandlerSlot` в `owner/` для каждого цикла, `OwnerTurnSlot` реализует `HandlerSlot`; исход паники `exit_policy` решает `AppDelivery::exit_policy` один раз (ADR-0258, ADR-0281), а не хост; `AppDelivery::question` сохраняет ответ обработчика, когда падает отчёт после него; правило «наступивший срок не крутит цикл» — одно, через `WakeDeadline::{take_due, arm}`; у `Services::page_origin` и запечатанного `Platform` нет тел по умолчанию; `bind` ставит `delivering`; `owner/handlers.rs` назван по содержимому, тесты `OwnerSignal` — рядом с `signal.rs`; лестница хостов в `lib.rs` написана один раз; маркеры и формулировки удержания после ADR-0281 убраны | LY105, LY106 | `crates/flui-native/src/owner/*`, `input/{linux,windows,headless}*`, `host.rs`, `platform.rs`, `lib.rs`, `tools/xtask/src/globals/fixture.rs` | `module-dag`, `globals`, `panic-boundary`, `markers`, `file-length` | повторная регистрация обработчика раскладки одинакова на каждом цикле; паника `exit_policy` — одна строка таблицы на все хосты; вето конца сессии переживает панику отчёта; trybuild: `impl Services` без `page_origin` не компилируется; каждый падает при откате | L + W + T; Dev: macOS (насос AppKit) |
-| **LY108** | **flui-app честно отвечает своим обработчикам.** Маршрут кадра — `FnMut(FrameRequest) -> FrameOutcome`, и каждый отказ runtime получает свой ответ; `WindowDelivery::run` возвращает результат только той доставки, которую поставил этот вызов; `Held.inputs` ограничен и сливает движения; запись размещения окна идёт через `StorageCapability` запуска, а не мимо неё, без второго блокирующего `recall`; `display_handle` Android отвечает `Unavailable` после ухода окна и вне looper; маркеры задач убраны | — | `crates/flui-app/src/app/{window_routes.rs,desktop.rs,runner/*}`, `crates/flui-native/src/{owner/window_delivery.rs,window/android.rs}` | `workspace`, `reach`, `markers`, `cross-typecheck` | таблица «отказ runtime → `FrameOutcome`»; ввод, поставленный с другого потока, не отдаёт свой ответ чужому вызову; приложение со своим хранилищем получает размещение в нём; каждый падает при откате | L + W + T; Dev: Android |
+| **LY108** | **flui-app честно отвечает своим обработчикам.** Маршрут кадра — `FnMut(FrameRequest) -> FrameOutcome`, и каждый отказ runtime получает свой ответ; `WindowDelivery::run` возвращает результат только той доставки, которую поставил этот вызов; `Held.inputs` не ограничен числом (ограничение отбрасывало бы ввод): ввод ждёт маршрута не дольше одного хода владельца; размещение окна читается один раз, до открытия, без второго блокирующего `recall`; **открыто:** оно читается и пишется через хранилище хоста, мимо `StorageCapability` приложения ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); `display_handle` Android и Web отвечает `Unavailable` там же, где `window_handle`; маркеры задач убраны | — | `crates/flui-app/src/app/{window_routes.rs,desktop.rs,runner/*}`, `crates/flui-native/src/{owner/window_delivery.rs,window/android.rs,window/web.rs}` | `workspace`, `reach`, `markers`, `cross-typecheck` | таблица «отказ runtime → `FrameOutcome`»; ввод, поставленный с другого потока, не отдаёт свой ответ чужому вызову; размещение читается из хранилища один раз; каждый путь runner ставит маршрут ввода к концу хода, который устанавливает окно; каждый падает при откате | L + W + T; Dev: Android |
 | **LY109** | **Отчёты о показе, цвет и граница паники.** Отметка времени показа ограничена в одном месте, через которое проходит каждый хост; пойманная паника в делегате `URLSession` завершает передачу ошибкой; ivar'ы, владеющие пользовательским кодом, снимаются под containment при отсоединении, и гейт `panic-boundary` видит ivar'ы каждого `define_class!`; `DisplayColor` держит свой инвариант типом (закрытые поля, `try_new`); неконечный headroom поверхности читается как SDR; срок простоя не бывает уже прошедшим; `facade-combos` проверяет каждую фичу фасада поодиночке | — | `crates/flui-native/src/{owner/*,http/apple.rs,window/apple/ios.rs}`, `crates/flui-platform/src/display.rs`, `crates/flui-engine/src/surface_color.rs`, `crates/flui-scheduler/src/frame_clock.rs`, `tools/xtask/src/{panic_boundary/*,tasks/facade.rs}` | `panic-boundary` (+ `--self-test`), `facade-combos`, `feature-matrix`, гейт API-замыкания, `cross-typecheck` | отчёт с отметкой из будущего не останавливает обратную связь окна; самотест гейта с посаженным ivar; таблица `DisplayColor::try_new`; headroom NaN и ∞; каждый падает при откате | L + T; Dev: macOS, iOS |
 | **LY110** | **Escape hatch делает то, что говорит, и имеет потребителя.** Команды `AppKitWindow` возвращают `Result<_, AppKitWindowError>`, проверяют закрытое окно и главную дорожку; прозрачность приложения хранится в состоянии окна и переживает отложенный первый показ, её тип не держит NaN; главное окно достижимо из того, что держит виджет, и это показывает один пример; у каждого метода `Win32Window` есть тест, либо метод удалён; `NotOnTheOwnerThread` удалён; `MacOSWindowLevel` и `MacOSCollectionBehavior` не публикуют сырые значения ОС | — | `crates/flui-native/src/window/{apple/macos/ext.rs,windows/*}`, `crates/flui-app/src/*`, `src/*` (фасад), `examples/*`, `docs/{gaps,extending}.md` | `workspace`, `reach`, `facade-combos`, `doc-strict`, гейт API-замыкания | команда на закрытом окне отвечает типизированной ошибкой; прозрачность после первого показа; пример собирается; тесты методов `Win32Window`; каждый падает при откате | L + W + T; Dev: macOS |
 | **LY111** | **Манифесты объявляют только то, что линкует сборка.** `flui build` берёт фичи каждого узла из `cargo tree -e normal,no-proc-macro`: фича dev-зависимости ничего не объявляет (Android; iOS и остальные манифесты проверяются на то же); строка LY56 и R5.12 переписаны под объём ADR-0307, остаток открыт в `docs/gaps.md` | — | `crates/flui-cli/src/{declarations.rs,build/*}`, `docs/plans/specs/platform-layer/{tasks,requirements}.md`, `docs/gaps.md` | `workspace`, `checks` | строка «фича dev-зависимости ничего не объявляет» падает при откате; `the_manifest_declares_what_the_linked_crates_need` проходит без ребра dev-зависимости | L |
@@ -4900,48 +4900,50 @@ graph LR
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
   публичный путь keyboard layout.
-- [ ] **LY108** — ветка `app/handler-answers`, PR #2641, шесть находок аудита.
-  1. Исправлено. Маршрут кадра теперь `FnMut(FrameRequest) -> FrameOutcome`, и у каждого runner
-     это `dispatch_platform_frame`: принятый владельцем кадр — `Produced` (выполнен в вызове или
-     встал в идущий ход, который его выполнит), отказ (`StaleRuntime`, `StalePresentation`,
-     `PresentationClosing`, `RuntimeUnavailable`) — `Declined`. Прежде окно отвечало `Produced`
-     на любой запрос. Вращение Win32-цикла по чтению: `WakeDeadline::arm` взводит тот же момент
-     после каждого посчитанного кадра, а `AppRuntime::next_wake` включает сроки, которые
-     обслуживает только ход владельца (запись расположения окна, text sizing); при отказе хода
-     нет, срок остаётся, счётчик растёт. В продакшене отказ при открытом окне найден только
-     переходный (закрытие презентации завершается в хвосте того же callback), поэтому
-     постоянного вращения нет; ответ всё равно был неверным. Правило записано в
-     `crates/flui-app/ARCHITECTURE.md`.
-  2. Исправлено. `WindowDelivery::run` возвращает ответ той доставки, которая начала drain
-     (`Drain::ahead_of_own`), а не первого input в очереди. Ни один хост не подаёт input вне
-     потока владельца (все источники — OS callback этого потока), так что в продакшене ошибка
-     не проявлялась; тип её допускал.
-  3. Не воспроизводится, записано в коде. Каждый runner ставит маршрут input в том же ходе
-     владельца, который открыл окно (для отложенного открытия — в ходе его завершения), а окно
-     с содержимым, чья установка занимает несколько ходов, показывается первым кадром.
-     Ограничение по числу отбрасывало бы input (отпускание без нажатия), поэтому его нет; чем
-     ограничена очередь, сказано у `Held::inputs`.
-  4. Частично. `restore` возвращает `RememberedPlacement`, которое доходит до `keep` вместе с
-     открываемым окном: хранилище определяется и читается один раз, второго блокирующего
-     `recall` нет; предупреждение называет `AppConfig::storage_dir`. Обход провайдера
-     `StorageCapability` не исправлен: запрос capability требует `ProviderContext` UI runtime,
-     а расположение читается до первого окна. Нужен запрос от имени хоста, которого ADR-0152
-     не называет; варианты и рекомендация — в PR.
-  5. Исправлено, не скомпилировано здесь (нет Android target): `display_handle` отвечает
-     `Unavailable` там же, где `window_handle`; `SAFETY:` называет инвариант.
-  6. Исправлено: две ссылки на трекер в `runner/host.rs`.
+- [ ] **LY108** — ветка `app/handler-answers`, PR #2641. Открытая часть: размещение окна мимо
+  `StorageCapability` приложения
+  ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); как хост
+  получает capability для себя, решает владелец.
+  - **Маршрут кадра.** `WindowRoutes::route_frame_requested` принимает
+    `FnMut(FrameRequest) -> FrameOutcome`; у каждого runner это `dispatch_platform_frame`.
+    Принятый кадр (выполнен в вызове или встал в идущий ход) — `Produced`; `StaleRuntime`,
+    `StalePresentation`, `PresentationClosing`, `RuntimeUnavailable` — `Declined`; `WrongThread`
+    и `Busy` (чистая публикация держит реестр владельца) — дефект этого крейта, паника с
+    инвариантом, которую окно отвечает как `Failed`. Правило в `crates/flui-app/ARCHITECTURE.md`.
+    Постоянного вращения цикла в продакшене не найдено: отказ при открытом окне переходный;
+    ответ был неверным в любом случае.
+  - **Ответ на ввод.** `WindowDelivery::run` возвращает ответ доставки, начавшей drain
+    (`Drain::ahead_of_own`); все drain начинаются в `Drain::claim`. Ввод вне потока владельца
+    не подаёт ни один хост, тип его допускал.
+  - **`Held.inputs`.** Очередь остаётся и не ограничена числом. Снимок capabilities приходит
+    внутри `open_window`, поэтому удерживается всегда; главное окно и голое вторичное получают
+    маршрут в вызове, который их открыл (или к концу хода, из которого открыты), вторичное окно
+    с содержимым — в следующем ходе владельца.
+  - **Размещение.** `desktop::OpeningWindow` несёт маршруты и `RememberedPlacement` от открытия
+    до установки; хранилище читается один раз.
+  - **`display_handle`.** Android и Web отвечают `Unavailable` там же, где `window_handle`;
+    остальные хосты уже так делали.
+  - **Маркеры.** Ссылки на трекер убраны из комментариев и README `flui-app`.
 
-  Тесты и откат: `window_routes_contract` (строка «state, frame and surface wait for their
-  routes»), `installed_frame_driver_contract`
-  (`a_frame_request_is_answered_by_what_became_of_it`), `window_handler_obligation_table`
-  («an input is answered with its own result») — с откатом каждого исправления падают все три
-  (`left: Produced, right: Declined`; ответ чужого input), с исправлением проходят. Проверки
-  на Windows: clippy `-p flui-app -p flui-native --all-targets -D warnings`; nextest тех же
-  крейтов — 730 из 733, три падения вне этого PR
-  (`the_driver_agent_contains_every_failure`, известное;
-  `an_intent_opens_its_link_or_documents`; `trybuild_ui::ui_tests`, где расходятся только
-  строки исходника std); `xtask checks` зелёный. Не запускалось: Linux, wasm32, Android и
-  Apple (остаются на CI).
+  Тесты, каждый падает при откате своего исправления (откат в коде, тест на месте):
+  `window_routes_contract` — ответ маршрута (`left: Produced, right: Declined`);
+  `installed_frame_driver_contract`, строка `a_frame_request_is_answered_by_what_became_of_it` —
+  заменённый runtime, чужой binding, закрывающаяся презентация, хост без runtime, запрос с
+  другого потока (четыре отката, четыре разных утверждения), а также кадр из очереди: выполнен
+  один раз после хода, а при закрытии хоста в том же ходе не выполнен и следующий запрос
+  отклонён; `window_handler_obligation_table`, строка «an input is answered with its own
+  result»; `a_remembered_placement_is_read_once_before_the_window_opens` (`left: 2, right: 1`);
+  `every_runner_path_routes_input_by_the_end_of_its_installing_turn` — три строки, все падают
+  без `install_input_wiring`; `web_page_events_leave_with_the_window` — оба handle до и после
+  закрытия (wasm, локально не собирался).
+
+  Проверки на Windows: clippy `-p flui-app -p flui-native -p flui-testing --all-targets
+  -D warnings`; nextest тех же крейтов — 859 из 862, три падения те же, что на `origin/main`
+  на этом хосте (`the_driver_agent_contains_every_failure`,
+  `an_intent_opens_its_link_or_documents`, trybuild `owner_platform_is_not_send`);
+  `xtask checks` зелёный; `xtask expectations`: изменение не трогает ни одного ожидания. Не
+  запускалось: Linux, wasm32, Android и Apple; правки `window/android.rs` и `window/web.rs`
+  впервые собирает CI.
 
 ## Отступление от порядка, решённое владельцем
 

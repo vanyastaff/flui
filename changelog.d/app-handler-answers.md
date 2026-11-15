@@ -1,17 +1,22 @@
 ### Fixed
 
-- A window answers a frame request with what became of it: a request its
-  presentation refused (the UI runtime or the presentation is gone or closing)
-  is `FrameOutcome::Declined`, where the runner used to answer `Produced` for
-  every request once the window was installed, which let a loop that waits on a
-  wake deadline ask for the same due instant again.
+- A window answers a frame request with what became of it. A request whose
+  presentation is gone (the UI runtime was replaced, the presentation is
+  closing, no runtime is left) is `FrameOutcome::Declined`, where the runner
+  used to answer `Produced` for every request once the window was installed,
+  which let a loop that waits on a wake deadline ask for the same due instant
+  again.
 - A platform input raised on the owner thread is answered with the handler's
   answer to that input, not with the answer to an input another thread queued
   ahead of it.
 - A window that remembers its placement (`AppConfig::restore_placement`) reads
   the stored placement once, before it opens; the second, blocking read while
-  the window was being installed is gone. The warning for a run without
-  storage names `AppConfig::storage_dir`.
-- Android: a window's surface target answers `HandleError::Unavailable` for its
-  display handle wherever it does for its window handle (off the looper thread,
-  with no native window, after the window's retirement).
+  the window was being installed is gone. The placement is still kept in the
+  host's own store, whatever storage provider the application registers
+  (`docs/gaps.md`, "Window placement bypasses an application's storage
+  provider"). The warning for a run without storage names
+  `AppConfig::storage_dir`.
+- Android and the Web: a window's surface target answers
+  `HandleError::Unavailable` for its display handle wherever it does for its
+  window handle (Android: off the looper thread, with no native window, after
+  the window's retirement; the Web: after the canvas is retired).
