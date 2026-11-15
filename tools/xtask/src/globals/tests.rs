@@ -513,13 +513,13 @@ fn trampoline_limits() {
             ),
             (
                 PLATFORM.to_owned(),
-                "owner::slot::SLOT".to_owned(),
-                PLACEMENT
+                "owner::headless::control::HEADLESS_TWIN".to_owned(),
+                SECOND_TRAMPOLINE
             ),
             (
                 PLATFORM.to_owned(),
-                "owner::headless::control::HEADLESS_TWIN".to_owned(),
-                SECOND_TRAMPOLINE
+                "owner::slot::SLOT".to_owned(),
+                PLACEMENT
             ),
             (
                 PLATFORM.to_owned(),
