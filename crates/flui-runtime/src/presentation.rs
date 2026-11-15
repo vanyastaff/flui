@@ -520,7 +520,8 @@ pub struct PresentationState {
     frames_dropped: Cell<u64>,
     /// Consecutive frames this presentation produced and handed to the
     /// backend that the backend could not put on screen, reset by a frame
-    /// that presents or finds no damage.
+    /// that presents or finds no damage and when the window is shown again
+    /// after it was hidden.
     ///
     /// Bounds the retention of a withheld frame
     /// ([`Self::record_frame_withheld`]'s caller decides how long to keep

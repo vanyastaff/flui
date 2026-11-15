@@ -71,9 +71,11 @@ transient at the display rate.
   streak clears, so once a wait already running ends, its next withheld frames are retried at the
   display rate. The wait and the dropped-frame streak stand, since a failed or lost frame may have
   armed them (ADR-0267, ADR-0334).
-- **§3.** Past the budget, a settlement of an older tree, a frame painted from this tree or a later
-  one still pending (as for a failed frame, ADR-0334 §1), and a given-up device (ADR-0267) arm no
-  wait: the current tree is owed by its own frame, and a given-up device holds its frames.
+- **§3.** Past the budget, a settlement of an older tree and a given-up device (ADR-0267) arm no
+  wait: the current tree is owed by its own frame, and a given-up device holds its frames. A frame
+  that shows the current tree has no pending frame painted from it or a later one, since each
+  painted segment advances the tree revision (ADR-0048), so ADR-0334 §1's guard for one does not
+  arise here.
 - **§4.** The retry repaints in full until ADR-0304 §7's retry from the held version is built; the
   wake and the repaint are armed before the trace, whose subscriber is user code.
 
