@@ -8,10 +8,11 @@ use crate::host::Host;
 use crate::owner::linux::x11::X11Loop;
 use crate::platform::HostPlatform;
 
-/// Turn the X11 loop of `platform` for `span`, as `run` does: the server's
-/// events reach the windows, the owner's turns run and the frames the windows
-/// asked for are delivered. No application handler is bound, so no wake
-/// deadline is asked and no exit policy ends anything.
+/// Turn the X11 loop of `platform` for `span`, each turn the one `run` takes:
+/// the server's events reach the windows, the owner's turns run and the
+/// frames the windows asked for are delivered. No application handler is
+/// bound, so its questions go unanswered: no wake deadline arms, and a quit
+/// or an exit the loop would end on ends nothing here.
 ///
 /// # Errors
 /// [`PlatformError::EventLoop`] when the X server connection fails.
