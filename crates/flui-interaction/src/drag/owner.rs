@@ -742,7 +742,7 @@ impl DragOwner {
                 .collect()
         };
         // Each withdrawal reaches the OS through the platform. One that fails keeps the others,
-        // and stays owed, so the next build or tick tells the OS again; the first failure
+        // and stays owed, so the next turn, build or move tells the OS again; the first failure
         // propagates after them.
         let mut failure = flui_foundation::panic::FirstPanic::new();
         for (presentation, id, tracker, owed) in owed {
