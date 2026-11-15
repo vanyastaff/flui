@@ -184,6 +184,10 @@ pub struct ClientFrameReport {
     /// The most buffers any surface of the frame keeps now: the ones the
     /// compositor holds and the released ones it draws into again.
     pub buffers: usize,
+    /// The most buffers any surface of the frame made since the frame was
+    /// drawn first: a compositor that releases what it showed has the
+    /// frame draw into it again instead of making another.
+    pub buffers_made: usize,
 }
 
 impl ClientFrameReport {
@@ -204,6 +208,7 @@ pub fn client_frame_report(window: &dyn HostWindow) -> Option<ClientFrameReport>
     let rect = |rect: Rect| (rect.x, rect.y, rect.width, rect.height);
     Some(ClientFrameReport {
         buffers: said.buffers,
+        buffers_made: said.made,
         geometry: said.geometry.map(rect),
         pieces: said
             .pieces

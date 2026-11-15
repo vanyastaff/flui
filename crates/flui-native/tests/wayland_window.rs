@@ -686,6 +686,39 @@ mod optional {
     }
 
     impl Optional {
+        /// Every subject, which `FLUI_REQUIRE_COMPOSITOR` names from.
+        const ALL: [Self; 6] = [
+            Self::TwoOutputs,
+            Self::Seat,
+            Self::XdgActivation,
+            Self::XdgDecoration,
+            Self::FractionalScale,
+            Self::XdgForeign,
+        ];
+
+        /// The subjects `FLUI_REQUIRE_COMPOSITOR`, a comma-separated list,
+        /// names. A name of no subject fails the case that reads it: a typo
+        /// would otherwise turn a required case back into a passing skip.
+        fn required() -> Vec<Self> {
+            let listed = std::env::var("FLUI_REQUIRE_COMPOSITOR").unwrap_or_default();
+            listed
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(|name| {
+                    Self::ALL
+                        .into_iter()
+                        .find(|subject| subject.name() == name)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "FLUI_REQUIRE_COMPOSITOR names `{name}`, no subject of {:?}",
+                                Self::ALL.map(Self::name)
+                            )
+                        })
+                })
+                .collect()
+        }
+
         /// The name `FLUI_REQUIRE_COMPOSITOR` lists it by.
         const fn name(self) -> &'static str {
             match self {
@@ -704,9 +737,10 @@ mod optional {
         /// case fails: the run was to prove the subject on a compositor that
         /// has it.
         fn missing(self, case: &str, instead: &str) {
-            let required = std::env::var("FLUI_REQUIRE_COMPOSITOR").unwrap_or_default();
             assert!(
-                !required.split(',').any(|name| name.trim() == self.name()),
+                !Self::required()
+                    .iter()
+                    .any(|subject| subject.name() == self.name()),
                 "{case}: FLUI_REQUIRE_COMPOSITOR lists {}, which the compositor lacks",
                 self.name()
             );
@@ -715,6 +749,15 @@ mod optional {
                 self.name()
             );
         }
+    }
+
+    /// Every name `FLUI_REQUIRE_COMPOSITOR` lists is a subject a case of this
+    /// module checks, so a misspelt one fails the run even where the
+    /// compositor offers every subject and no case reads the list.
+    #[test]
+    fn the_required_subjects_are_ones_a_case_knows() {
+        let required = Optional::required();
+        eprintln!("the compositor must offer {required:?}");
     }
 
     /// A window the compositor moves to another output of the same scale names

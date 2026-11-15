@@ -364,8 +364,13 @@ mod cases {
         }
 
         // Redrawn for thirty titles, the bar is drawn into the buffers
-        // Weston released: no surface of the frame keeps more than its
-        // three, and the bar drawn last is on the output.
+        // Weston released: the title bar makes no more than a set's worth
+        // of buffers for them (a frame that never heard a release would
+        // make one a redraw, evicting the oldest), no surface keeps more
+        // than a set, and the bar drawn last is on the output.
+        let made_before = client_frame_report(opened.window.as_ref())
+            .expect("a Wayland window")
+            .buffers_made;
         for round in 0..30 {
             opened
                 .window
@@ -377,6 +382,11 @@ mod cases {
         assert!(
             (1..=3).contains(&redrawn.buffers),
             "the buffers a surface of the frame keeps: {redrawn:?}"
+        );
+        let made = redrawn.buffers_made - made_before;
+        assert!(
+            made <= 3,
+            "thirty redraws make {made} buffers: Weston's releases are drawn into again"
         );
         assert_eq!(
             watch_bar(&opened, &screen, |found| found.is_some()),

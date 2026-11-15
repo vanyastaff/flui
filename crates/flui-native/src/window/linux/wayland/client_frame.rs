@@ -962,11 +962,18 @@ struct Kept<B> {
 #[derive(Debug)]
 pub(crate) struct BufferSet<B> {
     kept: Vec<Kept<B>>,
+    /// How many buffers it made, for a test.
+    #[cfg(any(test, feature = "testing"))]
+    made: usize,
 }
 
 impl<B> Default for BufferSet<B> {
     fn default() -> Self {
-        Self { kept: Vec::new() }
+        Self {
+            kept: Vec::new(),
+            #[cfg(any(test, feature = "testing"))]
+            made: 0,
+        }
     }
 }
 
@@ -1001,6 +1008,10 @@ impl<B> BufferSet<B> {
             }
             let lent = Lent::default();
             let buffer = make(&lent)?;
+            #[cfg(any(test, feature = "testing"))]
+            {
+                self.made = self.made.saturating_add(1);
+            }
             lent.lend();
             self.kept.push(Kept {
                 buffer,
@@ -1024,6 +1035,12 @@ impl<B> BufferSet<B> {
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn len(&self) -> usize {
         self.kept.len()
+    }
+
+    /// How many buffers it made, for a test.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) const fn made(&self) -> usize {
+        self.made
     }
 }
 
@@ -2185,6 +2202,16 @@ pub(crate) mod surfaces {
             self.pieces
                 .iter()
                 .map(|part| part.buffers.len())
+                .max()
+                .unwrap_or(0)
+        }
+
+        /// The most buffers any piece made since the frame was, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn most_made(&self) -> usize {
+            self.pieces
+                .iter()
+                .map(|part| part.buffers.made())
                 .max()
                 .unwrap_or(0)
         }

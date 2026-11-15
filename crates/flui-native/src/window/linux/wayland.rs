@@ -3205,6 +3205,8 @@ mod toplevel {
         pub(crate) carried: Vec<(Action, u32)>,
         /// The most buffers any piece keeps.
         pub(crate) buffers: usize,
+        /// The most buffers any piece made.
+        pub(crate) made: usize,
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -3240,6 +3242,7 @@ mod toplevel {
                 buffers: client_frame
                     .as_ref()
                     .map_or_default(ClientFrame::most_buffers),
+                made: client_frame.as_ref().map_or_default(ClientFrame::most_made),
             }
         }
 
