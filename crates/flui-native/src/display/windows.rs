@@ -469,7 +469,7 @@ pub(crate) mod source {
 
     use std::num::NonZeroIsize;
 
-    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot};
     use parking_lot::Mutex;
     use windows::Win32::{
@@ -928,7 +928,7 @@ pub(crate) mod source {
         device_name: String,
         bounds: Bounds<i32>,
         usable_bounds: Bounds<i32>,
-        scale_factor: f64,
+        scale_factor: DevicePixelRatio,
         is_primary: bool,
     }
 
@@ -965,7 +965,10 @@ pub(crate) mod source {
                         origin: Point::new(rc_work.left, rc_work.top),
                         size: Size::new(rc_work.right - rc_work.left, rc_work.bottom - rc_work.top),
                     },
-                    scale_factor: f64::from(dpi_x) / 96.0,
+                    // A DPI of zero, which no monitor has, reads as the
+                    // base DPI, as the window limits read it.
+                    scale_factor: DevicePixelRatio::try_new(f64::from(dpi_x) / 96.0)
+                        .unwrap_or(DevicePixelRatio::ONE),
                     // MONITORINFOF_PRIMARY = 1
                     is_primary: (monitor_info.monitorInfo.dwFlags & 1) != 0,
                 })

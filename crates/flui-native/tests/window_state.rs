@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::Opened;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_native::{
     DisplaySpec, HeadlessHostWindow, HeadlessPlatform, HeadlessWindowPolicy, HostWindow,
     Platform as _,
@@ -173,7 +173,9 @@ fn restoring_returns_to_the_rectangle_before() {
 
 fn fullscreen_is_borderless_on_the_whole_display() {
     let platform = HeadlessPlatform::new()
-        .with_displays(vec![DisplaySpec::new("Wide", 2560, 1440).scale_factor(2.0)]);
+        .with_displays(vec![DisplaySpec::new("Wide", 2560, 1440).scale_factor(
+            DevicePixelRatio::try_new(2.0).expect("a positive ratio"),
+        )]);
     let window = open(&platform);
     let (_, fullscreen) = applied(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
     assert_eq!(fullscreen.mode, WindowMode::Fullscreen);

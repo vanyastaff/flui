@@ -12143,7 +12143,7 @@ field flui::platform::DisplayInfo::is_primary: bool // at 6
 field flui::platform::DisplayInfo::name: String // at 1
 field flui::platform::DisplayInfo::persistent_key: Option<String> // at 7
 field flui::platform::DisplayInfo::refresh_period: Option<flui::platform::RefreshPeriod> // at 5
-field flui::platform::DisplayInfo::scale_factor: f64 // at 4
+field flui::platform::DisplayInfo::scale_factor: flui::geometry::DevicePixelRatio // at 4
 field flui::platform::DisplayInfo::usable_bounds: flui::geometry::Bounds<i32> // at 3
 impl Clone for flui::platform::DisplayInfo
 impl PartialEq for flui::platform::DisplayInfo
@@ -12152,7 +12152,7 @@ impl core::marker::StructuralPartialEq for flui::platform::DisplayInfo
 pub fn flui::platform::DisplayInfo::color_space(&self) -> Result<flui::platform::SurfaceColorSpace, flui::platform::Unsupported>
 pub fn flui::platform::DisplayInfo::headroom(&self) -> Result<flui::platform::Headroom, flui::platform::Unsupported>
 pub fn flui::platform::DisplayInfo::into_parts(self) -> (flui::platform::DisplayId, flui::platform::DisplayParts)
-pub fn flui::platform::DisplayInfo::new(id: flui::platform::DisplayId, name: impl Into<String>, bounds: flui::geometry::Bounds<i32>, scale_factor: f64) -> Self
+pub fn flui::platform::DisplayInfo::new(id: flui::platform::DisplayId, name: impl Into<String>, bounds: flui::geometry::Bounds<i32>, scale_factor: flui::geometry::DevicePixelRatio) -> Self
 pub fn flui::platform::DisplayInfo::with_color(self, color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence>) -> Self
 pub fn flui::platform::DisplayInfo::with_persistent_key(self, key: impl Into<String>) -> Self
 pub fn flui::platform::DisplayInfo::with_primary(self, is_primary: bool) -> Self
@@ -12182,7 +12182,7 @@ field flui::platform::DisplayParts::is_primary: bool // at 5
 field flui::platform::DisplayParts::name: String // at 0
 field flui::platform::DisplayParts::persistent_key: Option<String> // at 6
 field flui::platform::DisplayParts::refresh_period: Option<flui::platform::RefreshPeriod> // at 4
-field flui::platform::DisplayParts::scale_factor: f64 // at 3
+field flui::platform::DisplayParts::scale_factor: flui::geometry::DevicePixelRatio // at 3
 field flui::platform::DisplayParts::usable_bounds: flui::geometry::Bounds<i32> // at 2
 impl Clone for flui::platform::DisplayParts
 impl PartialEq for flui::platform::DisplayParts

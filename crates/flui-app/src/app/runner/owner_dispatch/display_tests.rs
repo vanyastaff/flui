@@ -433,7 +433,13 @@ fn unread_field_change_is_silent() {
         .simulate_display_change(rig.ids[LEFT], DisplayChange::Name("renamed".into()))
         .expect("rename");
     rig.controls
-        .simulate_display_change(rig.ids[LEFT], DisplayChange::ScaleFactor(2.0))
+        .simulate_display_change(
+            rig.ids[LEFT],
+            DisplayChange::ScaleFactor(
+                flui_foundation::geometry::DevicePixelRatio::try_new(2.0)
+                    .expect("a positive ratio"),
+            ),
+        )
         .expect("rescale");
     rig.turns.drive();
 

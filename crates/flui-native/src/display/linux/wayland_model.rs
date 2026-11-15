@@ -34,7 +34,7 @@
 //!   compositor cannot describe an output, the colour is absent on this
 //!   device.
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
     CapabilityAbsence, ColorGamut, DisplayColor, DisplayKey, Headroom, RefreshPeriod,
 };
@@ -458,7 +458,7 @@ fn view_of(
         name: label_of(state),
         bounds,
         usable_bounds: bounds,
-        scale_factor,
+        scale_factor: DevicePixelRatio::try_new(scale_factor)?,
         // `wl_output.mode`'s `refresh` is millihertz in an `i32`; zero or
         // less means the compositor does not know.
         refresh_period: RefreshPeriod::from_millihertz(i64::from(mode.refresh_millihertz)).ok(),
@@ -540,7 +540,7 @@ mod tests {
         assert!(outputs.apply(GLOBAL, OutputEvent::Done));
         let first = only(&outputs);
         assert_eq!(first.bounds.size.width, 1920);
-        assert_eq!(first.scale_factor, 1.0);
+        assert_eq!(first.scale_factor.get(), 1.0);
 
         // A mode and a scale change arrive as a burst: neither shows until done.
         assert!(!outputs.apply(GLOBAL, mode(3840, 2160, 120_000)));
@@ -549,7 +549,7 @@ mod tests {
         assert!(outputs.apply(GLOBAL, OutputEvent::Done));
         let second = only(&outputs);
         assert_eq!(second.bounds.size.width, 1920, "3840 pixels at scale 2");
-        assert_eq!(second.scale_factor, 2.0);
+        assert_eq!(second.scale_factor.get(), 2.0);
         assert_eq!(
             second.refresh_period.map(RefreshPeriod::get),
             Some(Duration::from_nanos(8_333_333))
@@ -764,7 +764,7 @@ mod tests {
             ],
         );
         let view = only(&outputs);
-        assert_eq!(view.scale_factor, 1.5);
+        assert_eq!(view.scale_factor.get(), 1.5);
         assert_eq!(view.bounds.origin.x, 1280);
         assert_eq!(view.bounds.size.width, 2560);
         assert_eq!(view.bounds.size.height, 1440);
@@ -820,13 +820,17 @@ mod tests {
             }
         ));
         let view = only(&outputs);
-        assert_eq!(view.scale_factor, 1.5);
+        assert_eq!(view.scale_factor.get(), 1.5);
         assert_eq!(view.bounds.size.width, 2560);
         // Once listed, a later burst applies at its own `done` as usual.
         outputs.apply(GLOBAL, OutputEvent::Scale(1));
         assert_eq!(only(&outputs), view);
         assert!(outputs.apply(GLOBAL, OutputEvent::Done));
-        assert_eq!(only(&outputs).scale_factor, 1.5, "the logical size rules");
+        assert_eq!(
+            only(&outputs).scale_factor.get(),
+            1.5,
+            "the logical size rules"
+        );
     }
 
     fn an_output_without_a_usable_mode_is_not_listed() {

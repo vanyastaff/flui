@@ -284,7 +284,11 @@ impl WindowsWindow {
                 message: format!("Failed to get module handle: {e}"),
             })?;
 
-            let system_scale = GetDpiForSystem() as f64 / USER_DEFAULT_SCREEN_DPI as f64;
+            // A DPI of zero, which no system has, reads as the base DPI.
+            let system_scale = DevicePixelRatio::try_new(
+                f64::from(GetDpiForSystem()) / f64::from(USER_DEFAULT_SCREEN_DPI),
+            )
+            .unwrap_or(DevicePixelRatio::ONE);
 
             // Determine window style
             // Always created hidden: the window is placed and put in its mode

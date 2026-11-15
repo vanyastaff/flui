@@ -503,20 +503,14 @@ pub(crate) fn open_spot(
     options: &WindowOptions,
     opening: &flui_platform::OpeningGeometry,
     target: Option<&flui_platform::DisplayInfo>,
-    system_scale: f64,
+    system_scale: DevicePixelRatio,
     outer_of: impl Fn(u32, (i32, i32)) -> (i32, i32),
 ) -> OpenSpot {
-    let scale = target
-        .map(|display| display.scale_factor)
-        .filter(|scale| scale.is_finite() && *scale > 0.0)
-        .unwrap_or(system_scale);
+    let ratio = target.map_or(system_scale, |display| display.scale_factor);
+    let scale = ratio.get();
     let dpi = ((scale * f64::from(USER_DEFAULT_SCREEN_DPI)).round() as u32).max(1);
     // The hosts' one extent rule; a side that is no size stays none.
-    let extent = |logical: f64| {
-        DevicePixelRatio::try_new(scale)
-            .and_then(|ratio| device_extent(logical, ratio))
-            .map_or(0, u32::cast_signed)
-    };
+    let extent = |logical: f64| device_extent(logical, ratio).map_or(0, u32::cast_signed);
     let content = (
         extent(opening.content.width()),
         extent(opening.content.height()),
@@ -606,7 +600,7 @@ pub(crate) fn outer_size(
 #[cfg(test)]
 #[cfg(test)]
 mod open_tests {
-    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{
         DisplayInfo, DisplayKey, DisplayRegistry, WindowCommand, WindowGeometry, WindowMode,
         WindowOptions,
@@ -627,6 +621,10 @@ mod open_tests {
         (content.0 + FRAME.0, content.1 + FRAME.1)
     }
 
+    fn ratio(scale: f64) -> DevicePixelRatio {
+        DevicePixelRatio::try_new(scale).expect("a positive ratio")
+    }
+
     fn display(scale: f64, origin: (i32, i32)) -> DisplayInfo {
         let registry = DisplayRegistry::new();
         let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
@@ -634,7 +632,7 @@ mod open_tests {
             id,
             "d",
             Bounds::new(Point::new(origin.0, origin.1), Size::new(3840, 2160)),
-            scale,
+            ratio(scale),
         )
     }
 
@@ -644,7 +642,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             None,
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(spot.outer, (816, 639));
@@ -662,7 +660,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             Some(&target),
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(spot.scale, 2.0);
@@ -676,7 +674,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             None,
-            1.5,
+            ratio(1.5),
             with_frame,
         );
         assert_eq!(spot.origin, Some((150, 75)));
@@ -694,7 +692,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             Some(&target),
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(spot.normal, Some((100, 80, 800, 580)));
@@ -708,7 +706,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             None,
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(spot.normal, Some((30, 40, 330, 240)));
@@ -719,7 +717,7 @@ mod open_tests {
                 &unplaced,
                 &unplaced.geometry().expect("valid options"),
                 None,
-                1.0,
+                ratio(1.0),
                 with_frame
             )
             .normal,
@@ -738,7 +736,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             None,
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(

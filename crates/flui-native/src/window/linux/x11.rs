@@ -889,14 +889,10 @@ pub(crate) mod placement {
         )
     }
 
-    /// The scale a window on `display` has: the display's, when it is a
-    /// scale, else `last`, the window's last good one. A window never
-    /// divides by a scale that is not finite and positive.
+    /// The scale a window on `display` has: the display's, else `last`, the
+    /// window's last one.
     pub(crate) fn window_scale(display: Option<&DisplayInfo>, last: f64) -> f64 {
-        display
-            .map(|display| display.scale_factor)
-            .filter(|scale| is_scale(*scale))
-            .unwrap_or(last)
+        display.map_or(last, |display| display.scale_factor.get())
     }
 
     /// The area two rectangles share, in square device pixels.
@@ -999,10 +995,10 @@ pub(crate) mod placement {
             );
         }
 
-        /// A window takes its display's scale only when it is one; otherwise it
-        /// keeps the last good one, and never divides by zero or NaN.
+        /// A window takes its display's scale, which is one by its type, and
+        /// keeps its last one when it is on no display.
         #[test]
-        fn a_window_takes_its_displays_scale_only_when_it_is_one() {
+        fn a_window_takes_its_displays_scale() {
             let registry = DisplayRegistry::new();
             let at = |scale: f64| {
                 let id = registry.mint(&DisplayKey::Unkeyed).expect("an id");
@@ -1010,16 +1006,12 @@ pub(crate) mod placement {
                     id,
                     "display",
                     Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
-                    scale,
+                    DevicePixelRatio::try_new(scale).expect("a positive ratio"),
                 )
             };
             // (case, display scale, last, scale taken)
             let table = [
                 ("a scale", Some(2.0), 1.0, 2.0),
-                ("zero", Some(0.0), 1.5, 1.5),
-                ("negative", Some(-1.0), 1.5, 1.5),
-                ("not a number", Some(f64::NAN), 1.5, 1.5),
-                ("infinite", Some(f64::INFINITY), 1.5, 1.5),
                 ("no display", None, 1.25, 1.25),
             ];
             for (case, scale, last, expected) in table {
@@ -1037,7 +1029,7 @@ pub(crate) mod placement {
                     id,
                     name,
                     Bounds::new(Point::new(x, 0), Size::new(1920, 1080)),
-                    1.0,
+                    DevicePixelRatio::ONE,
                 )
             };
             let snapshot = DisplaySnapshot::empty()

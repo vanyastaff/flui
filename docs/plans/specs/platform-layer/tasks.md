@@ -5781,6 +5781,56 @@ graph LR
   Не запущено: сборки Android, iOS и macOS (нет SDK, устройства и Mac; `stage_macos_app` на этом
   хосте не компилируется); Linux и wasm32 — на CI.
 
+- [ ] **LY112** — ветка `platform/one-rule-once`, PR #2651 (ждёт независимого чтения). Все семь
+  находок подтверждены на `main` @ `5e09d5476`; ни одну пакеты-предпосылки не сняли.
+  Построено: окно Wayland отдаёт свои состояния как `ModeFlags`, режим решает `mode_of`
+  (своя копия порядка «полноэкранный важнее развёрнутого» удалена), у
+  `every_window_system_decides_the_mode_alike` столбец Wayland (композитор не говорит о
+  свёрнутом окне, поэтому строки со свёрнутым — свой столбец). Шаг колеса X11 —
+  `decode::detent_step`, `value120` Wayland и `WM_MOUSEWHEEL` Win32 считаются одним
+  `DetentSteps`; у `every_backend_steps_a_turn_alike` столбцы X11 (через `scroll_detents`
+  валюатора) и Wayland (через `value120_step`), X11 вошёл и в `a_turn_that_is_not_finite_steps_nothing`.
+  Такты счётчика в наносекунды — одна `counter_nanos` (`u128` в середине, насыщение на
+  `u64::MAX`), ею читают якорь часов ввода и обе функции `frame_timing`. `drag/{wayland,x11}`
+  переехали в `drag/linux/` (ADR-0151 §10 уже называл этот путь); группа nextest
+  `xdnd-selection`, ARCHITECTURE, ADR-0312 и `docs/gaps.md` названы по новому пути.
+  `flui_platform::MAX_SURFACE_EXTENT` — наибольшая сторона поверхности: ею движок ограничивает
+  предел текстур, хост Wayland подгоняет масштаб; пункт `docs/gaps.md` о двух копиях снят,
+  вместо него — что делает каждый хост с окном больше неё. Одно правило перевода логической
+  стороны окна в пиксели устройства — `window::state::device_extent` (привязка к сетке, не
+  меньше пикселя, обрезка по `MAX_SURFACE_EXTENT`): ею читают X11 (размеры, пределы размера),
+  рамка Wayland (части, заголовок, поля) и Win32 (`SetSize`, размер при открытии).
+  `DisplayInfo::scale_factor` и `DisplayParts::scale_factor` — `DevicePixelRatio`; хосты строят
+  его там, где число ОС входит (Win32 и macOS/iOS: ноль читается как базовый масштаб; Android:
+  нулевая плотность оставляет дисплей вне снимка; X11 `Xft.dpi`, Wayland, Web — `try_new`), и
+  ручные проверки по масштабу дисплея ушли (`placement::usable`, `globalize` AppKit,
+  `PlacementDisplay::to_global`, `window_scale` X11, `open_spot` Win32, `positive` Web).
+  Кодек записи держит число и отказывает в не-отношении при чтении: формат записи не менялся,
+  старые записи читаются.
+  Тесты, в скобках результат с откатом: `every_window_system_decides_the_mode_alike` (чтение
+  Wayland без `fullscreen` — падает столбец Wayland); `every_backend_steps_a_turn_alike` (шаг X11
+  с вертикалью как у содержимого — падает столбец X11); `counter_ticks_become_nanoseconds_at_the_extremes`
+  (умножение в `u64` с насыщением — «the whole counter at the fastest frequency»: 1 вместо
+  10⁹); `a_size_past_the_largest_surface_is_clamped_to_it` (старый `device_pair` в `SetSize` —
+  `Apply(Platform(OutOfRange))`); `a_logical_side_becomes_a_device_extent_every_host_can_draw` —
+  таблица нового правила; `a_frame_past_the_largest_extent_is_drawn_at_it` (бывший
+  `a_frame_past_the_largest_extent_is_not_drawn`: заголовок шириной в `MAX_SURFACE_EXTENT`
+  вместо отказа). Строки таблиц, которые тип масштаба делает невозможными (NaN, ноль,
+  бесконечность в `displays_that_cannot_hold_a_window_are_not_candidates`,
+  `a_position_on_a_display_becomes_a_global_one`, `a_window_takes_its_displays_scale`), сняты:
+  такой дисплей больше не строится.
+  Проверки: Windows — clippy `--affected --all-targets -D warnings`, nextest `flui-native`,
+  `flui-platform`, `flui-app`, `flui-testing`, `flui-runtime`, `flui-engine` (кроме
+  `an_intent_opens_its_link_or_documents`, `trybuild`-тестов и `the_driver_agent_contains_every_failure`,
+  которые падают на этом хосте и диффа не касаются); WSL Ubuntu 24.04 — clippy `-p flui-native
+  -p flui-platform --all-targets -D warnings`, `cargo test -p flui-native --lib` по изменённым
+  модулям.
+  Не запущено: сборки macOS, iOS, Android и wasm32 (правки `display/apple`, `window/apple`,
+  `display/android`, `display/web` и `tests/wasm32` прочитаны, не скомпилированы); тесты X11 на
+  Xvfb (`drag::linux::x11::tests`) — на CI. Осталось: масштабы окон внутри хостов (запись окна
+  X11, `FrameInset::logical`, области ввода рамки Wayland, `WheelReading::scale`) остаются `f64`
+  со своей проверкой: они не из снимка дисплеев.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

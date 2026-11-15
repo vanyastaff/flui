@@ -26,7 +26,7 @@
 //!   from the `_ICC_PROFILE` property a colour manager sets on the root
 //!   window, which this host does not parse yet.
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{CapabilityAbsence, DisplayKey, RefreshPeriod};
 
 use super::view::{Identity, OutputView, intersection};
@@ -138,7 +138,7 @@ pub(crate) struct RandrState {
     pub crtcs: Vec<RandrCrtc>,
     pub modes: Vec<RandrMode>,
     /// `Xft.dpi / 96`; `None` when the server sets no such resource.
-    pub scale_factor: Option<f64>,
+    pub scale_factor: Option<DevicePixelRatio>,
     /// The current desktop's work area; `None` when the window manager sets none.
     pub work_area: Option<Bounds<i32>>,
 }
@@ -187,7 +187,7 @@ impl RandrState {
             name: monitor.name.clone(),
             bounds: monitor.bounds,
             usable_bounds,
-            scale_factor: self.scale_factor.unwrap_or(1.0),
+            scale_factor: self.scale_factor.unwrap_or(DevicePixelRatio::ONE),
             refresh_period,
             is_primary: monitor.is_primary,
             persistent_key,
@@ -276,14 +276,14 @@ fn mode_refresh_period(mode: &RandrMode) -> Option<RefreshPeriod> {
 
 /// `Xft.dpi / 96` from the text of the root window's `RESOURCE_MANAGER`
 /// property, or `None` when it sets no usable dpi.
-pub(crate) fn xft_scale_factor(resources: &str) -> Option<f64> {
+pub(crate) fn xft_scale_factor(resources: &str) -> Option<DevicePixelRatio> {
     let dpi: f64 = resources
         .lines()
         .find_map(|line| line.trim().strip_prefix("Xft.dpi:"))?
         .trim()
         .parse()
         .ok()?;
-    (dpi.is_finite() && dpi > 0.0).then(|| dpi / 96.0)
+    DevicePixelRatio::try_new(dpi / 96.0)
 }
 
 /// The work area of the desktop `current` out of `_NET_WORKAREA`, a flat list
@@ -611,11 +611,11 @@ mod tests {
 
     fn scale_and_work_area_come_from_the_server() {
         let mut randr = state(vec![monitor("DP-1", &[1], 0)]);
-        assert_eq!(randr.views()[0].scale_factor, 1.0);
+        assert_eq!(randr.views()[0].scale_factor, DevicePixelRatio::ONE);
         randr.scale_factor = xft_scale_factor("*.background: white\nXft.dpi:\t144\n");
         randr.work_area = current_work_area(&[0, 28, 1920, 1052, 0, 0, 1920, 1080], Some(0));
         let view = &randr.views()[0];
-        assert_eq!(view.scale_factor, 1.5);
+        assert_eq!(view.scale_factor.get(), 1.5);
         assert_eq!(view.usable_bounds.origin.y, 28);
         assert_eq!(view.usable_bounds.size.height, 1052);
         assert_eq!(view.bounds.size.height, 1080);
@@ -682,12 +682,30 @@ mod tests {
     }
 
     fn xft_dpi_parsing() {
-        assert_eq!(xft_scale_factor("Xft.dpi: 96"), Some(1.0));
-        assert_eq!(xft_scale_factor("Xft.dpi: 192\n"), Some(2.0));
-        assert_eq!(xft_scale_factor("Xft.dpi: 0"), None);
-        assert_eq!(xft_scale_factor("Xft.dpi: lots"), None);
-        assert_eq!(xft_scale_factor("Xft.antialias: 1"), None);
-        assert_eq!(xft_scale_factor("Xft.dpi: -96"), None);
+        assert_eq!(
+            xft_scale_factor("Xft.dpi: 96").map(DevicePixelRatio::get),
+            Some(1.0)
+        );
+        assert_eq!(
+            xft_scale_factor("Xft.dpi: 192\n").map(DevicePixelRatio::get),
+            Some(2.0)
+        );
+        assert_eq!(
+            xft_scale_factor("Xft.dpi: 0").map(DevicePixelRatio::get),
+            None
+        );
+        assert_eq!(
+            xft_scale_factor("Xft.dpi: lots").map(DevicePixelRatio::get),
+            None
+        );
+        assert_eq!(
+            xft_scale_factor("Xft.antialias: 1").map(DevicePixelRatio::get),
+            None
+        );
+        assert_eq!(
+            xft_scale_factor("Xft.dpi: -96").map(DevicePixelRatio::get),
+            None
+        );
     }
 
     #[test]

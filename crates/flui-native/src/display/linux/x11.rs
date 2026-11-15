@@ -19,7 +19,7 @@
 
 use std::os::fd::{AsFd, BorrowedFd};
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::Event;
@@ -436,7 +436,7 @@ fn atom_name(connection: &RustConnection, atom: xproto::Atom) -> String {
 }
 
 /// `Xft.dpi / 96` from the root window's `RESOURCE_MANAGER`, if it sets one.
-fn resource_scale(connection: &RustConnection, root: xproto::Window) -> Option<f64> {
+fn resource_scale(connection: &RustConnection, root: xproto::Window) -> Option<DevicePixelRatio> {
     let reply = xproto::get_property(
         connection,
         false,

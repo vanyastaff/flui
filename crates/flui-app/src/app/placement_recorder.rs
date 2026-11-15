@@ -91,7 +91,7 @@ pub(crate) fn restore_into(
     };
     let scale = displays
         .get(first.display)
-        .map_or(1.0, |display| display.scale_factor);
+        .map_or(1.0, |display| display.scale_factor.get());
     let frame = if options.frame.at_open(capabilities).has_system_title_bar() {
         frame_inset(scale)
     } else {

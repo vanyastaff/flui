@@ -1219,7 +1219,7 @@ pub(crate) mod source {
 
     use std::sync::Arc;
 
-    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{
         CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot,
         RefreshPeriod,
@@ -1422,8 +1422,9 @@ pub(crate) mod source {
             let screen = window.screen().map_err(|_| PlatformError::Displays {
                 message: "the window has no screen".into(),
             })?;
-            let scale_factor = positive(window.device_pixel_ratio()).unwrap_or(1.0);
-            let device_scale = *state.screen_ratio.get_or_insert(scale_factor);
+            let scale_factor = DevicePixelRatio::try_new(window.device_pixel_ratio())
+                .unwrap_or(DevicePixelRatio::ONE);
+            let device_scale = *state.screen_ratio.get_or_insert(scale_factor.get());
             let bounds = Bounds::new(
                 Point::new(0, 0),
                 Size::new(
@@ -1486,7 +1487,7 @@ pub(crate) mod source {
                         .find(|(screen, _)| is_primary(screen))
                         .map(|(_, id)| *id)
                 });
-            let window_scale = positive(window.device_pixel_ratio());
+            let window_scale = DevicePixelRatio::try_new(window.device_pixel_ratio());
             let displays = listed
                 .iter()
                 .map(|(screen, id)| {
@@ -1522,13 +1523,17 @@ pub(crate) mod source {
     /// are converted the same way: the coordinate space of a mixed-ratio layout is
     /// the browser's, and the origin is therefore the browser's value in that
     /// screen's device pixels, not a global device layout.
-    fn screen_info(screen: &JsValue, id: DisplayId, scale_override: Option<f64>) -> DisplayInfo {
+    fn screen_info(
+        screen: &JsValue,
+        id: DisplayId,
+        scale_override: Option<DevicePixelRatio>,
+    ) -> DisplayInfo {
         let own_ratio = get_number(screen, "devicePixelRatio")
-            .and_then(positive)
-            .unwrap_or(1.0);
+            .and_then(DevicePixelRatio::try_new)
+            .unwrap_or(DevicePixelRatio::ONE);
         let scale_factor = scale_override.unwrap_or(own_ratio);
         let number = |name: &str, fallback: f64| get_number(screen, name).unwrap_or(fallback);
-        let device = |css: f64| device_pixels(css, own_ratio);
+        let device = |css: f64| device_pixels(css, own_ratio.get());
         let bounds = Bounds::new(
             Point::new(device(number("left", 0.0)), device(number("top", 0.0))),
             Size::new(
@@ -1574,10 +1579,6 @@ pub(crate) mod source {
         get(target, name)?
             .as_f64()
             .filter(|value| value.is_finite())
-    }
-
-    fn positive(value: f64) -> Option<f64> {
-        (value.is_finite() && value > 0.0).then_some(value)
     }
 
     /// CSS pixels as the device pixels a snapshot carries.

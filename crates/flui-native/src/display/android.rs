@@ -18,7 +18,7 @@ pub(crate) mod sample {
 
     use std::sync::Arc;
 
-    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{
         Availability, CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, FrameRateHint,
         Headroom, RefreshPeriod,
@@ -113,11 +113,12 @@ pub(crate) mod sample {
         /// The snapshot entry for this display under `id`; `None` for a display
         /// that reports no size or density, which nothing could be laid out on.
         pub(crate) fn info(&self, id: DisplayId) -> Option<DisplayInfo> {
-            if self.width <= 0 || self.height <= 0 || self.density_dpi <= 0 {
+            if self.width <= 0 || self.height <= 0 {
                 return None;
             }
             let bounds = Bounds::new(Point::new(0, 0), Size::new(self.width, self.height));
-            let mut info = DisplayInfo::new(id, &self.name, bounds, scale_factor(self.density_dpi))
+            let scale = scale_factor(self.density_dpi)?;
+            let mut info = DisplayInfo::new(id, &self.name, bounds, scale)
                 .with_primary(self.display_id == Self::DEFAULT_DISPLAY_ID)
                 .with_color(display_color(self.color));
             info.refresh_period = RefreshPeriod::from_hz(f64::from(self.refresh_hz)).ok();
@@ -125,9 +126,10 @@ pub(crate) mod sample {
         }
     }
 
-    /// Device pixels per logical pixel: Android's density is `densityDpi / 160`.
-    fn scale_factor(density_dpi: i32) -> f64 {
-        f64::from(density_dpi) / 160.0
+    /// Device pixels per logical pixel: Android's density is `densityDpi / 160`;
+    /// `None` for a density that is none.
+    fn scale_factor(density_dpi: i32) -> Option<DevicePixelRatio> {
+        DevicePixelRatio::try_new(f64::from(density_dpi) / 160.0)
     }
 
     /// The highest rate among `rates` that describes a cadence.
@@ -245,7 +247,11 @@ pub(crate) mod sample {
                 color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             };
             let info = healthy.info(id).expect("a healthy display");
-            assert_eq!(info.scale_factor, 2.625, "420 dpi is 2.625 logical pixels");
+            assert_eq!(
+                info.scale_factor.get(),
+                2.625,
+                "420 dpi is 2.625 logical pixels"
+            );
             assert!(info.is_primary, "display 0 is the built-in screen");
             assert_eq!(info.bounds.size, Size::new(1080, 2400));
             assert_eq!(
@@ -813,7 +819,7 @@ pub(crate) mod source {
                     name.public = %$info.name,
                     width = $info.bounds.size.width,
                     height = $info.bounds.size.height,
-                    scale_factor = $info.scale_factor,
+                    scale_factor = $info.scale_factor.get(),
                     refresh_period_us = $refresh_period_us,
                     primary = $info.is_primary,
                     color.public = ?$info.color,

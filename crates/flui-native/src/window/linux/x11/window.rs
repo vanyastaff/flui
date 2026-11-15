@@ -109,8 +109,8 @@ use x11rb::wrapper::ConnectionExt as _;
 use super::hints::{motif_hints, size_limits};
 use super::mode::{NetWmState, NetWmStateAtoms, WmState, mode_flags, with_mode};
 use super::placement::{
-    FrameExtents, device_coordinate, device_extent, display_of, is_scale, logical_geometry,
-    outer_bounds, window_scale,
+    FrameExtents, device_coordinate, device_extent, display_of, logical_geometry, outer_bounds,
+    window_scale,
 };
 use super::support::{SupportAtoms, WindowManager, WindowManagerSupport, capabilities};
 use crate::host::{self, WindowFacets, WindowPositions};
@@ -2128,11 +2128,9 @@ impl X11Windows {
             &opening,
             &window_capabilities,
             placement,
-            self.frame_inset.logical(placement.scale_factor),
+            self.frame_inset.logical(placement.scale_factor.get()),
         );
-        let scale = Some(placement.scale_factor)
-            .filter(|scale| is_scale(*scale))
-            .unwrap_or(1.0);
+        let scale = placement.scale_factor.get();
         let (Some(width), Some(height)) = (
             device_extent(plan.content_size.width, scale),
             device_extent(plan.content_size.height, scale),

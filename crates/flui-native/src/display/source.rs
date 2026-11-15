@@ -712,7 +712,7 @@ mod mapping {
 mod tests {
     use std::cell::Cell;
 
-    use flui_foundation::geometry::Bounds;
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio};
     use flui_platform::{DisplayInfo, DisplayKey};
 
     use super::DisplaySource;
@@ -722,6 +722,7 @@ mod tests {
         let id = source
             .mint(&DisplayKey::Injected(1))
             .expect("ids are not exhausted");
+        let scale = DevicePixelRatio::try_new(scale).expect("a positive ratio");
         vec![DisplayInfo::new(id, "Test", Bounds::default(), scale)]
     }
 

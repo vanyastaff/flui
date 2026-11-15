@@ -42,6 +42,7 @@ use objc2_foundation::{
     NSString,
 };
 
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
 #[cfg(not(target_arch = "aarch64"))]
@@ -167,7 +168,10 @@ impl MacosDisplays {
             let Some(id) = display_key_of(&screen).and_then(|key| self.source.mint(&key)) else {
                 continue;
             };
-            let scale = screen.backingScaleFactor();
+            // A scale that is none, which no screen reports, reads as one.
+            let ratio = DevicePixelRatio::try_new(screen.backingScaleFactor())
+                .unwrap_or(DevicePixelRatio::ONE);
+            let scale = ratio.get();
             // NSScreen frames are in points with a bottom-left origin on the
             // primary screen; the snapshot carries device pixels of this
             // screen from the primary screen's top-left corner, like every
@@ -179,7 +183,7 @@ impl MacosDisplays {
             // The name System Settings shows ("Built-in Retina Display", a
             // monitor's model), macOS 10.15 and later.
             let mut display =
-                DisplayInfo::new(id, screen.localizedName().to_string(), bounds, scale)
+                DisplayInfo::new(id, screen.localizedName().to_string(), bounds, ratio)
                     .with_usable_bounds(usable_bounds)
                     .with_primary(index == 0);
             if let Some(uuid) = display_id_of(&screen)

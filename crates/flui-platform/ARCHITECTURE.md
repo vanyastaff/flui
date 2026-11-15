@@ -20,7 +20,17 @@ this one path (ADR-0151 §9).
   the compile-fail fixture `display_id_cannot_be_built_from_a_number`). `RefreshPeriod`
   is 1 ms to 1 s and every constructor refuses what does not describe a cadence, with
   rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
-  never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
+  never substitutes 60 Hz; that is a consumer's policy (ADR-0236). A display's scale
+  is a `DevicePixelRatio`, finite and positive by its type: a host checks the number
+  its operating system reports once, where it builds the display (a DPI of zero reads
+  as the base DPI on Windows, a density of zero leaves the Android display out), and
+  no reader of a snapshot checks it again. A recording keeps the number and refuses
+  one that is not a ratio when it is read.
+- **The largest surface is stated here.** `MAX_SURFACE_EXTENT` is the longest side, in
+  device pixels, of a surface a window may ask a renderer to draw: the engine caps its
+  GPU's texture limit with it and the native hosts read it (what each does with it is in
+  `docs/gaps.md`, "A window larger than a renderer draws"), since `flui-native` and
+  `flui-engine` both read this crate and neither the other.
 - **A headroom is finite and at least white; an absent colour says why.** A display's
   colour profile is `DisplayInfo::color`: a `DisplayColor` or the `CapabilityAbsence` the
   platform gives, which `color_space()` and `headroom()` answer as `Unsupported`.
