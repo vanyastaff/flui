@@ -256,6 +256,9 @@ pub struct AndroidLoop {
     /// The owner's end of `FluiHost`'s queue, bound on the Java main thread
     /// at start (ADR-0255 decision 2).
     host_queue: Arc<java_host::HostQueue>,
+    /// The Activity's requests for results, which providers reach through
+    /// `Loop::activity`; `None` when `FluiHost` gave no epoch.
+    results: Option<Rc<super::result_bridge::ResultBridge>>,
     /// `FluiView`, installed on the Java main thread at start (ADR-0247).
     pub(crate) java_view: Arc<java_view::JavaView>,
     /// The displays, as the table made them; shared with the window.
@@ -319,6 +322,7 @@ impl AndroidLoop {
             H::transfer,
         );
         let host_queue = java_host::HostQueue::start(app.clone(), Arc::downgrade(&owner_signal));
+        let results = super::result_bridge::ResultBridge::start(&app);
         let owner = Arc::downgrade(&owner_signal);
         let preferences = H::preferences(&app, api, &owner_signal);
         let clipboard = H::clipboard(&app, api);
@@ -327,6 +331,7 @@ impl AndroidLoop {
         Self {
             java_view,
             host_queue,
+            results,
             app,
             notices: H::notices(&app_delivery),
             app_delivery,
@@ -412,6 +417,11 @@ impl AndroidLoop {
         }
         self.java_view.detach();
         self.host_queue.detach();
+        // The requests still open end, and a provider's later ones are
+        // refused: the Activity is gone with this loop.
+        if let Some(results) = &self.results {
+            results.end();
+        }
     }
 
     /// Deliver what `FluiView` reported since the last turn, in order, on the
@@ -481,7 +491,17 @@ impl AndroidLoop {
     /// the owner thread, whether or not the Activity is resumed: a trim level
     /// matters most in the background.
     fn deliver_host_entries(&self) {
-        for entry in self.host_queue.take() {
+        let (entries, answers) = self.host_queue.take();
+        if !answers.is_empty() {
+            match &self.results {
+                Some(results) => results.answer(answers),
+                None => tracing::warn!(
+                    target: "flui_native::android",
+                    "answers to requests for results came to a loop that offers no Activity"
+                ),
+            }
+        }
+        for entry in entries {
             let event = match entry {
                 java_host::HostEntry::TrimMemory(level) => ActivityEvent::TrimMemory(level),
                 java_host::HostEntry::Intent(intent) => {
@@ -1146,6 +1166,12 @@ impl host::Loop for AndroidLoop {
 
     fn request_exit_policy_reevaluation(&self) {
         // No exit policy is consulted, so there is nothing to re-evaluate.
+    }
+
+    fn activity(&self) -> Option<flui_platform::capability::Activity> {
+        self.results
+            .as_ref()
+            .map(super::result_bridge::ResultBridge::activity)
     }
 }
 

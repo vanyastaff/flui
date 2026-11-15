@@ -337,6 +337,10 @@ fn capability_seam() {
                 capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn
                     as fn(),
             ),
+            (
+                "capability_seam::a_provider_sees_the_activity_the_host_offers",
+                capability_seam::a_provider_sees_the_activity_the_host_offers as fn(),
+            ),
         ],
     );
 }

@@ -1,9 +1,11 @@
 package dev.flui.platform;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.Parcelable;
 import android.provider.OpenableColumns;
@@ -11,6 +13,9 @@ import android.util.Log;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
 
 /**
  * The contract between this dex and the native library (ADR-0255 decision 5),
@@ -28,7 +33,11 @@ import java.util.ArrayList;
  * <p>The queues buffer: an entry, or what an intent opens, can arrive before
  * {@code android_main} runs, or between two platforms of one process. Entries
  * are pairs of kind and value ({@link #drain}); an intent is a record of its
- * launch, action and URIs ({@link #drainOpened}). The library binds a wake
+ * launch, action and URIs ({@link #drainOpened}); an answer to an activity
+ * the library started for a result names the request's epoch, token and key
+ * ({@link #drainAnswers}). The open requests are saved with the Activity's
+ * state, so an answer that reaches a later Activity, or a later process,
+ * still names its key. The library binds a wake
  * handle on the Java main thread once its platform starts, and unbinds it
  * there when the platform ends; while one is bound, each entry and intent
  * wakes the owner thread, which drains both queues. The Java side queues and
@@ -42,7 +51,7 @@ public final class FluiHost {
      * calls, the entries of the queue, and what each means. Raised with every
      * change to any of them, together with the library's constant.
      */
-    public static final int PROTOCOL = 3;
+    public static final int PROTOCOL = 4;
 
     /** An entry for {@code onTrimMemory}; its value is the level. */
     static final int TRIM_MEMORY = 1;
@@ -68,6 +77,98 @@ public final class FluiHost {
 
     /** The longest name of a document kept, in UTF-16 units. */
     static final int MAX_NAME_LENGTH = 1024;
+
+    /** An answer: the activity a request started answered ({@code onActivityResult}). */
+    static final int ANSWER_RESULT = 1;
+
+    /** An answer: Android refused to start the request's activity, or it was not taken. */
+    static final int ANSWER_NOT_LAUNCHED = 2;
+
+    /** The numbers of one answer in {@link #drainAnswers}: epoch, token, kind, result code. */
+    static final int ANSWER_NUMBERS = 4;
+
+    /** The epoch of a request restored from the saved state of a process that died. */
+    static final long EARLIER_PROCESS = 0;
+
+    /**
+     * The most requests open at once across the platforms of the process: waiting to start,
+     * started, and answered but not drained; the library's {@code MAX_OPEN_REQUESTS}. A refusal
+     * past it is an answer too, so at most twice as many answers wait.
+     */
+    static final int MAX_OPEN = 16;
+
+    private static final String SAVED_CODES = "dev.flui.platform.requests.codes";
+
+    private static final String SAVED_KEYS = "dev.flui.platform.requests.keys";
+
+    private static final String SAVED_NEXT_CODE = "dev.flui.platform.requests.next";
+
+    /**
+     * A request the library took: the epoch of its platform ({@link #nextEpoch}), the token the
+     * library minted, and the key that names its purpose across Activities.
+     */
+    private static final class Request {
+        final long epoch;
+        final long token;
+        final String key;
+
+        Request(long epoch, long token, String key) {
+            this.epoch = epoch;
+            this.token = token;
+            this.key = key;
+        }
+
+        boolean is(long epoch, long token) {
+            return this.epoch == epoch && this.token == token;
+        }
+    }
+
+    /** A request whose Activity was stopped when it was taken, with what starts it. */
+    private static final class Waiting {
+        final Activity activity;
+        final Intent intent;
+        final Request request;
+
+        Waiting(Activity activity, Intent intent, Request request) {
+            this.activity = activity;
+            this.intent = intent;
+            this.request = request;
+        }
+    }
+
+    /** What one request was answered with. */
+    private static final class Answer {
+        final Request request;
+        final int kind;
+        final int resultCode;
+        /** The started activity's {@code Intent}, held, never read here. */
+        final Intent data;
+
+        Answer(Request request, int kind, int resultCode, Intent data) {
+            this.request = request;
+            this.kind = kind;
+            this.resultCode = resultCode;
+            this.data = data;
+        }
+    }
+
+    /** Started requests by their request code. Java main thread only. */
+    private static final HashMap<Integer, Request> STARTED = new HashMap<>();
+
+    /** Requests taken while their Activity was stopped, oldest first. Java main thread only. */
+    private static final ArrayDeque<Waiting> WAITING = new ArrayDeque<>();
+
+    /** The next request code to try. Java main thread only. */
+    private static int nextCode = 1;
+
+    /** The Activity between its {@code onStart} and {@code onStop}. Java main thread only. */
+    private static Activity startedActivity;
+
+    /** Answers, oldest first. Guarded by {@link #LOCK}. */
+    private static final ArrayDeque<Answer> ANSWERS = new ArrayDeque<>();
+
+    /** The last epoch {@link #nextEpoch} gave. Guarded by {@link #LOCK}. */
+    private static long lastEpoch;
 
     /**
      * What each intent opens, oldest first, as {@link #record} lays it out.
@@ -216,6 +317,209 @@ public final class FluiHost {
         return null;
     }
 
+    /**
+     * The epoch of a platform's requests, a new one for each platform of the process and never
+     * {@link #EARLIER_PROCESS}; any thread. An answer names the epoch of its request, so the
+     * library tells its own Activity's answers from an earlier one's.
+     */
+    static long nextEpoch() {
+        synchronized (LOCK) {
+            lastEpoch++;
+            return lastEpoch;
+        }
+    }
+
+    /**
+     * Start {@code intent} for a result from {@code activity}; Java main thread. The request is
+     * the library's {@code token} under {@code key}, of the platform whose epoch is
+     * {@code epoch}. While {@code activity} is stopped it waits for {@link #started}. Past
+     * {@link #MAX_OPEN} open requests, or when Android refuses, it is answered with
+     * {@link #ANSWER_NOT_LAUNCHED}.
+     */
+    static void launch(Activity activity, Intent intent, long epoch, long token, String key) {
+        Request request = new Request(epoch, token, key);
+        int answered;
+        synchronized (LOCK) {
+            answered = ANSWERS.size();
+        }
+        if (STARTED.size() + WAITING.size() + answered >= MAX_OPEN) {
+            Log.w(TAG, "as many activity requests are open as FLUI holds; this one is refused");
+            answer(new Answer(request, ANSWER_NOT_LAUNCHED, 0, null));
+            return;
+        }
+        if (activity != startedActivity) {
+            WAITING.add(new Waiting(activity, intent, request));
+            return;
+        }
+        start(activity, intent, request);
+    }
+
+    private static void start(Activity activity, Intent intent, Request request) {
+        int code = freeCode();
+        STARTED.put(code, request);
+        try {
+            activity.startActivityForResult(intent, code);
+        } catch (RuntimeException error) {
+            // `ActivityNotFoundException`, `SecurityException`: nothing started.
+            STARTED.remove(code);
+            Log.w(TAG, "an activity FLUI was asked to start did not start", error);
+            answer(new Answer(request, ANSWER_NOT_LAUNCHED, 0, null));
+        }
+    }
+
+    /**
+     * A positive request code no started request holds. Codes go up and start again at 1 after
+     * {@code Integer.MAX_VALUE}: a code only tells Android's answer apart while its request is
+     * started, and the library matches the answer by epoch and token.
+     */
+    private static int freeCode() {
+        while (true) {
+            int code = nextCode;
+            nextCode = code == Integer.MAX_VALUE ? 1 : code + 1;
+            if (!STARTED.containsKey(code)) {
+                return code;
+            }
+        }
+    }
+
+    /**
+     * {@link FluiActivity#onActivityResult}: the answer of a request FLUI started waits for the
+     * owner; a code FLUI did not start is not FLUI's. {@code data} comes from another
+     * application: it is held as it is, and only the provider that asked reads it.
+     */
+    static void activityResult(int code, int resultCode, Intent data) {
+        Request request = STARTED.remove(code);
+        if (request != null) {
+            answer(new Answer(request, ANSWER_RESULT, resultCode, data));
+        }
+    }
+
+    /**
+     * The library cancelled its request {@code token} of the platform {@code epoch}; Java main
+     * thread. One still waiting to start is forgotten; a started one is finished, and the
+     * answer it then gives reaches the library, which drops it as answered.
+     */
+    static void cancel(Activity activity, long epoch, long token) {
+        for (Iterator<Waiting> waiting = WAITING.iterator(); waiting.hasNext(); ) {
+            if (waiting.next().request.is(epoch, token)) {
+                waiting.remove();
+                return;
+            }
+        }
+        for (Map.Entry<Integer, Request> started : STARTED.entrySet()) {
+            if (started.getValue().is(epoch, token)) {
+                activity.finishActivity(started.getKey());
+                return;
+            }
+        }
+    }
+
+    /** {@link FluiActivity#onStart}: the requests waiting for {@code activity} start. */
+    static void started(Activity activity) {
+        startedActivity = activity;
+        for (int count = WAITING.size(); count > 0; count--) {
+            Waiting waiting = WAITING.poll();
+            if (waiting.activity == activity) {
+                start(activity, waiting.intent, waiting.request);
+            } else {
+                WAITING.add(waiting);
+            }
+        }
+    }
+
+    /** {@link FluiActivity#onStop}. */
+    static void stopped(Activity activity) {
+        if (startedActivity == activity) {
+            startedActivity = null;
+        }
+    }
+
+    /**
+     * {@link FluiActivity#onDestroy}: what waits to start from {@code activity} never will. Its
+     * platform ends with it, and the library has ended those requests.
+     */
+    static void destroyed(Activity activity) {
+        for (Iterator<Waiting> waiting = WAITING.iterator(); waiting.hasNext(); ) {
+            if (waiting.next().activity == activity) {
+                waiting.remove();
+            }
+        }
+        stopped(activity);
+    }
+
+    /**
+     * {@link FluiActivity#onSaveInstanceState}: the started requests' codes and keys, so that the
+     * answers of a process that dies before them still name their key.
+     */
+    static void save(Bundle state) {
+        int[] codes = new int[STARTED.size()];
+        String[] keys = new String[codes.length];
+        int index = 0;
+        for (Map.Entry<Integer, Request> started : STARTED.entrySet()) {
+            codes[index] = started.getKey();
+            keys[index] = started.getValue().key;
+            index++;
+        }
+        state.putIntArray(SAVED_CODES, codes);
+        state.putStringArray(SAVED_KEYS, keys);
+        state.putInt(SAVED_NEXT_CODE, nextCode);
+    }
+
+    /**
+     * {@link FluiActivity#onCreate} with saved state: a started request this process does not
+     * know (its process died) is known again, of {@link #EARLIER_PROCESS}, at most
+     * {@link #MAX_OPEN}. One the process still knows keeps its epoch.
+     */
+    static void restore(Bundle state) {
+        int[] codes = state.getIntArray(SAVED_CODES);
+        String[] keys = state.getStringArray(SAVED_KEYS);
+        if (codes == null || keys == null || codes.length != keys.length) {
+            return;
+        }
+        for (int index = 0; index < codes.length && STARTED.size() < MAX_OPEN; index++) {
+            if (codes[index] > 0 && keys[index] != null && !STARTED.containsKey(codes[index])) {
+                STARTED.put(codes[index], new Request(EARLIER_PROCESS, 0, keys[index]));
+            }
+        }
+        int next = state.getInt(SAVED_NEXT_CODE, 1);
+        if (next > nextCode) {
+            nextCode = next;
+        }
+    }
+
+    private static void answer(Answer answer) {
+        synchronized (LOCK) {
+            ANSWERS.add(answer);
+        }
+        wake();
+    }
+
+    /**
+     * Every answer queued, oldest first, as {@code {long[] numbers, String[] keys,
+     * Intent[] data}}: {@link #ANSWER_NUMBERS} numbers each (epoch, token, kind, result code), and
+     * one key and one {@code Intent}, or {@code null}, each; any thread.
+     */
+    static Object[] drainAnswers() {
+        synchronized (LOCK) {
+            int count = ANSWERS.size();
+            long[] numbers = new long[count * ANSWER_NUMBERS];
+            String[] keys = new String[count];
+            Intent[] data = new Intent[count];
+            int index = 0;
+            for (Answer answer = ANSWERS.poll(); answer != null; answer = ANSWERS.poll()) {
+                int at = index * ANSWER_NUMBERS;
+                numbers[at] = answer.request.epoch;
+                numbers[at + 1] = answer.request.token;
+                numbers[at + 2] = answer.kind;
+                numbers[at + 3] = answer.resultCode;
+                keys[index] = answer.request.key;
+                data[index] = answer.data;
+                index++;
+            }
+            return new Object[] {numbers, keys, data};
+        }
+    }
+
     private static void wake() {
         if (wakeHandle != 0) {
             nativeWake(wakeHandle);
@@ -230,7 +534,7 @@ public final class FluiHost {
         wakeHandle = handle;
         boolean waiting;
         synchronized (LOCK) {
-            waiting = !ENTRIES.isEmpty() || !OPENED.isEmpty();
+            waiting = !ENTRIES.isEmpty() || !OPENED.isEmpty() || !ANSWERS.isEmpty();
         }
         if (waiting) {
             wake();

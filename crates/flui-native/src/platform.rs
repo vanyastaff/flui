@@ -248,6 +248,12 @@ pub trait Platform: sealed::Sealed + 'static {
     /// (`HeadlessExitReevaluation::drive`).
     fn request_exit_policy_reevaluation(&self);
 
+    /// The Activity the platform runs in, through which a capability
+    /// provider starts activities for results (ADR-0154 §9); `None` on every
+    /// host but Android's. Valid while this platform runs: once its loop
+    /// ends, the Activity refuses every request.
+    fn activity(&self) -> Option<flui_platform::capability::Activity>;
+
     // ==================== Window Management ====================
 
     /// Create and open a new window, whose deliveries go to `handler`
@@ -627,6 +633,10 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn request_exit_policy_reevaluation(&self) {
         self.owner.request_exit_policy_reevaluation();
+    }
+
+    fn activity(&self) -> Option<flui_platform::capability::Activity> {
+        self.owner.activity()
     }
 
     fn open_window(

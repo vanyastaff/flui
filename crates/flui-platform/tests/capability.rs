@@ -13,8 +13,11 @@ use std::{
 use flui_platform::{
     Unsupported, UnsupportedReason,
     capability::{
-        Abandoned, Capability, CapabilityProvider, CompletionSource, OwnerJob, OwnerPoster,
-        OwnerRetired, OwnerScope, PendingCompletions,
+        Abandoned, Activity, ActivityBridge, ActivityResult, Capability, CapabilityProvider,
+        CompletionSource, HostBridge, IntentFrame, InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN,
+        OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions, ProviderContext,
+        Resolver, ResultCode, ResultKey, ResultOutcome, ResultRefused, ResultRequest, ResultToken,
+        ResultTokenMint, RuntimeLocals,
     },
 };
 
@@ -275,10 +278,12 @@ fn a_leaf_crate_declares_registers_and_acquires_on_the_contract_alone() {
         assert_eq!(entries[0].name(), Vibration::NAME);
         assert_eq!(entries[0].capability(), std::any::TypeId::of::<Vibration>());
         let locals = flui_platform::capability::RuntimeLocals::new();
+        let host = flui_platform::capability::HostBridge::new();
         let ctx = flui_platform::capability::ProviderContext::new(
             owner.source.poster(),
             &owner.source,
             &locals,
+            &host,
             None,
         );
         entries[0].provide(&ctx).map(|handle| {
@@ -585,4 +590,124 @@ fn runtime_locals_keep_one_value_per_type_until_retirement() {
         !Rc::ptr_eq(&after, &locals.get_or_default::<Slot<DropFlag>>()),
         "a retired runtime keeps nothing"
     );
+}
+
+/// A host's side of the Activity that records what a provider asked of it
+/// and answers each launch with a pending request.
+struct BridgeCalls {
+    mint: ResultTokenMint,
+    launched: RefCell<Vec<(ResultKey, ResultToken)>>,
+    resolvers: RefCell<Vec<Resolver<ResultOutcome>>>,
+}
+
+impl ActivityBridge for BridgeCalls {
+    fn launch_for_result(
+        &self,
+        completions: &CompletionSource,
+        key: ResultKey,
+        _intent: &mut dyn FnMut(IntentFrame) -> bool,
+    ) -> Result<ResultRequest, ResultRefused> {
+        let token = self
+            .mint
+            .next()
+            .map_err(|_| ResultRefused::TokensExhausted)?;
+        let (completion, resolver) = completions.pending();
+        self.launched.borrow_mut().push((key, token));
+        self.resolvers.borrow_mut().push(resolver);
+        Ok(ResultRequest::new(token, completion))
+    }
+
+    fn reattach(
+        &self,
+        _completions: &CompletionSource,
+        _key: ResultKey,
+    ) -> Result<ResultRequest, ResultRefused> {
+        Err(ResultRefused::ActivityEnded)
+    }
+
+    fn cancel(&self, _token: ResultToken) {}
+
+    fn lend(&self, _f: &mut dyn FnMut(JniFrame)) -> bool {
+        false
+    }
+}
+
+/// A provider reaches the Activity the host offers through its context, and
+/// none once the host takes it back; a launch through it is answered by the
+/// completion of the token it was minted, at an owner turn.
+#[test]
+fn a_provider_reaches_the_activity_the_host_offers() {
+    const PICK: ResultKey = match ResultKey::try_new("flui-test.pick") {
+        Ok(key) => key,
+        Err(_) => panic!("BUG: a printable key"),
+    };
+    let owner = Owner::new();
+    let locals = RuntimeLocals::new();
+    let host = HostBridge::new();
+    let context =
+        || ProviderContext::new(owner.source.poster(), &owner.source, &locals, &host, None);
+    assert!(context().activity().is_none(), "no host offers one yet");
+
+    let bridge = Rc::new(BridgeCalls {
+        mint: ResultTokenMint::new(),
+        launched: RefCell::default(),
+        resolvers: RefCell::default(),
+    });
+    let offered = Activity::new(Rc::clone(&bridge) as Rc<dyn ActivityBridge>);
+    assert!(host.install_activity(Some(offered)).is_none());
+    let activity = context().activity().expect("the host offers its Activity");
+    let request = activity
+        .launch_for_result(&owner.source, PICK, |_| true)
+        .expect("taken");
+    let (token, mut completion) = request.into_parts();
+    assert_eq!(*bridge.launched.borrow(), [(PICK, token)]);
+    assert!(
+        activity.with_java(|_| ()).is_none(),
+        "this host lends nothing"
+    );
+
+    let resolver = bridge.resolvers.borrow_mut().pop().expect("one open");
+    let answer = ActivityResult::new(ResultCode::from_raw(-1), None);
+    assert!(resolver.resolve(Ok(answer)).is_ok());
+    assert!(completion.poll().is_none(), "settles at the owner's turn");
+    owner.turn();
+    match completion.poll() {
+        Some(Ok(Ok(result))) => assert_eq!(result.code(), ResultCode::Ok),
+        other => panic!("the answer: {other:?}"),
+    }
+
+    assert!(
+        host.install_activity(None).is_some(),
+        "the host takes it back"
+    );
+    assert!(context().activity().is_none());
+}
+
+/// A result key is a short printable name, checked where it is written; a
+/// result code reads Android's two named values and keeps every other.
+#[test]
+fn result_keys_and_codes_hold_their_rules() {
+    let long: &'static str = "k".repeat(MAX_RESULT_KEY_LEN + 1).leak();
+    for (name, expected) in [
+        ("flui-system.open-document", Ok("flui-system.open-document")),
+        ("", Err(InvalidResultKey::Empty)),
+        (long, Err(InvalidResultKey::TooLong)),
+        ("with space", Err(InvalidResultKey::NotPrintable)),
+        ("caf\u{e9}", Err(InvalidResultKey::NotPrintable)),
+    ] {
+        assert_eq!(
+            ResultKey::try_new(name).map(ResultKey::as_str),
+            expected,
+            "{name:?}"
+        );
+    }
+    for (raw, code) in [
+        (-1, ResultCode::Ok),
+        (0, ResultCode::Canceled),
+        (1, ResultCode::Other(1)),
+        (-7, ResultCode::Other(-7)),
+    ] {
+        assert_eq!(ResultCode::from_raw(raw), code);
+        assert_eq!(code.raw(), raw);
+    }
 }

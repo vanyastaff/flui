@@ -301,6 +301,18 @@ live apart from their implementations, so a crate that names a capability links 
 plugin can implement one without the backends. The contract of each
 capability is that of its own ADR.
 
+What only the host owns reaches a provider through its `ProviderContext`
+(ADR-0152 §2, item 6; ADR-0154 §9), which grows by methods: `owner()`,
+`window()`, and `activity()`, the running Android Activity, read from the
+`HostBridge` the composition root fills for each run's host and `None`
+elsewhere. `capability::activity_result` holds that vocabulary and no JNI
+type: a request is identified by a `ResultToken` the host mints per call and
+named by the provider's `ResultKey`, which outlives an Activity Android
+replaces; it ends exactly once, with an `ActivityResult` or a typed
+`ResultRefused`; and the provider's own `jni` crate works on raw pointers the
+host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host
+made instead of handing the host a reference it would have to trust.
+
 ### A TSF-shaped pull store carries text input
 
 Text-input authority is divided by contract rather than by one combined event count:

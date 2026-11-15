@@ -5026,16 +5026,52 @@ owner, which delivers them in order each loop turn, and contains a panic before 
 JVM. The view holds a `Box<Weak<JavaView>>` as its handle; `detach` clears the view's copy and
 then frees it, both on the Java main thread, the only thread that calls the view's natives.
 
-`FluiActivity` forwards what `NativeActivity` drops into a queue in `FluiHost` (ADR-0255 decision
-2); today that is `onTrimMemory`. The queue is a Java static: it buffers an entry that arrives
-before `android_main` runs or between two platforms of one process, and holds at most one entry
-per trim level. `java_host::HostQueue` registers `nativeWake` and binds its wake handle (a
+`FluiActivity` forwards what `NativeActivity` drops into queues in `FluiHost` (ADR-0255 decision
+2): `onTrimMemory`, at most one entry per trim level; each intent `onCreate` and `onNewIntent`
+receive, at most `MAX_OPENED_ITEMS`; and each answer `onActivityResult` brings to a request for a
+result (below). The queues are Java statics: they buffer what arrives before `android_main` runs
+or between two platforms of one process. `java_host::HostQueue` registers `nativeWake` and binds its wake handle (a
 `Box<Arc<Inbox>>`) on the Java main thread when the platform starts, and an entry queued before
 wakes it at once; each later entry wakes the owner, which takes the inbox's flag and only then
 drains the queue through JNI, each loop turn, resumed or not. At the loop's exit `FluiHost`
 forgets the handle, unless a later platform bound its own since, and the handle is freed, both
 on the Java main thread, the only thread that passes it to `nativeWake`. The Java side queues
-and wakes and never waits for the owner; the lock guards the deque alone.
+and wakes and never waits for the owner; the lock guards the deques alone.
+
+A capability provider reaches the Activity through its context
+(`ProviderContext::activity`, ADR-0154 §9): `Platform::activity` answers it from the Android
+loop's `owner::android::result_bridge::ResultBridge`, `flui-app` installs it in the registry's
+`HostBridge` for the loop's life, and every other loop answers `None`. A request for a result is
+identified by a `ResultToken` the bridge mints per call (`ResultTokenMint`, never reissued) and the
+loop's epoch, which `FluiHost.nextEpoch` gives each platform of the process; the provider names
+its purpose with a `ResultKey`. The provider fills an `Intent` the bridge made and lends it
+(`IntentFrame`), so no reference flows from a provider's JNI code into the host; the start is
+posted to the Java main thread, where `FluiHost.launch` picks the request code Android sees, holds
+the start until `onStart` while the Activity is stopped, and refuses past `MAX_OPEN` open requests
+across the process. `FluiActivity.onSaveInstanceState` saves the started requests' codes and keys,
+and a recreated Activity whose process died restores them with epoch 0. `onActivityResult` queues
+the answer with its epoch, token and key, and the result `Intent` is held by a global reference,
+never read by the host: a provider reads only what it asked for through `JavaObject::with`. The
+pure model, `owner::android::activity_results::ResultRouter`, routes each drained `Answer`: one of
+this epoch settles the open request with its token once, and one for a token that is not open is
+stale; one of another epoch belongs to an earlier Activity, whose runtime ended with it, and waits,
+at most `MAX_EARLIER`, for `Activity::reattach` under its key. At the loop's exit every open
+request ends as `ResultRefused::ActivityEnded` and later ones are refused; the router resolves
+nothing under its own borrow (`Delivery`). Its tests run on every host beside it
+(`an_answer_settles_the_request_its_token_names_once`,
+`an_earlier_activitys_answer_waits_for_its_key`, `the_end_refuses_every_open_request` and the
+rest of its table). A permission request (`onRequestPermissionsResult`) is the same shape, a
+request code answered once, and joins as one more `FluiHost` method and answer kind on this router
+with the first capability that needs a permission (ADR-0152 §2, item 8).
+
+The window's soft input mode is `adjustNothing` from API 30, set by `FluiActivity.onCreate` after
+`NativeActivity.onCreate` has set `adjustResize` (so the manifest's attribute would change
+nothing): the window never resizes for the input method, whose height arrives as the `ime()`
+insets and their `WindowInsetsAnimation` (ADR-0277). Below API 30 the insets carry the input
+method only under `adjustResize`, the mode Flutter's template keeps on every level, so it stays
+there, where the window is expected to resize once per show and hide. The count of `WindowResized` during a
+keyboard animation on both sides of API 30 is owed on a device (`docs/platform-parity.md`,
+"Soft-keyboard insets").
 
 The window's `TextStoreHost` is `text::android::AndroidTextInput`. The input method edits the
 view's mirror; `text::android::ime::Mirror` turns each report into one edit against the

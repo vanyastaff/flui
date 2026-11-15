@@ -31,7 +31,7 @@ use crate::PlatformError;
 /// the native methods and their signatures, the methods the library calls,
 /// the entries of the queue, and what each means. `FluiHost.PROTOCOL` states
 /// it on the Java side; the two are raised together.
-pub(crate) const PROTOCOL: i32 = 3;
+pub(crate) const PROTOCOL: i32 = 4;
 
 /// The binary name of the Activity class the manifest names.
 pub(crate) const ACTIVITY_CLASS: &str = "dev.flui.platform.FluiActivity";
@@ -225,7 +225,7 @@ impl HostEntry {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) use queue::HostQueue;
+pub(crate) use queue::{HostQueue, host_class};
 
 #[cfg(target_os = "android")]
 mod queue {
@@ -243,7 +243,9 @@ mod queue {
 
     use super::{HOST_CLASS, HostEntry, ReceivedIntent, load_class};
     use crate::owner::android::activity::with_activity;
+    use crate::owner::android::activity_results::Answer;
     use crate::owner::android::java_view::strings;
+    use crate::owner::android::result_bridge::drain_answers;
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::signal::OwnerSignal;
 
@@ -370,16 +372,17 @@ mod queue {
         }
 
         /// Every entry queued since the last call, oldest first, then every
-        /// intent; empty, with no JNI call, unless a wake came in between.
-        /// Owner thread.
-        pub(crate) fn take(&self) -> Vec<HostEntry> {
+        /// intent, and every answer to a request for a result; empty, with
+        /// no JNI call, unless a wake came in between. Owner thread.
+        pub(crate) fn take(&self) -> (Vec<HostEntry>, Vec<Answer>) {
             if !self.inbox.pending.swap(false, Ordering::AcqRel) {
-                return Vec::new();
+                return (Vec::new(), Vec::new());
             }
             // Each queue is drained on its own: a failure leaves that queue's
             // entries queued for the next turn and loses neither.
             let pairs = self.drained("entries", drain);
             let records = self.drained("intents", drain_opened);
+            let answers = self.drained("answers", drain_answers);
             let mut entries = HostEntry::from_pairs(&pairs.unwrap_or_default());
             entries.extend(
                 records
@@ -388,7 +391,7 @@ mod queue {
                     .filter_map(ReceivedIntent::from_record)
                     .map(HostEntry::Intent),
             );
-            entries
+            (entries, answers.unwrap_or_default())
         }
 
         /// The document `uri`, a `content:` URI an intent brought, opened for
@@ -469,7 +472,7 @@ mod queue {
     }
 
     /// `FluiHost`, through the Activity's class loader.
-    fn host_class<'local>(
+    pub(crate) fn host_class<'local>(
         env: &mut Env<'local>,
         activity: &JObject<'_>,
     ) -> jni::errors::Result<JClass<'local>> {
@@ -639,20 +642,23 @@ mod queue {
     }
 }
 
+/// The Java source of the class named `binary_name`, from the sources the
+/// checked-in dex is compiled from (`cargo xtask android-dex` holds the dex
+/// to them).
+#[cfg(test)]
+pub(crate) fn java_source(binary_name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("android/java")
+        .join(format!("{}.java", binary_name.replace('.', "/")));
+    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ACTIVITY_CLASS, Found, HOST_CLASS, HostEntry, PROTOCOL, TRIM_MEMORY, check};
+    use super::{
+        ACTIVITY_CLASS, Found, HOST_CLASS, HostEntry, PROTOCOL, TRIM_MEMORY, check, java_source,
+    };
     use crate::PlatformError;
-
-    /// The Java source of the class named `binary_name`, from the sources the
-    /// checked-in dex is compiled from (`cargo xtask android-dex` holds the
-    /// dex to them).
-    fn java_source(binary_name: &str) -> String {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("android/java")
-            .join(format!("{}.java", binary_name.replace('.', "/")));
-        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
-    }
 
     fn found(protocol: Option<i32>, is_flui_activity: bool) -> Found {
         Found {
@@ -762,6 +768,17 @@ mod tests {
         for forwarded in [
             "FluiHost.opened(intent, true);",
             "setIntent(intent);\n        FluiHost.opened(intent, false);",
+            // Activity results, the state their keys survive in, and the
+            // starts held while the Activity is stopped.
+            "FluiHost.activityResult(requestCode, resultCode, data);",
+            "FluiHost.save(outState);",
+            "FluiHost.restore(savedInstanceState);",
+            "FluiHost.started(this);",
+            "FluiHost.stopped(this);",
+            "FluiHost.destroyed(this);",
+            // The window never resizes for the input method from API 30.
+            "if (Build.VERSION.SDK_INT >= 30) {\n            getWindow().setSoftInputMode(SOFT_INPUT_FROM_API_30);",
+            "SOFT_INPUT_STATE_UNSPECIFIED\n                    | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;",
         ] {
             assert!(activity.contains(forwarded), "{forwarded:?} in\n{activity}");
         }

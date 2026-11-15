@@ -946,6 +946,11 @@ pub(crate) fn install_owner_platform(
     // a runner builds afterwards acquires it (`runtime_capabilities`).
     let clipboard = owner.clipboard();
     let primary_selection = owner.primary_selection();
+    // The platform's Activity, on Android, offered to providers from now on;
+    // the one it displaces is dropped here, outside the composition-root
+    // borrow.
+    let host_bridge = APP_RUNTIME.with(|slot| slot.borrow().host_bridge());
+    drop(host_bridge.install_activity(owner.activity()));
     let data_transfer = owner.data_transfer();
     // The outgoing loop's raster host, whose GPU context retires below,
     // outside the composition-root borrow.

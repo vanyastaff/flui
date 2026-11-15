@@ -77,7 +77,8 @@ impl AppCapabilities {
     ) -> Result<CapabilityRegistry, CapabilityConflict> {
         let mut builder = CapabilityRegistry::builder()
             .overrides(self.overrides)
-            .built_ins(built_ins(slots));
+            .built_ins(built_ins(slots))
+            .host(slots.host.clone());
         for plugin in &self.plugins {
             builder = builder.plugin(plugin.as_ref());
         }
@@ -98,6 +99,7 @@ impl std::fmt::Debug for AppCapabilities {
 pub(crate) fn built_in_registry(slots: &CapabilitySlots) -> CapabilityRegistry {
     CapabilityRegistry::builder()
         .built_ins(built_ins(slots))
+        .host(slots.host.clone())
         .build()
         .expect("BUG: the built-in providers name each capability once")
 }
@@ -198,6 +200,8 @@ pub(crate) struct CapabilitySlots {
         )
     )]
     pub(crate) primary_selection: PrimarySelectionSlot,
+    /// What the installed platform offers providers beyond the window.
+    pub(crate) host: flui_platform::capability::HostBridge,
 }
 
 /// The built-in primary selection: the owner platform's, on the platforms

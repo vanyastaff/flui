@@ -18,12 +18,18 @@
 //! through a [`CapabilityRegistrar`]; the registry itself, its precedence and
 //! its conflicts live in the UI runtime.
 
+mod activity_result;
 mod completion;
 mod owner;
 mod registrar;
 mod runtime_local;
 mod window_ref;
 
+pub use activity_result::{
+    Activity, ActivityBridge, ActivityResult, HostBridge, IntentFrame, InvalidResultKey,
+    JavaObject, JavaReference, JniFrame, MAX_OPEN_REQUESTS, MAX_RESULT_KEY_LEN, ResultCode,
+    ResultKey, ResultOutcome, ResultRefused, ResultRequest, ResultToken, ResultTokenMint,
+};
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
 pub use registrar::{CapabilityRegistrar, Plugin, RegisteredProvider};
@@ -82,24 +88,36 @@ pub struct ProviderContext<'a> {
     owner: &'a OwnerPoster,
     completions: &'a CompletionSource,
     locals: &'a RuntimeLocals,
+    host: &'a HostBridge,
     window: Option<WindowRef>,
 }
 
 impl<'a> ProviderContext<'a> {
-    /// The context a UI runtime hands its providers.
+    /// The context a UI runtime hands its providers: `host` is what the
+    /// running host offers beyond the window.
     #[must_use]
     pub fn new(
         owner: &'a OwnerPoster,
         completions: &'a CompletionSource,
         locals: &'a RuntimeLocals,
+        host: &'a HostBridge,
         window: Option<WindowRef>,
     ) -> Self {
         Self {
             owner,
             completions,
             locals,
+            host,
             window,
         }
+    }
+
+    /// The running Android Activity, which starts activities for results
+    /// ([`Activity::launch_for_result`]); `None` on every other platform,
+    /// and between two Activities.
+    #[must_use]
+    pub fn activity(&self) -> Option<Activity> {
+        self.host.activity()
     }
 
     /// A poster that runs a closure on the owner thread; it may be cloned and

@@ -28,8 +28,8 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::{
     PlatformWindow, Unsupported, UnsupportedReason,
     capability::{
-        CapabilityRegistrar, CompletionSource, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope,
-        PendingCompletions, Plugin, ProviderContext, RegisteredProvider, WindowRef,
+        CapabilityRegistrar, CompletionSource, HostBridge, OwnerJob, OwnerPoster, OwnerRetired,
+        OwnerScope, PendingCompletions, Plugin, ProviderContext, RegisteredProvider, WindowRef,
     },
 };
 use flui_view::CapabilitySource;
@@ -89,6 +89,9 @@ pub enum CapabilityConflict {
 #[derive(Clone, Default)]
 pub struct CapabilityRegistry {
     providers: Rc<HashMap<TypeId, RegisteredProvider>>,
+    /// What the running host offers providers beyond the window; the
+    /// composition root fills it for each run's host.
+    host: HostBridge,
 }
 
 impl CapabilityRegistry {
@@ -123,6 +126,13 @@ impl CapabilityRegistry {
             None => Err(Unsupported::named(name, UnsupportedReason::NotRegistered)),
         }
     }
+
+    /// What the running host offers providers beyond the window, which every
+    /// acquisition's [`ProviderContext`] reads.
+    #[must_use]
+    pub fn host(&self) -> &HostBridge {
+        &self.host
+    }
 }
 
 impl fmt::Debug for CapabilityRegistry {
@@ -135,6 +145,7 @@ impl fmt::Debug for CapabilityRegistry {
         names.sort_unstable();
         f.debug_struct("CapabilityRegistry")
             .field("capabilities", &names)
+            .field("host", &self.host)
             .finish()
     }
 }
@@ -144,9 +155,19 @@ impl fmt::Debug for CapabilityRegistry {
 #[derive(Debug, Default)]
 pub struct CapabilityRegistryBuilder {
     registrations: Vec<(ProviderTier, RegisteredProvider)>,
+    host: HostBridge,
 }
 
 impl CapabilityRegistryBuilder {
+    /// The bridge through which the composition root offers what each run's
+    /// host has beyond the window (its Android Activity); without it, no
+    /// provider is offered any.
+    #[must_use]
+    pub fn host(mut self, host: HostBridge) -> Self {
+        self.host = host;
+        self
+    }
+
     /// The application's overrides.
     #[must_use]
     pub fn overrides(mut self, registrar: CapabilityRegistrar) -> Self {
@@ -209,6 +230,7 @@ impl CapabilityRegistryBuilder {
         }
         Ok(CapabilityRegistry {
             providers: Rc::new(chosen),
+            host: self.host,
         })
     }
 }
@@ -345,7 +367,13 @@ impl CapabilitySource for PresentationCapabilities {
             WindowRef::new(window.id(), scale, window.surface_target())
         });
         let poster = self.completions.poster();
-        let ctx = ProviderContext::new(poster, &self.completions, &self.locals, window);
+        let ctx = ProviderContext::new(
+            poster,
+            &self.completions,
+            &self.locals,
+            self.registry.host(),
+            window,
+        );
         self.registry.acquire(capability, name, &ctx)
     }
 }

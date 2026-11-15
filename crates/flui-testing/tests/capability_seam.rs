@@ -751,3 +751,68 @@ pub(crate) fn a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn() {
     );
     drop(first);
 }
+
+/// Whether a provider was offered an Activity when it was asked.
+enum ActivitySeen {}
+
+impl Capability for ActivitySeen {
+    type Handle = bool;
+    const NAME: &'static str = "test-activity-seen";
+}
+
+/// An Activity that refuses everything: only whether one is offered counts.
+struct EndedActivity;
+
+impl flui_platform::capability::ActivityBridge for EndedActivity {
+    fn launch_for_result(
+        &self,
+        _completions: &flui_platform::capability::CompletionSource,
+        _key: flui_platform::capability::ResultKey,
+        _intent: &mut dyn FnMut(flui_platform::capability::IntentFrame) -> bool,
+    ) -> Result<flui_platform::capability::ResultRequest, flui_platform::capability::ResultRefused>
+    {
+        Err(flui_platform::capability::ResultRefused::ActivityEnded)
+    }
+
+    fn reattach(
+        &self,
+        _completions: &flui_platform::capability::CompletionSource,
+        _key: flui_platform::capability::ResultKey,
+    ) -> Result<flui_platform::capability::ResultRequest, flui_platform::capability::ResultRefused>
+    {
+        Err(flui_platform::capability::ResultRefused::ActivityEnded)
+    }
+
+    fn cancel(&self, _token: flui_platform::capability::ResultToken) {}
+
+    fn lend(&self, _f: &mut dyn FnMut(flui_platform::capability::JniFrame)) -> bool {
+        false
+    }
+}
+
+/// A provider sees the Activity the composition root offers through the
+/// registry's host bridge at each acquisition: none before the host installs
+/// one, then the one installed, and none again once it is taken back.
+pub(crate) fn a_provider_sees_the_activity_the_host_offers() {
+    let host_bridge = flui_platform::capability::HostBridge::new();
+    let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<ActivitySeen>(|ctx: &ProviderContext<'_>| Ok(ctx.activity().is_some()));
+    let registry = CapabilityRegistry::builder()
+        .built_ins(registrar)
+        .host(host_bridge.clone())
+        .build()
+        .expect("one provider");
+    let seen = |registry: &CapabilityRegistry| {
+        let mut host = HeadlessHost::with_capabilities(window(), registry.clone());
+        acquire_capability::<ActivitySeen>(&mut host).expect("provided")
+    };
+
+    assert!(!seen(&registry), "no Activity before the host offers one");
+    let activity = flui_platform::capability::Activity::new(
+        Rc::new(EndedActivity) as Rc<dyn flui_platform::capability::ActivityBridge>
+    );
+    assert!(host_bridge.install_activity(Some(activity)).is_none());
+    assert!(seen(&registry), "the Activity the host offers");
+    assert!(host_bridge.install_activity(None).is_some());
+    assert!(!seen(&registry), "none once the host takes it back");
+}
