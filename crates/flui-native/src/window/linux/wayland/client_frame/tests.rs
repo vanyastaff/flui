@@ -374,7 +374,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
         held: None,
         title: None,
     };
-    let pixels = paint_header(&frame, 1.0, plain).expect("drawn");
+    let pixels = paint_header(&frame, DrawScale::ONE, plain).expect("drawn");
     assert_eq!((pixels.width, pixels.height), (400, 37));
     let background = LIGHT.background();
     assert_eq!(
@@ -391,7 +391,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
         ..frame
     };
     assert_eq!(
-        paint_header(&maximized, 1.0, plain)
+        paint_header(&maximized, DrawScale::ONE, plain)
             .expect("drawn")
             .rgba(0, 0)[3],
         255,
@@ -407,7 +407,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
     let idle = pixels.rgba(x, y);
     let hovered = paint_header(
         &frame,
-        1.0,
+        DrawScale::ONE,
         HeaderLook {
             hovered: Some(Button::Close),
             ..plain
@@ -433,7 +433,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
     let mask = title_mask(40, 10);
     let titled = paint_header(
         &frame,
-        1.0,
+        DrawScale::ONE,
         HeaderLook {
             title: Some(&mask),
             ..plain
@@ -450,7 +450,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
 
     let dark = paint_header(
         &frame,
-        2.0,
+        DrawScale::of(2.0),
         HeaderLook {
             look: Look {
                 dark: true,
@@ -464,28 +464,224 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
     assert!(dark.rgba(120, 20)[0] < 64, "a dark bar");
 }
 
-/// A frame the compositor sizes past any screen, at no scale, or not shown
-/// is not drawn, and a margin is a transparent image.
+const PLAIN: HeaderLook<'static> = HeaderLook {
+    look: LIGHT,
+    hovered: None,
+    held: None,
+    title: None,
+};
+
+/// A compositor names any scale it likes. A frame is drawn at the window's
+/// scale up to the largest, and at one where the scale is no positive finite
+/// number: at 442 the 37-pixel title bar of a 37-pixel window would be
+/// 16 354 pixels a side, each within the largest extent and a gibibyte in
+/// all, drawn again at every hover. The area has a cap of its own, which
+/// refuses that bar even at a scale no frame is handed.
+#[test]
+fn a_hostile_scale_draws_no_gibibyte() {
+    for (told, drawn) in [
+        (1.0, 1.0),
+        (1.5, 1.5),
+        (8.0, 8.0),
+        (8.01, 8.0),
+        (442.0, 8.0),
+        (1e300, 8.0),
+        (f64::INFINITY, 1.0),
+        (f64::NAN, 1.0),
+        (0.0, 1.0),
+        (-2.0, 1.0),
+    ] {
+        assert_eq!(DrawScale::of(told).get(), drawn, "a window at {told}");
+    }
+    let narrow = Frame {
+        content: Size::new(37.0, 300.0),
+        ..floating()
+    };
+    let pixels = paint_header(&narrow, DrawScale::of(442.0), PLAIN).expect("drawn");
+    assert_eq!(
+        (pixels.width, pixels.height),
+        (296, 296),
+        "at the largest scale"
+    );
+
+    let unbounded = DrawScale(DevicePixelRatio::try_new(442.0).expect("a ratio"));
+    assert_eq!(device_extent(37.0, unbounded.get()), Some(16_354));
+    assert!(
+        paint_header(&narrow, unbounded, PLAIN).is_none(),
+        "each side is within the largest extent, the area is not"
+    );
+    assert!(Pixels::try_new(16_354, 16_354).is_none());
+    assert!(Pixels::try_new(MAX_EXTENT, 297).is_none());
+    // The widest bar at the largest scale is the most a frame draws.
+    assert_eq!(
+        f64::from(MAX_PIXELS),
+        f64::from(MAX_EXTENT) * HEADER * DrawScale::MAX
+    );
+    let widest = Pixels::try_new(MAX_EXTENT, 296).expect("within the area");
+    assert_eq!(widest.data.len(), 4 * 16_384 * 296);
+}
+
+/// A compositor that releases no buffer is lent no more than the set: each
+/// draw destroys the oldest for the one it makes, and the frame's end
+/// destroys the rest.
+#[test]
+fn a_compositor_that_releases_nothing_is_lent_a_bounded_set() {
+    let mut buffers = BufferSet::default();
+    let mut made = 0_usize;
+    let mut destroyed = Vec::new();
+    for draw in 1..=10_000_usize {
+        let lent = buffers
+            .lend(
+                (400, 37),
+                |_| {
+                    made += 1;
+                    Some(made)
+                },
+                |gone| destroyed.push(gone),
+            )
+            .copied();
+        assert_eq!(
+            lent,
+            Some(draw),
+            "nothing released, nothing drawn into again"
+        );
+        assert!(buffers.len() <= MAX_BUFFERS, "{} kept", buffers.len());
+    }
+    assert_eq!(
+        destroyed,
+        (1..=10_000 - MAX_BUFFERS).collect::<Vec<usize>>(),
+        "the oldest first, the newest kept"
+    );
+    buffers.clear(|gone| destroyed.push(gone));
+    assert_eq!(destroyed.len(), 10_000, "the frame's end destroys the rest");
+    assert_eq!(buffers.len(), 0);
+}
+
+/// A buffer the compositor released is drawn into again, so a frame that is
+/// redrawn makes no memory after its second buffer; one of another size is
+/// destroyed for the size drawn now; and where no memory can be had nothing
+/// is lent.
+#[test]
+fn a_released_buffer_is_drawn_into_again() {
+    use std::cell::RefCell;
+
+    let marks: RefCell<Vec<Lent>> = RefCell::default();
+    let make = |lent: &Lent| {
+        marks.borrow_mut().push(lent.clone());
+        Some(marks.borrow().len())
+    };
+    let destroyed: RefCell<Vec<usize>> = RefCell::default();
+    let destroy = |gone| destroyed.borrow_mut().push(gone);
+    let mut buffers = BufferSet::default();
+    let bar = (400, 37);
+
+    assert_eq!(buffers.lend(bar, make, destroy).copied(), Some(1));
+    assert_eq!(
+        buffers.lend(bar, make, destroy).copied(),
+        Some(2),
+        "1 is shown"
+    );
+    for _ in 0..5_000 {
+        marks.borrow()[0].release();
+        assert_eq!(buffers.lend(bar, make, destroy).copied(), Some(1));
+        marks.borrow()[1].release();
+        assert_eq!(buffers.lend(bar, make, destroy).copied(), Some(2));
+    }
+    assert_eq!(marks.borrow().len(), 2, "two buffers serve every draw");
+    assert!(destroyed.borrow().is_empty());
+
+    // The window is resized: buffer 1, released, fits nothing any more.
+    marks.borrow()[0].release();
+    assert_eq!(buffers.lend((800, 37), make, destroy).copied(), Some(3));
+    assert_eq!(*destroyed.borrow(), [1]);
+    assert_eq!(buffers.len(), 2);
+
+    assert_eq!(buffers.lend((1, 1), |_| None::<usize>, destroy), None);
+    assert_eq!(buffers.len(), 2, "what is lent stays");
+}
+
+/// Each seat's pointer hovers, holds and presses on its own: another seat's
+/// pointer leaving the frame lets go of nothing this one holds, and a press
+/// is answered where its own pointer is. A seat that goes is followed no
+/// more, and seats that come and go without end take no more places than
+/// the frame follows, none of them a place whose pointer holds a button.
+#[test]
+fn each_seats_pointer_is_followed_on_its_own() {
+    let frame = floating();
+    let close = frame.button_rect(Button::Close).expect("shown");
+    let (over_x, over_y) = (close.x + 12.0, close.y + 12.0);
+    let mut pointers = FramePointers::<u32>::default();
+
+    pointers.moved(&1, &frame, Piece::Header, over_x, over_y);
+    assert_eq!(pointers.button(&1, &frame, BTN_LEFT, true, 1_000), None);
+    assert_eq!(pointers.held(), Some(Button::Close));
+
+    pointers.moved(&2, &frame, Piece::Header, 20.0, 18.0);
+    pointers.left(&2);
+    assert_eq!(pointers.hovered(), Some(Button::Close), "seat 1 hovers on");
+    assert_eq!(pointers.held(), Some(Button::Close), "and holds on");
+    assert_eq!(
+        pointers.moved(&2, &frame, Piece::Bottom, 418.0, 5.0),
+        CursorIcon::SeResize
+    );
+    assert_eq!(
+        pointers.button(&2, &frame, BTN_LEFT, true, 1_100),
+        Some(Action::Resize(Edge::BottomRight)),
+        "where seat 2's pointer is"
+    );
+
+    for seat in 3..10_003 {
+        pointers.moved(&seat, &frame, Piece::Header, 20.0, 18.0);
+        pointers.left(&seat);
+        assert!(pointers.followed() <= MAX_POINTERS, "seat {seat}");
+    }
+    assert_eq!(
+        pointers.button(&1, &frame, BTN_LEFT, false, 1_200),
+        Some(Action::Close),
+        "seat 1 kept its place and its button"
+    );
+
+    pointers.moved(&1, &frame, Piece::Header, over_x, over_y);
+    pointers.button(&1, &frame, BTN_LEFT, true, 2_000);
+    pointers.forget(&1);
+    assert_eq!((pointers.hovered(), pointers.held()), (None, None));
+    assert_eq!(
+        pointers.button(&1, &frame, BTN_LEFT, false, 2_100),
+        None,
+        "a seat that went holds nothing"
+    );
+}
+
+/// A surface below version 4 has no `damage_buffer`: a compositor that
+/// offers `wl_compositor` up to 3 is sent the surface's damage, never a
+/// request it would close the connection for.
+#[test]
+fn damage_is_sent_with_the_request_the_surface_has() {
+    for (version, sent) in [
+        (1, Damage::Surface),
+        (3, Damage::Surface),
+        (4, Damage::Buffer),
+        (6, Damage::Buffer),
+    ] {
+        assert_eq!(Damage::on(version), sent, "wl_surface version {version}");
+    }
+}
+
+/// A frame the compositor sizes past any screen or does not show is not
+/// drawn, and a margin is a transparent image.
 #[test]
 fn a_frame_past_the_largest_extent_is_not_drawn() {
-    let plain = HeaderLook {
-        look: LIGHT,
-        hovered: None,
-        held: None,
-        title: None,
-    };
+    let plain = PLAIN;
     let wide = Frame {
         content: Size::new(1e7, 300.0),
         ..floating()
     };
-    assert!(paint_header(&wide, 1.0, plain).is_none());
-    assert!(paint_header(&floating(), f64::NAN, plain).is_none());
-    assert!(paint_header(&floating(), 0.0, plain).is_none());
+    assert!(paint_header(&wide, DrawScale::ONE, plain).is_none());
     let fullscreen = framed(ToplevelStates {
         fullscreen: true,
         ..ToplevelStates::default()
     });
-    assert!(paint_header(&fullscreen, 1.0, plain).is_none());
+    assert!(paint_header(&fullscreen, DrawScale::ONE, plain).is_none());
     assert_eq!(device_extent(f64::INFINITY, 1.0), None);
     assert_eq!(device_extent(0.2, 1.0), None);
     assert_eq!(device_extent(36.5, 1.0), Some(37));
@@ -501,20 +697,24 @@ fn a_frame_past_the_largest_extent_is_not_drawn() {
 fn a_title_is_shaped_and_rasterized() {
     let fonts = FontCollection::new();
     let mut text = TitleText::new(&fonts);
-    let mask = text.mask("Client frame", 300.0, 1.0).expect("shaped");
+    let mask = text
+        .mask("Client frame", 300.0, DrawScale::ONE)
+        .expect("shaped");
     assert!(mask.width > 20 && mask.width <= 300, "{}", mask.width);
     assert!(mask.height >= 15, "{}", mask.height);
     assert!(
         mask.coverage.iter().filter(|value| **value > 128).count() > 50,
         "the title has ink"
     );
-    let double = text.mask("Client frame", 300.0, 2.0).expect("shaped");
+    let double = text
+        .mask("Client frame", 300.0, DrawScale::of(2.0))
+        .expect("shaped");
     assert!(double.width >= mask.width * 2 - 2 && double.width <= mask.width * 2 + 2);
     let long = "A title far longer than the room the title bar leaves it ".repeat(4);
-    let cut = text.mask(&long, 120.0, 1.0).expect("shaped");
+    let cut = text.mask(&long, 120.0, DrawScale::ONE).expect("shaped");
     assert!(cut.width <= 120, "cut to the room: {}", cut.width);
-    assert!(text.mask("", 300.0, 1.0).is_none());
-    assert!(text.mask("x", 0.0, 1.0).is_none());
+    assert!(text.mask("", 300.0, DrawScale::ONE).is_none());
+    assert!(text.mask("x", 0.0, DrawScale::ONE).is_none());
     assert_eq!(text.generation(), fonts.generation());
 }
 
@@ -549,26 +749,38 @@ fn a_press_on_the_applications_bar_is_the_windows() {
         None,
     );
     let at = Instant::now();
+    let mut pointer = PointerOnContent::default();
 
-    assert_eq!(chrome.moved(200.0, 16.0), None, "no press held");
-    assert_eq!(chrome.button(Some(&bare), BTN_LEFT, true, at), Taken(None));
-    assert_eq!(chrome.moved(202.0, 17.0), None, "within the slop");
-    assert_eq!(chrome.moved(220.0, 30.0), Some(Action::Move));
-    assert_eq!(chrome.moved(240.0, 30.0), None, "one move a press");
-    assert_eq!(chrome.button(Some(&bare), BTN_LEFT, false, at), Taken(None));
+    assert_eq!(pointer.moved(&chrome, 200.0, 16.0), None, "no press held");
+    assert_eq!(
+        pointer.button(&chrome, Some(&bare), BTN_LEFT, true, at),
+        Taken(None)
+    );
+    assert_eq!(pointer.moved(&chrome, 202.0, 17.0), None, "within the slop");
+    assert_eq!(pointer.moved(&chrome, 220.0, 30.0), Some(Action::Move));
+    assert_eq!(
+        pointer.moved(&chrome, 240.0, 30.0),
+        None,
+        "one move a press"
+    );
+    assert_eq!(
+        pointer.button(&chrome, Some(&bare), BTN_LEFT, false, at),
+        Taken(None)
+    );
 
     let later = at + Duration::from_secs(2);
-    chrome.moved(100.0, 10.0);
+    pointer.moved(&chrome, 100.0, 10.0);
     assert_eq!(
-        chrome.button(Some(&bare), BTN_LEFT, true, later),
+        pointer.button(&chrome, Some(&bare), BTN_LEFT, true, later),
         Taken(None)
     );
     assert_eq!(
-        chrome.button(Some(&bare), BTN_LEFT, false, later),
+        pointer.button(&chrome, Some(&bare), BTN_LEFT, false, later),
         Taken(None)
     );
     assert_eq!(
-        chrome.button(
+        pointer.button(
+            &chrome,
             Some(&bare),
             BTN_LEFT,
             true,
@@ -578,11 +790,11 @@ fn a_press_on_the_applications_bar_is_the_windows() {
         "a double-click"
     );
     assert_eq!(
-        chrome.button(Some(&bare), BTN_LEFT, false, later),
+        pointer.button(&chrome, Some(&bare), BTN_LEFT, false, later),
         Taken(None)
     );
     assert_eq!(
-        chrome.button(Some(&bare), BTN_RIGHT, true, later),
+        pointer.button(&chrome, Some(&bare), BTN_RIGHT, true, later),
         Taken(Some(Action::Menu { x: 100, y: 10 }))
     );
     let no_menu = Frame {
@@ -592,20 +804,51 @@ fn a_press_on_the_applications_bar_is_the_windows() {
         },
         ..bare
     };
-    assert_eq!(chrome.button(Some(&no_menu), BTN_RIGHT, true, later), App);
-
-    chrome.moved(100.0, 200.0);
     assert_eq!(
-        chrome.button(Some(&bare), BTN_LEFT, true, later),
+        pointer.button(&chrome, Some(&no_menu), BTN_RIGHT, true, later),
+        App
+    );
+
+    pointer.moved(&chrome, 100.0, 200.0);
+    assert_eq!(
+        pointer.button(&chrome, Some(&bare), BTN_LEFT, true, later),
         App,
         "the content"
     );
-    assert_eq!(chrome.button(Some(&bare), BTN_LEFT, false, later), App);
-    chrome.moved(100.0, 10.0);
     assert_eq!(
-        chrome.button(Some(&floating()), BTN_LEFT, true, later),
+        pointer.button(&chrome, Some(&bare), BTN_LEFT, false, later),
+        App
+    );
+    pointer.moved(&chrome, 100.0, 10.0);
+    assert_eq!(
+        pointer.button(&chrome, Some(&floating()), BTN_LEFT, true, later),
         App,
         "the frame's own title bar"
     );
-    assert_eq!(chrome.button(None, BTN_LEFT, true, later), App, "no frame");
+    assert_eq!(
+        pointer.button(&chrome, None, BTN_LEFT, true, later),
+        App,
+        "no frame"
+    );
+
+    // A press on the bar waits for its own seat's pointer to travel, and
+    // the move it starts names that press.
+    let mut pointers = FramePointers::<u32>::default();
+    let press = ContentPress {
+        serial: 5,
+        code: BTN_LEFT,
+        pressed: true,
+    };
+    assert_eq!(pointers.content_moved(&1, &chrome, 200.0, 16.0), None);
+    assert_eq!(
+        pointers.content_button(&1, &chrome, Some(&bare), press, later),
+        Taken(None)
+    );
+    assert_eq!(
+        pointers.content_moved(&2, &chrome, 300.0, 30.0),
+        None,
+        "seat 2 pressed nothing"
+    );
+    assert_eq!(pointers.content_moved(&1, &chrome, 230.0, 30.0), Some(5));
+    assert_eq!(pointers.content_moved(&1, &chrome, 260.0, 30.0), None);
 }

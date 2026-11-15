@@ -3305,6 +3305,8 @@ mod toplevel {
         pub(crate) pieces: Vec<(client_frame::Piece, client_frame::Rect)>,
         /// The moves, resizes and menus carried out, with their serials.
         pub(crate) carried: Vec<(Action, u32)>,
+        /// The most buffers any piece keeps.
+        pub(crate) buffers: usize,
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -3329,17 +3331,17 @@ mod toplevel {
 
         /// The frame the window draws itself: the window geometry it sent
         /// last, each piece shown with its rectangle relative to the content,
-        /// and the moves, resizes and menus it carried out with the serial
-        /// each named.
+        /// the moves, resizes and menus it carried out with the serial each
+        /// named, and the most buffers a piece keeps.
         pub(crate) fn client_frame_said(&self) -> ClientFrameSaid {
+            let client_frame = self.client_frame.borrow();
             ClientFrameSaid {
                 geometry: self.applied.borrow().geometry,
-                pieces: self
-                    .client_frame
-                    .borrow()
-                    .as_ref()
-                    .map_or_default(ClientFrame::shown),
+                pieces: client_frame.as_ref().map_or_default(ClientFrame::shown),
                 carried: self.frame_record.carried_out(),
+                buffers: client_frame
+                    .as_ref()
+                    .map_or_default(ClientFrame::most_buffers),
             }
         }
 
@@ -3431,7 +3433,7 @@ mod toplevel {
             pool.destroy();
             let surface = &self.surface.0;
             surface.attach(Some(&buffer), 0, 0);
-            surface.damage_buffer(0, 0, width, height);
+            client_frame::surfaces::damage_all(surface);
             surface.commit();
             true
         }

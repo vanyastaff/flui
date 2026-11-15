@@ -232,6 +232,8 @@ struct PointerObjects {
 struct FrameFocus {
     /// The frame.
     frame: Arc<dyn FramePointer>,
+    /// The pointer's seat, which the frame follows it by.
+    seat: WlSeat,
     /// The frame's surface the pointer entered.
     surface: WlSurface,
     /// The window's own surface, which a button names on an activation
@@ -466,18 +468,18 @@ impl Shared {
             .flatten()
     }
 
-    /// The frame of the window whose own surface `pointer` is over: what a
-    /// press on a title bar of the application's is answered by.
-    fn content_frame(&self, pointer: &WlPointer) -> Option<Arc<dyn FramePointer>> {
-        let key = self
+    /// The frame of the window whose own surface `pointer` is over, with the
+    /// pointer's seat: what a press on a title bar of the application's is
+    /// answered by.
+    fn content_frame(&self, pointer: &WlPointer) -> Option<(Arc<dyn FramePointer>, WlSeat)> {
+        let (key, seat) = self
             .objects
             .with(|objects| {
-                objects
-                    .seats
-                    .iter()
-                    .filter_map(|seat| seat.pointer.as_ref())
-                    .find(|held| held.pointer == *pointer)
-                    .and_then(|held| held.focus.map(|(key, _)| key))
+                objects.seats.iter().find_map(|seat| {
+                    let held = seat.pointer.as_ref()?;
+                    let (key, _) = (held.pointer == *pointer).then_some(held.focus)??;
+                    Some((key, seat.seat.clone()))
+                })
             })
             .flatten()?;
         self.windows
@@ -488,6 +490,24 @@ impl Shared {
                     .map(|window| Arc::clone(&window.frame))
             })
             .flatten()
+            .map(|frame| (frame, seat))
+    }
+
+    /// `seat` or its pointer went: no window's frame follows that pointer
+    /// any more. Called by a dispatch with no cell of the input borrowed.
+    fn unfollow(&self, seat: &WlSeat) {
+        let frames: Vec<Arc<dyn FramePointer>> = self
+            .windows
+            .with(|windows| {
+                windows
+                    .iter()
+                    .map(|window| Arc::clone(&window.frame))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for frame in frames {
+            frame.seat_gone(seat);
+        }
     }
 
     /// The window surface `surface` is, when it is a window's.
@@ -623,21 +643,7 @@ impl SeatInput {
                     .as_mut()
                     .expect("BUG: the input holds its assembly from construction");
                 match wire {
-                    Wire::Seat(wire) => {
-                        if let SeatEvent::SeatRemoved(seat) = wire.event {
-                            delivering.keyboards.remove(seat);
-                            delivering.keymaps.retain(|(held, _)| *held != seat);
-                        }
-                        delivering
-                            .assembly
-                            .assemble(wire)
-                            .into_iter()
-                            .map(|routed| match routed {
-                                Routed::To(surface, input) => (Target::Surface(surface), input),
-                                Routed::Everywhere(input) => (Target::Everywhere, input),
-                            })
-                            .collect()
-                    }
+                    Wire::Seat(wire) => delivering.seat_wire(wire),
                     other => delivering.keyboard_wire(other),
                 }
             })
@@ -819,6 +825,29 @@ impl Delivering {
     ) -> Option<KeyEvent> {
         let keyboard = &mut self.keymap_mut(seat)?.keyboard;
         keyboard.key(code.saturating_add(EVDEV_OFFSET), state, repeat, time)
+    }
+
+    /// The input's answer to a pointer, touch, tool or pinch event, or to a
+    /// device or seat that came or went. A seat that goes takes its keyboard
+    /// with it: the keys it held are released in the window they were
+    /// pressed in, as when the keyboard leaves, before the seat is forgotten.
+    fn seat_wire(&mut self, wire: SeatWire) -> Vec<(Target, PlatformInput)> {
+        let mut inputs = Vec::new();
+        if let SeatEvent::SeatRemoved(seat) = wire.event {
+            inputs = self.keyboard_wire(Wire::KeyFocus { seat, focus: None });
+            self.keyboards.remove(seat);
+            self.keymaps.retain(|(held, _)| *held != seat);
+        }
+        inputs.extend(
+            self.assembly
+                .assemble(wire)
+                .into_iter()
+                .map(|routed| match routed {
+                    Routed::To(surface, input) => (Target::Surface(surface), input),
+                    Routed::Everywhere(input) => (Target::Everywhere, input),
+                }),
+        );
+        inputs
     }
 
     fn keyboard_wire(&mut self, wire: Wire) -> Vec<(Target, PlatformInput)> {
@@ -1502,7 +1531,10 @@ fn frame_event(
         let Some((frame, window, scale)) = shared.frame_of(surface) else {
             return false;
         };
-        let cursor = frame.moved(surface, *surface_x, *surface_y);
+        let Some(seat) = shared.seat_of(data.seat) else {
+            return false;
+        };
+        let cursor = frame.moved(&seat, surface, *surface_x, *surface_y);
         let shown = scale();
         shared.objects.with(|objects| {
             if let Some(held) = objects
@@ -1515,6 +1547,7 @@ fn frame_event(
                 held.focus_surface = None;
                 held.frame_focus = Some(FrameFocus {
                     frame,
+                    seat,
                     surface: surface.clone(),
                     window,
                     serial: *serial,
@@ -1546,7 +1579,9 @@ fn frame_event(
             surface_y,
             ..
         } => {
-            let cursor = focus.frame.moved(&focus.surface, *surface_x, *surface_y);
+            let cursor = focus
+                .frame
+                .moved(&focus.seat, &focus.surface, *surface_x, *surface_y);
             if cursor != focus.cursor {
                 let scale = (focus.scale)();
                 shared.objects.with(|objects| {
@@ -1573,22 +1608,12 @@ fn frame_event(
             if pressed {
                 shared.record_input(data.seat, *serial, focus.window.clone());
             }
-            let seat = shared
-                .objects
-                .with(|objects| {
-                    objects
-                        .seats
-                        .iter()
-                        .find(|held| held.key == data.seat)
-                        .map(|held| held.seat.clone())
-                })
-                .flatten();
-            if let Some(seat) = seat {
-                focus.frame.button(&seat, *serial, *time, *button, pressed);
-            }
+            focus
+                .frame
+                .button(&focus.seat, *serial, *time, *button, pressed);
         }
         wl_pointer::Event::Leave { .. } => {
-            focus.frame.left();
+            focus.frame.left(&focus.seat);
             shared.objects.with(|objects| {
                 if let Some(held) = objects
                     .seats
@@ -1737,8 +1762,12 @@ fn pinch(
 
 /// Let go of a removed seat's objects. Every device of it, its tablet tools
 /// among them, goes with the seat (`SeatEvent::SeatRemoved`), ending what
-/// they held open.
+/// they held open: the keys its keyboard held are released, and the grab its
+/// pointer held, the last input if it was its, and what the windows' frames
+/// followed of its pointer are forgotten, so nothing names the seat after.
 fn release_seat(seat: SeatObjects, shared: &Shared, time: WireTime) {
+    shared.last_input.seat_gone(&seat.seat);
+    shared.unfollow(&seat.seat);
     if let Some(pointer) = seat.pointer {
         if let Some(pinch) = pointer.pinch {
             pinch.destroy();
@@ -1775,7 +1804,12 @@ fn release_seat(seat: SeatObjects, shared: &Shared, time: WireTime) {
     shared.record_seat(time, SeatEvent::SeatRemoved(seat.key));
 }
 
-fn release_pointer(pointer: PointerObjects, shared: &Shared, time: WireTime) {
+/// Let go of the pointer `seat` lost: the grab it held ends, since no
+/// release reaches a pointer that is gone, and the windows' frames follow it
+/// no more.
+fn release_pointer(pointer: PointerObjects, seat: &WlSeat, shared: &Shared, time: WireTime) {
+    shared.last_input.left(seat);
+    shared.unfollow(seat);
     if let Some(pinch) = pointer.pinch {
         if let Some(data) = pinch.data::<PinchData>() {
             shared.record_seat(
@@ -1991,7 +2025,7 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
         });
         // The seat itself stays: only the devices it lost go.
         if let Some(pointer) = gone_pointer {
-            release_pointer(pointer, &shared, time);
+            release_pointer(pointer, seat, &shared, time);
         }
         if let Some(keyboard) = gone_keyboard {
             release_keyboard(&keyboard, key, &shared);
@@ -2059,8 +2093,8 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                     }
                     show_cursor(&shared, objects, key, cursor, scale);
                 });
-                if let Some(frame) = shared.content_frame(pointer) {
-                    frame.content_moved(surface_x, surface_y);
+                if let Some((frame, seat)) = shared.content_frame(pointer) {
+                    frame.content_moved(&seat, surface_x, surface_y);
                 }
                 (
                     arrival(None),
@@ -2091,8 +2125,8 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                 surface_x,
                 surface_y,
             } => {
-                if let Some(frame) = shared.content_frame(pointer) {
-                    frame.content_moved(surface_x, surface_y);
+                if let Some((frame, seat)) = shared.content_frame(pointer) {
+                    frame.content_moved(&seat, surface_x, surface_y);
                 }
                 (
                     arrival(Some(time)),
@@ -2130,17 +2164,7 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                 }
                 // A press on a title bar of the application's, and the
                 // release of one, is the window's, not its input's.
-                let seat = shared
-                    .objects
-                    .with(|objects| {
-                        objects
-                            .seats
-                            .iter()
-                            .find(|held| held.key == data.seat)
-                            .map(|held| held.seat.clone())
-                    })
-                    .flatten();
-                if let (Some(frame), Some(seat)) = (shared.content_frame(pointer), seat)
+                if let Some((frame, seat)) = shared.content_frame(pointer)
                     && frame.content_button(&seat, serial, button, pressed)
                 {
                     return;
@@ -2733,7 +2757,13 @@ impl Dispatch<WpCursorShapeDeviceV1, ()> for WaylandState {
 mod tests {
     use std::os::fd::OwnedFd;
 
-    use super::{Delivering, NativeClock, SeatKey, Wire, arrival, queue, read_keymap};
+    use flui_platform::PlatformInput;
+    use flui_platform::keyboard::KeyState;
+
+    use super::{
+        Delivering, NativeClock, NativeSurface, SeatEvent, SeatKey, SeatWire, Target, Wire,
+        arrival, queue, read_keymap,
+    };
     use crate::input::linux::xkb::GROUP_NAME_READS;
 
     /// A compositor that sends keymap after keymap before the loop delivers
@@ -2798,27 +2828,89 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
     }
 
-    /// A keymap of two named layouts, padded with a comment to nearly the
-    /// largest a host reads.
+    /// A keymap of two named layouts whose one key, evdev 2, types `1` and
+    /// `2`, ending in an open comment.
+    const TWO_LAYOUTS: &str = "xkb_keymap {\n\
+         xkb_keycodes \"flui\" { minimum = 8; maximum = 255; <AE01> = 10; };\n\
+         xkb_types \"flui\" { type \"ONE_LEVEL\" { modifiers = none; \
+         level_name[Level1] = \"Any\"; }; };\n\
+         xkb_compatibility \"flui\" { };\n\
+         xkb_symbols \"flui\" {\n\
+         name[Group1] = \"First\"; name[Group2] = \"Second\";\n\
+         key <AE01> { type = \"ONE_LEVEL\", symbols[Group1] = [ 1 ], \
+         symbols[Group2] = [ 2 ] };\n\
+         };\n};\n// ";
+
+    /// [`TWO_LAYOUTS`], padded with its comment to nearly the largest a host
+    /// reads.
     fn wide_keymap() -> Vec<u8> {
-        let mut text = String::from(
-            "xkb_keymap {\n\
-             xkb_keycodes \"flui\" { minimum = 8; maximum = 255; <AE01> = 10; };\n\
-             xkb_types \"flui\" { type \"ONE_LEVEL\" { modifiers = none; \
-             level_name[Level1] = \"Any\"; }; };\n\
-             xkb_compatibility \"flui\" { };\n\
-             xkb_symbols \"flui\" {\n\
-             name[Group1] = \"First\"; name[Group2] = \"Second\";\n\
-             key <AE01> { type = \"ONE_LEVEL\", symbols[Group1] = [ 1 ], \
-             symbols[Group2] = [ 2 ] };\n\
-             };\n};\n// ",
-        );
+        let mut text = String::from(TWO_LAYOUTS);
         let padding = crate::input::linux::xkb::KEYMAP_LIMIT - text.len() - 2;
         text.extend(std::iter::repeat_n('x', padding));
         text.push('\n');
         let mut bytes = text.into_bytes();
         bytes.push(0);
         bytes
+    }
+
+    /// `keymap` as a compositor shares it: a file's descriptor and its size.
+    fn shared(keymap: &[u8], name: &str) -> (OwnedFd, u32) {
+        let path = std::env::temp_dir().join(format!("flui-{name}-{}", std::process::id()));
+        std::fs::write(&path, keymap).expect("the keymap is written");
+        let fd = OwnedFd::from(std::fs::File::open(&path).expect("the keymap opens"));
+        std::fs::remove_file(&path).expect("the keymap is removed");
+        (fd, u32::try_from(keymap.len()).expect("within the limit"))
+    }
+
+    /// A seat the compositor removes while its keyboard holds a key releases
+    /// that key in the window it was pressed in, as a keyboard that leaves
+    /// does, before the seat is forgotten: the window is not left with a key
+    /// held that nothing will release.
+    #[test]
+    fn a_seat_that_goes_releases_the_keys_it_held() {
+        if xkbcommon_dl::xkbcommon_option().is_none() {
+            eprintln!("skipped: libxkbcommon is not installed");
+            return;
+        }
+        let (fd, size) = shared(format!("{TWO_LAYOUTS}\n\0").as_bytes(), "seat-keymap");
+        let mut delivering = Delivering::new(NativeClock::epoch_only());
+        let seat = SeatKey(1);
+        let window = NativeSurface(7);
+        let _ = delivering.keyboard_wire(Wire::Keymap { seat, fd, size });
+        let _ = delivering.keyboard_wire(Wire::KeyFocus {
+            seat,
+            focus: Some(window),
+        });
+        let keys = |inputs: Vec<(Target, PlatformInput)>| -> Vec<(NativeSurface, KeyState)> {
+            inputs
+                .into_iter()
+                .filter_map(|(target, input)| match (target, input) {
+                    (Target::Surface(surface), PlatformInput::Keyboard(event)) => {
+                        Some((surface, event.state()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let pressed = delivering.keyboard_wire(Wire::Key {
+            seat,
+            time: arrival(None),
+            code: 2,
+            pressed: true,
+        });
+        assert_eq!(keys(pressed), [(window, KeyState::Down)]);
+
+        let gone = delivering.seat_wire(SeatWire {
+            time: arrival(None),
+            event: SeatEvent::SeatRemoved(seat),
+        });
+        assert_eq!(
+            keys(gone),
+            [(window, KeyState::Up)],
+            "released where pressed"
+        );
+        assert_eq!(delivering.keyboards.focused(seat), None);
+        assert!(delivering.keymap(seat).is_none(), "the seat is forgotten");
     }
 
     /// A compositor switching layouts without end has each switch named by a
@@ -2830,15 +2922,10 @@ mod tests {
             eprintln!("skipped: libxkbcommon is not installed");
             return;
         }
-        let bytes = wide_keymap();
-        let path = std::env::temp_dir().join(format!("flui-wide-keymap-{}", std::process::id()));
-        std::fs::write(&path, &bytes).expect("the keymap is written");
-        let fd = OwnedFd::from(std::fs::File::open(&path).expect("the keymap opens"));
-        std::fs::remove_file(&path).expect("the keymap is removed");
+        let (fd, size) = shared(&wide_keymap(), "wide-keymap");
         GROUP_NAME_READS.with(|reads| reads.set(0));
         let mut delivering = Delivering::new(NativeClock::epoch_only());
         let seat = SeatKey(1);
-        let size = u32::try_from(bytes.len()).expect("within the limit");
         let _ = delivering.keyboard_wire(Wire::Keymap { seat, fd, size });
         assert_eq!(delivering.layout, "First");
         for change in 0..10_000_u32 {

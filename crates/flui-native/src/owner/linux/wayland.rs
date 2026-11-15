@@ -55,7 +55,8 @@ pub(crate) use event_loop::{
 pub(crate) mod activation {
     //! What the loop and its windows say of an activation (`xdg-activation`):
     //! the user input a token names, the token itself, and the token a
-    //! launcher handed the process.
+    //! launcher handed the process; and what the seats' input keeps of the
+    //! inputs a token or a drag names ([`Inputs`]).
 
     #![forbid(unsafe_code)]
 
@@ -72,6 +73,112 @@ pub(crate) mod activation {
         pub(crate) serial: u32,
         /// The surface the input went to.
         pub(crate) surface: Surface,
+    }
+
+    /// The user inputs the seats reported that a later request names: the
+    /// last one, which an activation token names, and the press that began
+    /// each seat's pointer grab while a button is held, which a drag starts
+    /// under. A seat has one grab at most, and a seat that goes leaves
+    /// nothing here, so what is kept is bounded by the seats bound.
+    #[derive(Debug)]
+    pub(crate) struct Inputs<Seat, Surface> {
+        last: Option<UserInput<Seat, Surface>>,
+        /// Each seat's grab: the press that began it and how many buttons
+        /// hold it now.
+        grabs: Vec<(UserInput<Seat, Surface>, u32)>,
+        /// The grab whose last button went up last, by its seat and the
+        /// serial of its press: a drag started under it never began, since
+        /// a drag takes the pointer from its surface before any release.
+        released: Option<(Seat, u32)>,
+    }
+
+    impl<Seat, Surface> Default for Inputs<Seat, Surface> {
+        fn default() -> Self {
+            Self {
+                last: None,
+                grabs: Vec::new(),
+                released: None,
+            }
+        }
+    }
+
+    impl<Seat: Clone + PartialEq, Surface: PartialEq> Inputs<Seat, Surface> {
+        /// The seats report `input`, which is now the last.
+        pub(crate) fn record(&mut self, input: UserInput<Seat, Surface>) {
+            self.last = Some(input);
+        }
+
+        /// The last input; `None` before any.
+        pub(crate) const fn latest(&self) -> Option<&UserInput<Seat, Surface>> {
+            self.last.as_ref()
+        }
+
+        /// A button of `press.seat`'s pointer went down: the first one held
+        /// begins the seat's grab, on `press.surface` under `press.serial`.
+        pub(crate) fn pressed(&mut self, press: UserInput<Seat, Surface>) {
+            match self
+                .grabs
+                .iter_mut()
+                .find(|(grab, _)| grab.seat == press.seat)
+            {
+                Some((_, held)) => *held = held.saturating_add(1),
+                None => self.grabs.push((press, 1)),
+            }
+        }
+
+        /// A button of `seat`'s pointer went up: the last one held ends the
+        /// seat's grab.
+        pub(crate) fn released(&mut self, seat: &Seat) {
+            let mut ended = None;
+            self.grabs.retain_mut(|(grab, held)| {
+                if grab.seat == *seat {
+                    *held = held.saturating_sub(1);
+                    if *held == 0 {
+                        ended = Some((grab.seat.clone(), grab.serial));
+                    }
+                }
+                *held > 0
+            });
+            if ended.is_some() {
+                self.released = ended;
+            }
+        }
+
+        /// Whether the grab `seat`'s press `serial` began ended with a
+        /// release that reached its surface.
+        pub(crate) fn released_grab(&self, seat: &Seat, serial: u32) -> bool {
+            self.released
+                .as_ref()
+                .is_some_and(|(held, at)| held == seat && *at == serial)
+        }
+
+        /// `seat`'s pointer left its surface, or went, which ends any grab
+        /// it held: no release reaches a surface the pointer left.
+        pub(crate) fn left(&mut self, seat: &Seat) {
+            self.grabs.retain(|(grab, _)| grab.seat != *seat);
+        }
+
+        /// `seat` went: its grab ends, and neither the last input nor the
+        /// grab last released names it, so no token and no drag is asked
+        /// for under a seat the compositor no longer knows.
+        pub(crate) fn seat_gone(&mut self, seat: &Seat) {
+            self.left(seat);
+            if self.last.as_ref().is_some_and(|last| last.seat == *seat) {
+                self.last = None;
+            }
+            if self.released.as_ref().is_some_and(|(held, _)| held == seat) {
+                self.released = None;
+            }
+        }
+
+        /// The press that began a grab `surface` holds now; `None` when no
+        /// button is held there.
+        pub(crate) fn grab_on(&self, surface: &Surface) -> Option<&UserInput<Seat, Surface>> {
+            self.grabs
+                .iter()
+                .find(|(grab, _)| grab.surface == *surface)
+                .map(|(grab, _)| grab)
+        }
     }
 
     /// An activation token: what the compositor answered a token request
@@ -127,6 +234,70 @@ pub(crate) mod activation {
                 "handed",
                 "the compositor gets back what it sent"
             );
+        }
+
+        fn input(seat: u32, serial: u32, surface: u32) -> UserInput<u32, u32> {
+            UserInput {
+                seat,
+                serial,
+                surface,
+            }
+        }
+
+        /// A seat's grab begins with its first button and ends with its
+        /// last, or as its pointer leaves; the grab a release ended is the
+        /// one a drag started under it never began.
+        #[test]
+        fn a_grab_lasts_while_a_button_is_held() {
+            let mut inputs = Inputs::default();
+            inputs.pressed(input(1, 10, 7));
+            inputs.pressed(input(1, 11, 7));
+            assert_eq!(
+                inputs.grab_on(&7),
+                Some(&input(1, 10, 7)),
+                "the first press"
+            );
+            inputs.released(&1);
+            assert_eq!(inputs.grab_on(&7), Some(&input(1, 10, 7)), "one still held");
+            assert!(!inputs.released_grab(&1, 10));
+            inputs.released(&1);
+            assert_eq!(inputs.grab_on(&7), None);
+            assert!(inputs.released_grab(&1, 10), "ended by a release");
+
+            inputs.pressed(input(2, 20, 8));
+            inputs.left(&2);
+            assert_eq!(inputs.grab_on(&8), None, "the pointer left");
+            assert!(!inputs.released_grab(&2, 20), "no release reached it");
+        }
+
+        /// A seat removed with a button held leaves no grab, and is neither
+        /// the last input nor the grab last released: a compositor adding
+        /// and removing seats without end grows nothing, and nothing asked
+        /// after names a seat that is gone.
+        #[test]
+        fn a_seat_that_goes_leaves_no_input_behind() {
+            let mut inputs = Inputs::default();
+            inputs.pressed(input(1, 5, 3));
+            inputs.record(input(1, 5, 3));
+            for seat in 2..10_002 {
+                inputs.record(input(seat, seat, 7));
+                inputs.pressed(input(seat, seat, 7));
+                inputs.seat_gone(&seat);
+                assert_eq!(inputs.grab_on(&7), None, "seat {seat} is gone");
+                assert_eq!(inputs.latest(), None, "seat {seat} is gone");
+            }
+            assert_eq!(inputs.grabs.len(), 1, "the seat still here keeps its grab");
+            assert_eq!(inputs.grab_on(&3), Some(&input(1, 5, 3)));
+
+            inputs.released(&1);
+            assert!(inputs.released_grab(&1, 5));
+            inputs.record(input(1, 6, 3));
+            inputs.seat_gone(&1);
+            assert!(
+                !inputs.released_grab(&1, 5),
+                "its released grab is forgotten"
+            );
+            assert_eq!(inputs.latest(), None);
         }
     }
 }
@@ -382,7 +553,9 @@ mod event_loop {
     use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
     use web_time::Instant;
 
-    use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, UserInput, launch_token};
+    use super::activation::{
+        ActivationToken, Inputs, LAUNCH_TOKEN_VARIABLE, UserInput, launch_token,
+    };
     use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, poll_timeout};
     use crate::error::PlatformError;
     use crate::executor::NativeExecutor;
@@ -523,20 +696,20 @@ mod event_loop {
 
     /// A window's own frame as the seats' input reaches it: the window
     /// feature's, which draws it. The input asks it whether a surface is the
-    /// frame's and tells it what the pointer does there; the frame records
-    /// it, and the window carries it out as it settles. Called by a dispatch
-    /// on the owner thread, with no cell of the input borrowed; it runs no
-    /// handler and calls back into nothing.
+    /// frame's and tells it what each seat's pointer does there; the frame
+    /// records it seat by seat, and the window carries it out as it settles.
+    /// Called by a dispatch on the owner thread, with no cell of the input
+    /// borrowed; it runs no handler and calls back into nothing.
     pub(crate) trait FramePointer: Send + Sync {
         /// Whether `surface` is one of the frame's.
         fn holds(&self, surface: &WlSurface) -> bool;
 
-        /// The pointer is at (`x`, `y`), surface-local, on `surface`, one of
-        /// the frame's: the cursor it shows there.
-        fn moved(&self, surface: &WlSurface, x: f64, y: f64) -> CursorIcon;
+        /// `seat`'s pointer is at (`x`, `y`), surface-local, on `surface`,
+        /// one of the frame's: the cursor it shows there.
+        fn moved(&self, seat: &WlSeat, surface: &WlSurface, x: f64, y: f64) -> CursorIcon;
 
-        /// The pointer left the frame's surfaces.
-        fn left(&self);
+        /// `seat`'s pointer left the frame's surfaces.
+        fn left(&self, seat: &WlSeat);
 
         /// Button `code` (evdev) of `seat`'s pointer went down or up over the
         /// frame at `time` (the compositor's milliseconds), as the event
@@ -544,17 +717,22 @@ mod event_loop {
         /// names that seat and serial.
         fn button(&self, seat: &WlSeat, serial: u32, time: u32, code: u32, pressed: bool);
 
-        /// The pointer is at (`x`, `y`), surface-local, on the window's own
-        /// surface: a press on a title bar of the application's is answered
-        /// from there, and a press on it held moves the window once the
-        /// pointer travels (ADR-0286 §11).
-        fn content_moved(&self, x: f64, y: f64);
+        /// `seat`'s pointer is at (`x`, `y`), surface-local, on the window's
+        /// own surface: a press on a title bar of the application's is
+        /// answered from there, and a press on it held moves the window once
+        /// the pointer travels (ADR-0286 §11).
+        fn content_moved(&self, seat: &WlSeat, x: f64, y: f64);
 
         /// Button `code` (evdev) of `seat`'s pointer went down or up over the
         /// window's own surface, as the event numbered `serial`: whether the
         /// window's chrome took it, which keeps it from the window's input.
         /// The release of a press it took is taken too.
         fn content_button(&self, seat: &WlSeat, serial: u32, code: u32, pressed: bool) -> bool;
+
+        /// `seat` went, or its pointer did: what the frame kept of that
+        /// pointer goes with it, and an action it asked for is not carried
+        /// out.
+        fn seat_gone(&self, seat: &WlSeat);
     }
 
     /// What one seat's `zwp_text_input_v3` reported, recorded in the seats'
@@ -913,101 +1091,58 @@ mod event_loop {
     ///
     /// Beside it, the press that began each seat's pointer grab while a button
     /// is held: a drag starts only under the serial of the grab its origin
-    /// surface holds.
+    /// surface holds. See [`Inputs`].
     #[derive(Clone, Default)]
-    pub(crate) struct LastInput(Arc<OwnerCell<Inputs>>);
-
-    /// What [`LastInput`] keeps.
-    #[derive(Default)]
-    struct Inputs {
-        last: Option<SeatInput>,
-        /// Each seat's grab: the press that began it and how many buttons
-        /// hold it now.
-        grabs: Vec<(SeatInput, u32)>,
-        /// The grab whose last button went up last, by its seat and the
-        /// serial of its press: a drag started under it never began, since
-        /// a drag takes the pointer from its surface before any release.
-        released: Option<(WlSeat, u32)>,
-    }
+    pub(crate) struct LastInput(Arc<OwnerCell<Inputs<WlSeat, WlSurface>>>);
 
     impl LastInput {
         /// The seats report `input`, which is now the last: a key, a button
         /// or a touch going down, or the keyboard entering a surface.
         pub(crate) fn record(&self, input: SeatInput) {
-            self.0.with(|inputs| inputs.last = Some(input));
+            self.0.with(|inputs| inputs.record(input));
         }
 
         /// The last input; `None` before any, or off the owner thread.
         pub(crate) fn latest(&self) -> Option<SeatInput> {
-            self.0.with(|inputs| inputs.last.clone()).flatten()
+            self.0.with(|inputs| inputs.latest().cloned()).flatten()
         }
 
         /// A button of `press.seat`'s pointer went down: the first one held
         /// begins the seat's grab, on `press.surface` under `press.serial`.
         pub(crate) fn pressed(&self, press: SeatInput) {
-            self.0.with(|inputs| {
-                match inputs
-                    .grabs
-                    .iter_mut()
-                    .find(|(grab, _)| grab.seat == press.seat)
-                {
-                    Some((_, held)) => *held = held.saturating_add(1),
-                    None => inputs.grabs.push((press, 1)),
-                }
-            });
+            self.0.with(|inputs| inputs.pressed(press));
         }
 
         /// A button of `seat`'s pointer went up: the last one held ends the
         /// seat's grab.
         pub(crate) fn released(&self, seat: &WlSeat) {
-            self.0.with(|inputs| {
-                let mut ended = None;
-                inputs.grabs.retain_mut(|(grab, held)| {
-                    if grab.seat == *seat {
-                        *held = held.saturating_sub(1);
-                        if *held == 0 {
-                            ended = Some((grab.seat.clone(), grab.serial));
-                        }
-                    }
-                    *held > 0
-                });
-                if ended.is_some() {
-                    inputs.released = ended;
-                }
-            });
+            self.0.with(|inputs| inputs.released(seat));
         }
 
         /// Whether the grab `seat`'s press `serial` began ended with a
         /// release that reached its surface; `false` off the owner thread.
         pub(crate) fn released_grab(&self, seat: &WlSeat, serial: u32) -> bool {
             self.0
-                .with(|inputs| {
-                    inputs
-                        .released
-                        .as_ref()
-                        .is_some_and(|(held, at)| held == seat && *at == serial)
-                })
+                .with(|inputs| inputs.released_grab(seat, serial))
                 .unwrap_or(false)
         }
 
-        /// `seat`'s pointer left its surface, which ends any grab it held:
-        /// no release reaches a surface the pointer left.
+        /// `seat`'s pointer left its surface, or went, which ends any grab
+        /// it held: no release reaches a surface the pointer left.
         pub(crate) fn left(&self, seat: &WlSeat) {
-            self.0
-                .with(|inputs| inputs.grabs.retain(|(grab, _)| grab.seat != *seat));
+            self.0.with(|inputs| inputs.left(seat));
+        }
+
+        /// `seat` went: nothing kept names it any more.
+        pub(crate) fn seat_gone(&self, seat: &WlSeat) {
+            self.0.with(|inputs| inputs.seat_gone(seat));
         }
 
         /// The press that began a grab `surface` holds now; `None` when no
         /// button is held there, or off the owner thread.
         pub(crate) fn grab_on(&self, surface: &WlSurface) -> Option<SeatInput> {
             self.0
-                .with(|inputs| {
-                    inputs
-                        .grabs
-                        .iter()
-                        .find(|(grab, _)| grab.surface == *surface)
-                        .map(|(grab, _)| grab.clone())
-                })
+                .with(|inputs| inputs.grab_on(surface).cloned())
                 .flatten()
         }
     }

@@ -45,10 +45,12 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::input_regions::ResizeEdge;
 
 use super::configure::{TiledEdges, ToplevelStates, WmCapabilities};
@@ -77,6 +79,46 @@ pub(crate) const DOUBLE_CLICK: u32 = 400;
 /// it a compositor's configure asks for more memory than any screen shows,
 /// and the frame is not drawn.
 pub(crate) const MAX_EXTENT: u32 = 16_384;
+/// The most device pixels a frame surface is drawn with: a title bar
+/// [`MAX_EXTENT`] wide at [`DrawScale::MAX`], 18.5 MiB of pixels. The two
+/// sides' caps alone leave room for a square of a gibibyte, which a
+/// compositor reaches with a narrow window at a scale in the hundreds.
+pub(crate) const MAX_PIXELS: u32 = MAX_EXTENT * 296;
+/// The buffers a frame surface keeps: the one the compositor shows, the one
+/// its next commit carries, and one to draw into meanwhile. A compositor
+/// that releases none has the oldest destroyed for the next.
+pub(crate) const MAX_BUFFERS: usize = 3;
+/// The seats whose pointers a frame follows at once, as many as the input
+/// binds; one more is followed once another's pointer is off the frame.
+pub(crate) const MAX_POINTERS: usize = 16;
+
+/// The scale a frame is drawn at: the window's, up to [`Self::MAX`]. A
+/// compositor names any scale it likes, and a frame drawn at it would be as
+/// many pixels; past the largest a frame is drawn at that one and the
+/// compositor stretches it, as it does a theme cursor past its own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DrawScale(DevicePixelRatio);
+
+impl DrawScale {
+    /// The largest scale a frame is drawn at: screens are driven at one to
+    /// four, and a theme cursor is drawn at no more than this either.
+    pub(crate) const MAX: f64 = 8.0;
+    /// One device pixel per logical pixel.
+    pub(crate) const ONE: Self = Self(DevicePixelRatio::ONE);
+
+    /// The scale a frame is drawn at on a window drawn at `scale`; one for
+    /// a scale that is no positive finite number.
+    pub(crate) fn of(scale: f64) -> Self {
+        DevicePixelRatio::try_new(scale)
+            .and_then(|told| DevicePixelRatio::try_new(told.get().min(Self::MAX)))
+            .map_or(Self::ONE, Self)
+    }
+
+    /// Device pixels per logical pixel.
+    pub(crate) const fn get(self) -> f64 {
+        self.0.get()
+    }
+}
 
 /// The evdev codes of the pointer buttons the frame answers.
 const BTN_LEFT: u32 = 0x110;
@@ -589,12 +631,10 @@ pub(crate) enum ContentAnswer {
     Taken(Option<Action>),
 }
 
-/// The presses on the window's own surface where the application draws the
-/// title bar (`WindowFrame::AppTitleBar`, ADR-0286 §11), answered from the
-/// chrome regions the last composited frame handed the window: a move once
-/// the pointer travels from a press on the bar, a maximize on a double-click,
-/// the window menu on a secondary press, a resize from a resize region. The
-/// frame keeps its margins for the edges, so no band of the content resizes.
+/// The chrome regions of a window whose application draws the title bar
+/// (`WindowFrame::AppTitleBar`, ADR-0286 §11), as the last composited frame
+/// handed them to the window: what a press on its own surface is answered
+/// from.
 #[derive(Debug, Default)]
 pub(crate) struct ContentChrome {
     /// The regions, in device pixels.
@@ -602,6 +642,15 @@ pub(crate) struct ContentChrome {
     /// The scale the regions were projected at, which a press is measured
     /// at too.
     pub(crate) scale: f64,
+}
+
+/// One seat's pointer on the window's own surface, where the application
+/// draws the title bar: a move once the pointer travels from a press on the
+/// bar, a maximize on a double-click, the window menu on a secondary press,
+/// a resize from a resize region. The frame keeps its margins for the edges,
+/// so no band of the content resizes.
+#[derive(Debug, Default)]
+pub(crate) struct PointerOnContent {
     presses: ChromePresses,
     /// Where the pointer is on the content, in logical pixels.
     at: Option<(f64, f64)>,
@@ -609,25 +658,26 @@ pub(crate) struct ContentChrome {
     held: Option<u32>,
 }
 
-impl ContentChrome {
+impl PointerOnContent {
     /// The pointer is at (`x`, `y`) on the content, in logical pixels: a
     /// move where a press on the bar is held and the pointer travelled.
-    pub(crate) fn moved(&mut self, x: f64, y: f64) -> Option<Action> {
+    pub(crate) fn moved(&mut self, chrome: &ContentChrome, x: f64, y: f64) -> Option<Action> {
         self.at = Some((x, y));
         if self.held != Some(BTN_LEFT) {
             return None;
         }
-        let point = device_point(x * self.scale, y * self.scale)?;
+        let point = device_point(x * chrome.scale, y * chrome.scale)?;
         self.presses
-            .moved(point, self.scale)
+            .moved(point, chrome.scale)
             .then_some(Action::Move)
     }
 
     /// Button `code` (evdev) went down or up at `at` over the content, with
     /// `frame` the window's own frame as last laid out (`None` while it draws
-    /// none): only a frame without its title bar answers from the regions.
+    /// none): only a frame without its title bar answers from `chrome`.
     pub(crate) fn button(
         &mut self,
+        chrome: &ContentChrome,
         frame: Option<&Frame>,
         code: u32,
         pressed: bool,
@@ -655,12 +705,17 @@ impl ContentChrome {
         let Some((x, y)) = self.at else {
             return ContentAnswer::App;
         };
-        let Some(point) = device_point(x * self.scale, y * self.scale) else {
+        let Some(point) = device_point(x * chrome.scale, y * chrome.scale) else {
             return ContentAnswer::App;
         };
-        let answer = self
-            .presses
-            .press(self.projected.sent(), point, button, None, at, self.scale);
+        let answer = self.presses.press(
+            chrome.projected.sent(),
+            point,
+            button,
+            None,
+            at,
+            chrome.scale,
+        );
         let action = match answer {
             ChromePress::App => return ContentAnswer::App,
             ChromePress::Move => None,
@@ -687,6 +742,306 @@ impl ContentChrome {
         };
         self.held = Some(code);
         ContentAnswer::Taken(action)
+    }
+}
+
+/// A button of a seat's pointer going down or up over the window's own
+/// surface, as the compositor numbered it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ContentPress {
+    /// The event's serial, which a move it starts names.
+    pub(crate) serial: u32,
+    /// The button's evdev code.
+    pub(crate) code: u32,
+    /// Whether it went down.
+    pub(crate) pressed: bool,
+}
+
+/// One seat's pointer in a window that draws a frame of its own.
+#[derive(Debug)]
+struct SeatPointer<S> {
+    seat: S,
+    on_frame: PointerOnFrame,
+    on_content: PointerOnContent,
+    /// The serial of the press on the application's bar a move waits on.
+    armed: Option<u32>,
+}
+
+impl<S> SeatPointer<S> {
+    /// Whether the pointer is off the frame with nothing of the window
+    /// held: another seat's pointer may be followed in its place.
+    const fn is_idle(&self) -> bool {
+        self.on_frame.over.is_none()
+            && self.on_frame.held.is_none()
+            && self.on_content.held.is_none()
+            && self.armed.is_none()
+    }
+}
+
+/// The seats' pointers in one window that draws a frame of its own: each
+/// seat's pointer hovers, holds and presses on its own, so one leaving or
+/// pressing changes nothing of another's. At most [`MAX_POINTERS`] are
+/// followed.
+#[derive(Debug)]
+pub(crate) struct FramePointers<S> {
+    seats: Vec<SeatPointer<S>>,
+}
+
+impl<S> Default for FramePointers<S> {
+    fn default() -> Self {
+        Self { seats: Vec::new() }
+    }
+}
+
+impl<S: Clone + PartialEq> FramePointers<S> {
+    /// `seat`'s pointer, followed from now on if it was not: in a place of
+    /// its own, or in an idle one's once [`MAX_POINTERS`] are followed.
+    /// `None` when every one of those holds something of the window.
+    fn of(&mut self, seat: &S) -> Option<&mut SeatPointer<S>> {
+        let index = match self.seats.iter().position(|held| held.seat == *seat) {
+            Some(index) => index,
+            None => {
+                let fresh = SeatPointer {
+                    seat: seat.clone(),
+                    on_frame: PointerOnFrame::default(),
+                    on_content: PointerOnContent::default(),
+                    armed: None,
+                };
+                if self.seats.len() < MAX_POINTERS {
+                    self.seats.push(fresh);
+                    self.seats.len() - 1
+                } else {
+                    let idle = self.seats.iter().position(SeatPointer::is_idle)?;
+                    self.seats[idle] = fresh;
+                    idle
+                }
+            }
+        };
+        self.seats.get_mut(index)
+    }
+
+    /// `seat`'s pointer is at (`x`, `y`) on `piece` of `frame`; the cursor
+    /// it shows there.
+    pub(crate) fn moved(
+        &mut self,
+        seat: &S,
+        frame: &Frame,
+        piece: Piece,
+        x: f64,
+        y: f64,
+    ) -> CursorIcon {
+        self.of(seat).map_or(CursorIcon::Default, |pointer| {
+            pointer.on_frame.moved(frame, piece, x, y)
+        })
+    }
+
+    /// `seat`'s pointer left the frame.
+    pub(crate) fn left(&mut self, seat: &S) {
+        if let Some(pointer) = self.seats.iter_mut().find(|held| held.seat == *seat) {
+            pointer.on_frame.left();
+        }
+    }
+
+    /// Button `code` (evdev) of `seat`'s pointer went down or up over the
+    /// frame at `time`; what that asks of the window.
+    pub(crate) fn button(
+        &mut self,
+        seat: &S,
+        frame: &Frame,
+        code: u32,
+        pressed: bool,
+        time: u32,
+    ) -> Option<Action> {
+        self.of(seat)?.on_frame.button(frame, code, pressed, time)
+    }
+
+    /// `seat`'s pointer is at (`x`, `y`) on the content: the serial of the
+    /// press on the application's bar a move starts under, once the pointer
+    /// travelled from it.
+    pub(crate) fn content_moved(
+        &mut self,
+        seat: &S,
+        chrome: &ContentChrome,
+        x: f64,
+        y: f64,
+    ) -> Option<u32> {
+        let pointer = self.of(seat)?;
+        pointer.on_content.moved(chrome, x, y)?;
+        pointer.armed.take()
+    }
+
+    /// A button of `seat`'s pointer went down or up over the content at
+    /// `at`; what that comes to. A press on the application's bar waits for
+    /// the pointer to travel.
+    pub(crate) fn content_button(
+        &mut self,
+        seat: &S,
+        chrome: &ContentChrome,
+        frame: Option<&Frame>,
+        press: ContentPress,
+        at: Instant,
+    ) -> ContentAnswer {
+        let Some(pointer) = self.of(seat) else {
+            return ContentAnswer::App;
+        };
+        let answer = pointer
+            .on_content
+            .button(chrome, frame, press.code, press.pressed, at);
+        pointer.armed =
+            (press.pressed && answer == ContentAnswer::Taken(None)).then_some(press.serial);
+        answer
+    }
+
+    /// `seat` or its pointer went: nothing of it is followed any more.
+    pub(crate) fn forget(&mut self, seat: &S) {
+        self.seats.retain(|held| held.seat != *seat);
+    }
+
+    /// The button a pointer hovers, the first seat's that hovers one.
+    pub(crate) fn hovered(&self) -> Option<Button> {
+        self.seats
+            .iter()
+            .find_map(|pointer| match pointer.on_frame.hovered() {
+                Some(Part::Button(button)) => Some(button),
+                _ => None,
+            })
+    }
+
+    /// The button a pointer holds, the first seat's that holds one.
+    pub(crate) fn held(&self) -> Option<Button> {
+        self.seats
+            .iter()
+            .find_map(|pointer| pointer.on_frame.held())
+    }
+
+    /// How many seats' pointers are followed, for a test.
+    #[cfg(test)]
+    pub(crate) fn followed(&self) -> usize {
+        self.seats.len()
+    }
+}
+
+/// The request a surface's damage is sent with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Damage {
+    /// `wl_surface.damage_buffer`, in the buffer's pixels.
+    Buffer,
+    /// `wl_surface.damage`, in the surface's coordinates.
+    Surface,
+}
+
+impl Damage {
+    /// The request a `wl_surface` of `version` takes: damage in the
+    /// buffer's pixels exists from version 4, and a compositor closes the
+    /// connection of a client that sends a request its version lacks.
+    pub(crate) const fn on(version: u32) -> Self {
+        if version >= 4 {
+            Self::Buffer
+        } else {
+            Self::Surface
+        }
+    }
+}
+
+/// Whether the compositor holds a buffer: from the commit that carries it to
+/// its `release`. Shared with the buffer's dispatch, which hears the release.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Lent(Arc<AtomicBool>);
+
+impl Lent {
+    /// The compositor released the buffer.
+    pub(crate) fn release(&self) {
+        self.0.store(false, Ordering::Release);
+    }
+
+    fn lend(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    fn is_lent(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// One buffer a frame surface drew into.
+#[derive(Debug)]
+struct Kept<B> {
+    buffer: B,
+    width: u32,
+    height: u32,
+    lent: Lent,
+}
+
+/// The buffers one frame surface draws into, oldest first: at most
+/// [`MAX_BUFFERS`]. A draw takes one the compositor released if it is the
+/// image's size, and makes one otherwise; the released ones of another size
+/// go first, and then the oldest, which the compositor holds for a commit
+/// two draws back at least.
+#[derive(Debug)]
+pub(crate) struct BufferSet<B> {
+    kept: Vec<Kept<B>>,
+}
+
+impl<B> Default for BufferSet<B> {
+    fn default() -> Self {
+        Self { kept: Vec::new() }
+    }
+}
+
+impl<B> BufferSet<B> {
+    /// The buffer a `width` by `height` image is drawn into and committed
+    /// with, lent to the compositor from here: a released one of that size,
+    /// else the one `make` makes with the mark its release clears, after
+    /// `destroy` took each buffer that made room for it. `None` where `make`
+    /// makes none.
+    pub(crate) fn lend(
+        &mut self,
+        (width, height): (u32, u32),
+        make: impl FnOnce(&Lent) -> Option<B>,
+        mut destroy: impl FnMut(B),
+    ) -> Option<&B> {
+        let fits = |kept: &Kept<B>| kept.width == width && kept.height == height;
+        if let Some(index) = self
+            .kept
+            .iter()
+            .position(|kept| !kept.lent.is_lent() && fits(kept))
+        {
+            let reused = self.kept.remove(index);
+            reused.lent.lend();
+            self.kept.push(reused);
+        } else {
+            // A released buffer of another size is drawn into no more.
+            for stale in self.kept.extract_if(.., |kept| !kept.lent.is_lent()) {
+                destroy(stale.buffer);
+            }
+            while self.kept.len() >= MAX_BUFFERS {
+                destroy(self.kept.remove(0).buffer);
+            }
+            let lent = Lent::default();
+            let buffer = make(&lent)?;
+            lent.lend();
+            self.kept.push(Kept {
+                buffer,
+                width,
+                height,
+                lent,
+            });
+        }
+        self.kept.last().map(|kept| &kept.buffer)
+    }
+
+    /// Every buffer kept, for `destroy` to take as the surface goes.
+    pub(crate) fn clear(&mut self, destroy: impl FnMut(B)) {
+        self.kept
+            .drain(..)
+            .map(|kept| kept.buffer)
+            .for_each(destroy);
+    }
+
+    /// How many buffers are kept, for a test.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn len(&self) -> usize {
+        self.kept.len()
     }
 }
 
@@ -787,9 +1142,13 @@ pub(crate) struct Pixels {
 
 impl Pixels {
     /// A transparent image of `width` by `height` device pixels; `None` for
-    /// an empty one or one past [`MAX_EXTENT`].
+    /// an empty one, one with a side past [`MAX_EXTENT`], or one of more
+    /// than [`MAX_PIXELS`].
     pub(crate) fn try_new(width: u32, height: u32) -> Option<Self> {
         if width == 0 || height == 0 || width > MAX_EXTENT || height > MAX_EXTENT {
+            return None;
+        }
+        if u64::from(width) * u64::from(height) > u64::from(MAX_PIXELS) {
             return None;
         }
         let bytes = usize::try_from(width)
@@ -942,12 +1301,15 @@ pub(crate) struct HeaderLook<'a> {
 /// The title bar of `frame` at `scale`: its background (rounded at the top
 /// corners of a floating window), a line along its foot, its buttons with
 /// their icons, and the title centred between them. `None` where the bar is
-/// not shown or its extent is no size or past [`MAX_EXTENT`].
-pub(crate) fn paint_header(frame: &Frame, scale: f64, look: HeaderLook<'_>) -> Option<Pixels> {
+/// not shown or its extent is no size, past [`MAX_EXTENT`] on a side or past
+/// [`MAX_PIXELS`] in all.
+pub(crate) fn paint_header(
+    frame: &Frame,
+    scale: DrawScale,
+    look: HeaderLook<'_>,
+) -> Option<Pixels> {
     let rect = frame.rect(Piece::Header)?;
-    if !(scale.is_finite() && scale > 0.0) {
-        return None;
-    }
+    let scale = scale.get();
     let mut pixels = Pixels::try_new(
         device_extent(rect.width, scale)?,
         device_extent(rect.height, scale)?,
@@ -1122,7 +1484,7 @@ pub(crate) mod title {
     use flui_painting::typography::{FontWeight, TextAlign, TextDirection, TextStyle};
     use flui_painting::{GlyphContent, GlyphRasterizer};
 
-    use super::{MAX_EXTENT, TITLE_SIZE, TitleMask, device_extent};
+    use super::{DrawScale, MAX_EXTENT, TITLE_SIZE, TitleMask, device_extent};
 
     /// What a title is shaped and rasterized with, kept between titles.
     pub(crate) struct TitleText {
@@ -1154,10 +1516,16 @@ pub(crate) mod title {
         /// `text` on one line at most `room` logical pixels wide, cut with an
         /// ellipsis where it is wider, rasterized at `scale`: its coverage.
         /// `None` for an empty title or one that cannot be shaped.
-        pub(crate) fn mask(&mut self, text: &str, room: f64, scale: f64) -> Option<TitleMask> {
+        pub(crate) fn mask(
+            &mut self,
+            text: &str,
+            room: f64,
+            scale: DrawScale,
+        ) -> Option<TitleMask> {
             if text.is_empty() || !(room.is_finite() && room > 0.0) {
                 return None;
             }
+            let scale = scale.get();
             let style = TextStyle::default()
                 .with_font_size(TITLE_SIZE)
                 .with_font_weight(FontWeight::W600);
@@ -1255,10 +1623,15 @@ pub(crate) mod surfaces {
     //! Each subsurface is synchronized with the content's surface (the
     //! default), so a piece drawn for a new size shows with the commit that
     //! gives the content that size, never before it. A piece is drawn again
-    //! only when what it shows changed; a buffer goes back to the compositor
-    //! with each draw and is destroyed when the compositor releases it, so
-    //! one turn draws each piece at most once.
+    //! only when what it shows changed, so one turn draws each piece at most
+    //! once, at the window's scale up to [`DrawScale::MAX`].
+    //!
+    //! A piece draws into at most [`MAX_BUFFERS`](super::MAX_BUFFERS) buffers
+    //! of shared memory ([`BufferSet`]): one the compositor released is drawn
+    //! into again, and one it keeps past two later commits is destroyed for
+    //! the next. All of them go with the frame.
 
+    use std::fs::File;
     use std::os::fd::AsFd;
     use std::os::unix::fs::FileExt;
     use std::sync::{Arc, OnceLock, Weak};
@@ -1276,14 +1649,15 @@ pub(crate) mod surfaces {
     use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
     use wayland_client::protocol::wl_subsurface::{self, WlSubsurface};
     use wayland_client::protocol::wl_surface::{self, WlSurface};
-    use wayland_client::{Connection, Dispatch, QueueHandle};
+    use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
     use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
     use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 
     use super::title::TitleText;
     use super::{
-        Action, Button, ContentAnswer, ContentChrome, Frame, HeaderLook, Look, Part, Piece,
-        PointerOnFrame, Rect, TitleMask, device_extent, paint_header, paint_margin, rounded,
+        Action, BufferSet, Button, ContentAnswer, ContentChrome, ContentPress, Damage, DrawScale,
+        Frame, FramePointers, HeaderLook, Lent, Look, Piece, Pixels, Rect, TitleMask,
+        device_extent, paint_header, paint_margin, rounded,
     };
     use crate::executor::NativeExecutor;
     use crate::owner::linux::wayland::{FramePointer, LoopWaker, WaylandState};
@@ -1337,22 +1711,21 @@ pub(crate) mod surfaces {
         pub(crate) serial: u32,
     }
 
-    /// What the pointer did over a frame, recorded by the seats' input and
-    /// carried out by the window as it settles. One action at most waits: a
-    /// later press replaces it.
+    /// What the seats' pointers did over a frame, recorded by the seats'
+    /// input and carried out by the window as it settles. One action at most
+    /// waits: a later press replaces it.
     #[derive(Default)]
     struct Pointing {
         /// The frame's surfaces and the piece each is.
         pieces: Vec<(WlSurface, Piece)>,
         /// The frame as last laid out; `None` while it is not shown.
         frame: Option<Frame>,
-        pointer: PointerOnFrame,
+        /// Each seat's pointer, over the frame and over the content.
+        pointers: FramePointers<WlSeat>,
         asked: Option<Asked>,
-        /// The presses on the window's own surface, where the application
-        /// draws the title bar.
+        /// The chrome regions a press on the window's own surface is
+        /// answered from, where the application draws the title bar.
         chrome: ContentChrome,
-        /// The seat and serial of the press on the bar a move waits on.
-        armed: Option<(WlSeat, u32)>,
         /// The moves, resizes and menus carried out, with the serial each
         /// named, for a test.
         #[cfg(any(test, feature = "testing"))]
@@ -1402,11 +1775,7 @@ pub(crate) mod surfaces {
         /// The button hovered and the one held.
         fn buttons(&self) -> (Option<Button>, Option<Button>) {
             let pointing = self.0.lock();
-            let hovered = match pointing.pointer.hovered() {
-                Some(Part::Button(button)) => Some(button),
-                _ => None,
-            };
-            (hovered, pointing.pointer.held())
+            (pointing.pointers.hovered(), pointing.pointers.held())
         }
     }
 
@@ -1415,7 +1784,7 @@ pub(crate) mod surfaces {
             self.0.lock().pieces.iter().any(|(held, _)| held == surface)
         }
 
-        fn moved(&self, surface: &WlSurface, x: f64, y: f64) -> CursorIcon {
+        fn moved(&self, seat: &WlSeat, surface: &WlSurface, x: f64, y: f64) -> CursorIcon {
             let mut pointing = self.0.lock();
             let piece = pointing
                 .pieces
@@ -1425,11 +1794,11 @@ pub(crate) mod surfaces {
             let (Some(piece), Some(frame)) = (piece, pointing.frame) else {
                 return CursorIcon::Default;
             };
-            pointing.pointer.moved(&frame, piece, x, y)
+            pointing.pointers.moved(seat, &frame, piece, x, y)
         }
 
-        fn left(&self) {
-            self.0.lock().pointer.left();
+        fn left(&self, seat: &WlSeat) {
+            self.0.lock().pointers.left(seat);
         }
 
         fn button(&self, seat: &WlSeat, serial: u32, time: u32, code: u32, pressed: bool) {
@@ -1437,7 +1806,7 @@ pub(crate) mod surfaces {
             let Some(frame) = pointing.frame else {
                 return;
             };
-            if let Some(action) = pointing.pointer.button(&frame, code, pressed, time) {
+            if let Some(action) = pointing.pointers.button(seat, &frame, code, pressed, time) {
                 pointing.asked = Some(Asked {
                     action,
                     seat: seat.clone(),
@@ -1446,14 +1815,15 @@ pub(crate) mod surfaces {
             }
         }
 
-        fn content_moved(&self, x: f64, y: f64) {
+        fn content_moved(&self, seat: &WlSeat, x: f64, y: f64) {
             let mut pointing = self.0.lock();
-            if pointing.chrome.moved(x, y) == Some(Action::Move)
-                && let Some((seat, serial)) = pointing.armed.take()
-            {
+            let Pointing {
+                pointers, chrome, ..
+            } = &mut *pointing;
+            if let Some(serial) = pointers.content_moved(seat, chrome, x, y) {
                 pointing.asked = Some(Asked {
                     action: Action::Move,
-                    seat,
+                    seat: seat.clone(),
                     serial,
                 });
             }
@@ -1461,19 +1831,22 @@ pub(crate) mod surfaces {
 
         fn content_button(&self, seat: &WlSeat, serial: u32, code: u32, pressed: bool) -> bool {
             let mut pointing = self.0.lock();
-            let frame = pointing.frame;
-            let answer = pointing
-                .chrome
-                .button(frame.as_ref(), code, pressed, Instant::now());
-            pointing.armed = None;
+            let Pointing {
+                pointers,
+                chrome,
+                frame,
+                ..
+            } = &mut *pointing;
+            let press = ContentPress {
+                serial,
+                code,
+                pressed,
+            };
+            let answer =
+                pointers.content_button(seat, chrome, frame.as_ref(), press, Instant::now());
             match answer {
                 ContentAnswer::App => false,
-                ContentAnswer::Taken(None) => {
-                    if pressed {
-                        pointing.armed = Some((seat.clone(), serial));
-                    }
-                    true
-                }
+                ContentAnswer::Taken(None) => true,
                 ContentAnswer::Taken(Some(action)) => {
                     pointing.asked = Some(Asked {
                         action,
@@ -1482,6 +1855,20 @@ pub(crate) mod surfaces {
                     });
                     true
                 }
+            }
+        }
+
+        fn seat_gone(&self, seat: &WlSeat) {
+            let mut pointing = self.0.lock();
+            pointing.pointers.forget(seat);
+            // What its press asked for names a seat the compositor no longer
+            // knows.
+            if pointing
+                .asked
+                .as_ref()
+                .is_some_and(|asked| asked.seat == *seat)
+            {
+                pointing.asked = None;
             }
         }
     }
@@ -1500,7 +1887,7 @@ pub(crate) mod surfaces {
     #[derive(Debug, Clone, PartialEq)]
     struct Shown {
         rect: Rect,
-        scale: f64,
+        scale: DrawScale,
         /// The title bar's look; `None` for a margin.
         header: Option<HeaderShown>,
     }
@@ -1523,21 +1910,78 @@ pub(crate) mod surfaces {
         subsurface: WlSubsurface,
         viewport: Option<WpViewport>,
         shown: Option<Shown>,
+        /// The buffers it draws into.
+        buffers: BufferSet<ShmBuffer>,
     }
 
     /// A frame piece's surface: the content's surface names the outputs, so
     /// what a piece's says is not read.
     pub(crate) struct FramePiece;
 
-    /// A buffer a frame piece was drawn into, destroyed once the compositor
-    /// releases it.
-    pub(crate) struct FrameBuffer;
+    /// A frame buffer's user data: the mark its `release` clears.
+    pub(crate) struct FrameBuffer(Lent);
+
+    /// A buffer of shared memory a piece draws into: the memory file, and
+    /// the `wl_buffer` over the pool made of it.
+    struct ShmBuffer {
+        memory: File,
+        buffer: WlBuffer,
+    }
+
+    impl ShmBuffer {
+        /// A buffer of `width` by `height` ARGB8888 pixels, whose release
+        /// clears `lent`; `None` where the memory cannot be had.
+        fn try_new(
+            shm: &WlShm,
+            queue: &QueueHandle<WaylandState>,
+            (width, height): (u32, u32),
+            lent: &Lent,
+        ) -> Option<Self> {
+            let width = i32::try_from(width).ok()?;
+            let height = i32::try_from(height).ok()?;
+            let stride = width.checked_mul(4)?;
+            let size = stride.checked_mul(height)?;
+            let memory =
+                rustix::fs::memfd_create("flui-window-frame", rustix::fs::MemfdFlags::CLOEXEC)
+                    .ok()?;
+            let memory = File::from(memory);
+            memory.set_len(u64::try_from(size).ok()?).ok()?;
+            let pool = shm.create_pool(memory.as_fd(), size, queue, ());
+            let buffer = pool.create_buffer(
+                0,
+                width,
+                height,
+                stride,
+                wl_shm::Format::Argb8888,
+                queue,
+                FrameBuffer(lent.clone()),
+            );
+            // The buffer keeps the pool's memory mapped in the compositor.
+            pool.destroy();
+            Some(Self { memory, buffer })
+        }
+
+        /// Write `pixels`, which are the buffer's size, into its memory.
+        fn write(&self, pixels: &Pixels) -> Option<()> {
+            self.memory.write_all_at(&pixels.data, 0).ok()
+        }
+    }
+
+    /// Mark the whole of `surface` damaged, whose buffer changed: a
+    /// rectangle larger than any surface or buffer covers it in either
+    /// coordinates.
+    pub(crate) fn damage_all(surface: &WlSurface) {
+        match Damage::on(surface.version()) {
+            Damage::Buffer => surface.damage_buffer(0, 0, i32::MAX, i32::MAX),
+            Damage::Surface => surface.damage(0, 0, i32::MAX, i32::MAX),
+        }
+    }
 
     /// The title last rasterized, kept while what it was drawn for holds.
     struct TitleKept {
         text: String,
         room: f64,
-        scale: f64,
+        scale: DrawScale,
         fonts: u64,
         mask: Option<TitleMask>,
     }
@@ -1585,6 +2029,7 @@ pub(crate) mod surfaces {
                         subsurface,
                         viewport,
                         shown: None,
+                        buffers: BufferSet::default(),
                     }
                 })
                 .collect();
@@ -1601,10 +2046,10 @@ pub(crate) mod surfaces {
             }
         }
 
-        /// Show `frame` (`None`: none) at `scale`, with `look` and `title`:
-        /// draw each piece whose image changed, hide each no longer shown.
-        /// Returns whether any piece was committed, which shows with the
-        /// content surface's next commit.
+        /// Show `frame` (`None`: none) on a window drawn at `scale`, with
+        /// `look` and `title`: draw each piece whose image changed, hide
+        /// each no longer shown. Returns whether any piece was committed,
+        /// which shows with the content surface's next commit.
         pub(crate) fn update(
             &mut self,
             frame: Option<Frame>,
@@ -1616,10 +2061,10 @@ pub(crate) mod surfaces {
             let (hovered, held) = self.record.buttons();
             // Without a viewport a buffer is the surface's size: drawn at
             // scale one, which the compositor scales as it does the content.
-            let scale = if self.globals.viewporter.is_some() && scale.is_finite() && scale > 0.0 {
-                scale
+            let scale = if self.globals.viewporter.is_some() {
+                DrawScale::of(scale)
             } else {
-                1.0
+                DrawScale::ONE
             };
             let fonts = self.text.generation();
             let mut committed = false;
@@ -1656,8 +2101,8 @@ pub(crate) mod surfaces {
         }
 
         /// Draw piece `index` as `shown` and commit it; `None` where it
-        /// could not be drawn (no size, past the largest extent, no shared
-        /// memory).
+        /// could not be drawn (no size, past the largest extent or area, no
+        /// shared memory).
         fn draw(&mut self, index: usize, shown: &Shown) -> Option<()> {
             let rect = shown.rect;
             let pixels = if let Some(header) = &shown.header {
@@ -1682,22 +2127,29 @@ pub(crate) mod surfaces {
                     device_extent(rect.height, 1.0)?,
                 )?
             };
-            let buffer = shm_buffer(&self.globals.shm, &self.globals.queue, &pixels)?;
-            let part = &self.pieces[index];
+            let FrameGlobals { shm, queue, .. } = &self.globals;
+            let part = &mut self.pieces[index];
+            let size = (pixels.width, pixels.height);
+            let drawn = part.buffers.lend(
+                size,
+                |lent| ShmBuffer::try_new(shm, queue, size, lent),
+                |replaced| replaced.buffer.destroy(),
+            )?;
+            drawn.write(&pixels)?;
             part.subsurface
                 .set_position(rounded(rect.x), rounded(rect.y));
             if let Some(viewport) = &part.viewport {
                 viewport.set_destination(rounded(rect.width).max(1), rounded(rect.height).max(1));
             }
-            part.surface.attach(Some(&buffer), 0, 0);
-            part.surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
+            part.surface.attach(Some(&drawn.buffer), 0, 0);
+            damage_all(&part.surface);
             part.surface.commit();
             Some(())
         }
 
         /// The title's coverage for `text` at most `room` wide at `scale`,
         /// rasterized again only when one of them or the fonts changed.
-        fn title_mask(&mut self, text: &str, room: f64, scale: f64) -> Option<&TitleMask> {
+        fn title_mask(&mut self, text: &str, room: f64, scale: DrawScale) -> Option<&TitleMask> {
             let fonts = self.text.generation();
             let kept = self.title.as_ref().is_some_and(|kept| {
                 kept.text == text && kept.room == room && kept.scale == scale && kept.fonts == fonts
@@ -1724,8 +2176,18 @@ pub(crate) mod surfaces {
                 .collect()
         }
 
-        /// Destroy the frame's objects; the input reaches none of its
-        /// surfaces from here.
+        /// The most buffers any piece keeps now, for a test.
+        #[cfg(any(test, feature = "testing"))]
+        pub(crate) fn most_buffers(&self) -> usize {
+            self.pieces
+                .iter()
+                .map(|part| part.buffers.len())
+                .max()
+                .unwrap_or(0)
+        }
+
+        /// Destroy the frame's objects, its buffers among them; the input
+        /// reaches none of its surfaces from here.
         pub(crate) fn destroy(self) {
             {
                 let mut pointing = self.record.0.lock();
@@ -1733,56 +2195,28 @@ pub(crate) mod surfaces {
                 pointing.frame = None;
                 pointing.asked = None;
             }
-            for part in self.pieces {
+            for mut part in self.pieces {
                 if let Some(viewport) = part.viewport {
                     viewport.destroy();
                 }
                 part.subsurface.destroy();
                 part.surface.destroy();
+                part.buffers.clear(|kept| kept.buffer.destroy());
             }
         }
-    }
-
-    /// `pixels` in a `wl_shm` buffer of its own: a memory file written with
-    /// the image, shared with the compositor through a pool made for it.
-    fn shm_buffer(
-        shm: &WlShm,
-        queue: &QueueHandle<WaylandState>,
-        pixels: &super::Pixels,
-    ) -> Option<WlBuffer> {
-        let width = i32::try_from(pixels.width).ok()?;
-        let height = i32::try_from(pixels.height).ok()?;
-        let stride = width.checked_mul(4)?;
-        let size = i32::try_from(pixels.data.len()).ok()?;
-        let memory =
-            rustix::fs::memfd_create("flui-window-frame", rustix::fs::MemfdFlags::CLOEXEC).ok()?;
-        let file = std::fs::File::from(memory);
-        file.write_all_at(&pixels.data, 0).ok()?;
-        let pool = shm.create_pool(file.as_fd(), size, queue, ());
-        let buffer = pool.create_buffer(
-            0,
-            width,
-            height,
-            stride,
-            wl_shm::Format::Argb8888,
-            queue,
-            FrameBuffer,
-        );
-        pool.destroy();
-        Some(buffer)
     }
 
     impl Dispatch<WlBuffer, FrameBuffer> for WaylandState {
         fn event(
             _: &mut Self,
-            buffer: &WlBuffer,
+            _: &WlBuffer,
             event: wl_buffer::Event,
-            _: &FrameBuffer,
+            FrameBuffer(lent): &FrameBuffer,
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
             if let wl_buffer::Event::Release = event {
-                buffer.destroy();
+                lent.release();
             }
         }
     }

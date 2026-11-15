@@ -176,6 +176,9 @@ pub struct ClientFrameReport {
     /// (`"move"`, `"resize"`, `"menu"`, and the modes and close it carried
     /// out), with the serial of the input it named.
     pub requests: Vec<(&'static str, u32)>,
+    /// The most buffers any surface of the frame keeps now: the ones the
+    /// compositor holds and the released ones it draws into again.
+    pub buffers: usize,
 }
 
 impl ClientFrameReport {
@@ -195,6 +198,7 @@ pub fn client_frame_report(window: &dyn HostWindow) -> Option<ClientFrameReport>
     let said = window.client_frame_said();
     let rect = |rect: Rect| (rect.x, rect.y, rect.width, rect.height);
     Some(ClientFrameReport {
+        buffers: said.buffers,
         geometry: said.geometry.map(rect),
         pieces: said
             .pieces
