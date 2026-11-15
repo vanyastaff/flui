@@ -19,8 +19,10 @@ fn manifest(name: &str, rest: &str) -> String {
 /// facade, whose `system` feature enables the capability crate `flui-sys`
 /// and `plain` a crate that is not one; `bare` on `flui-core` alone, from
 /// the checkout that also has the capability crate `flui-direct`. `app`'s
-/// tests turn on `flui-sys`'s `background` feature as a dev-dependency, and
-/// its Android build alone turns on the facade's `telephony`.
+/// tests turn on `flui-sys`'s `background` feature as a dev-dependency and
+/// link an older `flui-sys` without a plugin, whose directory cargo lists
+/// first; its Android build alone turns on the facade's `telephony`, and its
+/// iOS build alone the facade's `camera`.
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let capability = "[package.metadata.flui.declares]\nschema = 1\n\
@@ -32,7 +34,12 @@ fn fixture() -> tempfile::TempDir {
                       [package.metadata.flui.declares.features.background.android]\n\
                       permissions = [\"android.permission.FOREGROUND_SERVICE\"]\n\
                       [package.metadata.flui.declares.features.telephony.android]\n\
-                      permissions = [\"android.permission.READ_PHONE_STATE\"]\n";
+                      permissions = [\"android.permission.READ_PHONE_STATE\"]\n\
+                      [[package.metadata.flui.declares.features.telephony.apple.privacy.accessed-apis]]\n\
+                      category = \"NSPrivacyAccessedAPICategorySystemBootTime\"\n\
+                      reasons = [\"35F9.1\"]\n\
+                      [package.metadata.flui.declares.features.camera.android]\n\
+                      permissions = [\"android.permission.CAMERA\"]\n";
     let files = [
         (
             "ws/Cargo.toml",
@@ -47,7 +54,7 @@ fn fixture() -> tempfile::TempDir {
                 "[dependencies]\nflui-sys = { path = \"../sys\", optional = true }\n\
                  plain = { path = \"../plain\", optional = true }\n\
                  [features]\nsystem = [\"dep:flui-sys\"]\nplain = [\"dep:plain\"]\n\
-                 telephony = [\"flui-sys?/telephony\"]\n",
+                 telephony = [\"flui-sys?/telephony\"]\ncamera = [\"flui-sys?/camera\"]\n",
             ),
         ),
         (
@@ -55,10 +62,14 @@ fn fixture() -> tempfile::TempDir {
             manifest(
                 "flui-sys",
                 &format!(
-                    "[features]\nbackground = []\ntelephony = []\n\
+                    "[features]\nbackground = []\ntelephony = []\ncamera = []\n\
                      [package.metadata.flui.capability]\nplugin = \"SysPlugin\"\n{capability}"
                 ),
             ),
+        ),
+        (
+            "a-old/sys/Cargo.toml",
+            "[package]\nname = \"flui-sys\"\nversion = \"0.0.1\"\nedition = \"2024\"\n".to_owned(),
         ),
         ("ws/plain/Cargo.toml", manifest("plain", "")),
         ("ws/core/Cargo.toml", manifest("flui-core", "")),
@@ -76,8 +87,11 @@ fn fixture() -> tempfile::TempDir {
                 "[workspace]\n[dependencies]\nflui = { path = \"../ws/flui\" }\n\
                  [target.'cfg(target_os = \"android\")'.dependencies]\n\
                  flui = { path = \"../ws/flui\", features = [\"telephony\"] }\n\
+                 [target.'cfg(target_os = \"ios\")'.dependencies]\n\
+                 flui = { path = \"../ws/flui\", features = [\"camera\"] }\n\
                  [dev-dependencies]\n\
-                 flui-sys = { path = \"../ws/sys\", features = [\"background\"] }\n",
+                 flui-sys = { path = \"../ws/sys\", features = [\"background\"] }\n\
+                 old-sys = { package = \"flui-sys\", path = \"../a-old/sys\" }\n",
             ),
         ),
         (
@@ -112,14 +126,17 @@ fn added(stdout: &[u8]) -> serde_json::Value {
 }
 
 /// `flui add system` enables the facade feature that links the capability
-/// crate and prints the line that registers its plugin, with what the crate
-/// brings to the manifests of every platform the application builds for:
-/// what a feature only its Android build turns on declares, on any host,
-/// and not what a feature only its tests turn on does; a second run changes
-/// nothing; a feature whose
-/// crate states no plugin is refused and undone; an unknown name lists what
-/// the facade offers; without the facade, the crate is added from the
-/// checkout the application's FLUI dependencies come from.
+/// crate (the facade's dependency, not another crate of its name the tests
+/// link) and prints the line that registers its plugin, with what the crate
+/// brings to each platform's manifests from that platform's build, on any
+/// host: the Android permissions of the Android build, a feature only it
+/// turns on included, and not those of a feature only the iOS build turns
+/// on; the Apple accessed APIs of the iOS build and not those of the
+/// Android-only feature; nothing a feature only its tests turn on declares.
+/// A second run changes nothing; a feature whose crate states no plugin is
+/// refused and undone; an unknown name lists what the facade offers;
+/// without the facade, the crate is added from the checkout the
+/// application's FLUI dependencies come from.
 #[test]
 fn add_links_a_capability_and_shows_its_registration() {
     let dir = fixture();

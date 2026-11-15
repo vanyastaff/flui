@@ -197,21 +197,32 @@ async fn select_target_for(
                 metadata.workspace_members.contains(&package.id) && package.name.as_str() == name
             })
             .collect(),
+        // What cargo builds without `--package`: at the workspace's root,
+        // virtual or a package itself, its default members (the root
+        // package alone unless `default-members` names others); in a
+        // member, that member.
         _ => {
-            if let Some(package) = metadata.packages.iter().find(|package| {
+            let at_root = metadata
+                .workspace_root
+                .join("Cargo.toml")
+                .as_std_path()
+                .canonicalize()
+                .is_ok_and(|root| root == manifest);
+            match metadata.packages.iter().find(|package| {
                 package
                     .manifest_path
                     .as_std_path()
                     .canonicalize()
                     .is_ok_and(|path| path == manifest)
             }) {
-                vec![package]
-            } else {
-                metadata
+                Some(package) if !at_root || !metadata.workspace_default_members.is_available() => {
+                    vec![package]
+                }
+                _ => metadata
                     .packages
                     .iter()
                     .filter(|package| metadata.workspace_default_members.contains(&package.id))
-                    .collect()
+                    .collect(),
             }
         }
     };

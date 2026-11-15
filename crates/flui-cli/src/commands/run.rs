@@ -164,11 +164,7 @@ fn run_session(
     if matches!(project, Project::Application { .. }) {
         let root = std::env::current_dir().context("failed to resolve application directory")?;
         let host = crate::build::DesktopBuilder::detect_host_target()?;
-        crate::declarations::Declarations::collect(
-            crate::declarations::Build::at(&root),
-            &[&host],
-        )?
-        .require_one_instance(&host)?;
+        require_one_instance(&root, &host, agent.as_ref())?;
     }
     if hot_reload {
         match project {
@@ -313,11 +309,53 @@ fn start_agent_session(
     Ok(session)
 }
 
-/// Adds the agent's feature and credentials to a `cargo` command.
+/// The features a desktop run builds the application with beyond its
+/// defaults: the agent's driver feature, when the profile needs one. The
+/// cargo commands that build and run the application and the check of what
+/// it declares read this one list, so the check reads what is built.
+fn desktop_features(agent: Option<&Session>) -> Vec<String> {
+    agent
+        .and_then(Session::driver_feature)
+        .map(str::to_owned)
+        .into_iter()
+        .collect()
+}
+
+/// Adds the run's features and the agent's credentials to a `cargo`
+/// command.
 fn with_agent(cmd: &mut Command, agent: Option<&Session>) {
+    for feature in desktop_features(agent) {
+        cmd.args(["--features", &feature]);
+    }
     if let Some(session) = agent {
         session.apply(cmd);
     }
+}
+
+/// Refuse a desktop run for `host` of the application at `root` that opens
+/// links or files without the code that keeps one instance of it. What it
+/// opens is read from the build `cargo run` makes there: the package whose
+/// binary it runs, as `flui build` selects it, with the run's features
+/// ([`desktop_features`]).
+fn require_one_instance(root: &Path, host: &str, agent: Option<&Session>) -> CliResult<()> {
+    let selected = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("start the target selection runtime")?
+        .block_on(crate::build::util::cargo::select_target(
+            root,
+            &crate::build::BuildUnit::DefaultBinary,
+        ))?;
+    let package = selected.built_package();
+    let features = desktop_features(agent);
+    crate::declarations::Declarations::collect(
+        crate::declarations::Build::at(root)
+            .selecting(crate::declarations::Selection::of_built(Some(&package)))
+            .features(&features),
+        &[host],
+    )?
+    .require_one_instance(host)?;
+    Ok(())
 }
 
 /// Ask the application `cmd` starts to register its URL schemes with
@@ -3113,5 +3151,79 @@ mod tests {
                 device_selection_prefers_exact_id_then_name_then_unique_prefix,
             ),
         ]);
+    }
+
+    /// The one-instance check of a desktop run reads what `cargo run`
+    /// builds: at a workspace root, the default member whose binary it runs,
+    /// as the application even where another default member depends on it,
+    /// and the features the run turns on: an optimized `--agent` run's
+    /// driver feature reaches the cargo command and the check alike, so an
+    /// application whose `driver` brings the one-instance code runs.
+    #[test]
+    fn a_desktop_run_checks_what_it_builds() {
+        let project = tempfile::tempdir().expect("a temporary directory");
+        let write = |path: &str, contents: &str| {
+            let path = project.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent directory"))
+                .expect("the directories");
+            std::fs::write(path, contents).expect("a fixture file");
+        };
+        let manifest = |name: &str, rest: &str| {
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n{rest}")
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nresolver = \"3\"\nmembers = [\"app\", \"bench\"]\n",
+        );
+        write(
+            "app/Cargo.toml",
+            &manifest(
+                "app",
+                "[dependencies]\nflui = { path = \"../flui\" }\n\
+                 [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n",
+            ),
+        );
+        write("app/src/main.rs", "fn main() {}\n");
+        write(
+            "bench/Cargo.toml",
+            &manifest("bench", "[dependencies]\napp = { path = \"../app\" }\n"),
+        );
+        write("bench/src/lib.rs", "");
+        write(
+            "flui/Cargo.toml",
+            &manifest(
+                "flui",
+                "[features]\ndriver = [\"flui-native/single-instance\"]\n\
+                 [dependencies]\nflui-native = { path = \"../flui-native\" }\n",
+            ),
+        );
+        write("flui/src/lib.rs", "");
+        write(
+            "flui-native/Cargo.toml",
+            &manifest("flui-native", "[features]\nsingle-instance = []\n"),
+        );
+        write("flui-native/src/lib.rs", "");
+
+        let host = "x86_64-unknown-linux-gnu";
+        let plain = super::require_one_instance(project.path(), host, None)
+            .expect_err("a run without the one-instance code");
+        assert!(
+            format!("{plain:?}").contains("single-instance"),
+            "the application that cargo runs is refused for its links: {plain:?}"
+        );
+
+        let app = project.path().join("app");
+        let session = crate::agent::Session::create(&app, None, None)
+            .expect("an agent session")
+            .with_driver_feature("flui/driver".to_owned());
+        let mut cargo = std::process::Command::new("cargo");
+        super::with_agent(&mut cargo, Some(&session));
+        assert_eq!(
+            cargo.get_args().collect::<Vec<_>>(),
+            ["--features", "flui/driver"],
+            "the run builds with the driver feature"
+        );
+        super::require_one_instance(&app, host, Some(&session))
+            .expect("the driver feature brings the one-instance code");
     }
 }

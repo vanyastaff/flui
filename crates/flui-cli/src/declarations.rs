@@ -32,7 +32,7 @@ use serde::Deserialize;
 
 use crate::build::BuiltPackage;
 use crate::build::error::{BuildError, BuildResult};
-use linked::{Edges, LinkedBuild, LinkedCrates, Target};
+use linked::{Edges, LinkedBuild, LinkedCrates};
 pub(crate) use opening::{AssociatedDomain, FileType, UrlScheme};
 
 pub(crate) mod capability;
@@ -56,7 +56,8 @@ const ONE_INSTANCE: (&str, &str) = ("flui-native", "single-instance");
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Selection<'a> {
     /// What cargo builds by default in the build's directory: the package
-    /// there, or at a workspace's root its default members.
+    /// there, or at a workspace's root its default member. A root with
+    /// several default members selects no one application.
     Default,
     /// The library or a binary of the workspace member of this name.
     Package(&'a str),
@@ -112,17 +113,40 @@ impl<'a> Build<'a> {
     }
 }
 
-/// The packages cargo builds by default in the directory `metadata` was read
-/// in: the package there, or at a workspace's root, virtual or not, its
-/// default members.
-fn default_packages(metadata: &Metadata) -> BuildResult<Vec<&Package>> {
-    if metadata.workspace_default_members.is_available() {
-        Ok(metadata.workspace_default_packages())
-    } else {
-        Err(BuildError::Other(
+/// The package cargo builds by default in the directory `metadata` was read
+/// in: the package there, or at a workspace's root, virtual or not, its one
+/// default member.
+///
+/// # Errors
+///
+/// A root whose default members are several: each is an application of its
+/// own, and one application's manifests do not join another's declarations,
+/// so the build has to name the one it is for.
+fn default_package(metadata: &Metadata) -> BuildResult<&Package> {
+    if !metadata.workspace_default_members.is_available() {
+        return Err(BuildError::Other(
             "cargo metadata names no default members of the workspace; cargo 1.71 or newer does"
                 .to_owned(),
-        ))
+        ));
+    }
+    match metadata.workspace_default_packages().as_slice() {
+        [package] => Ok(package),
+        packages => Err(BuildError::invalid_config(
+            "default-members",
+            format!(
+                "cargo builds {} here, and an application's manifests declare what one \
+                 application links; run in the application's directory or name its package",
+                if packages.is_empty() {
+                    "no package".to_owned()
+                } else {
+                    packages
+                        .iter()
+                        .map(|package| format!("`{}`", package.name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            ),
+        )),
     }
 }
 
@@ -132,9 +156,10 @@ fn default_packages(metadata: &Metadata) -> BuildResult<Vec<&Package>> {
 /// dependency that declared a scheme would register a link the run refuses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CrateRole {
-    /// Nothing in the build depends on the crate.
+    /// The package the build compiles, whatever else of the build depends
+    /// on it (an example's dev-dependency may).
     Application,
-    /// Another crate of the build depends on it.
+    /// A crate the build links for the application.
     Dependency,
 }
 
@@ -480,8 +505,9 @@ impl Declarations {
     ///
     /// The failure of `cargo metadata` or of `cargo tree`,
     /// [`BuildError::InvalidConfig`] for a crate whose declarations are
-    /// malformed, and for a selected package no workspace member has the
-    /// name of.
+    /// malformed, for a selected package no workspace member has the name
+    /// of, and for cargo's default selection at a root with several default
+    /// members.
     pub(crate) fn collect(build: Build<'_>, targets: &[&str]) -> BuildResult<Self> {
         let mut joined = Self::default();
         for target in targets {
@@ -508,38 +534,39 @@ impl Declarations {
                         )
                     })
             };
-            let (roots, edges) = match build.selection {
-                Selection::Default => (default_packages(&metadata)?, Edges::Normal),
-                Selection::Package(name) => (vec![member(name)?], Edges::Normal),
-                Selection::Example(name) => (vec![member(name)?], Edges::NormalAndDev),
+            let (root, edges) = match build.selection {
+                Selection::Default => (default_package(&metadata)?, Edges::Normal),
+                Selection::Package(name) => (member(name)?, Edges::Normal),
+                Selection::Example(name) => (member(name)?, Edges::NormalAndDev),
             };
             let linked = LinkedCrates::read(
                 &LinkedBuild {
                     dir: build.dir,
-                    target: Target::Triple(target),
+                    target,
                     edges,
-                    roots: &roots,
+                    root,
                     features: build.features,
                 },
-                &metadata.packages,
+                &metadata,
             )?;
-            joined.join(Self::of_build(&metadata, &roots, edges, &linked)?);
+            joined.join(Self::of_build(&metadata, root, edges, &linked)?);
         }
         Ok(joined)
     }
 
-    /// The declarations of the crates the build of `roots` links: the
-    /// crates of `linked` the roots reach in `metadata`'s graph by normal
-    /// edges, themselves included, and for an example's build
-    /// ([`Edges::NormalAndDev`]) by the roots' own dev-dependencies too,
-    /// each with the features `linked` gives it.
+    /// The declarations of the crates the build of `root` links: the
+    /// crates of `linked` the root reaches in `metadata`'s graph by normal
+    /// edges, itself included, and for an example's build
+    /// ([`Edges::NormalAndDev`]) by the root's own dev-dependencies too,
+    /// each with the features `linked` gives it. The root is the
+    /// application; every other crate is a dependency.
     ///
     /// `metadata` has the crates' tables and the edges between them, but
     /// its features and its crates are those of everything the workspace
     /// can build; `linked` has the crates and the features of this build.
     fn of_build(
         metadata: &Metadata,
-        roots: &[&Package],
+        root: &Package,
         edges: Edges,
         linked: &LinkedCrates,
     ) -> BuildResult<Self> {
@@ -566,17 +593,15 @@ impl Declarations {
         let nodes: BTreeMap<&PackageId, &cargo_metadata::Node> =
             resolve.nodes.iter().map(|node| (&node.id, node)).collect();
         // Whether an example's build links the dev-dependencies of `id`: only
-        // a root's own.
-        let links_dev = |id: &PackageId| {
-            edges == Edges::NormalAndDev && roots.iter().any(|root| root.id == *id)
-        };
+        // the root's own.
+        let links_dev = |id: &PackageId| edges == Edges::NormalAndDev && root.id == *id;
         // The crates the artifact links, each with its features, found from
-        // the roots, which `linked` holds. A build edge is not followed:
+        // the root, which `linked` holds. A build edge is not followed:
         // what a build script depends on is linked into the script. A
         // dependency `linked` does not hold is one this build leaves out,
         // such as an optional one only a dev-dependency's feature turns on.
         let mut built: BTreeMap<&PackageId, (&Package, &BTreeSet<String>)> = BTreeMap::new();
-        let mut pending: Vec<&PackageId> = roots.iter().map(|root| &root.id).collect();
+        let mut pending: Vec<&PackageId> = vec![&root.id];
         while let Some(id) = pending.pop() {
             let Some(crate_built) = packages
                 .get(id)
@@ -596,24 +621,12 @@ impl Declarations {
                 })
             }));
         }
-        // A crate another crate of the build depends on, by a normal or
-        // build edge: a test crate that depends on the application leaves
-        // it an application.
-        let dependencies: BTreeSet<&PackageId> = built
-            .keys()
-            .filter_map(|id| nodes.get(id).map(|node| (links_dev(id), node)))
-            .flat_map(|(links_dev, node)| {
-                dependencies_of(node, move |kind| {
-                    links_dev || kind != DependencyKind::Development
-                })
-            })
-            .collect();
         let mut joined = Self::default();
         for (id, (package, features)) in &built {
-            let role = if dependencies.contains(id) {
-                CrateRole::Dependency
-            } else {
+            let role = if **id == root.id {
                 CrateRole::Application
+            } else {
+                CrateRole::Dependency
             };
             joined.add(package, features, role)?;
             if package.name.as_str() == ONE_INSTANCE.0 && features.contains(ONE_INSTANCE.1) {
@@ -624,44 +637,38 @@ impl Declarations {
     }
 
     /// What `package`, a dependency of `application`, declares alone for
-    /// every platform the application builds for: with the features a build
-    /// of the application for any target enables for it, so a feature only
-    /// its Android build turns on counts on any host. `metadata` is the
+    /// `targets` (Rust target triples): with the features the application's
+    /// build for each target enables for it, whatever the host, joined over
+    /// the targets that link it; nothing when none does. `metadata` is the
     /// graph `cargo metadata` resolves at `app_dir`, the application's
     /// directory, for every platform.
     ///
     /// # Errors
     ///
-    /// As [`Declarations::collect`], for this one crate's table, and
-    /// [`BuildError::InvalidConfig`] when the application does not link
-    /// `package`.
+    /// As [`Declarations::collect`], for this one crate's table.
     pub(crate) fn of_linked_crate(
         app_dir: &Path,
         metadata: &Metadata,
         application: &Package,
         package: &Package,
+        targets: &[&str],
     ) -> BuildResult<Self> {
-        let linked = LinkedCrates::read(
-            &LinkedBuild {
-                dir: app_dir,
-                target: Target::Every,
-                edges: Edges::Normal,
-                roots: &[application],
-                features: &[],
-            },
-            &metadata.packages,
-        )?;
-        let features = linked.features_of(&package.id).ok_or_else(|| {
-            BuildError::invalid_config(
-                "Cargo.toml",
-                format!(
-                    "the application does not link `{}`: no normal dependency reaches it",
-                    package.name
-                ),
-            )
-        })?;
         let mut declarations = Self::default();
-        declarations.add(package, features, CrateRole::Dependency)?;
+        for target in targets {
+            let linked = LinkedCrates::read(
+                &LinkedBuild {
+                    dir: app_dir,
+                    target,
+                    edges: Edges::Normal,
+                    root: application,
+                    features: &[],
+                },
+                metadata,
+            )?;
+            if let Some(features) = linked.features_of(&package.id) {
+                declarations.add(package, features, CrateRole::Dependency)?;
+            }
+        }
         Ok(declarations)
     }
 
@@ -1650,12 +1657,15 @@ mod tests {
     }
 
     /// The links an application opens are declared by the application, the
-    /// crate nothing in the build links: `#[flui::main]` carries its lists
-    /// into the run, which opens only those. A dependency that declares a
-    /// scheme, even under a feature the build leaves off, is refused by name;
-    /// an application a test crate of its workspace reaches only as a
-    /// dev-dependency is still the application, and the build of that test
-    /// crate alone, which does not link it, opens none of its links.
+    /// package the build compiles: `#[flui::main]` carries its lists into
+    /// the run, which opens only those. A dependency that declares a scheme,
+    /// even under a feature the build leaves off, is refused by name. The
+    /// package built stays the application when a crate of its build depends
+    /// on it, as an example's dev-dependency may; the build of a test crate
+    /// that reaches it only as a dev-dependency opens none of its links. A
+    /// workspace root whose default members are several applications selects
+    /// none of them: one application's manifests do not join another's
+    /// declarations, so the build names the one it is for.
     #[test]
     fn only_the_application_declares_the_links_it_opens() {
         let dependency = fixture(&[
@@ -1696,30 +1706,53 @@ mod tests {
                 "app",
                 &manifest(
                     "app",
-                    "[package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n",
+                    "[dev-dependencies]\nharness = { path = \"../harness\" }\n\
+                     [package.metadata.flui.declares]\nschema = 3\nurl-schemes = [\"notes\"]\n",
                 ),
+            ),
+            (
+                "harness",
+                &manifest("harness", "[dependencies]\napp = { path = \"../app\" }\n"),
             ),
         ]);
         std::fs::write(
             tested.path().join("Cargo.toml"),
-            "[workspace]\nresolver = \"3\"\nmembers = [\"app\", \"checks\"]\n",
+            "[workspace]\nresolver = \"3\"\nmembers = [\"app\", \"checks\", \"harness\"]\n",
         )
         .expect("the workspace manifest");
-        let schemes = |dir: &Path| -> Vec<String> {
-            collect(dir, "aarch64-linux-android")
-                .expect("declarations")
-                .url_schemes()
-                .map(|(scheme, _)| scheme.to_string())
-                .collect()
+        let schemes = |build: Build<'_>| -> Result<Vec<String>, String> {
+            Declarations::collect(build, &["aarch64-linux-android"])
+                .map(|declarations| {
+                    declarations
+                        .url_schemes()
+                        .map(|(scheme, _)| scheme.to_string())
+                        .collect()
+                })
+                .map_err(|error| error.to_string())
         };
+        let app = tested.path().join("app");
+        for build in [
+            Build::at(&app),
+            Build::at(tested.path()).selecting(Selection::Package("app")),
+            Build::at(&app).selecting(Selection::Example("app")),
+        ] {
+            assert_eq!(
+                schemes(build),
+                Ok(vec!["notes".to_owned()]),
+                "the package built declares its links: {build:?}"
+            );
+        }
         assert_eq!(
-            schemes(tested.path()),
-            ["notes"],
-            "an application a test crate depends on declares its links"
-        );
-        assert!(
-            schemes(&tested.path().join("checks")).is_empty(),
+            schemes(Build::at(&tested.path().join("checks"))),
+            Ok(Vec::new()),
             "a dev-dependency is not linked, so its links are not the build's"
+        );
+        let several = schemes(Build::at(tested.path()));
+        assert!(
+            several
+                .as_ref()
+                .is_err_and(|error| error.contains("cargo builds `app`, `checks`, `harness` here")),
+            "{several:?}"
         );
     }
 

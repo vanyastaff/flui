@@ -16,11 +16,12 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use cargo_metadata::{DependencyKind, Metadata, MetadataCommand, Package};
+use cargo_metadata::{Dependency, DependencyKind, Metadata, MetadataCommand, Package};
 use serde::Serialize;
 
 use crate::declarations::Declarations;
 use crate::declarations::capability::{PluginPath, plugin_of, plugin_of_manifest};
+use crate::declarations::verify::ManifestKind;
 use crate::error::{CliError, CliResult, ResultExt};
 use crate::ui;
 
@@ -35,6 +36,8 @@ enum Target {
         /// The facade's key in `[dependencies]` (its name, or a rename).
         key: String,
         feature: String,
+        /// The crate's key in the facade's `[dependencies]`.
+        crate_key: String,
         crate_name: String,
         enabled: bool,
     },
@@ -118,7 +121,11 @@ pub(crate) fn execute(name: &str) -> CliResult<()> {
     let snapshot = Snapshot::take(&[manifest.as_path(), lock.as_std_path()])?;
     let changed = !target.linked();
     let added = apply(&target, &manifest, &dir).and_then(|()| describe(&dir, &target));
-    let (plugin, declarations) = match added {
+    let Described {
+        plugin,
+        android,
+        apple,
+    } = match added {
         Ok(added) => added,
         Err(error) => {
             if changed {
@@ -137,11 +144,11 @@ pub(crate) fn execute(name: &str) -> CliResult<()> {
         },
         changed,
         snippet,
-        android_permissions: declarations
+        android_permissions: android
             .android_permissions()
             .map(|(permission, _)| permission.to_string())
             .collect(),
-        apple_accessed_apis: declarations
+        apple_accessed_apis: apple
             .apple_accessed_apis()
             .flat_map(|(category, reasons)| {
                 reasons.keys().map(move |reason| AccessedApi {
@@ -180,16 +187,14 @@ fn resolve(metadata: &Metadata, root: &Package, name: &str) -> CliResult<Target>
             path: checkout_crate(root, name),
         });
     };
-    let facade_package = metadata
-        .packages
-        .iter()
-        .find(|package| package.name.as_str() == FACADE)
-        .ok_or_else(|| CliError::Missing(format!("cargo metadata lists no `{FACADE}` package")))?;
-    if let Some(crate_name) = feature_crate(facade_package, name) {
+    let key = facade.rename.clone().unwrap_or_else(|| FACADE.to_owned());
+    let facade_package = dependency_package(metadata, root, &key)?;
+    if let Some(dependency) = feature_crate(facade_package, name) {
         return Ok(Target::Feature {
-            key: facade.rename.clone().unwrap_or_else(|| FACADE.to_owned()),
+            key,
             feature: name.to_owned(),
-            crate_name,
+            crate_key: key_of(dependency).to_owned(),
+            crate_name: dependency.name.clone(),
             enabled: facade.features.iter().any(|feature| feature == name)
                 || (facade.uses_default_features
                     && facade_package
@@ -216,9 +221,74 @@ fn resolve(metadata: &Metadata, root: &Package, name: &str) -> CliResult<Target>
     }))
 }
 
-/// The crate the facade's feature `feature` enables, when it enables one
-/// optional dependency and nothing else.
-fn feature_crate(facade: &Package, feature: &str) -> Option<String> {
+/// The key `dependency` has in its `[dependencies]`: its rename, or its
+/// package's name.
+fn key_of(dependency: &Dependency) -> &str {
+    dependency.rename.as_deref().unwrap_or(&dependency.name)
+}
+
+/// The package `from`'s normal dependency of key `key` resolves to in
+/// `metadata`'s graph: the package of `from`'s edge for it, so another
+/// package of the same name elsewhere in the graph is not mistaken for it.
+fn dependency_package<'m>(
+    metadata: &'m Metadata,
+    from: &Package,
+    key: &str,
+) -> CliResult<&'m Package> {
+    let missing = || {
+        CliError::Missing(format!(
+            "`{}`'s dependency `{key}` resolves to no package of cargo metadata's graph",
+            from.name
+        ))
+    };
+    let dependency = from
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.kind == DependencyKind::Normal && key_of(dependency) == key)
+        .ok_or_else(missing)?;
+    // Cargo names an edge by the crate name code uses: a rename, else the
+    // library's name, which no rename of `from` takes.
+    let renames: Vec<String> = from
+        .dependencies
+        .iter()
+        .filter_map(|dependency| dependency.rename.as_ref())
+        .map(|rename| rename.replace('-', "_"))
+        .collect();
+    let names_this_dependency = |edge: &str| match &dependency.rename {
+        Some(rename) => edge == rename.replace('-', "_"),
+        None => !renames.iter().any(|rename| rename == edge),
+    };
+    let node = metadata
+        .resolve
+        .as_ref()
+        .and_then(|resolve| resolve.nodes.iter().find(|node| node.id == from.id))
+        .ok_or_else(missing)?;
+    let mut packages = node
+        .deps
+        .iter()
+        .filter(|edge| {
+            names_this_dependency(&edge.name)
+                && edge
+                    .dep_kinds
+                    .iter()
+                    .any(|kind| kind.kind == DependencyKind::Normal)
+        })
+        .filter_map(|edge| {
+            metadata
+                .packages
+                .iter()
+                .find(|package| package.id == edge.pkg)
+        })
+        .filter(|package| package.name.as_str() == dependency.name);
+    match (packages.next(), packages.next()) {
+        (Some(package), None) => Ok(package),
+        _ => Err(missing()),
+    }
+}
+
+/// The facade's dependency its feature `feature` enables, when it enables
+/// one optional dependency and nothing else.
+fn feature_crate<'p>(facade: &'p Package, feature: &str) -> Option<&'p Dependency> {
     let [enabled] = facade.features.get(feature)?.as_slice() else {
         return None;
     };
@@ -226,11 +296,7 @@ fn feature_crate(facade: &Package, feature: &str) -> Option<String> {
     facade
         .dependencies
         .iter()
-        .find(|candidate| {
-            candidate.optional
-                && candidate.rename.as_deref().unwrap_or(&candidate.name) == dependency
-        })
-        .map(|candidate| candidate.name.clone())
+        .find(|candidate| candidate.optional && key_of(candidate) == dependency)
 }
 
 /// The facade features whose crate, at a path the facade names, states a
@@ -242,12 +308,6 @@ fn offered(facade: &Package) -> Vec<String> {
         .keys()
         .filter(|feature| {
             feature_crate(facade, feature)
-                .and_then(|crate_name| {
-                    facade
-                        .dependencies
-                        .iter()
-                        .find(|dependency| dependency.name == crate_name)
-                })
                 .and_then(|dependency| dependency.path.as_ref())
                 .and_then(|path| std::fs::read_to_string(path.join("Cargo.toml")).ok())
                 .is_some_and(|manifest| matches!(plugin_of_manifest(&manifest), Ok(Some(_))))
@@ -380,22 +440,33 @@ fn enable_feature(manifest: &str, key: &str, feature: &str) -> Result<String, St
     Ok(document.to_string())
 }
 
-/// What the linked crate states: its plugin and its declarations for every
-/// platform the application builds for, so the features a build for any
-/// target now enables for it count, whatever the host.
-fn describe(dir: &Path, target: &Target) -> CliResult<(PluginPath, Declarations)> {
+/// What [`describe`] reads of the linked crate.
+struct Described {
+    plugin: PluginPath,
+    /// Its declarations in the application's Android build.
+    android: Declarations,
+    /// Its declarations in the application's iOS build.
+    apple: Declarations,
+}
+
+/// What the linked crate states: its plugin, and its declarations for each
+/// platform whose manifests the application's build writes, from that
+/// platform's build, whatever the host: what a feature only the iOS build
+/// turns on declares for Android is not the Android build's.
+fn describe(dir: &Path, target: &Target) -> CliResult<Described> {
     let metadata = metadata(dir)?;
     let application = metadata.root_package().ok_or_else(|| {
         CliError::Missing("cargo metadata names no package in the application's directory".into())
     })?;
     let crate_name = target.crate_name();
-    let package = metadata
-        .packages
-        .iter()
-        .find(|package| package.name.as_str() == crate_name)
-        .ok_or_else(|| {
-            CliError::Missing(format!("`{crate_name}` is not in the application's graph"))
-        })?;
+    let package = match target {
+        Target::Feature { key, crate_key, .. } => dependency_package(
+            &metadata,
+            dependency_package(&metadata, application, key)?,
+            crate_key,
+        )?,
+        Target::Crate { crate_name, .. } => dependency_package(&metadata, application, crate_name)?,
+    };
     let refused = |reason: String| CliError::InvalidConfig {
         file: format!("{crate_name}'s Cargo.toml"),
         reason,
@@ -409,8 +480,14 @@ fn describe(dir: &Path, target: &Target) -> CliResult<(PluginPath, Declarations)
                     .into(),
             )
         })?;
-    let declarations = Declarations::of_linked_crate(dir, &metadata, application, package)?;
-    Ok((plugin, declarations))
+    let declarations = |kind: ManifestKind| {
+        Declarations::of_linked_crate(dir, &metadata, application, package, kind.targets())
+    };
+    Ok(Described {
+        plugin,
+        android: declarations(ManifestKind::Android)?,
+        apple: declarations(ManifestKind::ApplePrivacy)?,
+    })
 }
 
 fn report(added: &Added<'_>) {
